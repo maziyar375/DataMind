@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "raymand"
 version = "0.1.0"
@@ -31,6 +35,10 @@ dev = [
     "mypy>=1.13",
     "import-linter>=2.1",
 ]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+exclude = ["tests*", "fixtures*"]
 
 [tool.ruff]
 line-length = 96
