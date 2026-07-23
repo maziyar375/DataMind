@@ -120,7 +120,7 @@ class LlmConfigTestRequest(BaseModel):
 # ── connections ──────────────────────────────────────────────────────────
 class ConnectionCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
-    database_type: Literal["postgres", "mysql", "mssql"] = "postgres"
+    database_type: Literal["postgres", "mysql", "mssql", "oracle"] = "postgres"
     host: str = Field(min_length=1, max_length=255)
     port: int = Field(ge=1, le=65535)
     database_name: str = Field(min_length=1, max_length=200)
@@ -187,7 +187,7 @@ class ConnectionTestRequest(BaseModel):
     policy do not affect whether a connection works, so they are not asked for.
     """
 
-    database_type: Literal["postgres", "mysql", "mssql"] = "postgres"
+    database_type: Literal["postgres", "mysql", "mssql", "oracle"] = "postgres"
     host: str = Field(min_length=1, max_length=255)
     port: int = Field(ge=1, le=65535)
     database_name: str = Field(min_length=1, max_length=200)

@@ -19,6 +19,36 @@ class DatabaseKind(StrEnum):
     POSTGRES = "postgres"
     MYSQL = "mysql"
     MSSQL = "mssql"
+    ORACLE = "oracle"
+
+    @property
+    def sqlglot_dialect(self) -> str:
+        """What the guard parses and renders with.
+
+        Only MSSQL differs from its own name; sqlglot calls that dialect
+        `tsql`. Keeping the mapping here means a new kind cannot be added
+        without deciding how its SQL is to be read.
+        """
+        return _SQLGLOT_DIALECTS[self]
+
+    @property
+    def default_port(self) -> int:
+        return _DEFAULT_PORTS[self]
+
+
+_SQLGLOT_DIALECTS = {
+    DatabaseKind.POSTGRES: "postgres",
+    DatabaseKind.MYSQL: "mysql",
+    DatabaseKind.MSSQL: "tsql",
+    DatabaseKind.ORACLE: "oracle",
+}
+
+_DEFAULT_PORTS = {
+    DatabaseKind.POSTGRES: 5432,
+    DatabaseKind.MYSQL: 3306,
+    DatabaseKind.MSSQL: 1433,
+    DatabaseKind.ORACLE: 1521,
+}
 
 
 class RunStatus(StrEnum):

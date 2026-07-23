@@ -89,6 +89,57 @@ export const NODE_META: Record<string, { label: string; detail: string }> = {
   present: { label: 'Present', detail: 'Writing summary and chart spec…' },
 }
 
+/**
+ * The database engines Raymand can connect to.
+ *
+ * `port` is the engine's standard listener, applied when switching type so
+ * the form does not keep a port that belongs to a different engine.
+ * `databaseLabel` differs because the field does not mean the same thing
+ * everywhere: Oracle reaches a database through a listener *service*, not a
+ * catalogue name.
+ */
+export const DATABASE_TYPES: {
+  value: string
+  label: string
+  port: number
+  databaseLabel: string
+  databaseHint: string
+  schemaHint: string
+}[] = [
+  {
+    value: 'postgres',
+    label: 'PostgreSQL',
+    port: 5432,
+    databaseLabel: 'Database',
+    databaseHint: '',
+    schemaHint: 'Blank means every schema. Usually "public".',
+  },
+  {
+    value: 'mysql',
+    label: 'MySQL',
+    port: 3306,
+    databaseLabel: 'Database',
+    databaseHint: '',
+    schemaHint: 'MySQL has no separate schema; blank uses the database above.',
+  },
+  {
+    value: 'mssql',
+    label: 'SQL Server',
+    port: 1433,
+    databaseLabel: 'Database',
+    databaseHint: '',
+    schemaHint: 'Blank means "dbo".',
+  },
+  {
+    value: 'oracle',
+    label: 'Oracle',
+    port: 1521,
+    databaseLabel: 'Service name',
+    databaseHint: 'The listener service, e.g. FREEPDB1 or ORCLPDB1 — not a catalogue.',
+    schemaHint: 'In Oracle a schema is a user. Blank uses the connecting user.',
+  },
+]
+
 export const PROVIDER_URLS: Record<string, string> = {
   'OpenAI-compatible': 'https://api.openai.com/v1',
   Anthropic: 'https://api.anthropic.com',

@@ -9,6 +9,7 @@ import {
   DetailBody, DetailHeader, FieldRow, MasterColumn, MasterItem, Section,
   StatusLine, Tabs,
 } from '../components/settings'
+import { DATABASE_TYPES } from '../theme/tokens'
 
 const BLANK = {
   name: 'New connection',
@@ -186,6 +187,19 @@ export default function DataSourcesPage() {
 
   const editing = creating || !!selected
 
+  const engine =
+    DATABASE_TYPES.find((t) => t.value === draft.database_type) ?? DATABASE_TYPES[0]
+
+  /** Switching engine carries the previous engine's port, which is never right. */
+  function changeEngine(value: string) {
+    const next = DATABASE_TYPES.find((t) => t.value === value)
+    setDraft({
+      ...draft,
+      database_type: value,
+      port: next ? next.port : draft.port,
+    })
+  }
+
   // A draft has no stored password to fall back on, so everything the probe
   // needs must be on the form before Test can mean anything.
   const canTest = creating
@@ -205,7 +219,7 @@ export default function DataSourcesPage() {
           <MasterItem
             key={connection.id}
             title={connection.name}
-            subtitle={`${connection.host}:${connection.port}/${connection.database_name}`}
+            subtitle={`${engineLabel(connection.database_type)} · ${connection.host}:${connection.port}`}
             active={connection.id === selectedId}
             tone={
               connection.status === 'OK'
@@ -231,7 +245,7 @@ export default function DataSourcesPage() {
           <>
             <DetailHeader
               title={creating ? 'New connection' : selected!.name}
-              subtitle={`${draft.database_type} · ${draft.host}:${draft.port}/${draft.database_name || '—'}`}
+              subtitle={`${engine.label} · ${draft.host}:${draft.port}/${draft.database_name || '—'}`}
               chips={
                 creating ? undefined : (
                   <>
@@ -316,12 +330,26 @@ export default function DataSourcesPage() {
                   title="Connection"
                   description="Point Raymand at the database. Use a role with read-only rights."
                 >
-                  <Field label="Name">
-                    <TextInput
-                      value={draft.name}
-                      onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                    />
-                  </Field>
+                  <FieldRow>
+                    <Field label="Name">
+                      <TextInput
+                        value={draft.name}
+                        onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                      />
+                    </Field>
+                    <Field label="Engine">
+                      <Select
+                        value={draft.database_type}
+                        onChange={(e) => changeEngine(e.target.value)}
+                      >
+                        {DATABASE_TYPES.map((type) => (
+                          <option key={type.value} value={type.value}>
+                            {type.label}
+                          </option>
+                        ))}
+                      </Select>
+                    </Field>
+                  </FieldRow>
 
                   <FieldRow columns={3}>
                     <Field label="Host">
@@ -337,7 +365,7 @@ export default function DataSourcesPage() {
                         onChange={(e) => setDraft({ ...draft, port: Number(e.target.value) })}
                       />
                     </Field>
-                    <Field label="Database">
+                    <Field label={engine.databaseLabel} hint={engine.databaseHint || undefined}>
                       <TextInput
                         value={draft.database_name}
                         onChange={(e) =>
@@ -381,7 +409,7 @@ export default function DataSourcesPage() {
                     </Field>
                     <Field
                       label="Schema allowlist"
-                      hint="Optional. Comma separated; blank means every schema."
+                      hint={`Optional, comma separated. ${engine.schemaHint}`}
                     >
                       <TextInput
                         placeholder="public, analytics"
@@ -836,6 +864,10 @@ function GraphView({ schema }: { schema: SchemaSnapshot }) {
       </svg>
     </div>
   )
+}
+
+function engineLabel(value: string): string {
+  return DATABASE_TYPES.find((t) => t.value === value)?.label ?? value
 }
 
 function relativeTime(iso: string): string {

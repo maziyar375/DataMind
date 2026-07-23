@@ -20,7 +20,7 @@ from app.core.config import Settings
 from app.core.errors import NotFoundError, RunTimeoutError
 from app.core.logging import get_logger
 from app.domain.value_objects import (
-    ArtifactKind, MessageRole, RunStatus, StepName, StepStatus,
+    ArtifactKind, DatabaseKind, MessageRole, RunStatus, StepName, StepStatus,
 )
 from app.infra.connectors.factory import build_connector
 from app.infra.crypto.aesgcm_box import AesGcmSecretBox
@@ -462,7 +462,9 @@ def _policy_from_snapshot(
             c["name"].lower() for c in table.get("columns", [])
         }
     return GuardPolicy(
-        dialect=connection.database_type,
+        # sqlglot names the SQL Server dialect `tsql`, not `mssql`, so the
+        # connection's own kind cannot be handed over unmapped.
+        dialect=DatabaseKind(connection.database_type).sqlglot_dialect,
         max_rows=connection.max_rows,
         allowed_tables=allowed_tables,
         allowed_columns=allowed_columns,
