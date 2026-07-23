@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Fragment, useCallback, useEffect, useState } from 'react'
 import { users as api } from '../api/client'
 import type { User } from '../api/types'
 import {
-  Chip, ErrorNote, Icon, PrimaryButton, Spinner, TextInput, initialOf,
+  Chip, ErrorNote, GhostButton, Icon, PrimaryButton, Spinner, TextInput,
+  initialOf,
 } from '../components/ui'
 
 export default function UsersPage({ currentUser }: { currentUser: User }) {
@@ -12,6 +13,35 @@ export default function UsersPage({ currentUser }: { currentUser: User }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [invite, setInvite] = useState<{ email: string; password: string } | null>(null)
+
+  // Which user's password form is open, and the value being typed into it.
+  const [pwFor, setPwFor] = useState<string | null>(null)
+  const [pwValue, setPwValue] = useState('')
+  const [pwBusy, setPwBusy] = useState(false)
+  const [pwDone, setPwDone] = useState<string | null>(null)
+
+  function openPassword(userId: string) {
+    setPwFor(userId)
+    setPwValue('')
+    setPwDone(null)
+    setError(null)
+  }
+
+  async function savePassword(user: User) {
+    if (pwValue.length < 8) return
+    setPwBusy(true)
+    setError(null)
+    try {
+      await api.setPassword(user.id, pwValue)
+      setPwFor(null)
+      setPwValue('')
+      setPwDone(user.email)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not set that password.')
+    } finally {
+      setPwBusy(false)
+    }
+  }
 
   const refresh = useCallback(async () => {
     setList(await api.list())
@@ -76,7 +106,7 @@ export default function UsersPage({ currentUser }: { currentUser: User }) {
         <div>
           <div style={{ fontSize: 14, fontWeight: 600 }}>User management</div>
           <div style={{ fontSize: 12, color: 'var(--text-faint)' }}>
-            Admins can add or remove users and grant admin access
+            Admins can add or remove users, set passwords, and grant admin access
           </div>
         </div>
       </header>
@@ -93,6 +123,28 @@ export default function UsersPage({ currentUser }: { currentUser: User }) {
         }}
       >
         {error && <ErrorNote>{error}</ErrorNote>}
+
+        {pwDone && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              fontSize: 12.5,
+              color: 'var(--green)',
+              background: 'var(--green-bg)',
+              border: '1px solid transparent',
+              borderRadius: 8,
+              padding: '9px 12px',
+            }}
+          >
+            <Icon.Check size={14} stroke="var(--green)" />
+            <span>
+              Password updated for {pwDone}. Any existing sessions were signed
+              out.
+            </span>
+          </div>
+        )}
 
         {invite && (
           <div
@@ -202,15 +254,16 @@ export default function UsersPage({ currentUser }: { currentUser: User }) {
           >
             <span style={{ flex: 1 }}>User</span>
             <span style={{ width: 110 }}>Role</span>
-            <span style={{ width: 200, textAlign: 'right' }}>Actions</span>
+            <span style={{ width: 240, textAlign: 'right' }}>Actions</span>
           </div>
 
           {list.map((user) => {
             const isSelf = user.id === currentUser.id
             const isAdmin = user.role === 'ADMIN'
+            const editingPw = pwFor === user.id
             return (
+              <Fragment key={user.id}>
               <div
-                key={user.id}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -287,7 +340,7 @@ export default function UsersPage({ currentUser }: { currentUser: User }) {
 
                 <div
                   style={{
-                    width: 200,
+                    width: 240,
                     display: 'flex',
                     gap: 8,
                     justifyContent: 'flex-end',
@@ -315,28 +368,86 @@ export default function UsersPage({ currentUser }: { currentUser: User }) {
                   {isSelf ? (
                     <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>You</span>
                   ) : (
-                    <button
-                      onClick={() => removeUser(user)}
-                      title="Remove user"
-                      aria-label={`Remove ${user.display_name || user.email}`}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        width: 32,
-                        height: 32,
-                        background: 'transparent',
-                        color: 'var(--red)',
-                        border: '1px solid var(--red-border)',
-                        borderRadius: 7,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <Icon.Trash size={14} />
-                    </button>
+                    <>
+                      <button
+                        onClick={() => (editingPw ? setPwFor(null) : openPassword(user.id))}
+                        title="Set password"
+                        aria-label={`Set password for ${user.display_name || user.email}`}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          width: 32,
+                          height: 32,
+                          background: editingPw ? 'var(--accent-bg)' : 'transparent',
+                          color: 'var(--accent)',
+                          border: `1px solid ${editingPw ? 'var(--accent)' : 'var(--accent-border)'}`,
+                          borderRadius: 7,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <Icon.Key size={14} />
+                      </button>
+                      <button
+                        onClick={() => removeUser(user)}
+                        title="Remove user"
+                        aria-label={`Remove ${user.display_name || user.email}`}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          width: 32,
+                          height: 32,
+                          background: 'transparent',
+                          color: 'var(--red)',
+                          border: '1px solid var(--red-border)',
+                          borderRadius: 7,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <Icon.Trash size={14} />
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
+
+              {editingPw && (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    padding: '12px 16px 14px 61px',
+                    borderTop: '1px solid var(--border)',
+                    background: 'var(--panel-alt)',
+                  }}
+                >
+                  <TextInput
+                    type="password"
+                    autoFocus
+                    autoComplete="new-password"
+                    value={pwValue}
+                    onChange={(e) => setPwValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && pwValue.length >= 8) savePassword(user)
+                      if (e.key === 'Escape') setPwFor(null)
+                    }}
+                    placeholder="New password — at least 8 characters"
+                    aria-label={`New password for ${user.email}`}
+                    style={{ flex: 1, maxWidth: 320, borderRadius: 8, padding: '9px 12px' }}
+                  />
+                  <PrimaryButton
+                    onClick={() => savePassword(user)}
+                    disabled={pwBusy || pwValue.length < 8}
+                  >
+                    {pwBusy ? <Spinner /> : <Icon.Key size={14} />}
+                    Set password
+                  </PrimaryButton>
+                  <GhostButton onClick={() => setPwFor(null)}>Cancel</GhostButton>
+                </div>
+              )}
+              </Fragment>
             )
           })}
         </div>

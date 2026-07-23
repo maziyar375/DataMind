@@ -154,6 +154,11 @@ export const users = {
     post<{ user: User; temporary_password: string }>('/users', payload),
   update: (id: string, payload: { role?: string; status?: string }) =>
     patch<User>(`/users/${id}`, payload),
+  setPassword: (id: string, password: string) =>
+    request<void>(`/users/${id}/password`, {
+      method: 'PUT',
+      body: JSON.stringify({ password }),
+    }),
   remove: (id: string) => del(`/users/${id}`),
 }
 
