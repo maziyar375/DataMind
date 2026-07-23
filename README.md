@@ -1,7 +1,9 @@
 # DataMind
 
 Conversational BI. Ask a question in plain language, get a written answer, a
-table, and a chart — with the generated SQL visible and auditable.
+table, and a chart — with the generated SQL visible and auditable. Point it at
+**PostgreSQL, MySQL, SQL Server, or Oracle**; the question is the same, the
+dialect is the connector's problem.
 
 A single modular-monolith FastAPI application backed by one PostgreSQL
 database, plus a React SPA. No microservices, no message broker, no vector
@@ -14,8 +16,8 @@ database in this release.
 You need Docker and Docker Compose.
 
 ```bash
-git clone https://github.com/<you>/raymand.git
-cd raymand
+git clone https://github.com/<you>/datamind.git
+cd datamind
 
 make secrets      # writes .env with a fresh AES key and JWT secret
 make up           # builds and starts db, sales fixture, api, and web
@@ -29,14 +31,18 @@ To try the seeded demo database, add a data source pointing at the fixture:
 
 | Field    | Value          |
 | -------- | -------------- |
+| Engine   | `PostgreSQL`   |
 | Host     | `sales`        |
 | Port     | `5432`         |
 | Database | `sales`        |
 | User     | `analytics_ro` |
 | Password | `analytics_ro` |
 
-Test it — you should see **read-only role confirmed**. Then sync the schema
-and ask something like *"What was total revenue last month?"*
+**Test** it — before or after saving — and you should see **read-only role
+confirmed**. Then sync the schema and ask something like *"What was total
+revenue last month?"* The demo fixture is PostgreSQL; MySQL, SQL Server, and
+Oracle connections are configured the same way, only the engine and port
+differ.
 
 ### Running on a remote host
 
@@ -76,36 +82,42 @@ npm install && npm run dev
 
 ## What works today
 
-This implements the architecture doc's **§34 first milestone**, plus the
-frontend for all five screens.
-
 **Backend**
 
 - Email + password auth: Argon2id, short-lived JWT access tokens, rotating
   refresh tokens in an HttpOnly cookie, with reuse detection
+- User management: invite with a one-time password, promote/demote admins,
+  and an admin **set-password** that revokes the user's live sessions
 - AES-256-GCM credential encryption, bound to the owning row so a ciphertext
   copied between rows fails to decrypt
-- Data source CRUD, connection testing with genuine read-only verification,
-  schema introspection including foreign keys
-- Model configuration CRUD with a real capability probe
+- Four target-database connectors — **PostgreSQL, MySQL, SQL Server, and
+  Oracle** — behind one port, each with genuine read-only verification and
+  schema introspection including primary and foreign keys
+- Connection testing that works **before a connection is saved** as well as
+  after, so credentials can be checked without persisting a broken row
+- Model configuration CRUD with a real capability probe, likewise testable
+  before saving
 - The SQL guard: parse, single-statement enforcement, AST allowlist, name
-  resolution against the snapshot, LIMIT injection
+  resolution against the snapshot, LIMIT injection — dialect-aware, so the
+  same guard renders Postgres, MySQL, T-SQL, and Oracle
 - The pipeline: route → retrieve → generate → validate → execute → present,
-  with a bounded repair loop
+  with a bounded repair loop, including a metadata route that answers schema
+  questions ("what tables do I have?") without touching SQL
 - SSE streaming with replay from `Last-Event-ID`, plus a polling fallback
 - In-process run executor with heartbeats and a stale-run reconciler
 
 **Frontend**
 
-Chat with live step chips, the "Generated SQL" panel, result tables and bar
-charts, metadata chips, and a disclosure indicator; data sources with a table
-list and an FK graph view; LLM providers; user management. Dark and light
-themes.
+Chat with the live step trail, the "Generated SQL" panel, result tables and
+bar charts, metadata chips, a disclosure indicator, copy buttons, and
+conversation rename and delete; right-to-left support for Persian and other
+RTL scripts. Data sources with an engine picker, a table list, and an FK
+graph view; LLM providers; user management. Dark and light themes.
 
-**Not built yet:** MySQL and SQL Server connectors, the semantic layer,
-clarification turns, model-authored Vega-Lite charts, retrieval beyond exact
-matching, rolling conversation summaries, and the eval harness. Each is
-deferred deliberately — see the architecture doc for the reasoning.
+**Not built yet:** the semantic layer, clarification turns, model-authored
+Vega-Lite charts, retrieval beyond exact matching, rolling conversation
+summaries, and the eval harness. Each is deferred deliberately — see the
+architecture doc for the reasoning.
 
 ---
 
@@ -134,8 +146,12 @@ evasion. Zero bypasses, or CI fails.
 make guard
 ```
 
-Containment sits underneath correctness: every query runs in a `READ ONLY`
-transaction, with a per-session `statement_timeout` and a row cap.
+Containment sits underneath correctness, in each engine's own terms: a
+`READ ONLY` transaction on PostgreSQL, MySQL, and Oracle; the read-only role
+plus a query timeout on SQL Server, which has no such transaction mode. Every
+engine adds a statement timeout and a row cap, and each connector verifies the
+role genuinely cannot write by attempting one, inside a transaction it always
+rolls back.
 
 ### 2. Credentials are encrypted with a binding context
 
@@ -201,7 +217,8 @@ backend/
     pipeline/   typed RunState, nodes, executor, versioned prompts
     sqlguard/   parser, policy, validator, rewriter
     charts/     ChartIntent → validation → Vega-Lite
-    infra/      SQLAlchemy, crypto, connectors, LiteLLM, events, identity
+    infra/      SQLAlchemy, crypto, connectors (postgres/mysql/mssql/oracle),
+                LiteLLM, events, identity
     workers/    in-process executor, reconciler
   tests/
   fixtures/     seeded sales database with a read-only role
