@@ -134,6 +134,11 @@ async def update_conversation(
         if value is not None:
             setattr(conversation, field, value)
     await db.flush()
+    # `updated_at` has an onupdate, so the flush expires it. Refresh here, in
+    # the async context, or pydantic's attribute read below triggers a lazy
+    # load outside the greenlet and raises MissingGreenlet — a 500 on what is
+    # just a rename.
+    await db.refresh(conversation)
     return ConversationRead.model_validate(conversation)
 
 
