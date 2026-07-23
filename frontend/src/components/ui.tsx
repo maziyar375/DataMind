@@ -105,6 +105,11 @@ export const Icon = {
       <path d="M20 6L9 17l-5-5" />
     </svg>
   ),
+  Close: ({ size = 14, stroke = 'currentColor', strokeWidth = 2.2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <path d="M18 6L6 18M6 6l12 12" />
+    </svg>
+  ),
   Alert: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
     <svg {...iconBase(size, stroke, strokeWidth)}>
       <circle cx="12" cy="12" r="10" />
@@ -373,4 +378,17 @@ export function EmptyState({
 
 export function initialOf(value: string): string {
   return (value.trim()[0] ?? '?').toUpperCase()
+}
+
+// Persian, Arabic, and related scripts. If the first strong character of a
+// string is one of these, the text should be laid out right-to-left.
+const RTL_CHARS = /[֐-׿؀-ۿ܀-߿ࢠ-ࣿיִ-﷿ﹰ-﻿]/
+
+/** 'rtl' when the text leads with a right-to-left script, else 'ltr'. */
+export function dirOf(value: string): 'rtl' | 'ltr' {
+  for (const char of value) {
+    if (RTL_CHARS.test(char)) return 'rtl'
+    if (/[A-Za-z]/.test(char)) return 'ltr'
+  }
+  return 'ltr'
 }

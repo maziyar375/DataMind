@@ -3,11 +3,17 @@
 
 body {
   margin: 0;
-  font-family: Inter, system-ui, sans-serif;
+  /* Inter carries no Persian/Arabic glyphs, so the browser falls back to
+     Vazirmatn for those code points while Latin text stays on Inter. */
+  font-family: Inter, Vazirmatn, system-ui, sans-serif;
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
 }
+
+/* An element whose text direction follows its content. Persian text reads
+   right-to-left; Latin text in the same field stays left-to-right. */
+[dir='auto'] { unicode-bidi: plaintext; }
 
 *, *::before, *::after { box-sizing: border-box; }
 
@@ -33,6 +39,10 @@ a:focus-visible,
 }
 
 code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+/* Small icon buttons (delete/confirm/cancel in the conversation list). The
+   hover tint comes from a per-button --rm-hover-bg custom property. */
+.rm-icon-btn:hover { background: var(--rm-hover-bg) !important; }
 
 @keyframes rm-spin { to { transform: rotate(360deg); } }
 @keyframes rm-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }

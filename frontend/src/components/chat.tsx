@@ -8,7 +8,7 @@
  */
 import { useMemo, useState } from 'react'
 import type { Artifact, GeneratedQuery, RunDetail, RunStep, TableArtifactSpec } from '../api/types'
-import { Chip, Dot, Icon, Spinner } from './ui'
+import { Chip, Dot, dirOf, Icon, Spinner } from './ui'
 import { NODE_META } from '../theme/tokens'
 
 // ── user turn ─────────────────────────────────────────────────────────────
@@ -16,6 +16,7 @@ export function UserBubble({ text }: { text: string }) {
   return (
     <div
       className="rm-enter"
+      dir={dirOf(text)}
       style={{
         alignSelf: 'flex-end',
         maxWidth: 560,
@@ -532,6 +533,7 @@ export function AssistantTurn({
       {spec && spec.rows.length > 1 && <ResultBars spec={spec} />}
 
       <div
+        dir={dirOf(text)}
         style={{
           fontSize: 14.5,
           lineHeight: 1.55,
