@@ -114,3 +114,74 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ── Auth screen ─────────────────────────────────────────────────────────── */
+/* An ambient field of the brand's four neon hues — the same violet, magenta,
+   blue, and amber that make up the logo's orbs — with a glassy card floating
+   over it. Nothing here competes with content, so the treatment can be rich;
+   it is only ever on the signed-out screen. */
+.rm-auth { position: relative; isolation: isolate; overflow: hidden; }
+
+/* The neon orbs, echoing the mark. */
+.rm-auth::before {
+  content: '';
+  position: absolute;
+  inset: -25%;
+  z-index: -2;
+  pointer-events: none;
+  background:
+    radial-gradient(30% 34% at 20% 26%, oklch(0.62 0.22 300 / 0.32), transparent 68%),
+    radial-gradient(30% 34% at 82% 20%, oklch(0.66 0.24 350 / 0.30), transparent 68%),
+    radial-gradient(34% 38% at 24% 84%, oklch(0.64 0.2 255 / 0.28), transparent 68%),
+    radial-gradient(30% 34% at 84% 82%, oklch(0.8 0.16 80 / 0.22), transparent 68%);
+}
+
+/* The grid motif from the welcome screen, faded to the centre. */
+.rm-auth::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, var(--border) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--border) 1px, transparent 1px);
+  background-size: 46px 46px;
+  opacity: 0.4;
+  -webkit-mask-image: radial-gradient(closest-side at 50% 42%, #000, transparent);
+  mask-image: radial-gradient(closest-side at 50% 42%, #000, transparent);
+}
+
+/* Lighter theme needs a gentler wash. */
+:root[data-theme='light'] .rm-auth::before { opacity: 0.7; }
+
+/* A soft glow cupped behind the enlarged logo. */
+.rm-auth-logo { position: relative; display: grid; place-items: center; }
+.rm-auth-logo::before {
+  content: '';
+  position: absolute;
+  width: 160%;
+  height: 160%;
+  border-radius: 50%;
+  z-index: -1;
+  background: radial-gradient(closest-side, oklch(0.66 0.22 330 / 0.4), transparent 70%);
+  filter: blur(6px);
+}
+
+/* The glass card. */
+.rm-auth-card {
+  background: color-mix(in oklch, var(--panel) 78%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.15);
+  backdrop-filter: blur(14px) saturate(1.15);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow: 0 26px 70px -30px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* The primary action, with a brand-tinted lift on hover. */
+.rm-auth-submit {
+  transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
+  box-shadow: 0 10px 26px -10px var(--accent);
+}
+.rm-auth-submit:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.05); }
+.rm-auth-submit:active:not(:disabled) { transform: translateY(0); }

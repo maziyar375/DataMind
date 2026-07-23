@@ -76,6 +76,7 @@ export function applyTheme(name: ThemeName): void {
     root.style.setProperty(`--${key}`, value)
   }
   root.style.colorScheme = name
+  root.setAttribute('data-theme', name)
 }
 
 /** The pipeline steps, in the order the backend runs them. */

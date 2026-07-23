@@ -29,8 +29,9 @@ export default function LoginPage({ onSignedIn }: { onSignedIn: (user: User) => 
 
   return (
     <div
+      className="rm-auth"
       style={{
-        height: '100vh',
+        minHeight: '100vh',
         width: '100%',
         display: 'flex',
         alignItems: 'center',
@@ -40,12 +41,13 @@ export default function LoginPage({ onSignedIn }: { onSignedIn: (user: User) => 
       }}
     >
       <div
+        className="rm-enter"
         style={{
           width: '100%',
-          maxWidth: 380,
+          maxWidth: 392,
           display: 'flex',
           flexDirection: 'column',
-          gap: 24,
+          gap: 26,
         }}
       >
         <div
@@ -53,15 +55,17 @@ export default function LoginPage({ onSignedIn }: { onSignedIn: (user: User) => 
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            gap: 14,
+            gap: 18,
           }}
         >
-          <Logo size={56} />
+          <div className="rm-auth-logo">
+            <Logo size={84} />
+          </div>
           <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.02em' }}>
+            <div style={{ fontSize: 27, fontWeight: 700, letterSpacing: '-0.02em' }}>
               Welcome to DataMind
             </div>
-            <div style={{ fontSize: 13.5, color: 'var(--text-dim)', marginTop: 4 }}>
+            <div style={{ fontSize: 14, color: 'var(--text-dim)', marginTop: 6 }}>
               Sign in to your conversational BI workspace
             </div>
           </div>
@@ -69,15 +73,12 @@ export default function LoginPage({ onSignedIn }: { onSignedIn: (user: User) => 
 
         <form
           onSubmit={submit}
+          className="rm-auth-card"
           style={{
-            background: 'var(--panel)',
-            border: '1px solid var(--border)',
-            borderRadius: 16,
-            padding: 24,
+            padding: 26,
             display: 'flex',
             flexDirection: 'column',
             gap: 16,
-            boxShadow: '0 8px 30px rgba(0,0,0,0.12)',
           }}
         >
           {error && <ErrorNote>{error}</ErrorNote>}
@@ -122,6 +123,7 @@ export default function LoginPage({ onSignedIn }: { onSignedIn: (user: User) => 
           <button
             type="submit"
             disabled={busy}
+            className="rm-auth-submit"
             style={{
               marginTop: 4,
               width: '100%',
@@ -138,13 +140,23 @@ export default function LoginPage({ onSignedIn }: { onSignedIn: (user: User) => 
               padding: 12,
               cursor: busy ? 'wait' : 'pointer',
               opacity: busy ? 0.7 : 1,
-              boxShadow: '0 1px 2px rgba(0,0,0,0.15)',
             }}
           >
             {busy && <Spinner />}
             {busy ? 'Signing in' : 'Sign in'}
           </button>
         </form>
+
+        <div
+          style={{
+            textAlign: 'center',
+            fontSize: 12,
+            color: 'var(--text-faint)',
+            letterSpacing: '0.01em',
+          }}
+        >
+          Ask in plain language — get an answer, a table, and auditable SQL.
+        </div>
       </div>
     </div>
   )
