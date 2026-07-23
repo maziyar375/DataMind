@@ -80,6 +80,10 @@ class RunService:
             content=content,
         )
         self._db.add(user_message)
+        # Flush now so the message row exists before `runs` is inserted: the
+        # FK on user_message_id is a plain column, not a relationship, so the
+        # unit of work has no dependency info to order the two inserts itself.
+        await self._db.flush()
 
         # Snapshot the effective model config onto the run. Reading it from the
         # conversation later would make every prior run unexplainable the
