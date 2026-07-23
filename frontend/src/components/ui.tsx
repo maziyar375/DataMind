@@ -38,41 +38,81 @@ const LOGO_PIECES: { d: string; fill: string }[] = [
 const LOGO_SEAM_V = 'M48,2 L48,30 C59,30 59,42 48,42 L48,98'
 const LOGO_SEAM_H = 'M6,52 L60,52 C60,63 74,63 74,52 L94,52'
 
-// The neon look: a bright rim just outside a deep indigo-navy line.
+// The neon look from the source artwork: gradient-filled puzzle pieces, a
+// white glow rim over a deep indigo-navy line, soft colored orbs behind the
+// head, all on a dark app-icon tile.
 const LOGO_INK = '#161038'
-const LOGO_RIM = '#ffffff'
 
 export function Logo({ size = 26 }: { size?: number }) {
-  const clipId = React.useId()
+  const uid = 'lg' + React.useId().replace(/[^a-zA-Z0-9]/g, '')
+  const tile = `${uid}t`, head = `${uid}h`
+  const bg = `${uid}bg`, gV = `${uid}v`, gM = `${uid}m`, gB = `${uid}b`, gF = `${uid}f`
+  const blur = `${uid}blur`, glow = `${uid}glow`
   return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 100 100"
-      style={{ flexShrink: 0 }}
-      role="img"
-      aria-label="DataMind"
-    >
+    <svg width={size} height={size} viewBox="0 0 100 100" style={{ flexShrink: 0 }} role="img" aria-label="DataMind">
       <defs>
-        <clipPath id={clipId}>
-          <path d={LOGO_HEAD} />
-        </clipPath>
+        <clipPath id={tile}><rect x="0" y="0" width="100" height="100" rx="22" /></clipPath>
+        <clipPath id={head}><path d={LOGO_HEAD} /></clipPath>
+        <radialGradient id={bg} cx="50%" cy="36%" r="78%">
+          <stop offset="0%" stopColor="#241636" />
+          <stop offset="58%" stopColor="#0c0714" />
+          <stop offset="100%" stopColor="#050207" />
+        </radialGradient>
+        <linearGradient id={gV} x1="0" y1="0" x2="0.4" y2="1">
+          <stop offset="0%" stopColor="#8B3DF5" /><stop offset="100%" stopColor="#4F46E5" />
+        </linearGradient>
+        <linearGradient id={gM} x1="0" y1="0" x2="0.3" y2="1">
+          <stop offset="0%" stopColor="#F0369A" /><stop offset="100%" stopColor="#E11D74" />
+        </linearGradient>
+        <linearGradient id={gB} x1="0" y1="0" x2="0.4" y2="1">
+          <stop offset="0%" stopColor="#3B7BF6" /><stop offset="100%" stopColor="#2563EB" />
+        </linearGradient>
+        <linearGradient id={gF} x1="0.1" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#F5327D" /><stop offset="100%" stopColor="#A93AE0" />
+        </linearGradient>
+        <filter id={blur} x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="5" /></filter>
+        <filter id={glow} x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="1.6" /></filter>
       </defs>
-      <g clipPath={`url(#${clipId})`}>
-        {LOGO_PIECES.map((piece) => (
-          <path key={piece.fill} d={piece.d} fill={piece.fill} />
-        ))}
-        {/* interior seams — bright rim under the navy line */}
-        <g fill="none" strokeLinejoin="round" strokeLinecap="round">
-          <path d={LOGO_SEAM_V} stroke={LOGO_RIM} strokeWidth={3.6} opacity={0.5} />
-          <path d={LOGO_SEAM_H} stroke={LOGO_RIM} strokeWidth={3.6} opacity={0.5} />
-          <path d={LOGO_SEAM_V} stroke={LOGO_INK} strokeWidth={2.2} opacity={0.9} />
-          <path d={LOGO_SEAM_H} stroke={LOGO_INK} strokeWidth={2.2} opacity={0.9} />
+
+      <g clipPath={`url(#${tile})`}>
+        <rect x="0" y="0" width="100" height="100" fill={`url(#${bg})`} />
+        {/* soft background orbs */}
+        <g filter={`url(#${blur})`} opacity="0.5">
+          <circle cx="30" cy="30" r="24" fill="#7C3AED" />
+          <circle cx="68" cy="28" r="20" fill="#F5A623" />
+          <circle cx="30" cy="68" r="24" fill="#2563EB" />
+          <circle cx="70" cy="70" r="24" fill="#F0369A" />
         </g>
+        {/* little floating dots */}
+        <g opacity="0.9">
+          <circle cx="55" cy="11" r="3" fill="#F43F7A" />
+          <circle cx="90" cy="45" r="3" fill="#2B7BFF" />
+          <circle cx="10" cy="49" r="2.4" fill="#8B5CF6" />
+          <circle cx="15" cy="77" r="2.4" fill="#F5A623" />
+          <circle cx="88" cy="63" r="2.4" fill="#F43F7A" />
+        </g>
+
+        {/* the head — gradient pieces + neon seams */}
+        <g clipPath={`url(#${head})`}>
+          <path d={LOGO_PIECES[0].d} fill={`url(#${gV})`} />
+          <path d={LOGO_PIECES[1].d} fill={`url(#${gM})`} />
+          <path d={LOGO_PIECES[2].d} fill={`url(#${gF})`} />
+          <path d={LOGO_PIECES[3].d} fill={`url(#${gB})`} />
+          <g fill="none" strokeLinejoin="round" strokeLinecap="round">
+            <path d={LOGO_SEAM_V} stroke="#fff" strokeWidth="4.6" opacity="0.4" filter={`url(#${glow})`} />
+            <path d={LOGO_SEAM_H} stroke="#fff" strokeWidth="4.6" opacity="0.4" filter={`url(#${glow})`} />
+            <path d={LOGO_SEAM_V} stroke="#fff" strokeWidth="3.3" opacity="0.9" />
+            <path d={LOGO_SEAM_H} stroke="#fff" strokeWidth="3.3" opacity="0.9" />
+            <path d={LOGO_SEAM_V} stroke={LOGO_INK} strokeWidth="2.1" />
+            <path d={LOGO_SEAM_H} stroke={LOGO_INK} strokeWidth="2.1" />
+          </g>
+        </g>
+
+        {/* head silhouette — glow, white rim, navy line */}
+        <path d={LOGO_HEAD} fill="none" stroke="#fff" strokeWidth="6.5" opacity="0.5" strokeLinejoin="round" filter={`url(#${glow})`} />
+        <path d={LOGO_HEAD} fill="none" stroke="#fff" strokeWidth="4.4" opacity="0.95" strokeLinejoin="round" />
+        <path d={LOGO_HEAD} fill="none" stroke={LOGO_INK} strokeWidth="2.8" strokeLinejoin="round" />
       </g>
-      {/* head silhouette — the same rim-over-ink treatment */}
-      <path d={LOGO_HEAD} fill="none" stroke={LOGO_RIM} strokeWidth={4.2} strokeLinejoin="round" opacity={0.55} />
-      <path d={LOGO_HEAD} fill="none" stroke={LOGO_INK} strokeWidth={2.6} strokeLinejoin="round" opacity={0.95} />
     </svg>
   )
 }
