@@ -2,9 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { llmConfigs as api } from '../api/client'
 import type { LlmConfig, TestResult } from '../api/types'
 import {
-  Chip, DangerButton, Dot, EmptyState, ErrorNote, Field, GhostButton, Icon,
+  Chip, DangerButton, EmptyState, ErrorNote, Field, GhostButton, Icon,
   PrimaryButton, Select, Spinner, TextInput,
 } from '../components/ui'
+import {
+  DetailBody, DetailHeader, FieldRow, MasterColumn, MasterItem, Section,
+  StatusLine,
+} from '../components/settings'
 import { PROVIDER_URLS } from '../theme/tokens'
 
 const BLANK = {
@@ -51,6 +55,7 @@ export default function LlmProvidersPage() {
     setCreating(false)
     setApiKey('')
     setTestResult(null)
+    setError(null)
     setDraft({
       name: selected.name,
       provider: selected.provider,
@@ -67,6 +72,7 @@ export default function LlmProvidersPage() {
     setDraft(BLANK)
     setApiKey('')
     setTestResult(null)
+    setError(null)
   }
 
   function changeProvider(provider: string) {
@@ -82,10 +88,7 @@ export default function LlmProvidersPage() {
     setError(null)
     try {
       if (creating) {
-        const created = await api.create({
-          ...draft,
-          api_key: apiKey || undefined,
-        })
+        const created = await api.create({ ...draft, api_key: apiKey || undefined })
         await refresh()
         setSelectedId(created.id)
         setCreating(false)
@@ -128,288 +131,225 @@ export default function LlmProvidersPage() {
     setSelectedId(items[0]?.id ?? null)
   }
 
+  const editing = creating || !!selected
+
   return (
     <div style={{ display: 'flex', height: '100%', width: '100%', minWidth: 0 }}>
-      <div
-        style={{
-          width: 380,
-          flexShrink: 0,
-          overflowY: 'auto',
-          padding: 28,
-          borderRight: '1px solid var(--border)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 18,
-        }}
+      <MasterColumn
+        title="LLM providers"
+        count={list.length}
+        onNew={startCreate}
+        newLabel="Add a model"
+        empty="No models configured yet. Add one to start asking questions."
       >
-        <div
-          style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
-        >
-          <div style={{ fontSize: 16, fontWeight: 700 }}>LLM providers</div>
-          <button
-            onClick={startCreate}
-            style={{
-              fontSize: 12,
-              fontWeight: 600,
-              color: 'var(--accent)',
-              background: 'var(--accent-bg)',
-              border: '1px solid var(--accent-border)',
-              padding: '5px 10px',
-              borderRadius: 6,
-              cursor: 'pointer',
-            }}
-          >
-            + New
-          </button>
-        </div>
+        {list.map((config) => (
+          <MasterItem
+            key={config.id}
+            title={config.name}
+            subtitle={config.model}
+            active={config.id === selectedId}
+            tone={
+              config.status === 'OK' ? 'green' : config.status === 'ERROR' ? 'red' : 'neutral'
+            }
+            isDefault={config.is_default}
+            onClick={() => setSelectedId(config.id)}
+          />
+        ))}
+      </MasterColumn>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {list.map((config) => {
-            const active = config.id === selectedId
-            return (
-              <button
-                key={config.id}
-                onClick={() => setSelectedId(config.id)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '10px 12px',
-                  borderRadius: 9,
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                  background: active ? 'var(--panel-hover)' : 'var(--panel)',
-                  border: `1px solid ${active ? 'var(--accent-border)' : 'var(--border)'}`,
-                }}
-              >
-                <span style={{ fontSize: 13, fontWeight: 600 }}>{config.name}</span>
-                <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
-                  {config.model}
-                </span>
-                {config.is_default && (
-                  <span style={{ marginLeft: 'auto' }}>
-                    <Chip tone="green">Default</Chip>
-                  </span>
-                )}
-              </button>
-            )
-          })}
-          {list.length === 0 && !creating && (
-            <div style={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
-              No models configured yet.
-            </div>
-          )}
-        </div>
-
-        {(selected || creating) && (
-          <div
-            style={{
-              borderTop: '1px solid var(--border)',
-              paddingTop: 16,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 14,
-            }}
-          >
-            {error && <ErrorNote>{error}</ErrorNote>}
-
-            <Field label="Name">
-              <TextInput
-                value={draft.name}
-                onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-              />
-            </Field>
-
-            <Field label="Provider">
-              <Select
-                value={draft.provider}
-                onChange={(e) => changeProvider(e.target.value)}
-              >
-                {Object.keys(PROVIDER_URLS).map((provider) => (
-                  <option key={provider} value={provider}>
-                    {provider}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-
-            <Field label="Base URL">
-              <TextInput
-                value={draft.base_url ?? ''}
-                onChange={(e) => setDraft({ ...draft, base_url: e.target.value })}
-              />
-            </Field>
-
-            <Field label="Model">
-              <TextInput
-                value={draft.model}
-                onChange={(e) => setDraft({ ...draft, model: e.target.value })}
-              />
-            </Field>
-
-            <Field
-              label="API key"
-              hint={
-                creating
-                  ? 'Stored encrypted. It is never returned by the API.'
-                  : selected?.has_api_key
-                    ? 'A key is stored. Leave blank to keep it.'
-                    : 'No key stored yet.'
-              }
-            >
-              <TextInput
-                type="password"
-                autoComplete="new-password"
-                placeholder={selected?.has_api_key ? '••••••••' : 'sk-…'}
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-              />
-            </Field>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-              <Field label="Temperature">
-                <TextInput
-                  type="number"
-                  step="0.1"
-                  min="0"
-                  max="2"
-                  value={draft.temperature}
-                  onChange={(e) =>
-                    setDraft({ ...draft, temperature: Number(e.target.value) })
-                  }
-                />
-              </Field>
-              <Field label="Max tokens">
-                <TextInput
-                  type="number"
-                  value={draft.max_tokens}
-                  onChange={(e) =>
-                    setDraft({ ...draft, max_tokens: Number(e.target.value) })
-                  }
-                />
-              </Field>
-            </div>
-
-            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-              <PrimaryButton onClick={save} disabled={saving}>
-                {saving && <Spinner />}
-                {creating ? 'Add model' : 'Save changes'}
-              </PrimaryButton>
-              {!creating && (
-                <GhostButton onClick={test} disabled={testing}>
-                  {testing && <Spinner />}
-                  Test model
-                </GhostButton>
-              )}
-            </div>
-
-            {testResult && (
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  fontSize: 12.5,
-                  color: testResult.ok ? 'var(--green)' : 'var(--red)',
-                }}
-              >
-                <Dot color={testResult.ok ? 'var(--green)' : 'var(--red)'} />
-                {testResult.ok
-                  ? `${testResult.message} · ${testResult.latency_ms}ms`
-                  : testResult.message}
-              </div>
-            )}
-
-            {!creating && selected && !selected.is_default && (
-              <GhostButton
-                onClick={async () => {
-                  await api.update(selected.id, { is_default: true })
-                  await refresh()
-                }}
-                style={{
-                  alignSelf: 'flex-start',
-                  color: 'var(--accent)',
-                  borderColor: 'var(--accent-border)',
-                }}
-              >
-                Set as default
-              </GhostButton>
-            )}
-
-            {!creating && selected && (
-              <DangerButton onClick={remove} style={{ alignSelf: 'flex-start' }}>
-                <Icon.Trash />
-                Delete model
-              </DangerButton>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div style={{ flex: 1, overflow: 'auto', padding: 28, minWidth: 0 }}>
-        {!selected && (
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        {!editing ? (
           <EmptyState
             title="Connect a model"
             body="Raymand works with any OpenAI-compatible endpoint, Anthropic, or a local Ollama server. Testing a model records what it can actually do."
+            action={<PrimaryButton onClick={startCreate}>Add a model</PrimaryButton>}
           />
-        )}
+        ) : (
+          <>
+            <DetailHeader
+              title={creating ? 'New model' : selected!.name}
+              subtitle={`${draft.provider} · ${draft.model}`}
+              chips={
+                creating ? undefined : (
+                  <>
+                    <Chip tone={selected!.status === 'OK' ? 'green' : selected!.status === 'ERROR' ? 'red' : 'neutral'}>
+                      {selected!.status === 'OK'
+                        ? 'reachable'
+                        : selected!.status === 'ERROR'
+                          ? 'unreachable'
+                          : 'untested'}
+                    </Chip>
+                    <Chip tone={selected!.has_api_key ? 'green' : 'amber'}>
+                      {selected!.has_api_key ? 'key stored' : 'no key'}
+                    </Chip>
+                    {selected!.is_default && <Chip tone="accent">default</Chip>}
+                    {selected!.last_tested_at && (
+                      <Chip>tested {new Date(selected!.last_tested_at).toLocaleString()}</Chip>
+                    )}
+                  </>
+                )
+              }
+              actions={
+                <>
+                  {!creating && selected && !selected.is_default && (
+                    <GhostButton
+                      onClick={async () => {
+                        await api.update(selected.id, { is_default: true })
+                        await refresh()
+                      }}
+                    >
+                      Set as default
+                    </GhostButton>
+                  )}
+                  {!creating && (
+                    <GhostButton onClick={test} disabled={testing}>
+                      {testing && <Spinner />}
+                      Test model
+                    </GhostButton>
+                  )}
+                  <PrimaryButton onClick={save} disabled={saving}>
+                    {saving && <Spinner />}
+                    {creating ? 'Add model' : 'Save changes'}
+                  </PrimaryButton>
+                </>
+              }
+            />
 
-        {selected && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 18, maxWidth: 640 }}>
-            <div>
-              <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 4 }}>
-                {selected.name}
-              </div>
-              <div style={{ fontSize: 13, color: 'var(--text-dim)' }}>
-                {selected.provider} · {selected.model}
-              </div>
-            </div>
+            <DetailBody>
+              {error && <ErrorNote>{error}</ErrorNote>}
+              {testResult && (
+                <StatusLine ok={testResult.ok}>
+                  {testResult.ok
+                    ? `${testResult.message} · ${testResult.latency_ms}ms`
+                    : testResult.message}
+                </StatusLine>
+              )}
 
-            <div
-              style={{
-                border: '1px solid var(--border)',
-                borderRadius: 12,
-                background: 'var(--panel)',
-                padding: 18,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 12,
-              }}
-            >
-              <div
-                style={{
-                  fontSize: 11,
-                  fontWeight: 700,
-                  color: 'var(--text-faint)',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.05em',
-                }}
+              <Section
+                title="Endpoint"
+                description="Where Raymand sends completion requests."
               >
-                Detected capabilities
-              </div>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                <Chip tone={selected.status === 'OK' ? 'green' : 'neutral'}>
-                  {selected.status === 'OK'
-                    ? 'reachable'
-                    : selected.status === 'ERROR'
-                      ? 'unreachable'
-                      : 'untested'}
-                </Chip>
-                <Chip tone={selected.has_api_key ? 'green' : 'amber'}>
-                  {selected.has_api_key ? 'key stored' : 'no key'}
-                </Chip>
-                {selected.last_tested_at && (
-                  <Chip>tested {new Date(selected.last_tested_at).toLocaleString()}</Chip>
-                )}
-              </div>
-              <p style={{ fontSize: 12.5, color: 'var(--text-dim)', margin: 0, lineHeight: 1.5 }}>
-                Testing sends one short prompt and checks whether the provider
-                accepts a structured-output request. Raymand validates model
-                output on its own side regardless of what a provider claims to
-                support.
-              </p>
-            </div>
-          </div>
+                <FieldRow>
+                  <Field label="Name">
+                    <TextInput
+                      value={draft.name}
+                      onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                    />
+                  </Field>
+                  <Field label="Provider">
+                    <Select
+                      value={draft.provider}
+                      onChange={(e) => changeProvider(e.target.value)}
+                    >
+                      {Object.keys(PROVIDER_URLS).map((provider) => (
+                        <option key={provider} value={provider}>
+                          {provider}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                </FieldRow>
+
+                <Field label="Base URL">
+                  <TextInput
+                    value={draft.base_url ?? ''}
+                    onChange={(e) => setDraft({ ...draft, base_url: e.target.value })}
+                  />
+                </Field>
+
+                <Field label="Model">
+                  <TextInput
+                    value={draft.model}
+                    onChange={(e) => setDraft({ ...draft, model: e.target.value })}
+                  />
+                </Field>
+              </Section>
+
+              <Section
+                title="Credentials"
+                description="Stored encrypted with the server's secret box. The API never returns it."
+              >
+                <Field
+                  label="API key"
+                  hint={
+                    creating
+                      ? undefined
+                      : selected?.has_api_key
+                        ? 'A key is stored. Leave blank to keep it.'
+                        : 'No key stored yet.'
+                  }
+                >
+                  <TextInput
+                    type="password"
+                    autoComplete="new-password"
+                    placeholder={selected?.has_api_key ? '••••••••' : 'sk-…'}
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                  />
+                </Field>
+              </Section>
+
+              <Section
+                title="Generation"
+                description="Applied to every request this model serves."
+              >
+                <FieldRow>
+                  <Field label="Temperature" hint="0 is deterministic, 2 is wildest.">
+                    <TextInput
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      max="2"
+                      value={draft.temperature}
+                      onChange={(e) =>
+                        setDraft({ ...draft, temperature: Number(e.target.value) })
+                      }
+                    />
+                  </Field>
+                  <Field label="Max tokens" hint="Ceiling on a single completion.">
+                    <TextInput
+                      type="number"
+                      value={draft.max_tokens}
+                      onChange={(e) =>
+                        setDraft({ ...draft, max_tokens: Number(e.target.value) })
+                      }
+                    />
+                  </Field>
+                </FieldRow>
+              </Section>
+
+              {!creating && (
+                <>
+                  <Section title="How testing works">
+                    <p
+                      style={{
+                        fontSize: 12.5,
+                        color: 'var(--text-dim)',
+                        margin: 0,
+                        lineHeight: 1.6,
+                      }}
+                    >
+                      Testing sends one short prompt and checks whether the provider
+                      accepts a structured-output request. Raymand validates model
+                      output on its own side regardless of what a provider claims to
+                      support.
+                    </p>
+                  </Section>
+
+                  <Section
+                    title="Danger zone"
+                    description="Conversations that already ran on this model keep their recorded snapshot."
+                    danger
+                  >
+                    <DangerButton onClick={remove} style={{ alignSelf: 'flex-start' }}>
+                      <Icon.Trash />
+                      Delete model
+                    </DangerButton>
+                  </Section>
+                </>
+              )}
+            </DetailBody>
+          </>
         )}
       </div>
     </div>

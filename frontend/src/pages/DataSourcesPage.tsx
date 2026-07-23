@@ -2,9 +2,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { connections as api } from '../api/client'
 import type { Connection, SchemaSnapshot, SchemaTable, TestResult } from '../api/types'
 import {
-  Chip, DangerButton, Dot, EmptyState, ErrorNote, Field, GhostButton, Icon,
+  Chip, DangerButton, EmptyState, ErrorNote, Field, GhostButton, Icon,
   PrimaryButton, Select, Spinner, TextInput,
 } from '../components/ui'
+import {
+  DetailBody, DetailHeader, FieldRow, MasterColumn, MasterItem, Section,
+  StatusLine, Tabs,
+} from '../components/settings'
 
 const BLANK = {
   name: 'New connection',
@@ -28,7 +32,8 @@ export default function DataSourcesPage() {
   const [password, setPassword] = useState('')
   const [creating, setCreating] = useState(false)
   const [schema, setSchema] = useState<SchemaSnapshot | null>(null)
-  const [tab, setTab] = useState<'tables' | 'graph'>('tables')
+  const [tab, setTab] = useState<'settings' | 'schema'>('settings')
+  const [schemaView, setSchemaView] = useState<'tables' | 'graph'>('tables')
   const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [testing, setTesting] = useState(false)
@@ -58,6 +63,7 @@ export default function DataSourcesPage() {
     setCreating(false)
     setPassword('')
     setTestResult(null)
+    setError(null)
     setDraft({
       name: selected.name,
       database_type: selected.database_type,
@@ -84,6 +90,8 @@ export default function DataSourcesPage() {
     setDraft(BLANK)
     setPassword('')
     setTestResult(null)
+    setError(null)
+    setTab('settings')
   }
 
   async function save() {
@@ -162,363 +170,405 @@ export default function DataSourcesPage() {
     )
   }, [schema, search])
 
+  const editing = creating || !!selected
+
   return (
     <div style={{ display: 'flex', height: '100%', width: '100%', minWidth: 0 }}>
-      {/* left: list + form */}
-      <div
-        style={{
-          width: 380,
-          flexShrink: 0,
-          overflowY: 'auto',
-          padding: 28,
-          borderRight: '1px solid var(--border)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 18,
-        }}
+      <MasterColumn
+        title="Data sources"
+        count={list.length}
+        onNew={startCreate}
+        newLabel="Add a connection"
+        empty="No data sources yet. Add one to start asking questions."
       >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ fontSize: 16, fontWeight: 700 }}>Data sources</div>
-          <button
-            onClick={startCreate}
-            style={{
-              fontSize: 12,
-              fontWeight: 600,
-              color: 'var(--accent)',
-              background: 'var(--accent-bg)',
-              border: '1px solid var(--accent-border)',
-              padding: '5px 10px',
-              borderRadius: 6,
-              cursor: 'pointer',
-            }}
-          >
-            + New
-          </button>
-        </div>
+        {list.map((connection) => (
+          <MasterItem
+            key={connection.id}
+            title={connection.name}
+            subtitle={`${connection.host}:${connection.port}/${connection.database_name}`}
+            active={connection.id === selectedId}
+            tone={
+              connection.status === 'OK'
+                ? 'green'
+                : connection.status === 'ERROR'
+                  ? 'red'
+                  : 'neutral'
+            }
+            isDefault={connection.is_default}
+            onClick={() => setSelectedId(connection.id)}
+          />
+        ))}
+      </MasterColumn>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {list.map((connection) => {
-            const active = connection.id === selectedId
-            return (
-              <button
-                key={connection.id}
-                onClick={() => setSelectedId(connection.id)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 8,
-                  padding: '10px 12px',
-                  borderRadius: 9,
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                  background: active ? 'var(--panel-hover)' : 'var(--panel)',
-                  border: `1px solid ${active ? 'var(--accent-border)' : 'var(--border)'}`,
-                }}
-              >
-                <span style={{ fontSize: 13, fontWeight: 600 }}>{connection.name}</span>
-                <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
-                  {connection.host}:{connection.port}
-                </span>
-                {connection.is_default && (
-                  <span style={{ marginLeft: 'auto' }}>
-                    <Chip tone="green">Default</Chip>
-                  </span>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+        {!editing ? (
+          <EmptyState
+            title="Connect a database"
+            body="Raymand reads your schema over a read-only role, writes SQL against only what it finds there, and shows you every query it ran."
+            action={<PrimaryButton onClick={startCreate}>Add a connection</PrimaryButton>}
+          />
+        ) : (
+          <>
+            <DetailHeader
+              title={creating ? 'New connection' : selected!.name}
+              subtitle={`${draft.database_type} · ${draft.host}:${draft.port}/${draft.database_name || '—'}`}
+              chips={
+                creating ? undefined : (
+                  <>
+                    <Chip tone={selected!.status === 'OK' ? 'green' : selected!.status === 'ERROR' ? 'red' : 'neutral'}>
+                      {selected!.status === 'OK'
+                        ? 'reachable'
+                        : selected!.status === 'ERROR'
+                          ? 'unreachable'
+                          : 'untested'}
+                    </Chip>
+                    <Chip tone={selected!.readonly_confirmed ? 'green' : 'amber'}>
+                      {selected!.readonly_confirmed ? 'read-only confirmed' : 'role can write'}
+                    </Chip>
+                    {selected!.is_default && <Chip tone="accent">default</Chip>}
+                    <Chip>
+                      {selected!.last_synced_at
+                        ? `synced ${relativeTime(selected!.last_synced_at)}`
+                        : 'never synced'}
+                    </Chip>
+                  </>
+                )
+              }
+              actions={
+                <>
+                  {!creating && selected && !selected.is_default && (
+                    <GhostButton
+                      onClick={async () => {
+                        await api.update(selected.id, { is_default: true })
+                        await refresh()
+                      }}
+                    >
+                      Set as default
+                    </GhostButton>
+                  )}
+                  {!creating && (
+                    <GhostButton onClick={test} disabled={testing}>
+                      {testing && <Spinner />}
+                      Test connection
+                    </GhostButton>
+                  )}
+                  <PrimaryButton onClick={save} disabled={saving}>
+                    {saving && <Spinner />}
+                    {creating ? 'Add connection' : 'Save changes'}
+                  </PrimaryButton>
+                </>
+              }
+            />
+
+            {!creating && (
+              <Tabs
+                value={tab}
+                onChange={(v) => setTab(v as 'settings' | 'schema')}
+                items={[
+                  { value: 'settings', label: 'Settings' },
+                  { value: 'schema', label: 'Schema', count: schema?.tables.length },
+                ]}
+              />
+            )}
+
+            {(creating || tab === 'settings') && (
+              <DetailBody>
+                {error && <ErrorNote>{error}</ErrorNote>}
+                {testResult && (
+                  <StatusLine ok={testResult.ok}>
+                    {testResult.ok
+                      ? `Connected · ${
+                          testResult.readonly_confirmed
+                            ? 'read-only role confirmed'
+                            : 'this role can write — use a read-only role'
+                        } · ${testResult.latency_ms}ms`
+                      : testResult.message}
+                  </StatusLine>
                 )}
-              </button>
-            )
-          })}
-          {list.length === 0 && !creating && (
-            <div style={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
-              No data sources yet. Add one to start asking questions.
-            </div>
-          )}
-        </div>
 
-        {(selected || creating) && (
-          <div
-            style={{
-              borderTop: '1px solid var(--border)',
-              paddingTop: 16,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 14,
-            }}
-          >
-            {error && <ErrorNote>{error}</ErrorNote>}
+                <Section
+                  title="Connection"
+                  description="Point Raymand at the database. Use a role with read-only rights."
+                >
+                  <Field label="Name">
+                    <TextInput
+                      value={draft.name}
+                      onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                    />
+                  </Field>
 
-            <Field label="Name">
-              <TextInput
-                value={draft.name}
-                onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-              />
-            </Field>
+                  <FieldRow columns={3}>
+                    <Field label="Host">
+                      <TextInput
+                        value={draft.host}
+                        onChange={(e) => setDraft({ ...draft, host: e.target.value })}
+                      />
+                    </Field>
+                    <Field label="Port">
+                      <TextInput
+                        type="number"
+                        value={draft.port}
+                        onChange={(e) => setDraft({ ...draft, port: Number(e.target.value) })}
+                      />
+                    </Field>
+                    <Field label="Database">
+                      <TextInput
+                        value={draft.database_name}
+                        onChange={(e) =>
+                          setDraft({ ...draft, database_name: e.target.value })
+                        }
+                      />
+                    </Field>
+                  </FieldRow>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 10 }}>
-              <Field label="Host">
-                <TextInput
-                  value={draft.host}
-                  onChange={(e) => setDraft({ ...draft, host: e.target.value })}
-                />
-              </Field>
-              <Field label="Port">
-                <TextInput
-                  type="number"
-                  value={draft.port}
-                  onChange={(e) => setDraft({ ...draft, port: Number(e.target.value) })}
-                />
-              </Field>
-            </div>
+                  <FieldRow>
+                    <Field label="User">
+                      <TextInput
+                        value={draft.username}
+                        onChange={(e) => setDraft({ ...draft, username: e.target.value })}
+                      />
+                    </Field>
+                    <Field
+                      label="Password"
+                      hint={creating ? undefined : 'Leave blank to keep the stored one'}
+                    >
+                      <TextInput
+                        type="password"
+                        autoComplete="new-password"
+                        placeholder={creating ? '' : '••••••••'}
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                      />
+                    </Field>
+                  </FieldRow>
 
-            <Field label="Database">
-              <TextInput
-                value={draft.database_name}
-                onChange={(e) => setDraft({ ...draft, database_name: e.target.value })}
-              />
-            </Field>
+                  <FieldRow>
+                    <Field label="SSL mode">
+                      <Select
+                        value={draft.ssl_mode}
+                        onChange={(e) => setDraft({ ...draft, ssl_mode: e.target.value })}
+                      >
+                        <option value="require">require</option>
+                        <option value="verify-full">verify-full</option>
+                        <option value="disable">disable</option>
+                      </Select>
+                    </Field>
+                    <Field
+                      label="Schema allowlist"
+                      hint="Optional. Comma separated; blank means every schema."
+                    >
+                      <TextInput
+                        placeholder="public, analytics"
+                        value={(draft.schema_allowlist ?? []).join(', ')}
+                        onChange={(e) =>
+                          setDraft({
+                            ...draft,
+                            schema_allowlist: e.target.value
+                              .split(',')
+                              .map((s) => s.trim())
+                              .filter(Boolean),
+                          })
+                        }
+                      />
+                    </Field>
+                  </FieldRow>
+                </Section>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-              <Field label="User">
-                <TextInput
-                  value={draft.username}
-                  onChange={(e) => setDraft({ ...draft, username: e.target.value })}
-                />
-              </Field>
-              <Field
-                label="Password"
-                hint={creating ? undefined : 'Leave blank to keep the stored one'}
-              >
-                <TextInput
-                  type="password"
-                  autoComplete="new-password"
-                  placeholder={creating ? '' : '••••••••'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-              </Field>
-            </div>
+                <Section
+                  title="Safety & limits"
+                  description="Applied to every query Raymand runs on this connection."
+                >
+                  <Field
+                    label="Result sharing"
+                    hint="How much of a query result may be sent to the model provider."
+                  >
+                    <Select
+                      value={draft.disclosure_policy}
+                      onChange={(e) =>
+                        setDraft({ ...draft, disclosure_policy: e.target.value })
+                      }
+                    >
+                      <option value="NONE">Nothing — the model never sees result rows</option>
+                      <option value="AGGREGATE">Totals only</option>
+                      <option value="SAMPLE">A sample of rows</option>
+                      <option value="FULL">All returned rows</option>
+                    </Select>
+                  </Field>
 
-            <Field label="SSL mode">
-              <Select
-                value={draft.ssl_mode}
-                onChange={(e) => setDraft({ ...draft, ssl_mode: e.target.value })}
-              >
-                <option value="require">require</option>
-                <option value="verify-full">verify-full</option>
-                <option value="disable">disable</option>
-              </Select>
-            </Field>
+                  <FieldRow>
+                    <Field label="Row limit" hint="Rows a single query may return.">
+                      <TextInput
+                        type="number"
+                        value={draft.max_rows}
+                        onChange={(e) =>
+                          setDraft({ ...draft, max_rows: Number(e.target.value) })
+                        }
+                      />
+                    </Field>
+                    <Field label="Query timeout (ms)" hint="Cancelled past this budget.">
+                      <TextInput
+                        type="number"
+                        value={draft.statement_timeout_ms}
+                        onChange={(e) =>
+                          setDraft({
+                            ...draft,
+                            statement_timeout_ms: Number(e.target.value),
+                          })
+                        }
+                      />
+                    </Field>
+                  </FieldRow>
+                </Section>
 
-            <Field label="Schema allowlist (optional)">
-              <TextInput
-                placeholder="public, analytics"
-                value={(draft.schema_allowlist ?? []).join(', ')}
-                onChange={(e) =>
-                  setDraft({
-                    ...draft,
-                    schema_allowlist: e.target.value
-                      .split(',')
-                      .map((s) => s.trim())
-                      .filter(Boolean),
-                  })
-                }
-              />
-            </Field>
+                {!creating && (
+                  <Section
+                    title="Danger zone"
+                    description="Conversations that used this connection keep their recorded history."
+                    danger
+                  >
+                    <DangerButton onClick={remove} style={{ alignSelf: 'flex-start' }}>
+                      <Icon.Trash />
+                      Delete connection
+                    </DangerButton>
+                  </Section>
+                )}
+              </DetailBody>
+            )}
 
-            <Field
-              label="Result sharing"
-              hint="How much of a query result may be sent to the model provider."
-            >
-              <Select
-                value={draft.disclosure_policy}
-                onChange={(e) => setDraft({ ...draft, disclosure_policy: e.target.value })}
-              >
-                <option value="NONE">Nothing — the model never sees result rows</option>
-                <option value="AGGREGATE">Totals only</option>
-                <option value="SAMPLE">A sample of rows</option>
-                <option value="FULL">All returned rows</option>
-              </Select>
-            </Field>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-              <Field label="Row limit">
-                <TextInput
-                  type="number"
-                  value={draft.max_rows}
-                  onChange={(e) => setDraft({ ...draft, max_rows: Number(e.target.value) })}
-                />
-              </Field>
-              <Field label="Query timeout (ms)">
-                <TextInput
-                  type="number"
-                  value={draft.statement_timeout_ms}
-                  onChange={(e) =>
-                    setDraft({ ...draft, statement_timeout_ms: Number(e.target.value) })
-                  }
-                />
-              </Field>
-            </div>
-
-            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-              <PrimaryButton onClick={save} disabled={saving}>
-                {saving && <Spinner />}
-                {creating ? 'Add connection' : 'Save changes'}
-              </PrimaryButton>
-              {!creating && (
-                <GhostButton onClick={test} disabled={testing}>
-                  {testing && <Spinner />}
-                  Test connection
-                </GhostButton>
-              )}
-            </div>
-
-            {testResult && (
+            {!creating && tab === 'schema' && (
               <div
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  fontSize: 12.5,
-                  color: testResult.ok ? 'var(--green)' : 'var(--red)',
-                }}
-              >
-                <Dot color={testResult.ok ? 'var(--green)' : 'var(--red)'} />
-                {testResult.ok
-                  ? `Connected · ${
-                      testResult.readonly_confirmed
-                        ? 'read-only role confirmed'
-                        : 'this role can write — use a read-only role'
-                    } · ${testResult.latency_ms}ms`
-                  : testResult.message}
-              </div>
-            )}
-
-            {!creating && selected && !selected.is_default && (
-              <GhostButton
-                onClick={async () => {
-                  await api.update(selected.id, { is_default: true })
-                  await refresh()
-                }}
-                style={{
-                  alignSelf: 'flex-start',
-                  color: 'var(--accent)',
-                  borderColor: 'var(--accent-border)',
-                }}
-              >
-                Set as default
-              </GhostButton>
-            )}
-
-            {!creating && selected && (
-              <DangerButton onClick={remove} style={{ alignSelf: 'flex-start' }}>
-                <Icon.Trash />
-                Delete connection
-              </DangerButton>
-            )}
-
-            {!creating && selected && (
-              <div
-                style={{
-                  borderTop: '1px solid var(--border)',
-                  paddingTop: 16,
+                  flex: 1,
+                  overflowY: 'auto',
+                  padding: 28,
+                  minHeight: 0,
                   display: 'flex',
                   flexDirection: 'column',
-                  gap: 8,
+                  gap: 16,
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                {error && <ErrorNote>{error}</ErrorNote>}
+
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                    flexWrap: 'wrap',
+                  }}
+                >
                   <GhostButton onClick={sync} disabled={syncing}>
                     {syncing && <Spinner />}
                     Re-sync schema
                   </GhostButton>
-                  <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
-                    {selected.last_synced_at
-                      ? `last synced ${relativeTime(selected.last_synced_at)}`
+                  <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+                    {selected!.last_synced_at
+                      ? `last synced ${relativeTime(selected!.last_synced_at)}`
                       : 'never synced'}
                   </span>
+                  {schema && (
+                    <span style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
+                      <Chip tone="green">{schema.tables.length} tables</Chip>
+                      <Chip>{schema.relationships.length} relationships</Chip>
+                    </span>
+                  )}
                 </div>
-                {schema && (
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    <Chip tone="green">{schema.tables.length} tables</Chip>
-                    <Chip tone="neutral">
-                      {schema.relationships.length} relationships
-                    </Chip>
-                  </div>
+
+                {!schema ? (
+                  <EmptyState
+                    title="No schema yet"
+                    body="Sync this connection to read its tables, columns, and foreign keys. Raymand only ever writes SQL against what it finds here."
+                    action={
+                      <PrimaryButton onClick={sync} disabled={syncing}>
+                        {syncing && <Spinner />}
+                        Sync schema
+                      </PrimaryButton>
+                    }
+                  />
+                ) : (
+                  <>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        flexWrap: 'wrap',
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          gap: 2,
+                          background: 'var(--panel-alt)',
+                          borderRadius: 8,
+                          padding: 3,
+                        }}
+                      >
+                        <SegButton
+                          active={schemaView === 'tables'}
+                          onClick={() => setSchemaView('tables')}
+                        >
+                          Table list
+                        </SegButton>
+                        <SegButton
+                          active={schemaView === 'graph'}
+                          onClick={() => setSchemaView('graph')}
+                        >
+                          Graph view
+                        </SegButton>
+                      </div>
+                      {schemaView === 'tables' && (
+                        <TextInput
+                          placeholder="Search tables & columns…"
+                          value={search}
+                          onChange={(e) => setSearch(e.target.value)}
+                          style={{
+                            width: 280,
+                            marginLeft: 'auto',
+                            fontSize: 13,
+                            padding: '8px 11px',
+                          }}
+                        />
+                      )}
+                    </div>
+
+                    {schemaView === 'tables' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {filteredTables.map((table) => (
+                          <TableCard
+                            key={`${table.schema}.${table.name}`}
+                            table={table}
+                            open={!!expanded[`${table.schema}.${table.name}`]}
+                            onToggle={() =>
+                              setExpanded((prev) => ({
+                                ...prev,
+                                [`${table.schema}.${table.name}`]:
+                                  !prev[`${table.schema}.${table.name}`],
+                              }))
+                            }
+                          />
+                        ))}
+                        {filteredTables.length === 0 && (
+                          <p style={{ fontSize: 13, color: 'var(--text-dim)' }}>
+                            Nothing matches “{search}”.
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {schemaView === 'graph' && <GraphView schema={schema} />}
+                  </>
                 )}
               </div>
             )}
-          </div>
+          </>
         )}
-      </div>
-
-      {/* right: schema explorer */}
-      <div style={{ flex: 1, overflow: 'auto', padding: 28, minWidth: 0 }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            marginBottom: 14,
-          }}
-        >
-          <div style={{ display: 'flex', gap: 6 }}>
-            <TabButton active={tab === 'tables'} onClick={() => setTab('tables')}>
-              Table list
-            </TabButton>
-            <TabButton active={tab === 'graph'} onClick={() => setTab('graph')}>
-              Graph view
-            </TabButton>
-          </div>
-          {tab === 'tables' && (
-            <TextInput
-              placeholder="Search tables & columns…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              style={{ width: 260, fontSize: 13, padding: '8px 11px' }}
-            />
-          )}
-        </div>
-
-        {!schema && (
-          <EmptyState
-            title="No schema yet"
-            body="Sync this connection to read its tables, columns, and foreign keys. Raymand only ever writes SQL against what it finds here."
-            action={
-              selected ? (
-                <PrimaryButton onClick={sync} disabled={syncing}>
-                  {syncing && <Spinner />}
-                  Sync schema
-                </PrimaryButton>
-              ) : undefined
-            }
-          />
-        )}
-
-        {schema && tab === 'tables' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {filteredTables.map((table) => (
-              <TableCard
-                key={`${table.schema}.${table.name}`}
-                table={table}
-                open={!!expanded[`${table.schema}.${table.name}`]}
-                onToggle={() =>
-                  setExpanded((prev) => ({
-                    ...prev,
-                    [`${table.schema}.${table.name}`]:
-                      !prev[`${table.schema}.${table.name}`],
-                  }))
-                }
-              />
-            ))}
-          </div>
-        )}
-
-        {schema && tab === 'graph' && <GraphView schema={schema} />}
       </div>
     </div>
   )
 }
 
-function TabButton({
+function SegButton({
   active, onClick, children,
 }: {
   active: boolean
@@ -531,12 +581,13 @@ function TabButton({
       style={{
         fontSize: 12.5,
         fontWeight: 600,
-        padding: '7px 13px',
-        borderRadius: 7,
+        padding: '6px 12px',
+        borderRadius: 6,
         cursor: 'pointer',
+        border: 'none',
         color: active ? 'var(--text-strong)' : 'var(--text-dim)',
-        background: active ? 'var(--panel-alt)' : 'transparent',
-        border: `1px solid ${active ? 'var(--border-strong)' : 'transparent'}`,
+        background: active ? 'var(--panel)' : 'transparent',
+        boxShadow: active ? '0 1px 3px rgba(0,0,0,0.10)' : 'none',
       }}
     >
       {children}
