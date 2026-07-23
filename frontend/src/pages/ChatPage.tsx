@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { conversations, connections as connectionsApi, llmConfigs, streamRun } from '../api/client'
 import type {
   Connection, ConversationSummary, LlmConfig, MessageWithRun, RunStep,
@@ -377,9 +377,20 @@ export default function ChatPage() {
 
               {messages.map((message) => {
                 if (message.role === 'USER') {
-                  return <UserBubble key={message.id} text={message.content ?? ''} />
+                  // A run that died before writing an answer has no assistant
+                  // message to hang off, so the server attaches it here.
+                  // Dropping it was what made a failed turn look like the
+                  // question had simply vanished.
+                  return (
+                    <Fragment key={message.id}>
+                      <UserBubble text={message.content ?? ''} />
+                      {message.run && isFailure(message.run.status) && (
+                        <RunErrorCard run={message.run} />
+                      )}
+                    </Fragment>
+                  )
                 }
-                if (message.run && message.run.status === 'FAILED') {
+                if (message.run && isFailure(message.run.status)) {
                   return <RunErrorCard key={message.id} run={message.run} />
                 }
                 return (
@@ -892,4 +903,9 @@ function DisclosureChip({ policy }: { policy?: string }) {
 
 function isTerminal(status: string): boolean {
   return ['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT'].includes(status)
+}
+
+/** Terminal states that owe the reader an explanation. */
+function isFailure(status: string): boolean {
+  return ['FAILED', 'CANCELLED', 'TIMED_OUT'].includes(status)
 }
