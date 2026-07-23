@@ -154,18 +154,23 @@ export function StepTrail({ steps }: { steps: RunStep[] }) {
 }
 
 /**
- * A finished run's steps collapse to one line. The full trail is still a
- * click away — it is the record of how the answer was reached — but it no
- * longer competes with the answer itself in a long transcript.
+ * The step trail stays open on a finished run.
+ *
+ * Showing route → retrieve → generate → validate → execute → present, each
+ * with its own timing, is how a reader can see that an answer went through a
+ * validated pipeline rather than a single model call. That evidence is the
+ * product's argument for itself, so it is not hidden behind a disclosure;
+ * the toggle only exists for anyone who wants the transcript quieter.
  */
 function StepSummary({ run }: { run: RunDetail }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(true)
   if (run.steps.length === 0) return null
 
   const total =
     run.total_latency_ms ??
     run.steps.reduce((sum, s) => sum + (s.duration_ms ?? 0), 0)
   const seconds = (total / 1000).toFixed(total < 1000 ? 2 : 1)
+  const failed = run.steps.some((s) => s.status === 'FAILED')
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -178,16 +183,20 @@ function StepSummary({ run }: { run: RunDetail }) {
           gap: 6,
           alignSelf: 'flex-start',
           fontSize: 11.5,
-          fontWeight: 500,
-          color: 'var(--text-faint)',
+          fontWeight: 600,
+          color: failed ? 'var(--red)' : 'var(--green)',
           background: 'transparent',
           border: 'none',
           padding: 0,
           cursor: 'pointer',
         }}
       >
-        <Icon.Chevron open={open} size={12} stroke="var(--text-faint)" />
-        Thought for {seconds}s · {run.steps.length} steps
+        <Icon.Chevron open={open} size={12} stroke="currentColor" />
+        {failed ? (
+          <>Stopped after {run.steps.length} steps · {seconds}s</>
+        ) : (
+          <>All {run.steps.length} steps passed · {seconds}s</>
+        )}
       </button>
       {open && <StepTrail steps={run.steps} />}
     </div>
