@@ -7,6 +7,7 @@ run gets scheduled.
 from __future__ import annotations
 
 import uuid
+from dataclasses import asdict
 from datetime import timedelta
 from typing import Any
 from uuid import UUID
@@ -229,7 +230,11 @@ class RunService:
                         row_count=state.execution.row_count,
                         truncated=state.execution.truncated,
                         rows_scanned_estimate=state.execution.rows_scanned_estimate,
-                        result_schema=[c.__dict__ for c in state.execution.columns],
+                        # ResultColumn is a slots dataclass and so has no
+                        # __dict__; asdict is what actually serialises it.
+                        result_schema=[
+                            asdict(c) for c in state.execution.columns
+                        ],
                     )
                 )
 
