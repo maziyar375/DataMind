@@ -5,11 +5,73 @@
  * metadata chips all read from persisted run data rather than from live
  * events, which is why reopening an old conversation shows the full history
  * of how an answer was reached rather than a bare paragraph.
+ *
+ * An assistant turn is laid out as an avatar gutter plus an open content
+ * column rather than a bordered card. Wrapping every answer in a panel made
+ * the transcript read as a stack of forms; only the things that genuinely are
+ * objects — a result table, the SQL — keep a border of their own.
  */
 import { useMemo, useState } from 'react'
 import type { Artifact, GeneratedQuery, RunDetail, RunStep, TableArtifactSpec } from '../api/types'
-import { Chip, Dot, dirOf, Icon, Spinner } from './ui'
+import { Chip, CopyButton, Dot, dirOf, Icon, Spinner } from './ui'
 import { NODE_META } from '../theme/tokens'
+
+// ── turn frame ────────────────────────────────────────────────────────────
+function AssistantAvatar({ busy, failed }: { busy?: boolean; failed?: boolean }) {
+  return (
+    <span
+      style={{
+        width: 30,
+        height: 30,
+        borderRadius: 9,
+        flexShrink: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: failed ? 'var(--red-bg)' : 'var(--accent-bg)',
+        border: `1px solid ${failed ? 'var(--red-border)' : 'var(--accent-border)'}`,
+        marginTop: 1,
+      }}
+    >
+      {busy ? (
+        <Spinner size={14} />
+      ) : failed ? (
+        <Icon.Alert size={15} stroke="var(--red)" />
+      ) : (
+        <Icon.Sparkle size={15} stroke="var(--accent)" />
+      )}
+    </span>
+  )
+}
+
+/** Avatar gutter plus content column, so every answer lines up down the page. */
+function Turn({
+  avatar, children,
+}: {
+  avatar: React.ReactNode
+  children: React.ReactNode
+}) {
+  return (
+    <div
+      className="rm-enter rm-turn"
+      style={{ display: 'flex', gap: 13, alignItems: 'flex-start', maxWidth: 780 }}
+    >
+      {avatar}
+      <div
+        style={{
+          flex: 1,
+          minWidth: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 12,
+          paddingTop: 3,
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  )
+}
 
 // ── user turn ─────────────────────────────────────────────────────────────
 export function UserBubble({ text }: { text: string }) {
@@ -20,14 +82,15 @@ export function UserBubble({ text }: { text: string }) {
       style={{
         alignSelf: 'flex-end',
         maxWidth: 560,
-        background: 'var(--accent-bg)',
-        border: '1px solid var(--accent-border)',
-        color: 'var(--text-strong)',
-        padding: '10px 14px',
-        borderRadius: 10,
+        background: 'var(--accent)',
+        color: 'var(--on-accent)',
+        padding: '10px 15px',
+        borderRadius: '14px 14px 4px 14px',
         fontSize: 14,
+        lineHeight: 1.55,
         whiteSpace: 'pre-wrap',
         wordBreak: 'break-word',
+        boxShadow: '0 1px 3px rgba(0,0,0,0.10)',
       }}
     >
       {text}
@@ -72,7 +135,7 @@ export function StepTrail({ steps }: { steps: RunStep[] }) {
               fontSize: 11,
               fontWeight: 500,
               padding: '4px 9px',
-              borderRadius: 5,
+              borderRadius: 6,
               color: running ? 'var(--text-strong)' : 'var(--text-dim)',
               background: running ? 'var(--accent-bg)' : 'var(--panel-alt)',
               border: running ? '1px solid var(--accent-border)' : '1px solid transparent',
@@ -90,6 +153,47 @@ export function StepTrail({ steps }: { steps: RunStep[] }) {
   )
 }
 
+/**
+ * A finished run's steps collapse to one line. The full trail is still a
+ * click away — it is the record of how the answer was reached — but it no
+ * longer competes with the answer itself in a long transcript.
+ */
+function StepSummary({ run }: { run: RunDetail }) {
+  const [open, setOpen] = useState(false)
+  if (run.steps.length === 0) return null
+
+  const total =
+    run.total_latency_ms ??
+    run.steps.reduce((sum, s) => sum + (s.duration_ms ?? 0), 0)
+  const seconds = (total / 1000).toFixed(total < 1000 ? 2 : 1)
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <button
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          alignSelf: 'flex-start',
+          fontSize: 11.5,
+          fontWeight: 500,
+          color: 'var(--text-faint)',
+          background: 'transparent',
+          border: 'none',
+          padding: 0,
+          cursor: 'pointer',
+        }}
+      >
+        <Icon.Chevron open={open} size={12} stroke="var(--text-faint)" />
+        Thought for {seconds}s · {run.steps.length} steps
+      </button>
+      {open && <StepTrail steps={run.steps} />}
+    </div>
+  )
+}
+
 export function ThinkingCard({ steps, detail }: { steps: RunStep[]; detail?: string }) {
   const active = steps.find((s) => s.status === 'RUNNING')
   const label = active
@@ -97,33 +201,17 @@ export function ThinkingCard({ steps, detail }: { steps: RunStep[]; detail?: str
     : (detail ?? 'Starting…')
 
   return (
-    <div
-      className="rm-enter"
-      style={{
-        maxWidth: 720,
-        background: 'var(--panel)',
-        border: '1px solid var(--border)',
-        borderRadius: 12,
-        padding: '16px 20px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 12,
-      }}
-    >
+    <Turn avatar={<AssistantAvatar busy />}>
       <div
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 9,
-          fontSize: 13,
+          fontSize: 13.5,
           color: 'var(--text-dim)',
         }}
       >
-        <Spinner size={14} />
         <span className="rm-pulse">{label}</span>
       </div>
       <StepTrail steps={steps} />
-    </div>
+    </Turn>
   )
 }
 
@@ -134,44 +222,51 @@ export function SqlPanel({ queries }: { queries: GeneratedQuery[] }) {
 
   const final = queries[queries.length - 1]
   const rejected = queries.filter((q) => q.validation_status !== 'VALID')
+  const finalSql = final.rewritten_sql ?? final.raw_sql
 
   return (
     <div
       style={{
         border: '1px solid var(--border)',
-        borderRadius: 9,
+        borderRadius: 10,
         overflow: 'hidden',
         background: 'var(--code-bg)',
       }}
     >
-      <button
-        onClick={() => setOpen(!open)}
-        aria-expanded={open}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          width: '100%',
-          padding: '9px 12px',
-          background: 'transparent',
-          border: 'none',
-          color: 'var(--text-dim)',
-          fontSize: 12,
-          fontWeight: 600,
-          cursor: 'pointer',
-          textAlign: 'left',
-        }}
-      >
-        <Icon.Chevron open={open} size={13} />
-        Generated SQL
-        {rejected.length > 0 && (
-          <span style={{ marginLeft: 'auto' }}>
+      <div style={{ display: 'flex', alignItems: 'center' }}>
+        <button
+          onClick={() => setOpen(!open)}
+          aria-expanded={open}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            flex: 1,
+            minWidth: 0,
+            padding: '10px 12px',
+            background: 'transparent',
+            border: 'none',
+            color: 'var(--text-dim)',
+            fontSize: 12,
+            fontWeight: 600,
+            cursor: 'pointer',
+            textAlign: 'left',
+          }}
+        >
+          <Icon.Chevron open={open} size={13} />
+          Generated SQL
+          {rejected.length > 0 && (
             <Chip tone="amber">
               {rejected.length} repair{rejected.length > 1 ? 's' : ''}
             </Chip>
+          )}
+        </button>
+        {final.validation_status === 'VALID' && (
+          <span style={{ paddingRight: 8, flexShrink: 0 }}>
+            <CopyButton text={finalSql} label="Copy SQL" />
           </span>
         )}
-      </button>
+      </div>
 
       {open && (
         <div style={{ borderTop: '1px solid var(--border)' }}>
@@ -211,7 +306,7 @@ export function SqlPanel({ queries }: { queries: GeneratedQuery[] }) {
           ))}
 
           {final.validation_status === 'VALID' && (
-            <div style={{ padding: '10px 14px' }}>
+            <div style={{ padding: '12px 14px' }}>
               <pre
                 className="mono"
                 style={{
@@ -223,7 +318,7 @@ export function SqlPanel({ queries }: { queries: GeneratedQuery[] }) {
                   lineHeight: 1.6,
                 }}
               >
-                {final.rewritten_sql ?? final.raw_sql}
+                {finalSql}
               </pre>
             </div>
           )}
@@ -252,7 +347,7 @@ export function ResultTable({ spec }: { spec: TableArtifactSpec }) {
       <div
         style={{
           border: '1px solid var(--border)',
-          borderRadius: 9,
+          borderRadius: 10,
           overflow: 'auto',
           maxHeight: expanded ? 420 : 'none',
         }}
@@ -466,40 +561,37 @@ function findScanned(artifacts: Artifact[]): number | null {
 // ── error card ────────────────────────────────────────────────────────────
 export function RunErrorCard({ run }: { run: RunDetail }) {
   return (
-    <div
-      className="rm-enter"
-      style={{
-        maxWidth: 720,
-        background: 'var(--red-bg)',
-        border: '1px solid var(--red-border)',
-        borderRadius: 12,
-        padding: '14px 18px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 8,
-      }}
-    >
+    <Turn avatar={<AssistantAvatar failed />}>
       <div
         style={{
+          background: 'var(--red-bg)',
+          border: '1px solid var(--red-border)',
+          borderRadius: 12,
+          padding: '13px 16px',
           display: 'flex',
-          alignItems: 'center',
+          flexDirection: 'column',
           gap: 8,
-          fontSize: 13.5,
-          fontWeight: 600,
-          color: 'var(--red)',
         }}
       >
-        <Icon.Alert size={15} />
-        {run.error_message ?? 'This run did not complete.'}
+        <div
+          style={{
+            fontSize: 13.5,
+            fontWeight: 600,
+            color: 'var(--red)',
+            lineHeight: 1.5,
+          }}
+        >
+          {run.error_message ?? 'This run did not complete.'}
+        </div>
+        {run.error_code && (
+          <span className="mono" style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+            {run.error_code}
+          </span>
+        )}
       </div>
-      {run.error_code && (
-        <span className="mono" style={{ fontSize: 11, color: 'var(--text-faint)' }}>
-          {run.error_code}
-        </span>
-      )}
       {run.steps.length > 0 && <StepTrail steps={run.steps} />}
       {run.queries.length > 0 && <SqlPanel queries={run.queries} />}
-    </div>
+    </Turn>
   )
 }
 
@@ -515,28 +607,14 @@ export function AssistantTurn({
   const spec = table?.spec as TableArtifactSpec | undefined
 
   return (
-    <div
-      className="rm-enter"
-      style={{
-        maxWidth: 720,
-        background: 'var(--panel)',
-        border: '1px solid var(--border)',
-        borderRadius: 12,
-        padding: '18px 20px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 16,
-      }}
-    >
-      {run && run.steps.length > 0 && <StepTrail steps={run.steps} />}
-
-      {spec && spec.rows.length > 1 && <ResultBars spec={spec} />}
+    <Turn avatar={<AssistantAvatar busy={streaming} />}>
+      {run && !streaming && <StepSummary run={run} />}
 
       <div
         dir={dirOf(text)}
         style={{
           fontSize: 14.5,
-          lineHeight: 1.55,
+          lineHeight: 1.65,
           color: 'var(--text)',
           whiteSpace: 'pre-wrap',
         }}
@@ -558,9 +636,20 @@ export function AssistantTurn({
         )}
       </div>
 
+      {spec && spec.rows.length > 1 && <ResultBars spec={spec} />}
       {spec && <ResultTable spec={spec} />}
       {run && run.queries.length > 0 && <SqlPanel queries={run.queries} />}
       {run && <RunMetadata run={run} />}
-    </div>
+
+      {/* Revealed on hover of the turn, so a finished answer stays quiet. */}
+      {!streaming && text && (
+        <div
+          className="rm-turn-actions"
+          style={{ display: 'flex', alignItems: 'center', gap: 2, marginLeft: -6 }}
+        >
+          <CopyButton text={text} />
+        </div>
+      )}
+    </Turn>
   )
 }

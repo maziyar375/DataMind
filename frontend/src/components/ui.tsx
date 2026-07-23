@@ -110,6 +110,17 @@ export const Icon = {
       <path d="M18 6L6 18M6 6l12 12" />
     </svg>
   ),
+  Copy: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <rect x="9" y="9" width="12" height="12" rx="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  ),
+  ArrowDown: ({ size = 14, stroke = 'currentColor', strokeWidth = 2.2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <path d="M12 5v14M19 12l-7 7-7-7" />
+    </svg>
+  ),
   Alert: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
     <svg {...iconBase(size, stroke, strokeWidth)}>
       <circle cx="12" cy="12" r="10" />
@@ -373,6 +384,45 @@ export function EmptyState({
       </div>
       {action}
     </div>
+  )
+}
+
+/** Copies text and confirms it in place, so the click has visible feedback. */
+export function CopyButton({
+  text, label = 'Copy',
+}: {
+  text: string
+  label?: string
+}) {
+  const [copied, setCopied] = useState(false)
+
+  return (
+    <button
+      onClick={() => {
+        void navigator.clipboard.writeText(text).then(() => {
+          setCopied(true)
+          setTimeout(() => setCopied(false), 1400)
+        })
+      }}
+      title={label}
+      aria-label={label}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        fontSize: 11.5,
+        fontWeight: 500,
+        color: copied ? 'var(--green)' : 'var(--text-faint)',
+        background: 'transparent',
+        border: 'none',
+        padding: '4px 6px',
+        borderRadius: 6,
+        cursor: 'pointer',
+      }}
+    >
+      {copied ? <Icon.Check size={13} stroke="var(--green)" /> : <Icon.Copy size={13} />}
+      {copied ? 'Copied' : label}
+    </button>
   )
 }
 

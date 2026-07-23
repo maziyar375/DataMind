@@ -7,7 +7,7 @@ import {
   AssistantTurn, RunErrorCard, ThinkingCard, UserBubble,
 } from '../components/chat'
 import {
-  EmptyState, ErrorNote, Icon, PrimaryButton, Spinner, dirOf, initialOf,
+  ErrorNote, Icon, PrimaryButton, Spinner, dirOf, initialOf,
 } from '../components/ui'
 
 export default function ChatPage() {
@@ -29,6 +29,8 @@ export default function ChatPage() {
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
   const stopStreamRef = useRef<(() => void) | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const followRef = useRef(true)
+  const [showJump, setShowJump] = useState(false)
 
   // ── bootstrap ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -83,7 +85,26 @@ export default function ChatPage() {
     if (conversation?.default_llm_config_id) setModelId(conversation.default_llm_config_id)
   }, [activeId, loadMessages])
 
+  // Follow new content only when the reader is already at the end. Scrolling
+  // back to re-read an earlier answer should not be yanked forward by a
+  // streaming token.
+  function handleScroll() {
+    const el = scrollRef.current
+    if (!el) return
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+    followRef.current = distance < 120
+    setShowJump(distance > 240)
+  }
+
+  function jumpToEnd() {
+    const el = scrollRef.current
+    if (!el) return
+    followRef.current = true
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+  }
+
   useEffect(() => {
+    if (!followRef.current) return
     scrollRef.current?.scrollTo({
       top: scrollRef.current.scrollHeight,
       behavior: 'smooth',
@@ -151,8 +172,9 @@ export default function ChatPage() {
   }
 
   // ── send ────────────────────────────────────────────────────────────────
-  async function send() {
-    const content = draft.trim()
+  /** `override` lets a suggestion chip send without waiting for a state tick. */
+  async function send(override?: string) {
+    const content = (override ?? draft).trim()
     if (!content || activeRunId) return
 
     if (!connectionId || !modelId) {
@@ -288,15 +310,15 @@ export default function ChatPage() {
           }}
         >
           <div
+            dir={dirOf(activeTitle)}
             style={{
-              fontSize: 11,
+              fontSize: 14,
               fontWeight: 600,
-              color: 'var(--text-faint)',
-              textTransform: 'uppercase',
-              letterSpacing: '0.05em',
+              color: 'var(--text-strong)',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
+              minWidth: 0,
             }}
           >
             {activeTitle}
@@ -331,48 +353,79 @@ export default function ChatPage() {
           </div>
         </header>
 
-        <div
-          ref={scrollRef}
-          style={{
-            flex: 1,
-            overflowY: 'auto',
-            padding: '24px 28px 12px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 20,
-          }}
-        >
-          {error && <ErrorNote>{error}</ErrorNote>}
+        <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
+          <div
+            ref={scrollRef}
+            onScroll={handleScroll}
+            style={{ height: '100%', overflowY: 'auto' }}
+          >
+            <div
+              style={{
+                maxWidth: 820,
+                margin: '0 auto',
+                padding: '28px 28px 16px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 22,
+              }}
+            >
+              {error && <ErrorNote>{error}</ErrorNote>}
 
-          {messages.length === 0 && !activeRunId && (
-            <EmptyState
-              title="Ask a question about your data"
-              body="Raymand writes the SQL, checks it against your schema, runs it on a read-only connection, and shows you exactly what it did."
-            />
+              {messages.length === 0 && !activeRunId && (
+                <Welcome onPick={(text) => void send(text)} />
+              )}
+
+              {messages.map((message) => {
+                if (message.role === 'USER') {
+                  return <UserBubble key={message.id} text={message.content ?? ''} />
+                }
+                if (message.run && message.run.status === 'FAILED') {
+                  return <RunErrorCard key={message.id} run={message.run} />
+                }
+                return (
+                  <AssistantTurn
+                    key={message.id}
+                    text={message.content ?? ''}
+                    run={message.run}
+                  />
+                )
+              })}
+
+              {activeRunId &&
+                (liveText ? (
+                  <AssistantTurn text={liveText} run={null} streaming />
+                ) : (
+                  <ThinkingCard steps={liveSteps} />
+                ))}
+            </div>
+          </div>
+
+          {showJump && (
+            <button
+              onClick={jumpToEnd}
+              aria-label="Jump to latest"
+              title="Jump to latest"
+              style={{
+                position: 'absolute',
+                bottom: 14,
+                left: '50%',
+                transform: 'translateX(-50%)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 32,
+                height: 32,
+                borderRadius: '50%',
+                background: 'var(--panel)',
+                border: '1px solid var(--border-strong)',
+                color: 'var(--text-dim)',
+                cursor: 'pointer',
+                boxShadow: '0 4px 14px rgba(0,0,0,0.16)',
+              }}
+            >
+              <Icon.ArrowDown size={15} />
+            </button>
           )}
-
-          {messages.map((message) => {
-            if (message.role === 'USER') {
-              return <UserBubble key={message.id} text={message.content ?? ''} />
-            }
-            if (message.run && message.run.status === 'FAILED') {
-              return <RunErrorCard key={message.id} run={message.run} />
-            }
-            return (
-              <AssistantTurn
-                key={message.id}
-                text={message.content ?? ''}
-                run={message.run}
-              />
-            )
-          })}
-
-          {activeRunId &&
-            (liveText ? (
-              <AssistantTurn text={liveText} run={null} streaming />
-            ) : (
-              <ThinkingCard steps={liveSteps} />
-            ))}
         </div>
 
         <Composer
@@ -383,6 +436,102 @@ export default function ChatPage() {
         />
       </div>
     </div>
+  )
+}
+
+/**
+ * The opening screen. An empty transcript is the worst place to be told only
+ * what the product does, so it also offers questions that are safe to ask of
+ * any schema — the first one routes as METADATA and never touches SQL.
+ */
+const STARTERS = [
+  'What tables do I have?',
+  'Which tables can I join together?',
+  'How many records are in each table?',
+  'Show me a sample of rows',
+]
+
+function Welcome({ onPick }: { onPick: (text: string) => void }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 14,
+        padding: '56px 16px 24px',
+        textAlign: 'center',
+      }}
+    >
+      <span
+        style={{
+          width: 46,
+          height: 46,
+          borderRadius: 13,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'var(--accent-bg)',
+          border: '1px solid var(--accent-border)',
+        }}
+      >
+        <Icon.Sparkle size={22} stroke="var(--accent)" />
+      </span>
+
+      <div style={{ fontSize: 19, fontWeight: 700, color: 'var(--text-strong)' }}>
+        Ask a question about your data
+      </div>
+      <p
+        style={{
+          fontSize: 13.5,
+          color: 'var(--text-dim)',
+          maxWidth: 440,
+          lineHeight: 1.6,
+          margin: 0,
+        }}
+      >
+        Raymand writes the SQL, checks it against your schema, runs it on a
+        read-only connection, and shows you exactly what it did.
+      </p>
+
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 8,
+          justifyContent: 'center',
+          marginTop: 6,
+        }}
+      >
+        {STARTERS.map((text) => (
+          <StarterChip key={text} text={text} onClick={() => onPick(text)} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function StarterChip({ text, onClick }: { text: string; onClick: () => void }) {
+  const [hover, setHover] = useState(false)
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        fontSize: 12.5,
+        fontWeight: 500,
+        color: hover ? 'var(--text-strong)' : 'var(--text-dim)',
+        background: hover ? 'var(--panel-hover)' : 'var(--panel)',
+        border: `1px solid ${hover ? 'var(--accent-border)' : 'var(--border)'}`,
+        padding: '8px 13px',
+        borderRadius: 20,
+        cursor: 'pointer',
+        transition: 'background .12s ease, border-color .12s ease, color .12s ease',
+      }}
+    >
+      {text}
+    </button>
   )
 }
 

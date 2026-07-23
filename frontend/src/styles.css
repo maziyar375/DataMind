@@ -44,6 +44,12 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
    hover tint comes from a per-button --rm-hover-bg custom property. */
 .rm-icon-btn:hover { background: var(--rm-hover-bg) !important; }
 
+/* A finished answer stays quiet until you reach for it. Kept visible for
+   keyboard users, who never generate a hover. */
+.rm-turn-actions { opacity: 0; transition: opacity .15s ease; }
+.rm-turn:hover .rm-turn-actions,
+.rm-turn-actions:focus-within { opacity: 1; }
+
 @keyframes rm-spin { to { transform: rotate(360deg); } }
 @keyframes rm-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 @keyframes rm-fade-up {
