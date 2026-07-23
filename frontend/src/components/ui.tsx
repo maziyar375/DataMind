@@ -43,7 +43,30 @@ const LOGO_SEAM_H = 'M6,52 L60,52 C60,63 74,63 74,52 L94,52'
 // head, all on a dark app-icon tile.
 const LOGO_INK = '#161038'
 
+// The logo prefers the real brand image at /brand.png (drop your exact file
+// there and it is used verbatim, everywhere). Until that file exists the
+// drawn mark below is shown as an automatic fallback — no broken image.
 export function Logo({ size = 26 }: { size?: number }) {
+  const [failed, setFailed] = React.useState(false)
+  if (failed) return <LogoMark size={size} />
+  return (
+    <img
+      src="/brand.png"
+      width={size}
+      height={size}
+      alt="DataMind"
+      onError={() => setFailed(true)}
+      style={{
+        flexShrink: 0,
+        display: 'block',
+        borderRadius: Math.round(size * 0.22),
+        objectFit: 'cover',
+      }}
+    />
+  )
+}
+
+function LogoMark({ size = 26 }: { size?: number }) {
   const uid = 'lg' + React.useId().replace(/[^a-zA-Z0-9]/g, '')
   const tile = `${uid}t`, head = `${uid}h`
   const bg = `${uid}bg`, gV = `${uid}v`, gM = `${uid}m`, gB = `${uid}b`, gF = `${uid}f`
