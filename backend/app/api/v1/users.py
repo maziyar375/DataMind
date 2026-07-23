@@ -9,7 +9,11 @@ from sqlalchemy import select
 
 from app.api.deps import AdminDep, DbDep, SettingsDep
 from app.api.schemas import (
-    AdminSetPasswordRequest, UserCreate, UserInviteResponse, UserRead, UserUpdate,
+    AdminSetPasswordRequest,
+    UserCreate,
+    UserInviteResponse,
+    UserRead,
+    UserUpdate,
 )
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.domain.value_objects import Role, UserStatus

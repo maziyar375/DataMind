@@ -19,18 +19,31 @@ from app.core.clock import utcnow
 from app.core.config import Settings
 from app.core.errors import NotFoundError, RunTimeoutError
 from app.core.logging import get_logger
+from app.domain.ports.llm import ProviderCapabilities, ResolvedLLM
 from app.domain.value_objects import (
-    ArtifactKind, DatabaseKind, MessageRole, RunStatus, StepName, StepStatus,
+    ArtifactKind,
+    DatabaseKind,
+    MessageRole,
+    RunStatus,
+    StepStatus,
 )
 from app.infra.connectors.factory import build_connector
 from app.infra.crypto.aesgcm_box import AesGcmSecretBox
 from app.infra.db.models import (
-    Artifact, Conversation, DatabaseConnection, GeneratedQuery, LlmConfig,
-    Message, QueryExecution, Run, RunEventRow, RunStep, SchemaSnapshotRow,
+    Artifact,
+    Conversation,
+    DatabaseConnection,
+    GeneratedQuery,
+    LlmConfig,
+    Message,
+    QueryExecution,
+    Run,
+    RunEventRow,
+    RunStep,
+    SchemaSnapshotRow,
 )
 from app.infra.events.bus import event_bus
 from app.infra.llm.litellm_gateway import LiteLLMGateway
-from app.domain.ports.llm import ProviderCapabilities, ResolvedLLM
 from app.pipeline.nodes import NodeDeps
 from app.pipeline.pipeline import AnalyticsPipeline
 from app.pipeline.state import RunState
@@ -399,7 +412,9 @@ class RunService:
         message = await self._db.get(Message, run.user_message_id)
         return (message.content if message else "") or ""
 
-    async def _recent_history(self, conversation_id: UUID, limit: int = 6) -> list[dict[str, str]]:
+    async def _recent_history(
+        self, conversation_id: UUID, limit: int = 6
+    ) -> list[dict[str, str]]:
         result = await self._db.execute(
             select(Message)
             .where(Message.conversation_id == conversation_id)

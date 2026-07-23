@@ -9,7 +9,10 @@ from sqlalchemy import select, update
 
 from app.api.deps import CtxDep, DbDep, SecretBoxDep, SettingsDep
 from app.api.schemas import (
-    LlmConfigCreate, LlmConfigRead, LlmConfigTestRequest, LlmConfigUpdate,
+    LlmConfigCreate,
+    LlmConfigRead,
+    LlmConfigTestRequest,
+    LlmConfigUpdate,
     TestResult,
 )
 from app.core.clock import utcnow

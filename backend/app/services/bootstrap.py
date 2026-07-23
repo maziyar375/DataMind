@@ -35,7 +35,7 @@ async def ensure_admin(db: AsyncSession, settings: Settings) -> None:
     )
     await db.commit()
 
-    if password == "raymand":
+    if password == "raymand":  # noqa: S105  (comparing against the known default to warn)
         log.warning(
             "admin_bootstrap_default_password",
             message="The bootstrap admin is using the default password. "

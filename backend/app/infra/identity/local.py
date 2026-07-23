@@ -22,7 +22,9 @@ from app.core.clock import utcnow
 from app.core.config import Settings
 from app.core.errors import AuthenticationError
 from app.domain.ports.identity import (
-    AuthenticatedIdentity, Credentials, SessionTokens,
+    AuthenticatedIdentity,
+    Credentials,
+    SessionTokens,
 )
 from app.domain.value_objects import UserStatus
 from app.infra.db.models import Session as SessionRow

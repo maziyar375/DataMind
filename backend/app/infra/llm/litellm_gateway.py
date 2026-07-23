@@ -16,12 +16,16 @@ from collections.abc import AsyncIterator, Sequence
 from typing import Any, TypeVar
 
 import litellm
-from pydantic import BaseModel, ValidationError as PydanticValidationError
+from pydantic import BaseModel
+from pydantic import ValidationError as PydanticValidationError
 
 from app.core.errors import LLMError
 from app.core.logging import get_logger
 from app.domain.ports.llm import (
-    ChatMessage, Completion, ProviderCapabilities, ResolvedLLM,
+    ChatMessage,
+    Completion,
+    ProviderCapabilities,
+    ResolvedLLM,
 )
 
 T = TypeVar("T", bound=BaseModel)
@@ -40,9 +44,11 @@ class LiteLLMGateway:
     # ── request shaping ──────────────────────────────────────────────────
     def _kwargs(self, llm: ResolvedLLM, messages: Sequence[ChatMessage]) -> dict[str, Any]:
         model = llm.model
-        if llm.provider == "Ollama" and not model.startswith("ollama/"):
-            model = f"openai/{model}"
-        elif llm.provider in {"OpenAI-compatible", "Custom"} and "/" not in model:
+        needs_openai_prefix = (
+            (llm.provider == "Ollama" and not model.startswith("ollama/"))
+            or (llm.provider in {"OpenAI-compatible", "Custom"} and "/" not in model)
+        )
+        if needs_openai_prefix:
             model = f"openai/{model}"
 
         kwargs: dict[str, Any] = {
@@ -159,7 +165,7 @@ class LiteLLMGateway:
         )
 
 
-def _parse_into(schema: type[T], raw: str) -> T:
+def _parse_into(schema: type[T], raw: str) -> T:  # noqa: UP047  (matches TypeVar used above)
     candidate = raw
     fenced = _JSON_FENCE.search(raw)
     if fenced:

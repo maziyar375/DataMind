@@ -16,11 +16,20 @@ from app.domain.ports.database import DatabaseConnector
 from app.domain.ports.llm import ChatMessage, LLMGateway, ResolvedLLM
 from app.pipeline.contracts import SqlProposal
 from app.pipeline.prompts import (
-    ANSWER_SYSTEM, ANSWER_USER, GENERATE_SYSTEM, GENERATE_USER,
-    REPAIR_SYSTEM, ROUTE_SYSTEM,
+    ANSWER_SYSTEM,
+    ANSWER_USER,
+    GENERATE_SYSTEM,
+    GENERATE_USER,
+    REPAIR_SYSTEM,
+    ROUTE_SYSTEM,
 )
 from app.pipeline.state import (
-    ExecutionResult, NodeResult, RetrievedContext, RunError, RunState, SqlAttempt,
+    ExecutionResult,
+    NodeResult,
+    RetrievedContext,
+    RunError,
+    RunState,
+    SqlAttempt,
 )
 from app.sqlguard import GuardPolicy, guard
 from app.sqlguard.validator import ValidationReport
@@ -296,7 +305,7 @@ async def execute(state: RunState, deps: NodeDeps) -> NodeResult:
 
 # ── present ──────────────────────────────────────────────────────────────
 async def present(state: RunState, deps: NodeDeps) -> NodeResult:
-    from app.services.disclosure_service import disclose
+    from app.pipeline.disclosure import disclose
 
     assert state.execution is not None
     state.disclosed = disclose(state.execution, state.disclosure_policy)

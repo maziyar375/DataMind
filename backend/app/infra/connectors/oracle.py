@@ -19,6 +19,7 @@ a read-only grant and still sees tables owned by another schema.
 """
 from __future__ import annotations
 
+import contextlib
 import time
 from datetime import date, datetime
 from decimal import Decimal
@@ -28,8 +29,13 @@ import oracledb
 
 from app.core.errors import ConnectorError
 from app.domain.ports.database import (
-    ColumnInfo, ConnectionProbe, QueryResult, RelationshipInfo,
-    ResultColumn, SchemaSnapshot, TableInfo,
+    ColumnInfo,
+    ConnectionProbe,
+    QueryResult,
+    RelationshipInfo,
+    ResultColumn,
+    SchemaSnapshot,
+    TableInfo,
 )
 
 _TABLE_SQL = """
@@ -119,10 +125,8 @@ class OracleConnector:
 
     async def close(self) -> None:
         if self._pool is not None:
-            try:
+            with contextlib.suppress(Exception):
                 await self._pool.close()
-            except Exception:
-                pass
             self._pool = None
 
     # ── probe ────────────────────────────────────────────────────────────
@@ -171,11 +175,8 @@ class OracleConnector:
         except Exception:
             await conn.rollback()
             return True
-        try:
-            with conn.cursor() as cur:
-                await cur.execute("DROP TABLE raymand_probe_tmp")
-        except Exception:
-            pass
+        with contextlib.suppress(Exception), conn.cursor() as cur:
+            await cur.execute("DROP TABLE raymand_probe_tmp")
         await conn.rollback()
         return False
 

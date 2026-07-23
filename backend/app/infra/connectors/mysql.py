@@ -29,8 +29,13 @@ import aiomysql
 
 from app.core.errors import ConnectorError
 from app.domain.ports.database import (
-    ColumnInfo, ConnectionProbe, QueryResult, RelationshipInfo,
-    ResultColumn, SchemaSnapshot, TableInfo,
+    ColumnInfo,
+    ConnectionProbe,
+    QueryResult,
+    RelationshipInfo,
+    ResultColumn,
+    SchemaSnapshot,
+    TableInfo,
 )
 
 # ER_QUERY_TIMEOUT: the statement outlived max_execution_time.
@@ -186,20 +191,19 @@ class MySqlConnector:
         marks = ", ".join(["%s"] * len(schemas))
 
         pool = await self._acquire()
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute("SELECT VERSION()")
-                row = await cur.fetchone()
-                version = row[0] if row else None
+        async with pool.acquire() as conn, conn.cursor() as cur:
+            await cur.execute("SELECT VERSION()")
+            row = await cur.fetchone()
+            version = row[0] if row else None
 
-                await cur.execute(_TABLE_SQL.format(placeholders=marks), schemas)
-                col_rows = await cur.fetchall()
-                await cur.execute(_PK_SQL.format(placeholders=marks), schemas)
-                pk_rows = await cur.fetchall()
-                await cur.execute(_FK_SQL.format(placeholders=marks), schemas)
-                fk_rows = await cur.fetchall()
-                await cur.execute(_ROWCOUNT_SQL.format(placeholders=marks), schemas)
-                count_rows = await cur.fetchall()
+            await cur.execute(_TABLE_SQL.format(placeholders=marks), schemas)
+            col_rows = await cur.fetchall()
+            await cur.execute(_PK_SQL.format(placeholders=marks), schemas)
+            pk_rows = await cur.fetchall()
+            await cur.execute(_FK_SQL.format(placeholders=marks), schemas)
+            fk_rows = await cur.fetchall()
+            await cur.execute(_ROWCOUNT_SQL.format(placeholders=marks), schemas)
+            count_rows = await cur.fetchall()
 
         pks = {(r[0], r[1], r[2]) for r in pk_rows}
         fks = {
@@ -252,23 +256,22 @@ class MySqlConnector:
         pool = await self._acquire()
         started = time.perf_counter()
         try:
-            async with pool.acquire() as conn:
-                async with conn.cursor() as cur:
-                    # `SET SESSION max_execution_time`, not MariaDB's
-                    # `SET STATEMENT ... FOR ...`, which MySQL rejects as a
-                    # syntax error. It bounds read-only SELECTs, which is
-                    # exactly the population the guard lets through.
-                    await cur.execute(
-                        "SET SESSION max_execution_time = %s",
-                        (int(statement_timeout_ms),),
-                    )
-                    await cur.execute("START TRANSACTION READ ONLY")
-                    try:
-                        await cur.execute(sql)
-                        records = await cur.fetchall()
-                        description = cur.description
-                    finally:
-                        await cur.execute("ROLLBACK")
+            async with pool.acquire() as conn, conn.cursor() as cur:
+                # `SET SESSION max_execution_time`, not MariaDB's
+                # `SET STATEMENT ... FOR ...`, which MySQL rejects as a
+                # syntax error. It bounds read-only SELECTs, which is
+                # exactly the population the guard lets through.
+                await cur.execute(
+                    "SET SESSION max_execution_time = %s",
+                    (int(statement_timeout_ms),),
+                )
+                await cur.execute("START TRANSACTION READ ONLY")
+                try:
+                    await cur.execute(sql)
+                    records = await cur.fetchall()
+                    description = cur.description
+                finally:
+                    await cur.execute("ROLLBACK")
         except Exception as err:
             # 3024 is the only code that means the statement outlived its
             # budget. Matching on message text instead would let an unrelated
@@ -307,11 +310,10 @@ class MySqlConnector:
         """Estimated rows scanned. Powers the metadata chip in the chat UI."""
         pool = await self._acquire()
         try:
-            async with pool.acquire() as conn:
-                async with conn.cursor() as cur:
-                    await cur.execute(f"EXPLAIN {sql}")
-                    rows = await cur.fetchall()
-                    names = [d[0] for d in cur.description]
+            async with pool.acquire() as conn, conn.cursor() as cur:
+                await cur.execute(f"EXPLAIN {sql}")
+                rows = await cur.fetchall()
+                names = [d[0] for d in cur.description]
         except Exception:
             return None
 

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.core.context import RequestContext, get_correlation_id
-from app.core.errors import AuthenticationError, PermissionError_
+from app.core.errors import AuthenticationError, ForbiddenError
 from app.infra.crypto.aesgcm_box import AesGcmSecretBox
 from app.infra.db.session import get_sessionmaker
 from app.infra.identity.local import LocalIdentityProvider
@@ -68,7 +68,7 @@ CtxDep = Annotated[RequestContext, Depends(get_ctx)]
 
 async def require_admin(ctx: CtxDep) -> RequestContext:
     if not ctx.is_admin:
-        raise PermissionError_("This action requires an administrator account.")
+        raise ForbiddenError("This action requires an administrator account.")
     return ctx
 
 

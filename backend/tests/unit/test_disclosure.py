@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from app.domain.ports.database import ResultColumn
+from app.pipeline.disclosure import disclose
 from app.pipeline.state import ExecutionResult
-from app.services.disclosure_service import disclose
 
 RESULT = ExecutionResult(
     columns=[

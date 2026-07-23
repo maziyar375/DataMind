@@ -32,7 +32,7 @@ class ChartIntent(BaseModel):
     title: str | None = Field(default=None, max_length=120)
 
     @model_validator(mode="after")
-    def _axes_required(self) -> "ChartIntent":
+    def _axes_required(self) -> ChartIntent:
         if self.chart_type != "none" and (self.x_axis is None or self.y_axis is None):
             raise ValueError("x_axis and y_axis are required unless chart_type is 'none'")
         return self
@@ -60,7 +60,7 @@ def compile_vega_lite(
     intent: ChartIntent, columns: list[ResultColumn], rows: list[list[Any]]
 ) -> dict[str, Any]:
     names = [c.name for c in columns]
-    data = [dict(zip(names, row)) for row in rows]
+    data = [dict(zip(names, row, strict=True)) for row in rows]
 
     assert intent.x_axis is not None and intent.y_axis is not None
     x, y = intent.x_axis, intent.y_axis

@@ -123,7 +123,9 @@ class SqlValidator:
             if needle in lowered:
                 return ValidationIssue(
                     rule_id="E_FORBIDDEN_CONSTRUCT",
-                    message=f"The statement contains a forbidden construct: {needle.strip()!r}.",
+                    message=(
+                        f"The statement contains a forbidden construct: {needle.strip()!r}."
+                    ),
                     hint="Query only the business tables in the provided schema.",
                 )
         if "--" in sql or "/*" in sql:
@@ -189,7 +191,9 @@ class SqlValidator:
                     report.issues.append(
                         ValidationIssue(
                             rule_id="E_TABLE_NOT_ALLOWED",
-                            message=f"Table {bare!r} is not present in this connection's schema.",
+                            message=(
+                                f"Table {bare!r} is not present in this connection's schema."
+                            ),
                             hint="Use only tables listed in the schema you were given.",
                             node_sql=_safe_sql(table, self._policy.dialect),
                         )
@@ -268,7 +272,10 @@ class SqlValidator:
                     report.issues.append(
                         ValidationIssue(
                             rule_id="E_UNKNOWN_ALIAS",
-                            message=f"Alias {table_ref!r} is not bound to any table in the FROM clause.",
+                            message=(
+                                f"Alias {table_ref!r} is not bound to any "
+                                "table in the FROM clause."
+                            ),
                             node_sql=_safe_sql(column, self._policy.dialect),
                         )
                     )
@@ -306,7 +313,9 @@ class SqlValidator:
             report.issues.append(
                 ValidationIssue(
                     rule_id="E_TOO_MANY_JOINS",
-                    message=f"{join_count} joins exceeds the limit of {self._policy.max_joins}.",
+                    message=(
+                        f"{join_count} joins exceeds the limit of {self._policy.max_joins}."
+                    ),
                 )
             )
 

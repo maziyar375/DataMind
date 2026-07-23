@@ -8,8 +8,12 @@ from sqlalchemy import select, update
 
 from app.api.deps import CtxDep, DbDep, SecretBoxDep
 from app.api.schemas import (
-    ConnectionCreate, ConnectionRead, ConnectionTestRequest,
-    ConnectionTestResult, ConnectionUpdate, SchemaRead,
+    ConnectionCreate,
+    ConnectionRead,
+    ConnectionTestRequest,
+    ConnectionTestResult,
+    ConnectionUpdate,
+    SchemaRead,
 )
 from app.core.clock import utcnow
 from app.core.errors import ConflictError, NotFoundError

@@ -23,8 +23,13 @@ import asyncpg
 
 from app.core.errors import ConnectorError
 from app.domain.ports.database import (
-    ColumnInfo, ConnectionProbe, QueryResult, RelationshipInfo,
-    ResultColumn, SchemaSnapshot, TableInfo,
+    ColumnInfo,
+    ConnectionProbe,
+    QueryResult,
+    RelationshipInfo,
+    ResultColumn,
+    SchemaSnapshot,
+    TableInfo,
 )
 
 _NUMERIC_TYPES = {
@@ -255,12 +260,11 @@ class PostgresConnector:
         pool = await self._acquire()
         started = time.perf_counter()
         try:
-            async with pool.acquire() as conn:
-                async with conn.transaction(readonly=True):
-                    await conn.execute(
-                        f"SET LOCAL statement_timeout = {int(statement_timeout_ms)}"
-                    )
-                    records = await conn.fetch(sql)
+            async with pool.acquire() as conn, conn.transaction(readonly=True):
+                await conn.execute(
+                    f"SET LOCAL statement_timeout = {int(statement_timeout_ms)}"
+                )
+                records = await conn.fetch(sql)
         except asyncpg.QueryCanceledError as err:
             raise ConnectorError(
                 f"Query exceeded the {statement_timeout_ms}ms statement timeout."
@@ -278,7 +282,7 @@ class PostgresConnector:
                 db_type=_python_to_db_type(records[0][key]),
                 semantic_type=_semantic_type(records[0][key]),
             )
-            for key in records[0].keys()
+            for key in records[0]
         ]
         truncated = len(records) > max_rows
         rows = [
@@ -297,11 +301,10 @@ class PostgresConnector:
         """Estimated rows scanned. Powers the metadata chip in the chat UI."""
         pool = await self._acquire()
         try:
-            async with pool.acquire() as conn:
-                async with conn.transaction(readonly=True):
-                    plan = await conn.fetchval(
-                        f"EXPLAIN (FORMAT JSON) {sql}"
-                    )
+            async with pool.acquire() as conn, conn.transaction(readonly=True):
+                plan = await conn.fetchval(
+                    f"EXPLAIN (FORMAT JSON) {sql}"
+                )
         except Exception:
             return None
 

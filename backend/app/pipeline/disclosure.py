@@ -3,6 +3,10 @@
 This is one of the three things the architecture refuses to simplify. The
 policy is enforced here, in one place, and the chat header shows the user
 which policy is in force at the moment they ask.
+
+It lives in the pipeline layer because it is a pure transformation over a
+pipeline `ExecutionResult` — no I/O, no service dependencies — and the
+`present` node applies it as the last step before the model sees a result.
 """
 from __future__ import annotations
 

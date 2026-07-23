@@ -56,6 +56,8 @@ ignore = ["S101", "B008", "S104"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S", "E501"]
+# Alembic revisions are generated; their column definitions run long.
+"app/infra/db/migrations/versions/*" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -71,12 +73,18 @@ testpaths = ["tests"]
 # ── The dependency rule, enforced rather than documented ─────────────────
 [tool.importlinter]
 root_package = "app"
+# Required by import-linter when a forbidden contract names external packages
+# (fastapi, sqlalchemy, litellm) so they appear in the import graph.
+include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "Layered architecture: api -> services -> domain <- infra"
 type = "layers"
 layers = ["app.api", "app.services", "app.pipeline", "app.domain"]
+# Services may reach into infra (adapters). infra is not a layer here, so this
+# is unconstrained anyway; keep the note but do not error if it matches nothing.
 ignore_imports = ["app.services.* -> app.infra.*"]
+unmatched_ignore_imports_alerting = "none"
 
 [[tool.importlinter.contracts]]
 name = "domain imports no frameworks and no infrastructure"

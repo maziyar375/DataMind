@@ -20,6 +20,7 @@ directly instead of requiring a join through a constraint name.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import math
 import time
 from datetime import date, datetime
@@ -30,8 +31,13 @@ import pymssql
 
 from app.core.errors import ConnectorError
 from app.domain.ports.database import (
-    ColumnInfo, ConnectionProbe, QueryResult, RelationshipInfo,
-    ResultColumn, SchemaSnapshot, TableInfo,
+    ColumnInfo,
+    ConnectionProbe,
+    QueryResult,
+    RelationshipInfo,
+    ResultColumn,
+    SchemaSnapshot,
+    TableInfo,
 )
 
 _TABLE_SQL = """
@@ -169,11 +175,8 @@ class MsSqlConnector:
             except Exception:
                 readonly = True
             else:
-                try:
-                    with conn.cursor() as cur:
-                        cur.execute("DROP TABLE dbo.raymand_probe_tmp")
-                except Exception:
-                    pass
+                with contextlib.suppress(Exception), conn.cursor() as cur:
+                    cur.execute("DROP TABLE dbo.raymand_probe_tmp")
             conn.rollback()
             return version, readonly
         finally:

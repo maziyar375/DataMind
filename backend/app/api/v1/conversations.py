@@ -12,16 +12,29 @@ from sqlalchemy import func, select
 
 from app.api.deps import CtxDep, DbDep, SettingsDep
 from app.api.schemas import (
-    ArtifactRead, ConversationCreate, ConversationRead, ConversationUpdate,
-    GeneratedQueryRead, MessageAccepted, MessageCreate, MessageRead,
-    RunRead, RunStepRead,
+    ArtifactRead,
+    ConversationCreate,
+    ConversationRead,
+    ConversationUpdate,
+    GeneratedQueryRead,
+    MessageAccepted,
+    MessageCreate,
+    MessageRead,
+    RunRead,
+    RunStepRead,
 )
-from app.core.clock import utcnow
 from app.core.errors import NotFoundError
 from app.domain.value_objects import RunStatus
 from app.infra.db.models import (
-    Artifact, Conversation, DatabaseConnection, GeneratedQuery, LlmConfig,
-    Message, Run, RunEventRow, RunStep,
+    Artifact,
+    Conversation,
+    DatabaseConnection,
+    GeneratedQuery,
+    LlmConfig,
+    Message,
+    Run,
+    RunEventRow,
+    RunStep,
 )
 from app.infra.events.bus import event_bus
 from app.services.run_service import RunService

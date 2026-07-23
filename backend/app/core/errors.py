@@ -35,7 +35,7 @@ class AuthenticationError(AppError):
     title = "Authentication required"
 
 
-class PermissionError_(AppError):
+class ForbiddenError(AppError):
     code = "E_FORBIDDEN"
     http_status = 403
     title = "Not permitted"
