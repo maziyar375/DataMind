@@ -44,6 +44,12 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
    hover tint comes from a per-button --rm-hover-bg custom property. */
 .rm-icon-btn:hover { background: var(--rm-hover-bg) !important; }
 
+/* Dropdown menu rows (header Database/Model pickers). Only unselected rows
+   carry this class, so the selected row keeps its inline accent tint while
+   the rest light up on hover. !important is needed to beat the inline
+   transparent background. */
+.rm-menu-item:hover { background: var(--panel-hover) !important; }
+
 /* A finished answer stays quiet until you reach for it. Kept visible for
    keyboard users, who never generate a hover. */
 .rm-turn-actions { opacity: 0; transition: opacity .15s ease; }

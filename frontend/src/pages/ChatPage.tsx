@@ -980,6 +980,15 @@ function Composer({
   )
 }
 
+/**
+ * A themed dropdown for the header's Database and Model pickers.
+ *
+ * The native <select> it replaces sized itself to its content, so the two
+ * boxes jumped width on every change, and its popup ignored the app's dark
+ * theme. This keeps a fixed trigger width, a chevron affordance, a menu that
+ * follows the tokens, and a check on the current choice. Closes on an outside
+ * click or Escape.
+ */
 function HeaderSelect({
   icon, label, value, onChange, options,
 }: {
@@ -989,55 +998,167 @@ function HeaderSelect({
   onChange: (value: string) => void
   options: { value: string; label: string }[]
 }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  const selected = options.find((o) => o.value === value)
+  const display = selected?.label ?? 'None configured'
+
+  useEffect(() => {
+    if (!open) return
+    function onDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
   return (
-    <label
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        background: 'var(--panel)',
-        border: '1px solid var(--border-strong)',
-        borderRadius: 9,
-        padding: '6px 10px',
-        cursor: 'pointer',
-      }}
-    >
-      {icon}
-      <span style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.1 }}>
+    <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title={`${label}: ${display}`}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          width: 190,
+          background: 'var(--panel)',
+          border: `1px solid ${open ? 'var(--accent)' : 'var(--border-strong)'}`,
+          borderRadius: 9,
+          padding: '6px 10px',
+          cursor: 'pointer',
+          textAlign: 'left',
+          transition: 'border-color .12s ease',
+        }}
+      >
+        {icon}
         <span
           style={{
-            fontSize: 9.5,
-            color: 'var(--text-faint)',
-            fontWeight: 600,
-            textTransform: 'uppercase',
-            letterSpacing: '0.04em',
+            display: 'flex',
+            flexDirection: 'column',
+            lineHeight: 1.15,
+            minWidth: 0,
+            flex: 1,
           }}
         >
-          {label}
+          <span
+            style={{
+              fontSize: 9.5,
+              color: 'var(--text-faint)',
+              fontWeight: 600,
+              textTransform: 'uppercase',
+              letterSpacing: '0.04em',
+            }}
+          >
+            {label}
+          </span>
+          <span
+            style={{
+              fontSize: 12.5,
+              fontWeight: 600,
+              color: selected ? 'var(--text-strong)' : 'var(--text-faint)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {display}
+          </span>
         </span>
-        <select
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
+        <Icon.Chevron
+          open={open}
+          size={13}
+          stroke="var(--text-faint)"
+        />
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
           style={{
-            background: 'transparent',
-            border: 'none',
-            color: 'var(--text-strong)',
-            fontSize: 12.5,
-            fontWeight: 600,
-            outline: 'none',
-            cursor: 'pointer',
-            padding: 0,
+            position: 'absolute',
+            top: 'calc(100% + 6px)',
+            right: 0,
+            minWidth: '100%',
+            maxWidth: 280,
+            maxHeight: 320,
+            overflowY: 'auto',
+            background: 'var(--panel)',
+            border: '1px solid var(--border-strong)',
+            borderRadius: 10,
+            padding: 5,
+            boxShadow: '0 10px 30px rgba(0,0,0,0.22)',
+            zIndex: 50,
           }}
         >
-          {options.length === 0 && <option value="">None configured</option>}
-          {options.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </span>
-    </label>
+          {options.length === 0 ? (
+            <div
+              style={{
+                fontSize: 12.5,
+                color: 'var(--text-faint)',
+                padding: '9px 10px',
+              }}
+            >
+              None configured
+            </div>
+          ) : (
+            options.map((option) => {
+              const active = option.value === value
+              return (
+                <button
+                  key={option.value}
+                  role="option"
+                  aria-selected={active}
+                  className={active ? undefined : 'rm-menu-item'}
+                  onClick={() => {
+                    onChange(option.value)
+                    setOpen(false)
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    width: '100%',
+                    padding: '8px 10px',
+                    borderRadius: 7,
+                    border: 'none',
+                    background: active ? 'var(--accent-bg)' : 'transparent',
+                    color: active ? 'var(--text-strong)' : 'var(--text)',
+                    fontSize: 12.5,
+                    fontWeight: active ? 600 : 500,
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                  }}
+                >
+                  <span
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {option.label}
+                  </span>
+                  {active && <Icon.Check size={14} stroke="var(--accent)" />}
+                </button>
+              )
+            })
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 
