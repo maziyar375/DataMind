@@ -191,6 +191,14 @@ class LocalIdentityProvider:
             row.revoked_at = utcnow()
             await self._db.flush()
 
+    async def revoke_all_sessions(self, user_id: UUID) -> None:
+        """Every active session for a user, ended at once.
+
+        A password reset must not leave old sessions valid, or the reset
+        would not lock anyone out.
+        """
+        await self._revoke_all_for_user(user_id)
+
     async def _revoke_all_for_user(self, user_id: UUID) -> None:
         result = await self._db.execute(
             select(SessionRow).where(

@@ -45,6 +45,17 @@ class UserUpdate(BaseModel):
     status: Literal["ACTIVE", "INVITED", "DISABLED"] | None = None
 
 
+class AdminSetPasswordRequest(BaseModel):
+    """An admin sets a known password for another user.
+
+    A floor of 8 characters, no ceiling that would matter — the value is
+    hashed, never stored — is the whole policy. The request carries the
+    password only; who may send it is decided by the admin dependency.
+    """
+
+    password: SecretStr = Field(min_length=8, max_length=200)
+
+
 class UserRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID

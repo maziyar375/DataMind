@@ -8,7 +8,9 @@ from fastapi import APIRouter, status
 from sqlalchemy import select
 
 from app.api.deps import AdminDep, DbDep, SettingsDep
-from app.api.schemas import UserCreate, UserInviteResponse, UserRead, UserUpdate
+from app.api.schemas import (
+    AdminSetPasswordRequest, UserCreate, UserInviteResponse, UserRead, UserUpdate,
+)
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.domain.value_objects import Role, UserStatus
 from app.infra.db.models import User
@@ -75,6 +77,32 @@ async def update_user(
 
     await db.flush()
     return user
+
+
+@router.put("/{user_id}/password", status_code=status.HTTP_204_NO_CONTENT)
+async def set_user_password(
+    user_id: UUID, payload: AdminSetPasswordRequest,
+    ctx: AdminDep, db: DbDep, settings: SettingsDep,
+) -> None:
+    """An admin sets a known password for a user.
+
+    The new password is deliberate, not a temporary one, so must_change is
+    cleared and an INVITED account becomes ACTIVE. Every existing session is
+    revoked: a reset that left old sessions valid would not actually lock the
+    account, and if the admin is resetting their own password they expect to
+    sign in again with the new one.
+    """
+    user = await db.get(User, user_id)
+    if user is None:
+        raise NotFoundError("User not found.")
+
+    provider = LocalIdentityProvider(db, settings)
+    user.password_hash = provider.hash_password(payload.password.get_secret_value())
+    user.must_change_password = False
+    if user.status == UserStatus.INVITED:
+        user.status = UserStatus.ACTIVE
+    await provider.revoke_all_sessions(user.id)
+    await db.flush()
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
