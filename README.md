@@ -27,22 +27,26 @@ Then open <http://localhost:5173> and sign in with the bootstrap admin
 (`admin@raymand.local` / `raymand` by default — change `ADMIN_PASSWORD` in
 `.env` before doing anything real; the API logs a loud warning if you don't).
 
-To try the seeded demo database, add a data source pointing at the fixture:
+Two demo databases ship with the stack, so you can exercise the app against
+two engines. Add a data source pointing at either fixture — a **PostgreSQL**
+sales model (14 related tables: orders, order_items, payments, shipments,
+returns, inventory, employees…) or the classic **MySQL** "Sakila" sample
+(16 tables, ~46k rows of films, actors, rentals, payments):
 
-| Field    | Value          |
-| -------- | -------------- |
-| Engine   | `PostgreSQL`   |
-| Host     | `sales`        |
-| Port     | `5432`         |
-| Database | `sales`        |
-| User     | `analytics_ro` |
-| Password | `analytics_ro` |
+| Field    | PostgreSQL demo | MySQL demo     |
+| -------- | --------------- | -------------- |
+| Engine   | `PostgreSQL`    | `MySQL`        |
+| Host     | `sales`         | `sakila`       |
+| Port     | `5432`          | `3306`         |
+| Database | `sales`         | `sakila`       |
+| User     | `analytics_ro`  | `analytics_ro` |
+| Password | `analytics_ro`  | `analytics_ro` |
 
 **Test** it — before or after saving — and you should see **read-only role
 confirmed**. Then sync the schema and ask something like *"What was total
-revenue last month?"* The demo fixture is PostgreSQL; MySQL, SQL Server, and
-Oracle connections are configured the same way, only the engine and port
-differ.
+revenue last month?"* (sales) or *"Which film category earns the most?"*
+(Sakila). SQL Server and Oracle connections are configured the same way, only
+the engine and port differ.
 
 ### Running on a remote host
 

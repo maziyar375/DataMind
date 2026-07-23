@@ -31,6 +31,26 @@ services:
       timeout: 3s
       retries: 10
 
+  # A second demo target — the classic MySQL "Sakila" sample database: 16
+  # tables (films, actors, rentals, payments, customers, stores) with real
+  # data, so the app can be driven against MySQL as well as PostgreSQL. The
+  # seed also creates the read-only `analytics_ro` user the connector expects.
+  sakila:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: sakila
+    ports: ["3307:3306"]
+    volumes:
+      - ./backend/fixtures/mysql:/docker-entrypoint-initdb.d:ro
+      - raymand_sakila:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
   api:
     build: ./backend
     depends_on:
@@ -71,3 +91,4 @@ services:
 volumes:
   raymand_db:
   raymand_sales:
+  raymand_sakila:
