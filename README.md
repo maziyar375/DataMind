@@ -38,6 +38,27 @@ To try the seeded demo database, add a data source pointing at the fixture:
 Test it — you should see **read-only role confirmed**. Then sync the schema
 and ask something like *"What was total revenue last month?"*
 
+### Running on a remote host
+
+Lightning.ai, Codespaces, Gitpod, or any VM behind a tunnel all work, but two
+things differ from a laptop and both are already configured:
+
+- **Vite host checking.** Vite 5.4.12+ rejects requests whose `Host` header it
+  does not recognise, which is every proxied dev domain — you get
+  *"Blocked request. This host is not allowed."* `server.allowedHosts` is set
+  to `true` in `vite.config.ts` for this reason. It is a dev-server
+  convenience; do not expose that config publicly.
+- **API address.** The browser is not on the same machine as the API, so an
+  absolute `http://localhost:8000` would resolve to *your own laptop*. The SPA
+  therefore calls the same-origin path `/api/v1`, and Vite forwards it
+  server-side to `api:8000` over the compose network.
+
+Only port **5173** needs to be exposed through your platform's port viewer.
+The API is reached through it.
+
+If hot reload does not fire on your host's bind mounts, start with
+`VITE_POLL=1 docker compose up`.
+
 ### Without Docker
 
 ```bash

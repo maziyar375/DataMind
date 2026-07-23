@@ -55,7 +55,14 @@ services:
     build: ./frontend
     depends_on: [api]
     environment:
-      VITE_API_BASE_URL: http://localhost:8000/api/v1
+      # A same-origin path, not an absolute URL. In a remote environment the
+      # browser is not on the same machine as the API, so "localhost:8000"
+      # would resolve to the user's own laptop. Vite proxies /api server-side,
+      # where the compose network name "api" is reachable.
+      VITE_API_BASE_URL: /api/v1
+      VITE_PROXY_TARGET: http://api:8000
+      # Set VITE_POLL=1 if hot reload does not fire on your host's bind mounts.
+      VITE_POLL: "${VITE_POLL:-0}"
     ports: ["5173:5173"]
     volumes:
       - ./frontend:/app
