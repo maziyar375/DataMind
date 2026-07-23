@@ -253,6 +253,24 @@ export default function ChatPage() {
     }
   }
 
+  async function renameConversation(id: string, title: string) {
+    const trimmed = title.trim()
+    const current = conversationList.find((c) => c.id === id)
+    // A blank title or an unchanged one is not worth a request.
+    if (!trimmed || trimmed === current?.title) return
+
+    // Update optimistically; the sidebar and header both read from this list.
+    setConversationList((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, title: trimmed } : c)),
+    )
+    try {
+      await conversations.update(id, { title: trimmed })
+    } catch (err) {
+      setConversationList(await conversations.list().catch(() => conversationList))
+      setError(err instanceof Error ? err.message : 'Could not rename that conversation.')
+    }
+  }
+
   if (loading) {
     return (
       <div style={{ flex: 1, display: 'grid', placeItems: 'center' }}>
@@ -292,6 +310,7 @@ export default function ChatPage() {
               active={conversation.id === activeId}
               onSelect={() => setActiveId(conversation.id)}
               onDelete={() => deleteConversation(conversation.id)}
+              onRename={(title) => renameConversation(conversation.id, title)}
             />
           ))}
         </div>
@@ -548,15 +567,34 @@ function StarterChip({ text, onClick }: { text: string; onClick: () => void }) {
 }
 
 function ConversationItem({
-  conversation, active, onSelect, onDelete,
+  conversation, active, onSelect, onDelete, onRename,
 }: {
   conversation: ConversationSummary
   active: boolean
   onSelect: () => void
   onDelete: () => void
+  onRename: (title: string) => void
 }) {
   const [hover, setHover] = useState(false)
   const [confirming, setConfirming] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [value, setValue] = useState(conversation.title)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  function startEdit() {
+    setValue(conversation.title)
+    setEditing(true)
+  }
+
+  function commit() {
+    setEditing(false)
+    onRename(value)
+  }
+
+  // Select the whole title on entry, so a rename can start by just typing.
+  useEffect(() => {
+    if (editing) inputRef.current?.select()
+  }, [editing])
 
   return (
     <div
@@ -576,75 +614,107 @@ function ConversationItem({
         transition: 'background .12s ease',
       }}
     >
-      <button
-        onClick={onSelect}
-        title={conversation.title}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          flex: 1,
-          minWidth: 0,
-          padding: 0,
-          background: 'transparent',
-          border: 'none',
-          cursor: 'pointer',
-          textAlign: 'left',
-        }}
-      >
-        <span
+      {editing ? (
+        <input
+          ref={inputRef}
+          value={value}
+          dir={dirOf(value)}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              commit()
+            } else if (e.key === 'Escape') {
+              e.preventDefault()
+              setEditing(false)
+            }
+          }}
           style={{
-            width: 26,
-            height: 26,
-            borderRadius: 7,
-            background: 'var(--panel-alt)',
-            color: 'var(--text-dim)',
+            flex: 1,
+            minWidth: 0,
+            padding: '5px 8px',
+            fontSize: 12.5,
+            fontWeight: 600,
+            color: 'var(--text-strong)',
+            background: 'var(--input-bg)',
+            border: '1px solid var(--accent)',
+            borderRadius: 6,
+            outline: 'none',
+          }}
+        />
+      ) : (
+        <button
+          onClick={onSelect}
+          onDoubleClick={startEdit}
+          title={conversation.title}
+          style={{
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: 11,
-            fontWeight: 700,
-            flexShrink: 0,
-          }}
-        >
-          {initialOf(conversation.title)}
-        </span>
-        <span
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
+            gap: 10,
+            flex: 1,
             minWidth: 0,
-            lineHeight: 1.25,
+            padding: 0,
+            background: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+            textAlign: 'left',
           }}
         >
           <span
-            dir={dirOf(conversation.title)}
             style={{
-              fontSize: 12.5,
-              fontWeight: 600,
-              color: active ? 'var(--text-strong)' : 'var(--text)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
+              width: 26,
+              height: 26,
+              borderRadius: 7,
+              background: 'var(--panel-alt)',
+              color: 'var(--text-dim)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 11,
+              fontWeight: 700,
+              flexShrink: 0,
             }}
           >
-            {conversation.title}
+            {initialOf(conversation.title)}
           </span>
           <span
             style={{
-              fontSize: 11,
-              color: 'var(--text-faint)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
+              display: 'flex',
+              flexDirection: 'column',
+              minWidth: 0,
+              lineHeight: 1.25,
             }}
           >
-            {conversation.preview ?? `${conversation.message_count} messages`}
+            <span
+              dir={dirOf(conversation.title)}
+              style={{
+                fontSize: 12.5,
+                fontWeight: 600,
+                color: active ? 'var(--text-strong)' : 'var(--text)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {conversation.title}
+            </span>
+            <span
+              style={{
+                fontSize: 11,
+                color: 'var(--text-faint)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {conversation.preview ?? `${conversation.message_count} messages`}
+            </span>
           </span>
-        </span>
-      </button>
+        </button>
+      )}
 
-      {confirming ? (
+      {editing ? null : confirming ? (
         <span style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
           <button
             className="rm-icon-btn"
@@ -666,18 +736,34 @@ function ConversationItem({
           </button>
         </span>
       ) : (
-        <button
-          className="rm-icon-btn"
-          onClick={() => setConfirming(true)}
-          title="Delete conversation"
-          aria-label="Delete conversation"
+        <span
           style={{
-            ...iconBtnStyle('var(--text-faint)', 'var(--panel-alt)'),
+            display: 'flex',
+            alignItems: 'center',
+            gap: 2,
+            flexShrink: 0,
             visibility: hover ? 'visible' : 'hidden',
           }}
         >
-          <Icon.Trash size={13} stroke="var(--text-faint)" />
-        </button>
+          <button
+            className="rm-icon-btn"
+            onClick={startEdit}
+            title="Rename conversation"
+            aria-label="Rename conversation"
+            style={iconBtnStyle('var(--text-faint)', 'var(--panel-alt)')}
+          >
+            <Icon.Pencil size={13} stroke="var(--text-faint)" />
+          </button>
+          <button
+            className="rm-icon-btn"
+            onClick={() => setConfirming(true)}
+            title="Delete conversation"
+            aria-label="Delete conversation"
+            style={iconBtnStyle('var(--text-faint)', 'var(--panel-alt)')}
+          >
+            <Icon.Trash size={13} stroke="var(--text-faint)" />
+          </button>
+        </span>
       )}
     </div>
   )

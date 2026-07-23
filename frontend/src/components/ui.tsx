@@ -110,6 +110,12 @@ export const Icon = {
       <path d="M18 6L6 18M6 6l12 12" />
     </svg>
   ),
+  Pencil: ({ size = 13, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+    </svg>
+  ),
   Copy: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
     <svg {...iconBase(size, stroke, strokeWidth)}>
       <rect x="9" y="9" width="12" height="12" rx="2" />
