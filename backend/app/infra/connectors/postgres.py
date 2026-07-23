@@ -47,29 +47,49 @@ WHERE t.table_type = 'BASE TABLE'
 ORDER BY c.table_schema, c.table_name, c.ordinal_position
 """
 
+# Constraints come from pg_catalog, not information_schema.
+#
+# information_schema.table_constraints and constraint_column_usage only show
+# rows for tables owned by a currently enabled role. Raymand is meant to
+# connect as a read-only role that owns nothing, so those views return empty
+# and every key silently disappears — no PK markers, no foreign keys, and an
+# edgeless graph. pg_catalog carries no such filter.
+#
+# unnest(conkey, confkey) WITH ORDINALITY pairs each source column with the
+# target column at the same position, which is what keeps a composite key
+# from being expanded into a cross product.
 _PK_SQL = """
-SELECT tc.table_schema, tc.table_name, kcu.column_name
-FROM information_schema.table_constraints tc
-JOIN information_schema.key_column_usage kcu
-  ON kcu.constraint_name = tc.constraint_name
- AND kcu.table_schema = tc.table_schema
-WHERE tc.constraint_type = 'PRIMARY KEY'
-  AND tc.table_schema = ANY($1::text[])
+SELECT ns.nspname AS table_schema, cls.relname AS table_name,
+       att.attname AS column_name
+FROM pg_constraint con
+JOIN pg_class cls ON cls.oid = con.conrelid
+JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord) ON TRUE
+JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k.attnum
+WHERE con.contype = 'p'
+  AND ns.nspname = ANY($1::text[])
+ORDER BY table_schema, table_name, k.ord
 """
 
 _FK_SQL = """
-SELECT tc.table_schema AS from_schema, tc.table_name AS from_table,
-       kcu.column_name AS from_column,
-       ccu.table_schema AS to_schema, ccu.table_name AS to_table,
-       ccu.column_name AS to_column
-FROM information_schema.table_constraints tc
-JOIN information_schema.key_column_usage kcu
-  ON kcu.constraint_name = tc.constraint_name
- AND kcu.table_schema = tc.table_schema
-JOIN information_schema.constraint_column_usage ccu
-  ON ccu.constraint_name = tc.constraint_name
-WHERE tc.constraint_type = 'FOREIGN KEY'
-  AND tc.table_schema = ANY($1::text[])
+SELECT src_ns.nspname AS from_schema, src_cls.relname AS from_table,
+       src_att.attname AS from_column,
+       tgt_ns.nspname AS to_schema, tgt_cls.relname AS to_table,
+       tgt_att.attname AS to_column
+FROM pg_constraint con
+JOIN pg_class src_cls ON src_cls.oid = con.conrelid
+JOIN pg_namespace src_ns ON src_ns.oid = src_cls.relnamespace
+JOIN pg_class tgt_cls ON tgt_cls.oid = con.confrelid
+JOIN pg_namespace tgt_ns ON tgt_ns.oid = tgt_cls.relnamespace
+JOIN LATERAL unnest(con.conkey, con.confkey)
+     WITH ORDINALITY AS cols(src_attnum, tgt_attnum, ord) ON TRUE
+JOIN pg_attribute src_att
+  ON src_att.attrelid = con.conrelid AND src_att.attnum = cols.src_attnum
+JOIN pg_attribute tgt_att
+  ON tgt_att.attrelid = con.confrelid AND tgt_att.attnum = cols.tgt_attnum
+WHERE con.contype = 'f'
+  AND src_ns.nspname = ANY($1::text[])
+ORDER BY from_schema, from_table, cols.ord
 """
 
 _ROWCOUNT_SQL = """
