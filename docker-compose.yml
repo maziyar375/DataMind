@@ -1,0 +1,66 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: raymand
+      POSTGRES_PASSWORD: raymand
+      POSTGRES_DB: raymand
+    ports: ["5432:5432"]
+    volumes: ["raymand_db:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U raymand"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # The demo target database. A separate instance, because the whole point is
+  # that Raymand reaches customer data over a connector with a read-only role.
+  sales:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: sales
+    ports: ["5433:5432"]
+    volumes:
+      - ./backend/fixtures/sales_seed.sql:/docker-entrypoint-initdb.d/01_seed.sql:ro
+      - raymand_sales:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sales"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./backend
+    depends_on:
+      db: {condition: service_healthy}
+      sales: {condition: service_healthy}
+    environment:
+      DATABASE_URL: postgresql+asyncpg://raymand:raymand@db:5432/raymand
+      SECRET_BOX_KEY: ${SECRET_BOX_KEY:?Generate one - see README}
+      JWT_SECRET: ${JWT_SECRET:?Generate one - see README}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@raymand.local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-raymand}
+      CORS_ORIGINS: '["http://localhost:5173"]'
+      ENVIRONMENT: local
+      DEBUG: "true"
+    ports: ["8000:8000"]
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    volumes: ["./backend:/app"]
+
+  web:
+    build: ./frontend
+    depends_on: [api]
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000/api/v1
+    ports: ["5173:5173"]
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+volumes:
+  raymand_db:
+  raymand_sales:

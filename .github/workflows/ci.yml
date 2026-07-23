@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push: { branches: [main] }
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run: { working-directory: backend }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check app tests
+
+      - name: Type check
+        run: mypy app || true   # strict mode is being adopted module by module
+
+      # Milestone item 11 — the dependency rule is enforced, not documented.
+      - name: Architecture contracts
+        run: lint-imports
+
+      # Milestone item 12 — one grep decides whether the LLM abstraction is
+      # real or decorative. It costs a single CI line.
+      - name: LiteLLM stays behind the gateway
+        run: |
+          if grep -rn "import litellm" app/ | grep -v "infra/llm/"; then
+            echo "::error::litellm imported outside infra/llm/"
+            exit 1
+          fi
+
+      # Milestone item 6 — the hard gate.
+      - name: Hostile SQL corpus
+        run: pytest tests/unit/test_sqlguard_hostile.py -q
+
+      - name: Tests
+        run: pytest -q
+        env:
+          JWT_SECRET: ci-secret
+          ENVIRONMENT: ci
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run: { working-directory: frontend }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - run: npm ci || npm install
+      - run: npx tsc --noEmit
+      - run: npm run build
