@@ -50,6 +50,46 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .rm-turn:hover .rm-turn-actions,
 .rm-turn-actions:focus-within { opacity: 1; }
 
+/* Ambient treatment for the welcome screen only.
+   Deliberately not applied to the app shell: the working surfaces carry
+   tables, SQL, and step chips, and anything textured behind those costs
+   legibility. Here there is nothing to compete with, and it is gone as
+   soon as the first message lands. Both layers read from theme tokens, so
+   they follow light and dark without a second definition. */
+.rm-welcome { position: relative; isolation: isolate; }
+
+/* A grid, because the product's subject is tables. Masked to fade out
+   before it reaches the text. */
+.rm-welcome::before {
+  content: '';
+  position: absolute;
+  inset: -40px -80px;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, var(--border) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--border) 1px, transparent 1px);
+  background-size: 46px 46px;
+  -webkit-mask-image: radial-gradient(closest-side at 50% 38%, #000, transparent);
+  mask-image: radial-gradient(closest-side at 50% 38%, #000, transparent);
+  opacity: 0.55;
+}
+
+/* A soft accent glow behind the mark, tying the screen to the brand. */
+.rm-welcome::after {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 260px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(52% 100% at 50% 22%, var(--accent-bg), transparent 72%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rm-welcome::before, .rm-welcome::after { opacity: 0.3; }
+}
+
 @keyframes rm-spin { to { transform: rotate(360deg); } }
 @keyframes rm-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 @keyframes rm-fade-up {

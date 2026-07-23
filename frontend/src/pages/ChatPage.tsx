@@ -465,6 +465,7 @@ const STARTERS = [
 function Welcome({ onPick }: { onPick: (text: string) => void }) {
   return (
     <div
+      className="rm-welcome"
       style={{
         display: 'flex',
         flexDirection: 'column',
