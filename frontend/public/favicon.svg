@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="64" height="64">
+  <defs>
+    <clipPath id="h">
+      <path d="M32,20 C34,13 46,10 55,14 C64,18 68,26 68,34 L70,42 L78,50 L69,55 L71,61 C71,66 66,67 64,68 L63,76 L66,86 L34,86 L33,58 C27,54 27,30 32,20 Z"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#h)">
+    <path d="M6,2 L48,2 L48,30 C59,30 59,42 48,42 L48,52 L6,52 Z" fill="#7C3AED"/>
+    <path d="M48,2 L94,2 L94,52 L74,52 C74,63 60,63 60,52 L48,52 L48,42 C59,42 59,30 48,30 L48,2 Z" fill="#F5A623"/>
+    <path d="M48,52 L60,52 C60,63 74,63 74,52 L94,52 L94,98 L48,98 L48,52 Z" fill="#F43F5E"/>
+    <path d="M6,52 L48,52 L48,98 L6,98 L6,52 Z" fill="#2563EB"/>
+    <g fill="none" stroke="#131f38" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" opacity="0.5">
+      <path d="M48,2 L48,30 C59,30 59,42 48,42 L48,98"/>
+      <path d="M6,52 L60,52 C60,63 74,63 74,52 L94,52"/>
+    </g>
+  </g>
+  <path d="M32,20 C34,13 46,10 55,14 C64,18 68,26 68,34 L70,42 L78,50 L69,55 L71,61 C71,66 66,67 64,68 L63,76 L66,86 L34,86 L33,58 C27,54 27,30 32,20 Z" fill="none" stroke="#131f38" stroke-width="2.4" stroke-linejoin="round" opacity="0.55"/>
+</svg>

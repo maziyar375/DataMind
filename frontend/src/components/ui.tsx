@@ -7,19 +7,74 @@
 import React, { useState } from 'react'
 
 // ── logo ──────────────────────────────────────────────────────────────────
+//
+// A head in profile, split into four interlocking puzzle pieces — the mind as
+// something assembled from parts. Rebuilt as vector art rather than the source
+// raster so it stays crisp at 26px and needs no dark glow behind it; the four
+// piece colours are lifted from that image (violet, amber, blue, red).
+//
+// The four pieces tile a rectangle and are clipped to the head silhouette, so
+// the profile is authored once (as the clip and the outline) while the interior
+// seams — each with one puzzle knob — do the rest.
+const LOGO_HEAD =
+  'M32,20 C34,13 46,10 55,14 C64,18 68,26 68,34 L70,42 L78,50 L69,55 ' +
+  'L71,61 C71,66 66,67 64,68 L63,76 L66,86 L34,86 L33,58 C27,54 27,30 32,20 Z'
+
+const LOGO_PIECES: { d: string; fill: string }[] = [
+  { d: 'M6,2 L48,2 L48,30 C59,30 59,42 48,42 L48,52 L6,52 Z', fill: '#7C3AED' },
+  {
+    d: 'M48,2 L94,2 L94,52 L74,52 C74,63 60,63 60,52 L48,52 L48,42 C59,42 59,30 48,30 L48,2 Z',
+    fill: '#F5A623',
+  },
+  {
+    d: 'M48,52 L60,52 C60,63 74,63 74,52 L94,52 L94,98 L48,98 L48,52 Z',
+    fill: '#F43F5E',
+  },
+  { d: 'M6,52 L48,52 L48,98 L6,98 L6,52 Z', fill: '#2563EB' },
+]
+
+const LOGO_SEAM_V = 'M48,2 L48,30 C59,30 59,42 48,42 L48,98'
+const LOGO_SEAM_H = 'M6,52 L60,52 C60,63 74,63 74,52 L94,52'
+
 export function Logo({ size = 26 }: { size?: number }) {
+  const clipId = React.useId()
   return (
-    <svg width={size} height={size} viewBox="4 12 92 78" style={{ flexShrink: 0 }}>
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 100 100"
+      style={{ flexShrink: 0 }}
+      role="img"
+      aria-label="DataMind"
+    >
+      <defs>
+        <clipPath id={clipId}>
+          <path d={LOGO_HEAD} />
+        </clipPath>
+      </defs>
+      <g clipPath={`url(#${clipId})`}>
+        {LOGO_PIECES.map((piece) => (
+          <path key={piece.fill} d={piece.d} fill={piece.fill} />
+        ))}
+        <g
+          fill="none"
+          stroke="#131f38"
+          strokeWidth={2.4}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+          opacity={0.5}
+        >
+          <path d={LOGO_SEAM_V} />
+          <path d={LOGO_SEAM_H} />
+        </g>
+      </g>
       <path
-        d="M22 16 H78 A14 14 0 0 1 92 30 V58 A14 14 0 0 1 78 72 H42 L26 86 V72 H22 A14 14 0 0 1 8 58 V30 A14 14 0 0 1 22 16 Z"
-        fill="#5C8AE6"
-      />
-      <rect x="30" y="48" width="9" height="14" rx="2" fill="#ffffff" />
-      <rect x="44" y="40" width="9" height="22" rx="2" fill="#ffffff" />
-      <rect x="58" y="32" width="9" height="30" rx="2" fill="#ffffff" />
-      <path
-        d="M74 20 C75.4 27 76.6 28.2 84 30 C76.6 31.8 75.4 33 74 40 C72.6 33 71.4 31.8 64 30 C71.4 28.2 72.6 27 74 20 Z"
-        fill="#3FC79E"
+        d={LOGO_HEAD}
+        fill="none"
+        stroke="#131f38"
+        strokeWidth={2.4}
+        strokeLinejoin="round"
+        opacity={0.55}
       />
     </svg>
   )
