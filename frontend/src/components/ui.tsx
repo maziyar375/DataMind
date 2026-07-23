@@ -20,21 +20,27 @@ const LOGO_HEAD =
   'M32,20 C34,13 46,10 55,14 C64,18 68,26 68,34 L70,42 L78,50 L69,55 ' +
   'L71,61 C71,66 66,67 64,68 L63,76 L66,86 L34,86 L33,58 C27,54 27,30 32,20 Z'
 
+// Palette taken from the source artwork: violet, magenta, blue, rose — no
+// amber (that hue only appears as a background glow orb, not in the head).
 const LOGO_PIECES: { d: string; fill: string }[] = [
   { d: 'M6,2 L48,2 L48,30 C59,30 59,42 48,42 L48,52 L6,52 Z', fill: '#7C3AED' },
   {
     d: 'M48,2 L94,2 L94,52 L74,52 C74,63 60,63 60,52 L48,52 L48,42 C59,42 59,30 48,30 L48,2 Z',
-    fill: '#F5A623',
+    fill: '#EC2E8A',
   },
   {
     d: 'M48,52 L60,52 C60,63 74,63 74,52 L94,52 L94,98 L48,98 L48,52 Z',
-    fill: '#F43F5E',
+    fill: '#F43F7A',
   },
   { d: 'M6,52 L48,52 L48,98 L6,98 L6,52 Z', fill: '#2563EB' },
 ]
 
 const LOGO_SEAM_V = 'M48,2 L48,30 C59,30 59,42 48,42 L48,98'
 const LOGO_SEAM_H = 'M6,52 L60,52 C60,63 74,63 74,52 L94,52'
+
+// The neon look: a bright rim just outside a deep indigo-navy line.
+const LOGO_INK = '#161038'
+const LOGO_RIM = '#ffffff'
 
 export function Logo({ size = 26 }: { size?: number }) {
   const clipId = React.useId()
@@ -56,26 +62,17 @@ export function Logo({ size = 26 }: { size?: number }) {
         {LOGO_PIECES.map((piece) => (
           <path key={piece.fill} d={piece.d} fill={piece.fill} />
         ))}
-        <g
-          fill="none"
-          stroke="#131f38"
-          strokeWidth={2.4}
-          strokeLinejoin="round"
-          strokeLinecap="round"
-          opacity={0.5}
-        >
-          <path d={LOGO_SEAM_V} />
-          <path d={LOGO_SEAM_H} />
+        {/* interior seams — bright rim under the navy line */}
+        <g fill="none" strokeLinejoin="round" strokeLinecap="round">
+          <path d={LOGO_SEAM_V} stroke={LOGO_RIM} strokeWidth={3.6} opacity={0.5} />
+          <path d={LOGO_SEAM_H} stroke={LOGO_RIM} strokeWidth={3.6} opacity={0.5} />
+          <path d={LOGO_SEAM_V} stroke={LOGO_INK} strokeWidth={2.2} opacity={0.9} />
+          <path d={LOGO_SEAM_H} stroke={LOGO_INK} strokeWidth={2.2} opacity={0.9} />
         </g>
       </g>
-      <path
-        d={LOGO_HEAD}
-        fill="none"
-        stroke="#131f38"
-        strokeWidth={2.4}
-        strokeLinejoin="round"
-        opacity={0.55}
-      />
+      {/* head silhouette — the same rim-over-ink treatment */}
+      <path d={LOGO_HEAD} fill="none" stroke={LOGO_RIM} strokeWidth={4.2} strokeLinejoin="round" opacity={0.55} />
+      <path d={LOGO_HEAD} fill="none" stroke={LOGO_INK} strokeWidth={2.6} strokeLinejoin="round" opacity={0.95} />
     </svg>
   )
 }
