@@ -328,20 +328,12 @@ export default function ChatPage() {
             flexShrink: 0,
           }}
         >
-          <div
-            dir={dirOf(activeTitle)}
-            style={{
-              fontSize: 14,
-              fontWeight: 600,
-              color: 'var(--text-strong)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              minWidth: 0,
-            }}
-          >
-            {activeTitle}
-          </div>
+          <HeaderTitle
+            key={activeId ?? 'none'}
+            title={activeTitle}
+            editable={!!activeId}
+            onRename={(title) => activeId && renameConversation(activeId, title)}
+          />
 
           <div
             style={{
@@ -563,6 +555,113 @@ function StarterChip({ text, onClick }: { text: string; onClick: () => void }) {
     >
       {text}
     </button>
+  )
+}
+
+/**
+ * The conversation title in the chat header, editable in place. A pencil
+ * appears on hover and a double-click on the title opens the same editor, so
+ * a chat can be renamed from where the eye already is rather than only from
+ * the sidebar. Non-editable before the first conversation exists.
+ */
+function HeaderTitle({
+  title, editable, onRename,
+}: {
+  title: string
+  editable: boolean
+  onRename: (title: string) => void
+}) {
+  const [hover, setHover] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [value, setValue] = useState(title)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  function startEdit() {
+    if (!editable) return
+    setValue(title)
+    setEditing(true)
+  }
+
+  function commit() {
+    setEditing(false)
+    onRename(value)
+  }
+
+  useEffect(() => {
+    if (editing) inputRef.current?.select()
+  }, [editing])
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={value}
+        dir={dirOf(value)}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            commit()
+          } else if (e.key === 'Escape') {
+            e.preventDefault()
+            setEditing(false)
+          }
+        }}
+        style={{
+          minWidth: 0,
+          maxWidth: 360,
+          padding: '5px 9px',
+          fontSize: 14,
+          fontWeight: 600,
+          color: 'var(--text-strong)',
+          background: 'var(--input-bg)',
+          border: '1px solid var(--accent)',
+          borderRadius: 7,
+          outline: 'none',
+        }}
+      />
+    )
+  }
+
+  return (
+    <div
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}
+    >
+      <div
+        dir={dirOf(title)}
+        onDoubleClick={startEdit}
+        title={editable ? 'Double-click to rename' : undefined}
+        style={{
+          fontSize: 14,
+          fontWeight: 600,
+          color: 'var(--text-strong)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          minWidth: 0,
+          cursor: editable ? 'text' : 'default',
+        }}
+      >
+        {title}
+      </div>
+      {editable && (
+        <button
+          className="rm-icon-btn"
+          onClick={startEdit}
+          title="Rename conversation"
+          aria-label="Rename conversation"
+          style={{
+            ...iconBtnStyle('var(--text-faint)', 'var(--panel-alt)'),
+            visibility: hover ? 'visible' : 'hidden',
+          }}
+        >
+          <Icon.Pencil size={13} stroke="var(--text-faint)" />
+        </button>
+      )}
+    </div>
   )
 }
 
