@@ -1,4 +1,4 @@
-# Raymand
+# DataMind
 
 Conversational BI. Ask a question in plain language, get a written answer, a
 table, and a chart — with the generated SQL visible and auditable.

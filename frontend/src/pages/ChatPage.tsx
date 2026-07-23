@@ -513,7 +513,7 @@ function Welcome({ onPick }: { onPick: (text: string) => void }) {
           margin: 0,
         }}
       >
-        Raymand writes the SQL, checks it against your schema, runs it on a
+        DataMind writes the SQL, checks it against your schema, runs it on a
         read-only connection, and shows you exactly what it did.
       </p>
 

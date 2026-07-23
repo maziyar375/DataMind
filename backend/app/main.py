@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
-        title="Raymand",
+        title="DataMind",
         description="Conversational BI: ask a question, get a validated, auditable answer.",
         version="0.1.0",
         lifespan=lifespan,

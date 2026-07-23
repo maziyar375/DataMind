@@ -59,7 +59,7 @@ export default function App() {
         <div className="rm-pulse" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <Logo size={30} />
           <span style={{ fontWeight: 700, fontSize: 15, color: 'var(--text)' }}>
-            Raymand
+            DataMind
           </span>
         </div>
       </div>
@@ -141,7 +141,7 @@ function Sidebar({
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '0 8px 20px' }}>
         <Logo />
         <div style={{ fontWeight: 700, fontSize: 15, letterSpacing: '-0.01em' }}>
-          Raymand
+          DataMind
         </div>
         <div
           style={{

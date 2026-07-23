@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "raymand"
 version = "0.1.0"
-description = "Raymand — conversational BI platform"
+description = "DataMind — conversational BI platform"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",

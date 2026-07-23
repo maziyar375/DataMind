@@ -50,7 +50,7 @@ ORDER BY c.table_schema, c.table_name, c.ordinal_position
 # Constraints come from pg_catalog, not information_schema.
 #
 # information_schema.table_constraints and constraint_column_usage only show
-# rows for tables owned by a currently enabled role. Raymand is meant to
+# rows for tables owned by a currently enabled role. DataMind is meant to
 # connect as a read-only role that owns nothing, so those views return empty
 # and every key silently disappears — no PK markers, no foreign keys, and an
 # edgeless graph. pg_catalog carries no such filter.

@@ -178,7 +178,7 @@ export default function LlmProvidersPage() {
         {!editing ? (
           <EmptyState
             title="Connect a model"
-            body="Raymand works with any OpenAI-compatible endpoint, Anthropic, or a local Ollama server. Testing a model records what it can actually do."
+            body="DataMind works with any OpenAI-compatible endpoint, Anthropic, or a local Ollama server. Testing a model records what it can actually do."
             action={<PrimaryButton onClick={startCreate}>Add a model</PrimaryButton>}
           />
         ) : (
@@ -246,7 +246,7 @@ export default function LlmProvidersPage() {
 
               <Section
                 title="Endpoint"
-                description="Where Raymand sends completion requests."
+                description="Where DataMind sends completion requests."
               >
                 <FieldRow>
                   <Field label="Name">
@@ -349,7 +349,7 @@ export default function LlmProvidersPage() {
                       }}
                     >
                       Testing sends one short prompt and checks whether the provider
-                      accepts a structured-output request. Raymand validates model
+                      accepts a structured-output request. DataMind validates model
                       output on its own side regardless of what a provider claims to
                       support.
                     </p>

@@ -1,11 +1,11 @@
-# Raymand — Conversational BI Platform
+# DataMind — Conversational BI Platform
 ## Production Architecture Proposal (MVP → Enterprise)
 
 ---
 
 ## 1. Executive Summary
 
-Raymand is a natural-language analytics platform: a user picks an LLM configuration and a database connection, asks questions in plain language, and receives a written answer, a table, and a chart — with the generated SQL visible and auditable.
+DataMind is a natural-language analytics platform: a user picks an LLM configuration and a database connection, asks questions in plain language, and receives a written answer, a table, and a chart — with the generated SQL visible and auditable.
 
 **The recommended architecture is a single modular-monolith FastAPI application backed by one PostgreSQL database.** No microservices, no message broker in the first release, no vector database, no external identity provider, no workflow engine.
 

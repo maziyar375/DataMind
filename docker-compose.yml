@@ -14,7 +14,7 @@ services:
       retries: 10
 
   # The demo target database. A separate instance, because the whole point is
-  # that Raymand reaches customer data over a connector with a read-only role.
+  # that DataMind reaches customer data over a connector with a read-only role.
   sales:
     image: postgres:16-alpine
     environment:

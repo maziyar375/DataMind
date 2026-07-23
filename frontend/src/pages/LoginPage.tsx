@@ -59,7 +59,7 @@ export default function LoginPage({ onSignedIn }: { onSignedIn: (user: User) => 
           <Logo size={56} />
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.02em' }}>
-              Welcome to Raymand
+              Welcome to DataMind
             </div>
             <div style={{ fontSize: 13.5, color: 'var(--text-dim)', marginTop: 4 }}>
               Sign in to your conversational BI workspace

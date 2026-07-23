@@ -73,7 +73,7 @@ FROM generate_series(1, 9000) g;
 
 ANALYZE;
 
--- The read-only role Raymand is expected to connect with.
+-- The read-only role DataMind is expected to connect with.
 CREATE ROLE analytics_ro LOGIN PASSWORD 'analytics_ro';
 GRANT CONNECT ON DATABASE sales TO analytics_ro;
 GRANT USAGE ON SCHEMA public TO analytics_ro;

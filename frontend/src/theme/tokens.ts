@@ -90,7 +90,7 @@ export const NODE_META: Record<string, { label: string; detail: string }> = {
 }
 
 /**
- * The database engines Raymand can connect to.
+ * The database engines DataMind can connect to.
  *
  * `port` is the engine's standard listener, applied when switching type so
  * the form does not keep a port that belongs to a different engine.

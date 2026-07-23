@@ -238,7 +238,7 @@ export default function DataSourcesPage() {
         {!editing ? (
           <EmptyState
             title="Connect a database"
-            body="Raymand reads your schema over a read-only role, writes SQL against only what it finds there, and shows you every query it ran."
+            body="DataMind reads your schema over a read-only role, writes SQL against only what it finds there, and shows you every query it ran."
             action={<PrimaryButton onClick={startCreate}>Add a connection</PrimaryButton>}
           />
         ) : (
@@ -328,7 +328,7 @@ export default function DataSourcesPage() {
 
                 <Section
                   title="Connection"
-                  description="Point Raymand at the database. Use a role with read-only rights."
+                  description="Point DataMind at the database. Use a role with read-only rights."
                 >
                   <FieldRow>
                     <Field label="Name">
@@ -430,7 +430,7 @@ export default function DataSourcesPage() {
 
                 <Section
                   title="Safety & limits"
-                  description="Applied to every query Raymand runs on this connection."
+                  description="Applied to every query DataMind runs on this connection."
                 >
                   <Field
                     label="Result sharing"
@@ -531,7 +531,7 @@ export default function DataSourcesPage() {
                 {!schema ? (
                   <EmptyState
                     title="No schema yet"
-                    body="Sync this connection to read its tables, columns, and foreign keys. Raymand only ever writes SQL against what it finds here."
+                    body="Sync this connection to read its tables, columns, and foreign keys. DataMind only ever writes SQL against what it finds here."
                     action={
                       <PrimaryButton onClick={sync} disabled={syncing}>
                         {syncing && <Spinner />}
