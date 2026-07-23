@@ -8,8 +8,8 @@ from sqlalchemy import select, update
 
 from app.api.deps import CtxDep, DbDep, SecretBoxDep
 from app.api.schemas import (
-    ConnectionCreate, ConnectionRead, ConnectionTestResult, ConnectionUpdate,
-    SchemaRead,
+    ConnectionCreate, ConnectionRead, ConnectionTestRequest,
+    ConnectionTestResult, ConnectionUpdate, SchemaRead,
 )
 from app.core.clock import utcnow
 from app.core.errors import ConflictError, NotFoundError
@@ -84,6 +84,38 @@ async def create_connection(
         await _clear_other_defaults(db, ctx.user_id, connection_id)
     await db.flush()
     return connection
+
+
+@router.post("/test", response_model=ConnectionTestResult)
+async def test_draft_connection(
+    payload: ConnectionTestRequest, ctx: CtxDep
+) -> ConnectionTestResult:
+    """Probe credentials before they are saved.
+
+    Declared above `/{connection_id}` so the literal path wins the match.
+    Nothing is written: there is no row yet to record a status against.
+    """
+    connector = build_connector(
+        kind=payload.database_type,
+        host=payload.host,
+        port=payload.port,
+        database=payload.database_name,
+        username=payload.username,
+        password=payload.password.get_secret_value(),
+        ssl_mode=payload.ssl_mode,
+    )
+    try:
+        probe = await connector.probe()
+    finally:
+        await connector.close()
+
+    return ConnectionTestResult(
+        ok=probe.ok,
+        latency_ms=probe.latency_ms,
+        server_version=probe.server_version,
+        readonly_confirmed=probe.readonly_confirmed,
+        message=probe.message,
+    )
 
 
 @router.get("/{connection_id}", response_model=ConnectionRead)

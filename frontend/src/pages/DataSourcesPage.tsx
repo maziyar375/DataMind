@@ -118,12 +118,26 @@ export default function DataSourcesPage() {
   }
 
   async function test() {
-    if (!selected) return
     setTesting(true)
     setTestResult(null)
     try {
-      setTestResult(await api.test(selected.id))
-      await refresh()
+      if (creating) {
+        // No row exists yet, so probe the form values directly.
+        setTestResult(
+          await api.testDraft({
+            database_type: draft.database_type,
+            host: draft.host,
+            port: draft.port,
+            database_name: draft.database_name,
+            username: draft.username,
+            password,
+            ssl_mode: draft.ssl_mode,
+          }),
+        )
+      } else if (selected) {
+        setTestResult(await api.test(selected.id))
+        await refresh()
+      }
     } catch (err) {
       setTestResult({
         ok: false,
@@ -171,6 +185,12 @@ export default function DataSourcesPage() {
   }, [schema, search])
 
   const editing = creating || !!selected
+
+  // A draft has no stored password to fall back on, so everything the probe
+  // needs must be on the form before Test can mean anything.
+  const canTest = creating
+    ? Boolean(draft.host && draft.port && draft.database_name && draft.username && password)
+    : true
 
   return (
     <div style={{ display: 'flex', height: '100%', width: '100%', minWidth: 0 }}>
@@ -246,12 +266,18 @@ export default function DataSourcesPage() {
                       Set as default
                     </GhostButton>
                   )}
-                  {!creating && (
-                    <GhostButton onClick={test} disabled={testing}>
-                      {testing && <Spinner />}
-                      Test connection
-                    </GhostButton>
-                  )}
+                  <GhostButton
+                    onClick={test}
+                    disabled={testing || !canTest}
+                    title={
+                      canTest
+                        ? undefined
+                        : 'Fill in host, database, user, and password first.'
+                    }
+                  >
+                    {testing && <Spinner />}
+                    Test connection
+                  </GhostButton>
                   <PrimaryButton onClick={save} disabled={saving}>
                     {saving && <Spinner />}
                     {creating ? 'Add connection' : 'Save changes'}

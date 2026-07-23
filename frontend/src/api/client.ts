@@ -166,6 +166,10 @@ export const connections = {
     patch<Connection>(`/connections/${id}`, payload),
   remove: (id: string) => del(`/connections/${id}`),
   test: (id: string) => post<TestResult>(`/connections/${id}/test`),
+  // Probe credentials that have no row yet, so a connection can be checked
+  // before it is created. Records nothing server-side.
+  testDraft: (payload: Record<string, unknown>) =>
+    post<TestResult>('/connections/test', payload),
   syncSchema: (id: string) => post<SchemaSnapshot>(`/connections/${id}/schema/sync`),
   schema: (id: string) => get<SchemaSnapshot>(`/connections/${id}/schema`),
 }
@@ -179,6 +183,8 @@ export const llmConfigs = {
     patch<LlmConfig>(`/llm-configs/${id}`, payload),
   remove: (id: string) => del(`/llm-configs/${id}`),
   test: (id: string) => post<TestResult>(`/llm-configs/${id}/test`),
+  testDraft: (payload: Record<string, unknown>) =>
+    post<TestResult>('/llm-configs/test', payload),
 }
 
 // ── conversations ─────────────────────────────────────────────────────────

@@ -9,7 +9,8 @@ from sqlalchemy import select, update
 
 from app.api.deps import CtxDep, DbDep, SecretBoxDep, SettingsDep
 from app.api.schemas import (
-    LlmConfigCreate, LlmConfigRead, LlmConfigUpdate, TestResult,
+    LlmConfigCreate, LlmConfigRead, LlmConfigTestRequest, LlmConfigUpdate,
+    TestResult,
 )
 from app.core.clock import utcnow
 from app.core.errors import ConflictError, LLMError, NotFoundError
@@ -82,6 +83,49 @@ async def create_config(
         await _clear_other_defaults(db, ctx.user_id, config_id)
     await db.flush()
     return _to_read(row)
+
+
+@router.post("/test", response_model=TestResult)
+async def test_draft_config(
+    payload: LlmConfigTestRequest, ctx: CtxDep, settings: SettingsDep
+) -> TestResult:
+    """Probe a model configuration before it is saved.
+
+    Declared above `/{config_id}` so the literal path wins the match. Nothing
+    is written: there is no row yet to record capabilities against.
+    """
+    resolved = ResolvedLLM(
+        config_id=uuid.uuid4(),
+        provider=payload.provider,
+        model=payload.model,
+        base_url=payload.base_url,
+        api_key=payload.api_key.get_secret_value() if payload.api_key else "",
+        temperature=payload.temperature,
+        max_tokens=payload.max_tokens,
+        capabilities=ProviderCapabilities(),
+    )
+    gateway = LiteLLMGateway(timeout_seconds=settings.llm_request_timeout_seconds)
+
+    started = time.perf_counter()
+    try:
+        capabilities = await gateway.probe(resolved)
+    except LLMError as err:
+        return TestResult(
+            ok=False,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            message=err.message,
+        )
+
+    return TestResult(
+        ok=True,
+        latency_ms=int((time.perf_counter() - started) * 1000),
+        message=f"Reached {payload.model}",
+        detected_capabilities={
+            "supports_structured_output": capabilities.supports_structured_output,
+            "supports_streaming": capabilities.supports_streaming,
+            "supports_system_prompt": capabilities.supports_system_prompt,
+        },
+    )
 
 
 @router.patch("/{config_id}", response_model=LlmConfigRead)

@@ -107,12 +107,25 @@ export default function LlmProvidersPage() {
   }
 
   async function test() {
-    if (!selected) return
     setTesting(true)
     setTestResult(null)
     try {
-      setTestResult(await api.test(selected.id))
-      await refresh()
+      if (creating) {
+        // No row exists yet, so probe the form values directly.
+        setTestResult(
+          await api.testDraft({
+            provider: draft.provider,
+            base_url: draft.base_url || undefined,
+            model: draft.model,
+            api_key: apiKey || undefined,
+            temperature: draft.temperature,
+            max_tokens: draft.max_tokens,
+          }),
+        )
+      } else if (selected) {
+        setTestResult(await api.test(selected.id))
+        await refresh()
+      }
     } catch (err) {
       setTestResult({
         ok: false,
@@ -132,6 +145,10 @@ export default function LlmProvidersPage() {
   }
 
   const editing = creating || !!selected
+
+  // Ollama and other local endpoints need no key, so only the model is
+  // required before a draft probe can say anything useful.
+  const canTest = creating ? Boolean(draft.model) : true
 
   return (
     <div style={{ display: 'flex', height: '100%', width: '100%', minWidth: 0 }}>
@@ -201,12 +218,14 @@ export default function LlmProvidersPage() {
                       Set as default
                     </GhostButton>
                   )}
-                  {!creating && (
-                    <GhostButton onClick={test} disabled={testing}>
-                      {testing && <Spinner />}
-                      Test model
-                    </GhostButton>
-                  )}
+                  <GhostButton
+                    onClick={test}
+                    disabled={testing || !canTest}
+                    title={canTest ? undefined : 'Enter a model name first.'}
+                  >
+                    {testing && <Spinner />}
+                    Test model
+                  </GhostButton>
                   <PrimaryButton onClick={save} disabled={saving}>
                     {saving && <Spinner />}
                     {creating ? 'Add model' : 'Save changes'}

@@ -106,6 +106,17 @@ class TestResult(BaseModel):
     detected_capabilities: dict[str, Any] = Field(default_factory=dict)
 
 
+class LlmConfigTestRequest(BaseModel):
+    """Probe a model configuration that has not been saved yet."""
+
+    provider: Literal["OpenAI-compatible", "Anthropic", "Ollama", "Custom"]
+    base_url: str | None = None
+    model: str = Field(min_length=1, max_length=200)
+    api_key: SecretStr | None = None
+    temperature: float = Field(default=0.2, ge=0.0, le=2.0)
+    max_tokens: int = Field(default=2048, ge=1, le=200_000)
+
+
 # ── connections ──────────────────────────────────────────────────────────
 class ConnectionCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
@@ -167,6 +178,22 @@ class ConnectionTestResult(BaseModel):
     server_version: str | None = None
     readonly_confirmed: bool = False
     message: str | None = None
+
+
+class ConnectionTestRequest(BaseModel):
+    """Probe credentials that have not been saved yet.
+
+    Only the fields needed to open a socket. Row limits and the disclosure
+    policy do not affect whether a connection works, so they are not asked for.
+    """
+
+    database_type: Literal["postgres", "mysql", "mssql"] = "postgres"
+    host: str = Field(min_length=1, max_length=255)
+    port: int = Field(ge=1, le=65535)
+    database_name: str = Field(min_length=1, max_length=200)
+    username: str = Field(min_length=1, max_length=200)
+    password: SecretStr
+    ssl_mode: Literal["require", "verify-full", "disable"] | None = "require"
 
 
 class SchemaColumn(BaseModel):
