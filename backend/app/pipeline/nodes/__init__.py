@@ -80,7 +80,27 @@ async def route(state: RunState, deps: NodeDeps) -> NodeResult:
         )
         return NodeResult(status="FAILED", detail="Classified UNSUPPORTED")
 
+    if state.intent == "METADATA":
+        # Answered straight from the already-loaded snapshot. Routing this
+        # through generate/validate would make the LLM write SQL against
+        # information_schema, which the guard always rejects as a system
+        # table — the run would fail before an answer ever existed.
+        state.answer = _describe_schema(deps.snapshot.get("tables", []))
+        return NodeResult(status="HALT", detail=f"Classified METADATA in {elapsed}ms")
+
     return NodeResult(detail=f"Classified {state.intent} in {elapsed}ms")
+
+
+def _describe_schema(tables: list[dict[str, Any]]) -> str:
+    if not tables:
+        return "This connection has no tables in its current schema snapshot."
+    lines = [f"You have {len(tables)} table{'' if len(tables) == 1 else 's'}:"]
+    for table in tables:
+        cols = ", ".join(c["name"] for c in table.get("columns", []))
+        rows = table.get("approx_row_count")
+        suffix = f" (~{rows:,} rows)" if rows else ""
+        lines.append(f"- {table['schema']}.{table['name']}{suffix}: {cols}")
+    return "\n".join(lines)
 
 
 # ── retrieve ─────────────────────────────────────────────────────────────
