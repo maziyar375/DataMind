@@ -6,7 +6,11 @@ services:
       POSTGRES_PASSWORD: raymand
       POSTGRES_DB: raymand
     ports: ["5432:5432"]
-    volumes: ["raymand_db:/var/lib/postgresql/data"]
+    # Bind-mount onto the project dir (the persistent Lightning Studio drive)
+    # instead of a Docker-managed named volume. Named volumes live under
+    # /var/lib/docker, which is ephemeral here: a Studio stop wipes it and with
+    # it every chat and connection. A path inside the studio drive survives.
+    volumes: ["./.data/db:/var/lib/postgresql/data"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U raymand"]
       interval: 5s
@@ -89,6 +93,8 @@ services:
       - /app/node_modules
 
 volumes:
-  raymand_db:
+  # raymand_db is now a bind mount onto the studio drive (see the db service),
+  # so it is no longer a named volume. sales and sakila stay ephemeral on
+  # purpose: they re-seed from their init scripts on every fresh start.
   raymand_sales:
   raymand_sakila:

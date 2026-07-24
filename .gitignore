@@ -18,6 +18,9 @@ dist/
 .env.*
 !.env.example
 
+# Postgres data dir, bind-mounted to persist across Studio stops
+.data/
+
 .DS_Store
 .idea/
 .vscode/
