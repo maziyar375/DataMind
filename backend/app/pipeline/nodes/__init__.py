@@ -84,12 +84,15 @@ async def route(state: RunState, deps: NodeDeps) -> NodeResult:
         return NodeResult(status="HALT", detail=f"Classified CHITCHAT in {elapsed}ms")
 
     if state.intent == "UNSUPPORTED":
-        state.error = RunError(
-            code="E_UNSUPPORTED",
-            message="That request is outside what this connection allows.",
-            hint="This connection is read-only, so I can read data but never change it.",
+        # Answer gracefully instead of failing the run: an out-of-scope or
+        # write request is not an error the user needs to debug, so we reply
+        # like CHITCHAT (a HALT with an answer) rather than surfacing E_*.
+        state.answer = (
+            "I can only answer questions about the data in your connected "
+            "database, and I can read that data but never change it. "
+            'Try something like "What was total revenue last month?"'
         )
-        return NodeResult(status="FAILED", detail="Classified UNSUPPORTED")
+        return NodeResult(status="HALT", detail="Classified UNSUPPORTED")
 
     if state.intent == "METADATA":
         # Answered straight from the already-loaded snapshot. Routing this
