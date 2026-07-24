@@ -59,6 +59,7 @@ make guard     # the hostile SQL corpus alone — the hard CI gate
 make lint      # ruff + import-linter contracts
 make fmt       # ruff format
 make migrate   # alembic upgrade head
+make fixtures  # rebuild + verify the sales fixtures (PG/MySQL/MSSQL) from clean
 ```
 
 Frontend, from `frontend/`: `npm run dev`, `npm run build` (`tsc -b && vite
@@ -103,7 +104,11 @@ backend/app/
     events/       SSE event publisher
   workers/        inprocess run executor + stale-run reconciler
   tests/          unit (incl. test_sqlguard_hostile.py) + integration
-  fixtures/       sales_seed.sql — demo DB with a read-only role
+  fixtures/       sales_seed.sql (Postgres demo/eval DB) + sales_seed_mysql.sql
+                  and sales_seed_mssql.sql dialect mirrors + rebuild_fixtures.sh
+                  (`make fixtures`); each a wide, deliberately-messy 42-table
+                  commerce schema with a read-only role, sized so retrieval is
+                  actually exercised (snapshot exceeds the retrieve budget)
 
 frontend/src/
   main.tsx, App.tsx        entry + router/layout

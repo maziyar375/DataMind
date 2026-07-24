@@ -1,4 +1,4 @@
-.PHONY: help secrets up down logs test guard lint fmt migrate
+.PHONY: help secrets up down logs test guard lint fmt migrate fixtures
 
 help:
 	@echo "make secrets   Generate .env with fresh keys"
@@ -7,6 +7,7 @@ help:
 	@echo "make test      Run the backend test suite"
 	@echo "make guard     Run the hostile SQL corpus only"
 	@echo "make lint      Ruff + architecture contracts"
+	@echo "make fixtures  Rebuild + verify the sales fixtures (PG/MySQL/MSSQL) from clean"
 
 secrets:
 	@test -f .env || cp .env.example .env
@@ -43,3 +44,9 @@ fmt:
 
 migrate:
 	cd backend && alembic upgrade head
+
+# Rebuild the demo/eval fixtures from clean and prove each dialect loads, has
+# the expected 42 tables, and clears the retrieve-node budget. Rebuilds the
+# Compose Postgres demo unless SKIP_DEMO=1; ONLY=pg|mysql|mssql narrows it.
+fixtures:
+	bash backend/fixtures/rebuild_fixtures.sh
