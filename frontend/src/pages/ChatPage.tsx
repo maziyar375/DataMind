@@ -907,74 +907,105 @@ function Composer({
   }, [value])
 
   const canSend = value.trim().length > 0 && !busy
+  const active = focus || value.trim().length > 0
 
   return (
-    <div style={{ padding: '12px 28px 22px', flexShrink: 0 }}>
+    <div style={{ padding: '10px 28px 20px', flexShrink: 0 }}>
       <div
-        style={{
-          display: 'flex',
-          alignItems: 'flex-end',
-          gap: 10,
-          background: 'var(--panel)',
-          border: `1px solid ${focus ? 'var(--accent)' : 'var(--border-strong)'}`,
-          borderRadius: 16,
-          padding: '11px 12px 11px 16px',
-          boxShadow: focus
-            ? '0 0 0 3px var(--accent-bg), 0 6px 20px rgba(0,0,0,0.10)'
-            : '0 2px 10px rgba(0,0,0,0.06)',
-          transition: 'border-color .15s ease, box-shadow .15s ease',
-        }}
+        className={`rm-composer${active ? ' is-active' : ''}`}
+        style={{ maxWidth: 780, margin: '0 auto' }}
       >
-        <textarea
-          ref={ref}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onFocus={() => setFocus(true)}
-          onBlur={() => setFocus(false)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault()
-              if (canSend) onSubmit()
-            }
-          }}
-          rows={1}
-          dir={dirOf(value)}
-          placeholder="Ask about your data…  •  دربارهٔ داده‌هایتان بپرسید…"
-          aria-label="Ask about your data"
+        <div
           style={{
-            flex: 1,
-            resize: 'none',
-            maxHeight: 160,
-            background: 'transparent',
-            border: 'none',
-            outline: 'none',
-            color: 'var(--text)',
-            fontSize: 14,
-            lineHeight: 1.6,
-            padding: 0,
+            display: 'flex',
+            alignItems: 'flex-end',
+            gap: 10,
+            background: 'var(--panel)',
+            border: `1px solid ${focus ? 'var(--accent)' : 'var(--border-strong)'}`,
+            borderRadius: 22,
+            padding: '10px 10px 10px 18px',
+            boxShadow: focus
+              ? '0 0 0 4px var(--accent-bg), 0 12px 34px -12px rgba(0,0,0,0.28)'
+              : '0 2px 12px -4px rgba(0,0,0,0.14)',
+            transition: 'border-color .18s ease, box-shadow .18s ease, transform .18s ease',
+            transform: focus ? 'translateY(-1px)' : 'none',
           }}
-        />
-        <button
-          onClick={() => canSend && onSubmit()}
-          disabled={!canSend}
-          aria-label="Send"
+        >
+          <textarea
+            ref={ref}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            onFocus={() => setFocus(true)}
+            onBlur={() => setFocus(false)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                if (canSend) onSubmit()
+              }
+            }}
+            rows={1}
+            dir={dirOf(value)}
+            placeholder="Ask anything about your data…"
+            aria-label="Ask about your data"
+            style={{
+              flex: 1,
+              resize: 'none',
+              maxHeight: 160,
+              background: 'transparent',
+              border: 'none',
+              outline: 'none',
+              color: 'var(--text)',
+              fontSize: 14.5,
+              lineHeight: 1.6,
+              padding: '5px 0',
+            }}
+          />
+          <button
+            className="rm-send-btn"
+            onClick={() => canSend && onSubmit()}
+            disabled={!canSend}
+            aria-label="Send"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 38,
+              height: 38,
+              borderRadius: '50%',
+              border: 'none',
+              flexShrink: 0,
+              background: canSend
+                ? 'linear-gradient(150deg, color-mix(in oklch, var(--accent) 88%, white), var(--accent))'
+                : 'var(--panel-alt)',
+              color: canSend ? 'var(--on-accent)' : 'var(--text-faint)',
+              cursor: canSend ? 'pointer' : 'not-allowed',
+            }}
+          >
+            {busy ? <Spinner size={15} /> : <Icon.Send size={16} />}
+          </button>
+        </div>
+
+        <div
+          className="rm-composer-hint"
           style={{
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            width: 34,
-            height: 34,
-            borderRadius: 10,
-            border: 'none',
-            flexShrink: 0,
-            background: canSend ? 'var(--accent)' : 'var(--panel-alt)',
-            color: canSend ? 'var(--on-accent)' : 'var(--text-faint)',
-            cursor: canSend ? 'pointer' : 'not-allowed',
-            transition: 'background .15s ease',
+            gap: 8,
+            marginTop: 8,
+            fontSize: 11,
+            color: 'var(--text-faint)',
           }}
         >
-          {busy ? <Spinner size={15} /> : <Icon.Send size={16} />}
-        </button>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <span className="rm-kbd">Enter</span> to send
+          </span>
+          <span style={{ opacity: 0.5 }}>·</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <span className="rm-kbd">Shift</span>
+            <span className="rm-kbd">Enter</span> for a new line
+          </span>
+        </div>
       </div>
     </div>
   )

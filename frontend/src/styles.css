@@ -155,17 +155,41 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 /* Lighter theme needs a gentler wash. */
 :root[data-theme='light'] .rm-auth::before { opacity: 0.7; }
 
-/* A soft glow cupped behind the enlarged logo. */
-.rm-auth-logo { position: relative; display: grid; place-items: center; }
+/* A soft, multi-hue glow cupped behind the enlarged logo — echoing the
+   purple / blue / pink of the mark, with a gentle breathing float. */
+.rm-auth-logo {
+  position: relative;
+  display: grid;
+  place-items: center;
+  animation: rm-logo-float 6s ease-in-out infinite;
+}
 .rm-auth-logo::before {
   content: '';
   position: absolute;
-  width: 160%;
-  height: 160%;
+  width: 190%;
+  height: 190%;
   border-radius: 50%;
   z-index: -1;
-  background: radial-gradient(closest-side, oklch(0.66 0.22 330 / 0.4), transparent 70%);
-  filter: blur(6px);
+  background:
+    radial-gradient(closest-side, oklch(0.66 0.22 330 / 0.34), transparent 72%),
+    radial-gradient(closest-side at 34% 30%, oklch(0.62 0.22 285 / 0.28), transparent 70%),
+    radial-gradient(closest-side at 70% 68%, oklch(0.64 0.2 255 / 0.24), transparent 70%);
+  filter: blur(8px);
+  animation: rm-logo-glow 6s ease-in-out infinite;
+}
+/* The mark itself gets a crisp drop shadow so it reads as raised off the glow. */
+.rm-auth-logo > * {
+  position: relative;
+  border-radius: 22px;
+  box-shadow: 0 18px 40px -18px oklch(0.5 0.2 320 / 0.7);
+}
+@keyframes rm-logo-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+@keyframes rm-logo-glow {
+  0%, 100% { opacity: 0.85; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.06); }
 }
 
 /* The glass card. */
@@ -185,3 +209,30 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 }
 .rm-auth-submit:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.05); }
 .rm-auth-submit:active:not(:disabled) { transform: translateY(0); }
+
+/* Composer send button — a brand-tinted lift when it can fire. */
+.rm-send-btn {
+  transition: transform 0.14s ease, box-shadow 0.14s ease, filter 0.14s ease, background 0.15s ease;
+}
+.rm-send-btn:not(:disabled) { box-shadow: 0 6px 18px -8px var(--accent); }
+.rm-send-btn:hover:not(:disabled) { transform: translateY(-1px) scale(1.04); filter: brightness(1.06); }
+.rm-send-btn:active:not(:disabled) { transform: translateY(0) scale(0.97); }
+
+/* The keyboard hint under the composer fades in with focus or content. */
+.rm-composer-hint {
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  pointer-events: none;
+}
+.rm-composer.is-active .rm-composer-hint { opacity: 1; transform: translateY(0); }
+.rm-kbd {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}

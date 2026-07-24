@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { ApiError, auth } from '../api/client'
 import type { User } from '../api/types'
-import { ErrorNote, Logo, Spinner, TextInput } from '../components/ui'
+import { ErrorNote, Icon, Logo, Spinner, TextInput } from '../components/ui'
 
 export default function LoginPage({ onSignedIn }: { onSignedIn: (user: User) => void }) {
   const [email, setEmail] = useState('')
@@ -55,17 +55,24 @@ export default function LoginPage({ onSignedIn }: { onSignedIn: (user: User) => 
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            gap: 18,
+            gap: 22,
           }}
         >
           <div className="rm-auth-logo">
-            <Logo size={84} />
+            <Logo size={112} />
           </div>
           <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 27, fontWeight: 700, letterSpacing: '-0.02em' }}>
+            <div style={{ fontSize: 30, fontWeight: 700, letterSpacing: '-0.025em' }}>
               Welcome to DataMind
             </div>
-            <div style={{ fontSize: 14, color: 'var(--text-dim)', marginTop: 6 }}>
+            <div
+              style={{
+                fontSize: 14.5,
+                color: 'var(--text-dim)',
+                marginTop: 8,
+                lineHeight: 1.5,
+              }}
+            >
               Sign in to your conversational BI workspace
             </div>
           </div>
@@ -125,25 +132,27 @@ export default function LoginPage({ onSignedIn }: { onSignedIn: (user: User) => 
             disabled={busy}
             className="rm-auth-submit"
             style={{
-              marginTop: 4,
+              marginTop: 6,
               width: '100%',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               gap: 8,
-              fontSize: 14,
+              fontSize: 14.5,
               fontWeight: 600,
               color: 'var(--on-accent)',
-              background: 'var(--accent)',
+              background:
+                'linear-gradient(135deg, color-mix(in oklch, var(--accent) 86%, white), var(--accent))',
               border: 'none',
-              borderRadius: 10,
-              padding: 12,
+              borderRadius: 11,
+              padding: 13,
               cursor: busy ? 'wait' : 'pointer',
               opacity: busy ? 0.7 : 1,
             }}
           >
             {busy && <Spinner />}
             {busy ? 'Signing in' : 'Sign in'}
+            {!busy && <Icon.Chevron size={15} stroke="currentColor" />}
           </button>
         </form>
 
