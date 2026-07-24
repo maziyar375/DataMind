@@ -18,6 +18,7 @@ from app.api.schemas import (
     ConversationUpdate,
     GeneratedQueryRead,
     MessageAccepted,
+    SuggestionsRead,
     MessageCreate,
     MessageRead,
     RunRead,
@@ -236,6 +237,25 @@ async def post_message(
     await executor.submit(run.id)
 
     return MessageAccepted(run_id=run.id, message_id=run.user_message_id)
+
+
+@router.get(
+    "/conversations/{conversation_id}/suggestions",
+    response_model=SuggestionsRead,
+)
+async def suggest_followups(
+    conversation_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep,
+) -> SuggestionsRead:
+    """Model-proposed follow-up questions, grounded in schema + this thread.
+
+    Best-effort: returns an empty list (never an error) when there is no
+    schema, no model, or the provider is unavailable.
+    """
+    service = RunService(db, settings)
+    suggestions = await service.suggest_followups(
+        conversation_id=conversation_id, owner_id=ctx.user_id
+    )
+    return SuggestionsRead(suggestions=suggestions)
 
 
 # ── runs ─────────────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ run gets scheduled.
 """
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import asdict
 from datetime import timedelta
@@ -19,7 +20,7 @@ from app.core.clock import utcnow
 from app.core.config import Settings
 from app.core.errors import NotFoundError, RunTimeoutError
 from app.core.logging import get_logger
-from app.domain.ports.llm import ProviderCapabilities, ResolvedLLM
+from app.domain.ports.llm import ChatMessage, ProviderCapabilities, ResolvedLLM
 from app.domain.value_objects import (
     ArtifactKind,
     DatabaseKind,
@@ -44,7 +45,7 @@ from app.infra.db.models import (
 )
 from app.infra.events.bus import event_bus
 from app.infra.llm.litellm_gateway import LiteLLMGateway
-from app.pipeline.nodes import NodeDeps
+from app.pipeline.nodes import NodeDeps, _describe_schema
 from app.pipeline.pipeline import AnalyticsPipeline
 from app.pipeline.state import RunState
 from app.sqlguard import GuardPolicy
@@ -427,6 +428,94 @@ class RunService:
             for r in reversed(rows)
         ]
 
+    # ── follow-up suggestions ────────────────────────────────────────────
+    async def suggest_followups(
+        self, *, conversation_id: UUID, owner_id: UUID, limit: int = 3
+    ) -> list[str]:
+        """Propose a few natural-language follow-up questions for a thread.
+
+        Grounded in the connection's schema snapshot and the recent
+        conversation, so every suggestion is answerable over the same tables.
+        Deliberately best-effort: a missing schema, an unconfigured model, or a
+        provider error yields an empty list rather than disturbing the chat.
+        """
+        conversation = await self._db.get(Conversation, conversation_id)
+        if conversation is None or conversation.owner_id != owner_id:
+            raise NotFoundError("Conversation not found.")
+
+        conn_id = conversation.default_connection_id
+        llm_id = conversation.default_llm_config_id
+        if conn_id is None or llm_id is None:
+            return []
+
+        connection = await self._db.get(DatabaseConnection, conn_id)
+        llm_config = await self._db.get(LlmConfig, llm_id)
+        if connection is None or llm_config is None:
+            return []
+
+        snapshot = await self._latest_snapshot(conn_id)
+        tables = snapshot.get("tables", [])
+        if not tables:
+            return []
+
+        history = await self._history_for_suggestions(conversation_id)
+        # Only suggest once the thread has at least one answered turn.
+        if not any(m["role"] == "assistant" for m in history):
+            return []
+
+        transcript = "\n".join(
+            f"{m['role'].capitalize()}: {m['content']}" for m in history
+        )
+        system = (
+            "You help a business user explore a SQL database in plain language. "
+            "Given the database schema and the conversation so far, propose "
+            f"{limit} follow-up questions the user is likely to ask next. Rules: "
+            "each question must be answerable with SQL over the tables shown; "
+            "keep each under 12 words; make them specific to this schema, not "
+            "generic; never repeat a question already asked. Output exactly "
+            f"{limit} questions, one per line, with no numbering, quotes, or any "
+            "other text."
+        )
+        user = (
+            f"Database schema:\n{_describe_schema(tables)}\n\n"
+            f"Conversation so far:\n{transcript}"
+        )
+
+        try:
+            gateway = LiteLLMGateway(
+                timeout_seconds=self._settings.llm_request_timeout_seconds
+            )
+            completion = await gateway.complete(
+                self._resolve_llm(llm_config),
+                [
+                    ChatMessage(role="system", content=system),
+                    ChatMessage(role="user", content=user),
+                ],
+            )
+        except Exception:
+            log.warning(
+                "suggestions_failed", conversation_id=str(conversation_id)
+            )
+            return []
+
+        return _parse_suggestions(completion.text, limit, history)
+
+    async def _history_for_suggestions(
+        self, conversation_id: UUID, limit: int = 8
+    ) -> list[dict[str, str]]:
+        result = await self._db.execute(
+            select(Message)
+            .where(Message.conversation_id == conversation_id)
+            .order_by(Message.seq.desc())
+            .limit(limit)
+        )
+        rows = list(reversed(list(result.scalars())))
+        return [
+            {"role": r.role.lower(), "content": content}
+            for r in rows
+            if (content := (r.content or "").strip())
+        ]
+
     async def _latest_snapshot(self, connection_id: UUID) -> dict[str, Any]:
         result = await self._db.execute(
             select(SchemaSnapshotRow)
@@ -463,6 +552,35 @@ class RunService:
                 supports_streaming=caps.get("supports_streaming", True),
             ),
         )
+
+
+_LIST_MARKER = re.compile(r"^\s*(?:\d+[.)]|[-*•])\s*")
+
+
+def _parse_suggestions(
+    text: str, limit: int, history: list[dict[str, str]]
+) -> list[str]:
+    """Turn a model's free-text reply into clean, de-duplicated questions.
+
+    The model is asked for one question per line, but real replies also carry
+    numbering, bullets, or stray quotes; those are stripped. Anything already
+    asked in the thread is dropped so a suggestion never echoes the user.
+    """
+    asked = {m["content"].strip().lower() for m in history}
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in text.splitlines():
+        line = _LIST_MARKER.sub("", raw.strip()).strip().strip('"').strip()
+        if not line:
+            continue
+        key = line.lower()
+        if key in seen or key in asked:
+            continue
+        seen.add(key)
+        out.append(line)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _policy_from_snapshot(

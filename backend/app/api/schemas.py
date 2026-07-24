@@ -328,3 +328,13 @@ class MessageRead(BaseModel):
 class MessageAccepted(BaseModel):
     run_id: UUID
     message_id: UUID
+
+
+class SuggestionsRead(BaseModel):
+    """Model-proposed follow-up questions for a live conversation.
+
+    Best-effort and ephemeral: an empty list is a valid answer (no schema, no
+    model, or the provider was unavailable) and must not be treated as an error.
+    """
+
+    suggestions: list[str] = Field(default_factory=list)

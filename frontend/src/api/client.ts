@@ -203,6 +203,8 @@ export const conversations = {
   messages: (id: string) => get<MessageWithRun[]>(`/conversations/${id}/messages`),
   send: (id: string, payload: { content: string; connection_id?: string; llm_config_id?: string }) =>
     post<{ run_id: string; message_id: string }>(`/conversations/${id}/messages`, payload),
+  suggestions: (id: string) =>
+    get<{ suggestions: string[] }>(`/conversations/${id}/suggestions`),
 }
 
 // ── runs ──────────────────────────────────────────────────────────────────

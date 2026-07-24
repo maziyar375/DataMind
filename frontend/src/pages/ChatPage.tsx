@@ -21,6 +21,8 @@ export default function ChatPage() {
   const [draft, setDraft] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Model-proposed follow-ups, refreshed after each answered turn.
+  const [suggestions, setSuggestions] = useState<string[]>([])
 
   // Live run state, kept separate from persisted messages so a refresh
   // mid-run recovers from the server rather than from this component.
@@ -74,11 +76,24 @@ export default function ChatPage() {
     }
   }, [])
 
+  // Fetch follow-up suggestions for a thread. Best-effort — a failure just
+  // leaves the row empty and never surfaces an error to the reader.
+  const refreshSuggestions = useCallback(async (conversationId: string) => {
+    try {
+      const { suggestions: next } = await conversations.suggestions(conversationId)
+      setSuggestions(next)
+    } catch {
+      setSuggestions([])
+    }
+  }, [])
+
   useEffect(() => {
     if (!activeId) {
       setMessages([])
+      setSuggestions([])
       return
     }
+    setSuggestions([])
     loadMessages(activeId).catch(() => setError('Could not load this conversation.'))
     const conversation = conversationList.find((c) => c.id === activeId)
     if (conversation?.default_connection_id) setConnectionId(conversation.default_connection_id)
@@ -164,6 +179,8 @@ export default function ChatPage() {
         } catch {
           /* the run finished; a list refresh failure is not worth an error */
         }
+        // After the answer lands, offer where the reader might go next.
+        void refreshSuggestions(conversationId)
       },
       onError: () => {
         /* the client falls back to polling internally */
@@ -184,6 +201,7 @@ export default function ChatPage() {
 
     setError(null)
     setDraft('')
+    setSuggestions([])  // the prior turn's follow-ups no longer apply
 
     try {
       let conversationId = activeId
@@ -419,6 +437,13 @@ export default function ChatPage() {
                 ) : (
                   <ThinkingCard steps={liveSteps} />
                 ))}
+
+              {!activeRunId && suggestions.length > 0 && (
+                <SuggestedFollowups
+                  items={suggestions}
+                  onPick={(text) => void send(text)}
+                />
+              )}
             </div>
           </div>
 
@@ -556,6 +581,53 @@ function StarterChip({ text, onClick }: { text: string; onClick: () => void }) {
     >
       {text}
     </button>
+  )
+}
+
+/**
+ * Model-proposed next questions, shown under a finished answer. They line up
+ * with the assistant's content column (past the avatar gutter) so they read as
+ * a continuation of the thread rather than a new element. Each chip sends its
+ * question directly, reusing the starter-chip affordance for consistency.
+ */
+function SuggestedFollowups({
+  items, onPick,
+}: {
+  items: string[]
+  onPick: (text: string) => void
+}) {
+  return (
+    <div
+      className="rm-enter"
+      style={{
+        marginLeft: 43,
+        maxWidth: 737,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 9,
+      }}
+    >
+      <div
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          fontSize: 11,
+          fontWeight: 600,
+          textTransform: 'uppercase',
+          letterSpacing: '0.05em',
+          color: 'var(--text-faint)',
+        }}
+      >
+        <Icon.Sparkle size={12} stroke="var(--accent)" />
+        Suggested follow-ups
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {items.map((text) => (
+          <StarterChip key={text} text={text} onClick={() => onPick(text)} />
+        ))}
+      </div>
+    </div>
   )
 }
 
