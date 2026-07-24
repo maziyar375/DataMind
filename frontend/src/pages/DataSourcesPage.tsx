@@ -256,7 +256,6 @@ export default function DataSourcesPage() {
                   ? 'red'
                   : 'neutral'
             }
-            isDefault={connection.is_default}
             onClick={() => setSelectedId(connection.id)}
           />
         ))}
@@ -287,7 +286,6 @@ export default function DataSourcesPage() {
                     <Chip tone={selected!.readonly_confirmed ? 'green' : 'amber'}>
                       {selected!.readonly_confirmed ? 'read-only confirmed' : 'role can write'}
                     </Chip>
-                    {selected!.is_default && <Chip tone="accent">default</Chip>}
                     <Chip>
                       {selected!.last_synced_at
                         ? `synced ${relativeTime(selected!.last_synced_at)}`
@@ -298,16 +296,6 @@ export default function DataSourcesPage() {
               }
               actions={
                 <>
-                  {!creating && selected && !selected.is_default && (
-                    <GhostButton
-                      onClick={async () => {
-                        await api.update(selected.id, { is_default: true })
-                        await refresh()
-                      }}
-                    >
-                      Set as default
-                    </GhostButton>
-                  )}
                   <GhostButton
                     onClick={test}
                     disabled={testing || !canTest}

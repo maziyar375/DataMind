@@ -30,7 +30,6 @@ export interface Connection {
   max_rows: number
   statement_timeout_ms: number
   disclosure_policy: 'NONE' | 'AGGREGATE' | 'SAMPLE' | 'FULL'
-  is_default: boolean
   status: string
   readonly_confirmed: boolean
   server_version: string | null
@@ -46,7 +45,6 @@ export interface LlmConfig {
   model: string
   temperature: number
   max_tokens: number
-  is_default: boolean
   status: string
   has_api_key: boolean
   last_tested_at: string | null

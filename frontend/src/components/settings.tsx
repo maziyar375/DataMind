@@ -110,13 +110,12 @@ export function MasterColumn({
 }
 
 export function MasterItem({
-  title, subtitle, active, tone, isDefault, onClick,
+  title, subtitle, active, tone, onClick,
 }: {
   title: string
   subtitle: string
   active: boolean
   tone: 'green' | 'red' | 'neutral'
-  isDefault?: boolean
   onClick: () => void
 }) {
   const [hover, setHover] = useState(false)
@@ -182,24 +181,6 @@ export function MasterItem({
           {subtitle}
         </span>
       </span>
-      {isDefault && (
-        <span
-          style={{
-            marginLeft: 'auto',
-            flexShrink: 0,
-            fontSize: 9.5,
-            fontWeight: 700,
-            letterSpacing: '0.04em',
-            textTransform: 'uppercase',
-            color: 'var(--green)',
-            background: 'var(--green-bg)',
-            padding: '3px 6px',
-            borderRadius: 5,
-          }}
-        >
-          Default
-        </span>
-      )}
     </button>
   )
 }

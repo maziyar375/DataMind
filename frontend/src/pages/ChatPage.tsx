@@ -48,8 +48,9 @@ export default function ChatPage() {
         setConversationList(convs)
         setConnections(conns)
         setModels(llms)
-        setConnectionId(conns.find((c) => c.is_default)?.id ?? conns[0]?.id ?? '')
-        setModelId(llms.find((m) => m.is_default)?.id ?? llms[0]?.id ?? '')
+        // No preselection: the reader picks a database and a model for each
+        // conversation from the header. Selecting a saved conversation below
+        // restores whatever it was started with.
         if (convs.length > 0) setActiveId(convs[0].id)
       } catch {
         if (!cancelled) setError('Could not load your workspace.')
@@ -1106,7 +1107,11 @@ function HeaderSelect({
   const ref = useRef<HTMLDivElement>(null)
 
   const selected = options.find((o) => o.value === value)
-  const display = selected?.label ?? 'None configured'
+  // Distinguish "nothing chosen yet" (there are options, pick one) from
+  // "nothing to choose" (none configured on the settings page).
+  const placeholder =
+    options.length === 0 ? 'None configured' : `Choose a ${label.toLowerCase()}`
+  const display = selected?.label ?? placeholder
 
   useEffect(() => {
     if (!open) return

@@ -4,7 +4,7 @@ import uuid
 from uuid import UUID
 
 from fastapi import APIRouter, status
-from sqlalchemy import select, update
+from sqlalchemy import select
 
 from app.api.deps import CtxDep, DbDep, SecretBoxDep
 from app.api.schemas import (
@@ -81,11 +81,8 @@ async def create_connection(
         max_rows=payload.max_rows,
         statement_timeout_ms=payload.statement_timeout_ms,
         disclosure_policy=payload.disclosure_policy,
-        is_default=payload.is_default,
     )
     db.add(connection)
-    if payload.is_default:
-        await _clear_other_defaults(db, ctx.user_id, connection_id)
     await db.flush()
     return connection
 
@@ -162,9 +159,6 @@ async def update_connection(
         connection.key_version = box.key_version
         connection.status = "UNTESTED"
         connection.readonly_confirmed = False
-
-    if payload.is_default:
-        await _clear_other_defaults(db, ctx.user_id, connection.id)
 
     await db.flush()
     return connection
@@ -309,15 +303,4 @@ def _to_schema_read(row: SchemaSnapshotRow) -> SchemaRead:
         synced_at=row.created_at,
         tables=row.tables,
         relationships=row.relationships,
-    )
-
-
-async def _clear_other_defaults(db, owner_id: UUID, keep_id: UUID) -> None:
-    await db.execute(
-        update(DatabaseConnection)
-        .where(
-            DatabaseConnection.owner_id == owner_id,
-            DatabaseConnection.id != keep_id,
-        )
-        .values(is_default=False)
     )

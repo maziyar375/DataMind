@@ -188,7 +188,6 @@ export default function LlmProvidersPage() {
             tone={
               config.status === 'OK' ? 'green' : config.status === 'ERROR' ? 'red' : 'neutral'
             }
-            isDefault={config.is_default}
             onClick={() => setSelectedId(config.id)}
           />
         ))}
@@ -219,7 +218,6 @@ export default function LlmProvidersPage() {
                     <Chip tone={selected!.has_api_key ? 'green' : 'amber'}>
                       {selected!.has_api_key ? 'key stored' : 'no key'}
                     </Chip>
-                    {selected!.is_default && <Chip tone="accent">default</Chip>}
                     {selected!.last_tested_at && (
                       <Chip>tested {new Date(selected!.last_tested_at).toLocaleString()}</Chip>
                     )}
@@ -228,16 +226,6 @@ export default function LlmProvidersPage() {
               }
               actions={
                 <>
-                  {!creating && selected && !selected.is_default && (
-                    <GhostButton
-                      onClick={async () => {
-                        await api.update(selected.id, { is_default: true })
-                        await refresh()
-                      }}
-                    >
-                      Set as default
-                    </GhostButton>
-                  )}
                   <GhostButton
                     onClick={test}
                     disabled={testing || !canTest}

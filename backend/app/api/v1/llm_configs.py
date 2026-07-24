@@ -5,7 +5,7 @@ import uuid
 from uuid import UUID
 
 from fastapi import APIRouter, status
-from sqlalchemy import select, update
+from sqlalchemy import select
 
 from app.api.deps import CtxDep, DbDep, SecretBoxDep, SettingsDep
 from app.api.schemas import (
@@ -79,11 +79,8 @@ async def create_config(
             if payload.api_key else None
         ),
         key_version=box.key_version,
-        is_default=payload.is_default,
     )
     db.add(row)
-    if payload.is_default:
-        await _clear_other_defaults(db, ctx.user_id, config_id)
     await db.flush()
     return _to_read(row)
 
@@ -163,9 +160,6 @@ async def update_config(
         row.key_version = box.key_version
         row.status = "UNTESTED"
 
-    if payload.is_default:
-        await _clear_other_defaults(db, ctx.user_id, row.id)
-
     await db.flush()
     return _to_read(row)
 
@@ -222,12 +216,4 @@ async def test_config(
         ok=True, latency_ms=latency,
         message=f"Reached {row.model}",
         detected_capabilities=row.capabilities,
-    )
-
-
-async def _clear_other_defaults(db, owner_id: UUID, keep_id: UUID) -> None:
-    await db.execute(
-        update(LlmConfig)
-        .where(LlmConfig.owner_id == owner_id, LlmConfig.id != keep_id)
-        .values(is_default=False)
     )

@@ -29,9 +29,7 @@ from app.domain.value_objects import RunStatus
 from app.infra.db.models import (
     Artifact,
     Conversation,
-    DatabaseConnection,
     GeneratedQuery,
-    LlmConfig,
     Message,
     Run,
     RunEventRow,
@@ -105,34 +103,15 @@ async def list_conversations(ctx: CtxDep, db: DbDep) -> list[ConversationRead]:
 async def create_conversation(
     payload: ConversationCreate, ctx: CtxDep, db: DbDep
 ) -> ConversationRead:
-    connection_id = payload.connection_id
-    llm_config_id = payload.llm_config_id
-
-    # Fall back to whatever the user marked default, so a new chat is usable
-    # without making them pick twice.
-    if connection_id is None:
-        result = await db.execute(
-            select(DatabaseConnection.id)
-            .where(DatabaseConnection.owner_id == ctx.user_id)
-            .order_by(DatabaseConnection.is_default.desc(), DatabaseConnection.created_at)
-            .limit(1)
-        )
-        connection_id = result.scalar_one_or_none()
-    if llm_config_id is None:
-        result = await db.execute(
-            select(LlmConfig.id)
-            .where(LlmConfig.owner_id == ctx.user_id)
-            .order_by(LlmConfig.is_default.desc(), LlmConfig.created_at)
-            .limit(1)
-        )
-        llm_config_id = result.scalar_one_or_none()
-
+    # No auto-default: a conversation stores exactly the database and model the
+    # user chose (or nothing yet). The chooser in the chat header is where that
+    # choice is made, and a message cannot be sent until both are set.
     conversation = Conversation(
         id=uuid.uuid4(),
         owner_id=ctx.user_id,
         title=payload.title or "New chat",
-        default_connection_id=connection_id,
-        default_llm_config_id=llm_config_id,
+        default_connection_id=payload.connection_id,
+        default_llm_config_id=payload.llm_config_id,
     )
     db.add(conversation)
     await db.flush()

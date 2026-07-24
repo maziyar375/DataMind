@@ -81,7 +81,6 @@ class LlmConfigCreate(BaseModel):
     api_key: SecretStr | None = None
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     max_tokens: int = Field(default=2048, ge=1, le=200_000)
-    is_default: bool = False
 
 
 class LlmConfigUpdate(BaseModel):
@@ -92,7 +91,6 @@ class LlmConfigUpdate(BaseModel):
     api_key: SecretStr | None = None
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     max_tokens: int | None = Field(default=None, ge=1, le=200_000)
-    is_default: bool | None = None
 
 
 class LlmConfigRead(BaseModel):
@@ -104,7 +102,6 @@ class LlmConfigRead(BaseModel):
     model: str
     temperature: float
     max_tokens: int
-    is_default: bool
     status: str
     has_api_key: bool = False
     last_tested_at: datetime | None = None
@@ -148,7 +145,6 @@ class ConnectionCreate(BaseModel):
     max_rows: int = Field(default=1000, ge=1, le=100_000)
     statement_timeout_ms: int = Field(default=30_000, ge=1_000, le=300_000)
     disclosure_policy: Literal["NONE", "AGGREGATE", "SAMPLE", "FULL"] = "SAMPLE"
-    is_default: bool = False
 
 
 class ConnectionUpdate(BaseModel):
@@ -163,7 +159,6 @@ class ConnectionUpdate(BaseModel):
     max_rows: int | None = Field(default=None, ge=1, le=100_000)
     statement_timeout_ms: int | None = Field(default=None, ge=1_000, le=300_000)
     disclosure_policy: Literal["NONE", "AGGREGATE", "SAMPLE", "FULL"] | None = None
-    is_default: bool | None = None
 
 
 class ConnectionRead(BaseModel):
@@ -181,7 +176,6 @@ class ConnectionRead(BaseModel):
     max_rows: int
     statement_timeout_ms: int
     disclosure_policy: str
-    is_default: bool
     status: str
     readonly_confirmed: bool
     server_version: str | None = None
