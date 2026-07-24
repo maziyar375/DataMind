@@ -18,11 +18,11 @@ from app.api.schemas import (
     ConversationUpdate,
     GeneratedQueryRead,
     MessageAccepted,
-    SuggestionsRead,
     MessageCreate,
     MessageRead,
     RunRead,
     RunStepRead,
+    SuggestionsRead,
 )
 from app.core.errors import NotFoundError
 from app.domain.value_objects import RunStatus

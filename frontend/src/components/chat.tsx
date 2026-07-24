@@ -14,6 +14,7 @@
 import { useMemo, useState } from 'react'
 import type { Artifact, GeneratedQuery, RunDetail, RunStep, TableArtifactSpec } from '../api/types'
 import { Chip, CopyButton, Dot, dirOf, Icon, Spinner } from './ui'
+import { VegaChart } from './VegaChart'
 import { NODE_META } from '../theme/tokens'
 
 // ── turn frame ────────────────────────────────────────────────────────────
@@ -614,6 +615,8 @@ export function AssistantTurn({
 }) {
   const table = run?.artifacts.find((a) => a.kind === 'TABLE')
   const spec = table?.spec as TableArtifactSpec | undefined
+  const chart = run?.artifacts.find((a) => a.kind === 'CHART')
+  const chartSpec = chart?.spec as Record<string, unknown> | undefined
 
   return (
     <Turn avatar={<AssistantAvatar busy={streaming} />}>
@@ -645,7 +648,11 @@ export function AssistantTurn({
         )}
       </div>
 
-      {spec && spec.rows.length > 1 && <ResultBars spec={spec} />}
+      {chartSpec ? (
+        <VegaChart spec={chartSpec} />
+      ) : (
+        spec && spec.rows.length > 1 && <ResultBars spec={spec} />
+      )}
       {spec && <ResultTable spec={spec} />}
       {run && run.queries.length > 0 && <SqlPanel queries={run.queries} />}
       {run && <RunMetadata run={run} />}

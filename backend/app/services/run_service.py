@@ -274,6 +274,19 @@ class RunService:
                 "artifact_id": str(artifact.id), "kind": ArtifactKind.TABLE,
             })
 
+        if state.chart is not None:
+            chart_artifact = Artifact(
+                id=uuid.uuid4(),
+                run_id=run.id,
+                kind=ArtifactKind.CHART,
+                spec=state.chart,
+            )
+            self._db.add(chart_artifact)
+            await self._db.flush()
+            await self._emit(run.id, "ARTIFACT_CREATED", {
+                "artifact_id": str(chart_artifact.id), "kind": ArtifactKind.CHART,
+            })
+
         if state.error is not None and run.status == RunStatus.RUNNING:
             run.status = RunStatus.FAILED
             run.error_code = state.error.code

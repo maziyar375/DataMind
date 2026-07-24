@@ -29,6 +29,7 @@ ORDER: list[tuple[str, NodeFn]] = [
     (StepName.VALIDATE, nodes.validate),
     (StepName.EXECUTE, nodes.execute),
     (StepName.PRESENT, nodes.present),
+    (StepName.CHART, nodes.chart),
 ]
 
 # Hard ceiling on loop iterations, independent of max_repairs. A goto cycle

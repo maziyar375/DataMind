@@ -18,6 +18,8 @@ from app.pipeline.contracts import SqlProposal
 from app.pipeline.prompts import (
     ANSWER_SYSTEM,
     ANSWER_USER,
+    CHART_SYSTEM,
+    CHART_USER,
     GENERATE_SYSTEM,
     GENERATE_USER,
     REPAIR_SYSTEM,
@@ -340,3 +342,69 @@ async def present(state: RunState, deps: NodeDeps) -> NodeResult:
 
     state.answer = "".join(buffer).strip()
     return NodeResult(detail="Answer written")
+
+
+# ── chart ──────────────────────────────────────────────────────────────────
+async def chart(state: RunState, deps: NodeDeps) -> NodeResult:
+    """Let the model choose a chart for the result, then compile it.
+
+    Best-effort and fail-closed for the chart alone: the answer and the table
+    are already persisted, so any failure here just yields no chart. The model
+    only sees the result *schema* (column names + types + row count), never the
+    row data — charting never widens what the disclosure policy already allows.
+    """
+    from app.charts import (
+        ChartIntent,
+        compile_vega_lite,
+        heuristic_intent,
+        validate_intent,
+    )
+
+    execution = state.execution
+    if execution is None or execution.row_count == 0 or len(execution.columns) < 2:
+        return NodeResult(status="SKIPPED", detail="Nothing chartable")
+
+    columns = "\n".join(
+        f"- {c.name} ({c.semantic_type})" for c in execution.columns
+    )
+
+    # Let the model choose first. It is best-effort: a provider error, or a
+    # model that cannot emit a valid nested ChartIntent (common with small
+    # models), falls through to a deterministic choice from the data shape so a
+    # chart still appears and still varies question to question.
+    intent: ChartIntent | None = None
+    source = "model"
+    try:
+        intent = await deps.llm_gateway.structured(
+            deps.llm,
+            [
+                ChatMessage(role="system", content=CHART_SYSTEM),
+                ChatMessage(
+                    role="user",
+                    content=CHART_USER.format(
+                        question=state.question,
+                        row_count=execution.row_count,
+                        columns=columns,
+                    ),
+                ),
+            ],
+            ChartIntent,
+        )
+    except LLMError as err:
+        log.warning("chart_intent_failed", run_id=str(state.run_id), error=err.message)
+
+    if intent is not None and validate_intent(intent, execution.columns)[0]:
+        pass  # the model's choice is usable
+    else:
+        intent = heuristic_intent(execution.columns, execution.row_count)
+        source = "heuristic"
+
+    if intent is None or not validate_intent(intent, execution.columns)[0]:
+        return NodeResult(status="SKIPPED", detail="No chart fits this result")
+
+    state.chart = compile_vega_lite(intent, execution.columns, execution.rows)
+    await deps.emit(
+        "ARTIFACT_CREATED",
+        {"kind": "CHART", "chart_type": intent.chart_type, "source": source},
+    )
+    return NodeResult(detail=f"{intent.chart_type} chart ({source})")

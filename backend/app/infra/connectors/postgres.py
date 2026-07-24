@@ -282,7 +282,9 @@ class PostgresConnector:
                 db_type=_python_to_db_type(records[0][key]),
                 semantic_type=_semantic_type(records[0][key]),
             )
-            for key in records[0].keys()
+            # NB: iterate .keys() — an asyncpg Record iterates its *values*, so
+            # `for key in records[0]` would yield data, not column names.
+            for key in records[0].keys()  # noqa: SIM118
         ]
         truncated = len(records) > max_rows
         rows = [

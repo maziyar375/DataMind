@@ -76,6 +76,7 @@ class StepName(StrEnum):
     VALIDATE = "validate"
     EXECUTE = "execute"
     PRESENT = "present"
+    CHART = "chart"
 
 
 class StepStatus(StrEnum):

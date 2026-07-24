@@ -59,8 +59,32 @@ SQL that ran:
 Result ({row_count} rows):
 {result}"""
 
-CHART_SYSTEM = """You choose a chart for a query result, or decline.
+CHART_SYSTEM = """You choose the single best chart for a query result, or decline.
 
-Return JSON matching ChartIntent. Use chart_type "none" when the result is a
-single value, has no natural category axis, or would be misleading as a chart.
-Only reference column names that appear in the result schema."""
+Pick one chart_type:
+- "bar": compare a measure across a handful of categories.
+- "horizontal_bar": same, but when the category labels are long or many (>8).
+- "line": a measure over an ordered or time axis (a trend).
+- "area": a trend where the filled magnitude matters.
+- "scatter": the relationship between two quantitative fields.
+- "pie": parts of a single whole, only for a few categories (<=6).
+- "none": a single value, no natural category axis, or nothing a chart clarifies.
+
+Rules:
+- x_axis and y_axis are required unless chart_type is "none".
+- Only reference column names that appear in the result schema below.
+- Put the category/time field on x_axis and the numeric measure on y_axis
+  (for horizontal_bar the platform flips them for you — do not pre-swap).
+- The result is ALREADY aggregated by SQL. Set each axis aggregation to "none"
+  unless you are certain a further roll-up is needed.
+- Set the axis "type" to match the column: quantitative for numbers, temporal
+  for dates/timestamps, nominal for text, ordinal for ranked categories.
+
+Return JSON matching the ChartIntent schema."""
+
+CHART_USER = """Question: {question}
+
+Result schema ({row_count} rows):
+{columns}
+
+Choose the best chart, or "none"."""

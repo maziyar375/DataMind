@@ -99,7 +99,8 @@ export const NODE_META: Record<string, { label: string; detail: string }> = {
   generate: { label: 'Generate SQL', detail: 'Drafting query…' },
   validate: { label: 'Validate', detail: 'Checking against schema with SQLGlot…' },
   execute: { label: 'Execute', detail: 'Running on read-only connection…' },
-  present: { label: 'Present', detail: 'Writing summary and chart spec…' },
+  present: { label: 'Present', detail: 'Writing the summary…' },
+  chart: { label: 'Chart', detail: 'Choosing the best chart for the result…' },
 }
 
 /**
