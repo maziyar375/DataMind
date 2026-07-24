@@ -282,7 +282,7 @@ class PostgresConnector:
                 db_type=_python_to_db_type(records[0][key]),
                 semantic_type=_semantic_type(records[0][key]),
             )
-            for key in records[0]
+            for key in records[0].keys()
         ]
         truncated = len(records) > max_rows
         rows = [
