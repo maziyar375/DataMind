@@ -4,7 +4,7 @@
  * Every dimension, radius, and font size here is lifted from the design
  * concept rather than invented. The mock is the specification.
  */
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 
 // ── logo ──────────────────────────────────────────────────────────────────
 //
@@ -258,6 +258,12 @@ export const Icon = {
     <svg {...iconBase(size, stroke, strokeWidth)}>
       <rect x="4" y="11" width="16" height="10" rx="2" />
       <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+    </svg>
+  ),
+  Search: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="M21 21l-4.3-4.3" />
     </svg>
   ),
 }
@@ -516,6 +522,139 @@ export function EmptyState({
         {body}
       </div>
       {action}
+    </div>
+  )
+}
+
+/**
+ * A centered modal dialog over a scrim. Closes on Escape or a click on the
+ * backdrop; locks body scroll while open. The header, scrollable body, and
+ * optional footer are laid out so long forms scroll without the chrome moving.
+ */
+export function Modal({
+  title, subtitle, onClose, children, footer, width = 460,
+}: {
+  title: React.ReactNode
+  subtitle?: React.ReactNode
+  onClose: () => void
+  children: React.ReactNode
+  footer?: React.ReactNode
+  width?: number
+}) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prevOverflow
+    }
+  }, [onClose])
+
+  return (
+    <div
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 100,
+        background: 'rgba(0,0,0,0.5)',
+        backdropFilter: 'blur(2px)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 20,
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="rm-enter"
+        style={{
+          width: '100%',
+          maxWidth: width,
+          maxHeight: 'calc(100vh - 40px)',
+          display: 'flex',
+          flexDirection: 'column',
+          background: 'var(--panel)',
+          border: '1px solid var(--border-strong)',
+          borderRadius: 14,
+          boxShadow: '0 24px 64px -20px rgba(0,0,0,0.55)',
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 12,
+            padding: '16px 18px',
+            borderBottom: '1px solid var(--border)',
+          }}
+        >
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-strong)' }}>
+              {title}
+            </div>
+            {subtitle && (
+              <div style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 2 }}>
+                {subtitle}
+              </div>
+            )}
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 30,
+              height: 30,
+              flexShrink: 0,
+              background: 'transparent',
+              color: 'var(--text-dim)',
+              border: '1px solid var(--border)',
+              borderRadius: 7,
+              cursor: 'pointer',
+            }}
+          >
+            <Icon.Close size={15} />
+          </button>
+        </div>
+
+        <div
+          style={{
+            padding: 18,
+            overflowY: 'auto',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 14,
+          }}
+        >
+          {children}
+        </div>
+
+        {footer && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'flex-end',
+              gap: 10,
+              padding: '14px 18px',
+              borderTop: '1px solid var(--border)',
+            }}
+          >
+            {footer}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

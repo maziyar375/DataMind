@@ -69,6 +69,15 @@ async def update_user(
     if user is None:
         raise NotFoundError("User not found.")
 
+    if payload.display_name is not None:
+        user.display_name = payload.display_name.strip()
+    if payload.email is not None:
+        new_email = payload.email.lower().strip()
+        if new_email != user.email:
+            clash = await db.execute(select(User).where(User.email == new_email))
+            if clash.scalar_one_or_none() is not None:
+                raise ConflictError("A user with that email already exists.")
+            user.email = new_email
     if payload.role is not None:
         if user.id == ctx.user_id and payload.role != Role.ADMIN:
             raise ValidationError("You cannot remove your own admin access.")

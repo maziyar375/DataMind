@@ -152,8 +152,15 @@ export const users = {
   list: () => get<User[]>('/users'),
   create: (payload: { email: string; display_name: string; role: string }) =>
     post<{ user: User; temporary_password: string }>('/users', payload),
-  update: (id: string, payload: { role?: string; status?: string }) =>
-    patch<User>(`/users/${id}`, payload),
+  update: (
+    id: string,
+    payload: {
+      display_name?: string
+      email?: string
+      role?: string
+      status?: string
+    },
+  ) => patch<User>(`/users/${id}`, payload),
   setPassword: (id: string, password: string) =>
     request<void>(`/users/${id}/password`, {
       method: 'PUT',
