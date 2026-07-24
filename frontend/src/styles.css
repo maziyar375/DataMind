@@ -15,6 +15,20 @@ body {
    right-to-left; Latin text in the same field stays left-to-right. */
 [dir='auto'] { unicode-bidi: plaintext; }
 
+/* Light theme gets a warm, soft wash so the open areas of the app read as
+   inviting "paper" rather than flat white. Panels and tables sit on
+   solid backgrounds above this, so working surfaces stay perfectly legible.
+   Scoped to light mode only — dark theme keeps its flat surface. The overlay
+   is set with !important because the shell declares its base colour inline. */
+:root[data-theme='light'] .rm-app {
+  background:
+    radial-gradient(58% 48% at 8% -4%, oklch(0.86 0.11 66 / 0.22), transparent 60%),
+    radial-gradient(52% 46% at 102% 4%, oklch(0.83 0.12 20 / 0.16), transparent 62%),
+    radial-gradient(50% 52% at 96% 104%, oklch(0.82 0.1 285 / 0.14), transparent 64%),
+    radial-gradient(46% 44% at -4% 96%, oklch(0.85 0.1 150 / 0.1), transparent 64%),
+    var(--bg) !important;
+}
+
 *, *::before, *::after { box-sizing: border-box; }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }

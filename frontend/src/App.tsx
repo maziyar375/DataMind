@@ -72,6 +72,7 @@ export default function App() {
 
   return (
     <div
+      className="rm-app"
       style={{
         position: 'relative',
         height: '100vh',
