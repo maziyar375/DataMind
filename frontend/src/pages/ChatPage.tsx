@@ -369,6 +369,12 @@ export default function ChatPage() {
               value={connectionId}
               onChange={setConnectionId}
               options={connections.map((c) => ({ value: c.id, label: c.name }))}
+              width={232}
+              badge={
+                <DisclosureBadge
+                  policy={connections.find((c) => c.id === connectionId)?.disclosure_policy}
+                />
+              }
             />
             <HeaderSelect
               icon={<Icon.Sparkle size={15} stroke="var(--accent)" />}
@@ -376,9 +382,6 @@ export default function ChatPage() {
               value={modelId}
               onChange={setModelId}
               options={models.map((m) => ({ value: m.id, label: m.name }))}
-            />
-            <DisclosureChip
-              policy={connections.find((c) => c.id === connectionId)?.disclosure_policy}
             />
           </div>
         </header>
@@ -1095,13 +1098,16 @@ function Composer({
  * click or Escape.
  */
 function HeaderSelect({
-  icon, label, value, onChange, options,
+  icon, label, value, onChange, options, badge, width = 190,
 }: {
   icon: React.ReactNode
   label: string
   value: string
   onChange: (value: string) => void
   options: { value: string; label: string }[]
+  /** Optional status pill fused into the trigger, e.g. the disclosure badge. */
+  badge?: React.ReactNode
+  width?: number
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -1140,7 +1146,7 @@ function HeaderSelect({
           display: 'flex',
           alignItems: 'center',
           gap: 8,
-          width: 190,
+          width,
           background: 'var(--panel)',
           border: `1px solid ${open ? 'var(--accent)' : 'var(--border-strong)'}`,
           borderRadius: 9,
@@ -1184,6 +1190,7 @@ function HeaderSelect({
             {display}
           </span>
         </span>
+        {badge}
         <Icon.Chevron
           open={open}
           size={13}
@@ -1274,45 +1281,60 @@ function HeaderSelect({
 /**
  * If result rows leave the customer's database for a third-party API, the
  * person asking should see that at the moment they ask, not by reading docs.
+ *
+ * The policy is a property of the *connection*, so this renders as a compact
+ * pill fused into the Database picker (see HeaderSelect's `badge` prop) rather
+ * than floating beside the model. Dot + one word carries the state at a glance;
+ * the full sentence lives in the tooltip.
  */
-function DisclosureChip({ policy }: { policy?: string }) {
+function DisclosureBadge({ policy }: { policy?: string }) {
   if (!policy) return null
 
-  const copy: Record<string, { text: string; tone: string }> = {
-    NONE: { text: 'no rows shared with model', tone: 'var(--green)' },
-    AGGREGATE: { text: 'only totals shared with model', tone: 'var(--green)' },
-    SAMPLE: { text: 'sample rows shared with model', tone: 'var(--amber)' },
-    FULL: { text: 'all rows shared with model', tone: 'var(--amber)' },
+  // `tone` names a token trio (--green / --green-bg / --green-border, likewise
+  // amber) redefined per theme. The label uses the neutral --text2 (not the
+  // tone) so it flips near-white in dark / near-black in light and reads as
+  // native to the active palette; a saturated tone label looked like a stray
+  // light-mode accent on the dark UI. The dot alone carries the policy colour.
+  const copy: Record<string, { short: string; full: string; tone: 'green' | 'amber' }> = {
+    NONE: { short: 'Private', full: 'No rows shared with the model provider', tone: 'green' },
+    AGGREGATE: { short: 'Totals', full: 'Only aggregate totals shared with the model provider', tone: 'green' },
+    SAMPLE: { short: 'Sample', full: 'Sample rows shared with the model provider', tone: 'amber' },
+    FULL: { short: 'All rows', full: 'All rows shared with the model provider', tone: 'amber' },
   }
   const entry = copy[policy]
   if (!entry) return null
 
   return (
     <span
-      title="Controls how much of a query result is sent to the model provider."
+      title={`${entry.full} — controls how much of a query result is sent to the model provider.`}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
-        gap: 6,
-        fontSize: 10.5,
-        fontWeight: 500,
-        color: entry.tone,
-        border: '1px solid var(--border)',
-        background: 'var(--panel)',
-        padding: '5px 9px',
-        borderRadius: 7,
+        gap: 5,
+        flexShrink: 0,
+        fontSize: 10,
+        fontWeight: 600,
+        letterSpacing: '0.01em',
+        // Neutral, theme-aware label on a native surface — near-white in dark,
+        // near-black in light — so the chip belongs to whichever palette is
+        // active. The dot alone carries the amber/green policy signal.
+        color: 'var(--text2)',
+        background: `var(--${entry.tone}-bg)`,
+        border: `1px solid var(--${entry.tone}-border)`,
+        padding: '2px 7px 2px 6px',
+        borderRadius: 999,
         whiteSpace: 'nowrap',
       }}
     >
       <span
         style={{
-          width: 6,
-          height: 6,
+          width: 5,
+          height: 5,
           borderRadius: '50%',
-          background: entry.tone,
+          background: `var(--${entry.tone})`,
         }}
       />
-      {entry.text}
+      {entry.short}
     </span>
   )
 }
