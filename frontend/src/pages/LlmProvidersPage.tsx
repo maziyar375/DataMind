@@ -284,7 +284,14 @@ export default function LlmProvidersPage() {
                   />
                 </Field>
 
-                <Field label="Model">
+                <Field
+                  label="Model"
+                  hint={
+                    draft.provider === 'OpenAI-compatible' || draft.provider === 'Custom'
+                      ? 'If the model name contains a slash (e.g. lightning-ai/gemma-4-31B-it), prefix it with openai/ — openai/lightning-ai/gemma-4-31B-it — or it will not route correctly.'
+                      : undefined
+                  }
+                >
                   <TextInput
                     value={draft.model}
                     onChange={(e) => setDraft({ ...draft, model: e.target.value })}
