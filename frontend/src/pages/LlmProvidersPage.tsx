@@ -36,6 +36,21 @@ export default function LlmProvidersPage() {
     [list, selectedId],
   )
 
+  // True when the form holds edits not yet saved to `selected`. A new key
+  // counts, since a blank key field means "keep the stored one" — see test().
+  const isDirty = useMemo(() => {
+    if (!selected) return false
+    return (
+      apiKey !== '' ||
+      draft.name !== selected.name ||
+      draft.provider !== selected.provider ||
+      (draft.base_url || '') !== (selected.base_url ?? '') ||
+      draft.model !== selected.model ||
+      draft.temperature !== selected.temperature ||
+      draft.max_tokens !== selected.max_tokens
+    )
+  }, [selected, draft, apiKey])
+
   const refresh = useCallback(async () => {
     const items = await api.list()
     setList(items)
@@ -110,10 +125,13 @@ export default function LlmProvidersPage() {
     setTesting(true)
     setTestResult(null)
     try {
-      if (creating) {
-        // No row exists yet, so probe the form values directly.
+      if (creating || (selected && isDirty)) {
+        // Probe the form values, not the saved row. `config_id` (absent while
+        // creating) lets the backend reuse the stored key if none was typed.
+        // This never persists, since the form may differ from what is saved.
         setTestResult(
           await api.testDraft({
+            config_id: selected?.id,
             provider: draft.provider,
             base_url: draft.base_url || undefined,
             model: draft.model,
@@ -123,6 +141,7 @@ export default function LlmProvidersPage() {
           }),
         )
       } else if (selected) {
+        // No unsaved edits: test the stored row, which records its capabilities.
         setTestResult(await api.test(selected.id))
         await refresh()
       }
@@ -147,8 +166,9 @@ export default function LlmProvidersPage() {
   const editing = creating || !!selected
 
   // Ollama and other local endpoints need no key, so only the model is
-  // required before a draft probe can say anything useful.
-  const canTest = creating ? Boolean(draft.model) : true
+  // required before a draft probe can say anything useful. Editing an unsaved
+  // change takes the same draft path, so it needs a model name too.
+  const canTest = creating || isDirty ? Boolean(draft.model) : true
 
   return (
     <div style={{ display: 'flex', height: '100%', width: '100%', minWidth: 0 }}>

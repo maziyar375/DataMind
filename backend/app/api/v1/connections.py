@@ -16,7 +16,7 @@ from app.api.schemas import (
     SchemaRead,
 )
 from app.core.clock import utcnow
-from app.core.errors import ConflictError, NotFoundError
+from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.infra.connectors.factory import build_connector
 from app.infra.db.models import DatabaseConnection, SchemaSnapshotRow
 
@@ -92,20 +92,36 @@ async def create_connection(
 
 @router.post("/test", response_model=ConnectionTestResult)
 async def test_draft_connection(
-    payload: ConnectionTestRequest, ctx: CtxDep
+    payload: ConnectionTestRequest, ctx: CtxDep, db: DbDep, box: SecretBoxDep
 ) -> ConnectionTestResult:
-    """Probe credentials before they are saved.
+    """Probe credentials straight from the form, saved or not.
 
     Declared above `/{connection_id}` so the literal path wins the match.
-    Nothing is written: there is no row yet to record a status against.
+    Nothing is written: the form may hold unsaved edits that differ from the
+    row, so a probe here never records status against a row — only
+    `/{id}/test`, which tests the stored values, may do that.
+
+    When `connection_id` is given and no new password was typed, the stored
+    password is reused so an edit can be tested without re-entering the secret;
+    every other value comes from the form.
     """
+    if payload.password is not None:
+        password = payload.password.get_secret_value()
+    elif payload.connection_id is not None:
+        connection = await _owned(db, payload.connection_id, ctx)
+        password = box.decrypt(
+            connection.encrypted_password, aad=f"connection:{connection.id}"
+        )
+    else:
+        raise ValidationError("A password is required to test a connection.")
+
     connector = build_connector(
         kind=payload.database_type,
         host=payload.host,
         port=payload.port,
         database=payload.database_name,
         username=payload.username,
-        password=payload.password.get_secret_value(),
+        password=password,
         ssl_mode=payload.ssl_mode,
     )
     try:

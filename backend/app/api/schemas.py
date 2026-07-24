@@ -118,8 +118,14 @@ class TestResult(BaseModel):
 
 
 class LlmConfigTestRequest(BaseModel):
-    """Probe a model configuration that has not been saved yet."""
+    """Probe a model configuration straight from the (possibly unsaved) form.
 
+    `config_id` is set when an existing config is being edited: it lets the
+    saved API key be reused when the key field was left blank, so every other
+    value still comes from the form rather than from the stored row.
+    """
+
+    config_id: UUID | None = None
     provider: Literal["OpenAI-compatible", "Anthropic", "Ollama", "Custom"]
     base_url: str | None = None
     model: str = Field(min_length=1, max_length=200)
@@ -192,18 +198,23 @@ class ConnectionTestResult(BaseModel):
 
 
 class ConnectionTestRequest(BaseModel):
-    """Probe credentials that have not been saved yet.
+    """Probe credentials straight from the (possibly unsaved) form.
 
     Only the fields needed to open a socket. Row limits and the disclosure
     policy do not affect whether a connection works, so they are not asked for.
+
+    `connection_id` is set when an existing connection is being edited: it lets
+    the saved password be reused when the password field was left blank, so
+    every other value still comes from the form rather than the stored row.
     """
 
+    connection_id: UUID | None = None
     database_type: Literal["postgres", "mysql", "mssql", "oracle"] = "postgres"
     host: str = Field(min_length=1, max_length=255)
     port: int = Field(ge=1, le=65535)
     database_name: str = Field(min_length=1, max_length=200)
     username: str = Field(min_length=1, max_length=200)
-    password: SecretStr
+    password: SecretStr | None = None
     ssl_mode: Literal["require", "verify-full", "disable"] | None = "require"
 
 

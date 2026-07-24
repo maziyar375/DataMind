@@ -90,19 +90,32 @@ async def create_config(
 
 @router.post("/test", response_model=TestResult)
 async def test_draft_config(
-    payload: LlmConfigTestRequest, ctx: CtxDep, settings: SettingsDep
+    payload: LlmConfigTestRequest,
+    ctx: CtxDep, db: DbDep, box: SecretBoxDep, settings: SettingsDep,
 ) -> TestResult:
-    """Probe a model configuration before it is saved.
+    """Probe a model configuration straight from the form, saved or not.
 
     Declared above `/{config_id}` so the literal path wins the match. Nothing
-    is written: there is no row yet to record capabilities against.
+    is written: the form may hold unsaved edits that differ from the row, so a
+    probe here never records capabilities against a row — only `/{id}/test`,
+    which tests the stored values, may do that.
+
+    When `config_id` is given and no new key was typed, the stored key is
+    reused so an edit can be tested without re-entering the secret; every other
+    value comes from the form.
     """
+    api_key = payload.api_key.get_secret_value() if payload.api_key else ""
+    if payload.config_id is not None and not payload.api_key:
+        row = await _owned(db, payload.config_id, ctx)
+        if row.encrypted_api_key:
+            api_key = box.decrypt(row.encrypted_api_key, aad=f"llm_config:{row.id}")
+
     resolved = ResolvedLLM(
-        config_id=uuid.uuid4(),
+        config_id=payload.config_id or uuid.uuid4(),
         provider=payload.provider,
         model=payload.model,
         base_url=payload.base_url,
-        api_key=payload.api_key.get_secret_value() if payload.api_key else "",
+        api_key=api_key,
         temperature=payload.temperature,
         max_tokens=payload.max_tokens,
         capabilities=ProviderCapabilities(),

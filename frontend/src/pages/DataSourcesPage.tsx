@@ -48,6 +48,23 @@ export default function DataSourcesPage() {
     [list, selectedId],
   )
 
+  // True when the form holds edits to a saved connection that affect the
+  // probe. A new password counts, since a blank field means "keep the stored
+  // one" — see test(). Non-connectivity fields (row cap, disclosure) don't
+  // change what a probe does, so they are left out.
+  const isDirty = useMemo(() => {
+    if (!selected) return false
+    return (
+      password !== '' ||
+      draft.database_type !== selected.database_type ||
+      draft.host !== selected.host ||
+      Number(draft.port) !== selected.port ||
+      draft.database_name !== selected.database_name ||
+      draft.username !== selected.username ||
+      (draft.ssl_mode ?? null) !== (selected.ssl_mode ?? null)
+    )
+  }, [selected, draft, password])
+
   const refresh = useCallback(async () => {
     const items = await api.list()
     setList(items)
@@ -122,20 +139,25 @@ export default function DataSourcesPage() {
     setTesting(true)
     setTestResult(null)
     try {
-      if (creating) {
-        // No row exists yet, so probe the form values directly.
+      if (creating || (selected && isDirty)) {
+        // Probe the form values, not the saved row. `connection_id` (absent
+        // while creating) lets the backend reuse the stored password if none
+        // was typed. This never persists, since the form may differ from what
+        // is saved.
         setTestResult(
           await api.testDraft({
+            connection_id: selected?.id,
             database_type: draft.database_type,
             host: draft.host,
             port: draft.port,
             database_name: draft.database_name,
             username: draft.username,
-            password,
+            password: password || undefined,
             ssl_mode: draft.ssl_mode,
           }),
         )
       } else if (selected) {
+        // No unsaved edits: test the stored row, which records its status.
         setTestResult(await api.test(selected.id))
         await refresh()
       }
@@ -200,11 +222,17 @@ export default function DataSourcesPage() {
     })
   }
 
-  // A draft has no stored password to fall back on, so everything the probe
-  // needs must be on the form before Test can mean anything.
+  // Everything the probe needs must be on the form before Test can mean
+  // anything. A new connection has no stored password to fall back on, so the
+  // password is required too; an edit can reuse the saved one, so it is not.
+  const hasConnFields = Boolean(
+    draft.host && draft.port && draft.database_name && draft.username,
+  )
   const canTest = creating
-    ? Boolean(draft.host && draft.port && draft.database_name && draft.username && password)
-    : true
+    ? hasConnFields && Boolean(password)
+    : isDirty
+      ? hasConnFields
+      : true
 
   return (
     <div style={{ display: 'flex', height: '100%', width: '100%', minWidth: 0 }}>
