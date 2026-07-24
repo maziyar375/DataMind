@@ -90,8 +90,9 @@ npm install && npm run dev
 
 - Email + password auth: Argon2id, short-lived JWT access tokens, rotating
   refresh tokens in an HttpOnly cookie, with reuse detection
-- User management: invite with a one-time password, promote/demote admins,
-  and an admin **set-password** that revokes the user's live sessions
+- User management: invite with a one-time password, edit a user's name, email,
+  and role (including promote/demote admin), and an admin **set-password** that
+  revokes the user's live sessions
 - AES-256-GCM credential encryption, bound to the owning row so a ciphertext
   copied between rows fails to decrypt
 - Four target-database connectors — **PostgreSQL, MySQL, SQL Server, and
@@ -104,24 +105,29 @@ npm install && npm run dev
 - The SQL guard: parse, single-statement enforcement, AST allowlist, name
   resolution against the snapshot, LIMIT injection — dialect-aware, so the
   same guard renders Postgres, MySQL, T-SQL, and Oracle
-- The pipeline: route → retrieve → generate → validate → execute → present,
-  with a bounded repair loop, including a metadata route that answers schema
-  questions ("what tables do I have?") without touching SQL
+- The pipeline: route → retrieve → generate → validate → execute → present →
+  chart, with a bounded repair loop, including a metadata route that answers
+  schema questions ("what tables do I have?") without touching SQL. The chart
+  step is fail-open: the model proposes a constrained `ChartIntent` (compiled to
+  Vega-Lite) with a data-shape heuristic fallback, and any failure just yields
+  no chart
 - SSE streaming with replay from `Last-Event-ID`, plus a polling fallback
 - In-process run executor with heartbeats and a stale-run reconciler
 
 **Frontend**
 
 Chat with the live step trail, the "Generated SQL" panel, result tables and
-bar charts, metadata chips, a disclosure indicator, copy buttons, and
-conversation rename and delete; right-to-left support for Persian and other
-RTL scripts. Data sources with an engine picker, a table list, and an FK
-graph view; LLM providers; user management. Dark and light themes.
+charts, and metadata chips. Each conversation is pinned to one database and
+model, chosen in the header — which also shows the disclosure policy — and
+locked once the first message is sent. Copy buttons, conversation rename and
+delete, and right-to-left support for Persian and other RTL scripts. Data
+sources with an engine picker, a table list, and an FK graph view; LLM
+providers; a user-management panel with per-user editing. Dark and light
+themes.
 
-**Not built yet:** the semantic layer, clarification turns, model-authored
-Vega-Lite charts, retrieval beyond exact matching, rolling conversation
-summaries, and the eval harness. Each is deferred deliberately — see the
-architecture doc for the reasoning.
+**Not built yet:** the semantic layer, clarification turns, retrieval beyond
+exact matching, rolling conversation summaries, and the eval harness. Each is
+deferred deliberately — see the architecture doc for the reasoning.
 
 ---
 

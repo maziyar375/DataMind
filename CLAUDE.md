@@ -91,7 +91,7 @@ backend/app/
   services/       use cases + transaction boundaries: run_service, bootstrap,
                   disclosure_service, policy
   pipeline/       the AI run: state.py (typed RunState), pipeline.py (state machine),
-                  nodes/ (route→retrieve→generate→validate→execute→present), prompts/
+                  nodes/ (route→retrieve→generate→validate→execute→present→chart), prompts/
   sqlguard/       policy, validator, rewriter — self-contained, dialect-aware
   charts/         ChartIntent → validation → Vega-Lite
   infra/          adapters implementing the ports:
@@ -166,7 +166,7 @@ hands off to the in-process executor. `AnalyticsPipeline.run` walks a linear
 state machine with one bounded repair loop:
 
 ```
-route → retrieve → generate → validate → execute → present
+route → retrieve → generate → validate → execute → present → chart
 ```
 
 - `route` classifies intent. **METADATA** questions ("what tables do I have?")
@@ -176,6 +176,15 @@ route → retrieve → generate → validate → execute → present
 - Each step persists a `run_step` and emits an SSE event; the SPA renders the
   **live step trail**, which is a valued feature — keep it visible, don't
   collapse it behind a "Thought for Xs" summary by default.
+- `chart` is **best-effort and fail-open** (the opposite of the SQL guard): the
+  model proposes a constrained `ChartIntent` compiled to Vega-Lite, with a
+  data-shape heuristic as the fallback; any failure just yields no chart, since
+  the answer and table are already persisted.
+- A conversation is **bound to one connection + model**, picked in the chat
+  header before the first message; the pickers lock once the transcript is
+  non-empty. The choice is stored as the conversation's `default_connection_id`
+  / `default_llm_config_id`. `create_run` still accepts a per-message override
+  and snapshots what it used onto the run, so earlier turns stay explainable.
 - Terminal states: `SUCCEEDED | FAILED | TIMED_OUT | CANCELLED`
   (`NEEDS_CLARIFICATION` reserved).
 
