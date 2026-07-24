@@ -254,6 +254,12 @@ export const Icon = {
       <path d="M12 8v4M12 16h.01" />
     </svg>
   ),
+  Lock: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <rect x="4" y="11" width="16" height="10" rx="2" />
+      <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+    </svg>
+  ),
 }
 
 // ── hoverable button ──────────────────────────────────────────────────────

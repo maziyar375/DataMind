@@ -32,6 +32,9 @@ export default function ChatPage() {
   const stopStreamRef = useRef<(() => void) | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const followRef = useRef(true)
+  // Id of a conversation `send` just created and is already populating, so the
+  // load effect below doesn't re-fetch it out from under the optimistic turn.
+  const justCreatedRef = useRef<string | null>(null)
   const [showJump, setShowJump] = useState(false)
 
   // ── bootstrap ───────────────────────────────────────────────────────────
@@ -92,6 +95,13 @@ export default function ChatPage() {
     if (!activeId) {
       setMessages([])
       setSuggestions([])
+      return
+    }
+    // A conversation `send` just created already holds the optimistic turn and
+    // owns its stream; re-loading it here would race that POST and could blank
+    // the question the reader just asked.
+    if (justCreatedRef.current === activeId) {
+      justCreatedRef.current = null
       return
     }
     setSuggestions([])
@@ -212,6 +222,7 @@ export default function ChatPage() {
           llm_config_id: modelId,
         })
         conversationId = created.id
+        justCreatedRef.current = created.id
         setActiveId(created.id)
         setConversationList((prev) => [created, ...prev])
       }
@@ -241,16 +252,22 @@ export default function ChatPage() {
     }
   }
 
-  async function newChat() {
+  // A new chat starts empty and unbound: no database, no model, nothing
+  // persisted. The conversation row is created lazily on the first send (see
+  // `send`), stored with exactly the database/model pair chosen there — the
+  // pair the thread then stays locked to.
+  function newChat() {
     stopStreamRef.current?.()
     setActiveRunId(null)
-    const created = await conversations.create({
-      connection_id: connectionId || undefined,
-      llm_config_id: modelId || undefined,
-    })
-    setConversationList((prev) => [created, ...prev])
-    setActiveId(created.id)
+    setLiveSteps([])
+    setLiveText('')
+    setActiveId(null)
     setMessages([])
+    setSuggestions([])
+    setConnectionId('')
+    setModelId('')
+    setDraft('')
+    setError(null)
   }
 
   async function deleteConversation(id: string) {
@@ -300,6 +317,13 @@ export default function ChatPage() {
 
   const activeTitle =
     conversationList.find((c) => c.id === activeId)?.title ?? 'New chat'
+
+  // The database and model are chosen once, before the first message, then
+  // frozen: every run in a thread must stay explainable against a single pair,
+  // so the pickers lock the moment the transcript is non-empty. Until both are
+  // chosen, a brand-new chat cannot send.
+  const locked = messages.length > 0
+  const ready = Boolean(connectionId && modelId)
 
   return (
     <div style={{ display: 'flex', height: '100%', width: '100%', minWidth: 0 }}>
@@ -370,6 +394,7 @@ export default function ChatPage() {
               onChange={setConnectionId}
               options={connections.map((c) => ({ value: c.id, label: c.name }))}
               width={232}
+              disabled={locked}
               badge={
                 <DisclosureBadge
                   policy={connections.find((c) => c.id === connectionId)?.disclosure_policy}
@@ -382,6 +407,7 @@ export default function ChatPage() {
               value={modelId}
               onChange={setModelId}
               options={models.map((m) => ({ value: m.id, label: m.name }))}
+              disabled={locked}
             />
           </div>
         </header>
@@ -405,7 +431,7 @@ export default function ChatPage() {
               {error && <ErrorNote>{error}</ErrorNote>}
 
               {messages.length === 0 && !activeRunId && (
-                <Welcome onPick={(text) => void send(text)} />
+                <Welcome ready={ready} onPick={(text) => void send(text)} />
               )}
 
               {messages.map((message) => {
@@ -484,6 +510,7 @@ export default function ChatPage() {
           onChange={setDraft}
           onSubmit={() => void send()}
           busy={!!activeRunId}
+          ready={ready}
         />
       </div>
     </div>
@@ -502,7 +529,7 @@ const STARTERS = [
   'Show me a sample of rows',
 ]
 
-function Welcome({ onPick }: { onPick: (text: string) => void }) {
+function Welcome({ ready, onPick }: { ready: boolean; onPick: (text: string) => void }) {
   return (
     <div
       className="rm-welcome"
@@ -557,29 +584,49 @@ function Welcome({ onPick }: { onPick: (text: string) => void }) {
         }}
       >
         {STARTERS.map((text) => (
-          <StarterChip key={text} text={text} onClick={() => onPick(text)} />
+          <StarterChip
+            key={text}
+            text={text}
+            disabled={!ready}
+            onClick={() => onPick(text)}
+          />
         ))}
       </div>
+
+      {!ready && (
+        <div style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 2 }}>
+          Choose a database and model in the header to begin.
+        </div>
+      )}
     </div>
   )
 }
 
-function StarterChip({ text, onClick }: { text: string; onClick: () => void }) {
+function StarterChip({
+  text, onClick, disabled = false,
+}: {
+  text: string
+  onClick: () => void
+  disabled?: boolean
+}) {
   const [hover, setHover] = useState(false)
+  const lit = hover && !disabled
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
         fontSize: 12.5,
         fontWeight: 500,
-        color: hover ? 'var(--text-strong)' : 'var(--text-dim)',
-        background: hover ? 'var(--panel-hover)' : 'var(--panel)',
-        border: `1px solid ${hover ? 'var(--accent-border)' : 'var(--border)'}`,
+        color: lit ? 'var(--text-strong)' : 'var(--text-dim)',
+        background: lit ? 'var(--panel-hover)' : 'var(--panel)',
+        border: `1px solid ${lit ? 'var(--accent-border)' : 'var(--border)'}`,
         padding: '8px 13px',
         borderRadius: 20,
-        cursor: 'pointer',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
         transition: 'background .12s ease, border-color .12s ease, color .12s ease',
       }}
     >
@@ -965,12 +1012,14 @@ function iconBtnStyle(color: string, hoverBg: string): React.CSSProperties {
 }
 
 function Composer({
-  value, onChange, onSubmit, busy,
+  value, onChange, onSubmit, busy, ready,
 }: {
   value: string
   onChange: (value: string) => void
   onSubmit: () => void
   busy: boolean
+  /** Both a database and a model are chosen — required before a first send. */
+  ready: boolean
 }) {
   const [focus, setFocus] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
@@ -983,7 +1032,7 @@ function Composer({
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`
   }, [value])
 
-  const canSend = value.trim().length > 0 && !busy
+  const canSend = value.trim().length > 0 && !busy && ready
   const active = focus || value.trim().length > 0
 
   return (
@@ -1074,14 +1123,23 @@ function Composer({
             color: 'var(--text-faint)',
           }}
         >
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-            <span className="rm-kbd">Enter</span> to send
-          </span>
-          <span style={{ opacity: 0.5 }}>·</span>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-            <span className="rm-kbd">Shift</span>
-            <span className="rm-kbd">Enter</span> for a new line
-          </span>
+          {ready ? (
+            <>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <span className="rm-kbd">Enter</span> to send
+              </span>
+              <span style={{ opacity: 0.5 }}>·</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <span className="rm-kbd">Shift</span>
+                <span className="rm-kbd">Enter</span> for a new line
+              </span>
+            </>
+          ) : (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <Icon.Sparkle size={12} stroke="var(--text-faint)" />
+              Choose a database and model above to start
+            </span>
+          )}
         </div>
       </div>
     </div>
@@ -1098,7 +1156,7 @@ function Composer({
  * click or Escape.
  */
 function HeaderSelect({
-  icon, label, value, onChange, options, badge, width = 190,
+  icon, label, value, onChange, options, badge, width = 190, disabled = false,
 }: {
   icon: React.ReactNode
   label: string
@@ -1108,6 +1166,8 @@ function HeaderSelect({
   /** Optional status pill fused into the trigger, e.g. the disclosure badge. */
   badge?: React.ReactNode
   width?: number
+  /** Read-only: once a thread has started, its database/model can't change. */
+  disabled?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -1138,10 +1198,15 @@ function HeaderSelect({
   return (
     <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
       <button
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => !disabled && setOpen((v) => !v)}
+        disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
-        title={`${label}: ${display}`}
+        title={
+          disabled
+            ? `${label} is fixed for this conversation: ${display}`
+            : `${label}: ${display}`
+        }
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -1151,9 +1216,10 @@ function HeaderSelect({
           border: `1px solid ${open ? 'var(--accent)' : 'var(--border-strong)'}`,
           borderRadius: 9,
           padding: '6px 10px',
-          cursor: 'pointer',
+          cursor: disabled ? 'default' : 'pointer',
+          opacity: disabled ? 0.7 : 1,
           textAlign: 'left',
-          transition: 'border-color .12s ease',
+          transition: 'border-color .12s ease, opacity .12s ease',
         }}
       >
         {icon}
@@ -1191,14 +1257,14 @@ function HeaderSelect({
           </span>
         </span>
         {badge}
-        <Icon.Chevron
-          open={open}
-          size={13}
-          stroke="var(--text-faint)"
-        />
+        {disabled ? (
+          <Icon.Lock size={12} stroke="var(--text-faint)" />
+        ) : (
+          <Icon.Chevron open={open} size={13} stroke="var(--text-faint)" />
+        )}
       </button>
 
-      {open && (
+      {open && !disabled && (
         <div
           role="listbox"
           style={{
