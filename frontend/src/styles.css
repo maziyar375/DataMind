@@ -106,6 +106,26 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   background: radial-gradient(52% 100% at 50% 22%, var(--accent-bg), transparent 72%);
 }
 
+/* In light mode the big welcome glow goes warm, so the empty chat reads as
+   warm paper rather than a cool blue pool. The blue accent is kept everywhere
+   else — buttons, links, user bubbles — as a deliberate cool pop; only this
+   one large background glow is warmed. Dark mode keeps its accent glow. */
+:root[data-theme='light'] .rm-welcome::after {
+  background: radial-gradient(52% 100% at 50% 22%, oklch(0.83 0.12 62 / 0.4), transparent 72%);
+}
+
+/* The sparkle badge at the centre of the empty chat is the focal point of the
+   warm glow, so in light mode it takes the warm amber tokens instead of the
+   blue accent. Inline styles set the badge colours, hence !important; the icon
+   stroke is a plain SVG attribute, which CSS overrides directly. */
+:root[data-theme='light'] .rm-welcome-badge {
+  background: var(--amber-bg) !important;
+  border-color: var(--amber-border) !important;
+}
+:root[data-theme='light'] .rm-welcome-badge svg {
+  stroke: var(--amber);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .rm-welcome::before, .rm-welcome::after { opacity: 0.3; }
 }
@@ -166,8 +186,17 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   mask-image: radial-gradient(closest-side at 50% 42%, #000, transparent);
 }
 
-/* Lighter theme needs a gentler wash. */
-:root[data-theme='light'] .rm-auth::before { opacity: 0.7; }
+/* On the pale light surface the dark theme's neon pastels wash out, so light
+   mode gets its own orbs: deeper, more saturated hues at higher alpha so the
+   four brand colours actually register. Same positions and hues as dark. */
+:root[data-theme='light'] .rm-auth::before {
+  opacity: 1;
+  background:
+    radial-gradient(30% 34% at 20% 26%, oklch(0.6 0.26 300 / 0.42), transparent 66%),
+    radial-gradient(30% 34% at 82% 20%, oklch(0.62 0.27 350 / 0.4), transparent 66%),
+    radial-gradient(34% 38% at 24% 84%, oklch(0.6 0.24 255 / 0.38), transparent 66%),
+    radial-gradient(30% 34% at 84% 82%, oklch(0.72 0.19 75 / 0.36), transparent 66%);
+}
 
 /* A soft, multi-hue glow cupped behind the enlarged logo — echoing the
    purple / blue / pink of the mark, with a gentle breathing float. */

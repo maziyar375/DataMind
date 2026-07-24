@@ -43,9 +43,14 @@ export const THEMES: Record<ThemeName, Record<string, string>> = {
   // neutrals sit at a warm hue (~80) with a whisper of chroma, so surfaces feel
   // inviting instead of soulless. The app shell also layers a soft multi-hue
   // wash (see `.rm-app` in styles.css) that only shows through open areas —
-  // cards and tables keep solid backgrounds, so legibility is untouched. The
-  // blue accent is kept (a cool accent over warm paper is deliberate contrast).
-  // Dark theme is intentionally unchanged.
+  // cards and tables keep solid backgrounds, so legibility is untouched.
+  //
+  // Accent is a warm plum/orchid (hue ~315) drawn from the logo, not the cold
+  // blue: it's the "professional-warm" choice — a jewel tone that stays warm
+  // against the paper and, unlike an amber/terracotta accent, doesn't collide
+  // with the warning-amber or error-red semantics. Amber lives on as a
+  // secondary warm highlight (the welcome glow + sparkle badge), giving a
+  // deliberate plum-primary / amber-highlight pairing. Dark theme is unchanged.
   light: {
     bg: 'oklch(0.975 0.009 83)',
     'sidebar-bg': 'oklch(0.96 0.011 80)',
@@ -62,10 +67,10 @@ export const THEMES: Record<ThemeName, Record<string, string>> = {
     text2: 'oklch(0.34 0.012 72)',
     'text-dim': 'oklch(0.5 0.013 74)',
     'text-faint': 'oklch(0.62 0.013 76)',
-    accent: 'oklch(0.55 0.16 250)',
-    'accent-bg': 'oklch(0.55 0.16 250 / 0.1)',
-    'accent-border': 'oklch(0.55 0.16 250 / 0.35)',
-    'on-accent': 'oklch(0.99 0.004 85)',
+    accent: 'oklch(0.52 0.19 315)',
+    'accent-bg': 'oklch(0.52 0.19 315 / 0.1)',
+    'accent-border': 'oklch(0.52 0.19 315 / 0.35)',
+    'on-accent': 'oklch(0.99 0.004 320)',
     green: 'oklch(0.54 0.15 155)',
     'green-bg': 'oklch(0.54 0.15 155 / 0.12)',
     amber: 'oklch(0.62 0.16 66)',

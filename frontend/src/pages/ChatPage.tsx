@@ -487,6 +487,7 @@ function Welcome({ onPick }: { onPick: (text: string) => void }) {
       }}
     >
       <span
+        className="rm-welcome-badge"
         style={{
           width: 46,
           height: 46,
