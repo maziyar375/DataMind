@@ -62,7 +62,15 @@ class Settings(BaseSettings):
 
     # ── llm ──────────────────────────────────────────────────────────────
     llm_request_timeout_seconds: int = 60
+    # Transient-failure retry (rate limits / 5xx). Bounded exponential backoff;
+    # a permanent error (auth, bad request) is never retried. 0 disables it.
+    llm_max_retries: int = 4
+    llm_retry_base_delay_seconds: float = 2.0
+    llm_retry_max_delay_seconds: float = 30.0
     prompt_version: str = "v1"
+    # Default model for `python -m app.eval.runner` when --llm-config is omitted,
+    # so the suite runs in one command (falls back to the sole config if unset).
+    eval_llm_config_id: str | None = None
 
     @property
     def is_production(self) -> bool:

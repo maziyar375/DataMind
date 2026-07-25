@@ -105,6 +105,30 @@ async def route(state: RunState, deps: NodeDeps) -> NodeResult:
     return NodeResult(detail=f"Classified {state.intent} in {elapsed}ms")
 
 
+def _expand_by_fk(
+    seed: list[dict[str, Any]],
+    tables: list[dict[str, Any]],
+    relationships: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Grow a seed set by one foreign-key hop, in either direction.
+
+    Junction and bridge tables reference the entities they connect, so a table
+    one hop from a matched entity is exactly the join path the question implies
+    but does not spell out. Order is preserved (snapshot order) for a stable
+    prompt.
+    """
+    seed_names = {f"{t['schema']}.{t['name']}" for t in seed}
+    reachable = set(seed_names)
+    # Condition reads the frozen seed only, so this is exactly one hop —
+    # deterministic and independent of relationship order.
+    for r in relationships:
+        if r["from_table"] in seed_names:
+            reachable.add(r["to_table"])
+        if r["to_table"] in seed_names:
+            reachable.add(r["from_table"])
+    return [t for t in tables if f"{t['schema']}.{t['name']}" in reachable]
+
+
 def _describe_schema(tables: list[dict[str, Any]]) -> str:
     if not tables:
         return "This connection has no tables in its current schema snapshot."
@@ -135,11 +159,17 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
         selected, strategy = tables, "FULL_SNAPSHOT"
     else:
         needle = state.question.lower()
-        selected = [
+        matched = [
             t for t in tables
             if t["name"].lower() in needle
             or any(c["name"].lower() in needle for c in t.get("columns", []))
-        ] or tables[:20]
+        ]
+        # A question names its entities ("orders", "products") but almost never
+        # the junction/bridge tables that join them ("order_items",
+        # "product_tags"). Pull in every table one foreign-key hop from a matched
+        # table so those bridges reach the generator; substring matching alone
+        # structurally cannot find them.
+        selected = _expand_by_fk(matched, tables, relationships) if matched else tables[:20]
         strategy = "EXACT_MATCH"
 
     names = {f"{t['schema']}.{t['name']}" for t in selected}

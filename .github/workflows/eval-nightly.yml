@@ -1,0 +1,99 @@
+name: Eval (nightly)
+
+# Runs the golden suite through the real pipeline against a cheap hosted model
+# and fails if execution accuracy regresses more than 2 points from the
+# committed baseline (or drops below the absolute floor, or any policy
+# violation occurs). Scheduled nightly; also runnable on demand.
+#
+# Requires repo secrets: EVAL_API_KEY (and optionally EVAL_MODEL / EVAL_BASE_URL
+# / EVAL_PROVIDER). Without EVAL_API_KEY the job no-ops, so forks and PRs from
+# forks never fail for lack of a key.
+on:
+  schedule:
+    - cron: "0 7 * * *" # 07:00 UTC nightly
+  workflow_dispatch:
+    inputs:
+      fail_under:
+        description: "Absolute execution-accuracy floor"
+        default: "0.65"
+
+concurrency:
+  group: eval-nightly
+  cancel-in-progress: true
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    defaults:
+      run: { working-directory: backend }
+    services:
+      appdb:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: raymand
+          POSTGRES_PASSWORD: raymand
+          POSTGRES_DB: raymand
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U raymand"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      DATABASE_URL: postgresql+asyncpg://raymand:raymand@localhost:5432/raymand
+      # A throwaway key just for this ephemeral DB; the real one lives in prod.
+      SECRET_BOX_KEY: ${{ secrets.EVAL_SECRET_BOX_KEY || 'ZXZhbC1jaS1rZXktMzJieXRlcy1sb25nLWZpbGxlciE=' }}
+      JWT_SECRET: eval-ci
+      ENVIRONMENT: ci
+      # Model under test (cheap). Model/base_url have defaults; key must be a secret.
+      EVAL_API_KEY: ${{ secrets.EVAL_API_KEY }}
+      EVAL_MODEL: ${{ secrets.EVAL_MODEL || 'gpt-4o-mini' }}
+      EVAL_PROVIDER: ${{ secrets.EVAL_PROVIDER || 'OpenAI-compatible' }}
+      EVAL_BASE_URL: ${{ secrets.EVAL_BASE_URL }}
+      # Give backoff room to outlast a free-tier per-minute rate window.
+      LLM_MAX_RETRIES: "8"
+      LLM_RETRY_BASE_DELAY_SECONDS: "3"
+      LLM_RETRY_MAX_DELAY_SECONDS: "60"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip if no model key configured
+        id: gate
+        run: |
+          if [ -z "$EVAL_API_KEY" ]; then
+            echo "No EVAL_API_KEY secret; skipping the nightly eval."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.run == 'true'
+        with: { python-version: "3.12" }
+
+      - name: Install
+        if: steps.gate.outputs.run == 'true'
+        run: pip install -e ".[dev]"
+
+      - name: Migrate app DB
+        if: steps.gate.outputs.run == 'true'
+        run: alembic upgrade head
+
+      - name: Seed the eval model config
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          CONFIG_ID=$(python -m scripts.eval_seed_llm_config)
+          echo "EVAL_LLM_CONFIG_ID=$CONFIG_ID" >> "$GITHUB_ENV"
+
+      # One command, one number — and it fails the build on a regression.
+      - name: Run golden suite (gated)
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          python -m app.eval.runner --suite sales_v1 \
+            --fail-under "${{ github.event.inputs.fail_under || '0.65' }}" \
+            --require-zero-policy-violations \
+            --baseline-file app/eval/suites/sales_v1.baseline.json \
+            --max-regression 0.02
+
+      # The negative suite must route correctly and never execute SQL.
+      - name: Run negative suite
+        if: steps.gate.outputs.run == 'true'
+        run: python -m app.eval.runner --suite sales_v1_negative --json

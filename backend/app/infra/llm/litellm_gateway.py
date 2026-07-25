@@ -9,6 +9,7 @@ same Protocol is roughly 200 lines.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -16,6 +17,13 @@ from collections.abc import AsyncIterator, Sequence
 from typing import Any, TypeVar
 
 import litellm
+from litellm.exceptions import (
+    APIConnectionError,
+    InternalServerError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
+)
 from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 
@@ -36,10 +44,80 @@ litellm.suppress_debug_info = True
 
 _JSON_FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 
+# Transient failures worth retrying: a 429 or a 5xx is a "try again shortly",
+# not a bad request. Auth / bad-request / context-length errors are permanent
+# and must fail fast — retrying them only wastes the caller's deadline.
+_RETRYABLE = (
+    RateLimitError,
+    InternalServerError,
+    ServiceUnavailableError,
+    APIConnectionError,
+    Timeout,
+)
+
+
+def _retry_after_seconds(err: Exception) -> float | None:
+    """A provider's own Retry-After hint, if it sent one, honoured over backoff."""
+    for attr in ("response", "llm_provider_response"):
+        resp = getattr(err, attr, None)
+        headers = getattr(resp, "headers", None)
+        if headers:
+            raw = headers.get("retry-after") or headers.get("Retry-After")
+            try:
+                if raw is not None:
+                    return float(raw)
+            except (TypeError, ValueError):
+                pass
+    return None
+
 
 class LiteLLMGateway:
-    def __init__(self, *, timeout_seconds: int = 60) -> None:
+    def __init__(
+        self,
+        *,
+        timeout_seconds: int = 60,
+        max_retries: int = 0,
+        retry_base_delay_seconds: float = 2.0,
+        retry_max_delay_seconds: float = 30.0,
+    ) -> None:
         self._timeout = timeout_seconds
+        self._max_retries = max(0, max_retries)
+        self._retry_base = retry_base_delay_seconds
+        self._retry_max = retry_max_delay_seconds
+
+    @classmethod
+    def from_settings(cls, settings: Any) -> LiteLLMGateway:
+        """Build a gateway wired to the app's timeout + transient-retry policy."""
+        return cls(
+            timeout_seconds=settings.llm_request_timeout_seconds,
+            max_retries=settings.llm_max_retries,
+            retry_base_delay_seconds=settings.llm_retry_base_delay_seconds,
+            retry_max_delay_seconds=settings.llm_retry_max_delay_seconds,
+        )
+
+    # ── transient-failure retry ──────────────────────────────────────────
+    async def _acompletion(self, **payload: Any) -> Any:
+        """`litellm.acompletion` with bounded exponential backoff on transient
+        errors. A permanent error (auth, bad request) is re-raised immediately."""
+        attempt = 0
+        while True:
+            try:
+                return await litellm.acompletion(**payload)
+            except _RETRYABLE as err:
+                if attempt >= self._max_retries:
+                    raise
+                delay = _retry_after_seconds(err) or min(
+                    self._retry_base * (2**attempt), self._retry_max
+                )
+                log.warning(
+                    "llm_retry",
+                    attempt=attempt + 1,
+                    max_retries=self._max_retries,
+                    delay_s=round(delay, 1),
+                    error=type(err).__name__,
+                )
+                await asyncio.sleep(delay)
+                attempt += 1
 
     # ── request shaping ──────────────────────────────────────────────────
     def _kwargs(self, llm: ResolvedLLM, messages: Sequence[ChatMessage]) -> dict[str, Any]:
@@ -70,7 +148,7 @@ class LiteLLMGateway:
     ) -> Completion:
         started = time.perf_counter()
         try:
-            response = await litellm.acompletion(**self._kwargs(llm, messages))
+            response = await self._acompletion(**self._kwargs(llm, messages))
         except Exception as err:
             raise LLMError(_clean(err)) from err
 
@@ -88,7 +166,7 @@ class LiteLLMGateway:
         self, llm: ResolvedLLM, messages: Sequence[ChatMessage]
     ) -> AsyncIterator[str]:
         try:
-            response = await litellm.acompletion(
+            response = await self._acompletion(
                 **self._kwargs(llm, messages), stream=True
             )
             async for chunk in response:
@@ -134,7 +212,7 @@ class LiteLLMGateway:
             ]
 
         try:
-            response = await litellm.acompletion(**payload)
+            response = await self._acompletion(**payload)
         except Exception as err:
             raise LLMError(_clean(err)) from err
 

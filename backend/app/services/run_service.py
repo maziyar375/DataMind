@@ -183,9 +183,7 @@ class RunService:
         )
 
         deps = NodeDeps(
-            llm_gateway=LiteLLMGateway(
-                timeout_seconds=self._settings.llm_request_timeout_seconds
-            ),
+            llm_gateway=LiteLLMGateway.from_settings(self._settings),
             llm=self._resolve_llm(llm_config),
             connector=connector,
             snapshot=snapshot,
@@ -495,9 +493,7 @@ class RunService:
         )
 
         try:
-            gateway = LiteLLMGateway(
-                timeout_seconds=self._settings.llm_request_timeout_seconds
-            )
+            gateway = LiteLLMGateway.from_settings(self._settings)
             completion = await gateway.complete(
                 self._resolve_llm(llm_config),
                 [

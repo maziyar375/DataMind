@@ -30,6 +30,11 @@ Schema:
 {schema}
 
 {history}"""
+# NB (eval Round 2, reverted): adding a "getting the answer right" block of
+# general SQL guidance here *lowered* execution accuracy on the small eval model
+# (36% -> 26%) and hurt parse (98% -> 88%) and guard-pass (96% -> 86%) — the
+# extra instructions crowded out the schema for gemma-4-31B. If you re-try
+# generation guidance, keep it terse and re-measure; more is not better here.
 
 GENERATE_USER = """Question: {question}
 

@@ -1,0 +1,16 @@
+{
+  "execution_accuracy": 0.36,
+  "suite": "sales_v1",
+  "measured_on": "2026-07-25",
+  "model": "openai/lightning-ai/gemma-4-31B-it",
+  "temperature": 0.2,
+  "prompt_version": "v1",
+  "pipeline_note": "committed state = baseline pipeline + Round-1 FK-neighbour retrieval expansion",
+  "companion_metrics": {
+    "retrieval_recall_mean": 0.864,
+    "retrieval_full_hit": 0.74,
+    "parse_rate": 0.98,
+    "policy_violation_rate": 0.02
+  },
+  "_README": "The nightly regression gate fails the build if a run's execution_accuracy drops more than --max-regression (0.02) below the value above. That number is MODEL- AND SETTINGS-SPECIFIC: it was measured on gemma-4-31B at temperature 0.2. If the nightly runs a different model (the workflow defaults EVAL_MODEL to gpt-4o-mini) or different settings, regenerate this file from the first green CI run — run the suite, take execution_accuracy, and commit it here. Prefer temperature 0 in CI (the seed script's default) so the ~4-point run-to-run noise seen at temp 0.2 does not false-trip a 2-point gate."
+}
