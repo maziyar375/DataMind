@@ -40,6 +40,8 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.13",
     "import-linter>=2.1",
+    # Eval harness spins real fixture databases in throwaway containers.
+    "testcontainers>=4.8",
 ]
 
 [tool.setuptools.packages.find]

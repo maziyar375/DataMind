@@ -27,6 +27,13 @@ ALLOWED_NODES: frozenset[type[exp.Expression]] = frozenset({
     exp.Sub, exp.Mul, exp.Div, exp.Mod, exp.Neg, exp.Paren, exp.Bracket,
     exp.Case, exp.If, exp.Coalesce, exp.Cast, exp.TryCast, exp.Exists,
     exp.Any, exp.All,
+    # The target type of a CAST / `::` — `exp.Cast` is allowed but its `to`
+    # child is an `exp.DataType` (with `exp.DataTypeParam` for parametrised
+    # types like numeric(10,2)). Without these, every explicit cast was a
+    # false rejection (E_NODE_NOT_ALLOWED). A type name casts an
+    # already-allowed expression to a type; it introduces no table, function,
+    # or system access, so the read-only + allowlist posture is unchanged.
+    exp.DataType, exp.DataTypeParam,
     # aggregates + common functions
     exp.Count, exp.Sum, exp.Avg, exp.Min, exp.Max, exp.Abs, exp.Round,
     exp.Ceil, exp.Floor, exp.Length, exp.Lower, exp.Upper, exp.Trim,

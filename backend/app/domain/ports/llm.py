@@ -68,7 +68,9 @@ class LLMGateway(Protocol):
         self, llm: ResolvedLLM, messages: Sequence[ChatMessage]
     ) -> Completion: ...
 
-    async def stream(
+    # An async generator: its type is a function returning an AsyncIterator, not
+    # a coroutine — so this is `def`, not `async def` (callers use `async for`).
+    def stream(
         self, llm: ResolvedLLM, messages: Sequence[ChatMessage]
     ) -> AsyncIterator[str]: ...
 

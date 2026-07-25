@@ -355,3 +355,87 @@ class AuditLog(Base):
     resource_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True))
     outcome: Mapped[str] = mapped_column(String(20), nullable=False)
     detail: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+
+
+# ── evaluation (offline; written by app.eval.runner, never on the request path) ──
+class EvalRun(Base):
+    """One invocation of the eval runner over a suite: the aggregate scorecard."""
+
+    __tablename__ = "eval_runs"
+
+    id: Mapped[uuid.UUID] = _pk()
+    suite: Mapped[str] = mapped_column(String(60), nullable=False)
+    suite_version: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    connection_fixture: Mapped[str] = mapped_column(String(60), nullable=False, default="")
+    # No FK: an eval may run against a config that was later deleted, and we
+    # still want the historical scorecard to survive.
+    llm_config_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True))
+    model_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    prompt_version: Mapped[str] = mapped_column(String(20), default="v1")
+    git_sha: Mapped[str | None] = mapped_column(String(64))
+    total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # The full SuiteReport (execution accuracy, retrieval recall, all the rest).
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    notes: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class EvalResult(Base):
+    """Per-question outcome. Candidate SQL and failure reason are kept verbatim
+    so a bad run can be read afterwards without re-running it."""
+
+    __tablename__ = "eval_results"
+    __table_args__ = (
+        Index("ix_eval_results_run", "eval_run_id"),
+        UniqueConstraint("eval_run_id", "record_id", name="uq_eval_result_record"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    eval_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("eval_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    record_id: Mapped[str] = mapped_column(String(60), nullable=False)
+    question: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    tags: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    difficulty: Mapped[str | None] = mapped_column(String(20))
+
+    outcome: Mapped[str] = mapped_column(String(30), nullable=False)
+    intent: Mapped[str | None] = mapped_column(String(20))
+
+    expected_tables: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    retrieved_tables: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    retrieval_recall: Mapped[float | None] = mapped_column()
+    retrieval_hit: Mapped[bool | None] = mapped_column(Boolean)
+
+    gold_sql: Mapped[str | None] = mapped_column(Text)
+    candidate_sql: Mapped[str | None] = mapped_column(Text)
+    gold_row_count: Mapped[int | None] = mapped_column(Integer)
+    candidate_row_count: Mapped[int | None] = mapped_column(Integer)
+
+    parse_ok: Mapped[bool | None] = mapped_column(Boolean)
+    validated_ok: Mapped[bool | None] = mapped_column(Boolean)
+    execution_ok: Mapped[bool | None] = mapped_column(Boolean)
+    execution_match: Mapped[bool | None] = mapped_column(Boolean)
+    exact_match: Mapped[bool | None] = mapped_column(Boolean)
+    policy_violations: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+
+    attempts: Mapped[int | None] = mapped_column(Integer)
+    repair_count: Mapped[int | None] = mapped_column(Integer)
+    succeeded_on_attempt: Mapped[int | None] = mapped_column(Integer)
+
+    llm_ms: Mapped[int | None] = mapped_column(Integer)
+    validate_ms: Mapped[int | None] = mapped_column(Integer)
+    db_ms: Mapped[int | None] = mapped_column(Integer)
+    total_ms: Mapped[int | None] = mapped_column(Integer)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    cost_usd: Mapped[float | None] = mapped_column()
+
+    failure_reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

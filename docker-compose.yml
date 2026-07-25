@@ -10,7 +10,18 @@ services:
     # instead of a Docker-managed named volume. Named volumes live under
     # /var/lib/docker, which is ephemeral here: a Studio stop wipes it and with
     # it every chat and connection. A path inside the studio drive survives.
-    volumes: ["./.data/db:/var/lib/postgresql/data"]
+    #
+    # The entrypoint shim recreates the empty runtime dirs Postgres needs but
+    # that the studio drive drops across restarts (it does not preserve empty
+    # directories), which would otherwise make the server fail to start with
+    # "could not open directory 'pg_notify'". Data itself is untouched.
+    volumes:
+      - ./.data/db:/var/lib/postgresql/data
+      - ./scripts/pg-ensure-runtime-dirs.sh:/usr/local/bin/pg-ensure-runtime-dirs.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/pg-ensure-runtime-dirs.sh"]
+    # Overriding entrypoint clears the image's default CMD, so restore it: the
+    # shim passes these args through to docker-entrypoint.sh.
+    command: ["postgres"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U raymand"]
       interval: 5s

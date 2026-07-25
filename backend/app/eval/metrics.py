@@ -1,0 +1,376 @@
+"""Metrics, in the order of importance the phase fixed.
+
+Everything here is a pure function over already-collected results, so it is unit
+tested without a database or a model:
+
+1. execution accuracy   — gold vs candidate result sets (the headline)
+2. retrieval recall @ k  — did retrieval surface every expected table
+3. parse / policy / execution rates
+4. repair distribution   — succeeded at attempt 1 vs 2 vs 3
+5. latency p50/p95 (llm/validate/db), tokens, cost per question
+
+`exact_match` is computed as a diagnostic only and is never a gate.
+"""
+from __future__ import annotations
+
+import re
+from collections import Counter
+from dataclasses import dataclass, field
+from typing import Any
+
+Row = list[Any]
+NUMERIC_TOLERANCE = 1e-6
+
+# Outcome labels, most-desirable first. `MATCH` is the only success.
+OUTCOME_MATCH = "MATCH"
+OUTCOME_MISMATCH = "MISMATCH"          # ran, but result set differs from gold
+OUTCOME_EXEC_FAILED = "EXEC_FAILED"    # valid SQL the database still rejected
+OUTCOME_VALIDATION_FAILED = "VALIDATION_FAILED"  # guard rejected every attempt
+OUTCOME_NO_SQL = "NO_SQL"              # routed away from SQL (metadata/chitchat/…)
+OUTCOME_ERROR = "ERROR"                # pipeline/gold crash
+
+
+# ── value & result-set comparison (execution accuracy) ──────────────────────
+
+
+def _as_number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    # Decimal, date, etc. — try str->float, else not numeric.
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def values_equal(a: Any, b: Any, tol: float = NUMERIC_TOLERANCE) -> bool:
+    if a is None or b is None:
+        return a is None and b is None
+    na, nb = _as_number(a), _as_number(b)
+    if na is not None and nb is not None:
+        return abs(na - nb) <= tol * max(1.0, abs(na), abs(nb))
+    return str(a).strip() == str(b).strip()
+
+
+def _rows_equal(a: Row, b: Row) -> bool:
+    return len(a) == len(b) and all(values_equal(x, y) for x, y in zip(a, b, strict=False))
+
+
+def _row_key(row: Row) -> tuple[str, ...]:
+    """A hashable, tolerance-aware key: numbers rounded, everything else str."""
+    key: list[str] = []
+    for cell in row:
+        if cell is None:
+            key.append("\x00NULL")
+            continue
+        num = _as_number(cell)
+        key.append(f"n:{round(num, 6)}" if num is not None else f"s:{str(cell).strip()}")
+    return tuple(key)
+
+
+def result_sets_match(gold: list[Row], candidate: list[Row], equivalence: str) -> bool:
+    """Execution accuracy: compare by position within each row.
+
+    * `ordered_rows` — row order is part of the answer (rankings, time series).
+    * everything else — unordered multiset of rows.
+
+    Column names are ignored; the match is positional, with 1e-6 numeric
+    tolerance. Two correct queries are rarely string-identical, which is exactly
+    why string equality is never the gate.
+    """
+    if len(gold) != len(candidate):
+        return False
+    if equivalence == "ordered_rows":
+        return all(_rows_equal(g, c) for g, c in zip(gold, candidate, strict=False))
+    return Counter(_row_key(r) for r in gold) == Counter(_row_key(r) for r in candidate)
+
+
+_WS = re.compile(r"\s+")
+
+
+def exact_match(gold_sql: str, candidate_sql: str | None) -> bool:
+    """String equality after whitespace/case/semicolon normalisation. Diagnostic only."""
+    if candidate_sql is None:
+        return False
+
+    def norm(s: str) -> str:
+        return _WS.sub(" ", s.strip().rstrip(";")).lower()
+
+    return norm(gold_sql) == norm(candidate_sql)
+
+
+# ── retrieval recall @ k ────────────────────────────────────────────────────
+
+
+def _bare(name: str) -> str:
+    return name.split(".")[-1].strip().lower()
+
+
+def retrieval_recall(expected_tables: list[str], retrieved_tables: list[str]) -> float:
+    """Fraction of expected tables present in the retrieved set (bare names)."""
+    if not expected_tables:
+        return 1.0
+    have = {_bare(t) for t in retrieved_tables}
+    hits = sum(1 for t in expected_tables if _bare(t) in have)
+    return hits / len(expected_tables)
+
+
+# ── per-record outcome ──────────────────────────────────────────────────────
+
+
+@dataclass
+class RecordOutcome:
+    """Everything measured for one question — persisted verbatim per record."""
+
+    record_id: str
+    tags: list[str]
+    difficulty: str
+    model: str = ""
+
+    outcome: str = OUTCOME_ERROR
+    intent: str | None = None
+
+    expected_tables: list[str] = field(default_factory=list)
+    retrieved_tables: list[str] = field(default_factory=list)
+    retrieval_recall: float = 0.0
+    retrieval_hit: bool = False
+
+    gold_sql: str = ""
+    candidate_sql: str | None = None
+    gold_row_count: int | None = None
+    candidate_row_count: int | None = None
+
+    parse_ok: bool = False
+    validated_ok: bool = False
+    execution_ok: bool = False
+    execution_match: bool = False
+    exact_match: bool = False
+    policy_violations: list[str] = field(default_factory=list)
+
+    attempts: int = 0
+    repair_count: int = 0
+    succeeded_on_attempt: int | None = None
+
+    llm_ms: int = 0
+    validate_ms: int = 0
+    db_ms: int = 0
+    total_ms: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float | None = None
+
+    failure_reason: str | None = None
+
+    @property
+    def is_success(self) -> bool:
+        return self.outcome == OUTCOME_MATCH
+
+
+# ── aggregation ─────────────────────────────────────────────────────────────
+
+
+def percentile(values: list[float], p: float) -> float:
+    if not values:
+        return 0.0
+    s = sorted(values)
+    if len(s) == 1:
+        return s[0]
+    rank = (p / 100.0) * (len(s) - 1)
+    lo = int(rank)
+    hi = min(lo + 1, len(s) - 1)
+    frac = rank - lo
+    return s[lo] + (s[hi] - s[lo]) * frac
+
+
+def _rate(hits: int, total: int) -> float:
+    return (hits / total) if total else 0.0
+
+
+@dataclass
+class TagBreakdown:
+    tag: str
+    n: int
+    execution_accuracy: float
+    retrieval_recall: float
+
+
+@dataclass
+class SuiteReport:
+    n: int
+    # 1. headline
+    execution_accuracy: float
+    # 2. diagnostic that decides what to fix
+    retrieval_recall_mean: float
+    retrieval_full_hit_rate: float
+    # 3. rates
+    parse_rate: float
+    validation_pass_rate: float
+    execution_success_rate: float
+    policy_violation_rate: float
+    policy_violations_by_rule: dict[str, int]
+    # 4. repair distribution
+    repair_distribution: dict[str, int]
+    # 5. latency / tokens / cost
+    latency_ms: dict[str, dict[str, float]]     # {"llm": {"p50":..,"p95":..}, ...}
+    tokens_per_question: dict[str, float]
+    cost_per_question: float | None
+    cost_by_model: dict[str, float]
+    # diagnostic, never a gate
+    exact_match_rate: float
+    # breakdowns
+    per_tag: list[TagBreakdown]
+    outcome_counts: dict[str, int]
+
+
+def aggregate(outcomes: list[RecordOutcome]) -> SuiteReport:
+    n = len(outcomes)
+    matched = [o for o in outcomes if o.is_success]
+
+    # policy violations by rule
+    rule_counter: Counter[str] = Counter()
+    for o in outcomes:
+        rule_counter.update(o.policy_violations)
+
+    # repair distribution: attempt number a run first succeeded on
+    repair: Counter[str] = Counter()
+    for o in outcomes:
+        if o.succeeded_on_attempt is None:
+            repair["failed"] += 1
+        else:
+            repair[f"attempt_{o.succeeded_on_attempt}"] += 1
+
+    def _pcts(field_name: str) -> dict[str, float]:
+        vals = [float(getattr(o, field_name)) for o in outcomes]
+        return {"p50": round(percentile(vals, 50), 1), "p95": round(percentile(vals, 95), 1)}
+
+    # cost
+    costed = [o.cost_usd for o in outcomes if o.cost_usd is not None]
+    cost_by_model: dict[str, float] = {}
+    model_sums: dict[str, float] = {}
+    model_counts: dict[str, int] = {}
+    for o in outcomes:
+        if o.cost_usd is not None and o.model:
+            model_sums[o.model] = model_sums.get(o.model, 0.0) + o.cost_usd
+            model_counts[o.model] = model_counts.get(o.model, 0) + 1
+    for m, total in model_sums.items():
+        cost_by_model[m] = round(total / model_counts[m], 6)
+
+    # per-tag breakdown
+    tags = sorted({t for o in outcomes for t in o.tags})
+    per_tag: list[TagBreakdown] = []
+    for tag in tags:
+        group = [o for o in outcomes if tag in o.tags]
+        per_tag.append(
+            TagBreakdown(
+                tag=tag,
+                n=len(group),
+                execution_accuracy=round(
+                    _rate(sum(o.is_success for o in group), len(group)), 4
+                ),
+                retrieval_recall=round(
+                    sum(o.retrieval_recall for o in group) / len(group) if group else 0.0, 4
+                ),
+            )
+        )
+
+    return SuiteReport(
+        n=n,
+        execution_accuracy=round(_rate(len(matched), n), 4),
+        retrieval_recall_mean=round(
+            sum(o.retrieval_recall for o in outcomes) / n if n else 0.0, 4
+        ),
+        retrieval_full_hit_rate=round(_rate(sum(o.retrieval_hit for o in outcomes), n), 4),
+        parse_rate=round(_rate(sum(o.parse_ok for o in outcomes), n), 4),
+        validation_pass_rate=round(_rate(sum(o.validated_ok for o in outcomes), n), 4),
+        execution_success_rate=round(_rate(sum(o.execution_ok for o in outcomes), n), 4),
+        policy_violation_rate=round(
+            _rate(sum(1 for o in outcomes if o.policy_violations), n), 4
+        ),
+        policy_violations_by_rule=dict(rule_counter.most_common()),
+        repair_distribution=dict(repair),
+        latency_ms={
+            "llm": _pcts("llm_ms"),
+            "validate": _pcts("validate_ms"),
+            "db": _pcts("db_ms"),
+            "total": _pcts("total_ms"),
+        },
+        tokens_per_question={
+            "prompt": round(sum(o.prompt_tokens for o in outcomes) / n if n else 0.0, 1),
+            "completion": round(
+                sum(o.completion_tokens for o in outcomes) / n if n else 0.0, 1
+            ),
+        },
+        cost_per_question=round(sum(costed) / len(costed), 6) if costed else None,
+        cost_by_model=cost_by_model,
+        exact_match_rate=round(_rate(sum(o.exact_match for o in outcomes), n), 4),
+        per_tag=per_tag,
+        outcome_counts=dict(Counter(o.outcome for o in outcomes).most_common()),
+    )
+
+
+def report_to_dict(report: SuiteReport) -> dict[str, Any]:
+    from dataclasses import asdict
+
+    return asdict(report)
+
+
+# ── human-readable rendering ────────────────────────────────────────────────
+
+
+def format_report(report: SuiteReport, *, title: str = "") -> str:
+    def pct(x: float) -> str:
+        return f"{x * 100:5.1f}%"
+
+    lines: list[str] = []
+    if title:
+        lines += [title, "=" * len(title)]
+    lines.append(f"questions: {report.n}")
+    lines.append("")
+    lines.append(f"1. EXECUTION ACCURACY   {pct(report.execution_accuracy)}   <- headline")
+    lines.append(
+        f"2. retrieval recall@k   mean {pct(report.retrieval_recall_mean)}   "
+        f"full-hit {pct(report.retrieval_full_hit_rate)}"
+    )
+    lines.append(
+        f"3. parse {pct(report.parse_rate)}   guard-pass {pct(report.validation_pass_rate)}   "
+        f"exec-success {pct(report.execution_success_rate)}   "
+        f"policy-violation {pct(report.policy_violation_rate)}"
+    )
+    if report.policy_violations_by_rule:
+        rules = "  ".join(f"{k}={v}" for k, v in report.policy_violations_by_rule.items())
+        lines.append(f"     violations by rule: {rules}")
+    dist = "  ".join(f"{k}={v}" for k, v in sorted(report.repair_distribution.items()))
+    lines.append(f"4. repair distribution: {dist}")
+    lat = report.latency_ms
+    lines.append(
+        f"5. latency p50/p95 ms  llm {lat['llm']['p50']:.0f}/{lat['llm']['p95']:.0f}  "
+        f"validate {lat['validate']['p50']:.0f}/{lat['validate']['p95']:.0f}  "
+        f"db {lat['db']['p50']:.0f}/{lat['db']['p95']:.0f}  "
+        f"total {lat['total']['p50']:.0f}/{lat['total']['p95']:.0f}"
+    )
+    tok = report.tokens_per_question
+    cost = "n/a" if report.cost_per_question is None else f"${report.cost_per_question:.5f}"
+    lines.append(
+        f"   tokens/q prompt {tok['prompt']:.0f} completion {tok['completion']:.0f}"
+        f"   cost/q {cost}"
+    )
+    if report.cost_by_model:
+        by = "  ".join(f"{m}=${c:.5f}" for m, c in report.cost_by_model.items())
+        lines.append(f"   cost/q by model: {by}")
+    lines.append(f"   exact_match (diagnostic, not a gate): {pct(report.exact_match_rate)}")
+    lines.append("")
+    lines.append("per-tag breakdown (exec-accuracy | retrieval-recall | n):")
+    for tb in sorted(report.per_tag, key=lambda t: t.execution_accuracy):
+        lines.append(
+            f"  {tb.tag:<16} {pct(tb.execution_accuracy)} | {pct(tb.retrieval_recall)} | {tb.n}"
+        )
+    lines.append("")
+    lines.append("outcomes: " + "  ".join(f"{k}={v}" for k, v in report.outcome_counts.items()))
+    return "\n".join(lines)

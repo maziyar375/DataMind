@@ -1,4 +1,4 @@
-.PHONY: help secrets up down logs test guard lint fmt migrate fixtures
+.PHONY: help secrets up down logs test guard lint fmt migrate fixtures db-repair
 
 help:
 	@echo "make secrets   Generate .env with fresh keys"
@@ -8,6 +8,7 @@ help:
 	@echo "make guard     Run the hostile SQL corpus only"
 	@echo "make lint      Ruff + architecture contracts"
 	@echo "make fixtures  Rebuild + verify the sales fixtures (PG/MySQL/MSSQL) from clean"
+	@echo "make db-repair Recreate empty PGDATA runtime dirs the studio drive strips, then start db"
 
 secrets:
 	@test -f .env || cp .env.example .env
@@ -50,3 +51,13 @@ migrate:
 # Compose Postgres demo unless SKIP_DEMO=1; ONLY=pg|mysql|mssql narrows it.
 fixtures:
 	bash backend/fixtures/rebuild_fixtures.sh
+
+# Escape hatch if the app DB ever fails to start with "could not open directory
+# 'pg_notify'": the studio drive drops empty dirs on restart. The db service
+# self-heals on `up` via scripts/pg-ensure-runtime-dirs.sh; this forces it and
+# recreates the dirs directly in case the container can't start at all. Data is
+# never touched — only the empty runtime scaffolding is recreated.
+db-repair:
+	@docker run --rm -u 0 -v "$(CURDIR)/.data/db:/pgdata" postgres:16-alpine sh -c \
+	'for d in pg_notify pg_stat_tmp pg_replslot pg_serial pg_snapshots pg_tblspc pg_twophase pg_commit_ts pg_dynshmem pg_logical/snapshots pg_logical/mappings pg_wal/archive_status; do [ -d "/pgdata/$$d" ] || { mkdir -p "/pgdata/$$d" && chown "$$(stat -c %u:%g /pgdata)" "/pgdata/$$d" && chmod 700 "/pgdata/$$d"; }; done'
+	docker compose up -d db

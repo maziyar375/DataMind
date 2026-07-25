@@ -165,6 +165,27 @@ class LiteLLMGateway:
         )
 
 
+def estimate_cost_usd(
+    model: str, prompt_tokens: int, completion_tokens: int
+) -> float | None:
+    """Best-effort USD cost for a completion, from litellm's price map.
+
+    Lives here because litellm may only be imported under infra/llm. Returns
+    None for a model litellm does not price (e.g. a local Ollama model), so the
+    eval reports cost where it is known and stays silent where it is not.
+    """
+    try:
+        prompt_cost, completion_cost = litellm.cost_per_token(
+            model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+    except Exception:
+        return None
+    total = (prompt_cost or 0.0) + (completion_cost or 0.0)
+    return total or None
+
+
 def _parse_into(schema: type[T], raw: str) -> T:  # noqa: UP047  (matches TypeVar used above)
     candidate = raw
     fenced = _JSON_FENCE.search(raw)
