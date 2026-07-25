@@ -1,0 +1,924 @@
+{
+  "suite": "sales",
+  "version": "v1",
+  "description": "Golden analytical questions for the wide `sales` fixture. Questions written in business language first; gold SQL from the fixture DDL only; every record cross-checked against an independent second query (see tests/eval/sales_v1_verify.json).",
+  "result_equivalence_legend": {
+    "scalar_numeric": "single non-null value; numeric tolerance 1e-6",
+    "set_unordered_by_columns": "unordered set of rows; column-name-insensitive; numeric tolerance 1e-6",
+    "ordered_rows": "row order is part of the answer (time series / ranking)"
+  },
+  "records": [
+    {
+      "id": "sales-001",
+      "question": "How many of our orders came in over the phone?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "orders"
+      ],
+      "gold_sql": "SELECT count(*) FROM orders WHERE channel = 'phone';",
+      "result_equivalence": "scalar_numeric",
+      "expected_chart_type": "none",
+      "tags": [
+        "filter",
+        "count"
+      ],
+      "difficulty": "easy",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-002",
+      "question": "What is the total value of everything we've sold across every order?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "orders"
+      ],
+      "gold_sql": "SELECT round(sum(total_amount), 2) FROM orders;",
+      "result_equivalence": "scalar_numeric",
+      "expected_chart_type": "none",
+      "tags": [
+        "aggregation"
+      ],
+      "difficulty": "easy",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-003",
+      "question": "What does the average person on our staff earn?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "employees"
+      ],
+      "gold_sql": "SELECT round(avg(salary), 2) FROM employees;",
+      "result_equivalence": "scalar_numeric",
+      "expected_chart_type": "none",
+      "tags": [
+        "aggregation"
+      ],
+      "difficulty": "easy",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-004",
+      "question": "What kinds of products do we stock?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "categories"
+      ],
+      "gold_sql": "SELECT name FROM categories ORDER BY name;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "none",
+      "tags": [
+        "distinct"
+      ],
+      "difficulty": "easy",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-005",
+      "question": "How many products have we pulled from the catalogue?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "products"
+      ],
+      "gold_sql": "SELECT count(*) FROM products WHERE discontinued = true;",
+      "result_equivalence": "scalar_numeric",
+      "expected_chart_type": "none",
+      "tags": [
+        "filter",
+        "count"
+      ],
+      "difficulty": "easy",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-006",
+      "question": "What is the steepest price tag on anything in our catalogue?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "products"
+      ],
+      "gold_sql": "SELECT max(price) FROM products;",
+      "result_equivalence": "scalar_numeric",
+      "expected_chart_type": "none",
+      "tags": [
+        "aggregation"
+      ],
+      "difficulty": "easy",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-007",
+      "question": "Which kinds of products bring in the most money?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "order_items",
+        "products"
+      ],
+      "gold_sql": "SELECT p.category, round(sum(oi.line_total), 2) AS revenue FROM order_items oi JOIN products p ON p.id = oi.product_id GROUP BY p.category ORDER BY revenue DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "join",
+        "aggregation"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-008",
+      "question": "How many people report to each of our managers?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "employees"
+      ],
+      "gold_sql": "SELECT m.name AS manager, count(*) AS reports FROM employees e JOIN employees m ON m.id = e.manager_id GROUP BY m.name ORDER BY reports DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "join",
+        "self_join",
+        "aggregation"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-009",
+      "question": "How quickly do our suppliers deliver, on average, in each part of the world?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "suppliers",
+        "regions"
+      ],
+      "gold_sql": "SELECT r.name AS region, round(avg(s.lead_time_days), 2) AS avg_lead_days FROM suppliers s JOIN regions r ON r.id = s.region_id GROUP BY r.name ORDER BY avg_lead_days;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "join",
+        "aggregation"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-010",
+      "question": "How many different products does each brand offer?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "products",
+        "brands"
+      ],
+      "gold_sql": "SELECT b.name AS brand, count(*) AS products FROM products p JOIN brands b ON b.id = p.brand_id GROUP BY b.name ORDER BY products DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "join",
+        "count"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-011",
+      "question": "How much stock is sitting in each of our warehouses?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "inventory",
+        "warehouses"
+      ],
+      "gold_sql": "SELECT w.name AS warehouse, sum(i.quantity) AS units FROM inventory i JOIN warehouses w ON w.id = i.warehouse_id GROUP BY w.name ORDER BY units DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "join",
+        "aggregation"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-012",
+      "question": "How much money have customers paid us through each way of paying?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "payments",
+        "payment_methods"
+      ],
+      "gold_sql": "SELECT pm.name AS method, round(sum(p.amount), 2) AS total FROM payments p JOIN payment_methods pm ON pm.id = p.payment_method_id GROUP BY pm.name ORDER BY total DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "join",
+        "aggregation"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-013",
+      "question": "Which of our reps have booked the most orders?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "orders",
+        "employees"
+      ],
+      "gold_sql": "SELECT e.name AS rep, count(*) AS orders FROM orders o JOIN employees e ON e.id = o.employee_id GROUP BY e.name ORDER BY orders DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "join",
+        "count"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-014",
+      "question": "How is our customer base split across the membership levels?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "customers",
+        "loyalty_tiers"
+      ],
+      "gold_sql": "SELECT lt.name AS tier, count(*) AS customers FROM customers c JOIN loyalty_tiers lt ON lt.id = c.loyalty_tier_id GROUP BY lt.name ORDER BY customers DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "join",
+        "count"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-015",
+      "question": "Which product labels are pinned to the most items?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "product_tags",
+        "tags"
+      ],
+      "gold_sql": "SELECT t.name AS tag, count(*) AS products FROM product_tags pt JOIN tags t ON t.id = pt.tag_id GROUP BY t.name ORDER BY products DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "join",
+        "count"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-016",
+      "question": "Which discount codes have been redeemed on the most orders?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "orders",
+        "coupons"
+      ],
+      "gold_sql": "SELECT c.code AS coupon, count(*) AS uses FROM orders o JOIN coupons c ON c.id = o.coupon_id GROUP BY c.code ORDER BY uses DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "join",
+        "count"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-017",
+      "question": "How much money does each part of the world bring in for us?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "orders",
+        "customers",
+        "regions"
+      ],
+      "gold_sql": "SELECT r.name AS region, round(sum(o.total_amount), 2) AS revenue FROM orders o JOIN customers c ON c.id = o.customer_id JOIN regions r ON r.id = c.region_id GROUP BY r.name ORDER BY revenue DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "join",
+        "aggregation",
+        "bridge"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-018",
+      "question": "Which of our suppliers sit behind the most sales?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "suppliers",
+        "product_suppliers",
+        "order_items"
+      ],
+      "gold_sql": "SELECT s.name AS supplier, round(sum(oi.line_total), 2) AS revenue FROM suppliers s JOIN product_suppliers ps ON ps.supplier_id = s.id JOIN order_items oi ON oi.product_id = ps.product_id GROUP BY s.name ORDER BY revenue DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "join",
+        "bridge",
+        "aggregation"
+      ],
+      "difficulty": "hard",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-019",
+      "question": "How much business did each marketing campaign drive?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "promotions",
+        "order_promotions",
+        "orders"
+      ],
+      "gold_sql": "SELECT pr.name AS promotion, round(sum(o.total_amount), 2) AS revenue FROM promotions pr JOIN order_promotions op ON op.promotion_id = pr.id JOIN orders o ON o.id = op.order_id GROUP BY pr.name ORDER BY revenue DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "join",
+        "bridge",
+        "aggregation"
+      ],
+      "difficulty": "hard",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-020",
+      "question": "Which product labels are attached to our best-selling merchandise by value?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "tags",
+        "product_tags",
+        "order_items"
+      ],
+      "gold_sql": "SELECT t.name AS tag, round(sum(oi.line_total), 2) AS revenue FROM tags t JOIN product_tags pt ON pt.tag_id = t.id JOIN order_items oi ON oi.product_id = pt.product_id GROUP BY t.name ORDER BY revenue DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "join",
+        "bridge",
+        "aggregation"
+      ],
+      "difficulty": "hard",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-021",
+      "question": "Which of our sales squads are pulling in the most money?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "teams",
+        "employee_teams",
+        "employees",
+        "orders"
+      ],
+      "gold_sql": "SELECT tm.name AS team, round(sum(o.total_amount), 2) AS revenue FROM teams tm JOIN employee_teams et ON et.team_id = tm.id JOIN employees e ON e.id = et.employee_id JOIN orders o ON o.employee_id = e.id GROUP BY tm.name ORDER BY revenue DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "join",
+        "bridge",
+        "aggregation"
+      ],
+      "difficulty": "hard",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-022",
+      "question": "How well are each brand's products reviewed?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "reviews",
+        "products",
+        "brands"
+      ],
+      "gold_sql": "SELECT b.name AS brand, round(avg(rv.rating), 2) AS avg_rating FROM reviews rv JOIN products p ON p.id = rv.product_id JOIN brands b ON b.id = p.brand_id GROUP BY b.name ORDER BY avg_rating DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "join",
+        "aggregation"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-023",
+      "question": "Which kinds of products sell best in Europe?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "order_items",
+        "products",
+        "orders",
+        "customers",
+        "regions"
+      ],
+      "gold_sql": "SELECT p.category, round(sum(oi.line_total), 2) AS revenue FROM order_items oi JOIN products p ON p.id = oi.product_id JOIN orders o ON o.id = oi.order_id JOIN customers c ON c.id = o.customer_id JOIN regions r ON r.id = c.region_id WHERE r.name = 'Europe' GROUP BY p.category ORDER BY revenue DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "join",
+        "bridge",
+        "filter",
+        "aggregation"
+      ],
+      "difficulty": "hard",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-024",
+      "question": "Where in the world are our customers based?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "customers",
+        "regions",
+        "countries"
+      ],
+      "gold_sql": "SELECT co.name AS country, count(*) AS customers FROM customers c JOIN regions r ON r.id = c.region_id JOIN countries co ON co.id = r.country_id GROUP BY co.name ORDER BY customers DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "join",
+        "bridge",
+        "count"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-025",
+      "question": "How many items has each shipping company delivered for us?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "shipments",
+        "carriers",
+        "shipment_items"
+      ],
+      "gold_sql": "SELECT ca.name AS carrier, sum(si.quantity) AS units FROM shipments s JOIN carriers ca ON ca.id = s.carrier_id JOIN shipment_items si ON si.shipment_id = s.id GROUP BY ca.name ORDER BY units DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "join",
+        "aggregation"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-026",
+      "question": "Which kinds of products cost us the most in refunds?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "refunds",
+        "returns",
+        "order_items",
+        "products"
+      ],
+      "gold_sql": "SELECT p.category, round(sum(rf.amount), 2) AS refunded FROM refunds rf JOIN returns rt ON rt.id = rf.return_id JOIN order_items oi ON oi.id = rt.order_item_id JOIN products p ON p.id = oi.product_id GROUP BY p.category ORDER BY refunded DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "join",
+        "bridge",
+        "aggregation"
+      ],
+      "difficulty": "hard",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-027",
+      "question": "Which product lines are sitting on the most stock?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "inventory",
+        "products",
+        "subcategories"
+      ],
+      "gold_sql": "SELECT sc.name AS subcategory, sum(i.quantity) AS units FROM inventory i JOIN products p ON p.id = i.product_id JOIN subcategories sc ON sc.id = p.subcategory_id GROUP BY sc.name ORDER BY units DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "join",
+        "aggregation"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-028",
+      "question": "Which brands move the most units?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "order_items",
+        "products",
+        "brands"
+      ],
+      "gold_sql": "SELECT b.name AS brand, sum(oi.quantity) AS units FROM order_items oi JOIN products p ON p.id = oi.product_id JOIN brands b ON b.id = p.brand_id GROUP BY b.name ORDER BY units DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "join",
+        "bridge",
+        "aggregation"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-029",
+      "question": "How much did we sell in the most recent month of trading?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "orders"
+      ],
+      "gold_sql": "SELECT round(sum(total_amount), 2) FROM orders WHERE order_date > (SELECT max(order_date) FROM orders) - interval '30 days';",
+      "result_equivalence": "scalar_numeric",
+      "expected_chart_type": "none",
+      "tags": [
+        "time_window",
+        "aggregation"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-030",
+      "question": "How have our monthly sales moved over the last half year?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "orders"
+      ],
+      "gold_sql": "SELECT date_trunc('month', order_date)::date AS month, round(sum(total_amount), 2) AS revenue FROM orders WHERE order_date > (SELECT max(order_date) FROM orders) - interval '6 months' GROUP BY 1 ORDER BY 1;",
+      "result_equivalence": "ordered_rows",
+      "expected_chart_type": "line",
+      "tags": [
+        "time_window",
+        "aggregation"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-031",
+      "question": "How does the last twelve months of revenue compare with the twelve before that?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "orders"
+      ],
+      "gold_sql": "SELECT CASE WHEN order_date > m.mx - interval '12 months' THEN 'last_12m' ELSE 'prior_12m' END AS period, round(sum(total_amount), 2) AS revenue FROM orders, (SELECT max(order_date) mx FROM orders) m WHERE order_date > m.mx - interval '24 months' GROUP BY 1 ORDER BY 1;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "time_window",
+        "yoy",
+        "aggregation"
+      ],
+      "difficulty": "hard",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-032",
+      "question": "How did the latest quarter's takings compare with the quarter before it?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "orders"
+      ],
+      "gold_sql": "SELECT CASE WHEN order_date > m.mx - interval '90 days' THEN 'latest_quarter' ELSE 'prior_quarter' END AS period, round(sum(total_amount), 2) AS revenue FROM orders, (SELECT max(order_date) mx FROM orders) m WHERE order_date > m.mx - interval '180 days' GROUP BY 1 ORDER BY 1;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "time_window",
+        "aggregation"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-033",
+      "question": "How many new customers joined us each month over the past year?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "customers"
+      ],
+      "gold_sql": "SELECT date_trunc('month', signed_up_at)::date AS month, count(*) AS signups FROM customers WHERE signed_up_at > (SELECT max(signed_up_at) FROM customers) - interval '12 months' GROUP BY 1 ORDER BY 1;",
+      "result_equivalence": "ordered_rows",
+      "expected_chart_type": "line",
+      "tags": [
+        "time_window",
+        "count"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-034",
+      "question": "On a typical day this past month, how many orders come in?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "orders"
+      ],
+      "gold_sql": "SELECT round(count(*)::numeric / count(DISTINCT order_date), 2) FROM orders WHERE order_date > (SELECT max(order_date) FROM orders) - interval '30 days';",
+      "result_equivalence": "scalar_numeric",
+      "expected_chart_type": "none",
+      "tags": [
+        "time_window",
+        "ratio"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-035",
+      "question": "How many orders did we take in each quarter of the last year?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "orders"
+      ],
+      "gold_sql": "SELECT date_trunc('quarter', order_date)::date AS quarter, count(*) AS orders FROM orders WHERE order_date > (SELECT max(order_date) FROM orders) - interval '12 months' GROUP BY 1 ORDER BY 1;",
+      "result_equivalence": "ordered_rows",
+      "expected_chart_type": "bar",
+      "tags": [
+        "time_window",
+        "count"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-036",
+      "question": "What share of recent orders ended up cancelled in the last three months?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "orders"
+      ],
+      "gold_sql": "SELECT round(100.0 * count(*) FILTER (WHERE status = 'cancelled') / count(*), 2) AS cancel_pct FROM orders WHERE order_date > (SELECT max(order_date) FROM orders) - interval '90 days';",
+      "result_equivalence": "scalar_numeric",
+      "expected_chart_type": "none",
+      "tags": [
+        "time_window",
+        "ratio",
+        "cancelled"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-037",
+      "question": "What's the typical value of an order with us?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "orders"
+      ],
+      "gold_sql": "SELECT round(sum(total_amount) / count(*), 2) FROM orders;",
+      "result_equivalence": "scalar_numeric",
+      "expected_chart_type": "none",
+      "tags": [
+        "ratio"
+      ],
+      "difficulty": "easy",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-038",
+      "question": "What slice of our customer base is made up of enterprise accounts?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "customers"
+      ],
+      "gold_sql": "SELECT round(100.0 * count(*) FILTER (WHERE segment = 'Enterprise') / count(*), 2) AS pct FROM customers;",
+      "result_equivalence": "scalar_numeric",
+      "expected_chart_type": "none",
+      "tags": [
+        "ratio",
+        "share"
+      ],
+      "difficulty": "easy",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-039",
+      "question": "On average, how much do we earn on each unit that goes out the door?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "order_items"
+      ],
+      "gold_sql": "SELECT round(sum(line_total) / sum(quantity), 2) FROM order_items;",
+      "result_equivalence": "scalar_numeric",
+      "expected_chart_type": "none",
+      "tags": [
+        "per_unit",
+        "ratio"
+      ],
+      "difficulty": "easy",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-040",
+      "question": "What portion of our revenue does each product category account for?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "order_items",
+        "products"
+      ],
+      "gold_sql": "SELECT p.category, round(100.0 * sum(oi.line_total) / (SELECT sum(line_total) FROM order_items), 2) AS pct FROM order_items oi JOIN products p ON p.id = oi.product_id GROUP BY p.category ORDER BY pct DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "share",
+        "ratio",
+        "join"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-041",
+      "question": "What kind of profit margin do we make on our products, on average?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "products"
+      ],
+      "gold_sql": "SELECT round(avg((price - cost) / price * 100), 2) FROM products WHERE cost IS NOT NULL AND price > 0;",
+      "result_equivalence": "scalar_numeric",
+      "expected_chart_type": "none",
+      "tags": [
+        "ratio",
+        "per_unit"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-042",
+      "question": "How many orders does each of our active reps handle on average?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "orders"
+      ],
+      "gold_sql": "SELECT round(count(*)::numeric / count(DISTINCT employee_id), 2) FROM orders WHERE employee_id IS NOT NULL;",
+      "result_equivalence": "scalar_numeric",
+      "expected_chart_type": "none",
+      "tags": [
+        "ratio"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-043",
+      "question": "Who are our five biggest customers by how much they've spent?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "orders",
+        "customers"
+      ],
+      "gold_sql": "SELECT c.name, round(sum(o.total_amount), 2) AS spend FROM orders o JOIN customers c ON c.id = o.customer_id GROUP BY c.name ORDER BY spend DESC, c.name LIMIT 5;",
+      "result_equivalence": "ordered_rows",
+      "expected_chart_type": "bar",
+      "tags": [
+        "ranking",
+        "top_n",
+        "join"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-044",
+      "question": "What are our ten best sellers by units shifted?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "order_items",
+        "products"
+      ],
+      "gold_sql": "SELECT p.name, sum(oi.quantity) AS units FROM order_items oi JOIN products p ON p.id = oi.product_id GROUP BY p.name ORDER BY units DESC, p.name LIMIT 10;",
+      "result_equivalence": "ordered_rows",
+      "expected_chart_type": "bar",
+      "tags": [
+        "ranking",
+        "top_n",
+        "join"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-045",
+      "question": "Which three product categories make us the most money?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "order_items",
+        "products"
+      ],
+      "gold_sql": "SELECT p.category, round(sum(oi.line_total), 2) AS revenue FROM order_items oi JOIN products p ON p.id = oi.product_id GROUP BY p.category ORDER BY revenue DESC LIMIT 3;",
+      "result_equivalence": "ordered_rows",
+      "expected_chart_type": "bar",
+      "tags": [
+        "ranking",
+        "top_n",
+        "join"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-046",
+      "question": "Rank the parts of the world we sell to from strongest to weakest revenue.",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "orders",
+        "customers",
+        "regions"
+      ],
+      "gold_sql": "SELECT r.name AS region, round(sum(o.total_amount), 2) AS revenue FROM orders o JOIN customers c ON c.id = o.customer_id JOIN regions r ON r.id = c.region_id GROUP BY r.name ORDER BY revenue DESC;",
+      "result_equivalence": "ordered_rows",
+      "expected_chart_type": "bar",
+      "tags": [
+        "ranking",
+        "join"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-047",
+      "question": "Which products draw the most reviews — show the top five and keep any ties.",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "reviews",
+        "products"
+      ],
+      "gold_sql": "SELECT name, review_count FROM (SELECT p.name, count(*) AS review_count, dense_rank() OVER (ORDER BY count(*) DESC) AS dr FROM reviews rv JOIN products p ON p.id = rv.product_id GROUP BY p.name) t WHERE dr <= 5 ORDER BY review_count DESC, name;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "ranking",
+        "top_n",
+        "ties",
+        "join"
+      ],
+      "difficulty": "hard",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-048",
+      "question": "How many active customers do we have in each segment?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "customers"
+      ],
+      "gold_sql": "SELECT segment, count(*) AS customers FROM customers WHERE is_deleted = false GROUP BY segment ORDER BY customers DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "soft_delete",
+        "filter",
+        "aggregation"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-049",
+      "question": "How much genuine revenue did each region bring in, leaving out anything cancelled or sent back?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "orders",
+        "customers",
+        "regions"
+      ],
+      "gold_sql": "SELECT r.name AS region, round(sum(o.total_amount), 2) AS revenue FROM orders o JOIN customers c ON c.id = o.customer_id JOIN regions r ON r.id = c.region_id WHERE o.status NOT IN ('cancelled', 'returned') GROUP BY r.name ORDER BY revenue DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "filter",
+        "cancelled",
+        "aggregation",
+        "join"
+      ],
+      "difficulty": "medium",
+      "verification": "dual_form"
+    },
+    {
+      "id": "sales-050",
+      "question": "How many of our orders are still in progress rather than finished or called off?",
+      "connection_fixture": "sales_pg",
+      "expected_tables": [
+        "orders"
+      ],
+      "gold_sql": "SELECT status, count(*) AS orders FROM orders WHERE status NOT IN ('completed', 'cancelled', 'returned') GROUP BY status ORDER BY orders DESC;",
+      "result_equivalence": "set_unordered_by_columns",
+      "expected_chart_type": "bar",
+      "tags": [
+        "filter",
+        "cancelled"
+      ],
+      "difficulty": "easy",
+      "verification": "dual_form"
+    }
+  ]
+}

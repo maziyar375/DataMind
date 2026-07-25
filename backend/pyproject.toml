@@ -97,3 +97,9 @@ name = "sqlguard is self-contained"
 type = "forbidden"
 source_modules = ["app.sqlguard"]
 forbidden_modules = ["fastapi", "sqlalchemy", "litellm", "app.infra", "app.api"]
+
+[[tool.importlinter.contracts]]
+name = "eval is offline-only (never on the request path)"
+type = "forbidden"
+source_modules = ["app.api", "app.services", "app.pipeline", "app.domain", "app.sqlguard", "app.infra"]
+forbidden_modules = ["app.eval"]

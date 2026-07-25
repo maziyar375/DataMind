@@ -1,0 +1,98 @@
+{
+  "suite": "sales",
+  "version": "v1",
+  "kind": "negative",
+  "description": "Non-analytical inputs. Correct outcome is the right route (METADATA/CHITCHAT/UNSUPPORTED) or a clean refusal — never a generated analytical query. expected_route uses the router's own labels (ANALYTICAL/METADATA/CHITCHAT/UNSUPPORTED).",
+  "records": [
+    {
+      "id": "sales-neg-001",
+      "question": "What tables are available in this database?",
+      "connection_fixture": "sales_pg",
+      "expected_route": "METADATA",
+      "category": "metadata",
+      "expects_sql": false,
+      "rationale": "A schema question; answered from the snapshot, halts before any SQL."
+    },
+    {
+      "id": "sales-neg-002",
+      "question": "Which columns does the orders table have?",
+      "connection_fixture": "sales_pg",
+      "expected_route": "METADATA",
+      "category": "metadata",
+      "expects_sql": false,
+      "rationale": "Structural question about one table; answered from the snapshot, not by querying data."
+    },
+    {
+      "id": "sales-neg-003",
+      "question": "Give me a quick overview of what's in my database.",
+      "connection_fixture": "sales_pg",
+      "expected_route": "METADATA",
+      "category": "metadata",
+      "expects_sql": false,
+      "rationale": "Asks to describe the schema; a METADATA route, no analytical SQL."
+    },
+    {
+      "id": "sales-neg-004",
+      "question": "Hi there! How's your day going?",
+      "connection_fixture": "sales_pg",
+      "expected_route": "CHITCHAT",
+      "category": "chitchat",
+      "expects_sql": false,
+      "rationale": "Pure small talk; must halt with a friendly reply, never SQL."
+    },
+    {
+      "id": "sales-neg-005",
+      "question": "Thanks, that's all really helpful.",
+      "connection_fixture": "sales_pg",
+      "expected_route": "CHITCHAT",
+      "category": "chitchat",
+      "expects_sql": false,
+      "rationale": "Gratitude / conversational closer; no query intent."
+    },
+    {
+      "id": "sales-neg-006",
+      "question": "Please delete every cancelled order from the system.",
+      "connection_fixture": "sales_pg",
+      "expected_route": "UNSUPPORTED",
+      "category": "write_request",
+      "expects_sql": false,
+      "rationale": "A write/DDL request; the grant is SELECT-only and the guard is read-only, so it must be refused, not executed."
+    },
+    {
+      "id": "sales-neg-007",
+      "question": "Update the price of product 10 to 500.",
+      "connection_fixture": "sales_pg",
+      "expected_route": "UNSUPPORTED",
+      "category": "write_request",
+      "expects_sql": false,
+      "rationale": "A mutation request; unsupported and refused — never turned into SQL that runs."
+    },
+    {
+      "id": "sales-neg-008",
+      "question": "Add a new customer called Acme Corp with a $50k credit limit.",
+      "connection_fixture": "sales_pg",
+      "expected_route": "UNSUPPORTED",
+      "category": "write_request",
+      "expects_sql": false,
+      "rationale": "An insert request; write path does not exist, so a clean refusal is the correct outcome."
+    },
+    {
+      "id": "sales-neg-009",
+      "question": "What is each employee's date of birth?",
+      "connection_fixture": "sales_pg",
+      "expected_route": "UNSUPPORTED",
+      "category": "unanswerable",
+      "expects_sql": false,
+      "rationale": "The schema has no birth-date column anywhere; genuinely unanswerable, so no SQL should be fabricated."
+    },
+    {
+      "id": "sales-neg-010",
+      "question": "How many visitors did our website get last month?",
+      "connection_fixture": "sales_pg",
+      "expected_route": "UNSUPPORTED",
+      "category": "unanswerable",
+      "expects_sql": false,
+      "rationale": "No web-traffic / analytics data exists in this commerce schema; unanswerable from the fixture."
+    }
+  ]
+}
