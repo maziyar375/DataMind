@@ -28,6 +28,20 @@ def test_values_equal_numeric_tolerance() -> None:
     assert not values_equal(True, 1)          # bool is not a number here
 
 
+def test_values_equal_absorbs_two_decimal_rounding() -> None:
+    # Golds report figures with round(x, 2); a full-precision but numerically
+    # identical candidate must still count as equal (real cases from DeepSeek).
+    assert values_equal(957.42, 957.416)     # gold round(sum/count,2) vs AVG(x)
+    assert values_equal(24.44, 24.43781443)  # gold round(avg(margin),2) vs raw
+    # ...but a genuinely different figure (>half a cent) is still not equal.
+    assert not values_equal(0.02, 0.03)
+    assert not values_equal(957.42, 957.99)
+
+
+def test_unordered_scalar_rounding_matches() -> None:
+    assert result_sets_match([[957.42]], [[957.416]], "scalar_numeric")
+
+
 def test_unordered_match_ignores_row_order() -> None:
     gold = [[1, "a"], [2, "b"]]
     cand = [[2, "b"], [1, "a"]]

@@ -13,13 +13,21 @@ tested without a database or a model:
 """
 from __future__ import annotations
 
+import math
 import re
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
 Row = list[Any]
-NUMERIC_TOLERANCE = 1e-6
+# Relative tolerance soaks up float noise on large magnitudes (a million-scale
+# SUM summed in a different order). The absolute tolerance matches the golden
+# set's own precision: golds report figures with round(x, 2), so any value
+# within half a cent of the gold is the *same* answer at the precision the gold
+# states. Without this, a correct `AVG(x)` (957.416) is scored wrong against a
+# gold `round(sum/count, 2)` (957.42) — a presentation gap, not an error.
+NUMERIC_REL_TOLERANCE = 1e-6
+NUMERIC_ABS_TOLERANCE = 5e-3
 
 # Outcome labels, most-desirable first. `MATCH` is the only success.
 OUTCOME_MATCH = "MATCH"
@@ -50,29 +58,22 @@ def _as_number(value: Any) -> float | None:
         return None
 
 
-def values_equal(a: Any, b: Any, tol: float = NUMERIC_TOLERANCE) -> bool:
+def values_equal(
+    a: Any,
+    b: Any,
+    rel_tol: float = NUMERIC_REL_TOLERANCE,
+    abs_tol: float = NUMERIC_ABS_TOLERANCE,
+) -> bool:
     if a is None or b is None:
         return a is None and b is None
     na, nb = _as_number(a), _as_number(b)
     if na is not None and nb is not None:
-        return abs(na - nb) <= tol * max(1.0, abs(na), abs(nb))
+        return math.isclose(na, nb, rel_tol=rel_tol, abs_tol=abs_tol)
     return str(a).strip() == str(b).strip()
 
 
 def _rows_equal(a: Row, b: Row) -> bool:
     return len(a) == len(b) and all(values_equal(x, y) for x, y in zip(a, b, strict=False))
-
-
-def _row_key(row: Row) -> tuple[str, ...]:
-    """A hashable, tolerance-aware key: numbers rounded, everything else str."""
-    key: list[str] = []
-    for cell in row:
-        if cell is None:
-            key.append("\x00NULL")
-            continue
-        num = _as_number(cell)
-        key.append(f"n:{round(num, 6)}" if num is not None else f"s:{str(cell).strip()}")
-    return tuple(key)
 
 
 def result_sets_match(gold: list[Row], candidate: list[Row], equivalence: str) -> bool:
@@ -81,15 +82,27 @@ def result_sets_match(gold: list[Row], candidate: list[Row], equivalence: str) -
     * `ordered_rows` — row order is part of the answer (rankings, time series).
     * everything else — unordered multiset of rows.
 
-    Column names are ignored; the match is positional, with 1e-6 numeric
-    tolerance. Two correct queries are rarely string-identical, which is exactly
-    why string equality is never the gate.
+    Column names are ignored; the match is positional and tolerance-aware (see
+    the tolerance constants). The unordered case is a greedy multiset match
+    rather than a hash on rounded keys, so two rows equal *within tolerance*
+    match even when they would round to different keys at a bucket boundary.
+    Result sets here are small, so the O(n^2) match is not a concern. Two
+    correct queries are rarely string-identical, which is why string equality
+    is never the gate.
     """
     if len(gold) != len(candidate):
         return False
     if equivalence == "ordered_rows":
         return all(_rows_equal(g, c) for g, c in zip(gold, candidate, strict=False))
-    return Counter(_row_key(r) for r in gold) == Counter(_row_key(r) for r in candidate)
+    remaining = list(candidate)
+    for g in gold:
+        for i, c in enumerate(remaining):
+            if _rows_equal(g, c):
+                remaining.pop(i)
+                break
+        else:
+            return False
+    return True
 
 
 _WS = re.compile(r"\s+")

@@ -18,4 +18,10 @@ Format per entry:
 
 ---
 
-<!-- No corrections yet. The set as authored in Task 2 is the baseline. -->
+<!-- No corrections. The set as authored in Task 2 stands. -->
+
+Evaluated against gemma-4-31B and DeepSeek V4 Pro. Every mismatch investigated
+traced to a model choice, a service/harness defect (guard CTE handling, an
+over-strict rounding tolerance), or genuine question ambiguity (relative time
+windows, long-vs-wide comparison shape) — never a demonstrably wrong gold. No
+gold SQL was changed.

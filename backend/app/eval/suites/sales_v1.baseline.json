@@ -1,16 +1,16 @@
 {
   "execution_accuracy": 0.36,
   "suite": "sales_v1",
-  "measured_on": "2026-07-25",
-  "model": "openai/lightning-ai/gemma-4-31B-it",
+  "measured_on": "2026-07-26",
+  "model": "openai/lightning-ai/deepseek-v4-pro",
   "temperature": 0.2,
-  "prompt_version": "v1",
-  "pipeline_note": "committed state = baseline pipeline + Round-1 FK-neighbour retrieval expansion",
+  "prompt_version": "v2",
+  "pipeline_note": "committed state after DeepSeek-driven fixes: 1-hop FK retrieval expansion, CTE guard fix, 'answer exactly what's asked' prompt, rounding-tolerant metric",
   "companion_metrics": {
     "retrieval_recall_mean": 0.864,
     "retrieval_full_hit": 0.74,
-    "parse_rate": 0.98,
-    "policy_violation_rate": 0.02
+    "parse_rate": 1.0,
+    "policy_violation_rate": 0.10
   },
-  "_README": "The nightly regression gate fails the build if a run's execution_accuracy drops more than --max-regression (0.02) below the value above. That number is MODEL- AND SETTINGS-SPECIFIC: it was measured on gemma-4-31B at temperature 0.2. If the nightly runs a different model (the workflow defaults EVAL_MODEL to gpt-4o-mini) or different settings, regenerate this file from the first green CI run — run the suite, take execution_accuracy, and commit it here. Prefer temperature 0 in CI (the seed script's default) so the ~4-point run-to-run noise seen at temp 0.2 does not false-trip a 2-point gate."
+  "_README": "The nightly regression gate fails the build if a run's execution_accuracy drops more than --max-regression (0.02) below the value above. That number is MODEL- AND SETTINGS-SPECIFIC: measured on DeepSeek V4 Pro at temperature 0.2. If the nightly runs a different model (the workflow defaults EVAL_MODEL to gpt-4o-mini) or different settings, regenerate this file from the first green CI run and commit it. Prefer temperature 0 in CI so run-to-run noise does not false-trip a 2-point gate. History on this suite: gemma-4-31B 36%, DeepSeek V4 Pro 24%->36% after the guard/prompt/metric fixes above."
 }

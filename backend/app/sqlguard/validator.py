@@ -176,10 +176,20 @@ class SqlValidator:
         }
         alias_to_table: dict[str, str] = {}
         resolved: set[str] = set()
+        # Aliases that point at a CTE, not a real table: `FROM current_period cp`
+        # binds `cp` to the CTE. Column refs through them (cp.revenue) are CTE
+        # columns, already unverified below — not unknown aliases. The CTE's own
+        # body tables are still validated by this loop (their names are not CTE
+        # names), so registering the alias weakens nothing.
+        cte_aliases: set[str] = set()
 
         for table in tree.find_all(exp.Table):
             bare = (table.name or "").lower()
-            if not bare or bare in cte_names:
+            if not bare:
+                continue
+            if bare in cte_names:
+                if table.alias:
+                    cte_aliases.add(table.alias.lower())
                 continue
 
             db = (table.db or "").lower()
@@ -229,7 +239,7 @@ class SqlValidator:
         report.referenced_tables = sorted(resolved)
         output_aliases = _collect_output_aliases(tree)
         self._resolve_columns(
-            tree, alias_to_table, cte_names, resolved, output_aliases, report
+            tree, alias_to_table, cte_names | cte_aliases, resolved, output_aliases, report
         )
 
     def _resolve_columns(

@@ -3,7 +3,7 @@ wording never silently invalidates historical comparisons.
 """
 from __future__ import annotations
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 
 ROUTE_SYSTEM = """You classify a user's question about a SQL database.
 
@@ -24,6 +24,9 @@ Rules, all mandatory:
 - Qualify tables with their schema (for example public.orders).
 - Do not add a LIMIT; the platform applies one.
 - Prefer explicit JOINs using the listed foreign keys.
+- Answer exactly what is asked, at that granularity. If the question asks for a
+  single figure, return one row with just that value — no per-group breakdown
+  and no extra explanatory columns.
 - Dialect: {dialect}
 
 Schema:
