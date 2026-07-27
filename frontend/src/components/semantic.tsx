@@ -54,6 +54,23 @@ const ROLE_TONE: Record<string, string> = {
 
 type Filter = 'all' | 'review' | 'metrics' | 'issues'
 
+/** Shown in place of the stats strip before anything has been generated —
+ *  three concrete examples beat a paragraph about "semantics". */
+const WHAT_IT_HOLDS = [
+  {
+    title: 'Grain',
+    body: '“One row per line item on an order” — what stops a join from double-counting.',
+  },
+  {
+    title: 'Metrics',
+    body: 'revenue = SUM(quantity × unit_price), excluding cancelled orders. Bound to real SQL.',
+  },
+  {
+    title: 'Time',
+    body: 'Whether “last month” means the calendar month or a rolling 30 days.',
+  },
+]
+
 export function SemanticLayerTab({
   connection, onConnectionChange,
 }: {
@@ -269,9 +286,7 @@ export function SemanticLayerTab({
           </Note>
         )}
 
-        {empty ? (
-          <Welcome onGenerate={() => setAskGenerate(true)} disabled={running} />
-        ) : (
+        {!empty && (
           <>
             <Overview doc={doc!} onChange={patch} />
 
@@ -322,6 +337,7 @@ export function SemanticLayerTab({
           </>
         )}
       </Shell>
+
 
       {dirty && (
         <SaveBar
@@ -533,6 +549,53 @@ function Hero({
         </div>
       )}
 
+      {/* Nothing generated yet: the same card teaches what a layer is, so
+          there is one box and one call to action rather than two of each. */}
+      {!exists && !running && (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+            gap: 10,
+            padding: '0 20px 20px',
+          }}
+        >
+          {WHAT_IT_HOLDS.map((item) => (
+            <div
+              key={item.title}
+              style={{
+                border: '1px solid var(--border)',
+                borderRadius: 10,
+                background: 'var(--panel-alt)',
+                padding: '13px 14px',
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: 0.4,
+                  textTransform: 'uppercase',
+                  color: 'var(--accent)',
+                }}
+              >
+                {item.title}
+              </div>
+              <div
+                style={{
+                  fontSize: 12.5,
+                  lineHeight: 1.55,
+                  color: 'var(--text-dim)',
+                  marginTop: 5,
+                }}
+              >
+                {item.body}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {exists && (
         <>
           <div
@@ -692,118 +755,6 @@ function ConfirmDelete({
         layer at any time.
       </p>
     </Modal>
-  )
-}
-
-// ── welcome ────────────────────────────────────────────────────────────────
-function Welcome({
-  onGenerate, disabled,
-}: {
-  onGenerate: () => void
-  disabled: boolean
-}) {
-  const examples = [
-    {
-      title: 'Grain',
-      body: '“One row per line item on an order” — what stops a join from double-counting.',
-    },
-    {
-      title: 'Metrics',
-      body: 'revenue = SUM(quantity × unit_price), excluding cancelled orders. Bound to real SQL.',
-    },
-    {
-      title: 'Time',
-      body: 'Whether “last month” means the calendar month or a rolling 30 days.',
-    },
-  ]
-  return (
-    <section
-      style={{
-        border: '1px solid var(--border)',
-        borderRadius: 14,
-        background: 'var(--panel)',
-        padding: '30px 28px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 22,
-        alignItems: 'center',
-        textAlign: 'center',
-      }}
-    >
-      <div style={{ maxWidth: 520 }}>
-        <h3
-          style={{
-            margin: 0,
-            fontSize: 16,
-            fontWeight: 700,
-            color: 'var(--text-strong)',
-          }}
-        >
-          Teach DataMind what your data means
-        </h3>
-        <p
-          style={{
-            margin: '8px 0 0',
-            fontSize: 13,
-            lineHeight: 1.65,
-            color: 'var(--text-dim)',
-          }}
-        >
-          Your schema already says what exists. A model reads it table by table
-          and writes down what it <em>means</em>, so questions stop being
-          answered by guesswork. You can edit every word of it afterwards.
-        </p>
-      </div>
-
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
-          gap: 10,
-          width: '100%',
-          textAlign: 'left',
-        }}
-      >
-        {examples.map((item) => (
-          <div
-            key={item.title}
-            style={{
-              border: '1px solid var(--border)',
-              borderRadius: 10,
-              background: 'var(--panel-alt)',
-              padding: '13px 14px',
-            }}
-          >
-            <div
-              style={{
-                fontSize: 11,
-                fontWeight: 700,
-                letterSpacing: 0.4,
-                textTransform: 'uppercase',
-                color: 'var(--accent)',
-              }}
-            >
-              {item.title}
-            </div>
-            <div
-              style={{
-                fontSize: 12.5,
-                lineHeight: 1.55,
-                color: 'var(--text-dim)',
-                marginTop: 5,
-              }}
-            >
-              {item.body}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <PrimaryButton onClick={onGenerate} disabled={disabled}>
-        <Icon.Sparkle size={15} />
-        Generate with AI
-      </PrimaryButton>
-    </section>
   )
 }
 
