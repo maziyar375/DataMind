@@ -277,7 +277,17 @@ export default function DataSourcesPage() {
         ))}
       </MasterColumn>
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      {/* `position: relative` anchors the semantic tab's floating save bar,
+          which hovers over the content instead of eating a strip of the pane. */}
+      <div
+        style={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          minWidth: 0,
+          position: 'relative',
+        }}
+      >
         {!editing ? (
           <EmptyState
             title="Connect a database"

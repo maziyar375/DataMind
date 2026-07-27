@@ -1,17 +1,24 @@
 /**
  * The semantic layer editor.
  *
- * Two jobs, and the design follows from the tension between them:
+ * Two jobs, and the layout follows from the tension between them:
  *
  *  - **Generate.** A model describes the schema, table by table, over minutes.
- *    So the button opens a modal that makes the two decisions that cost money
- *    explicit (which model, how much of the schema), then hands over to a
- *    progress bar that says which table is being described right now.
+ *    The two decisions that cost money — which model, how much of the schema —
+ *    are made on picker *cards*, not in a dropdown: choosing a model is the
+ *    single biggest lever on how good the result is, and a `<select>` hides
+ *    exactly the things you choose on (which model id, has it been reached).
  *  - **Edit.** What the model wrote is a draft. Everything is editable, an
  *    edit is marked so a later regeneration cannot silently overwrite it, and
  *    `Reviewed` is a deliberate act — the layer's authority over the SQL
  *    generator should be something a person granted, not something a model
  *    assumed.
+ *
+ * Layout rules worth keeping: content is capped at a readable width rather
+ * than stretched across the pane; the search and filter bar sticks, because a
+ * 42-table schema scrolls past it in a second; and destructive actions live in
+ * an overflow menu behind a confirmation, never as a red panel parked in the
+ * middle of an editing flow.
  *
  * Validation is never guessed at locally: metric expressions are checked by
  * the same backend parser that will reject them at save time.
@@ -23,20 +30,29 @@ import type {
   SemanticEntity, SemanticJob, SemanticLayer, SemanticMetric,
 } from '../api/types'
 import {
-  Chip, DangerButton, EmptyState, ErrorNote, Field, GhostButton, Icon,
+  Chip, DangerButton, ErrorNote, Field, GhostButton, Icon, Modal,
   PrimaryButton, ProgressBar, Select, Spinner, TextArea, TextInput, Toggle,
-  Modal, relativeTime,
+  relativeTime,
 } from './ui'
-import { FieldRow, Section } from './settings'
+import { FieldRow } from './settings'
 
 const ACTIVE = ['QUEUED', 'RUNNING']
+const CONTENT_WIDTH = 900
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December',
 ]
 
-type Filter = 'all' | 'review' | 'metrics' | 'issues' | 'missing'
+const ROLE_TONE: Record<string, string> = {
+  fact: 'var(--accent)',
+  dimension: 'var(--green)',
+  bridge: 'var(--amber)',
+  lookup: 'var(--text-faint)',
+  unknown: 'var(--border-strong)',
+}
+
+type Filter = 'all' | 'review' | 'metrics' | 'issues'
 
 export function SemanticLayerTab({
   connection, onConnectionChange,
@@ -52,11 +68,19 @@ export function SemanticLayerTab({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [askGenerate, setAskGenerate] = useState(false)
+  const [askDelete, setAskDelete] = useState(false)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
   const [open, setOpen] = useState<Record<string, boolean>>({})
 
   const dirty = doc !== null && JSON.stringify(doc) !== baseline
+
+  // Read inside `load` without making it depend on `baseline`, which would
+  // rebuild the callback on every keystroke.
+  const baselineRef = useRef('')
+  useEffect(() => {
+    baselineRef.current = baseline
+  }, [baseline])
 
   const load = useCallback(async () => {
     const next = await api.get(connection.id)
@@ -72,13 +96,6 @@ export function SemanticLayerTab({
     setBaseline(JSON.stringify(next.document))
     return next
   }, [connection.id])
-
-  // Read inside `load` without making it depend on `baseline`, which would
-  // rebuild the callback on every keystroke.
-  const baselineRef = useRef('')
-  useEffect(() => {
-    baselineRef.current = baseline
-  }, [baseline])
 
   useEffect(() => {
     setLoading(true)
@@ -175,6 +192,7 @@ export function SemanticLayerTab({
   }
 
   async function discardLayer() {
+    setAskDelete(false)
     await api.remove(connection.id)
     await load()
   }
@@ -194,14 +212,7 @@ export function SemanticLayerTab({
       }
       if (filter === 'review') return !entity.provenance.reviewed
       if (filter === 'metrics') return entity.metrics.length > 0
-      if (filter === 'issues') {
-        return (
-          !entity.valid ||
-          entity.issue !== '' ||
-          entity.metrics.some((m) => !m.valid) ||
-          entity.columns.some((c) => !c.valid)
-        )
-      }
+      if (filter === 'issues') return hasIssue(entity)
       return true
     })
   }, [doc, search, filter])
@@ -213,69 +224,69 @@ export function SemanticLayerTab({
 
   if (loading) {
     return (
-      <Body>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', color: 'var(--text-dim)', fontSize: 13 }}>
+      <Shell>
+        <div
+          style={{
+            display: 'flex', gap: 9, alignItems: 'center',
+            color: 'var(--text-dim)', fontSize: 13, padding: '40px 0',
+          }}
+        >
           <Spinner />
           Loading the semantic layer…
         </div>
-      </Body>
+      </Shell>
     )
   }
 
   const running = job !== null && ACTIVE.includes(job.status)
+  const empty = !doc || doc.entities.length === 0
 
   return (
     <>
-      <Body>
+      <Shell padBottom={dirty}>
         {error && <ErrorNote>{error}</ErrorNote>}
 
-        <Toolbar
+        <Hero
           layer={layer}
           connection={connection}
           running={running}
+          job={job}
           onGenerate={() => setAskGenerate(true)}
+          onDelete={() => setAskDelete(true)}
+          onCancel={cancelGeneration}
           onToggle={(value) => onConnectionChange({ semantic_layer_enabled: value })}
+          onFocusFilter={(next) => {
+            setFilter(next)
+            setSearch('')
+          }}
         />
 
-        {running && job && (
-          <RunningPanel job={job} onCancel={cancelGeneration} />
-        )}
-
-        {!running && job && job.status !== 'SUCCEEDED' && (
-          <FinishedBanner job={job} />
-        )}
-
-        {layer?.stale && (
+        {layer?.stale && !running && (
           <Note tone="amber">
             The schema has been re-synced since this layer was written. Anything
-            that no longer matches is flagged below and is already being kept out
-            of the model's prompt.
+            that no longer matches is flagged below, and is already being kept
+            out of the model's prompt.
           </Note>
         )}
 
-        {!doc || doc.entities.length === 0 ? (
-          <EmptyState
-            title="No semantic layer yet"
-            body="Your schema says what exists. A semantic layer says what it means — the business name of each table, what one row is, and the exact SQL behind measures like revenue. DataMind sends it alongside the schema so the model stops guessing."
-            action={
-              <PrimaryButton onClick={() => setAskGenerate(true)} disabled={running}>
-                <Icon.Sparkle size={15} />
-                Generate with AI
-              </PrimaryButton>
-            }
-          />
+        {empty ? (
+          <Welcome onGenerate={() => setAskGenerate(true)} disabled={running} />
         ) : (
           <>
-            <Overview doc={doc} onChange={patch} />
+            <Overview doc={doc!} onChange={patch} />
 
-            <Filters
+            <FilterBar
               value={filter}
               onChange={setFilter}
               search={search}
               onSearch={setSearch}
+              counts={{
+                all: doc!.entities.length,
+                review: doc!.entities.filter((e) => !e.provenance.reviewed).length,
+                metrics: doc!.entities.filter((e) => e.metrics.length > 0).length,
+                issues: doc!.entities.filter(hasIssue).length,
+              }}
               shown={entities.length}
-              total={doc.entities.length}
-              undescribed={undescribed.length}
             />
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -292,27 +303,25 @@ export function SemanticLayerTab({
                 />
               ))}
               {entities.length === 0 && (
-                <p style={{ fontSize: 13, color: 'var(--text-dim)' }}>
+                <div
+                  style={{
+                    border: '1px dashed var(--border-strong)',
+                    borderRadius: 10,
+                    padding: '28px 20px',
+                    textAlign: 'center',
+                    fontSize: 13,
+                    color: 'var(--text-dim)',
+                  }}
+                >
                   Nothing matches this filter.
-                </p>
+                </div>
               )}
             </div>
 
-            <Glossary doc={doc} onChange={patch} />
-
-            <Section
-              title="Danger zone"
-              description="Deleting the layer leaves the schema and your conversations untouched."
-              danger
-            >
-              <DangerButton onClick={discardLayer} style={{ alignSelf: 'flex-start' }}>
-                <Icon.Trash />
-                Delete semantic layer
-              </DangerButton>
-            </Section>
+            <Glossary doc={doc!} onChange={patch} />
           </>
         )}
-      </Body>
+      </Shell>
 
       {dirty && (
         <SaveBar
@@ -330,132 +339,519 @@ export function SemanticLayerTab({
           onStart={startGeneration}
         />
       )}
+
+      {askDelete && (
+        <ConfirmDelete
+          count={layer?.entity_count ?? 0}
+          onClose={() => setAskDelete(false)}
+          onConfirm={discardLayer}
+        />
+      )}
     </>
   )
 }
 
-// ── chrome ─────────────────────────────────────────────────────────────────
-function Body({ children }: { children: React.ReactNode }) {
+// ── shell ──────────────────────────────────────────────────────────────────
+/** The scroll container. Content is capped rather than stretched: a 1600px
+ *  form field is unreadable, and every other detail tab already caps. */
+function Shell({
+  children, padBottom,
+}: {
+  children: React.ReactNode
+  padBottom?: boolean
+}) {
   return (
-    <div
-      style={{
-        flex: 1,
-        overflowY: 'auto',
-        padding: 28,
-        minHeight: 0,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 16,
-      }}
-    >
-      {children}
+    <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+      <div
+        style={{
+          maxWidth: CONTENT_WIDTH,
+          margin: '0 auto',
+          // Extra room so the floating save bar never covers the last card.
+          padding: `24px 28px ${padBottom ? 96 : 32}px`,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 16,
+        }}
+      >
+        {children}
+      </div>
     </div>
   )
 }
 
-function Toolbar({
-  layer, connection, running, onGenerate, onToggle,
+// ── hero ───────────────────────────────────────────────────────────────────
+function Hero({
+  layer, connection, running, job, onGenerate, onDelete, onCancel, onToggle,
+  onFocusFilter,
 }: {
   layer: SemanticLayer | null
   connection: Connection
   running: boolean
+  job: SemanticJob | null
   onGenerate: () => void
+  onDelete: () => void
+  onCancel: () => void
   onToggle: (value: boolean) => void
+  onFocusFilter: (next: Filter) => void
 }) {
+  const exists = !!layer?.exists
   const model = layer?.model_snapshot?.model as string | undefined
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <GhostButton onClick={onGenerate} disabled={running}>
-          <Icon.Sparkle size={15} />
-          {layer?.exists ? 'Regenerate with AI' : 'Generate with AI'}
-        </GhostButton>
-        <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
-          {layer?.generated_at
-            ? `generated ${relativeTime(layer.generated_at)}${model ? ` · ${model}` : ''}`
-            : 'never generated'}
-          {layer?.edited_at ? ` · edited ${relativeTime(layer.edited_at)}` : ''}
-        </span>
-        {layer && layer.entity_count > 0 && (
-          <span style={{ display: 'flex', gap: 6, marginLeft: 'auto', flexWrap: 'wrap' }}>
-            <Chip tone="accent">{layer.entity_count} described</Chip>
-            <Chip tone="green">{layer.metric_count} metrics</Chip>
-            <Chip tone={layer.reviewed_count > 0 ? 'green' : 'neutral'}>
-              {layer.reviewed_count} reviewed
-            </Chip>
-            {layer.issue_count > 0 && (
-              <Chip tone="red">{layer.issue_count} need attention</Chip>
-            )}
-          </span>
-        )}
-      </div>
+  const described = layer?.entity_count ?? 0
+  const total = layer?.tables.length ?? 0
 
-      {layer?.exists && (
-        <div
-          style={{
-            border: '1px solid var(--border)',
-            borderRadius: 10,
-            background: 'var(--panel)',
-            padding: '12px 14px',
-          }}
-        >
-          <Toggle
-            checked={connection.semantic_layer_enabled}
-            onChange={onToggle}
-            label="Send this layer to the model"
-            hint="Off keeps the layer but writes SQL from the bare schema — the way to check whether it is helping."
-          />
-        </div>
-      )}
-    </div>
-  )
-}
-
-function RunningPanel({ job, onCancel }: { job: SemanticJob; onCancel: () => void }) {
   return (
-    <div
+    <section
       style={{
-        border: '1px solid var(--accent)',
-        borderRadius: 10,
-        background: 'var(--accent-bg)',
-        padding: '14px 16px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 10,
+        border: '1px solid var(--border)',
+        borderRadius: 14,
+        background: 'var(--panel)',
+        overflow: 'hidden',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <Spinner />
-        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-strong)' }}>
-          {job.status === 'QUEUED' ? 'Starting…' : 'Writing your semantic layer'}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 14,
+          padding: '18px 20px',
+        }}
+      >
+        <span
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 38,
+            height: 38,
+            borderRadius: 10,
+            flexShrink: 0,
+            color: 'var(--accent)',
+            background: 'var(--accent-bg)',
+            border: '1px solid var(--accent-border)',
+          }}
+        >
+          <Icon.Sparkle size={19} />
         </span>
-        <span style={{ marginLeft: 'auto' }}>
-          <GhostButton onClick={onCancel} style={{ padding: '5px 11px', fontSize: 12 }}>
-            Stop
-          </GhostButton>
-        </span>
+
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <h2
+            style={{
+              margin: 0,
+              fontSize: 15,
+              fontWeight: 700,
+              color: 'var(--text-strong)',
+            }}
+          >
+            Semantic layer
+          </h2>
+          <p
+            style={{
+              margin: '3px 0 0',
+              fontSize: 12.5,
+              lineHeight: 1.55,
+              color: 'var(--text-dim)',
+            }}
+          >
+            What your schema <em>means</em> — business names, what one row is, and
+            the exact SQL behind measures like revenue. Sent with every question.
+          </p>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, flexShrink: 0, alignItems: 'center' }}>
+          {exists ? (
+            <GhostButton onClick={onGenerate} disabled={running}>
+              <Icon.Sparkle size={14} />
+              Regenerate
+            </GhostButton>
+          ) : (
+            <PrimaryButton onClick={onGenerate} disabled={running}>
+              <Icon.Sparkle size={14} />
+              Generate with AI
+            </PrimaryButton>
+          )}
+          {exists && (
+            <IconButton
+              label="Delete semantic layer"
+              onClick={onDelete}
+              size={34}
+            >
+              <Icon.Trash />
+            </IconButton>
+          )}
+        </div>
       </div>
-      <ProgressBar
-        current={job.progress_current}
-        total={job.progress_total}
-        label={job.phase || 'Preparing'}
-      />
-      <span style={{ fontSize: 11.5, color: 'var(--text-dim)' }}>
-        You can leave this page — generation carries on and the result is saved
-        when it finishes.
-      </span>
-    </div>
+
+      {running && job && (
+        <div
+          style={{
+            padding: '14px 20px',
+            borderTop: '1px solid var(--border)',
+            background: 'var(--accent-bg)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+            <span style={{ color: 'var(--accent)', display: 'flex' }}>
+              <Spinner size={13} />
+            </span>
+            <span
+              style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-strong)' }}
+            >
+              {job.status === 'QUEUED' ? 'Starting…' : 'Writing your semantic layer'}
+            </span>
+            <span style={{ marginLeft: 'auto' }}>
+              <GhostButton
+                onClick={onCancel}
+                style={{ padding: '4px 10px', fontSize: 12 }}
+              >
+                Stop
+              </GhostButton>
+            </span>
+          </div>
+          <ProgressBar
+            current={job.progress_current}
+            total={job.progress_total}
+            label={job.phase || 'Preparing'}
+          />
+          <span style={{ fontSize: 11.5, color: 'var(--text-dim)' }}>
+            You can leave this page — generation carries on and the result is
+            saved when it finishes.
+          </span>
+        </div>
+      )}
+
+      {!running && job && job.status === 'FAILED' && (
+        <div style={{ padding: '0 20px 16px' }}>
+          <Note tone="red">{job.error_message ?? 'Generation failed.'}</Note>
+        </div>
+      )}
+      {!running && job && job.status === 'CANCELLED' && (
+        <div style={{ padding: '0 20px 16px' }}>
+          <Note tone="amber">Generation was stopped. Nothing was saved.</Note>
+        </div>
+      )}
+
+      {exists && (
+        <>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+              borderTop: '1px solid var(--border)',
+            }}
+          >
+            <Stat value={described} label="tables described" hint={`of ${total}`} />
+            <Stat value={layer!.metric_count} label="metrics" tone="green" />
+            <Stat
+              value={layer!.reviewed_count}
+              label="reviewed"
+              tone={layer!.reviewed_count > 0 ? 'accent' : 'neutral'}
+              onClick={() => onFocusFilter('review')}
+            />
+            <Stat
+              value={layer!.issue_count}
+              label="need attention"
+              tone={layer!.issue_count > 0 ? 'red' : 'neutral'}
+              onClick={layer!.issue_count > 0 ? () => onFocusFilter('issues') : undefined}
+              last
+            />
+          </div>
+
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 14,
+              flexWrap: 'wrap',
+              padding: '13px 20px',
+              borderTop: '1px solid var(--border)',
+              background: 'var(--panel-alt)',
+            }}
+          >
+            <Toggle
+              checked={connection.semantic_layer_enabled}
+              onChange={onToggle}
+              label={
+                connection.semantic_layer_enabled
+                  ? 'Sent to the model'
+                  : 'Not sent to the model'
+              }
+              hint="Turn off to write SQL from the bare schema — the way to check whether this layer is helping."
+            />
+            <span
+              style={{
+                marginLeft: 'auto',
+                fontSize: 11.5,
+                color: 'var(--text-faint)',
+                textAlign: 'right',
+              }}
+            >
+              {layer!.generated_at
+                ? `generated ${relativeTime(layer!.generated_at)}`
+                : 'written by hand'}
+              {model ? ` · ${model}` : ''}
+              {layer!.edited_at ? ` · edited ${relativeTime(layer!.edited_at)}` : ''}
+            </span>
+          </div>
+        </>
+      )}
+    </section>
   )
 }
 
-function FinishedBanner({ job }: { job: SemanticJob }) {
-  if (job.status === 'CANCELLED') {
-    return <Note tone="amber">Generation was stopped. Nothing was saved.</Note>
+function Stat({
+  value, label, hint, tone = 'neutral', onClick, last,
+}: {
+  value: number
+  label: string
+  hint?: string
+  tone?: 'neutral' | 'green' | 'accent' | 'red'
+  onClick?: () => void
+  last?: boolean
+}) {
+  const color =
+    tone === 'neutral' ? 'var(--text-strong)' : `var(--${tone})`
+  const inner = (
+    <>
+      <span
+        style={{
+          fontSize: 21,
+          fontWeight: 700,
+          lineHeight: 1.1,
+          color,
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      >
+        {value}
+      </span>
+      <span
+        style={{
+          fontSize: 10.5,
+          fontWeight: 600,
+          letterSpacing: 0.4,
+          textTransform: 'uppercase',
+          color: 'var(--text-faint)',
+        }}
+      >
+        {label}
+        {hint ? ` ${hint}` : ''}
+      </span>
+    </>
+  )
+  const style: React.CSSProperties = {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 3,
+    padding: '14px 20px',
+    background: 'transparent',
+    border: 'none',
+    borderRight: last ? 'none' : '1px solid var(--border)',
+    textAlign: 'left',
+    minWidth: 0,
   }
+  if (!onClick) return <div style={style}>{inner}</div>
   return (
-    <Note tone="red">
-      {job.error_message ?? 'Generation failed.'}
-    </Note>
+    <button
+      onClick={onClick}
+      style={{ ...style, cursor: 'pointer' }}
+      title={`Show only these`}
+    >
+      {inner}
+    </button>
+  )
+}
+
+function ConfirmDelete({
+  count, onClose, onConfirm,
+}: {
+  count: number
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  return (
+    <Modal
+      title="Delete this semantic layer?"
+      subtitle={`${count} described ${count === 1 ? 'table' : 'tables'}, including anything you edited by hand.`}
+      onClose={onClose}
+      width={440}
+      footer={
+        <>
+          <GhostButton onClick={onClose}>Keep it</GhostButton>
+          <DangerButton onClick={onConfirm} style={{ padding: '9px 16px', fontSize: 13 }}>
+            <Icon.Trash />
+            Delete
+          </DangerButton>
+        </>
+      }
+    >
+      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: 'var(--text-dim)' }}>
+        Your schema, connection and conversations are untouched. Questions will
+        go back to being answered from the bare schema. You can generate a new
+        layer at any time.
+      </p>
+    </Modal>
+  )
+}
+
+// ── welcome ────────────────────────────────────────────────────────────────
+function Welcome({
+  onGenerate, disabled,
+}: {
+  onGenerate: () => void
+  disabled: boolean
+}) {
+  const examples = [
+    {
+      title: 'Grain',
+      body: '“One row per line item on an order” — what stops a join from double-counting.',
+    },
+    {
+      title: 'Metrics',
+      body: 'revenue = SUM(quantity × unit_price), excluding cancelled orders. Bound to real SQL.',
+    },
+    {
+      title: 'Time',
+      body: 'Whether “last month” means the calendar month or a rolling 30 days.',
+    },
+  ]
+  return (
+    <section
+      style={{
+        border: '1px solid var(--border)',
+        borderRadius: 14,
+        background: 'var(--panel)',
+        padding: '30px 28px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 22,
+        alignItems: 'center',
+        textAlign: 'center',
+      }}
+    >
+      <div style={{ maxWidth: 520 }}>
+        <h3
+          style={{
+            margin: 0,
+            fontSize: 16,
+            fontWeight: 700,
+            color: 'var(--text-strong)',
+          }}
+        >
+          Teach DataMind what your data means
+        </h3>
+        <p
+          style={{
+            margin: '8px 0 0',
+            fontSize: 13,
+            lineHeight: 1.65,
+            color: 'var(--text-dim)',
+          }}
+        >
+          Your schema already says what exists. A model reads it table by table
+          and writes down what it <em>means</em>, so questions stop being
+          answered by guesswork. You can edit every word of it afterwards.
+        </p>
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))',
+          gap: 10,
+          width: '100%',
+          textAlign: 'left',
+        }}
+      >
+        {examples.map((item) => (
+          <div
+            key={item.title}
+            style={{
+              border: '1px solid var(--border)',
+              borderRadius: 10,
+              background: 'var(--panel-alt)',
+              padding: '13px 14px',
+            }}
+          >
+            <div
+              style={{
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: 0.4,
+                textTransform: 'uppercase',
+                color: 'var(--accent)',
+              }}
+            >
+              {item.title}
+            </div>
+            <div
+              style={{
+                fontSize: 12.5,
+                lineHeight: 1.55,
+                color: 'var(--text-dim)',
+                marginTop: 5,
+              }}
+            >
+              {item.body}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <PrimaryButton onClick={onGenerate} disabled={disabled}>
+        <Icon.Sparkle size={15} />
+        Generate with AI
+      </PrimaryButton>
+    </section>
+  )
+}
+
+// ── panels ─────────────────────────────────────────────────────────────────
+/** A titled card. Local rather than `settings.Section` so the semantic tab can
+ *  carry an action in the header without changing every other settings page. */
+function Panel({
+  title, description, action, children,
+}: {
+  title: string
+  description?: string
+  action?: React.ReactNode
+  children: React.ReactNode
+}) {
+  return (
+    <section
+      style={{
+        border: '1px solid var(--border)',
+        borderRadius: 12,
+        background: 'var(--panel)',
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          padding: '13px 18px',
+          borderBottom: '1px solid var(--border)',
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-strong)' }}>
+            {title}
+          </div>
+          {description && (
+            <div style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 3 }}>
+              {description}
+            </div>
+          )}
+        </div>
+        {action}
+      </div>
+      <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {children}
+      </div>
+    </section>
   )
 }
 
@@ -475,7 +871,7 @@ function Note({ tone, children }: { tone: 'amber' | 'red'; children: React.React
         padding: '11px 13px',
       }}
     >
-      <span style={{ marginTop: 1 }}>
+      <span style={{ marginTop: 1, flexShrink: 0 }}>
         <Icon.Alert />
       </span>
       <span>{children}</span>
@@ -483,6 +879,8 @@ function Note({ tone, children }: { tone: 'amber' | 'red'; children: React.React
   )
 }
 
+/** Floats clear of the content instead of eating a strip of the pane, so the
+ *  last card is never half-hidden behind it. */
 function SaveBar({
   saving, onSave, onDiscard,
 }: {
@@ -493,28 +891,43 @@ function SaveBar({
   return (
     <div
       style={{
-        flexShrink: 0,
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        bottom: 20,
         display: 'flex',
-        alignItems: 'center',
-        gap: 12,
-        padding: '12px 28px',
-        borderTop: '1px solid var(--border-strong)',
-        background: 'var(--panel)',
-        boxShadow: '0 -6px 20px -12px rgba(0,0,0,0.5)',
+        justifyContent: 'center',
+        pointerEvents: 'none',
+        zIndex: 30,
       }}
     >
-      <span style={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
-        You have unsaved changes.
-      </span>
-      <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-        <GhostButton onClick={onDiscard} disabled={saving}>
-          Discard
-        </GhostButton>
-        <PrimaryButton onClick={onSave} disabled={saving}>
-          {saving && <Spinner />}
-          Save changes
-        </PrimaryButton>
-      </span>
+      <div
+        className="rm-enter"
+        style={{
+          pointerEvents: 'auto',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 14,
+          padding: '10px 12px 10px 18px',
+          borderRadius: 12,
+          background: 'var(--panel)',
+          border: '1px solid var(--border-strong)',
+          boxShadow: '0 18px 44px -18px rgba(0,0,0,0.6)',
+        }}
+      >
+        <span style={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
+          Unsaved changes
+        </span>
+        <span style={{ display: 'flex', gap: 8 }}>
+          <GhostButton onClick={onDiscard} disabled={saving} style={{ padding: '7px 12px' }}>
+            Discard
+          </GhostButton>
+          <PrimaryButton onClick={onSave} disabled={saving} style={{ padding: '7px 14px' }}>
+            {saving && <Spinner />}
+            Save changes
+          </PrimaryButton>
+        </span>
+      </div>
     </div>
   )
 }
@@ -535,7 +948,7 @@ function Overview({
   }
 
   return (
-    <Section
+    <Panel
       title="About this database"
       description="Sent with every question. Two or three sentences and the time conventions are worth more here than anything else on this page."
     >
@@ -544,6 +957,22 @@ function Overview({
           value={doc.business_context}
           placeholder="An online retailer's order book: customers place orders made of line items, fulfilled from warehouses…"
           onChange={(e) => onChange({ ...doc, business_context: e.target.value })}
+        />
+      </Field>
+
+      <Field
+        label="“Last month” means"
+        hint="The single most common source of a wrong-looking answer."
+      >
+        <ChoiceRow
+          value={time.relative_windows}
+          onChange={(next) =>
+            setTime({ relative_windows: next as 'calendar' | 'rolling' })
+          }
+          options={[
+            { value: 'calendar', label: 'Calendar', hint: 'The whole previous month' },
+            { value: 'rolling', label: 'Rolling', hint: 'The last 30 days' },
+          ]}
         />
       </Field>
 
@@ -577,21 +1006,6 @@ function Overview({
         </Field>
       </FieldRow>
 
-      <Field
-        label="“Last month” means"
-        hint="The single most common source of a wrong-looking answer."
-      >
-        <Select
-          value={time.relative_windows}
-          onChange={(e) =>
-            setTime({ relative_windows: e.target.value as 'calendar' | 'rolling' })
-          }
-        >
-          <option value="calendar">The whole previous calendar month</option>
-          <option value="rolling">A rolling 30-day window ending today</option>
-        </Select>
-      </Field>
-
       <Field label="Other time conventions" hint="Optional. One sentence.">
         <TextInput
           value={time.notes}
@@ -599,68 +1013,121 @@ function Overview({
           onChange={(e) => setTime({ notes: e.target.value })}
         />
       </Field>
-    </Section>
+    </Panel>
   )
 }
 
 // ── filters ────────────────────────────────────────────────────────────────
-function Filters({
-  value, onChange, search, onSearch, shown, total, undescribed,
+/** Sticks to the top of the scroll area: a 42-table schema scrolls past this
+ *  in a second, and losing the search box is what makes a long list feel
+ *  unmanageable. */
+function FilterBar({
+  value, onChange, search, onSearch, counts, shown,
 }: {
   value: Filter
   onChange: (next: Filter) => void
   search: string
   onSearch: (next: string) => void
+  counts: Record<Filter, number>
   shown: number
-  total: number
-  undescribed: number
 }) {
   const options: { value: Filter; label: string }[] = [
-    { value: 'all', label: `All ${total}` },
+    { value: 'all', label: 'All' },
     { value: 'review', label: 'Needs review' },
     { value: 'metrics', label: 'Has metrics' },
     { value: 'issues', label: 'Needs attention' },
   ]
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+    <div
+      style={{
+        // Reads as a floating toolbar rather than a strip of page: a solid
+        // panel background is the only thing that stays right over the app's
+        // light-theme background wash.
+        position: 'sticky',
+        top: 6,
+        zIndex: 10,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap',
+        padding: '8px 10px',
+        borderRadius: 11,
+        background: 'var(--panel)',
+        border: '1px solid var(--border)',
+        boxShadow: '0 10px 24px -18px rgba(0,0,0,0.55)',
+      }}
+    >
       <div
         style={{
           display: 'flex',
           gap: 2,
           background: 'var(--panel-alt)',
-          borderRadius: 8,
+          borderRadius: 9,
           padding: 3,
         }}
       >
-        {options.map((option) => (
-          <button
-            key={option.value}
-            onClick={() => onChange(option.value)}
-            style={{
-              fontSize: 12.5,
-              fontWeight: 600,
-              padding: '6px 12px',
-              borderRadius: 6,
-              cursor: 'pointer',
-              border: 'none',
-              color: option.value === value ? 'var(--text-strong)' : 'var(--text-dim)',
-              background: option.value === value ? 'var(--panel)' : 'transparent',
-              boxShadow: option.value === value ? '0 1px 3px rgba(0,0,0,0.10)' : 'none',
-            }}
-          >
-            {option.label}
-          </button>
-        ))}
+        {options.map((option) => {
+          const active = option.value === value
+          const count = counts[option.value]
+          return (
+            <button
+              key={option.value}
+              onClick={() => onChange(option.value)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: 12.5,
+                fontWeight: 600,
+                padding: '6px 11px',
+                borderRadius: 6,
+                cursor: 'pointer',
+                border: 'none',
+                color: active ? 'var(--text-strong)' : 'var(--text-dim)',
+                background: active ? 'var(--panel)' : 'transparent',
+                boxShadow: active ? '0 1px 3px rgba(0,0,0,0.10)' : 'none',
+              }}
+            >
+              {option.label}
+              <span
+                style={{
+                  fontSize: 10.5,
+                  fontWeight: 700,
+                  fontVariantNumeric: 'tabular-nums',
+                  color:
+                    option.value === 'issues' && count > 0
+                      ? 'var(--red)'
+                      : 'var(--text-faint)',
+                }}
+              >
+                {count}
+              </span>
+            </button>
+          )
+        })}
       </div>
-      {undescribed > 0 && (
-        <Chip tone="amber">{undescribed} tables not described</Chip>
-      )}
-      <TextInput
-        placeholder="Search tables, metrics, columns…"
-        value={search}
-        onChange={(e) => onSearch(e.target.value)}
-        style={{ width: 260, marginLeft: 'auto', fontSize: 13, padding: '8px 11px' }}
-      />
+
+      <div style={{ position: 'relative', marginLeft: 'auto', width: 260 }}>
+        <span
+          style={{
+            position: 'absolute',
+            left: 10,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            color: 'var(--text-faint)',
+            display: 'flex',
+            pointerEvents: 'none',
+          }}
+        >
+          <Icon.Search size={13} />
+        </span>
+        <TextInput
+          placeholder="Search tables, metrics, columns…"
+          value={search}
+          onChange={(e) => onSearch(e.target.value)}
+          style={{ fontSize: 13, padding: '8px 11px 8px 30px' }}
+        />
+      </div>
       {search && (
         <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>{shown} shown</span>
       )}
@@ -678,16 +1145,13 @@ function EntityCard({
   onToggle: () => void
   onChange: (change: Partial<SemanticEntity>) => void
 }) {
-  const broken =
-    !entity.valid ||
-    entity.metrics.some((m) => !m.valid) ||
-    entity.columns.some((c) => !c.valid)
+  const broken = hasIssue(entity)
 
   return (
     <div
       style={{
         border: `1px solid ${broken ? 'var(--red-border)' : 'var(--border)'}`,
-        borderRadius: 10,
+        borderRadius: 11,
         background: 'var(--panel)',
         overflow: 'hidden',
         opacity: entity.exclude ? 0.6 : 1,
@@ -699,40 +1163,63 @@ function EntityCard({
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 10,
+          gap: 11,
           width: '100%',
-          padding: '11px 14px',
+          padding: '12px 14px',
           background: 'transparent',
           border: 'none',
+          borderLeft: `3px solid ${ROLE_TONE[entity.role] ?? ROLE_TONE.unknown}`,
           cursor: 'pointer',
           textAlign: 'left',
         }}
       >
         <Icon.Chevron open={open} size={13} stroke="var(--text-dim)" />
-        <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-strong)' }}>
-          {entity.label || entity.table.split('.').slice(-1)[0]}
+
+        <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
+          <span style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+            <span
+              style={{
+                fontSize: 13.5,
+                fontWeight: 600,
+                color: 'var(--text-strong)',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {entity.label || entity.table.split('.').slice(-1)[0]}
+            </span>
+            <span
+              className="mono"
+              style={{
+                fontSize: 11,
+                color: 'var(--text-faint)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {entity.table}
+            </span>
+          </span>
+          <span
+            style={{
+              fontSize: 11.5,
+              color: entity.grain ? 'var(--text-dim)' : 'var(--text-faint)',
+              fontStyle: entity.grain ? 'normal' : 'italic',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {entity.grain || 'no grain described yet'}
+          </span>
         </span>
-        <span className="mono" style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
-          {entity.table}
-        </span>
-        <span
-          style={{
-            fontSize: 12,
-            color: 'var(--text-dim)',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            minWidth: 0,
-            flex: 1,
-          }}
-        >
-          {entity.grain}
-        </span>
-        <span style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+
+        <span style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
           {entity.exclude && <Chip>hidden</Chip>}
-          {entity.role !== 'unknown' && <Chip>{entity.role}</Chip>}
           {entity.metrics.length > 0 && (
-            <Chip tone="green">{entity.metrics.length} metrics</Chip>
+            <Chip tone="green">
+              {entity.metrics.length} {entity.metrics.length === 1 ? 'metric' : 'metrics'}
+            </Chip>
           )}
           {broken && <Chip tone="red">needs attention</Chip>}
           {entity.provenance.reviewed && <Chip tone="accent">reviewed</Chip>}
@@ -743,82 +1230,82 @@ function EntityCard({
         <div
           style={{
             borderTop: '1px solid var(--border)',
-            padding: 16,
+            padding: 18,
             display: 'flex',
             flexDirection: 'column',
-            gap: 14,
+            gap: 18,
+            background: 'var(--panel)',
           }}
         >
           {entity.issue && <Note tone="amber">{entity.issue}</Note>}
 
-          <FieldRow>
-            <Field label="Business name">
-              <TextInput
-                value={entity.label}
-                placeholder="Orders"
-                onChange={(e) => onChange({ label: e.target.value })}
-              />
-            </Field>
-            <Field label="Also called" hint="Comma separated.">
-              <TextInput
-                value={entity.synonyms.join(', ')}
-                placeholder="purchases, sales orders"
-                onChange={(e) => onChange({ synonyms: splitList(e.target.value) })}
-              />
-            </Field>
-          </FieldRow>
+          <Group title="Meaning">
+            <FieldRow>
+              <Field label="Business name">
+                <TextInput
+                  value={entity.label}
+                  placeholder="Orders"
+                  onChange={(e) => onChange({ label: e.target.value })}
+                />
+              </Field>
+              <Field label="Also called" hint="Comma separated.">
+                <TextInput
+                  value={entity.synonyms.join(', ')}
+                  placeholder="purchases, sales orders"
+                  onChange={(e) => onChange({ synonyms: splitList(e.target.value) })}
+                />
+              </Field>
+            </FieldRow>
 
-          <Field
-            label="One row is…"
-            hint="The most valuable sentence here — it is what stops a join from double-counting."
-          >
-            <TextInput
-              value={entity.grain}
-              placeholder="one row per line item on an order"
-              onChange={(e) => onChange({ grain: e.target.value })}
-            />
-          </Field>
-
-          <Field label="Description">
-            <TextArea
-              value={entity.description}
-              placeholder="What this table records, and when a row appears."
-              onChange={(e) => onChange({ description: e.target.value })}
-            />
-          </Field>
-
-          <FieldRow>
-            <Field label="Kind of table">
-              <Select
-                value={entity.role}
-                onChange={(e) =>
-                  onChange({ role: e.target.value as SemanticEntity['role'] })
-                }
-              >
-                <option value="unknown">Not specified</option>
-                <option value="fact">Fact — events or transactions</option>
-                <option value="dimension">Dimension — things being described</option>
-                <option value="bridge">Bridge — joins two others</option>
-                <option value="lookup">Lookup — reference codes</option>
-              </Select>
-            </Field>
             <Field
-              label="Date column"
-              hint="Which column answers “when did this happen”."
+              label="One row is…"
+              hint="The most valuable sentence here — it is what stops a join from double-counting."
             >
               <TextInput
-                className="mono"
-                value={entity.default_time_column}
-                placeholder="ordered_at"
-                onChange={(e) => onChange({ default_time_column: e.target.value })}
+                value={entity.grain}
+                placeholder="one row per line item on an order"
+                onChange={(e) => onChange({ grain: e.target.value })}
               />
             </Field>
-          </FieldRow>
 
-          <Columns
-            entity={entity}
-            onChange={(columns) => onChange({ columns })}
-          />
+            <Field label="Description">
+              <TextArea
+                value={entity.description}
+                placeholder="What this table records, and when a row appears."
+                onChange={(e) => onChange({ description: e.target.value })}
+              />
+            </Field>
+
+            <FieldRow>
+              <Field label="Kind of table">
+                <Select
+                  value={entity.role}
+                  onChange={(e) =>
+                    onChange({ role: e.target.value as SemanticEntity['role'] })
+                  }
+                >
+                  <option value="unknown">Not specified</option>
+                  <option value="fact">Fact — events or transactions</option>
+                  <option value="dimension">Dimension — things being described</option>
+                  <option value="bridge">Bridge — joins two others</option>
+                  <option value="lookup">Lookup — reference codes</option>
+                </Select>
+              </Field>
+              <Field
+                label="Date column"
+                hint="Which column answers “when did this happen”."
+              >
+                <TextInput
+                  className="mono"
+                  value={entity.default_time_column}
+                  placeholder="ordered_at"
+                  onChange={(e) => onChange({ default_time_column: e.target.value })}
+                />
+              </Field>
+            </FieldRow>
+          </Group>
+
+          <Columns entity={entity} onChange={(columns) => onChange({ columns })} />
 
           <Metrics
             connectionId={connectionId}
@@ -828,12 +1315,11 @@ function EntityCard({
 
           <div
             style={{
-              display: 'flex',
-              gap: 10,
-              alignItems: 'center',
-              paddingTop: 4,
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+              gap: 14,
+              paddingTop: 14,
               borderTop: '1px solid var(--border)',
-              flexWrap: 'wrap',
             }}
           >
             <Toggle
@@ -844,17 +1330,60 @@ function EntityCard({
               label="Reviewed"
               hint="You have checked this description is true."
             />
-            <span style={{ marginLeft: 'auto' }}>
-              <Toggle
-                checked={entity.exclude}
-                onChange={(exclude) => onChange({ exclude })}
-                label="Hide from the model"
-                hint="For deprecated or staging tables."
-              />
-            </span>
+            <Toggle
+              checked={entity.exclude}
+              onChange={(exclude) => onChange({ exclude })}
+              label="Hide from the model"
+              hint="For deprecated or staging tables."
+            />
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+/** A labelled band inside an expanded entity. Keeps a long form readable as
+ *  three or four parts rather than one wall of inputs. */
+function Group({
+  title, hint, action, children,
+}: {
+  title: string
+  hint?: string
+  action?: React.ReactNode
+  children: React.ReactNode
+}) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              fontSize: 10.5,
+              fontWeight: 700,
+              letterSpacing: 0.5,
+              textTransform: 'uppercase',
+              color: 'var(--text-faint)',
+            }}
+          >
+            {title}
+          </div>
+          {hint && (
+            <div
+              style={{
+                fontSize: 11.5,
+                lineHeight: 1.5,
+                color: 'var(--text-dim)',
+                marginTop: 4,
+              }}
+            >
+              {hint}
+            </div>
+          )}
+        </div>
+        {action}
+      </div>
+      {children}
     </div>
   )
 }
@@ -878,38 +1407,27 @@ function Columns({
     )
   }
 
+  function add() {
+    const name = adding.trim()
+    if (!name) return
+    onChange([...entity.columns, blankColumn(name)])
+    setAdding('')
+  }
+
   return (
-    <SubSection
+    <Group
       title="Columns worth explaining"
       hint="Only the ones whose name is not self-evident — codes, units, abbreviations."
     >
       {entity.columns.map((column, index) => (
-        <div
-          key={`${column.name}-${index}`}
-          style={{
-            border: `1px solid ${column.valid ? 'var(--border)' : 'var(--red-border)'}`,
-            borderRadius: 8,
-            padding: 12,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 10,
-            background: 'var(--panel-alt)',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span className="mono" style={{ fontSize: 12.5, color: 'var(--text-strong)' }}>
-              {column.name}
-            </span>
-            {!column.valid && <Chip tone="red">{column.issue}</Chip>}
-            <span style={{ marginLeft: 'auto' }}>
-              <IconButton
-                label={`Remove ${column.name}`}
-                onClick={() => onChange(entity.columns.filter((_, i) => i !== index))}
-              >
-                <Icon.Trash />
-              </IconButton>
-            </span>
-          </div>
+        <SubCard key={`${column.name}-${index}`} invalid={!column.valid}>
+          <SubCardHead
+            title={column.name}
+            mono
+            badge={!column.valid ? <Chip tone="red">{column.issue}</Chip> : null}
+            onRemove={() => onChange(entity.columns.filter((_, i) => i !== index))}
+            removeLabel={`Remove ${column.name}`}
+          />
           <FieldRow columns={3}>
             <Field label="Label">
               <TextInput
@@ -950,16 +1468,18 @@ function Columns({
               hint="One per line, as CODE = meaning. Only values present in the schema snapshot are kept."
             >
               <TextArea
+                className="mono"
                 value={Object.entries(column.value_meanings)
                   .map(([k, v]) => `${k} = ${v}`)
                   .join('\n')}
                 onChange={(e) =>
                   update(index, { value_meanings: parseMeanings(e.target.value) })
                 }
+                style={{ fontSize: 12.5, minHeight: 56 }}
               />
             </Field>
           )}
-        </div>
+        </SubCard>
       ))}
 
       <div style={{ display: 'flex', gap: 8 }}>
@@ -968,21 +1488,24 @@ function Columns({
           placeholder="column_name"
           value={adding}
           onChange={(e) => setAdding(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              add()
+            }
+          }}
           style={{ maxWidth: 240, fontSize: 13, padding: '7px 10px' }}
         />
         <GhostButton
           disabled={!adding.trim()}
-          onClick={() => {
-            onChange([...entity.columns, blankColumn(adding.trim())])
-            setAdding('')
-          }}
+          onClick={add}
           style={{ padding: '7px 12px', fontSize: 12.5 }}
         >
           <Icon.Plus size={13} />
           Add column
         </GhostButton>
       </div>
-    </SubSection>
+    </Group>
   )
 }
 
@@ -1005,10 +1528,33 @@ function Metrics({
   }
 
   return (
-    <SubSection
+    <Group
       title="Metrics"
       hint="The part that changes answers: a named measure bound to exact SQL, including the filters that belong to the definition rather than the question."
+      action={
+        <GhostButton
+          onClick={() => onChange([...entity.metrics, blankMetric()])}
+          style={{ padding: '6px 11px', fontSize: 12.5, flexShrink: 0 }}
+        >
+          <Icon.Plus size={13} />
+          Add metric
+        </GhostButton>
+      }
     >
+      {entity.metrics.length === 0 && (
+        <div
+          style={{
+            border: '1px dashed var(--border-strong)',
+            borderRadius: 9,
+            padding: '16px 14px',
+            fontSize: 12.5,
+            color: 'var(--text-faint)',
+            textAlign: 'center',
+          }}
+        >
+          No metrics on this table. Lookup and bridge tables usually have none.
+        </div>
+      )}
       {entity.metrics.map((metric, index) => (
         <MetricCard
           key={index}
@@ -1019,14 +1565,7 @@ function Metrics({
           onRemove={() => onChange(entity.metrics.filter((_, i) => i !== index))}
         />
       ))}
-      <GhostButton
-        onClick={() => onChange([...entity.metrics, blankMetric()])}
-        style={{ alignSelf: 'flex-start', padding: '7px 12px', fontSize: 12.5 }}
-      >
-        <Icon.Plus size={13} />
-        Add metric
-      </GhostButton>
-    </SubSection>
+    </Group>
   )
 }
 
@@ -1074,27 +1613,13 @@ function MetricCard({
   const state = check ?? (metric.valid ? null : { valid: false, issue: metric.issue })
 
   return (
-    <div
-      style={{
-        border: `1px solid ${state && !state.valid ? 'var(--red-border)' : 'var(--border)'}`,
-        borderRadius: 8,
-        padding: 12,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 10,
-        background: 'var(--panel-alt)',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-strong)' }}>
-          {metric.label || metric.name || 'New metric'}
-        </span>
-        <span style={{ marginLeft: 'auto' }}>
-          <IconButton label="Remove metric" onClick={onRemove}>
-            <Icon.Trash />
-          </IconButton>
-        </span>
-      </div>
+    <SubCard invalid={!!state && !state.valid}>
+      <SubCardHead
+        title={metric.label || metric.name || 'New metric'}
+        badge={metric.unit ? <Chip>{metric.unit}</Chip> : null}
+        onRemove={onRemove}
+        removeLabel="Remove metric"
+      />
 
       <FieldRow>
         <Field label="Identifier" hint="snake_case, unique on this table.">
@@ -1138,7 +1663,9 @@ function MetricCard({
           value={metric.filters.join('\n')}
           placeholder={`${table}.status <> 'CANCELLED'`}
           onChange={(e) =>
-            onChange({ filters: e.target.value.split('\n').map((l) => l.trim()).filter(Boolean) })
+            onChange({
+              filters: e.target.value.split('\n').map((l) => l.trim()).filter(Boolean),
+            })
           }
           style={{ minHeight: 48, fontSize: 12.5 }}
         />
@@ -1188,7 +1715,7 @@ function MetricCard({
           />
         </Field>
       </FieldRow>
-    </div>
+    </SubCard>
   )
 }
 
@@ -1233,7 +1760,16 @@ function CheckLine({
 
 function Line({ color, children }: { color: string; children: React.ReactNode }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color }}>
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        fontSize: 12,
+        color,
+        marginTop: -4,
+      }}
+    >
       {children}
     </div>
   )
@@ -1260,60 +1796,86 @@ function Glossary({
   }
 
   return (
-    <Section
+    <Panel
       title="Business terms"
       description="Words a user will type that are not the name of a table or a metric — “churn”, “active customer”, “AOV”."
+      action={
+        <GhostButton
+          onClick={() =>
+            setTerms([
+              ...doc.glossary,
+              {
+                term: '',
+                meaning: '',
+                maps_to: [],
+                provenance: { source: 'human', edited: true, reviewed: false },
+              },
+            ])
+          }
+          style={{ padding: '6px 11px', fontSize: 12.5, flexShrink: 0 }}
+        >
+          <Icon.Plus size={13} />
+          Add a term
+        </GhostButton>
+      }
     >
+      {doc.glossary.length === 0 && (
+        <div
+          style={{
+            border: '1px dashed var(--border-strong)',
+            borderRadius: 9,
+            padding: '16px 14px',
+            fontSize: 12.5,
+            color: 'var(--text-faint)',
+            textAlign: 'center',
+          }}
+        >
+          No terms yet. Add one when a word your team uses has no table behind it.
+        </div>
+      )}
       {doc.glossary.map((term, index) => (
-        <FieldRow key={index} columns={3}>
+        <div
+          key={index}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(120px, 1fr) minmax(180px, 2fr) minmax(120px, 1fr) 30px',
+            gap: 10,
+            alignItems: 'end',
+          }}
+        >
           <Field label="Term">
             <TextInput
               value={term.term}
+              placeholder="churn"
               onChange={(e) => update(index, { term: e.target.value })}
             />
           </Field>
           <Field label="Means">
             <TextInput
               value={term.meaning}
+              placeholder="a customer with no order in the last 90 days"
               onChange={(e) => update(index, { meaning: e.target.value })}
             />
           </Field>
-          <Field label=" ">
-            <div style={{ display: 'flex', gap: 8 }}>
-              <TextInput
-                className="mono"
-                placeholder="maps to…"
-                value={term.maps_to.join(', ')}
-                onChange={(e) => update(index, { maps_to: splitList(e.target.value) })}
-              />
-              <IconButton
-                label={`Remove ${term.term}`}
-                onClick={() => setTerms(doc.glossary.filter((_, i) => i !== index))}
-              >
-                <Icon.Trash />
-              </IconButton>
-            </div>
+          <Field label="Maps to">
+            <TextInput
+              className="mono"
+              placeholder="public.customers"
+              value={term.maps_to.join(', ')}
+              onChange={(e) => update(index, { maps_to: splitList(e.target.value) })}
+            />
           </Field>
-        </FieldRow>
+          <div style={{ paddingBottom: 1 }}>
+            <IconButton
+              label={`Remove ${term.term || 'term'}`}
+              onClick={() => setTerms(doc.glossary.filter((_, i) => i !== index))}
+            >
+              <Icon.Trash />
+            </IconButton>
+          </div>
+        </div>
       ))}
-      <GhostButton
-        onClick={() =>
-          setTerms([
-            ...doc.glossary,
-            {
-              term: '',
-              meaning: '',
-              maps_to: [],
-              provenance: { source: 'human', edited: true, reviewed: false },
-            },
-          ])
-        }
-        style={{ alignSelf: 'flex-start', padding: '7px 12px', fontSize: 12.5 }}
-      >
-        <Icon.Plus size={13} />
-        Add a term
-      </GhostButton>
-    </Section>
+    </Panel>
   )
 }
 
@@ -1331,6 +1893,7 @@ function GenerateModal({
   }) => void
 }) {
   const [configs, setConfigs] = useState<LlmConfig[]>([])
+  const [loading, setLoading] = useState(true)
   const [configId, setConfigId] = useState('')
   const [mode, setMode] = useState<'MERGE' | 'REPLACE'>('MERGE')
   const [scope, setScope] = useState<'all' | 'missing'>(
@@ -1350,20 +1913,20 @@ function GenerateModal({
         setConfigId((reachable ?? items[0])?.id ?? '')
       })
       .catch(() => setConfigs([]))
+      .finally(() => setLoading(false))
   }, [])
 
   const total = layer?.tables.length ?? 0
   const count = scope === 'missing' ? undescribed.length : total
-  const chosen = configs.find((c) => c.id === configId)
 
   return (
     <Modal
       title="Generate a semantic layer"
       subtitle="A model reads your schema table by table and writes what each one means."
       onClose={onClose}
-      width={560}
+      width={600}
       footer={
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <>
           <GhostButton onClick={onClose}>Cancel</GhostButton>
           <PrimaryButton
             disabled={!configId || count === 0 || starting}
@@ -1379,85 +1942,211 @@ function GenerateModal({
             {starting && <Spinner />}
             Describe {count} {count === 1 ? 'table' : 'tables'}
           </PrimaryButton>
-        </div>
+        </>
       }
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        {configs.length === 0 ? (
+      <ModalGroup
+        title="Model"
+        hint="Worth spending your best model here: this runs once, and every question afterwards reads what it wrote."
+      >
+        {loading ? (
+          <Line color="var(--text-faint)">
+            <Spinner size={12} />
+            Loading your models…
+          </Line>
+        ) : configs.length === 0 ? (
           <Note tone="amber">
-            Add a model under Models before generating a semantic layer.
+            Add a model under <strong>Models</strong> before generating a
+            semantic layer.
           </Note>
         ) : (
-          <Field
-            label="Model"
-            hint="A stronger model is worth it here: this runs once and every question afterwards reads what it wrote."
+          <div
+            role="radiogroup"
+            aria-label="Model"
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+              maxHeight: 232,
+              overflowY: 'auto',
+            }}
           >
-            <Select value={configId} onChange={(e) => setConfigId(e.target.value)}>
-              {configs.map((config) => (
-                <option key={config.id} value={config.id}>
-                  {config.name} — {config.model}
-                  {config.status === 'OK' ? '' : ' (untested)'}
-                </option>
-              ))}
-            </Select>
-          </Field>
+            {configs.map((config) => (
+              <ModelOption
+                key={config.id}
+                config={config}
+                selected={config.id === configId}
+                onSelect={() => setConfigId(config.id)}
+              />
+            ))}
+          </div>
         )}
+      </ModalGroup>
 
-        {layer?.exists && (
-          <>
-            <Field label="Scope">
-              <Select
-                value={scope}
-                onChange={(e) => setScope(e.target.value as 'all' | 'missing')}
-              >
-                <option value="missing">
-                  Only the {undescribed.length} tables not yet described
-                </option>
-                <option value="all">Every table ({total})</option>
-              </Select>
-            </Field>
+      {layer?.exists && (
+        <>
+          <ModalGroup title="How much to describe">
+            <ChoiceRow
+              value={scope}
+              onChange={(next) => setScope(next as 'all' | 'missing')}
+              options={[
+                {
+                  value: 'missing',
+                  label: 'Only what is missing',
+                  hint: `${undescribed.length} ${undescribed.length === 1 ? 'table' : 'tables'}`,
+                  disabled: undescribed.length === 0,
+                },
+                {
+                  value: 'all',
+                  label: 'Every table',
+                  hint: `${total} tables`,
+                },
+              ]}
+            />
+          </ModalGroup>
 
-            <Field
-              label="What happens to what is already there"
-              hint="Anything you edited by hand is kept either way unless you choose to start over."
-            >
-              <Select
-                value={mode}
-                onChange={(e) => setMode(e.target.value as 'MERGE' | 'REPLACE')}
-              >
-                <option value="MERGE">Keep my edits, refresh the rest</option>
-                <option value="REPLACE">Start over — discard everything</option>
-              </Select>
-            </Field>
-          </>
-        )}
+          <ModalGroup title="What happens to what is already there">
+            <ChoiceRow
+              value={mode}
+              onChange={(next) => setMode(next as 'MERGE' | 'REPLACE')}
+              options={[
+                {
+                  value: 'MERGE',
+                  label: 'Keep my edits',
+                  hint: 'Refresh the rest',
+                },
+                {
+                  value: 'REPLACE',
+                  label: 'Start over',
+                  hint: 'Discard everything',
+                  tone: 'red',
+                },
+              ]}
+            />
+          </ModalGroup>
+        </>
+      )}
 
-        <div
-          style={{
-            fontSize: 12,
-            lineHeight: 1.6,
-            color: 'var(--text-dim)',
-            background: 'var(--panel-alt)',
-            border: '1px solid var(--border)',
-            borderRadius: 8,
-            padding: '10px 12px',
-          }}
-        >
-          One model call per table, four at a time — roughly{' '}
-          <strong style={{ color: 'var(--text-strong)' }}>
-            {estimateMinutes(count)}
-          </strong>{' '}
-          for {count} tables{chosen ? ` on ${chosen.model}` : ''}. The model sees the
-          same schema detail it already sees when answering a question, so this
-          shares nothing new with your provider. Nothing is saved until it finishes.
-        </div>
+      <div
+        style={{
+          fontSize: 12,
+          lineHeight: 1.6,
+          color: 'var(--text-dim)',
+          background: 'var(--panel-alt)',
+          border: '1px solid var(--border)',
+          borderRadius: 9,
+          padding: '11px 13px',
+        }}
+      >
+        One model call per table, four at a time — roughly{' '}
+        <strong style={{ color: 'var(--text-strong)' }}>
+          {estimateMinutes(count)}
+        </strong>{' '}
+        for {count} {count === 1 ? 'table' : 'tables'}. The model sees the same
+        schema detail it already sees when answering a question, so this shares
+        nothing new with your provider. Nothing is saved until it finishes.
       </div>
     </Modal>
   )
 }
 
-// ── small pieces ───────────────────────────────────────────────────────────
-function SubSection({
+/** A model, shown as the thing you actually choose on: which model id, and
+ *  whether it has ever been reached. A `<select>` hides both. */
+function ModelOption({
+  config, selected, onSelect,
+}: {
+  config: LlmConfig
+  selected: boolean
+  onSelect: () => void
+}) {
+  const [hover, setHover] = useState(false)
+  const ok = config.status === 'OK'
+  return (
+    <button
+      role="radio"
+      aria-checked={selected}
+      onClick={onSelect}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 11,
+        width: '100%',
+        padding: '11px 13px',
+        textAlign: 'left',
+        borderRadius: 9,
+        cursor: 'pointer',
+        background: selected ? 'var(--accent-bg)' : 'transparent',
+        border: `1px solid ${
+          selected
+            ? 'var(--accent)'
+            : hover
+              ? 'var(--border-strong)'
+              : 'var(--border)'
+        }`,
+      }}
+    >
+      <span
+        style={{
+          width: 15,
+          height: 15,
+          borderRadius: '50%',
+          flexShrink: 0,
+          border: `1.5px solid ${selected ? 'var(--accent)' : 'var(--border-strong)'}`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {selected && (
+          <span
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: '50%',
+              background: 'var(--accent)',
+            }}
+          />
+        )}
+      </span>
+
+      <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <span
+          style={{
+            fontSize: 13,
+            fontWeight: 600,
+            color: 'var(--text-strong)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {config.name}
+        </span>
+        <span
+          className="mono"
+          style={{
+            fontSize: 11,
+            color: 'var(--text-faint)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {config.model}
+        </span>
+      </span>
+
+      <span style={{ flexShrink: 0, display: 'flex', gap: 6, alignItems: 'center' }}>
+        <Chip>temp {config.temperature}</Chip>
+        <Chip tone={ok ? 'green' : 'neutral'}>{ok ? 'reachable' : 'untested'}</Chip>
+      </span>
+    </button>
+  )
+}
+
+function ModalGroup({
   title, hint, children,
 }: {
   title: string
@@ -1465,13 +2154,20 @@ function SubSection({
   children: React.ReactNode
 }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div>
         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-strong)' }}>
           {title}
         </div>
         {hint && (
-          <div style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 2 }}>
+          <div
+            style={{
+              fontSize: 11.5,
+              lineHeight: 1.5,
+              color: 'var(--text-dim)',
+              marginTop: 3,
+            }}
+          >
             {hint}
           </div>
         )}
@@ -1481,33 +2177,182 @@ function SubSection({
   )
 }
 
+/** Two or three mutually exclusive options, laid out as cards. Better than a
+ *  `<select>` when the options need a line of explanation each — which is
+ *  exactly when the choice is worth making carefully. */
+function ChoiceRow({
+  value, onChange, options,
+}: {
+  value: string
+  onChange: (next: string) => void
+  options: {
+    value: string
+    label: string
+    hint?: string
+    tone?: 'red'
+    disabled?: boolean
+  }[]
+}) {
+  return (
+    <div
+      role="radiogroup"
+      style={{
+        display: 'grid',
+        gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))`,
+        gap: 8,
+      }}
+    >
+      {options.map((option) => {
+        const selected = option.value === value
+        const accent = option.tone === 'red' ? 'var(--red)' : 'var(--accent)'
+        return (
+          <button
+            key={option.value}
+            role="radio"
+            aria-checked={selected}
+            disabled={option.disabled}
+            onClick={() => onChange(option.value)}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 2,
+              padding: '10px 12px',
+              borderRadius: 9,
+              textAlign: 'left',
+              cursor: option.disabled ? 'not-allowed' : 'pointer',
+              opacity: option.disabled ? 0.45 : 1,
+              background: selected
+                ? option.tone === 'red'
+                  ? 'var(--red-bg)'
+                  : 'var(--accent-bg)'
+                : 'transparent',
+              border: `1px solid ${selected ? accent : 'var(--border)'}`,
+            }}
+          >
+            <span
+              style={{
+                fontSize: 12.5,
+                fontWeight: 600,
+                color: selected ? accent : 'var(--text-strong)',
+              }}
+            >
+              {option.label}
+            </span>
+            {option.hint && (
+              <span style={{ fontSize: 11.5, color: 'var(--text-dim)' }}>
+                {option.hint}
+              </span>
+            )}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+// ── small pieces ───────────────────────────────────────────────────────────
+function SubCard({
+  invalid, children,
+}: {
+  invalid?: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <div
+      style={{
+        border: `1px solid ${invalid ? 'var(--red-border)' : 'var(--border)'}`,
+        borderRadius: 9,
+        padding: 13,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 11,
+        background: 'var(--panel-alt)',
+      }}
+    >
+      {children}
+    </div>
+  )
+}
+
+function SubCardHead({
+  title, mono, badge, onRemove, removeLabel,
+}: {
+  title: string
+  mono?: boolean
+  badge?: React.ReactNode
+  onRemove: () => void
+  removeLabel: string
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <span
+        className={mono ? 'mono' : undefined}
+        style={{
+          fontSize: mono ? 12.5 : 12.5,
+          fontWeight: 600,
+          color: 'var(--text-strong)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {title}
+      </span>
+      {badge}
+      <span style={{ marginLeft: 'auto', flexShrink: 0 }}>
+        <IconButton label={removeLabel} onClick={onRemove}>
+          <Icon.Trash />
+        </IconButton>
+      </span>
+    </div>
+  )
+}
+
+/** A quiet destructive action: neutral until hovered, then unmistakably red.
+ *  Every use of it is behind a confirmation, which is where the real safety
+ *  lives — a red panel parked in the page reads as a warning about the
+ *  content, not about the button. */
 function IconButton({
-  label, onClick, children,
+  label, onClick, children, size = 28,
 }: {
   label: string
   onClick: () => void
   children: React.ReactNode
+  size?: number
 }) {
+  const [hover, setHover] = useState(false)
   return (
     <button
       aria-label={label}
       title={label}
       onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
-        width: 26,
-        height: 26,
-        borderRadius: 6,
-        border: '1px solid var(--border)',
-        background: 'transparent',
-        color: 'var(--text-dim)',
+        width: size,
+        height: size,
+        borderRadius: size > 30 ? 8 : 7,
+        border: `1px solid ${hover ? 'var(--red-border)' : 'var(--border-strong)'}`,
+        background: hover ? 'var(--red-bg)' : 'transparent',
+        color: hover ? 'var(--red)' : 'var(--text-faint)',
         cursor: 'pointer',
+        flexShrink: 0,
       }}
     >
       {children}
     </button>
+  )
+}
+
+function hasIssue(entity: SemanticEntity): boolean {
+  return (
+    !entity.valid ||
+    entity.issue !== '' ||
+    entity.metrics.some((m) => !m.valid) ||
+    entity.columns.some((c) => !c.valid)
   )
 }
 
