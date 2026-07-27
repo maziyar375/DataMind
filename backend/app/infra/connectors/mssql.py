@@ -23,6 +23,7 @@ import asyncio
 import contextlib
 import math
 import time
+from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -38,6 +39,18 @@ from app.domain.ports.database import (
     ResultColumn,
     SchemaSnapshot,
     TableInfo,
+)
+from app.domain.value_objects import (
+    HINT_MAX_CARDINALITY,
+    HintBudget,
+    is_sensitive_column,
+)
+from app.infra.connectors.hints import (
+    ColumnHints,
+    apply_probe,
+    clean_values,
+    enforce_budget,
+    plan_probes,
 )
 
 _TABLE_SQL = """
@@ -91,6 +104,69 @@ JOIN sys.partitions p
 WHERE s.name IN ({placeholders})
 GROUP BY s.name, t.name
 """
+
+# SQL Server has the least usable statistics of the four engines for this
+# purpose. `sys.dm_db_stats_histogram` holds the values, but it is a DMV
+# requiring VIEW DATABASE STATE — a permission a read-only analytics login is
+# routinely *not* granted — and statistics exist only where an index or the
+# auto-create setting put them. It is attempted, and the probe covers the
+# (common) case where it returns nothing.
+#
+# `rows` and `rows_sampled` on the stats header let a partial sample be
+# rejected: a histogram built from a sample cannot be a complete domain.
+_STATS_SQL = """
+SELECT sch.name AS table_schema, t.name AS table_name,
+       c.name AS column_name,
+       h.range_high_key,
+       p.rows, p.rows_sampled, p.unfiltered_rows
+FROM sys.stats st
+JOIN sys.tables t ON t.object_id = st.object_id
+JOIN sys.schemas sch ON sch.schema_id = t.schema_id
+JOIN sys.stats_columns sc
+  ON sc.object_id = st.object_id AND sc.stats_id = st.stats_id
+ AND sc.stats_column_id = 1
+JOIN sys.columns c
+  ON c.object_id = st.object_id AND c.column_id = sc.column_id
+CROSS APPLY sys.dm_db_stats_properties(st.object_id, st.stats_id) p
+CROSS APPLY sys.dm_db_stats_histogram(st.object_id, st.stats_id) h
+WHERE sch.name IN ({placeholders})
+  AND h.range_high_key IS NOT NULL
+"""
+
+_TEXT_TYPES = frozenset({
+    "char", "varchar", "text", "nchar", "nvarchar", "ntext",
+})
+
+
+def _build_hints(stat_rows: list[Any]) -> dict[tuple[str, str, str], ColumnHints]:
+    """Fold histogram steps into hint records, dropping sampled statistics.
+
+    A SQL Server histogram step is a `range_high_key` — an upper bound, not an
+    enumerated value — so it is only the complete domain when the statistic
+    covered every row (`rows_sampled = rows`) and the step count stayed under
+    the cardinality cap. Anything else is a summary and is discarded rather
+    than presented as a value list.
+    """
+    steps: dict[tuple[str, str, str], list[Any]] = {}
+    full_scan: dict[tuple[str, str, str], bool] = {}
+
+    for schema, table, column, key, rows, rows_sampled, _unfiltered in stat_rows:
+        ident = (schema, table, column)
+        steps.setdefault(ident, []).append(key)
+        full_scan[ident] = bool(rows) and rows_sampled == rows
+
+    hints: dict[tuple[str, str, str], ColumnHints] = {}
+    for ident, keys in steps.items():
+        if not full_scan.get(ident):
+            continue
+        if is_sensitive_column(ident[2]):
+            continue
+        values = clean_values(keys)
+        if values:
+            hints[ident] = ColumnHints(
+                sample_values=values, distinct_count=len(values)
+            )
+    return hints
 
 
 class MsSqlConnector:
@@ -183,11 +259,47 @@ class MsSqlConnector:
             conn.close()
 
     # ── introspection ────────────────────────────────────────────────────
-    async def introspect(self, *, schema_allowlist: list[str]) -> SchemaSnapshot:
+    async def introspect(
+        self, *, schema_allowlist: list[str], hints: HintBudget = HintBudget()
+    ) -> SchemaSnapshot:
         schemas = schema_allowlist or ["dbo"]
-        return await asyncio.to_thread(self._introspect_blocking, schemas)
+        return await asyncio.to_thread(self._introspect_blocking, schemas, hints)
 
-    def _introspect_blocking(self, schemas: list[str]) -> SchemaSnapshot:
+    def _probe_values(
+        self,
+        cur: Any,
+        hints: dict[tuple[str, str, str], ColumnHints],
+        *,
+        columns: Mapping[tuple[str, str, str], str],
+        row_counts: Mapping[tuple[str, str], int | None],
+    ) -> None:
+        """Fill value lists the DMVs could not, one bounded query each.
+
+        Runs on the caller's cursor because this connector is synchronous
+        under `asyncio.to_thread`; opening a second connection per sync would
+        double the login cost for no benefit.
+        """
+        targets = plan_probes(
+            columns=columns, known=hints, row_counts=row_counts,
+            text_types=_TEXT_TYPES,
+        )
+        top = f"TOP {HINT_MAX_CARDINALITY + 1}"
+        for target in targets:
+            table, column = target.quoted("[")
+            # SQL Server has no per-statement timeout to set here; TOP plus
+            # the table-size ceiling in `plan_probes` are the bound. Escaped
+            # identifiers, and no user value in the statement.
+            sql = f"SELECT DISTINCT {top} {column} FROM {table}"  # noqa: S608
+            rows = None
+            with contextlib.suppress(Exception):
+                cur.execute(sql)
+                rows = cur.fetchall()
+            if rows is not None:
+                apply_probe(hints, target, [r[0] for r in rows])
+
+    def _introspect_blocking(
+        self, schemas: list[str], budget: HintBudget
+    ) -> SchemaSnapshot:
         marks = ", ".join(["%s"] * len(schemas))
         params = tuple(schemas)
         conn = self._connect()
@@ -205,12 +317,31 @@ class MsSqlConnector:
                 fk_rows = cur.fetchall()
                 cur.execute(_ROWCOUNT_SQL.format(placeholders=marks), params)
                 count_rows = cur.fetchall()
+
+                # Hints are an accuracy aid, never a correctness dependency.
+                # The DMVs below need VIEW DATABASE STATE, which a read-only
+                # analytics login usually lacks; the probe covers that case.
+                stat_rows: list[Any] = []
+                if budget.value_lists:
+                    with contextlib.suppress(Exception):
+                        cur.execute(_STATS_SQL.format(placeholders=marks), params)
+                        stat_rows = list(cur.fetchall())
+
+                counts = {(r[0], r[1]): int(r[2] or 0) for r in count_rows}
+                hints = _build_hints(stat_rows)
+                if budget.value_lists:
+                    self._probe_values(
+                        cur,
+                        hints,
+                        columns={(r[0], r[1], r[2]): r[3] for r in col_rows},
+                        row_counts=counts,
+                    )
+                hints = enforce_budget(hints, budget)
         finally:
             conn.close()
 
         pks = {(r[0], r[1], r[2]) for r in pk_rows}
         fks = {(r[0], r[1], r[2]): f"{r[3]}.{r[4]}.{r[5]}" for r in fk_rows}
-        counts = {(r[0], r[1]): int(r[2] or 0) for r in count_rows}
 
         grouped: dict[tuple[str, str], list[ColumnInfo]] = {}
         for schema, table, column, data_type, nullable, _pos in col_rows:
@@ -223,6 +354,7 @@ class MsSqlConnector:
                     is_primary_key=ident in pks,
                     is_foreign_key=ident in fks,
                     references=fks.get(ident),
+                    **hints.get(ident, ColumnHints()).as_kwargs(),
                 )
             )
 

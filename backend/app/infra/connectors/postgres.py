@@ -13,7 +13,10 @@ correctness argument and these are containment:
 """
 from __future__ import annotations
 
+import contextlib
 import time
+from collections.abc import Mapping
+from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -30,6 +33,21 @@ from app.domain.ports.database import (
     ResultColumn,
     SchemaSnapshot,
     TableInfo,
+)
+from app.domain.value_objects import (
+    HINT_MAX_CARDINALITY,
+    HINT_MAX_VALUE_CHARS,
+    HintBudget,
+    is_sensitive_column,
+)
+from app.infra.connectors.hints import (
+    PROBE_TIMEOUT_MS,
+    ColumnHints,
+    apply_probe,
+    clean_values,
+    enforce_budget,
+    normalise_distinct,
+    plan_probes,
 )
 
 _NUMERIC_TYPES = {
@@ -102,6 +120,73 @@ SELECT n.nspname AS schema, c.relname AS name, c.reltuples::bigint AS approx
 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE c.relkind = 'r' AND n.nspname = ANY($1::text[])
 """
+
+# Column content hints straight from the planner's own statistics — no table
+# scan, no SELECT DISTINCT over 71k rows. `pg_stats` is a security-barrier
+# view that only exposes columns the current role may read, so a read-only
+# role sees exactly what it is allowed to (the same privilege filtering that
+# makes `information_schema` unreliable for constraints works *for* us here).
+# Empty stats simply yield no hints; ANALYZE has to have run at least once.
+#
+# The double cast is deliberate: `anyarray` cannot be decoded by the client,
+# but Postgres will render it to text and parse it back as text[] for us.
+_STATS_SQL = """
+SELECT s.schemaname AS schema, s.tablename AS name, s.attname AS column_name,
+       s.n_distinct, s.null_frac,
+       (SELECT array_agg(v)
+          FROM unnest(s.most_common_vals::text::text[]) AS v) AS common_vals,
+       (SELECT array_agg(v)
+          FROM unnest(s.histogram_bounds::text::text[]) AS v) AS bounds
+FROM pg_stats s
+WHERE s.schemaname = ANY($1::text[])
+"""
+
+_TEXT_TYPES = {
+    "text", "character varying", "character", "varchar", "char", "bpchar",
+}
+
+
+def _column_hints(
+    *, column: str, data_type: str, stat: Any, approx_rows: int | None
+) -> ColumnHints:
+    """Turn one `pg_stats` row into the engine-neutral hint record.
+
+    Counts are captured for every column; *values* only for short, genuinely
+    low-cardinality, non-sensitive text. The cardinality cap and the sensitive
+    -name floor are applied here, at capture, so values that may never be
+    disclosed are never written to the snapshot in the first place.
+    """
+    if stat is None:
+        return ColumnHints()
+
+    approx_distinct = normalise_distinct(stat["n_distinct"], approx_rows)
+    null_frac = stat["null_frac"]
+    hints = ColumnHints(
+        distinct_count=approx_distinct,
+        null_fraction=round(float(null_frac), 4) if null_frac is not None else None,
+    )
+
+    bounds = list(stat["bounds"] or [])
+    if data_type in _TEMPORAL_TYPES or data_type in _NUMERIC_TYPES:
+        if bounds:
+            return replace(
+                hints,
+                min_value=str(bounds[0])[:HINT_MAX_VALUE_CHARS],
+                max_value=str(bounds[-1])[:HINT_MAX_VALUE_CHARS],
+            )
+        return hints
+
+    if data_type not in _TEXT_TYPES or is_sensitive_column(column):
+        return hints
+    if approx_distinct is None or approx_distinct > HINT_MAX_CARDINALITY:
+        return hints
+
+    # `most_common_vals` holds only the *frequent* values, so it is a complete
+    # domain only when the column has no more distinct values than it lists.
+    values = clean_values(stat["common_vals"])
+    if len(values) != approx_distinct:
+        return hints
+    return replace(hints, sample_values=values)
 
 
 class PostgresConnector:
@@ -196,8 +281,51 @@ class PostgresConnector:
             await tx.rollback()
             return False
 
+    async def _probe_values(
+        self,
+        hints: dict[tuple[str, str, str], ColumnHints],
+        *,
+        columns: Mapping[tuple[str, str, str], str],
+        row_counts: Mapping[tuple[str, str], int | None],
+    ) -> None:
+        """Fill value lists the catalog could not, one bounded query each.
+
+        Read-only and time-boxed like every other statement this connector
+        issues. Any failure — permissions, timeout, a dropped table — leaves
+        the column with no hint rather than failing the sync.
+        """
+        targets = plan_probes(
+            columns=columns, known=hints, row_counts=row_counts,
+            text_types=frozenset(_TEXT_TYPES),
+        )
+        if not targets:
+            return
+
+        pool = await self._acquire()
+        async with pool.acquire() as conn:
+            await conn.execute(f"SET statement_timeout = {PROBE_TIMEOUT_MS}")
+            tx = conn.transaction(readonly=True)
+            await tx.start()
+            try:
+                cap = HINT_MAX_CARDINALITY + 1
+                for target in targets:
+                    table, column = target.quoted()
+                    # Identifiers cannot be bound, so they are interpolated —
+                    # escaped by `quoted()`, and there is no user value in the
+                    # statement at all.
+                    sql = f"SELECT DISTINCT {column} FROM {table} LIMIT {cap}"  # noqa: S608
+                    rows = None
+                    with contextlib.suppress(Exception):
+                        rows = await conn.fetch(sql)
+                    if rows is not None:
+                        apply_probe(hints, target, [r[0] for r in rows])
+            finally:
+                await tx.rollback()
+
     # ── introspection ────────────────────────────────────────────────────
-    async def introspect(self, *, schema_allowlist: list[str]) -> SchemaSnapshot:
+    async def introspect(
+        self, *, schema_allowlist: list[str], hints: HintBudget = HintBudget()
+    ) -> SchemaSnapshot:
         schemas = schema_allowlist or ["public"]
         pool = await self._acquire()
         async with pool.acquire() as conn:
@@ -206,6 +334,15 @@ class PostgresConnector:
             pk_rows = await conn.fetch(_PK_SQL, schemas)
             fk_rows = await conn.fetch(_FK_SQL, schemas)
             count_rows = await conn.fetch(_ROWCOUNT_SQL, schemas)
+            stat_rows = []
+            try:
+                if hints.stats:
+                    stat_rows = await conn.fetch(_STATS_SQL, schemas)
+            except Exception:
+                # Hints are an accuracy aid, never a correctness dependency: a
+                # database that has never been ANALYZEd, or a role that cannot
+                # read pg_stats, degrades to a snapshot with no hints at all.
+                stat_rows = []
 
         pks = {(r["table_schema"], r["table_name"], r["column_name"]) for r in pk_rows}
         fks = {
@@ -214,6 +351,35 @@ class PostgresConnector:
             for r in fk_rows
         }
         counts = {(r["schema"], r["name"]): int(r["approx"] or 0) for r in count_rows}
+        stats = {
+            (r["schema"], r["name"], r["column_name"]): r for r in stat_rows
+        }
+
+        captured = {
+            (r["table_schema"], r["table_name"], r["column_name"]): _column_hints(
+                column=r["column_name"],
+                data_type=r["data_type"],
+                stat=stats.get(
+                    (r["table_schema"], r["table_name"], r["column_name"])
+                ),
+                approx_rows=counts.get((r["table_schema"], r["table_name"])),
+            )
+            for r in col_rows
+        }
+        # `most_common_vals` only covers a column whose whole domain is
+        # frequent. Anything it could not settle falls through to the probe,
+        # which is exact or silent.
+        if hints.value_lists:
+            await self._probe_values(
+                captured,
+                columns={
+                    (r["table_schema"], r["table_name"], r["column_name"]):
+                        r["data_type"]
+                    for r in col_rows
+                },
+                row_counts=counts,
+            )
+        captured = enforce_budget(captured, hints)
 
         grouped: dict[tuple[str, str], list[ColumnInfo]] = {}
         for r in col_rows:
@@ -227,6 +393,7 @@ class PostgresConnector:
                     is_primary_key=ident in pks,
                     is_foreign_key=ident in fks,
                     references=fks.get(ident),
+                    **captured.get(ident, ColumnHints()).as_kwargs(),
                 )
             )
 

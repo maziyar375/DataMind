@@ -92,12 +92,14 @@ backend/app/
   services/       use cases + transaction boundaries: run_service, bootstrap,
                   disclosure_service, policy
   pipeline/       the AI run: state.py (typed RunState), pipeline.py (state machine),
-                  nodes/ (route→retrieve→generate→validate→execute→present→chart), prompts/
+                  nodes/ (route→retrieve→generate→validate→execute→inspect→present→chart),
+                  prompts/, disclosure.py (result gate), checks.py (free result checks)
   sqlguard/       policy, validator, rewriter — self-contained, dialect-aware
   charts/         ChartIntent → validation → Vega-Lite
   infra/          adapters implementing the ports:
     db/           SQLAlchemy models.py + Alembic migrations + session
     connectors/   factory + postgres/mysql/mssql/oracle (one DatabaseConnector each)
+                  + hints.py: the engine-neutral column-hint contract they share
     llm/          LiteLLM behind LLMGateway
     crypto/       SecretBox (AES-256-GCM)
     identity/     local Argon2id + JWT provider
@@ -159,7 +161,14 @@ litellm` outside `app/infra/llm/`** — CI greps for it.
    `api_key`**; a test asserts this against the generated schemas.
 4. **Disclosure is explicit and visible.** Each connection declares how much
    result data may reach the model: `NONE | AGGREGATE | SAMPLE | FULL`. The
-   chat header shows the policy in force *at ask time*.
+   chat header shows the policy in force *at ask time*. The policy has **two
+   halves**: `pipeline/disclosure.py` gates the result, and `HintBudget`
+   (`domain/value_objects`) gates the per-column content hints in the schema
+   block. Hints are filtered at *render* time, never only at sync, so
+   tightening a policy takes effect without a re-sync — and the sensitive-name
+   floor (`is_sensitive_column`) applies at capture under every policy,
+   including FULL, because the schema block is sent on every question while a
+   result is only sent for the query the user asked for.
 
 ---
 
@@ -171,13 +180,20 @@ hands off to the in-process executor. `AnalyticsPipeline.run` walks a linear
 state machine with one bounded repair loop:
 
 ```
-route → retrieve → generate → validate → execute → present → chart
+route → retrieve → generate → validate → execute → inspect → present → chart
 ```
 
 - `route` classifies intent. **METADATA** questions ("what tables do I have?")
   are answered from the schema snapshot and **HALT before any SQL**.
 - A validation/execution failure can `goto` back to `generate` (bounded repair);
   a hard ceiling of 24 transitions and a per-run deadline prevent runaway loops.
+- `inspect` covers the third failure mode: the query ran and the answer is
+  wrong. Its checks are **structural** — SQL + snapshot + result *shape*, never
+  a result value — so they cost no tokens and behave identically under every
+  disclosure policy. Only `retry=True` findings spend a regeneration, at most
+  once per run, and the superseded result is restored if that retry fails, so a
+  check can never turn a working answer into a failed run. See
+  `pipeline/checks.py`.
 - Each step persists a `run_step` and emits an SSE event; the SPA renders the
   **live step trail**, which is a valued feature — keep it visible, don't
   collapse it behind a "Thought for Xs" summary by default.
@@ -229,6 +245,14 @@ so no row is stuck `RUNNING`.
   `factory.py`, add the `DatabaseKind` + its `sqlglot_dialect`/`default_port`,
   extend `sqlguard` if the dialect needs it, and add the engine to the frontend
   `DATABASE_TYPES`. Verify against a real container with a read-only role.
+  Column hints are optional — a connector that populates none still works — but
+  if you add them, go through `connectors/hints.py` and honour its one rule:
+  **emit a value list only when it is provably the complete domain.** Each
+  engine proves that differently (Postgres: MCV count equals `n_distinct`;
+  Oracle: a FREQUENCY histogram's endpoints equal `num_distinct`; MySQL: a
+  declared `enum`/`set`, or a *singleton* histogram; SQL Server: a histogram
+  whose `rows_sampled` equals `rows`), and where none of that holds, the
+  bounded `SELECT DISTINCT … LIMIT n+1` probe is exact or silent.
 - **A new API route:** router in `api/v1/`, DTO in `schemas.py`, business logic
   in a `services/*` function that owns the transaction. Literal paths (e.g.
   `/test`) must be declared **above** `/{id}` routes.

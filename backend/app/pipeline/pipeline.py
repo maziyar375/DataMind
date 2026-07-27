@@ -28,6 +28,7 @@ ORDER: list[tuple[str, NodeFn]] = [
     (StepName.GENERATE, nodes.generate),
     (StepName.VALIDATE, nodes.validate),
     (StepName.EXECUTE, nodes.execute),
+    (StepName.INSPECT, nodes.inspect),
     (StepName.PRESENT, nodes.present),
     (StepName.CHART, nodes.chart),
 ]

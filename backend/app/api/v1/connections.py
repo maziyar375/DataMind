@@ -17,6 +17,7 @@ from app.api.schemas import (
 )
 from app.core.clock import utcnow
 from app.core.errors import ConflictError, NotFoundError, ValidationError
+from app.domain.value_objects import HintBudget
 from app.infra.connectors.factory import build_connector
 from app.infra.db.models import DatabaseConnection, SchemaSnapshotRow
 
@@ -229,7 +230,12 @@ async def sync_schema(
     )
     try:
         snapshot = await connector.introspect(
-            schema_allowlist=connection.schema_allowlist
+            schema_allowlist=connection.schema_allowlist,
+            # Column content hints are customer data, so what may be *captured*
+            # is capped by the same policy that caps what may be disclosed.
+            # A NONE connection stores structure only — tightening the policy
+            # takes effect at once, loosening it needs a re-sync.
+            hints=HintBudget.from_policy(connection.disclosure_policy),
         )
     finally:
         await connector.close()
@@ -247,24 +253,7 @@ async def sync_schema(
         connection_id=connection.id,
         version=version,
         dialect=snapshot.dialect,
-        tables=[
-            {
-                "schema": t.schema,
-                "name": t.name,
-                "approx_row_count": t.approx_row_count,
-                "columns": [
-                    {
-                        "name": c.name, "data_type": c.data_type,
-                        "nullable": c.nullable,
-                        "is_primary_key": c.is_primary_key,
-                        "is_foreign_key": c.is_foreign_key,
-                        "references": c.references,
-                    }
-                    for c in t.columns
-                ],
-            }
-            for t in snapshot.tables
-        ],
+        tables=[t.as_dict() for t in snapshot.tables],
         relationships=[
             {
                 "from_table": r.from_table, "from_column": r.from_column,

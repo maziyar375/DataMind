@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import contextlib
 import time
+from collections.abc import Mapping
+from dataclasses import replace
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -36,6 +38,20 @@ from app.domain.ports.database import (
     ResultColumn,
     SchemaSnapshot,
     TableInfo,
+)
+from app.domain.value_objects import (
+    HINT_MAX_CARDINALITY,
+    HintBudget,
+    is_sensitive_column,
+)
+from app.infra.connectors.hints import (
+    ColumnHints,
+    apply_probe,
+    clean_values,
+    enforce_budget,
+    normalise_distinct,
+    null_fraction_from_counts,
+    plan_probes,
 )
 
 _TABLE_SQL = """
@@ -82,6 +98,84 @@ SELECT owner, table_name, num_rows
 FROM all_tables
 WHERE owner IN ({placeholders})
 """
+
+# Oracle keeps the richest column statistics of the four engines: a distinct
+# count and a null count per column, gathered by DBMS_STATS. Both are visible
+# through ALL_* views to any role with SELECT on the table, so a read-only
+# analytics user sees exactly its own tables.
+_STATS_SQL = """
+SELECT owner, table_name, column_name, num_distinct, num_nulls
+FROM all_tab_col_statistics
+WHERE owner IN ({placeholders})
+"""
+
+# For a *frequency* histogram — the kind Oracle builds precisely when a column
+# has few distinct values — every endpoint is a real value, so this is the
+# complete domain rather than a sample. ENDPOINT_ACTUAL_VALUE is only
+# populated for character columns, which is the only place a value list is
+# wanted anyway.
+_HISTOGRAM_SQL = """
+SELECT h.owner, h.table_name, h.column_name, h.endpoint_actual_value
+FROM all_tab_histograms h
+JOIN all_tab_col_statistics s
+  ON s.owner = h.owner AND s.table_name = h.table_name
+ AND s.column_name = h.column_name
+WHERE h.owner IN ({placeholders})
+  AND h.endpoint_actual_value IS NOT NULL
+  AND s.histogram = 'FREQUENCY'
+"""
+
+_TEXT_TYPES = frozenset({
+    "varchar2", "nvarchar2", "char", "nchar", "varchar", "clob", "nclob",
+})
+
+
+def _build_hints(
+    *,
+    col_rows: list[Any],
+    stat_rows: list[Any],
+    histogram_rows: list[Any],
+    counts: dict[tuple[str, str], int],
+) -> dict[tuple[str, str, str], ColumnHints]:
+    """Fold DBMS_STATS counts and frequency histograms into hint records.
+
+    Oracle reports a null *count* against the table's own `num_rows`, so the
+    fraction is derived rather than read. Min/max are deliberately skipped:
+    ALL_TAB_COLUMNS stores LOW_VALUE/HIGH_VALUE as type-encoded RAW, and
+    decoding it correctly per type is far more machinery than a range hint is
+    worth.
+    """
+    endpoints: dict[tuple[str, str, str], list[str]] = {}
+    for owner, table, column, value in histogram_rows:
+        endpoints.setdefault((owner, table, column), []).append(value)
+
+    types = {(r[0], r[1], r[2]): str(r[3]).lower() for r in col_rows}
+    hints: dict[tuple[str, str, str], ColumnHints] = {}
+
+    for owner, table, column, num_distinct, num_nulls in stat_rows:
+        ident = (owner, table, column)
+        distinct = normalise_distinct(num_distinct, counts.get((owner, table)))
+        record = ColumnHints(
+            distinct_count=distinct,
+            null_fraction=null_fraction_from_counts(
+                int(num_nulls) if num_nulls is not None else None,
+                counts.get((owner, table)),
+            ),
+        )
+        if (
+            types.get(ident) in _TEXT_TYPES
+            and not is_sensitive_column(column)
+            and distinct is not None
+            and distinct <= HINT_MAX_CARDINALITY
+        ):
+            values = clean_values(endpoints.get(ident))
+            # A frequency histogram has one endpoint per distinct value, so
+            # anything short of that is not the whole domain.
+            if len(values) == distinct:
+                record = replace(record, sample_values=values)
+        hints[ident] = record
+
+    return hints
 
 
 class OracleConnector:
@@ -180,8 +274,40 @@ class OracleConnector:
         await conn.rollback()
         return False
 
+    async def _probe_values(
+        self,
+        hints: dict[tuple[str, str, str], ColumnHints],
+        *,
+        columns: Mapping[tuple[str, str, str], str],
+        row_counts: Mapping[tuple[str, str], int | None],
+    ) -> None:
+        """Fill value lists DBMS_STATS could not, one bounded query each."""
+        targets = plan_probes(
+            columns=columns, known=hints, row_counts=row_counts,
+            text_types=_TEXT_TYPES,
+        )
+        if not targets:
+            return
+
+        pool = await self._acquire()
+        async with pool.acquire() as conn:
+            with conn.cursor() as cur:
+                rows_only = f"FETCH FIRST {HINT_MAX_CARDINALITY + 1} ROWS ONLY"
+                for target in targets:
+                    table, column = target.quoted()
+                    # Escaped identifiers, and no user value in the statement.
+                    sql = f"SELECT DISTINCT {column} FROM {table} {rows_only}"  # noqa: S608
+                    rows = None
+                    with contextlib.suppress(Exception):
+                        await cur.execute(sql)
+                        rows = await cur.fetchall()
+                    if rows is not None:
+                        apply_probe(hints, target, [r[0] for r in rows])
+
     # ── introspection ────────────────────────────────────────────────────
-    async def introspect(self, *, schema_allowlist: list[str]) -> SchemaSnapshot:
+    async def introspect(
+        self, *, schema_allowlist: list[str], hints: HintBudget = HintBudget()
+    ) -> SchemaSnapshot:
         schemas = [s.upper() for s in schema_allowlist] or [self._default_schema]
         # Oracle binds by name; positional :1 style keeps the IN list simple.
         marks = ", ".join(f":{i + 1}" for i in range(len(schemas)))
@@ -202,9 +328,39 @@ class OracleConnector:
                 await cur.execute(_ROWCOUNT_SQL.format(placeholders=marks), schemas)
                 count_rows = await cur.fetchall()
 
+                stat_rows, histogram_rows = [], []
+                # Skipped entirely when the policy could never emit them.
+                # Hints are an accuracy aid, never a correctness dependency:
+                # a schema whose statistics were never gathered, or a role
+                # without access to the ALL_* stats views, simply yields none.
+                if hints.stats:
+                    with contextlib.suppress(Exception):
+                        await cur.execute(
+                            _STATS_SQL.format(placeholders=marks), schemas
+                        )
+                        stat_rows = await cur.fetchall()
+                if hints.value_lists:
+                    with contextlib.suppress(Exception):
+                        await cur.execute(
+                            _HISTOGRAM_SQL.format(placeholders=marks), schemas
+                        )
+                        histogram_rows = await cur.fetchall()
+
         pks = {(r[0], r[1], r[2]) for r in pk_rows}
         fks = {(r[0], r[1], r[2]): f"{r[3]}.{r[4]}.{r[5]}" for r in fk_rows}
         counts = {(r[0], r[1]): int(r[2] or 0) for r in count_rows}
+
+        captured = _build_hints(
+            col_rows=col_rows, stat_rows=stat_rows,
+            histogram_rows=histogram_rows, counts=counts,
+        )
+        if hints.value_lists:
+            await self._probe_values(
+                captured,
+                columns={(r[0], r[1], r[2]): r[3] for r in col_rows},
+                row_counts=counts,
+            )
+        captured = enforce_budget(captured, hints)
 
         grouped: dict[tuple[str, str], list[ColumnInfo]] = {}
         for owner, table, column, data_type, nullable, _pos in col_rows:
@@ -217,6 +373,7 @@ class OracleConnector:
                     is_primary_key=ident in pks,
                     is_foreign_key=ident in fks,
                     references=fks.get(ident),
+                    **captured.get(ident, ColumnHints()).as_kwargs(),
                 )
             )
 

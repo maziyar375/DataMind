@@ -3,7 +3,12 @@ wording never silently invalidates historical comparisons.
 """
 from __future__ import annotations
 
-PROMPT_VERSION = "v2"
+PROMPT_VERSION = "v3"
+# v3: the schema block can now carry column content hints (value lists, null
+# fractions, ranges) gated by the connection's disclosure policy, and a
+# result-check repair path was added. The generate prompt itself is unchanged;
+# the version moves because the *rendered* prompt does, and comparing a v3 run
+# against the v2 baseline would otherwise silently mix two schema formats.
 
 ROUTE_SYSTEM = """You classify a user's question about a SQL database.
 
@@ -40,6 +45,18 @@ Schema:
 # generation guidance, keep it terse and re-measure; more is not better here.
 
 GENERATE_USER = """Question: {question}
+
+Return JSON with keys: sql, tables_used, reasoning."""
+
+REVIEW_SYSTEM = """Your previous SQL ran successfully, but the result looks wrong.
+
+These are automated structural checks, not proof of a mistake. If a check is
+wrong for this question, keep your original query.
+
+{feedback}
+
+Schema:
+{schema}
 
 Return JSON with keys: sql, tables_used, reasoning."""
 

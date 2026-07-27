@@ -1,6 +1,8 @@
 """Value objects. No I/O, no framework imports."""
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from enum import StrEnum
 
 
@@ -75,6 +77,7 @@ class StepName(StrEnum):
     GENERATE = "generate"
     VALIDATE = "validate"
     EXECUTE = "execute"
+    INSPECT = "inspect"
     PRESENT = "present"
     CHART = "chart"
 
@@ -110,6 +113,86 @@ class DisclosurePolicy(StrEnum):
     FULL = "FULL"            # the whole (capped) result set
 
 
+# ── column hints: the second half of the disclosure policy ──────────────────
+# `pipeline/disclosure.py` governs how much of a *result* reaches the model.
+# The same customer data also leaks the other way — through the schema block,
+# which carries per-column statistics captured at sync time. It lives here
+# because both sides need it: infra connectors decide what to *capture*, and
+# `RetrievedContext.render` decides what to *emit* for the policy in force at
+# ask time. Capturing and rendering are deliberately separate: a connection
+# downgraded from FULL to NONE must stop emitting hints immediately, without
+# waiting for a re-sync.
+
+# Never captured, at any policy. Low cardinality is not the same as
+# non-sensitive: a 12-value `city` column is still a disclosure. This is a
+# floor under the ladder below, not another rung of it.
+SENSITIVE_COLUMN_TOKENS = (
+    "name", "email", "mail", "phone", "tel", "mobile", "address", "addr",
+    "street", "city", "postal", "zip", "ssn", "tax", "passport", "iban",
+    "account", "card", "token", "secret", "password", "hash", "ref",
+    "tracking", "url", "website", "note", "comment", "description", "body",
+    "title", "subject", "lat", "lon", "ip",
+)
+
+_SENSITIVE_RE = re.compile(
+    r"(^|_)(" + "|".join(SENSITIVE_COLUMN_TOKENS) + r")(e?s)?($|_)", re.IGNORECASE
+)
+
+
+def is_sensitive_column(name: str) -> bool:
+    """True if a column's *name* alone disqualifies it from value capture.
+
+    Token-boundary matching, so `city` and `billing_city` are excluded while
+    `capacity` and `is_active` are not — a substring test would swallow both.
+    The optional plural suffix matters more than it looks: without it `notes`
+    and `addresses` slip past a list written in the singular.
+    """
+    return bool(_SENSITIVE_RE.search(name))
+
+
+@dataclass(frozen=True, slots=True)
+class HintBudget:
+    """What the schema block may say about a column's *contents*.
+
+    The ladder mirrors `disclose()`: NONE shares nothing derived from data,
+    AGGREGATE shares counts but never a value, SAMPLE shares bounded values
+    the way it shares bounded rows, FULL is the widest.
+    """
+
+    row_counts: bool = False        # approximate table cardinality
+    stats: bool = False             # distinct counts, null fractions
+    value_lists: bool = False       # the actual distinct values
+    temporal_range: bool = False    # min/max of date and timestamp columns
+    numeric_range: bool = False     # min/max of numeric columns
+    max_values: int = 0             # cap on values emitted per column
+
+    @classmethod
+    def from_policy(cls, policy: str) -> HintBudget:
+        if policy == DisclosurePolicy.AGGREGATE:
+            return cls(row_counts=True, stats=True)
+        if policy == DisclosurePolicy.SAMPLE:
+            return cls(
+                row_counts=True, stats=True, value_lists=True,
+                temporal_range=True, max_values=25,
+            )
+        if policy == DisclosurePolicy.FULL:
+            return cls(
+                row_counts=True, stats=True, value_lists=True,
+                temporal_range=True, numeric_range=True, max_values=50,
+            )
+        # NONE, and anything unrecognised — fail closed.
+        return cls()
+
+
+# A column with more distinct values than this is not an enum, and listing it
+# would be both useless to the generator and a wide disclosure. Applied at
+# capture time so the values are never stored in the first place.
+HINT_MAX_CARDINALITY = 25
+
+# Values longer than this are prose, not categories.
+HINT_MAX_VALUE_CHARS = 40
+
+
 class RunEventType(StrEnum):
     RUN_STARTED = "RUN_STARTED"
     STEP_STARTED = "STEP_STARTED"
@@ -118,6 +201,7 @@ class RunEventType(StrEnum):
     SQL_VALIDATED = "SQL_VALIDATED"
     SQL_REJECTED = "SQL_REJECTED"
     QUERY_COMPLETED = "QUERY_COMPLETED"
+    RESULT_CHECKED = "RESULT_CHECKED"
     ARTIFACT_CREATED = "ARTIFACT_CREATED"
     CLARIFICATION_REQUESTED = "CLARIFICATION_REQUESTED"
     TEXT_DELTA = "TEXT_DELTA"

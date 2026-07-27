@@ -20,7 +20,11 @@ are owner-filtered and forced the pg_catalog route.
 """
 from __future__ import annotations
 
+import contextlib
+import json
 import time
+from collections.abc import Mapping
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -37,13 +41,27 @@ from app.domain.ports.database import (
     SchemaSnapshot,
     TableInfo,
 )
+from app.domain.value_objects import (
+    HINT_MAX_CARDINALITY,
+    HintBudget,
+    is_sensitive_column,
+)
+from app.infra.connectors.hints import (
+    PROBE_TIMEOUT_MS,
+    ColumnHints,
+    apply_probe,
+    clean_values,
+    enforce_budget,
+    parse_enum_members,
+    plan_probes,
+)
 
 # ER_QUERY_TIMEOUT: the statement outlived max_execution_time.
 _ER_QUERY_TIMEOUT = 3024
 
 _TABLE_SQL = """
 SELECT c.table_schema, c.table_name, c.column_name, c.data_type,
-       c.is_nullable, c.ordinal_position
+       c.is_nullable, c.ordinal_position, c.column_type
 FROM information_schema.columns c
 JOIN information_schema.tables t
   ON t.table_schema = c.table_schema AND t.table_name = c.table_name
@@ -51,6 +69,123 @@ WHERE t.table_type = 'BASE TABLE'
   AND c.table_schema IN ({placeholders})
 ORDER BY c.table_schema, c.table_name, c.ordinal_position
 """
+
+# MySQL has no `pg_stats` equivalent, but it has two cheaper sources.
+#
+# `information_schema.STATISTICS.CARDINALITY` is the number of distinct values
+# an index sees, which for the first column of an index is the column's own
+# distinct count. Only indexed columns have it, which is exactly the subset
+# worth knowing about anyway.
+_INDEX_CARDINALITY_SQL = """
+SELECT table_schema, table_name, column_name, cardinality
+FROM information_schema.statistics
+WHERE table_schema IN ({placeholders})
+  AND seq_in_index = 1
+  AND cardinality IS NOT NULL
+"""
+
+# MySQL 8.0 histograms, present only where someone ran
+# `ANALYZE TABLE … UPDATE HISTOGRAM ON …`. A "singleton" histogram stores one
+# bucket per distinct value, so its buckets are the complete domain; an
+# "equi-height" one is a summary and is ignored here.
+_HISTOGRAM_SQL = """
+SELECT schema_name, table_name, column_name, histogram
+FROM information_schema.column_statistics
+WHERE schema_name IN ({placeholders})
+"""
+
+_TEXT_TYPES = frozenset({"char", "varchar", "text", "tinytext", "mediumtext",
+                         "longtext", "enum", "set"})
+
+
+def _singleton_histogram(raw: Any) -> tuple[list[str], float | None]:
+    """Values and null fraction from a MySQL 8 histogram, if it is a singleton.
+
+    An equi-height histogram summarises ranges rather than enumerating values,
+    so it cannot produce a complete domain and is dropped.
+    """
+    if raw is None:
+        return [], None
+    try:
+        doc = json.loads(raw) if isinstance(raw, str | bytes) else raw
+    except (ValueError, TypeError):
+        return [], None
+    if not isinstance(doc, dict):
+        return [], None
+
+    null_fraction = doc.get("null-values")
+    fraction = (
+        round(float(null_fraction), 4)
+        if isinstance(null_fraction, int | float)
+        else None
+    )
+    if doc.get("histogram-type") != "singleton":
+        return [], fraction
+
+    buckets = doc.get("buckets")
+    if not isinstance(buckets, list):
+        return [], fraction
+    # Each bucket is [value, cumulative_frequency].
+    values = [b[0] for b in buckets if isinstance(b, list) and b]
+    return clean_values(values), fraction
+
+
+def _build_hints(
+    *,
+    col_rows: list[Any],
+    cardinality_rows: list[Any],
+    histogram_rows: list[Any],
+) -> dict[tuple[str, str, str], ColumnHints]:
+    """Combine the three MySQL sources, most authoritative first.
+
+    A declared `enum`/`set` beats every statistic: the type *is* the domain,
+    so it is complete by construction and free to read.
+    """
+    hints: dict[tuple[str, str, str], ColumnHints] = {}
+
+    for schema, table, column, cardinality in cardinality_rows:
+        if cardinality is None:
+            continue
+        hints[(schema, table, column)] = ColumnHints(
+            distinct_count=int(cardinality) or None
+        )
+
+    for schema, table, column, raw in histogram_rows:
+        values, null_fraction = _singleton_histogram(raw)
+        ident = (schema, table, column)
+        current = hints.get(ident, ColumnHints())
+        hints[ident] = replace(
+            current,
+            null_fraction=(
+                current.null_fraction if current.null_fraction is not None
+                else null_fraction
+            ),
+            sample_values=(
+                values
+                if values and not is_sensitive_column(column)
+                else current.sample_values
+            ),
+            distinct_count=(
+                current.distinct_count
+                if current.distinct_count is not None
+                else (len(values) or None)
+            ),
+        )
+
+    for schema, table, column, _type, _nullable, _pos, column_type in col_rows:
+        members = parse_enum_members(column_type)
+        if not members:
+            continue
+        ident = (schema, table, column)
+        current = hints.get(ident, ColumnHints())
+        hints[ident] = replace(
+            current,
+            distinct_count=len(members),
+            sample_values=[] if is_sensitive_column(column) else members,
+        )
+
+    return hints
+
 
 _PK_SQL = """
 SELECT k.table_schema, k.table_name, k.column_name
@@ -183,8 +318,43 @@ class MySqlConnector:
             return True
         return False
 
+    async def _probe_values(
+        self,
+        hints: dict[tuple[str, str, str], ColumnHints],
+        *,
+        columns: Mapping[tuple[str, str, str], str],
+        row_counts: Mapping[tuple[str, str], int | None],
+    ) -> None:
+        """Fill value lists the catalog could not, one bounded query each."""
+        targets = plan_probes(
+            columns=columns, known=hints, row_counts=row_counts,
+            text_types=_TEXT_TYPES,
+        )
+        if not targets:
+            return
+
+        pool = await self._acquire()
+        async with pool.acquire() as conn, conn.cursor() as cur:
+            with contextlib.suppress(Exception):
+                await cur.execute(
+                    f"SET SESSION max_execution_time = {PROBE_TIMEOUT_MS}"
+                )
+            cap = HINT_MAX_CARDINALITY + 1
+            for target in targets:
+                table, column = target.quoted("`")
+                # Escaped identifiers, and no user value in the statement.
+                sql = f"SELECT DISTINCT {column} FROM {table} LIMIT {cap}"  # noqa: S608
+                rows = None
+                with contextlib.suppress(Exception):
+                    await cur.execute(sql)
+                    rows = await cur.fetchall()
+                if rows is not None:
+                    apply_probe(hints, target, [r[0] for r in rows])
+
     # ── introspection ────────────────────────────────────────────────────
-    async def introspect(self, *, schema_allowlist: list[str]) -> SchemaSnapshot:
+    async def introspect(
+        self, *, schema_allowlist: list[str], hints: HintBudget = HintBudget()
+    ) -> SchemaSnapshot:
         # MySQL has no schema/database distinction, so the connected database
         # is the schema unless the caller narrowed it further.
         schemas = schema_allowlist or [self._database]
@@ -205,6 +375,23 @@ class MySqlConnector:
             await cur.execute(_ROWCOUNT_SQL.format(placeholders=marks), schemas)
             count_rows = await cur.fetchall()
 
+            # Hints are an accuracy aid, never a correctness dependency:
+            # MariaDB and MySQL 5.7 have no `column_statistics` view at all,
+            # and a restricted role may not see `statistics` either.
+            cardinality_rows: list[Any] = []
+            histogram_rows: list[Any] = []
+            if hints.stats:
+                with contextlib.suppress(Exception):
+                    await cur.execute(
+                        _INDEX_CARDINALITY_SQL.format(placeholders=marks), schemas
+                    )
+                    cardinality_rows = list(await cur.fetchall())
+                with contextlib.suppress(Exception):
+                    await cur.execute(
+                        _HISTOGRAM_SQL.format(placeholders=marks), schemas
+                    )
+                    histogram_rows = list(await cur.fetchall())
+
         pks = {(r[0], r[1], r[2]) for r in pk_rows}
         fks = {
             (r[0], r[1], r[2]): f"{r[3]}.{r[4]}.{r[5]}"
@@ -212,8 +399,21 @@ class MySqlConnector:
         }
         counts = {(r[0], r[1]): int(r[2] or 0) for r in count_rows}
 
+        captured = _build_hints(
+            col_rows=list(col_rows),
+            cardinality_rows=cardinality_rows,
+            histogram_rows=histogram_rows,
+        )
+        if hints.value_lists:
+            await self._probe_values(
+                captured,
+                columns={(r[0], r[1], r[2]): r[3] for r in col_rows},
+                row_counts=counts,
+            )
+        captured = enforce_budget(captured, hints)
+
         grouped: dict[tuple[str, str], list[ColumnInfo]] = {}
-        for schema, table, column, data_type, nullable, _pos in col_rows:
+        for schema, table, column, data_type, nullable, _pos, _column_type in col_rows:
             ident = (schema, table, column)
             grouped.setdefault((schema, table), []).append(
                 ColumnInfo(
@@ -223,6 +423,7 @@ class MySqlConnector:
                     is_primary_key=ident in pks,
                     is_foreign_key=ident in fks,
                     references=fks.get(ident),
+                    **captured.get(ident, ColumnHints()).as_kwargs(),
                 )
             )
 

@@ -23,6 +23,7 @@ from app.pipeline.prompts import (
     GENERATE_SYSTEM,
     GENERATE_USER,
     REPAIR_SYSTEM,
+    REVIEW_SYSTEM,
     ROUTE_SYSTEM,
 )
 from app.pipeline.state import (
@@ -190,7 +191,10 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
 async def generate(state: RunState, deps: NodeDeps) -> NodeResult:
     assert state.context is not None
     attempt_no = len(state.attempts) + 1
-    schema_text = state.context.render()
+    # The schema block carries column content hints (value lists, ranges,
+    # null fractions) that are customer data, so it is rendered against the
+    # same disclosure policy that governs the result in `present`.
+    schema_text = state.context.render(state.disclosure_policy)
 
     if attempt_no == 1:
         history_text = ""
@@ -212,19 +216,27 @@ async def generate(state: RunState, deps: NodeDeps) -> NodeResult:
         ]
     else:
         previous = state.attempts[-1]
-        feedback = previous.report.to_feedback()
-        if previous.db_error:
-            feedback += f"\nThe database also reported: {previous.db_error}"
+        # A repair driven by structural checks is a different conversation
+        # from a repair driven by rejection: the SQL was legal and it ran, so
+        # telling the model it was "rejected by a validator" would be a lie
+        # that invites it to fix the wrong thing.
+        if previous.report.status == "VALID" and previous.findings:
+            feedback = "\n".join(f.to_feedback() for f in previous.findings)
+            system = REVIEW_SYSTEM.format(feedback=feedback, schema=schema_text)
+            preamble = "Your previous SQL was:"
+        else:
+            feedback = previous.report.to_feedback()
+            if previous.db_error:
+                feedback += f"\nThe database also reported: {previous.db_error}"
+            system = REPAIR_SYSTEM.format(feedback=feedback, schema=schema_text)
+            preamble = "Your rejected SQL was:"
         messages = [
-            ChatMessage(
-                role="system",
-                content=REPAIR_SYSTEM.format(feedback=feedback, schema=schema_text),
-            ),
+            ChatMessage(role="system", content=system),
             ChatMessage(
                 role="user",
                 content=(
                     f"Question: {state.question}\n\n"
-                    f"Your rejected SQL was:\n{previous.raw_sql}"
+                    f"{preamble}\n{previous.raw_sql}"
                 ),
             ),
         ]
@@ -276,6 +288,8 @@ async def validate(state: RunState, deps: NodeDeps) -> NodeResult:
             return NodeResult(
                 status="OK", goto="generate", detail=f"Rejected: {', '.join(codes)}"
             )
+        if (restored := _restore_superseded(state)) is not None:
+            return restored
         first = report.errors[0]
         state.error = RunError(code=first.rule_id, message=first.message, hint=first.hint)
         return NodeResult(status="FAILED", detail=f"Rejected: {', '.join(codes)}")
@@ -310,6 +324,8 @@ async def execute(state: RunState, deps: NodeDeps) -> NodeResult:
         attempt.db_error = err.message
         if state.repair_count < state.max_repairs:
             return NodeResult(status="OK", goto="generate", detail=err.message)
+        if (restored := _restore_superseded(state)) is not None:
+            return restored
         state.error = RunError(
             code="E_QUERY_FAILED",
             message="The query could not be run against the database.",
@@ -336,6 +352,82 @@ async def execute(state: RunState, deps: NodeDeps) -> NodeResult:
         },
     )
     return NodeResult(detail=f"{result.row_count} rows in {result.duration_ms}ms")
+
+
+# ── inspect ──────────────────────────────────────────────────────────────
+def _restore_superseded(state: RunState) -> NodeResult | None:
+    """Undo a check-driven retry that ended worse than where it started.
+
+    A structural check is a suspicion, so it is never allowed to cost the user
+    a working answer: if the retry it prompted cannot be validated or run, the
+    result that triggered the check is put back and the run continues to
+    `present` as if the retry had not happened.
+    """
+    if state.superseded_execution is None:
+        return None
+    state.execution = state.superseded_execution
+    state.superseded_execution = None
+    state.error = None
+    return NodeResult(
+        status="OK", goto="present", detail="Retry failed; kept the earlier result"
+    )
+
+
+async def inspect(state: RunState, deps: NodeDeps) -> NodeResult:
+    """Structural checks over a result that ran. No model call, no result data.
+
+    Fail-open like `chart`: a check that cannot run leaves the answer alone.
+    """
+    execution = state.execution
+    if execution is None or not state.attempts:
+        return NodeResult(status="SKIPPED", detail="Nothing to inspect")
+
+    from app.pipeline.checks import inspect_result
+
+    attempt = state.attempts[-1]
+    findings = inspect_result(
+        question=state.question,
+        sql=attempt.rewritten_sql or attempt.raw_sql,
+        dialect=state.dialect,
+        tables=state.context.tables if state.context else [],
+        row_count=execution.row_count,
+        column_count=len(execution.columns),
+        truncated=execution.truncated,
+    )
+    attempt.findings = findings
+
+    if not findings:
+        # A retry that cleared the findings has done its job; drop the fallback.
+        state.superseded_execution = None
+        return NodeResult(detail="No issues found")
+
+    await deps.emit(
+        "RESULT_CHECKED",
+        {
+            "attempt_no": attempt.attempt_no,
+            "findings": [f.model_dump() for f in findings],
+        },
+    )
+    codes = ", ".join(f.code for f in findings)
+
+    retryable = [f for f in findings if f.retry]
+    if (
+        retryable
+        and not state.check_repair_used
+        and state.repair_count < state.max_repairs
+    ):
+        # One retry only, and only from a clean repair budget — a check must
+        # never eat the allowance the guard and the database have first claim
+        # on, and two rounds of structural nudging is guesswork.
+        state.check_repair_used = True
+        state.superseded_execution = execution
+        return NodeResult(status="OK", goto="generate", detail=f"Retrying: {codes}")
+
+    # Out of budget, or the retry came back with findings of its own. Either
+    # way the result stands; the findings are on the record via the event and
+    # the step trail.
+    state.superseded_execution = None
+    return NodeResult(detail=f"Noted: {codes}")
 
 
 # ── present ──────────────────────────────────────────────────────────────

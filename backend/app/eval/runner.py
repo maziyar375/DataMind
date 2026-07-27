@@ -37,7 +37,13 @@ from app.core.errors import RunTimeoutError
 from app.core.logging import get_logger
 from app.domain.ports.database import DatabaseConnector, SchemaSnapshot
 from app.domain.ports.llm import LLMGateway, ProviderCapabilities, ResolvedLLM
-from app.domain.value_objects import DatabaseKind, StepName, StepStatus
+from app.domain.value_objects import (
+    DatabaseKind,
+    DisclosurePolicy,
+    HintBudget,
+    StepName,
+    StepStatus,
+)
 from app.eval import dataset, metrics
 from app.eval.dataset import FixtureSpec, GoldRecord, NegativeRecord
 from app.eval.metrics import (
@@ -73,24 +79,7 @@ def snapshot_to_dict(snapshot: SchemaSnapshot) -> dict[str, Any]:
     """Same shape `connections.sync` stores and `run_service` feeds the pipeline."""
     return {
         "dialect": snapshot.dialect,
-        "tables": [
-            {
-                "schema": t.schema,
-                "name": t.name,
-                "approx_row_count": t.approx_row_count,
-                "columns": [
-                    {
-                        "name": c.name, "data_type": c.data_type,
-                        "nullable": c.nullable,
-                        "is_primary_key": c.is_primary_key,
-                        "is_foreign_key": c.is_foreign_key,
-                        "references": c.references,
-                    }
-                    for c in t.columns
-                ],
-            }
-            for t in snapshot.tables
-        ],
+        "tables": [t.as_dict() for t in snapshot.tables],
         "relationships": [
             {
                 "from_table": r.from_table, "from_column": r.from_column,
@@ -618,7 +607,12 @@ async def _amain(args: argparse.Namespace) -> int:
         connector = build_connector(kind=spec.dialect, **params)
         try:
             snap = snapshot_to_dict(
-                await connector.introspect(schema_allowlist=list(spec.schema_allowlist))
+                await connector.introspect(
+                    schema_allowlist=list(spec.schema_allowlist),
+                    # The eval fixture is synthetic data the harness owns,
+                    # so it measures the pipeline at its widest.
+                    hints=HintBudget.from_policy(DisclosurePolicy.FULL),
+                )
             )
             policy = build_policy(
                 snap, DatabaseKind(spec.dialect).sqlglot_dialect, settings.default_max_rows
