@@ -16,6 +16,7 @@ from app.infra.db.session import dispose_engine, get_sessionmaker
 from app.services.bootstrap import ensure_admin
 from app.workers.inprocess import InProcessRunExecutor
 from app.workers.reconciler import reconcile_once, reconciler_loop
+from app.workers.semantic import SemanticJobExecutor, sweep_orphans
 
 log = get_logger(__name__)
 
@@ -26,6 +27,7 @@ async def lifespan(app: FastAPI):
     configure_logging(json_logs=not settings.debug, level="DEBUG" if settings.debug else "INFO")
 
     app.state.run_executor = InProcessRunExecutor(settings)
+    app.state.semantic_executor = SemanticJobExecutor(settings)
 
     async with get_sessionmaker()() as session:
         await ensure_admin(session, settings)
@@ -34,6 +36,12 @@ async def lifespan(app: FastAPI):
     orphaned = await reconcile_once(settings)
     if orphaned:
         log.warning("startup_reconciled_orphans", count=orphaned)
+
+    # Same for a generation: nothing was persisted, so the row is failed
+    # rather than resumed, and the user is told it is safe to start again.
+    stranded = await sweep_orphans()
+    if stranded:
+        log.warning("startup_failed_stranded_semantic_jobs", count=stranded)
 
     reconciler = asyncio.create_task(reconciler_loop(settings))
     log.info("raymand_started", environment=settings.environment)

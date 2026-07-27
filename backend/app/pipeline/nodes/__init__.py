@@ -49,6 +49,9 @@ class NodeDeps:
     history: list[dict[str, str]]
     policy: GuardPolicy
     emit: Any  # async callable(event_type: str, data: dict) -> None
+    # The connection's semantic layer, or None when it has none or has
+    # switched it off. Passed through `retrieve` into the schema block.
+    semantic: dict[str, Any] | None = None
 
 
 # ── route ────────────────────────────────────────────────────────────────
@@ -183,8 +186,19 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
         ],
         history=deps.history,
         strategy=strategy,
+        semantic=deps.semantic,
     )
-    return NodeResult(detail=f"{len(selected)} tables via {strategy}")
+    described = (
+        sum(
+            1 for e in (deps.semantic or {}).get("entities", [])
+            if e.get("table", "").lower() in {n.lower() for n in names}
+        )
+        if deps.semantic else 0
+    )
+    detail = f"{len(selected)} tables via {strategy}"
+    return NodeResult(
+        detail=detail + (f" · {described} described" if described else "")
+    )
 
 
 # ── generate ─────────────────────────────────────────────────────────────
@@ -220,8 +234,15 @@ async def generate(state: RunState, deps: NodeDeps) -> NodeResult:
         # from a repair driven by rejection: the SQL was legal and it ran, so
         # telling the model it was "rejected by a validator" would be a lie
         # that invites it to fix the wrong thing.
-        if previous.report.status == "VALID" and previous.findings:
-            feedback = "\n".join(f.to_feedback() for f in previous.findings)
+        triggering = [f for f in previous.findings if f.retry]
+        if previous.report.status == "VALID" and triggering:
+            # Only the finding that *earned* the retry is quoted back. An
+            # advisory finding is advisory in both directions: it may not
+            # start a regeneration, and it may not steer one that some other
+            # check started. Passing the whole list is what let an advisory
+            # soft-delete note add a `WHERE is_deleted = false` the question
+            # never asked for, turning a correct answer into a wrong one.
+            feedback = "\n".join(f.to_feedback() for f in triggering)
             system = REVIEW_SYSTEM.format(feedback=feedback, schema=schema_text)
             preamble = "Your previous SQL was:"
         else:

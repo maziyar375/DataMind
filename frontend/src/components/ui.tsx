@@ -328,6 +328,143 @@ export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
   return <select {...props} style={{ ...inputStyle, ...props.style }} />
 }
 
+export function TextArea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea
+      {...props}
+      style={{
+        ...inputStyle,
+        minHeight: 68,
+        lineHeight: 1.5,
+        resize: 'vertical',
+        fontFamily: 'inherit',
+        ...props.style,
+      }}
+    />
+  )
+}
+
+/** A labelled on/off switch, for settings a checkbox would under-sell. */
+export function Toggle({
+  checked, onChange, label, hint, disabled,
+}: {
+  checked: boolean
+  onChange: (next: boolean) => void
+  label: string
+  hint?: string
+  disabled?: boolean
+}) {
+  return (
+    <label
+      style={{
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 10,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.55 : 1,
+      }}
+    >
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        disabled={disabled}
+        onClick={() => !disabled && onChange(!checked)}
+        style={{
+          width: 34,
+          height: 20,
+          flexShrink: 0,
+          marginTop: 1,
+          borderRadius: 999,
+          border: '1px solid var(--border-strong)',
+          background: checked ? 'var(--accent)' : 'var(--panel-alt)',
+          position: 'relative',
+          cursor: 'inherit',
+          transition: 'background 120ms ease',
+          padding: 0,
+        }}
+      >
+        <span
+          style={{
+            position: 'absolute',
+            top: 2,
+            left: checked ? 16 : 2,
+            width: 14,
+            height: 14,
+            borderRadius: '50%',
+            background: checked ? 'var(--on-accent)' : 'var(--text-faint)',
+            transition: 'left 120ms ease',
+          }}
+        />
+      </button>
+      <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <span style={{ fontSize: 13, color: 'var(--text-strong)' }}>{label}</span>
+        {hint && (
+          <span style={{ fontSize: 11.5, color: 'var(--text-dim)' }}>{hint}</span>
+        )}
+      </span>
+    </label>
+  )
+}
+
+/**
+ * Determinate progress. Deliberately not a spinner: a generation takes minutes
+ * and "n of m tables" is the difference between waiting and wondering.
+ */
+export function ProgressBar({
+  current, total, label,
+}: {
+  current: number
+  total: number
+  label?: React.ReactNode
+}) {
+  const pct = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
+      {label && (
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            gap: 12,
+            fontSize: 12.5,
+            color: 'var(--text-dim)',
+          }}
+        >
+          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {label}
+          </span>
+          <span className="mono" style={{ flexShrink: 0 }}>
+            {current}/{total}
+          </span>
+        </div>
+      )}
+      <div
+        role="progressbar"
+        aria-valuenow={pct}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        style={{
+          height: 6,
+          borderRadius: 999,
+          background: 'var(--panel-alt)',
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            width: `${pct}%`,
+            height: '100%',
+            background: 'var(--accent)',
+            borderRadius: 999,
+            transition: 'width 240ms ease',
+          }}
+        />
+      </div>
+    </div>
+  )
+}
+
 // ── buttons ───────────────────────────────────────────────────────────────
 export function PrimaryButton({
   children, style, ...rest
@@ -696,6 +833,15 @@ export function CopyButton({
       {copied ? 'Copied' : label}
     </button>
   )
+}
+
+/** "just now" / "4m ago" / "3d ago" — shared by every settings surface. */
+export function relativeTime(iso: string): string {
+  const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
+  if (seconds < 60) return 'just now'
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
+  return `${Math.floor(seconds / 86400)}d ago`
 }
 
 export function initialOf(value: string): string {

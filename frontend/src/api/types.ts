@@ -30,6 +30,7 @@ export interface Connection {
   max_rows: number
   statement_timeout_ms: number
   disclosure_policy: 'NONE' | 'AGGREGATE' | 'SAMPLE' | 'FULL'
+  semantic_layer_enabled: boolean
   status: string
   readonly_confirmed: boolean
   server_version: string | null
@@ -88,6 +89,148 @@ export interface SchemaSnapshot {
   synced_at: string | null
   tables: SchemaTable[]
   relationships: SchemaRelationship[]
+}
+
+// ── semantic layer ─────────────────────────────────────────────────────────
+// Mirrors `app/semantic/models.py`. `valid` and `issue` are written by the
+// backend validator on every read, never by this UI: the editor shows drift,
+// it does not decide what counts as drift.
+export interface Provenance {
+  source: 'llm' | 'human' | 'derived'
+  edited: boolean
+  reviewed: boolean
+}
+
+export type ColumnRole = 'key' | 'time' | 'dimension' | 'measure' | 'attribute'
+export type EntityRole = 'fact' | 'dimension' | 'bridge' | 'lookup' | 'unknown'
+export type Additivity = 'additive' | 'semi_additive' | 'non_additive'
+
+export interface SemanticColumn {
+  name: string
+  label: string
+  description: string
+  synonyms: string[]
+  role: ColumnRole
+  unit: string
+  value_meanings: Record<string, string>
+  provenance: Provenance
+  valid: boolean
+  issue: string
+}
+
+export interface SemanticMetric {
+  name: string
+  label: string
+  description: string
+  synonyms: string[]
+  expression: string
+  filters: string[]
+  required_joins: string[]
+  additive: Additivity
+  unit: string
+  format: string
+  provenance: Provenance
+  valid: boolean
+  issue: string
+}
+
+export interface SemanticEntity {
+  table: string
+  label: string
+  description: string
+  synonyms: string[]
+  grain: string
+  role: EntityRole
+  default_time_column: string
+  columns: SemanticColumn[]
+  metrics: SemanticMetric[]
+  exclude: boolean
+  provenance: Provenance
+  valid: boolean
+  issue: string
+}
+
+export interface SemanticJoin {
+  left: string
+  right: string
+  on: string
+  cardinality: 'one_to_one' | 'one_to_many' | 'many_to_one' | 'many_to_many'
+  fan_out_warning: string
+  provenance: Provenance
+}
+
+export interface GlossaryTerm {
+  term: string
+  meaning: string
+  maps_to: string[]
+  provenance: Provenance
+}
+
+export interface TimeSemantics {
+  fiscal_year_start_month: number
+  week_starts_on: 'monday' | 'sunday'
+  timezone: string
+  relative_windows: 'calendar' | 'rolling'
+  notes: string
+  provenance: Provenance
+}
+
+export interface SemanticDocument {
+  document_version: number
+  business_context: string
+  time: TimeSemantics
+  entities: SemanticEntity[]
+  joins: SemanticJoin[]
+  glossary: GlossaryTerm[]
+}
+
+export interface SemanticJob {
+  id: string
+  connection_id: string
+  llm_config_id: string | null
+  model_snapshot: Record<string, unknown>
+  mode: 'MERGE' | 'REPLACE'
+  only_tables: string[]
+  status: 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED'
+  phase: string
+  progress_current: number
+  progress_total: number
+  stats: {
+    tables_described?: number
+    tables_failed?: string[]
+    metrics_kept?: number
+    metrics_dropped?: number
+  }
+  error_message: string | null
+  started_at: string | null
+  finished_at: string | null
+  created_at: string
+}
+
+export interface SemanticTableFact {
+  table: string
+  column_count: number
+  approx_row_count: number | null
+  described: boolean
+}
+
+export interface SemanticLayer {
+  document: SemanticDocument
+  exists: boolean
+  enabled: boolean
+  entity_count: number
+  metric_count: number
+  reviewed_count: number
+  issue_count: number
+  schema_version: number
+  schema_dialect: string
+  stale: boolean
+  tables: SemanticTableFact[]
+  model_snapshot: Record<string, unknown>
+  prompt_version: string
+  generated_at: string | null
+  edited_at: string | null
+  job: SemanticJob | null
 }
 
 export interface ConversationSummary {

@@ -83,18 +83,22 @@ backend/app/
   main.py         ASGI factory: lifespan (bootstrap admin, reconcile orphans,
                   start reconciler), CORS, correlation-id middleware, health.
   api/            HTTP shape ONLY — no business logic.
-    v1/           auth, users, connections, llm_configs, conversations routers
+    v1/           auth, users, connections, llm_configs, semantic, conversations
     schemas.py    Pydantic request/response DTOs (no secrets ever in reads)
     errors.py     RFC 7807 problem+json mapping
   core/           config, logging (with redaction), errors, correlation context, clock
   domain/         entities, value_objects (enums/kinds), ports — ZERO I/O, no frameworks
     ports/        Protocols: database, llm, secrets, identity, events, run_executor
-  services/       use cases + transaction boundaries: run_service, bootstrap,
-                  disclosure_service, policy
+  services/       use cases + transaction boundaries: run_service,
+                  semantic_service, bootstrap, disclosure_service, policy
   pipeline/       the AI run: state.py (typed RunState), pipeline.py (state machine),
                   nodes/ (route→retrieve→generate→validate→execute→inspect→present→chart),
                   prompts/, disclosure.py (result gate), checks.py (free result checks)
   sqlguard/       policy, validator, rewriter — self-contained, dialect-aware
+  semantic/       what the schema *means*: models.py (the document), validate.py
+                  (bind it to a snapshot, parse metric SQL), generator.py (build
+                  one with a model, one call per table), render.py (the prompt
+                  block), prompts.py — self-contained like sqlguard
   charts/         ChartIntent → validation → Vega-Lite
   infra/          adapters implementing the ports:
     db/           SQLAlchemy models.py + Alembic migrations + session
@@ -104,7 +108,8 @@ backend/app/
     crypto/       SecretBox (AES-256-GCM)
     identity/     local Argon2id + JWT provider
     events/       SSE event publisher
-  workers/        inprocess run executor + stale-run reconciler
+  workers/        inprocess run executor + stale-run reconciler + semantic.py
+                  (generation jobs; minutes long, so they are polled not streamed)
   tests/          unit (incl. test_sqlguard_hostile.py) + integration
   fixtures/       sales_seed.sql (Postgres demo/eval DB) + sales_seed_mysql.sql
                   and sales_seed_mssql.sql dialect mirrors + rebuild_fixtures.sh
@@ -116,7 +121,8 @@ frontend/src/
   main.tsx, App.tsx        entry + router/layout
   theme/tokens.ts          design tokens (oklch), DATABASE_TYPES, dark+light palettes
   api/client.ts, types.ts  typed client, SSE streaming + polling fallback
-  components/               ui.tsx (primitives, icons, Logo), chat.tsx, settings.tsx
+  components/               ui.tsx (primitives, icons, Logo), chat.tsx,
+                            settings.tsx, semantic.tsx (the layer editor)
   pages/                    Login, Chat, DataSources, LlmProviders, Users
 ```
 
@@ -125,7 +131,7 @@ frontend/src/
 ## The dependency rule (enforced, not documented)
 
 ```
-api → services → pipeline → domain ← infra
+api → services → pipeline → semantic → domain ← infra
 ```
 
 `import-linter` fails CI on violation (`make lint`). Concretely:
@@ -133,6 +139,9 @@ api → services → pipeline → domain ← infra
 - **`app.domain` imports no framework and no infra** — no fastapi, sqlalchemy,
   litellm, `app.infra`, `app.api`, `app.services`. Keep it pure.
 - **`app.sqlguard` is self-contained** — no fastapi/sqlalchemy/litellm/infra/api.
+- **`app.semantic` is self-contained** for the same reason — it is a pure
+  function of a snapshot, a document and the `LLMGateway` *port*, so the whole
+  generator runs in a test against a dict and a fake gateway.
 - Services may reach into infra (that carve-out is explicit in the config).
 
 Ports & adapters exist at **exactly four** seams — the four things most likely
@@ -185,6 +194,10 @@ route → retrieve → generate → validate → execute → inspect → present
 
 - `route` classifies intent. **METADATA** questions ("what tables do I have?")
   are answered from the schema snapshot and **HALT before any SQL**.
+- `retrieve` selects tables, then attaches the connection's **semantic layer**;
+  `RetrievedContext.render` appends a block describing only the retrieved
+  tables — business names, grain, defined metrics with their SQL, time
+  conventions, fan-out cautions. See "The semantic layer" below.
 - A validation/execution failure can `goto` back to `generate` (bounded repair);
   a hard ceiling of 24 transitions and a per-run deadline prevent runaway loops.
 - `inspect` covers the third failure mode: the query ran and the answer is
@@ -212,6 +225,51 @@ route → retrieve → generate → validate → execute → inspect → present
 A node crash is caught and recorded as a **run failure**, never a bare HTTP
 500. A process that dies mid-run is healed by the reconciler + a startup sweep,
 so no row is stuck `RUNNING`.
+
+---
+
+## The semantic layer
+
+The schema snapshot says what *exists*. The semantic layer says what it
+**means**: the business name and **grain** of each table ("one row per line
+item"), the columns worth explaining, **metrics** bound to exact SQL including
+the filters that belong to the definition rather than the question, **time
+conventions** (fiscal year, week start, whether "last month" is calendar or
+rolling), a glossary, and per-join **fan-out cautions**. One editable document
+per connection, in `semantic_layers`.
+
+It exists because the eval said so: FK-neighbour retrieval lifted recall 70→86%
+with **flat** execution accuracy, and the residual DeepSeek failures were
+interpretation, not retrieval — rolling-vs-calendar windows, long-vs-wide
+shapes. That is the class this addresses.
+
+- **Generate** — `POST /connections/{id}/semantic/generate` with an
+  `llm_config_id` queues a `semantic_jobs` row and returns **202**; the SPA
+  polls it. `app/semantic/generator.py` runs **one model call per table**, four
+  concurrently: a whole-schema call returns forty one-line descriptions and no
+  metrics, per-table calls return grain and real expressions. **Joins are
+  derived, never asked for** — cardinality is readable off the catalog.
+- **Nothing unchecked is kept.** Generated names are resolved against the
+  snapshot and metric expressions parsed with SQLGlot; an invalid *generated*
+  metric is dropped (and counted in the job's stats), while an invalid
+  *human-written* one is flagged and kept, because deleting a person's work to
+  hide drift is worse than showing it. Flagged entries never reach the prompt.
+- **Regeneration is safe.** Any field a user edits sets `provenance.edited`, and
+  `merge_documents` keeps those entities; `REPLACE` is the explicit "start
+  over" the UI makes you choose.
+- **It is off-by-absence.** With no layer, or with
+  `connections.semantic_layer_enabled` false, `RetrievedContext.render` emits
+  **byte-identical** output to before the feature existed — verified by a test.
+  That switch is how you A/B a layer against the bare schema on the eval suite
+  without deleting it. `PROMPT_VERSION` moved to **v4** because a v3 and a v4
+  run are otherwise indistinguishable from the outside.
+- **It widens no disclosure.** Generation reads the same schema block a run
+  reads, under the same `HintBudget`, and column `value_meanings` are filtered
+  to values already in the snapshot — the model cannot invent a key to leak.
+- **Editing** lives in Data sources → Semantic layer
+  (`frontend/src/components/semantic.tsx`). Metric expressions are validated
+  live by `POST .../semantic/check`, which is the *same parser* the save path
+  uses — the editor never promises something the backend will reject.
 
 ---
 
@@ -256,7 +314,11 @@ so no row is stuck `RUNNING`.
 - **A new API route:** router in `api/v1/`, DTO in `schemas.py`, business logic
   in a `services/*` function that owns the transaction. Literal paths (e.g.
   `/test`) must be declared **above** `/{id}` routes.
-- **Prompt changes:** versioned prompts live in `pipeline/prompts/`.
+- **Prompt changes:** versioned prompts live in `pipeline/prompts/`. The
+  semantic-layer generation prompts are the exception — they live in
+  `app/semantic/prompts.py` (versioned as `SEMANTIC_PROMPT_VERSION`, recorded
+  on every layer) because `app.semantic` sits *below* the pipeline: the
+  pipeline reads a layer, a layer knows nothing about a run.
 
 ---
 

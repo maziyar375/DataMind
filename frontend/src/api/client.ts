@@ -9,7 +9,8 @@
 
 import type {
   ArtifactSpec, Connection, ConversationSummary, LlmConfig, MessageWithRun,
-  ProblemDetail, RunDetail, RunEvent, SchemaSnapshot, TestResult, User,
+  ProblemDetail, RunDetail, RunEvent, SchemaSnapshot, SemanticDocument,
+  SemanticJob, SemanticLayer, TestResult, User,
 } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? '/api/v1'
@@ -184,6 +185,43 @@ export const connections = {
     post<TestResult>('/connections/test', payload),
   syncSchema: (id: string) => post<SchemaSnapshot>(`/connections/${id}/schema/sync`),
   schema: (id: string) => get<SchemaSnapshot>(`/connections/${id}/schema`),
+}
+
+// ── semantic layer ────────────────────────────────────────────────────────
+// Generation is a job, not a request: describing forty tables takes minutes,
+// so `generate` returns immediately with a job the UI polls through `job()`.
+export const semantic = {
+  get: (connectionId: string) =>
+    get<SemanticLayer>(`/connections/${connectionId}/semantic`),
+  save: (connectionId: string, document: SemanticDocument) =>
+    request<SemanticLayer>(`/connections/${connectionId}/semantic`, {
+      method: 'PUT',
+      body: JSON.stringify({ document }),
+    }),
+  remove: (connectionId: string) => del(`/connections/${connectionId}/semantic`),
+  generate: (
+    connectionId: string,
+    payload: { llm_config_id: string; mode: 'MERGE' | 'REPLACE'; only_tables?: string[] },
+  ) => post<SemanticJob>(`/connections/${connectionId}/semantic/generate`, payload),
+  job: (connectionId: string, jobId: string) =>
+    get<SemanticJob>(`/connections/${connectionId}/semantic/jobs/${jobId}`),
+  cancelJob: (connectionId: string, jobId: string) =>
+    post<SemanticJob>(`/connections/${connectionId}/semantic/jobs/${jobId}/cancel`),
+  // Same parser the save path uses, so the metric editor cannot promise
+  // something the backend will later reject.
+  check: (
+    connectionId: string,
+    payload: {
+      table: string
+      expression: string
+      required_joins?: string[]
+      is_filter?: boolean
+    },
+  ) =>
+    post<{ valid: boolean; issue: string }>(
+      `/connections/${connectionId}/semantic/check`,
+      payload,
+    ),
 }
 
 // ── llm configs ───────────────────────────────────────────────────────────

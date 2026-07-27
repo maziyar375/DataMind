@@ -67,6 +67,11 @@ class RetrievedContext(BaseModel):
     relationships: list[dict[str, Any]] = Field(default_factory=list)
     history: list[dict[str, str]] = Field(default_factory=list)
     strategy: Literal["FULL_SNAPSHOT", "EXACT_MATCH", "TRIGRAM"] = "FULL_SNAPSHOT"
+    # The connection's semantic layer, serialised. None when the connection
+    # has none or has switched it off — in which case `render` emits exactly
+    # the bytes it emitted before this field existed, so the eval baseline
+    # stays comparable.
+    semantic: dict[str, Any] | None = None
 
     def render(self, policy: str = DisclosurePolicy.NONE) -> str:
         """The schema block as the model sees it, for the policy in force.
@@ -115,7 +120,33 @@ class RetrievedContext(BaseModel):
                     f"- {rel['from_table']}.{rel['from_column']} -> "
                     f"{rel['to_table']}.{rel['to_column']}"
                 )
+
+        meaning = self._render_semantic(budget)
+        if meaning:
+            lines += ["", meaning]
         return "\n".join(lines)
+
+    def _render_semantic(self, budget: HintBudget) -> str:
+        """The semantic layer, scoped to the tables that survived retrieval.
+
+        Deliberately last in the block: the structure is what the model must
+        not get wrong, and it stays where it has always been. Import is local
+        so `app.pipeline` does not pay for `app.semantic` on a run whose
+        connection has no layer.
+        """
+        if not self.semantic:
+            return ""
+        from app.semantic import SemanticDocument, render_semantic
+
+        try:
+            doc = SemanticDocument.model_validate(self.semantic)
+        except ValueError:
+            return ""
+        return render_semantic(
+            doc,
+            tables=[f"{t['schema']}.{t['name']}" for t in self.tables],
+            budget=budget,
+        )
 
 
 class SqlAttempt(BaseModel):

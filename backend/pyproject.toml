@@ -82,7 +82,7 @@ include_external_packages = true
 [[tool.importlinter.contracts]]
 name = "Layered architecture: api -> services -> domain <- infra"
 type = "layers"
-layers = ["app.api", "app.services", "app.pipeline", "app.domain"]
+layers = ["app.api", "app.services", "app.pipeline", "app.semantic", "app.domain"]
 # Services may reach into infra (adapters). infra is not a layer here, so this
 # is unconstrained anyway; keep the note but do not error if it matches nothing.
 ignore_imports = ["app.services.* -> app.infra.*"]
@@ -99,6 +99,15 @@ name = "sqlguard is self-contained"
 type = "forbidden"
 source_modules = ["app.sqlguard"]
 forbidden_modules = ["fastapi", "sqlalchemy", "litellm", "app.infra", "app.api"]
+
+[[tool.importlinter.contracts]]
+# Same rule as sqlguard, for the same reason: the semantic layer is a pure
+# function of a schema snapshot, a document, and an LLM *port* — so it can be
+# driven end to end in a test with a dict and a fake gateway.
+name = "semantic is self-contained"
+type = "forbidden"
+source_modules = ["app.semantic"]
+forbidden_modules = ["fastapi", "sqlalchemy", "litellm", "app.infra", "app.api", "app.services"]
 
 [[tool.importlinter.contracts]]
 name = "eval is offline-only (never on the request path)"

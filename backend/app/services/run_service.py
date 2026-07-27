@@ -48,6 +48,7 @@ from app.infra.llm.litellm_gateway import LiteLLMGateway
 from app.pipeline.nodes import NodeDeps, _describe_schema
 from app.pipeline.pipeline import AnalyticsPipeline
 from app.pipeline.state import RunState
+from app.services.semantic_service import load_document
 from app.sqlguard import GuardPolicy
 
 log = get_logger(__name__)
@@ -157,6 +158,9 @@ class RunService:
         assert connection is not None and llm_config is not None
 
         snapshot = await self._latest_snapshot(connection.id)
+        # Loaded once per run, not per attempt: a repair regenerates against
+        # the same schema block, and the layer is part of that block.
+        semantic = await load_document(self._db, connection)
         state = RunState(
             run_id=run.id,
             conversation_id=run.conversation_id,
@@ -190,6 +194,7 @@ class RunService:
             history=await self._recent_history(run.conversation_id),
             policy=_policy_from_snapshot(snapshot, connection),
             emit=lambda t, d: self._emit(run_id, t, d),
+            semantic=(semantic.model_dump(mode="json") if semantic else None),
         )
 
         pipeline = AnalyticsPipeline(

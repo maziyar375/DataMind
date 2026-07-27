@@ -16,9 +16,20 @@ incidental:
   where a model-based critic would be handed the string "(Result data was not
   shared with the model by policy.)" and could conclude nothing.
 
-A finding is a *suspicion*, never a verdict. Only `retry=True` findings are
-allowed to spend a regeneration, and `nodes.inspect` keeps the original result
-so a retry can never turn a mediocre answer into a failed run.
+A finding is a *suspicion*, never a verdict, and the bar for acting on one is
+deliberately high: **a check informs the answer, it does not rewrite the
+query.** Only `retry=True` findings may spend a regeneration, and today that is
+`C_EMPTY_RESULT` alone — the one case where the model produced no answer at
+all, so there is nothing to lose by asking again.
+
+Everything else is advisory: recorded on the attempt, emitted as an event, and
+shown in the step trail for a human to judge. That is not caution for its own
+sake. `C_NULLABLE_INNER_JOIN` shipped retry-eligible and cost four correct
+answers on `sales_v1` (see `reports/sales_v1_deepseek_2026-07-27.md`), because
+"should this nullable foreign key be outer-joined?" is a question about what
+the user meant, and a structural check cannot see intent. Resolving that kind
+of ambiguity by heuristic is the failure mode the eval already identified as
+the binding constraint — automating it makes the product worse, not better.
 """
 from __future__ import annotations
 
@@ -205,7 +216,13 @@ def inspect_result(
                     "result. Use a LEFT JOIN unless the question genuinely "
                     "excludes them."
                 ),
-                retry=True,
+                # Advisory, on evidence. This was retry-eligible in the first
+                # release and measured 0 wins / 4 losses on `sales_v1`
+                # (2026-07-27, DeepSeek V4 Pro, 36% -> 30%): every time it
+                # fired on a *correct* query, the regeneration obeyed it,
+                # cleared the finding and returned a worse answer. Whether a
+                # nullable FK should be outer-joined is a question about what
+                # was asked, and this check cannot see that.
             )
         )
 

@@ -161,6 +161,7 @@ class ConnectionUpdate(BaseModel):
     max_rows: int | None = Field(default=None, ge=1, le=100_000)
     statement_timeout_ms: int | None = Field(default=None, ge=1_000, le=300_000)
     disclosure_policy: Literal["NONE", "AGGREGATE", "SAMPLE", "FULL"] | None = None
+    semantic_layer_enabled: bool | None = None
 
 
 class ConnectionRead(BaseModel):
@@ -178,6 +179,7 @@ class ConnectionRead(BaseModel):
     max_rows: int
     statement_timeout_ms: int
     disclosure_policy: str
+    semantic_layer_enabled: bool = True
     status: str
     readonly_confirmed: bool
     server_version: str | None = None
@@ -245,6 +247,90 @@ class SchemaRead(BaseModel):
     synced_at: datetime | None = None
     tables: list[SchemaTable] = Field(default_factory=list)
     relationships: list[SchemaRelationship] = Field(default_factory=list)
+
+
+# ── semantic layer ───────────────────────────────────────────────────────
+# The document itself is `app.semantic.SemanticDocument`, used directly as the
+# request and response body. Re-declaring it here would give it two shapes
+# that drift, and the editor in the UI needs exactly the fields the renderer
+# and validator already agree on.
+class SemanticTableFact(BaseModel):
+    """One physical table, as the editor's table picker sees it."""
+
+    table: str
+    column_count: int
+    approx_row_count: int | None = None
+    described: bool = False
+
+
+class SemanticJobRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    connection_id: UUID
+    llm_config_id: UUID | None = None
+    model_snapshot: dict[str, Any] = Field(default_factory=dict)
+    mode: str
+    only_tables: list[str] = Field(default_factory=list)
+    status: str
+    phase: str = ""
+    progress_current: int = 0
+    progress_total: int = 0
+    stats: dict[str, Any] = Field(default_factory=dict)
+    error_message: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_at: datetime
+
+
+class SemanticLayerRead(BaseModel):
+    """The document plus everything the UI needs to frame it."""
+
+    document: dict[str, Any] = Field(default_factory=dict)
+    exists: bool = False
+    enabled: bool = True
+    entity_count: int = 0
+    metric_count: int = 0
+    reviewed_count: int = 0
+    issue_count: int = 0
+    schema_version: int = 0
+    schema_dialect: str = "postgres"
+    # True when the schema has been re-synced since this document was written,
+    # which is the moment a definition can quietly stop being true.
+    stale: bool = False
+    tables: list[SemanticTableFact] = Field(default_factory=list)
+    model_snapshot: dict[str, Any] = Field(default_factory=dict)
+    prompt_version: str = ""
+    generated_at: datetime | None = None
+    edited_at: datetime | None = None
+    job: SemanticJobRead | None = None
+
+
+class SemanticGenerateRequest(BaseModel):
+    llm_config_id: UUID
+    # MERGE keeps every entity a person edited; REPLACE is the explicit
+    # "start over" the UI has to make the user confirm.
+    mode: Literal["MERGE", "REPLACE"] = "MERGE"
+    # Empty means the whole schema.
+    only_tables: list[str] = Field(default_factory=list)
+
+
+class SemanticSaveRequest(BaseModel):
+    document: dict[str, Any]
+
+
+class SemanticExpressionCheck(BaseModel):
+    """Live validation for the metric editor, so a bad expression is caught
+    while it is being typed rather than when a question depends on it."""
+
+    table: str
+    expression: str
+    required_joins: list[str] = Field(default_factory=list)
+    is_filter: bool = False
+
+
+class SemanticExpressionResult(BaseModel):
+    valid: bool
+    issue: str = ""
 
 
 # ── conversations & messages ─────────────────────────────────────────────

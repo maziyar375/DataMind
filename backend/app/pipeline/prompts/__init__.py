@@ -3,7 +3,14 @@ wording never silently invalidates historical comparisons.
 """
 from __future__ import annotations
 
-PROMPT_VERSION = "v3"
+PROMPT_VERSION = "v4"
+# v4: the schema block may now be followed by a semantic-layer block — business
+# names, grain, defined metrics, time conventions and fan-out cautions for the
+# retrieved tables. A connection with no layer, or with the layer switched off,
+# renders byte-identically to v3, so v3 and v4 runs are comparable *only* when
+# no layer was in force; the version moves because they cannot be told apart
+# from the outside otherwise.
+#
 # v3: the schema block can now carry column content hints (value lists, null
 # fractions, ranges) gated by the connection's disclosure policy, and a
 # result-check repair path was added. The generate prompt itself is unchanged;

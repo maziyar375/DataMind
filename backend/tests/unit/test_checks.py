@@ -73,6 +73,43 @@ def test_inner_join_on_nullable_fk() -> None:
     assert "C_NULLABLE_INNER_JOIN" in check(sql)
 
 
+def test_nullable_inner_join_is_advisory_not_retryable() -> None:
+    """It shipped retry-eligible and measured 0 wins / 4 losses on sales_v1:
+    the regeneration obeyed it, cleared the finding, and answered a different
+    question. Whether a nullable FK wants an outer join is about intent."""
+    sql = (
+        "SELECT e.id, SUM(o.total_amount) FROM public.orders o "
+        "JOIN public.employees e ON e.id = o.employee_id GROUP BY e.id"
+    )
+    findings = inspect_result(
+        question="Revenue by employee", sql=sql, dialect="postgres",
+        tables=TABLES, row_count=5, column_count=2, truncated=False,
+    )
+    flag = next(f for f in findings if f.code == "C_NULLABLE_INNER_JOIN")
+    assert flag.retry is False
+
+
+def test_only_empty_result_may_spend_a_retry() -> None:
+    """The whole retry surface, asserted in one place so widening it is a
+    deliberate act with a test to change, not an accident."""
+    from app.pipeline import checks
+
+    sql = (
+        "SELECT c.id FROM public.customers c "
+        "JOIN public.orders o ON o.customer_id = c.id"
+    )
+    every_code = set()
+    for rows in (0, 5):
+        every_code |= {
+            f.code for f in inspect_result(
+                question="How many customers?", sql=sql, dialect="postgres",
+                tables=TABLES, row_count=rows, column_count=2, truncated=True,
+            ) if f.retry
+        }
+    assert every_code == {"C_EMPTY_RESULT"}
+    assert checks.Finding(code="x", message="m", hint="h").retry is False
+
+
 def test_inner_join_on_non_nullable_fk_is_fine() -> None:
     sql = (
         "SELECT c.id FROM public.orders o "
@@ -217,6 +254,59 @@ def test_no_fallback_when_no_retry_was_attempted() -> None:
     from app.pipeline.nodes import _restore_superseded
 
     assert _restore_superseded(_state()) is None
+
+
+@pytest.mark.asyncio
+async def test_only_the_triggering_finding_reaches_the_repair_prompt() -> None:
+    """Advisory means advisory in both directions.
+
+    The bug this pins: `generate` quoted back *every* finding, so an advisory
+    soft-delete note added a `WHERE is_deleted = false` the question never
+    asked for — on a retry some other check had started. That flipped correct
+    answers to wrong ones on sales_v1 (2026-07-27).
+    """
+    from app.pipeline.checks import Finding
+    from app.pipeline.contracts import SqlProposal
+    from app.pipeline.nodes import NodeDeps, generate
+    from app.pipeline.state import RetrievedContext
+
+    seen: list[str] = []
+
+    class CapturingGateway:
+        async def structured(self, _llm, messages, _schema):  # type: ignore[no-untyped-def]
+            seen.extend(m.content for m in messages)
+            return SqlProposal(sql="SELECT 1", tables_used=[], reasoning="")
+
+    async def emit(_type: str, _data: dict) -> None:
+        return None
+
+    deps = NodeDeps(
+        llm_gateway=CapturingGateway(), llm=None, connector=None, snapshot={},
+        history=[], policy=None, emit=emit,
+    )
+    state = _state()
+    state.context = RetrievedContext(dialect="postgres", tables=TABLES)
+    state.attempts = [
+        SqlAttempt(
+            attempt_no=1, raw_sql="SELECT 1", rewritten_sql="SELECT 1",
+            report=ValidationReport(status="VALID"),
+            findings=[
+                Finding(code="C_EMPTY_RESULT", message="empty", hint="widen",
+                        retry=True),
+                Finding(code="C_SOFT_DELETE_UNFILTERED", message="soft",
+                        hint="filter is_deleted"),
+            ],
+        )
+    ]
+
+    await generate(state, deps)
+    prompt = "\n".join(seen)
+
+    assert "C_EMPTY_RESULT" in prompt
+    assert "C_SOFT_DELETE_UNFILTERED" not in prompt
+    # `is_deleted` itself is legitimately in the schema block; what must not
+    # appear is the advisory finding's instruction to filter on it.
+    assert "filter is_deleted" not in prompt
 
 
 @pytest.mark.asyncio

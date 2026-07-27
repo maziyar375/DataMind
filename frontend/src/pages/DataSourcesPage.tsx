@@ -3,12 +3,13 @@ import { connections as api } from '../api/client'
 import type { Connection, SchemaSnapshot, SchemaTable, TestResult } from '../api/types'
 import {
   Chip, DangerButton, EmptyState, ErrorNote, Field, GhostButton, Icon,
-  PrimaryButton, Select, Spinner, TextInput,
+  PrimaryButton, Select, Spinner, TextInput, relativeTime,
 } from '../components/ui'
 import {
   DetailBody, DetailHeader, FieldRow, MasterColumn, MasterItem, Section,
   StatusLine, Tabs,
 } from '../components/settings'
+import { SemanticLayerTab } from '../components/semantic'
 import { DATABASE_TYPES } from '../theme/tokens'
 
 const BLANK = {
@@ -33,7 +34,7 @@ export default function DataSourcesPage() {
   const [password, setPassword] = useState('')
   const [creating, setCreating] = useState(false)
   const [schema, setSchema] = useState<SchemaSnapshot | null>(null)
-  const [tab, setTab] = useState<'settings' | 'schema'>('settings')
+  const [tab, setTab] = useState<'settings' | 'schema' | 'semantic'>('settings')
   const [schemaView, setSchemaView] = useState<'tables' | 'graph'>('tables')
   const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -186,6 +187,21 @@ export default function DataSourcesPage() {
     }
   }
 
+  /** A one-field update saved immediately, for switches that live outside the
+   *  Settings form and so have no Save button of their own. */
+  async function patchConnection(patch: Partial<Connection>) {
+    if (!selected) return
+    setList((prev) =>
+      prev.map((c) => (c.id === selected.id ? { ...c, ...patch } : c)),
+    )
+    try {
+      await api.update(selected.id, patch as Record<string, unknown>)
+    } catch (err) {
+      await refresh()
+      setError(err instanceof Error ? err.message : 'Could not update this connection.')
+    }
+  }
+
   async function remove() {
     if (!selected) return
     await api.remove(selected.id)
@@ -319,10 +335,11 @@ export default function DataSourcesPage() {
             {!creating && (
               <Tabs
                 value={tab}
-                onChange={(v) => setTab(v as 'settings' | 'schema')}
+                onChange={(v) => setTab(v as 'settings' | 'schema' | 'semantic')}
                 items={[
                   { value: 'settings', label: 'Settings' },
                   { value: 'schema', label: 'Schema', count: schema?.tables.length },
+                  { value: 'semantic', label: 'Semantic layer' },
                 ]}
               />
             )}
@@ -631,6 +648,14 @@ export default function DataSourcesPage() {
                 )}
               </div>
             )}
+
+            {!creating && tab === 'semantic' && (
+              <SemanticLayerTab
+                key={selected!.id}
+                connection={selected!}
+                onConnectionChange={patchConnection}
+              />
+            )}
           </>
         )}
       </div>
@@ -886,10 +911,3 @@ function engineLabel(value: string): string {
   return DATABASE_TYPES.find((t) => t.value === value)?.label ?? value
 }
 
-function relativeTime(iso: string): string {
-  const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)
-  if (seconds < 60) return 'just now'
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
-  return `${Math.floor(seconds / 86400)}d ago`
-}
