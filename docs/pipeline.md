@@ -124,8 +124,9 @@ semantic layer** — deliberately the cheapest call in the run.
 **No LLM call.** Cost: zero tokens, sub-millisecond.
 
 **Logic** ([nodes/__init__.py:159-211](../backend/app/pipeline/nodes/__init__.py#L159-L211)):
-1. `approx_chars = sum(60 + 40 * len(columns))` over all snapshot tables;
-   `budget = 24_000`.
+1. `approx_chars = sum(60 + 40 * len(columns))` over all snapshot tables,
+   against `_RETRIEVE_BUDGET_CHARS = 50_000`. (The `sales` fixture sits at
+   26,480 — under the ceiling, so it takes step 2.)
 2. **Under budget → `FULL_SNAPSHOT`**: send every table. This is the common
    path for small and medium schemas.
 3. **Over budget → `EXACT_MATCH`**:
@@ -439,16 +440,26 @@ is a lateral move — don't take the dependency for cosmetics.
    prompt entirely**. Every cost figure is a large undercount. Fix: return usage
    from `structured`/`stream` in the gateway.
 
-2. **`retrieve` may never take its interesting branch.** The `sales_seed.sql`
-   fixture is 42 tables / 313 columns → `approx_chars = 15,040`, under the
-   `24_000` budget → `FULL_SNAPSHOT`, which should give **100%** retrieval
-   recall on all 50 gold questions (all their `expected_tables` exist). But
-   `reports/sales_v1_deepseek_2026-07-27b.md` records 86.4% mean / 74%
-   full-hit, which only `EXACT_MATCH` can produce. The fixture hasn't changed
-   since 07-24 and the budget hasn't changed since the initial commit, so these
-   don't reconcile. **Log `strategy` and `approx_chars` in the retrieve step
-   detail before trusting either number.** (CLAUDE.md's claim that the fixture
-   "exceeds the retrieve budget" is not true under the current arithmetic.)
+2. **The eval suite no longer exercises retrieval.** Measured against the live
+   fixture: 42 tables, **599 columns**, `approx_chars = 26,480`. That
+   straddled the old `24_000` ceiling, which is why the reports show 86.4%
+   recall / 74% full-hit — `EXACT_MATCH` was firing, and the residual misses
+   were real. Raising the ceiling to `50_000` puts the fixture **under** it, so
+   `sales_v1` now runs entirely on `FULL_SNAPSHOT` and every recall figure in a
+   future report will read 100% — not because retrieval improved but because it
+   stopped choosing. Gaps 3-5 below are unfixed and now untested; they still
+   fire on any schema past ~50k chars.
+
+   `test_fixture_fits_the_retrieve_budget_and_recalls_everything` pins this so
+   the change of meaning is visible, and
+   `test_retrieval_recall_gap_shows_on_bridge_question` forces the budget down
+   to keep covering `EXACT_MATCH`. **Do not compare a post-50k recall number
+   against a pre-50k one.**
+
+   (Do not read the DDL to estimate this: parsing `sales_seed.sql` for
+   `CREATE TABLE` columns gives 313 and misses the ~286 added by later
+   `ALTER TABLE`, which understates `approx_chars` by more than half and
+   inverts the branch. Introspect the live database.)
 
 3. **`retrieve` ignores the semantic layer's vocabulary.** `deps.semantic`
    holds per-table `label` and `synonyms` and per-column `synonyms` — exactly
@@ -466,7 +477,7 @@ is a lateral move — don't take the dependency for cosmetics.
    columns. Tokenizing both sides with a 3-4 char minimum fixes both.
 
 5. **No budget re-check after `_expand_by_fk`.** The branch that exists to
-   respect the 24k budget can emit well past it, unbounded.
+   respect `_RETRIEVE_BUDGET_CHARS` can emit well past it, unbounded.
 
 6. **v5 is shipped but unmeasured.** Two gaps were closed in one change:
    the repair prompts now carry the shared `_SQL_RULES` block and the

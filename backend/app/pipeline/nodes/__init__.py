@@ -156,6 +156,20 @@ def _describe_schema(tables: list[dict[str, Any]]) -> str:
 
 
 # ── retrieve ─────────────────────────────────────────────────────────────
+# How much estimated schema text may go to the model before retrieval starts
+# selecting. Raised 24k -> 50k, because the fallback below is the worse path
+# rather than the safer one: it seeds on raw substring matches against catalog
+# names, so it misses `order_items` for a user who typed "order items" while
+# matching every table carrying a column called `id`. Sending a whole schema
+# costs tokens; taking that branch costs answers. Roughly 12k tokens of schema
+# at the ceiling, before the semantic layer adds up to 8k chars more.
+#
+# A module constant, not a local, so a test can lower it to exercise the
+# fallback without needing a schema larger than whatever the fixture happens
+# to be — the `sales` fixture sits at ~26.5k, which straddled the old value.
+_RETRIEVE_BUDGET_CHARS = 50_000
+
+
 async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
     """Naive by design: send the whole snapshot when it fits the budget.
 
@@ -167,9 +181,8 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
     relationships = deps.snapshot.get("relationships", [])
 
     approx_chars = sum(60 + 40 * len(t.get("columns", [])) for t in tables)
-    budget = 24_000
 
-    if approx_chars <= budget:
+    if approx_chars <= _RETRIEVE_BUDGET_CHARS:
         selected, strategy = tables, "FULL_SNAPSHOT"
     else:
         needle = state.question.lower()

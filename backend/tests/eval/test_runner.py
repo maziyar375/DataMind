@@ -25,6 +25,7 @@ from app.domain.ports.llm import ChatMessage, Completion, ProviderCapabilities, 
 from app.domain.value_objects import DatabaseKind
 from app.eval import dataset, metrics, runner
 from app.infra.connectors.factory import build_connector
+from app.pipeline import nodes
 from app.pipeline.contracts import SqlProposal
 
 DSN = os.environ.get(
@@ -142,14 +143,39 @@ async def test_perfect_model_matches_across_slices() -> None:
 
 
 @pytest.mark.asyncio
-async def test_retrieval_recall_gap_shows_on_bridge_question() -> None:
+async def test_retrieval_recall_gap_shows_on_bridge_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # sales-018 needs product_suppliers + order_items, which the question never
     # names. Even a perfect model MATCHes, but retrieval recall must be < 1.
+    #
+    # The budget is forced below the fixture (~26.5k chars) so this exercises
+    # EXACT_MATCH on purpose. It used to rely on the fixture happening to
+    # exceed the ceiling, which made the test silently vacuous the moment the
+    # ceiling moved — raising it 24k -> 50k put the fixture under it, and this
+    # assertion started failing for a reason that had nothing to do with
+    # retrieval quality.
+    monkeypatch.setattr(nodes, "_RETRIEVE_BUDGET_CHARS", 1_000)
     rec = _record("sales-018")
     async with _env() as env:
         o = await _eval(rec, FakeGateway(plan={rec.question: [rec.gold_sql]}), env)
     assert o.outcome == metrics.OUTCOME_MATCH
     assert o.retrieval_recall < 1.0 and not o.retrieval_hit
+
+
+@pytest.mark.asyncio
+async def test_fixture_fits_the_retrieve_budget_and_recalls_everything() -> None:
+    """The shipped ceiling, on the shipped fixture: no selection happens.
+
+    Pins the consequence of the 50k budget rather than the number itself — if
+    the fixture grows past it, or the ceiling drops, retrieval starts choosing
+    tables on the eval suite again and every recall figure in a report changes
+    meaning. That should fail here first.
+    """
+    rec = _record("sales-018")
+    async with _env() as env:
+        o = await _eval(rec, FakeGateway(plan={rec.question: [rec.gold_sql]}), env)
+    assert o.retrieval_recall == 1.0 and o.retrieval_hit
 
 
 @pytest.mark.asyncio
