@@ -26,6 +26,13 @@ TABLES = [
             {"name": "employee_id", "data_type": "bigint", "nullable": True,
              "is_foreign_key": True},
             {"name": "total_amount", "data_type": "numeric"},
+            # `sample_values` is a *complete* domain by the connector contract
+            # (infra/connectors/hints.py), which is what makes "not in this
+            # list" evidence rather than a guess.
+            {"name": "status", "data_type": "text",
+             "sample_values": ["shipped", "Pending", "cancelled"]},
+            {"name": "ordered_at", "data_type": "date",
+             "min_value": "2024-01-01", "max_value": "2025-12-31"},
         ],
     },
     {
@@ -65,6 +72,76 @@ def test_empty_result_is_flagged() -> None:
     assert "C_EMPTY_RESULT" in check("SELECT id FROM public.orders", rows=0)
 
 
+def _empty(sql: str) -> Any:
+    findings = inspect_result(
+        question="How many orders?", sql=sql, dialect="postgres", tables=TABLES,
+        row_count=0, column_count=1, truncated=False,
+    )
+    return next(f for f in findings if f.code == "C_EMPTY_RESULT")
+
+
+def test_empty_result_retries_on_a_literal_the_column_cannot_hold() -> None:
+    """`sample_values` is the column's complete domain, so a literal outside
+    it is a mis-spelling, not an answer — the one case worth a regeneration."""
+    flag = _empty("SELECT id FROM public.orders WHERE status = 'delivered'")
+    assert flag.retry is True
+    assert "delivered" in flag.message
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        # Literal present in the domain, only cased differently.
+        "SELECT id FROM public.orders WHERE status = 'PENDING'",
+        # One reachable value is enough for an IN list to be satisfiable.
+        "SELECT id FROM public.orders WHERE status IN ('delivered', 'shipped')",
+        # A date range squarely inside the recorded bounds.
+        "SELECT id FROM public.orders WHERE ordered_at >= '2024-06-01'",
+        # Under an OR, an unmatchable branch proves nothing.
+        "SELECT id FROM public.orders "
+        "WHERE status = 'delivered' OR status = 'shipped'",
+        # No statistics on the column at all.
+        "SELECT id FROM public.orders WHERE total_amount = 42",
+        # No filter to be wrong about.
+        "SELECT id FROM public.orders",
+    ],
+)
+def test_empty_result_without_evidence_is_advisory_only(sql: str) -> None:
+    """Zero rows is frequently the true answer. Retrying on it alone repeats
+    the `C_NULLABLE_INNER_JOIN` regression: the model obeys the finding and
+    invents rows that were correctly absent."""
+    flag = _empty(sql)
+    assert flag.retry is False
+    assert "may be a correct answer" in flag.hint
+
+
+def test_empty_result_retries_on_a_range_outside_the_recorded_bounds() -> None:
+    sql = "SELECT id FROM public.orders WHERE ordered_at > DATE '2026-05-01'"
+    assert _empty(sql).retry is True
+
+
+def test_empty_result_retries_on_a_between_outside_the_recorded_bounds() -> None:
+    sql = (
+        "SELECT id FROM public.orders "
+        "WHERE ordered_at BETWEEN '2019-01-01' AND '2019-12-31'"
+    )
+    assert _empty(sql).retry is True
+
+
+def test_empty_result_evidence_is_found_through_a_join_condition() -> None:
+    """ON is as much a filter as WHERE, and the check reads both."""
+    sql = (
+        "SELECT c.id FROM public.customers c JOIN public.orders o "
+        "ON o.customer_id = c.id AND o.status = 'delivered'"
+    )
+    assert _empty(sql).retry is True
+
+
+def test_unparseable_empty_result_is_advisory_not_retryable() -> None:
+    """No AST means no evidence, and no evidence means no retry."""
+    assert _empty("SELECT FROM WHERE ((").retry is False
+
+
 def test_inner_join_on_nullable_fk() -> None:
     sql = (
         "SELECT e.id, SUM(o.total_amount) FROM public.orders o "
@@ -96,7 +173,8 @@ def test_only_empty_result_may_spend_a_retry() -> None:
 
     sql = (
         "SELECT c.id FROM public.customers c "
-        "JOIN public.orders o ON o.customer_id = c.id"
+        "JOIN public.orders o ON o.customer_id = c.id "
+        "WHERE o.status = 'delivered'"
     )
     every_code = set()
     for rows in (0, 5):
@@ -185,6 +263,35 @@ def test_single_figure_question_with_one_row_is_clean() -> None:
     codes = check("SELECT COUNT(*) FROM public.orders",
                   question="How many orders?", rows=1)
     assert "C_GRANULARITY" not in codes
+
+
+def test_group_by_explains_the_extra_rows() -> None:
+    """"How many orders per X?" trips the single-figure regex and is still
+    shaped exactly right — one row per group is what was asked for."""
+    codes = check(
+        "SELECT employee_id, COUNT(*) FROM public.orders GROUP BY employee_id",
+        question="How many orders per employee?", rows=12,
+    )
+    assert "C_GRANULARITY" not in codes
+
+
+def test_grouping_sets_also_explain_the_extra_rows() -> None:
+    codes = check(
+        "SELECT status, COUNT(*) FROM public.orders GROUP BY ROLLUP(status)",
+        question="How many orders?", rows=4,
+    )
+    assert "C_GRANULARITY" not in codes
+
+
+def test_many_rows_without_a_group_by_still_flags() -> None:
+    """The case the check is actually for: nothing in the SQL groups the
+    rows, so the multiplicity is an unaggregated SELECT or a join fan-out."""
+    codes = check(
+        "SELECT o.id FROM public.orders o "
+        "JOIN public.customers c ON c.id = o.customer_id",
+        question="How many orders do we have?", rows=12,
+    )
+    assert "C_GRANULARITY" in codes
 
 
 def test_truncation_is_advisory_only() -> None:
@@ -321,12 +428,14 @@ async def test_inspect_retries_once_then_accepts() -> None:
         llm_gateway=None, llm=None, connector=None, snapshot={},
         history=[], policy=None, emit=emit,
     )
+    # A literal the snapshot says `status` cannot hold: the only empty result
+    # that is evidence of a mistake rather than an answer.
+    sql = "SELECT id FROM public.orders WHERE status = 'delivered'"
     state = _state(max_repairs=1)
     state.context = RetrievedContext(dialect="postgres", tables=TABLES)
     state.execution = ExecutionResult(row_count=0)
     state.attempts = [
-        SqlAttempt(attempt_no=1, raw_sql="SELECT id FROM public.orders",
-                   rewritten_sql="SELECT id FROM public.orders",
+        SqlAttempt(attempt_no=1, raw_sql=sql, rewritten_sql=sql,
                    report=ValidationReport(status="VALID"))
     ]
 
@@ -337,8 +446,7 @@ async def test_inspect_retries_once_then_accepts() -> None:
 
     # The retry produced another empty result: accept it rather than loop.
     state.attempts.append(
-        SqlAttempt(attempt_no=2, raw_sql="SELECT id FROM public.orders",
-                   rewritten_sql="SELECT id FROM public.orders",
+        SqlAttempt(attempt_no=2, raw_sql=sql, rewritten_sql=sql,
                    report=ValidationReport(status="VALID"))
     )
     second = await inspect(state, deps)
