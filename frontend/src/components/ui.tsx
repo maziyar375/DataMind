@@ -550,11 +550,13 @@ export function DangerButton({
 }
 
 // ── chips and badges ──────────────────────────────────────────────────────
+export type ChipTone = 'neutral' | 'green' | 'amber' | 'red' | 'accent'
+
 export function Chip({
   children, tone = 'neutral',
 }: {
   children: React.ReactNode
-  tone?: 'neutral' | 'green' | 'amber' | 'red' | 'accent'
+  tone?: ChipTone
 }) {
   const tones: Record<string, React.CSSProperties> = {
     neutral: { color: 'var(--text-dim)', background: 'var(--panel-alt)' },

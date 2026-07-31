@@ -34,6 +34,7 @@ import {
   PrimaryButton, ProgressBar, Select, Spinner, TextArea, TextInput, Toggle,
   relativeTime,
 } from './ui'
+import type { ChipTone } from './ui'
 import { FieldRow } from './settings'
 
 const ACTIVE = ['QUEUED', 'RUNNING']
@@ -50,6 +51,29 @@ const ROLE_TONE: Record<string, string> = {
   bridge: 'var(--amber)',
   lookup: 'var(--text-faint)',
   unknown: 'var(--border-strong)',
+}
+
+/** What each table's kind is called, and the chip tone that carries it.
+ *
+ *  The kind used to be encoded only as the 3px stripe down the left of a
+ *  collapsed row — a colour with no legend, so the one thing a reader most
+ *  wants while scanning ("which of these are facts?") was the one thing they
+ *  had to open every row to find out. The stripe stays; this names it. */
+const ROLE_META: Record<string, { label: string; tone: ChipTone }> = {
+  fact: { label: 'Fact', tone: 'accent' },
+  dimension: { label: 'Dimension', tone: 'green' },
+  bridge: { label: 'Bridge', tone: 'amber' },
+  lookup: { label: 'Lookup', tone: 'neutral' },
+  unknown: { label: 'Kind not set', tone: 'neutral' },
+}
+
+/** The same idea one level down: a column's role, visible without opening it. */
+const COLUMN_ROLE_TONE: Record<string, ChipTone> = {
+  key: 'neutral',
+  time: 'amber',
+  dimension: 'green',
+  measure: 'accent',
+  attribute: 'neutral',
 }
 
 type Filter = 'all' | 'review' | 'metrics' | 'issues'
@@ -1097,6 +1121,7 @@ function EntityCard({
   onChange: (change: Partial<SemanticEntity>) => void
 }) {
   const broken = hasIssue(entity)
+  const role = ROLE_META[entity.role] ?? ROLE_META.unknown
 
   return (
     <div
@@ -1153,25 +1178,40 @@ function EntityCard({
           </span>
           <span
             style={{
+              display: 'flex',
+              alignItems: 'baseline',
+              gap: 8,
+              minWidth: 0,
               fontSize: 11.5,
-              color: entity.grain ? 'var(--text-dim)' : 'var(--text-faint)',
-              fontStyle: entity.grain ? 'normal' : 'italic',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
             }}
           >
-            {entity.grain || 'no grain described yet'}
+            <span
+              style={{
+                color: entity.grain ? 'var(--text-dim)' : 'var(--text-faint)',
+                fontStyle: entity.grain ? 'normal' : 'italic',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {entity.grain || 'no grain described yet'}
+            </span>
+            {/* What is inside, without opening it. Quiet text rather than more
+                chips — the chips to the right are for the exceptions. */}
+            <span
+              style={{ color: 'var(--text-faint)', whiteSpace: 'nowrap', flexShrink: 0 }}
+            >
+              {entity.columns.length > 0 && `${entity.columns.length} cols`}
+              {entity.columns.length > 0 && entity.metrics.length > 0 && ' · '}
+              {entity.metrics.length > 0 &&
+                `${entity.metrics.length} ${entity.metrics.length === 1 ? 'metric' : 'metrics'}`}
+            </span>
           </span>
         </span>
 
         <span style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
+          <Chip tone={role.tone}>{role.label}</Chip>
           {entity.exclude && <Chip>hidden</Chip>}
-          {entity.metrics.length > 0 && (
-            <Chip tone="green">
-              {entity.metrics.length} {entity.metrics.length === 1 ? 'metric' : 'metrics'}
-            </Chip>
-          )}
           {broken && <Chip tone="red">needs attention</Chip>}
           {entity.provenance.reviewed && <Chip tone="accent">reviewed</Chip>}
         </span>
@@ -1297,27 +1337,47 @@ function EntityCard({
 /** A labelled band inside an expanded entity. Keeps a long form readable as
  *  three or four parts rather than one wall of inputs. */
 function Group({
-  title, hint, action, children,
+  title, hint, count, action, children,
 }: {
   title: string
   hint?: string
+  count?: number
   action?: React.ReactNode
   children: React.ReactNode
 }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'flex-end',
+          gap: 12,
+          // A rule under the heading, so an expanded table reads as three
+          // labelled regions instead of one continuous run of inputs. The
+          // heading itself is ordinary sentence case at readable size: the
+          // old 10.5px uppercase whisper was quieter than the field labels
+          // beneath it, which inverted the hierarchy.
+          borderBottom: '1px solid var(--border)',
+          paddingBottom: 8,
+        }}
+      >
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
             style={{
-              fontSize: 10.5,
-              fontWeight: 700,
-              letterSpacing: 0.5,
-              textTransform: 'uppercase',
-              color: 'var(--text-faint)',
+              display: 'flex',
+              alignItems: 'baseline',
+              gap: 7,
+              fontSize: 13,
+              fontWeight: 600,
+              color: 'var(--text-strong)',
             }}
           >
             {title}
+            {count !== undefined && (
+              <span style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--text-faint)' }}>
+                {count}
+              </span>
+            )}
           </div>
           {hint && (
             <div
@@ -1347,6 +1407,17 @@ function Columns({
   onChange: (columns: SemanticColumn[]) => void
 }) {
   const [adding, setAdding] = useState('')
+  // Collapsed by default, and several may be open at once — the same rule the
+  // table list above follows, so the two levels behave alike.
+  const [open, setOpen] = useState<Set<number>>(new Set())
+
+  function toggle(index: number) {
+    setOpen((prev) => {
+      const next = new Set(prev)
+      if (!next.delete(index)) next.add(index)
+      return next
+    })
+  }
 
   function update(index: number, change: Partial<SemanticColumn>) {
     onChange(
@@ -1362,23 +1433,40 @@ function Columns({
     const name = adding.trim()
     if (!name) return
     onChange([...entity.columns, blankColumn(name)])
+    // Open what was just added — a new row that arrives collapsed and empty
+    // looks like the button did nothing.
+    setOpen((prev) => new Set(prev).add(entity.columns.length))
     setAdding('')
   }
 
   return (
     <Group
       title="Columns worth explaining"
+      count={entity.columns.length}
       hint="Only the ones whose name is not self-evident — codes, units, abbreviations."
     >
       {entity.columns.map((column, index) => (
-        <SubCard key={`${column.name}-${index}`} invalid={!column.valid}>
+        <SubCard key={`${column.name}-${index}`} invalid={!column.valid} compact={!open.has(index)}>
           <SubCardHead
             title={column.name}
             mono
-            badge={!column.valid ? <Chip tone="red">{column.issue}</Chip> : null}
+            open={open.has(index)}
+            onToggle={() => toggle(index)}
+            summary={column.label || column.description}
+            badge={
+              !column.valid ? (
+                <Chip tone="red">{column.issue}</Chip>
+              ) : column.role !== 'attribute' ? (
+                // "attribute" is the default and sits on most rows; a chip
+                // repeating it on every line is noise, not information.
+                <Chip tone={COLUMN_ROLE_TONE[column.role] ?? 'neutral'}>{column.role}</Chip>
+              ) : null
+            }
             onRemove={() => onChange(entity.columns.filter((_, i) => i !== index))}
             removeLabel={`Remove ${column.name}`}
           />
+          {open.has(index) && (
+            <>
           <FieldRow columns={3}>
             <Field label="Label">
               <TextInput
@@ -1430,6 +1518,8 @@ function Columns({
               />
             </Field>
           )}
+            </>
+          )}
         </SubCard>
       ))}
 
@@ -1468,6 +1558,16 @@ function Metrics({
   entity: SemanticEntity
   onChange: (metrics: SemanticMetric[]) => void
 }) {
+  const [open, setOpen] = useState<Set<number>>(new Set())
+
+  function toggle(index: number) {
+    setOpen((prev) => {
+      const next = new Set(prev)
+      if (!next.delete(index)) next.add(index)
+      return next
+    })
+  }
+
   function update(index: number, change: Partial<SemanticMetric>) {
     onChange(
       entity.metrics.map((m, i) =>
@@ -1481,10 +1581,14 @@ function Metrics({
   return (
     <Group
       title="Metrics"
+      count={entity.metrics.length}
       hint="The part that changes answers: a named measure bound to exact SQL, including the filters that belong to the definition rather than the question."
       action={
         <GhostButton
-          onClick={() => onChange([...entity.metrics, blankMetric()])}
+          onClick={() => {
+            setOpen((prev) => new Set(prev).add(entity.metrics.length))
+            onChange([...entity.metrics, blankMetric()])
+          }}
           style={{ padding: '6px 11px', fontSize: 12.5, flexShrink: 0 }}
         >
           <Icon.Plus size={13} />
@@ -1512,6 +1616,8 @@ function Metrics({
           connectionId={connectionId}
           table={entity.table}
           metric={metric}
+          open={open.has(index)}
+          onToggle={() => toggle(index)}
           onChange={(change) => update(index, change)}
           onRemove={() => onChange(entity.metrics.filter((_, i) => i !== index))}
         />
@@ -1521,11 +1627,13 @@ function Metrics({
 }
 
 function MetricCard({
-  connectionId, table, metric, onChange, onRemove,
+  connectionId, table, metric, open, onToggle, onChange, onRemove,
 }: {
   connectionId: string
   table: string
   metric: SemanticMetric
+  open: boolean
+  onToggle: () => void
   onChange: (change: Partial<SemanticMetric>) => void
   onRemove: () => void
 }) {
@@ -1535,7 +1643,11 @@ function MetricCard({
   const [checking, setChecking] = useState(false)
 
   useEffect(() => {
-    if (!metric.expression.trim()) {
+    // Only while the metric is open for editing. Collapsed, the document's own
+    // stored validity is already the answer, and re-checking every metric on a
+    // table the moment it expands spent a round trip per metric to redisplay
+    // what the server had just sent.
+    if (!open || !metric.expression.trim()) {
       setCheck(null)
       return
     }
@@ -1559,19 +1671,30 @@ function MetricCard({
       cancelled = true
       clearTimeout(timer)
     }
-  }, [connectionId, table, metric.expression, metric.required_joins.join(',')])
+  }, [open, connectionId, table, metric.expression, metric.required_joins.join(',')])
 
   const state = check ?? (metric.valid ? null : { valid: false, issue: metric.issue })
 
   return (
-    <SubCard invalid={!!state && !state.valid}>
+    <SubCard invalid={!!state && !state.valid} compact={!open}>
       <SubCardHead
         title={metric.label || metric.name || 'New metric'}
-        badge={metric.unit ? <Chip>{metric.unit}</Chip> : null}
+        open={open}
+        onToggle={onToggle}
+        summary={metric.expression}
+        badge={
+          state && !state.valid ? (
+            <Chip tone="red">invalid</Chip>
+          ) : metric.unit ? (
+            <Chip>{metric.unit}</Chip>
+          ) : null
+        }
         onRemove={onRemove}
         removeLabel="Remove metric"
       />
 
+      {!open ? null : (
+        <>
       <FieldRow>
         <Field label="Identifier" hint="snake_case, unique on this table.">
           <TextInput
@@ -1666,6 +1789,8 @@ function MetricCard({
           />
         </Field>
       </FieldRow>
+        </>
+      )}
     </SubCard>
   )
 }
@@ -2203,9 +2328,11 @@ function ChoiceRow({
 
 // ── small pieces ───────────────────────────────────────────────────────────
 function SubCard({
-  invalid, children,
+  invalid, compact, children,
 }: {
   invalid?: boolean
+  /** Collapsed to a single row: tighter, so a list of them reads as a list. */
+  compact?: boolean
   children: React.ReactNode
 }) {
   return (
@@ -2213,7 +2340,7 @@ function SubCard({
       style={{
         border: `1px solid ${invalid ? 'var(--red-border)' : 'var(--border)'}`,
         borderRadius: 9,
-        padding: 13,
+        padding: compact ? '8px 12px' : 13,
         display: 'flex',
         flexDirection: 'column',
         gap: 11,
@@ -2225,32 +2352,75 @@ function SubCard({
   )
 }
 
+/** The head of a column or metric card, and the row it collapses to.
+ *
+ *  Every entry used to render its whole form at once, so opening a table with
+ *  a dozen described columns produced a page of near-identical inputs with
+ *  nothing to navigate by. Collapsed, each entry is one line — name, role,
+ *  and whatever it means — and the form appears only for the one being
+ *  edited. Same disclosure the table list above already uses, one level down. */
 function SubCardHead({
-  title, mono, badge, onRemove, removeLabel,
+  title, mono, badge, summary, open, onToggle, onRemove, removeLabel,
 }: {
   title: string
   mono?: boolean
   badge?: React.ReactNode
+  summary?: string
+  open: boolean
+  onToggle: () => void
   onRemove: () => void
   removeLabel: string
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      <span
-        className={mono ? 'mono' : undefined}
+      <button
+        onClick={onToggle}
+        aria-expanded={open}
         style={{
-          fontSize: mono ? 12.5 : 12.5,
-          fontWeight: 600,
-          color: 'var(--text-strong)',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          flex: 1,
+          minWidth: 0,
+          padding: 0,
+          background: 'transparent',
+          border: 'none',
+          cursor: 'pointer',
+          textAlign: 'left',
         }}
       >
-        {title}
-      </span>
-      {badge}
-      <span style={{ marginLeft: 'auto', flexShrink: 0 }}>
+        <Icon.Chevron open={open} size={11} stroke="var(--text-faint)" />
+        <span
+          className={mono ? 'mono' : undefined}
+          style={{
+            fontSize: 12.5,
+            fontWeight: 600,
+            color: 'var(--text-strong)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            flexShrink: 0,
+          }}
+        >
+          {title}
+        </span>
+        {badge}
+        {!open && summary && (
+          <span
+            style={{
+              fontSize: 11.5,
+              color: 'var(--text-dim)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
+            }}
+          >
+            {summary}
+          </span>
+        )}
+      </button>
+      <span style={{ flexShrink: 0 }}>
         <IconButton label={removeLabel} onClick={onRemove}>
           <Icon.Trash />
         </IconButton>
