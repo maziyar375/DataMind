@@ -616,36 +616,47 @@ async def present(state: RunState, deps: NodeDeps) -> NodeResult:
 
 # ── chart ──────────────────────────────────────────────────────────────────
 async def chart(state: RunState, deps: NodeDeps) -> NodeResult:
-    """Let the model choose a chart for the result, then compile it.
+    """Let the model choose a chart for the result, then fit it and compile.
 
     Best-effort and fail-closed for the chart alone: the answer and the table
     are already persisted, so any failure here just yields no chart. The model
-    only sees the result *schema* (column names + types + row count), never the
-    row data — charting never widens what the disclosure policy already allows.
+    only sees the result's *shape* (column names, types, cardinality, numeric
+    range), never a row value, so charting never widens what the disclosure
+    policy already allows — cardinality is a count, not data.
+
+    The model's answer is a suggestion, not a verdict: `plan_chart` measures the
+    result first, refuses outright when the data cannot say anything, repairs a
+    salvageable intent, and falls back to the shape heuristic otherwise.
     """
     from app.charts import (
         ChartIntent,
         compile_vega_lite,
-        heuristic_intent,
-        validate_intent,
+        plan_chart,
+        profile_result,
+        unchartable_reason,
     )
 
     execution = state.execution
     if execution is None or execution.row_count == 0 or len(execution.columns) < 2:
         return NodeResult(status="SKIPPED", detail="Nothing chartable")
 
-    columns = "\n".join(
-        f"- {c.name} ({c.semantic_type})" for c in execution.columns
+    profile = profile_result(
+        execution.columns, execution.rows, truncated=execution.truncated
     )
 
-    # Let the model choose first. It is best-effort: a provider error, or a
-    # model that cannot emit a valid nested ChartIntent (common with small
-    # models), falls through to a deterministic choice from the data shape so a
-    # chart still appears and still varies question to question.
-    intent: ChartIntent | None = None
-    source = "model"
+    # Ask the data before asking the model: a single row, a constant measure or
+    # a result with no dimension cannot become a chart whatever the model says,
+    # so the call is skipped entirely — no tokens, no latency, and the step
+    # trail shows a fact about the result instead of "the model declined".
+    if (blocked := unchartable_reason(profile)) is not None:
+        return NodeResult(status="SKIPPED", detail=blocked)
+
+    # A provider error, or a model that cannot emit a valid nested ChartIntent
+    # (common with small models), falls through to a deterministic choice from
+    # the data shape, so a chart still appears and still varies by question.
+    suggestion: ChartIntent | None = None
     try:
-        intent = await deps.llm_gateway.structured(
+        suggestion = await deps.llm_gateway.structured(
             deps.llm,
             [
                 ChatMessage(role="system", content=CHART_SYSTEM),
@@ -654,7 +665,12 @@ async def chart(state: RunState, deps: NodeDeps) -> NodeResult:
                     content=CHART_USER.format(
                         question=state.question,
                         row_count=execution.row_count,
-                        columns=columns,
+                        truncated=(
+                            " (capped: the query returned at least this many)"
+                            if execution.truncated
+                            else ""
+                        ),
+                        columns=profile.describe(),
                     ),
                 ),
             ],
@@ -663,18 +679,15 @@ async def chart(state: RunState, deps: NodeDeps) -> NodeResult:
     except LLMError as err:
         log.warning("chart_intent_failed", run_id=str(state.run_id), error=err.message)
 
-    if intent is not None and validate_intent(intent, execution.columns)[0]:
-        pass  # the model's choice is usable
-    else:
-        intent = heuristic_intent(execution.columns, execution.row_count)
-        source = "heuristic"
+    plan = plan_chart(profile, suggestion)
+    if plan.intent is None:
+        return NodeResult(status="SKIPPED", detail=plan.reason or "No chart fits")
 
-    if intent is None or not validate_intent(intent, execution.columns)[0]:
-        return NodeResult(status="SKIPPED", detail="No chart fits this result")
-
-    state.chart = compile_vega_lite(intent, execution.columns, execution.rows)
+    state.chart = compile_vega_lite(
+        plan.intent, profile, execution.columns, execution.rows
+    )
     await deps.emit(
         "ARTIFACT_CREATED",
-        {"kind": "CHART", "chart_type": intent.chart_type, "source": source},
+        {"kind": "CHART", "chart_type": plan.intent.chart_type, "source": plan.source},
     )
-    return NodeResult(detail=f"{intent.chart_type} chart ({source})")
+    return NodeResult(detail=f"{plan.intent.chart_type} chart ({plan.source})")

@@ -107,14 +107,23 @@ export function VegaChart({ spec }: { spec: Record<string, unknown> }) {
         ? 260
         : 300
     const xIsCategorical = encoding.x?.type === 'nominal' || encoding.x?.type === 'ordinal'
-    return { encoding, isHorizontalBar, height, xIsCategorical }
+    // The same rule on the other axis: a vertical bar chart squeezed to the
+    // container turns its categories into a smear once there are more of them
+    // than the width has pixels for. Past a dozen, give each mark a minimum
+    // width and let the box scroll sideways instead. The backend caps category
+    // charts long before this matters — this is the floor that holds if that
+    // cap ever changes, not the primary defence.
+    const PER_COLUMN = 34
+    const width: number | 'container' =
+      xIsCategorical && rowCount > 12 ? rowCount * PER_COLUMN : 'container'
+    return { encoding, isHorizontalBar, height, width, xIsCategorical }
   }, [spec])
 
   useEffect(() => {
     const el = ref.current
     if (!el) return
     const p = PALETTES[theme]
-    const { encoding, height, xIsCategorical } = layout
+    const { encoding, height, width, xIsCategorical } = layout
 
     const config = {
       background: 'transparent',
@@ -160,9 +169,9 @@ export function VegaChart({ spec }: { spec: Record<string, unknown> }) {
     const full = {
       ...spec,
       encoding: encodingOverride,
-      width: 'container',
+      width,
       height,
-      autosize: { type: 'fit-x', contains: 'padding' },
+      autosize: { type: width === 'container' ? 'fit-x' : 'pad', contains: 'padding' },
       background: 'transparent',
       config,
     }

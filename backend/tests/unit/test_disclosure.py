@@ -45,3 +45,16 @@ def test_sample_of_small_result_has_no_truncation_note() -> None:
         columns=RESULT.columns, rows=[["North", 10]], row_count=1
     )
     assert disclose(small, "SAMPLE").note == ""
+
+
+def test_a_capped_result_says_so_under_every_policy() -> None:
+    # 1000 rows is the platform's cap, not the answer: a model told only the
+    # row count narrates it as "the top 1000 customers".
+    capped = ExecutionResult(
+        columns=[ResultColumn(name="name", db_type="text")],
+        rows=[[f"c{i}"] for i in range(1000)],
+        row_count=1000,
+        truncated=True,
+    )
+    for policy in ("NONE", "AGGREGATE", "SAMPLE", "FULL"):
+        assert "partial result" in disclose(capped, policy).note

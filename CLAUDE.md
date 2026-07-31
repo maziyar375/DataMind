@@ -100,7 +100,7 @@ backend/app/
                   (bind it to a snapshot, parse metric SQL), generator.py (build
                   one with a model, one call per table), render.py (the prompt
                   block), prompts.py — self-contained like sqlguard
-  charts/         ChartIntent → validation → Vega-Lite
+  charts/         ChartIntent → result profile → shape fit → Vega-Lite
   infra/          adapters implementing the ports:
     db/           SQLAlchemy models.py + Alembic migrations + session
     connectors/   factory + postgres/mysql/mssql/oracle (one DatabaseConnector each)
@@ -228,7 +228,15 @@ present → chart
 - `chart` is **best-effort and fail-open** (the opposite of the SQL guard): the
   model proposes a constrained `ChartIntent` compiled to Vega-Lite, with a
   data-shape heuristic as the fallback; any failure just yields no chart, since
-  the answer and table are already persisted.
+  the answer and table are already persisted. The model's pick is a
+  *suggestion*, never the last word: `charts.plan_chart` profiles the result
+  first (cardinality, numeric range, constant columns) and owns the decision —
+  it vetoes charts the data cannot support (a single row, a measure identical
+  in every row, an id column as the measure), repairs salvageable intents (pie
+  → bar past 6 slices, line → bar over unordered text, swapped axes,
+  mislabelled axis types), and caps category charts at `MAX_CATEGORY_MARKS`
+  while labelling the chart with what was dropped. The veto runs *before* the
+  model call, so an unchartable result costs no tokens.
 - A conversation is **bound to one connection + model**, picked in the chat
   header before the first message; the pickers lock once the transcript is
   non-empty. The choice is stored as the conversation's `default_connection_id`

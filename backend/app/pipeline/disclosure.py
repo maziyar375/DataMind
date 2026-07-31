@@ -16,13 +16,34 @@ from app.pipeline.state import DisclosedResult, ExecutionResult
 SAMPLE_ROWS = 50
 
 
+def _cap_note(execution: ExecutionResult) -> str:
+    """Say so when the row cap, not the query, decided how many rows there are.
+
+    Without this the model narrates a capped result as if it were the whole
+    answer — "the top 1000 customers" — when 1000 is the platform's limit and
+    the real count is unknown. Empty (and byte-identical to before) whenever
+    the result is complete.
+    """
+    if not execution.truncated:
+        return ""
+    return (
+        f" This is a partial result: the platform capped it at "
+        f"{execution.row_count} rows, so the true total is higher and any "
+        "'all'/'top N' claim about the full set cannot be made from it."
+    )
+
+
 def disclose(execution: ExecutionResult, policy: str) -> DisclosedResult:
     columns = [c.name for c in execution.columns]
+    cap = _cap_note(execution)
 
     if policy == DisclosurePolicy.NONE:
         return DisclosedResult(
             policy=policy, columns=[], rows=[],
-            note=f"{execution.row_count} rows were returned but not shared with the model.",
+            note=(
+                f"{execution.row_count} rows were returned but not shared "
+                f"with the model.{cap}"
+            ),
         )
 
     if policy == DisclosurePolicy.AGGREGATE:
@@ -30,7 +51,7 @@ def disclose(execution: ExecutionResult, policy: str) -> DisclosedResult:
             policy=policy, columns=columns, rows=[],
             note=(
                 f"{execution.row_count} rows across columns: {', '.join(columns)}. "
-                "Individual values were not shared with the model."
+                f"Individual values were not shared with the model.{cap}"
             ),
         )
 
@@ -41,11 +62,13 @@ def disclose(execution: ExecutionResult, policy: str) -> DisclosedResult:
             note = (
                 f"Showing the first {len(rows)} of {execution.row_count} rows."
             )
-        return DisclosedResult(policy=policy, columns=columns, rows=rows, note=note)
+        return DisclosedResult(
+            policy=policy, columns=columns, rows=rows, note=f"{note}{cap}".strip()
+        )
 
     return DisclosedResult(
         policy=DisclosurePolicy.FULL,
         columns=columns,
         rows=execution.rows,
-        note=f"{execution.row_count} rows.",
+        note=f"{execution.row_count} rows.{cap}",
     )
