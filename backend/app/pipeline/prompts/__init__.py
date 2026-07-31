@@ -3,7 +3,24 @@ wording never silently invalidates historical comparisons.
 """
 from __future__ import annotations
 
-PROMPT_VERSION = "v4"
+PROMPT_VERSION = "v5"
+# v5: the two repair prompts now *extend* the first-attempt prompt instead of
+# replacing it. They previously carried only the feedback and the schema, so a
+# repair attempt was never told "SELECT only", "never guess a name" or "do not
+# add a LIMIT" — it could fix the flagged issue, break a rule it had not been
+# shown, and be rejected a second time with a repair budget of 1 already spent.
+# The mandatory rules now live in one `_SQL_RULES` constant used by all three.
+# Both repair prompts also carry the conversation history the first attempt
+# gets, and that history now includes the SQL each earlier answer ran, not only
+# its prose: `state.answer` is what is persisted as the assistant message, so
+# before this a follow-up ("now break that down by month") had to re-derive the
+# previous query from a 300-character narration excerpt.
+#
+# This is an unconditional addition to the SQL-producing path, which eval Round
+# 2 showed can cost accuracy on a small model (see the note under
+# GENERATE_SYSTEM). It is measured with `repair_violations_by_rule`, which
+# attributes each guard rejection to the attempt that raised it.
+#
 # v4: the schema block may now be followed by a semantic-layer block — business
 # names, grain, defined metrics, time conventions and fan-out cautions for the
 # retrieved tables. A connection with no layer, or with the layer switched off,
@@ -71,9 +88,7 @@ CLARIFY_USER = """Question: {question}
 
 Return JSON with keys: answerable, question, options, reasoning."""
 
-GENERATE_SYSTEM = """You write a single read-only SQL SELECT statement.
-
-Rules, all mandatory:
+_SQL_RULES = """\
 - Exactly one statement. No semicolons, no comments, no CTE tricks to hide writes.
 - SELECT only. Never INSERT, UPDATE, DELETE, DDL, or any write.
 - Use only the tables and columns given in the schema below. Never guess a name.
@@ -83,12 +98,26 @@ Rules, all mandatory:
 - Answer exactly what is asked, at that granularity. If the question asks for a
   single figure, return one row with just that value — no per-group breakdown
   and no extra explanatory columns.
-- Dialect: {dialect}
+- Dialect: {dialect}"""
+# One copy, because three drifted. These rules bind every call that produces
+# SQL, and the copy that silently lost them was the repair path — the one place
+# where a second rejection ends the run. `{dialect}` stays a placeholder here:
+# the f-strings below interpolate this block verbatim, so every prompt built
+# from it is still formatted with `dialect=` at call time.
+#
+# Anything added here is paid for on *every* SQL call, first attempt included.
+# That is the addition eval Round 2 measured as harmful; keep this list to
+# constraints the guard actually enforces, and re-measure when it changes.
+
+GENERATE_SYSTEM = f"""You write a single read-only SQL SELECT statement.
+
+Rules, all mandatory:
+{_SQL_RULES}
 
 Schema:
-{schema}
+{{schema}}
 
-{history}"""
+{{history}}"""
 # NB (eval Round 2, reverted): adding a "getting the answer right" block of
 # general SQL guidance here *lowered* execution accuracy on the small eval model
 # (36% -> 26%) and hurt parse (98% -> 88%) and guard-pass (96% -> 86%) — the
@@ -99,24 +128,39 @@ GENERATE_USER = """Question: {question}
 
 Return JSON with keys: sql, tables_used, reasoning."""
 
-REVIEW_SYSTEM = """Your previous SQL ran successfully, but the result looks wrong.
+REVIEW_SYSTEM = f"""Your previous SQL ran successfully, but the result looks wrong.
 
 These are automated structural checks, not proof of a mistake. If a check is
 wrong for this question, keep your original query.
 
-{feedback}
+{{feedback}}
+
+The rules have not changed:
+{_SQL_RULES}
 
 Schema:
-{schema}
+{{schema}}
+
+{{history}}
 
 Return JSON with keys: sql, tables_used, reasoning."""
+# The rules block is repeated rather than assumed remembered: this is a fresh
+# two-message conversation, not a continuation, so the model has never seen
+# GENERATE_SYSTEM. "The rules have not changed" frames it as a restatement, so
+# a model that fixed the flagged issue correctly is not invited to re-read the
+# constraints as new instructions and rewrite a query that was already fine.
 
-REPAIR_SYSTEM = """Your previous SQL was rejected by a validator. Fix it.
+REPAIR_SYSTEM = f"""Your previous SQL was rejected by a validator. Fix it.
 
-{feedback}
+{{feedback}}
+
+The rules have not changed:
+{_SQL_RULES}
 
 Schema:
-{schema}
+{{schema}}
+
+{{history}}
 
 Return JSON with keys: sql, tables_used, reasoning."""
 

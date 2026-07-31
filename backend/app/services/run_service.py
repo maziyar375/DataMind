@@ -480,10 +480,52 @@ class RunService:
             .limit(limit + 1)
         )
         rows = list(result.scalars())[1:]  # drop the message that started this run
-        return [
-            {"role": r.role.lower(), "content": r.content or ""}
-            for r in reversed(rows)
-        ]
+        sql_by_message = await self._sql_behind(
+            [r.id for r in rows if r.role == MessageRole.ASSISTANT]
+        )
+        turns: list[dict[str, str]] = []
+        for row in reversed(rows):
+            turn = {"role": row.role.lower(), "content": row.content or ""}
+            sql = sql_by_message.get(row.id)
+            if sql:
+                turn["sql"] = sql
+            turns.append(turn)
+        return turns
+
+    async def _sql_behind(
+        self, assistant_message_ids: list[UUID]
+    ) -> dict[UUID, str]:
+        """The SQL that produced each of those answers, where one is known.
+
+        The assistant *message* only ever holds `state.answer` — the prose. The
+        statement behind it lives on `generated_queries`, so a follow-up turn
+        can only build on the previous query if it is joined back in here.
+
+        `rewritten_sql` is non-null exactly when the guard validated that
+        attempt, so filtering on it skips drafts that never ran. Ordering by
+        `attempt_no` and letting later rows win takes the last attempt that
+        passed the guard — which is the presented one except in the rare case
+        where `_restore_superseded` put an earlier result back and a later
+        attempt had validated but failed in the database. Wrong by one attempt
+        there, and it is a hint for the next question rather than anything the
+        run depends on.
+        """
+        if not assistant_message_ids:
+            return {}
+        result = await self._db.execute(
+            select(Run.assistant_message_id, GeneratedQuery.rewritten_sql)
+            .join(GeneratedQuery, GeneratedQuery.run_id == Run.id)
+            .where(
+                Run.assistant_message_id.in_(assistant_message_ids),
+                GeneratedQuery.rewritten_sql.is_not(None),
+            )
+            .order_by(GeneratedQuery.attempt_no)
+        )
+        return {
+            message_id: sql
+            for message_id, sql in result.all()
+            if message_id is not None and sql
+        }
 
     # ── follow-up suggestions ────────────────────────────────────────────
     async def suggest_followups(

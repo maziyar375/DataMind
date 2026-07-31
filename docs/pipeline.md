@@ -204,15 +204,25 @@ clarify existed.
 `structured(SqlProposal)` → `{sql, tables_used, reasoning}`. **Three different
 prompts depending on why we're here:**
 
-| when | system prompt | user turn | history? |
-|---|---|---|:--:|
-| attempt 1 | `GENERATE_SYSTEM(dialect, schema, history)` | `Question: …` | ✅ |
-| retry after **`inspect`** (previous SQL was `VALID` **and** has `retry=True` findings) | `REVIEW_SYSTEM(feedback, schema)` — *"ran successfully, but the result looks wrong"* | question + `Your previous SQL was:` | ❌ |
-| retry after **guard rejection or DB error** | `REPAIR_SYSTEM(feedback, schema)` — *"rejected by a validator"* | question + `Your rejected SQL was:` | ❌ |
+| when | system prompt | user turn |
+|---|---|---|
+| attempt 1 | `GENERATE_SYSTEM(dialect, schema, history)` | `Question: …` |
+| retry after **`inspect`** (previous SQL was `VALID` **and** has `retry=True` findings) | `REVIEW_SYSTEM(feedback, rules, schema, history)` — *"ran successfully, but the result looks wrong"* | question + `Your previous SQL was:` |
+| retry after **guard rejection or DB error** | `REPAIR_SYSTEM(feedback, rules, schema, history)` — *"rejected by a validator"* | question + `Your rejected SQL was:` |
 
 The REVIEW/REPAIR split is not cosmetic: telling the model its SQL was
 "rejected by a validator" when it actually ran fine is a lie that invites it to
 fix the wrong thing.
+
+**All three share one `_SQL_RULES` constant, and all three get the history.** A
+repair opens a *fresh two-message conversation* — the model has never seen
+`GENERATE_SYSTEM` — so anything a repair prompt omits is gone, not remembered.
+Until v5 both repair prompts omitted every mandatory rule, which meant a repair
+could fix the flagged issue, break a rule it had never been shown, and be
+rejected a second time with a budget of 1 already spent.
+[test_generate_prompt.py](../backend/tests/unit/test_generate_prompt.py) asserts
+each prompt carries the rules, the dialect and the history, so the three cannot
+drift apart again.
 
 **Only the finding that *earned* the retry is quoted back.** An advisory finding
 is advisory in both directions — it may not start a regeneration, and it may
@@ -381,7 +391,7 @@ valued feature; keep it visible, don't collapse it behind "Thought for Xs".
 
 ## 5. Prompt versioning
 
-`PROMPT_VERSION` (currently **v4**) is recorded on every run.
+`PROMPT_VERSION` (currently **v5**) is recorded on every run.
 [prompts/__init__.py](../backend/app/pipeline/prompts/__init__.py) is the only
 place run prompts live — except the semantic-layer *generation* prompts, which
 live in `app/semantic/prompts.py` under `SEMANTIC_PROMPT_VERSION`, because
@@ -389,9 +399,9 @@ live in `app/semantic/prompts.py` under `SEMANTIC_PROMPT_VERSION`, because
 knows nothing about a run.
 
 **Move `PROMPT_VERSION` when the bytes the SQL-producing path sends change.**
-That's why v3 → v4 for the semantic block, and why clarify, caveats and chart
-prompt changes *don't* move it — the eval scores generated SQL, and none of
-those touch it.
+That's why v3 → v4 for the semantic block and v4 → v5 for the shared rules and
+history on repairs, and why clarify, caveats and chart prompt changes *don't*
+move it — the eval scores generated SQL, and none of those touch it.
 
 ---
 
@@ -458,8 +468,38 @@ is a lateral move — don't take the dependency for cosmetics.
 5. **No budget re-check after `_expand_by_fk`.** The branch that exists to
    respect the 24k budget can emit well past it, unbounded.
 
-6. **The repair prompts drop conversation history**, and the history the first
-   attempt *does* get contains the assistant's **prose**, not its SQL
-   (`state.answer` is what's persisted as the message). On "now break that down
-   by month" the generator cannot see the query it just wrote and must
-   re-derive it from a 300-char narration excerpt.
+6. **v5 is shipped but unmeasured.** Two gaps were closed in one change:
+   the repair prompts now carry the shared `_SQL_RULES` block and the
+   conversation history, and that history now includes the SQL behind each
+   earlier answer (`run_service._sql_behind` joins `generated_queries` back to
+   the assistant message, since the message itself only holds the prose).
+
+   **This is an unconditional addition to the SQL-producing path — the exact
+   shape of change that cost 10 points in eval Round 2.** It has not been run
+   against `sales_v1`. Until it has, treat v5 as unvalidated and keep v4
+   reachable for comparison. Two numbers decide it:
+
+   - **`repair_violations_by_rule`** — printed under the existing violations
+     line as `of those, on a repair attempt: …`. This is the metric the change
+     was made to move; it should shrink or empty out.
+
+     ```
+     violations by rule: E_UNKNOWN_COLUMN=2  E_TABLE_NOT_ALLOWED=1
+          of those, on a repair attempt: E_UNKNOWN_COLUMN=1
+     ```
+
+   - **execution accuracy on attempt 1** — the regression risk. The rules
+     block is unchanged there, but the history block is longer now (it carries
+     SQL), and the small model is sensitive to a crowded prompt. If attempt-1
+     accuracy drops, the history change is the suspect, not the rules.
+
+   If v5 loses accuracy, split it: the rules-on-repair half only affects
+   attempt 2 and can ship alone.
+
+7. **`_sql_behind` can be one attempt off in a rare case.** It takes the
+   highest `attempt_no` whose `rewritten_sql` is non-null (i.e. passed the
+   guard). When `_restore_superseded` put an earlier result back *and* a later
+   attempt had validated but failed in the database, the history shows the
+   later statement rather than the one that produced the answer. It is a hint
+   for the next question, not something a run depends on — fixing it means
+   joining `query_executions` as well.

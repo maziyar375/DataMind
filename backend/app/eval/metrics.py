@@ -166,6 +166,15 @@ class RecordOutcome:
     execution_match: bool = False
     exact_match: bool = False
     policy_violations: list[str] = field(default_factory=list)
+    # The same rule ids, restricted to *repair* attempts. The flat list above
+    # cannot say whether a violation came from the first draft or from a
+    # regeneration, and the two have different causes: `REPAIR_SYSTEM` and
+    # `REVIEW_SYSTEM` replace `GENERATE_SYSTEM` wholesale rather than extending
+    # it, so a repair attempt is never shown the mandatory rules ("SELECT
+    # only", "never guess a name", "do not add a LIMIT"). Whether that omission
+    # costs runs is exactly what this field answers: violations clustering here
+    # say yes, an empty list says the repair prompts are fine as they are.
+    repair_violations: list[str] = field(default_factory=list)
 
     attempts: int = 0
     repair_count: int = 0
@@ -228,6 +237,10 @@ class SuiteReport:
     execution_success_rate: float
     policy_violation_rate: float
     policy_violations_by_rule: dict[str, int]
+    # The subset of the above raised on a repair attempt rather than the first
+    # draft — a repair prompt carries the feedback and the schema but none of
+    # the mandatory rules, so this is where that would show up.
+    repair_violations_by_rule: dict[str, int]
     # 4. repair distribution
     repair_distribution: dict[str, int]
     # 5. latency / tokens / cost
@@ -246,10 +259,12 @@ def aggregate(outcomes: list[RecordOutcome]) -> SuiteReport:
     n = len(outcomes)
     matched = [o for o in outcomes if o.is_success]
 
-    # policy violations by rule
+    # policy violations by rule, and the repair-attempt subset of them
     rule_counter: Counter[str] = Counter()
+    repair_rule_counter: Counter[str] = Counter()
     for o in outcomes:
         rule_counter.update(o.policy_violations)
+        repair_rule_counter.update(o.repair_violations)
 
     # repair distribution: attempt number a run first succeeded on
     repair: Counter[str] = Counter()
@@ -307,6 +322,7 @@ def aggregate(outcomes: list[RecordOutcome]) -> SuiteReport:
             _rate(sum(1 for o in outcomes if o.policy_violations), n), 4
         ),
         policy_violations_by_rule=dict(rule_counter.most_common()),
+        repair_violations_by_rule=dict(repair_rule_counter.most_common()),
         repair_distribution=dict(repair),
         latency_ms={
             "llm": _pcts("llm_ms"),
@@ -359,6 +375,11 @@ def format_report(report: SuiteReport, *, title: str = "") -> str:
     if report.policy_violations_by_rule:
         rules = "  ".join(f"{k}={v}" for k, v in report.policy_violations_by_rule.items())
         lines.append(f"     violations by rule: {rules}")
+    if report.repair_violations_by_rule:
+        repair_rules = "  ".join(
+            f"{k}={v}" for k, v in report.repair_violations_by_rule.items()
+        )
+        lines.append(f"     of those, on a repair attempt: {repair_rules}")
     dist = "  ".join(f"{k}={v}" for k, v in sorted(report.repair_distribution.items()))
     lines.append(f"4. repair distribution: {dist}")
     lat = report.latency_ms

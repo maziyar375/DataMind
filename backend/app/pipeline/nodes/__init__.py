@@ -211,6 +211,37 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
     )
 
 
+# ── conversation history ─────────────────────────────────────────────────
+# A turn is trimmed, not summarised: there is no summarisation anywhere in the
+# pipeline, and a truncated real sentence is a safer input than a paraphrase
+# nothing verified.
+_HISTORY_CONTENT_CHARS = 300
+_HISTORY_SQL_CHARS = 400
+
+
+def _render_history(history: list[dict[str, str]]) -> str:
+    """The recent turns as the model sees them, or `""` when there are none.
+
+    An assistant turn carries the SQL that produced it when one is known.
+    Without it the model reads its own narration ("Revenue was $1.2M in
+    June…") and has to re-derive the query behind it, which is the whole
+    difficulty of a follow-up like "now break that down by month" — the answer
+    it is building on is a sentence, not a statement it can extend.
+
+    The SQL is whitespace-collapsed onto one line so a multi-line statement
+    cannot break the `role: content` structure the turns are read by.
+    """
+    if not history:
+        return ""
+    lines: list[str] = []
+    for turn in history:
+        lines.append(f"{turn['role']}: {turn['content'][:_HISTORY_CONTENT_CHARS]}")
+        sql = turn.get("sql")
+        if sql:
+            lines.append(f"  SQL: {' '.join(sql.split())[:_HISTORY_SQL_CHARS]}")
+    return "Earlier in this conversation:\n" + "\n".join(lines)
+
+
 # ── clarify ──────────────────────────────────────────────────────────────
 def _clean_options(options: list[str], limit: int = 4) -> list[str]:
     """De-duplicated, trimmed, capped. A chip the user cannot read is noise."""
@@ -246,12 +277,7 @@ async def clarify(state: RunState, deps: NodeDeps) -> NodeResult:
 
     assert state.context is not None
     started = time.perf_counter()
-    history_text = ""
-    if state.context.history:
-        turns = "\n".join(
-            f"{h['role']}: {h['content'][:300]}" for h in state.context.history
-        )
-        history_text = f"Earlier in this conversation:\n{turns}"
+    history_text = _render_history(state.context.history)
 
     try:
         proposal = await deps.llm_gateway.structured(
@@ -300,13 +326,14 @@ async def generate(state: RunState, deps: NodeDeps) -> NodeResult:
     # same disclosure policy that governs the result in `present`.
     schema_text = state.context.render(state.disclosure_policy)
 
+    # Every SQL-producing prompt gets the same history. A repair is a fresh
+    # two-message conversation with the model, so anything the first attempt
+    # was told and the repair is not is simply lost — which is how the repair
+    # path came to be the only one that could not see what the user asked two
+    # turns ago.
+    history_text = _render_history(state.context.history)
+
     if attempt_no == 1:
-        history_text = ""
-        if state.context.history:
-            turns = "\n".join(
-                f"{h['role']}: {h['content'][:300]}" for h in state.context.history
-            )
-            history_text = f"Earlier in this conversation:\n{turns}"
         messages = [
             ChatMessage(
                 role="system",
@@ -333,13 +360,23 @@ async def generate(state: RunState, deps: NodeDeps) -> NodeResult:
             # soft-delete note add a `WHERE is_deleted = false` the question
             # never asked for, turning a correct answer into a wrong one.
             feedback = "\n".join(f.to_feedback() for f in triggering)
-            system = REVIEW_SYSTEM.format(feedback=feedback, schema=schema_text)
+            system = REVIEW_SYSTEM.format(
+                feedback=feedback,
+                schema=schema_text,
+                dialect=state.dialect,
+                history=history_text,
+            )
             preamble = "Your previous SQL was:"
         else:
             feedback = previous.report.to_feedback()
             if previous.db_error:
                 feedback += f"\nThe database also reported: {previous.db_error}"
-            system = REPAIR_SYSTEM.format(feedback=feedback, schema=schema_text)
+            system = REPAIR_SYSTEM.format(
+                feedback=feedback,
+                schema=schema_text,
+                dialect=state.dialect,
+                history=history_text,
+            )
             preamble = "Your rejected SQL was:"
         messages = [
             ChatMessage(role="system", content=system),

@@ -223,6 +223,18 @@ async def evaluate_record(
                 for i in a.report.errors
             }
         )
+        # Attributed to the attempt that raised them. `attempt_no` is 1-based,
+        # so anything above 1 was produced by REPAIR_SYSTEM or REVIEW_SYSTEM —
+        # prompts that carry the feedback and the schema but restate none of
+        # GENERATE_SYSTEM's mandatory rules.
+        o.repair_violations = sorted(
+            {
+                i.rule_id
+                for a in state.attempts
+                if a.report.status == "REJECTED" and a.attempt_no > 1
+                for i in a.report.errors
+            }
+        )
     o.execution_ok = state.execution is not None
     o.exact_match = metrics.exact_match(record.gold_sql, o.candidate_sql)
 

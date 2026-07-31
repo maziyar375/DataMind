@@ -9,6 +9,7 @@ from app.eval.metrics import (
     RecordOutcome,
     aggregate,
     exact_match,
+    format_report,
     percentile,
     result_sets_match,
     retrieval_recall,
@@ -124,6 +125,38 @@ def test_aggregate_headline_and_breakdowns() -> None:
     assert tags["join"].n == 2 and tags["join"].execution_accuracy == 0.5
     assert tags["bridge"].n == 1 and tags["bridge"].execution_accuracy == 0.0
     assert r.latency_ms["llm"]["p50"] > 0
+
+
+def test_repair_violations_are_a_subset_attributed_to_the_retry() -> None:
+    """A rejection on attempt 2 is a different diagnosis from one on attempt 1.
+
+    Only the repair prompts drop `GENERATE_SYSTEM`'s mandatory rules, so a
+    violation raised there points at that omission; the same rule id raised on
+    a first draft does not. The flat counter cannot tell them apart, which is
+    the whole reason this second counter exists.
+    """
+    outs = [
+        # rejected twice: once as a first draft, once again after repair
+        _outcome(record_id="a", policy_violations=["E_UNKNOWN_COLUMN"],
+                 repair_violations=["E_UNKNOWN_COLUMN"]),
+        # rejected on the first draft only, then repaired successfully
+        _outcome(record_id="b", policy_violations=["E_TABLE_NOT_ALLOWED"],
+                 succeeded_on_attempt=2),
+    ]
+    r = aggregate(outs)
+    assert r.policy_violations_by_rule == {
+        "E_UNKNOWN_COLUMN": 1, "E_TABLE_NOT_ALLOWED": 1
+    }
+    assert r.repair_violations_by_rule == {"E_UNKNOWN_COLUMN": 1}
+    assert "on a repair attempt: E_UNKNOWN_COLUMN=1" in format_report(r)
+
+
+def test_repair_violations_absent_when_only_first_drafts_were_rejected() -> None:
+    r = aggregate([_outcome(policy_violations=["E_UNKNOWN_COLUMN"])])
+    assert r.repair_violations_by_rule == {}
+    # Nothing to say means nothing printed — an empty line here would read as
+    # a measurement rather than the absence of one.
+    assert "on a repair attempt" not in format_report(r)
 
 
 def test_report_dict_is_json_serialisable() -> None:
