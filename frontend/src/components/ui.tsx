@@ -46,7 +46,14 @@ const LOGO_INK = '#161038'
 // The logo prefers the real brand image at /brand.png (drop your exact file
 // there and it is used verbatim, everywhere). Until that file exists the
 // drawn mark below is shown as an automatic fallback — no broken image.
-export function Logo({ size = 26 }: { size?: number }) {
+//
+// Sizes here run larger than a logo normally would, because the artwork is
+// mostly negative space: the opaque bbox leaves ~9% margin on three sides and
+// ~17% at the bottom, the circle cluster covers ~68% of the box, and the
+// identifying glyph — the speech bubble and its three bars — is only ~31% of
+// it. A 40px box therefore reads as a ~12px mark, about the optical weight of
+// the 15px wordmark beside it. Shrink these and the bars stop resolving.
+export function Logo({ size = 40 }: { size?: number }) {
   const [failed, setFailed] = React.useState(false)
   if (failed) return <LogoMark size={size} />
   return (

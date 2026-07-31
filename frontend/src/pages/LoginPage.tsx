@@ -59,7 +59,7 @@ export default function LoginPage({ onSignedIn }: { onSignedIn: (user: User) => 
           }}
         >
           <div className="rm-auth-logo">
-            <Logo size={112} />
+            <Logo size={176} />
           </div>
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 30, fontWeight: 700, letterSpacing: '-0.025em' }}>

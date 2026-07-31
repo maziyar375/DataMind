@@ -220,11 +220,14 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   filter: blur(8px);
   animation: rm-logo-glow 6s ease-in-out infinite;
 }
-/* The mark itself gets a crisp drop shadow so it reads as raised off the glow. */
+/* The mark itself gets a crisp drop shadow so it reads as raised off the glow.
+   It must be a filter, not a box-shadow: the brand image is a transparent mark,
+   not the opaque rounded tile it used to be, so a box-shadow would cast the
+   element's rectangle as a visible slab behind it. drop-shadow follows the
+   alpha channel, so the shadow traces the circle cluster instead. */
 .rm-auth-logo > * {
   position: relative;
-  border-radius: 22px;
-  box-shadow: 0 18px 40px -18px oklch(0.5 0.2 320 / 0.7);
+  filter: drop-shadow(0 14px 22px oklch(0.5 0.2 320 / 0.55));
 }
 @keyframes rm-logo-float {
   0%, 100% { transform: translateY(0); }

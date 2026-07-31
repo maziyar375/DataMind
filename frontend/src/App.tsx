@@ -69,7 +69,7 @@ export default function App() {
         }}
       >
         <div className="rm-pulse" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <Logo size={30} />
+          <Logo />
           <span style={{ fontWeight: 700, fontSize: 15, color: 'var(--text)' }}>
             DataMind
           </span>
