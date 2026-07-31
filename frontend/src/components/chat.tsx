@@ -11,7 +11,7 @@
  * the transcript read as a stack of forms; only the things that genuinely are
  * objects — a result table, the SQL — keep a border of their own.
  */
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import type {
   Artifact, ClarificationSpec, GeneratedQuery, RunDetail, RunStep, TableArtifactSpec,
 } from '../api/types'
@@ -454,81 +454,6 @@ function formatCell(value: unknown): string {
   return String(value)
 }
 
-// ── simple bar chart, drawn from the result itself ────────────────────────
-export function ResultBars({ spec }: { spec: TableArtifactSpec }) {
-  const chart = useMemo(() => {
-    const labelIndex = spec.columns.findIndex((c) => c.semantic_type !== 'quantitative')
-    const valueIndex = spec.columns.findIndex((c) => c.semantic_type === 'quantitative')
-    if (labelIndex === -1 || valueIndex === -1) return null
-
-    const points = spec.rows.slice(0, 12).map((row) => ({
-      label: String(row[labelIndex] ?? ''),
-      value: Number(row[valueIndex] ?? 0),
-    }))
-    if (points.length < 2 || points.some((p) => Number.isNaN(p.value))) return null
-
-    const max = Math.max(...points.map((p) => p.value))
-    return max > 0 ? { points, max } : null
-  }, [spec])
-
-  if (!chart) return null
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-      {chart.points.map((point, index) => (
-        <div key={index} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span
-            style={{
-              width: 140,
-              fontSize: 12,
-              color: 'var(--text-dim)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              flexShrink: 0,
-            }}
-            title={point.label}
-          >
-            {point.label}
-          </span>
-          <span
-            style={{
-              flex: 1,
-              height: 8,
-              background: 'var(--panel-alt)',
-              borderRadius: 4,
-              overflow: 'hidden',
-            }}
-          >
-            <span
-              style={{
-                display: 'block',
-                height: '100%',
-                width: `${(point.value / chart.max) * 100}%`,
-                background: 'var(--accent)',
-                borderRadius: 4,
-                transition: 'width .3s ease',
-              }}
-            />
-          </span>
-          <span
-            className="mono"
-            style={{
-              width: 92,
-              textAlign: 'right',
-              fontSize: 12,
-              color: 'var(--text2)',
-              flexShrink: 0,
-            }}
-          >
-            {point.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-          </span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
 // ── metadata chips ────────────────────────────────────────────────────────
 export function RunMetadata({ run }: { run: RunDetail }) {
   const tables = run.queries.at(-1)?.referenced_tables ?? []
@@ -731,11 +656,16 @@ export function AssistantTurn({
         />
       )}
 
-      {chartSpec ? (
-        <VegaChart spec={chartSpec} />
-      ) : (
-        spec && spec.rows.length > 1 && <ResultBars spec={spec} />
-      )}
+      {/*
+        No client-side fallback chart. "No chart" is a decision the `chart`
+        node makes about the data — a single row, a measure identical in every
+        row, more categories than a reader can compare — and it carries a
+        reason into the step trail. A second renderer here that drew bars
+        anyway would silently overrule it, which is how a result the pipeline
+        called unchartable ended up as a wall of equal-length bars sitting
+        under an answer that said they were all tied.
+      */}
+      {chartSpec && <VegaChart spec={chartSpec} />}
       {spec && <ResultTable spec={spec} />}
       {run && run.queries.length > 0 && <SqlPanel queries={run.queries} />}
       {run && <RunMetadata run={run} />}

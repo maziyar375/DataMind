@@ -42,19 +42,35 @@ export default function ChatPage() {
     let cancelled = false
     ;(async () => {
       try {
-        const [convs, conns, llms] = await Promise.all([
+        // Settled, not `all`. These three fill three independent pickers, so
+        // one failing request must not empty the other two: with `all`, a
+        // single expired call left the whole workspace blank — no history, no
+        // database, no model — which reads as "my data is gone" rather than
+        // "one request failed".
+        const [convs, conns, llms] = await Promise.allSettled([
           conversations.list(),
           connectionsApi.list(),
           llmConfigs.list(),
         ])
         if (cancelled) return
-        setConversationList(convs)
-        setConnections(conns)
-        setModels(llms)
-        // No preselection: the reader picks a database and a model for each
-        // conversation from the header. Selecting a saved conversation below
-        // restores whatever it was started with.
-        if (convs.length > 0) setActiveId(convs[0].id)
+        if (convs.status === 'fulfilled') {
+          setConversationList(convs.value)
+          // No preselection beyond this: the reader picks a database and a
+          // model for each conversation from the header. Selecting a saved
+          // conversation below restores whatever it was started with.
+          if (convs.value.length > 0) setActiveId(convs.value[0].id)
+        }
+        if (conns.status === 'fulfilled') setConnections(conns.value)
+        if (llms.status === 'fulfilled') setModels(llms.value)
+
+        const missing = [
+          convs.status === 'rejected' ? 'conversations' : null,
+          conns.status === 'rejected' ? 'data sources' : null,
+          llms.status === 'rejected' ? 'models' : null,
+        ].filter((name): name is string => name !== null)
+        if (missing.length > 0) {
+          setError(`Could not load ${missing.join(', ')}. Try reloading.`)
+        }
       } catch {
         if (!cancelled) setError('Could not load your workspace.')
       } finally {

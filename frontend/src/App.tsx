@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { auth } from './api/client'
+import { auth, getAccessToken, onAuthChange } from './api/client'
 import type { User } from './api/types'
 import { Icon, Logo, initialOf } from './components/ui'
 import ChatPage from './pages/ChatPage'
@@ -39,6 +39,18 @@ export default function App() {
       cancelled = true
     }
   }, [])
+
+  // A 401 the refresh cookie cannot rescue clears the token deep inside the
+  // client. Nothing was listening for that, so the signed-in shell stayed
+  // mounted around a session that no longer existed and every request behind
+  // it failed — the app looked emptied out instead of signed out. Dropping the
+  // user here shows the login screen, which is the truth.
+  useEffect(
+    () => onAuthChange(() => {
+      if (getAccessToken() === null) setUser((current) => (current ? null : current))
+    }),
+    [],
+  )
 
   const handleLogout = useCallback(async () => {
     await auth.logout()
