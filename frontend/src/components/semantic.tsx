@@ -312,7 +312,15 @@ export function SemanticLayerTab({
 
         {!empty && (
           <>
+            {/* The two panels that describe the whole database sit together,
+                above the per-table list. "Business terms" used to sit below
+                it — under forty-odd rows, several of them expandable — which
+                put a document-level section behind the entire working surface
+                and made it read as an appendix to the last table rather than a
+                peer of "About this database". It also fell under the filter
+                bar, whose search and filters never applied to it. */}
             <Overview doc={doc!} onChange={patch} />
+            <Glossary doc={doc!} onChange={patch} />
 
             <FilterBar
               value={filter}
@@ -356,8 +364,6 @@ export function SemanticLayerTab({
                 </div>
               )}
             </div>
-
-            <Glossary doc={doc!} onChange={patch} />
           </>
         )}
       </Shell>
@@ -784,15 +790,61 @@ function ConfirmDelete({
 
 // ── panels ─────────────────────────────────────────────────────────────────
 /** A titled card. Local rather than `settings.Section` so the semantic tab can
- *  carry an action in the header without changing every other settings page. */
+ *  carry an action in the header without changing every other settings page.
+ *
+ *  Optionally collapsible: the two document-level panels sit above a list of
+ *  however many tables the database has, and a filled-in one should state what
+ *  it holds in a line rather than spend a screen of form between the reader and
+ *  the tables they came for. Pass `summary` to make it collapsible. */
 function Panel({
-  title, description, action, children,
+  title, description, summary, defaultOpen = true, action, children,
 }: {
   title: string
   description?: string
+  summary?: string
+  defaultOpen?: boolean
   action?: React.ReactNode
   children: React.ReactNode
 }) {
+  const collapsible = summary !== undefined
+  const [open, setOpen] = useState(defaultOpen)
+  const shown = !collapsible || open
+
+  // Open, the description explains what to write here; closed, the summary
+  // reports what is already written. Never both.
+  const titleBlock = (
+    <div style={{ flex: 1, minWidth: 0 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          fontSize: 12.5,
+          fontWeight: 700,
+          color: 'var(--text-strong)',
+        }}
+      >
+        {collapsible && <Icon.Chevron open={open} size={12} stroke="var(--text-dim)" />}
+        {title}
+      </div>
+      {(shown ? description : summary) && (
+        <div
+          style={{
+            fontSize: 11.5,
+            color: 'var(--text-dim)',
+            marginTop: 3,
+            marginLeft: collapsible ? 20 : 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {shown ? description : summary}
+        </div>
+      )}
+    </div>
+  )
+
   return (
     <section
       style={{
@@ -808,24 +860,40 @@ function Panel({
           alignItems: 'center',
           gap: 12,
           padding: '13px 18px',
-          borderBottom: '1px solid var(--border)',
+          borderBottom: shown ? '1px solid var(--border)' : 'none',
         }}
       >
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-strong)' }}>
-            {title}
-          </div>
-          {description && (
-            <div style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 3 }}>
-              {description}
-            </div>
-          )}
+        {collapsible ? (
+          // The action stays outside the toggle: a button inside a button is
+          // invalid, and "Add a term" must not also collapse the panel.
+          <button
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              flex: 1,
+              minWidth: 0,
+              padding: 0,
+              background: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              textAlign: 'left',
+            }}
+          >
+            {titleBlock}
+          </button>
+        ) : (
+          titleBlock
+        )}
+        {shown && action}
+      </div>
+      {shown && (
+        <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {children}
         </div>
-        {action}
-      </div>
-      <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 14 }}>
-        {children}
-      </div>
+      )}
     </section>
   )
 }
@@ -922,10 +990,24 @@ function Overview({
     })
   }
 
+  // Closed, the panel says what it is holding: the first clause of the context
+  // and the conventions that decide what "last month" resolves to.
+  const context = doc.business_context.trim()
+  const summary = [
+    context ? (context.length > 90 ? `${context.slice(0, 90)}…` : context) : 'No context written',
+    `${time.relative_windows === 'calendar' ? 'Calendar' : 'Rolling'} windows`,
+    `FY from ${MONTHS[time.fiscal_year_start_month - 1] ?? '—'}`,
+    `weeks from ${time.week_starts_on === 'monday' ? 'Mon' : 'Sun'}`,
+  ].join(' · ')
+
   return (
     <Panel
       title="About this database"
       description="Sent with every question. Two or three sentences and the time conventions are worth more here than anything else on this page."
+      summary={summary}
+      // Unwritten context is the highest-value thing on the page, so an empty
+      // one opens itself; a filled one gets out of the way of the tables.
+      defaultOpen={!context}
     >
       <Field label="What this database is for">
         <TextArea
@@ -1871,10 +1953,18 @@ function Glossary({
     )
   }
 
+  const named = doc.glossary.map((t) => t.term.trim()).filter(Boolean)
+
   return (
     <Panel
       title="Business terms"
       description="Words a user will type that are not the name of a table or a metric — “churn”, “active customer”, “AOV”."
+      summary={
+        named.length === 0
+          ? 'No terms yet'
+          : `${named.length} ${named.length === 1 ? 'term' : 'terms'} — ${named.slice(0, 6).join(', ')}${named.length > 6 ? '…' : ''}`
+      }
+      defaultOpen={false}
       action={
         <GhostButton
           onClick={() =>
