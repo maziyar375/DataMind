@@ -62,6 +62,7 @@ from app.infra.db.session import dispose_engine, get_sessionmaker
 from app.infra.llm.litellm_gateway import LiteLLMGateway, estimate_cost_usd
 from app.pipeline.nodes import NodeDeps
 from app.pipeline.pipeline import AnalyticsPipeline
+from app.pipeline.prompts import PROMPT_VERSION
 from app.pipeline.state import RunState
 from app.sqlguard import GuardPolicy
 
@@ -668,7 +669,10 @@ async def _amain(args: argparse.Namespace) -> int:
         connection_fixture=records[0].connection_fixture,
         llm_config_id=config_id,
         model_snapshot=model_snapshot,
-        prompt_version=settings.prompt_version,
+        # The prompt module is the truth, not `settings.prompt_version` — that
+        # setting is a hardcoded default that drifted (it still reads "v2"), so
+        # runs were being filed under a version they did not use.
+        prompt_version=PROMPT_VERSION,
         outcomes=outcomes,
         report_dict=report_dict,
         records_by_id={r.id: r for r in records} if not negative else {},
