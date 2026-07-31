@@ -205,5 +205,9 @@ class RunEventType(StrEnum):
     ARTIFACT_CREATED = "ARTIFACT_CREATED"
     CLARIFICATION_REQUESTED = "CLARIFICATION_REQUESTED"
     TEXT_DELTA = "TEXT_DELTA"
+    # "Discard the answer text streamed so far, then render what follows."
+    # Emitted only when narration fails part-way through, so the fallback
+    # sentence does not arrive glued to half a sentence — live or on replay.
+    TEXT_RESET = "TEXT_RESET"
     ERROR = "ERROR"
     RUN_FINISHED = "RUN_FINISHED"

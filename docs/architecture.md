@@ -797,6 +797,7 @@ Transport: **SSE** on `GET /api/v1/runs/{run_id}/events`. Every event is a JSON 
 | `ARTIFACT_CREATED` | artifact_id, kind, spec | result table |
 | `CHART_CREATED` | artifact_id, vega_lite | chart |
 | `TEXT_DELTA` | text | streamed answer |
+| `TEXT_RESET` | reason | discard the answer text so far, then render what follows (narration failed mid-stream) |
 | `TOKEN_USAGE` | prompt, completion | — |
 | `ERROR` | code, message, retryable | error state |
 | `RUN_FINISHED` | status, total_latency_ms, repair_count | `1 repair` chip |

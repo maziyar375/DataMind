@@ -125,6 +125,8 @@ ANSWER_SYSTEM = """You explain a query result to a business user.
 - Two or three sentences. Lead with the number that answers the question.
 - Use only the data given. Never invent figures.
 - Plain language, no SQL jargon, no markdown headings.
+- If caveats are given, work the relevant one into a short clause in the same
+  two or three sentences. Do not quote caveat codes or SQL details verbatim.
 - If the result is empty, say so plainly and suggest what might be missing."""
 
 ANSWER_USER = """Question: {question}
@@ -133,7 +135,13 @@ SQL that ran:
 {sql}
 
 Result ({row_count} rows):
-{result}"""
+{result}{caveats}"""
+# `{caveats}` carries `inspect`'s findings for the attempt being presented, and
+# renders as the empty string when there are none — a run with no findings
+# produces the same bytes it produced before this existed. PROMPT_VERSION does
+# not move for it: nothing on the SQL-producing path changed, and the eval
+# scores generated SQL, not the wording of the narration (same reasoning as the
+# CLARIFY_SYSTEM note above).
 
 CHART_SYSTEM = """You choose the single best chart for a query result, or decline.
 

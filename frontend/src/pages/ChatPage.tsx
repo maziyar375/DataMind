@@ -176,6 +176,13 @@ export default function ChatPage() {
           case 'TEXT_DELTA':
             setLiveText((prev) => prev + (event.data.text ?? ''))
             break
+          // Narration failed part-way through: the deltas already rendered are
+          // half a sentence, and the fallback that follows replaces them
+          // rather than continuing them. Same path on replay, since polling
+          // and SSE both land here.
+          case 'TEXT_RESET':
+            setLiveText('')
+            break
           default:
             break
         }

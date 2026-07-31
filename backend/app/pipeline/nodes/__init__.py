@@ -14,6 +14,7 @@ from app.core.errors import ConnectorError, LLMError
 from app.core.logging import get_logger
 from app.domain.ports.database import DatabaseConnector
 from app.domain.ports.llm import ChatMessage, LLMGateway, ResolvedLLM
+from app.pipeline.checks import Finding
 from app.pipeline.contracts import ClarificationProposal, SqlProposal
 from app.pipeline.prompts import (
     ANSWER_SYSTEM,
@@ -539,11 +540,34 @@ async def inspect(state: RunState, deps: NodeDeps) -> NodeResult:
 
 
 # ── present ──────────────────────────────────────────────────────────────
+def _render_caveats(findings: list[Finding]) -> str:
+    """Inspect's findings, in the words the reader of the answer needs.
+
+    Only `.message` is used. `.hint` is repair guidance addressed to the
+    generator ("use a LEFT JOIN unless…"), which is meaningless to a business
+    user and would read as an instruction the answer failed to follow.
+
+    Returns "" when there is nothing to say, and the leading blank line is part
+    of the block, so a run with no findings renders a prompt byte-identical to
+    the one this node sent before caveats existed.
+    """
+    lines = [f"- {f.message}" for f in findings if f.message]
+    if not lines:
+        return ""
+    return "\n\nCaveats about this result:\n" + "\n".join(lines)
+
+
 async def present(state: RunState, deps: NodeDeps) -> NodeResult:
     from app.pipeline.disclosure import disclose
 
     assert state.execution is not None
     state.disclosed = disclose(state.execution, state.disclosure_policy)
+
+    # Only the attempt being presented. Findings are recorded on the attempt
+    # `inspect` looked at and never accumulated across retries, so a suspicion
+    # a retry cleared cannot resurface in the sentence the user reads.
+    attempt = state.last_attempt
+    caveats = _render_caveats(attempt.findings if attempt else [])
 
     messages = [
         ChatMessage(role="system", content=ANSWER_SYSTEM),
@@ -554,6 +578,7 @@ async def present(state: RunState, deps: NodeDeps) -> NodeResult:
                 sql=state.executable_sql or "",
                 row_count=state.execution.row_count,
                 result=state.disclosed.render(),
+                caveats=caveats,
             ),
         ),
     ]
@@ -566,6 +591,18 @@ async def present(state: RunState, deps: NodeDeps) -> NodeResult:
     except LLMError as err:
         # The data is already correct; a narration failure should not lose it.
         log.warning("answer_stream_failed", error=err.message)
+        if buffer:
+            # Every delta above is already on the live bus *and* durably stored
+            # for Last-Event-ID replay, so discarding them from `state.answer`
+            # is not enough: a client would show half a sentence with the
+            # fallback stitched onto the end. This says "clear what you have
+            # rendered for this answer, then render what follows". Nothing is
+            # emitted when the stream failed before yielding — there is then no
+            # partial text to clear. The web client handles it in
+            # `frontend/src/pages/ChatPage.tsx`; any other consumer that does
+            # not will simply ignore an unknown event type and keep today's
+            # concatenated text.
+            await deps.emit("TEXT_RESET", {"reason": "stream_failed"})
         fallback = (
             f"The query returned {state.execution.row_count} rows. "
             "I could not generate a written summary for this result."
