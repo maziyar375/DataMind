@@ -1,0 +1,465 @@
+# The run pipeline, node by node
+
+What happens between "user hits enter" and "answer + table + chart appear".
+Companion to [architecture.md](architecture.md) (the why) and
+[CODEBASE.md](CODEBASE.md) (the whole stack). This file is only the pipeline.
+
+Code: [`backend/app/pipeline/`](../backend/app/pipeline/) —
+`pipeline.py` (the executor), `nodes/__init__.py` (all nine nodes),
+`state.py` (typed state), `prompts/` (versioned prompts),
+`checks.py`, `disclosure.py`, `metadata.py`.
+
+---
+
+## 1. What orchestrates this
+
+**Not LangGraph. Not LiteLLM.** Both names come up, both are the wrong layer:
+
+- **LiteLLM** is a *provider adapter*, not an orchestrator. It lives at
+  `app/infra/llm/` behind the `LLMGateway` port and does one thing: turn
+  `ChatMessage[]` into a provider call. **`import litellm` outside
+  `app/infra/llm/` fails CI.** Nodes only ever see three methods:
+
+  | method | returns | used by |
+  |---|---|---|
+  | `complete(llm, messages)` | `Completion` (text + token counts + latency) | `route` |
+  | `structured(llm, messages, schema)` | a validated Pydantic model | `clarify`, `generate`, `chart` |
+  | `stream(llm, messages)` | `AsyncIterator[str]` | `present` |
+
+- **The orchestrator is our own state machine**, `AnalyticsPipeline.run` in
+  [pipeline.py](../backend/app/pipeline/pipeline.py) — ~70 lines, a `while`
+  loop over an ordered node list with an index. That is the whole engine.
+
+- **LangGraph is deliberately deferred.** The graph is linear with one bounded
+  loop: no parallel fan-out, no durable interrupts, no resume-mid-graph. Node
+  signatures are already LangGraph-shaped (`async (state, deps) -> result`), so
+  adopting it is wiring, not a rewrite. See §6 for the port map.
+
+---
+
+## 2. The graph
+
+```
+                                    ┌─── CHITCHAT / UNSUPPORTED / METADATA ──► HALT (answer, no SQL)
+                                    │
+  route ──────────────────────────► ┤
+                                    │ ANALYTICAL
+                                    ▼
+  retrieve  (no LLM — schema block + semantic layer + history)
+      │
+      ▼
+  clarify ──── asks? ─────────────► HALT (question becomes the answer,
+      │                                    run ends NEEDS_CLARIFICATION)
+      │ answerable / skipped / failed-open
+      ▼
+  generate ◄──────────────────────────────────┐
+      │                                       │
+      ▼                                       │ goto generate
+  validate ── guard rejected ─────────────────┤  (budget permitting)
+      │ VALID                                 │
+      ▼                                       │
+  execute  ── db error ───────────────────────┤
+      │ rows                                  │
+      ▼                                       │
+  inspect  ── retryable finding (once) ───────┘
+      │
+      ▼
+  present  (disclosure gate → streamed narration)
+      │
+      ▼
+  chart    (data veto → model → plan_chart → Vega-Lite)
+```
+
+`ORDER` in [pipeline.py:25-38](../backend/app/pipeline/pipeline.py#L25-L38) is
+the single source of truth for sequence. Nodes never decide what runs next
+beyond an optional `goto`.
+
+### Node summary
+
+| # | node | LLM? | can HALT | can `goto` | writes |
+|---|---|:--:|:--:|:--:|---|
+| 1 | `route` | ✅ `complete` | ✅ | – | `intent`, `answer`, **tokens** |
+| 2 | `retrieve` | ❌ | – | – | `context` |
+| 3 | `clarify` | ✅ `structured` | ✅ | – | `clarification`, `answer` |
+| 4 | `generate` | ✅ `structured` | – | – | `attempts[]` |
+| 5 | `validate` | ❌ | – | ✅ `generate`/`present` | `attempt.report`, `.rewritten_sql` |
+| 6 | `execute` | ❌ | – | ✅ `generate`/`present` | `execution` |
+| 7 | `inspect` | ❌ | – | ✅ `generate` | `attempt.findings` |
+| 8 | `present` | ✅ `stream` | – | – | `disclosed`, `answer` |
+| 9 | `chart` | ✅ `structured` | – | – | `chart` |
+
+**Typical successful run = 4 model calls** (route, clarify, generate, present)
+**+ 1 if a chart survives the veto.** Four of the nine nodes cost nothing.
+
+---
+
+## 3. Each node in detail
+
+### 1. `route` — classify before spending a schema-sized prompt
+
+**Prompt:** `ROUTE_SYSTEM` + the raw question. **No schema, no history, no
+semantic layer** — deliberately the cheapest call in the run.
+
+**Logic:**
+1. `complete()`, take `text.strip().upper().split()[0]`.
+2. Not one of the four labels → `ANALYTICAL`. `LLMError` → `ANALYTICAL`.
+   Fail-open in both directions: a routing failure must not fail the run.
+3. Branch:
+   - **CHITCHAT** → canned greeting, `HALT`.
+   - **UNSUPPORTED** (writes, out of scope) → canned refusal, `HALT`. Answered
+     gracefully, not as an `E_*` error — a write request isn't a bug to debug.
+   - **METADATA** → `metadata.answer_metadata(question, snapshot tables)`,
+     `HALT`. **No model call, no SQL.** This branch exists because routing
+     "what tables do I have?" into `generate` makes the model write SQL against
+     `information_schema`, which the guard *always* rejects as a system table —
+     the run would fail before an answer could exist. `metadata.py` picks
+     granularity from the question: an inventory (name, rows, column count)
+     unless the question names a table, then that table's columns with types.
+   - **ANALYTICAL** → continue.
+
+**Only node that records tokens** — see §7.
+
+### 2. `retrieve` — build everything the generator is allowed to see
+
+**No LLM call.** Cost: zero tokens, sub-millisecond.
+
+**Logic** ([nodes/__init__.py:159-211](../backend/app/pipeline/nodes/__init__.py#L159-L211)):
+1. `approx_chars = sum(60 + 40 * len(columns))` over all snapshot tables;
+   `budget = 24_000`.
+2. **Under budget → `FULL_SNAPSHOT`**: send every table. This is the common
+   path for small and medium schemas.
+3. **Over budget → `EXACT_MATCH`**:
+   - seed = tables whose *name*, or any of whose *column names*, appears as a
+     lowercase **substring of the question**;
+   - `_expand_by_fk(seed, …)` grows it by **exactly one FK hop in either
+     direction** — a question names `orders` and `products` but never the
+     `order_items` bridge that joins them, and substring matching structurally
+     cannot find bridges;
+   - no seed at all → `tables[:20]` in snapshot order.
+4. Keep only relationships touching a selected table.
+5. Attach `deps.history` (last ≤6 messages) and `deps.semantic` (the layer, or
+   `None`), build `RetrievedContext`.
+
+**What `RetrievedContext.render(policy)` emits** — the block every downstream
+prompt embeds:
+
+```
+Dialect: postgres
+<bracket legend, only if some column actually rendered a hint>
+
+Tables:
+- public.orders(id integer PK, customer_id integer FK->public.customers.id,
+                status text [∈ {paid, cancelled}], ...)  (~12,000 rows)
+
+Foreign keys:
+- public.order_items.order_id -> public.orders.id
+
+<semantic-layer block, only if a layer is present and enabled>
+```
+
+Two independent gates apply here:
+- **`HintBudget.from_policy(policy)`** decides whether row counts, value lists,
+  distinct counts, null fractions and ranges render at all. Structure is never
+  gated; *content* always is.
+- **`render_semantic`** ([semantic/render.py](../backend/app/semantic/render.py))
+  scopes the layer to the retrieved tables and drops anything invalid or
+  excluded. **No layer → no block, not even a blank line** — byte-identical to
+  the pre-feature prompt, which is what keeps the eval baseline comparable and
+  gives you the A/B switch (`connections.semantic_layer_enabled`).
+
+### 3. `clarify` — ask once, instead of answering a question nobody asked
+
+**Prompt:** `CLARIFY_SYSTEM` (schema block + history) + `CLARIFY_USER`
+(question) → `structured(ClarificationProposal)`.
+
+**Placement is the design.** After `retrieve` so it judges against the *same*
+schema block and semantic layer the generator will see — "which revenue
+column?" is only answerable with the columns in hand, and a metric definition
+that already settles the question must be visible or this node invents doubt.
+Before `generate` so an unanswerable question costs no SQL.
+
+**Logic:**
+1. `deps.clarify_enabled` false → `SKIPPED`. It is false both when the
+   connection switch is off **and** when this run *is* the answer to a question
+   we already asked — enforced in `run_service` by checking the previous run's
+   status, not by trusting the model to remember.
+2. **Fails open in every direction**: `LLMError`, `ValueError`, or an empty
+   question all mean *proceed*. A guessed answer shown with its SQL beats no
+   answer.
+3. `answerable=True` → proceed.
+4. Otherwise: options cleaned (deduped, trimmed to 120 chars, capped at 4),
+   **`state.answer` = the question itself** so the thread reads as a
+   conversation rather than a dead run, emit `CLARIFICATION_REQUESTED`, `HALT`.
+   The run ends `NEEDS_CLARIFICATION`, which is **not terminal** — `cancel`
+   still applies, and the stale-run reconciler leaves it alone. The user's
+   reply arrives as an ordinary new run; no durable interrupt, no resume.
+
+`GENERATE_SYSTEM` is untouched by this feature on purpose: eval Round 2 showed
+that prompt losing 10 points of execution accuracy to an unrelated addition, so
+when a question is answerable the generator sees exactly what it saw before
+clarify existed.
+
+### 4. `generate` — the only node that writes SQL
+
+`structured(SqlProposal)` → `{sql, tables_used, reasoning}`. **Three different
+prompts depending on why we're here:**
+
+| when | system prompt | user turn | history? |
+|---|---|---|:--:|
+| attempt 1 | `GENERATE_SYSTEM(dialect, schema, history)` | `Question: …` | ✅ |
+| retry after **`inspect`** (previous SQL was `VALID` **and** has `retry=True` findings) | `REVIEW_SYSTEM(feedback, schema)` — *"ran successfully, but the result looks wrong"* | question + `Your previous SQL was:` | ❌ |
+| retry after **guard rejection or DB error** | `REPAIR_SYSTEM(feedback, schema)` — *"rejected by a validator"* | question + `Your rejected SQL was:` | ❌ |
+
+The REVIEW/REPAIR split is not cosmetic: telling the model its SQL was
+"rejected by a validator" when it actually ran fine is a lie that invites it to
+fix the wrong thing.
+
+**Only the finding that *earned* the retry is quoted back.** An advisory finding
+is advisory in both directions — it may not start a regeneration, and it may
+not steer one some other check started. Passing the whole list is what let an
+advisory soft-delete note add a `WHERE is_deleted = false` the question never
+asked for, turning a correct answer into a wrong one.
+
+`LLMError` → `E_LLM`, `FAILED`. Otherwise strip trailing `;`, append a
+`SqlAttempt`, emit `SQL_GENERATED`.
+
+> ⚠️ Do not add general SQL guidance to `GENERATE_SYSTEM`. Eval Round 2
+> measured a "getting the answer right" block **lowering** execution accuracy
+> 36% → 26% and parse 98% → 88% on the small model — the extra instructions
+> crowded out the schema. More is not better here.
+
+### 5. `validate` — the hard gate, fails closed
+
+**No LLM call.** `guard(raw_sql, policy)` =
+`SqlValidator.validate` (SQLGlot parse → AST walked against an **allowlist**,
+names resolved against the connection's stored snapshot) → `render()` (rewrite,
+inject the row `LIMIT`). An **unknown node type is a rejection, not a
+warning**. An unsynced connection can query nothing.
+
+**On `status != VALID`**, a three-rung ladder — the same one `execute` uses:
+1. repair budget left (`repair_count < max_repairs`) → `goto generate`;
+2. else `_restore_superseded()` — if a check-driven retry is in flight, put the
+   earlier working result back and `goto present`;
+3. else `FAILED` with the first error's `rule_id`.
+
+### 6. `execute` — read-only, capped, timed out
+
+**No LLM call.**
+1. `connector.explain(sql)` → `rows_scanned_estimate` (for the step trail).
+2. `connector.execute(sql, max_rows, statement_timeout_ms)` — `READ ONLY`
+   transaction on PG/MySQL/Oracle, read-only role + query timeout on SQL Server.
+3. `ConnectorError` → the same three-rung ladder as `validate`, ending in
+   `E_QUERY_FAILED`.
+4. Success → `state.execution`, emit `QUERY_COMPLETED`.
+
+### 7. `inspect` — "it ran, and it's wrong"
+
+The repair loop already covers two failure modes: *the guard said no* and *the
+database said no*. Both mean no result exists. This covers the third and most
+expensive: **the query ran, returned something plausible, and is wrong.**
+
+**No LLM call, and it never reads a result value** — only the SQL, the
+snapshot, and the result *shape*. That is deliberate: it costs no tokens, it
+cannot inherit the generator's own misreading of the question the way a model
+critiquing its own SQL does, and it behaves identically under every disclosure
+policy (a model critic under `NONE` is handed *"Result data was not shared"* and
+can conclude nothing).
+
+| code | fires when | retry? |
+|---|---|:--:|
+| `C_EMPTY_RESULT` | 0 rows **and** a predicate provably contradicts the snapshot — a literal outside `sample_values`, or a range outside recorded min/max | ✅ |
+| `C_EMPTY_RESULT` | 0 rows, no such evidence | ❌ advisory |
+| `C_NULLABLE_INNER_JOIN` | inner join `ON` a nullable **FK** column | ❌ advisory |
+| `C_SOFT_DELETE_UNFILTERED` | `is_deleted`/`archived`/`is_active`… on a queried table, never mentioned, `distinct_count != 1` | ❌ advisory |
+| `C_GRANULARITY` | question matches the single-figure regex, `row_count > 1`, no `GROUP BY` keys | ❌ advisory |
+| `C_TRUNCATED` | result hit the row cap | ❌ advisory |
+
+**A finding is a suspicion, never a verdict.** The bar for spending a
+regeneration is deliberately high, and it was set by measurement:
+`C_NULLABLE_INNER_JOIN` shipped retry-eligible and cost **four correct answers**
+on `sales_v1` (0 wins / 4 losses, 36% → 30%) — every time it fired on a
+*correct* query, the regeneration obeyed it and came back worse. Whether a
+nullable FK should be outer-joined is a question about what the user *meant*,
+and a structural check cannot see intent.
+
+**Retry mechanics:** at most one, only if `not check_repair_used` and the guard
+and database haven't already spent the budget. It stashes
+`superseded_execution` first — that stash is what makes the retry safe, because
+`_restore_superseded` puts the working result back if the retry can't validate
+or run. **A check can never turn a working answer into a failed run.**
+`distinct_count == 1` is skipped on soft-delete flags because the eval fixture
+carries an always-false `is_archived` on 35 of its 42 tables, which would
+otherwise fire on nearly every query.
+
+### 8. `present` — the disclosure gate, then narration
+
+1. `disclose(execution, policy)` — the **one place** result data is filtered:
+
+   | policy | what the model gets |
+   |---|---|
+   | `NONE` | row count only, zero values |
+   | `AGGREGATE` | column *names* + row count, no values |
+   | `SAMPLE` | first **50** rows |
+   | `FULL` | everything |
+
+   Plus a **cap note** when truncated, so the model can't narrate a capped
+   result as "the top 1000 customers" when 1000 is the platform's limit.
+
+2. Caveats = `inspect`'s findings **for the attempt being presented only**
+   (never accumulated across retries, so a suspicion a retry cleared cannot
+   resurface). Only `.message` is used — `.hint` is repair guidance addressed to
+   the generator and would read as an instruction the answer failed to follow.
+
+3. `stream()`, emitting `TEXT_DELTA` per chunk. On mid-stream `LLMError` with
+   partial text already emitted: emit **`TEXT_RESET`** then a fallback
+   sentence. Discarding the buffer isn't enough — deltas are already on the live
+   bus *and* durably stored for `Last-Event-ID` replay, so a client would show
+   half a sentence with the fallback stitched on. The data is already correct; a
+   narration failure must not lose it.
+
+### 9. `chart` — the data gets a veto before the model gets a vote
+
+Best-effort and fail-open (the opposite of the guard): the answer and table are
+already persisted, so any failure here just means no chart.
+
+1. Skip outright if no execution, 0 rows, or `< 2` columns.
+2. `profile_result(...)` → cardinality, numeric range, constant columns.
+3. **`unchartable_reason(profile)` runs *before* the model call** — a single
+   row, a constant measure, or an id-as-measure is unchartable whatever the
+   model says, so it costs **zero tokens** and the step trail shows a fact about
+   the data instead of "the model declined".
+4. `structured(ChartIntent)`. The model sees column names, types, cardinality
+   and numeric range — **never a row value**, so charting never widens
+   disclosure. A cardinality is a count, not data.
+5. **`plan_chart(profile, suggestion)` owns the verdict.** It vetoes what the
+   data can't support, repairs salvageable intents (pie → bar past 6 slices,
+   line → bar over unordered text, swapped axes, mislabelled axis types), caps
+   category charts at `MAX_CATEGORY_MARKS` with a label saying what was dropped,
+   and falls back to a pure shape heuristic when the model errored or emitted
+   garbage (common with small models).
+6. `compile_vega_lite(...)` → `state.chart`, emit `ARTIFACT_CREATED`.
+
+---
+
+## 4. Control flow rules
+
+Every rule lives in [pipeline.py](../backend/app/pipeline/pipeline.py).
+
+**Node return values** — `NodeResult(status, detail, goto)`:
+
+| status | executor does |
+|---|---|
+| `OK` | next node (or jump, if `goto` is set) |
+| `SKIPPED` | next node — identical to `OK`, only the persisted step status differs |
+| `HALT` | stop, run is finished successfully |
+| `FAILED` | stop, `state.error` is already set |
+
+**Guard rails, all three independent:**
+- **Deadline** — `utcnow() >= state.deadline_at` is checked *before each node*,
+  raising `RunTimeoutError` → `E_TIMEOUT`. It cannot interrupt a node in
+  flight; the statement timeout does that job inside `execute`.
+- **`_MAX_TRANSITIONS = 24`** — a `goto` cycle can never spin forever even if a
+  node misbehaves → `E_PIPELINE_LOOP`.
+- **Node crash** — caught, logged, recorded as `E_NODE_FAILED` and a `FAILED`
+  step. **Never a bare HTTP 500.** A process that dies mid-run is healed by the
+  reconciler and a startup sweep, so no row is stuck `RUNNING`.
+
+**The repair budget is shared.** `max_repairs` defaults to **1** and
+`repair_count = len(attempts) - 1`, so a run makes **at most 2 generate
+attempts total** — and guard rejection, DB error and `inspect`'s retry all draw
+from that same allowance. A check can never eat the budget the guard and the
+database have first claim on.
+
+**Every node** persists a `run_step` and emits `STEP_STARTED` /
+`STEP_FINISHED` over SSE. The SPA renders this as the live step trail — a
+valued feature; keep it visible, don't collapse it behind "Thought for Xs".
+
+**Terminal states:** `SUCCEEDED | FAILED | TIMED_OUT | CANCELLED`.
+`NEEDS_CLARIFICATION` is deliberately **not** terminal.
+
+---
+
+## 5. Prompt versioning
+
+`PROMPT_VERSION` (currently **v4**) is recorded on every run.
+[prompts/__init__.py](../backend/app/pipeline/prompts/__init__.py) is the only
+place run prompts live — except the semantic-layer *generation* prompts, which
+live in `app/semantic/prompts.py` under `SEMANTIC_PROMPT_VERSION`, because
+`app.semantic` sits *below* the pipeline: the pipeline reads a layer, a layer
+knows nothing about a run.
+
+**Move `PROMPT_VERSION` when the bytes the SQL-producing path sends change.**
+That's why v3 → v4 for the semantic block, and why clarify, caveats and chart
+prompt changes *don't* move it — the eval scores generated SQL, and none of
+those touch it.
+
+---
+
+## 6. When you port to LangGraph
+
+The shapes already line up. Nothing here needs redesigning:
+
+| today | LangGraph |
+|---|---|
+| `async def node(state, deps) -> NodeResult` | node function (bind `deps` via `functools.partial` or config) |
+| `RunState` (Pydantic, `extra="forbid"`) | graph state schema — already the right shape |
+| `ORDER` list + `index += 1` | `add_edge` chain |
+| `NodeResult.goto` | `add_conditional_edges` |
+| `status="HALT"` | edge to `END` |
+| `_MAX_TRANSITIONS = 24` | `recursion_limit` |
+| `deps.emit(...)` + `on_step(...)` | `astream_events` / callbacks |
+| `clarify` HALT + new run | `interrupt()` + checkpointer — **the actual upgrade** |
+
+**The one thing worth migrating for** is clarification. Today a clarifying
+question ends the run and the user's reply arrives as a brand-new run, with
+continuity carried only by the 6-message history tail. A checkpointer plus
+`interrupt()` would make it a real durable pause. Everything else on this list
+is a lateral move — don't take the dependency for cosmetics.
+
+---
+
+## 7. Known gaps (verified in code, 2026-07-31)
+
+1. **Token accounting only counts `route`.** `state.prompt_tokens` is written
+   in exactly one place — [nodes/__init__.py:78-79](../backend/app/pipeline/nodes/__init__.py#L78-L79)
+   — because `complete()` returns a `Completion` with usage while
+   `structured()` and `stream()` return the parsed model / a delta iterator and
+   drop it. So `runs.prompt_tokens` and the eval's `estimate_cost_usd` count
+   only the tiny classifier call and **miss the schema-bearing `generate`
+   prompt entirely**. Every cost figure is a large undercount. Fix: return usage
+   from `structured`/`stream` in the gateway.
+
+2. **`retrieve` may never take its interesting branch.** The `sales_seed.sql`
+   fixture is 42 tables / 313 columns → `approx_chars = 15,040`, under the
+   `24_000` budget → `FULL_SNAPSHOT`, which should give **100%** retrieval
+   recall on all 50 gold questions (all their `expected_tables` exist). But
+   `reports/sales_v1_deepseek_2026-07-27b.md` records 86.4% mean / 74%
+   full-hit, which only `EXACT_MATCH` can produce. The fixture hasn't changed
+   since 07-24 and the budget hasn't changed since the initial commit, so these
+   don't reconcile. **Log `strategy` and `approx_chars` in the retrieve step
+   detail before trusting either number.** (CLAUDE.md's claim that the fixture
+   "exceeds the retrieve budget" is not true under the current arithmetic.)
+
+3. **`retrieve` ignores the semantic layer's vocabulary.** `deps.semantic`
+   holds per-table `label` and `synonyms` and per-column `synonyms` — exactly
+   the "revenue" → `order_items.line_total` bridge that substring matching on
+   raw catalog names cannot cross. It's passed straight through to
+   `RetrievedContext` and never consulted for *selection*. Free recall, already
+   in scope at that line.
+
+4. **`EXACT_MATCH` matches backwards and on the wrong granularity.** The test is
+   `table_name in question`, so **17 of the 42 fixture tables are snake_case
+   and structurally unmatchable** (a user types "order items", not
+   "order_items"). Meanwhile `id` is a column in **36 of 42 tables**, so any
+   question containing *paid*, *did*, *provide* matches nearly everything and
+   FK-expands to the whole schema. Too narrow on tables, far too loose on
+   columns. Tokenizing both sides with a 3-4 char minimum fixes both.
+
+5. **No budget re-check after `_expand_by_fk`.** The branch that exists to
+   respect the 24k budget can emit well past it, unbounded.
+
+6. **The repair prompts drop conversation history**, and the history the first
+   attempt *does* get contains the assistant's **prose**, not its SQL
+   (`state.answer` is what's persisted as the message). On "now break that down
+   by month" the generator cannot see the query it just wrote and must
+   re-derive it from a 300-char narration excerpt.

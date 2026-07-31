@@ -184,6 +184,10 @@ litellm` outside `app/infra/llm/`** — CI greps for it.
 
 ## How a run works
 
+> Node-by-node reference — what each node does, its exact logic, the prompts it
+> sends, the control-flow rules, and the LangGraph port map:
+> **[docs/pipeline.md](docs/pipeline.md)**. Read that before changing a node.
+
 `POST /conversations/{id}/messages` → `run_service.create_run` writes the user
 `message`, **flushes**, then the `runs` row (FK order matters — see below),
 hands off to the in-process executor. `AnalyticsPipeline.run` walks a linear
