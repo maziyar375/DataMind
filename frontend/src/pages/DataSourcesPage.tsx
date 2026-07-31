@@ -7,7 +7,7 @@ import {
 } from '../components/ui'
 import {
   DetailBody, DetailHeader, FieldRow, MasterColumn, MasterItem, Section,
-  StatusLine, Tabs,
+  StatusLine, Tabs, UnsavedNote,
 } from '../components/settings'
 import { SemanticLayerTab } from '../components/semantic'
 import { DATABASE_TYPES } from '../theme/tokens'
@@ -66,6 +66,33 @@ export default function DataSourcesPage() {
       (draft.ssl_mode ?? null) !== (selected.ssl_mode ?? null)
     )
   }, [selected, draft, password])
+
+  // True when the form differs from the saved row in *any* field — the
+  // question "is there anything to save?", which is broader than `isDirty`
+  // above and must stay that way: that one answers "would a probe behave
+  // differently?" and deliberately ignores the row cap and disclosure policy.
+  //
+  // Derived from the draft's own keys rather than a written-out list, because
+  // a hand-maintained one silently omits every field added after it — the
+  // reason `clarify_enabled` would have been missed here.
+  const hasChanges = useMemo(() => {
+    if (creating) return true      // nothing saved yet to differ from
+    if (!selected) return false
+    if (password !== '') return true
+    const saved = selected as unknown as Record<string, unknown>
+    return Object.keys(draft).some((key) => {
+      // The draft hydrates a null `ssl_mode` as 'require' (the Select has no
+      // empty option), so compare through the same lens or a form that was
+      // only just opened reads as edited.
+      const a = key === 'ssl_mode' ? (draft[key] ?? 'require') : draft[key]
+      const b = key === 'ssl_mode' ? (saved[key] ?? 'require') : saved[key]
+      if (Array.isArray(a) || Array.isArray(b)) {
+        return JSON.stringify(a ?? []) !== JSON.stringify(b ?? [])
+      }
+      if (typeof b === 'number') return Number(a) !== b
+      return (a ?? null) !== (b ?? null)
+    })
+  }, [creating, selected, draft, password])
 
   const refresh = useCallback(async () => {
     const items = await api.list()
@@ -323,24 +350,34 @@ export default function DataSourcesPage() {
                 )
               }
               actions={
-                <>
-                  <GhostButton
-                    onClick={test}
-                    disabled={testing || !canTest}
-                    title={
-                      canTest
-                        ? undefined
-                        : 'Fill in host, database, user, and password first.'
-                    }
-                  >
-                    {testing && <Spinner />}
-                    Test connection
-                  </GhostButton>
-                  <PrimaryButton onClick={save} disabled={saving}>
-                    {saving && <Spinner />}
-                    {creating ? 'Add connection' : 'Save changes'}
-                  </PrimaryButton>
-                </>
+                // Only on the tab that owns the form. Schema and Semantic
+                // layer save themselves; leaving these here offered to save a
+                // form the reader could not see.
+                creating || tab === 'settings' ? (
+                  <>
+                    {!creating && hasChanges && <UnsavedNote />}
+                    <GhostButton
+                      onClick={test}
+                      disabled={testing || !canTest}
+                      title={
+                        canTest
+                          ? undefined
+                          : 'Fill in host, database, user, and password first.'
+                      }
+                    >
+                      {testing && <Spinner />}
+                      Test connection
+                    </GhostButton>
+                    <PrimaryButton
+                      onClick={save}
+                      disabled={saving || !hasChanges}
+                      title={hasChanges ? undefined : 'No changes to save.'}
+                    >
+                      {saving && <Spinner />}
+                      {creating ? 'Add connection' : 'Save changes'}
+                    </PrimaryButton>
+                  </>
+                ) : undefined
               }
             />
 

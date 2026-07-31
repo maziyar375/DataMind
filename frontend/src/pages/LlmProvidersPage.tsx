@@ -7,7 +7,7 @@ import {
 } from '../components/ui'
 import {
   DetailBody, DetailHeader, FieldRow, MasterColumn, MasterItem, Section,
-  StatusLine,
+  StatusLine, UnsavedNote,
 } from '../components/settings'
 import { PROVIDER_URLS } from '../theme/tokens'
 
@@ -38,17 +38,26 @@ export default function LlmProvidersPage() {
 
   // True when the form holds edits not yet saved to `selected`. A new key
   // counts, since a blank key field means "keep the stored one" — see test().
+  //
+  // One check serves both questions here — "is there anything to save?" and
+  // "must a probe use the form rather than the stored row?" — because every
+  // field on this form is sent to the probe. (Data sources needs two: its row
+  // cap and disclosure policy change nothing about a probe.)
+  //
+  // Derived from the draft's own keys rather than a written-out list, because
+  // a hand-maintained one silently omits every field added after it.
   const isDirty = useMemo(() => {
     if (!selected) return false
-    return (
-      apiKey !== '' ||
-      draft.name !== selected.name ||
-      draft.provider !== selected.provider ||
-      (draft.base_url || '') !== (selected.base_url ?? '') ||
-      draft.model !== selected.model ||
-      draft.temperature !== selected.temperature ||
-      draft.max_tokens !== selected.max_tokens
-    )
+    if (apiKey !== '') return true
+    const saved = selected as unknown as Record<string, unknown>
+    return Object.keys(draft).some((key) => {
+      // `base_url` hydrates a null as '' (the input has no null state), so
+      // compare through the same lens or a just-opened form reads as edited.
+      const a = key === 'base_url' ? (draft[key] || '') : draft[key]
+      const b = key === 'base_url' ? (saved[key] ?? '') : saved[key]
+      if (typeof b === 'number') return Number(a) !== b
+      return (a ?? null) !== (b ?? null)
+    })
   }, [selected, draft, apiKey])
 
   const refresh = useCallback(async () => {
@@ -226,6 +235,7 @@ export default function LlmProvidersPage() {
               }
               actions={
                 <>
+                  {!creating && isDirty && <UnsavedNote />}
                   <GhostButton
                     onClick={test}
                     disabled={testing || !canTest}
@@ -234,7 +244,11 @@ export default function LlmProvidersPage() {
                     {testing && <Spinner />}
                     Test model
                   </GhostButton>
-                  <PrimaryButton onClick={save} disabled={saving}>
+                  <PrimaryButton
+                    onClick={save}
+                    disabled={saving || !(creating || isDirty)}
+                    title={creating || isDirty ? undefined : 'No changes to save.'}
+                  >
                     {saving && <Spinner />}
                     {creating ? 'Add model' : 'Save changes'}
                   </PrimaryButton>

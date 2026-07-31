@@ -245,6 +245,43 @@ export function DetailHeader({
   )
 }
 
+/**
+ * Says *why* Save is live, next to the button rather than at the field that
+ * changed. A disabled button explains itself only on hover; this makes the
+ * difference between "nothing to do" and "you have edits pending" readable at
+ * a glance, and it is also the only acknowledgement that a save happened —
+ * the note disappearing is the receipt.
+ *
+ * Lives here rather than in either page because both settings screens are the
+ * same shape and must read the same way.
+ */
+export function UnsavedNote() {
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        fontSize: 12,
+        color: 'var(--text-dim)',
+        marginRight: 2,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <span
+        style={{
+          width: 6,
+          height: 6,
+          borderRadius: 999,
+          background: 'var(--amber)',
+          flexShrink: 0,
+        }}
+      />
+      Unsaved changes
+    </span>
+  )
+}
+
 export function Tabs({
   value, onChange, items,
 }: {
