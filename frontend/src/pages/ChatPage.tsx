@@ -324,6 +324,9 @@ export default function ChatPage() {
   // chosen, a brand-new chat cannot send.
   const locked = messages.length > 0
   const ready = Boolean(connectionId && modelId)
+  // The last turn asked the user something rather than answering. A normal
+  // state, not a failure: the thread is simply mid-exchange.
+  const awaitingAnswer = messages.at(-1)?.run?.status === 'NEEDS_CLARIFICATION'
 
   return (
     <div style={{ display: 'flex', height: '100%', width: '100%', minWidth: 0 }}>
@@ -457,6 +460,10 @@ export default function ChatPage() {
                     key={message.id}
                     text={message.content ?? ''}
                     run={message.run}
+                    // Answering a clarifying question is just the next
+                    // message, so the chips send exactly what typing would.
+                    onPickOption={(text) => void send(text)}
+                    optionsDisabled={Boolean(activeRunId)}
                   />
                 )
               })}
@@ -468,7 +475,10 @@ export default function ChatPage() {
                   <ThinkingCard steps={liveSteps} />
                 ))}
 
-              {!activeRunId && suggestions.length > 0 && (
+              {/* Not while the thread is waiting on an answer: the turn
+                  already offers chips, and a second row of unrelated ones
+                  reads as a choice between them. */}
+              {!activeRunId && !awaitingAnswer && suggestions.length > 0 && (
                 <SuggestedFollowups
                   items={suggestions}
                   onPick={(text) => void send(text)}

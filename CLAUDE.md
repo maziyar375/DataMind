@@ -92,7 +92,8 @@ backend/app/
   services/       use cases + transaction boundaries: run_service,
                   semantic_service, bootstrap, disclosure_service, policy
   pipeline/       the AI run: state.py (typed RunState), pipeline.py (state machine),
-                  nodes/ (route→retrieve→generate→validate→execute→inspect→present→chart),
+                  nodes/ (route→retrieve→clarify→generate→validate→execute→
+                  inspect→present→chart),
                   prompts/, disclosure.py (result gate), checks.py (free result checks)
   sqlguard/       policy, validator, rewriter — self-contained, dialect-aware
   semantic/       what the schema *means*: models.py (the document), validate.py
@@ -189,7 +190,8 @@ hands off to the in-process executor. `AnalyticsPipeline.run` walks a linear
 state machine with one bounded repair loop:
 
 ```
-route → retrieve → generate → validate → execute → inspect → present → chart
+route → retrieve → clarify → generate → validate → execute → inspect →
+present → chart
 ```
 
 - `route` classifies intent. **METADATA** questions ("what tables do I have?")
@@ -200,6 +202,19 @@ route → retrieve → generate → validate → execute → inspect → present
   conventions, fan-out cautions. See "The semantic layer" below.
 - A validation/execution failure can `goto` back to `generate` (bounded repair);
   a hard ceiling of 24 transitions and a per-run deadline prevent runaway loops.
+- `clarify` is the one node that can end a run without SQL. It runs after
+  `retrieve` so it judges the question against the same schema block and
+  semantic layer the generator will see, and it **fails open** — any provider
+  error, or a malformed answer, proceeds to `generate`, because a guessed
+  answer shown with its SQL beats no answer. When it does ask, the question
+  becomes the assistant message, the run ends `NEEDS_CLARIFICATION` with a
+  `CLARIFICATION` artifact carrying the options, and the user's reply arrives
+  as an ordinary new run — no durable interrupt, no resume. It asks **at most
+  once per exchange**, enforced in `run_service` by checking whether the
+  previous run in the thread asked, not by trusting the model to remember.
+  Switched per connection with `connections.clarify_enabled`; off is
+  byte-identical to the pre-feature pipeline. `GENERATE_SYSTEM` is untouched
+  by it on purpose — see the note in `pipeline/prompts`.
 - `inspect` covers the third failure mode: the query ran and the answer is
   wrong. Its checks are **structural** — SQL + snapshot + result *shape*, never
   a result value — so they cost no tokens and behave identically under every
@@ -219,8 +234,10 @@ route → retrieve → generate → validate → execute → inspect → present
   non-empty. The choice is stored as the conversation's `default_connection_id`
   / `default_llm_config_id`. `create_run` still accepts a per-message override
   and snapshots what it used onto the run, so earlier turns stay explainable.
-- Terminal states: `SUCCEEDED | FAILED | TIMED_OUT | CANCELLED`
-  (`NEEDS_CLARIFICATION` reserved).
+- Terminal states: `SUCCEEDED | FAILED | TIMED_OUT | CANCELLED`.
+  `NEEDS_CLARIFICATION` is deliberately **not** terminal — a run that asked a
+  question is mid-exchange, so `cancel` still applies to it while the
+  reconciler (which sweeps `QUEUED`/`RUNNING`) leaves it alone.
 
 A node crash is caught and recorded as a **run failure**, never a bare HTTP
 500. A process that dies mid-run is healed by the reconciler + a startup sweep,

@@ -195,6 +195,10 @@ class RunService:
             policy=_policy_from_snapshot(snapshot, connection),
             emit=lambda t, d: self._emit(run_id, t, d),
             semantic=(semantic.model_dump(mode="json") if semantic else None),
+            clarify_enabled=(
+                connection.clarify_enabled
+                and not await self._previous_run_asked(run)
+            ),
         )
 
         pipeline = AnalyticsPipeline(
@@ -290,6 +294,19 @@ class RunService:
                 "artifact_id": str(chart_artifact.id), "kind": ArtifactKind.CHART,
             })
 
+        if state.clarification is not None:
+            # Persisted as an artifact rather than a column: it rides to the
+            # SPA on the run detail the chat already fetches, exactly as the
+            # ERROR artifact does, and needs no new endpoint or migration.
+            self._db.add(
+                Artifact(
+                    id=uuid.uuid4(),
+                    run_id=run.id,
+                    kind=ArtifactKind.CLARIFICATION,
+                    spec=state.clarification.model_dump(mode="json"),
+                )
+            )
+
         if state.error is not None and run.status == RunStatus.RUNNING:
             run.status = RunStatus.FAILED
             run.error_code = state.error.code
@@ -316,7 +333,15 @@ class RunService:
             run.assistant_message_id = assistant.id
 
         if run.status == RunStatus.RUNNING:
-            run.status = RunStatus.SUCCEEDED
+            # A run that asked did not succeed and did not fail: it produced a
+            # question, and the thread is waiting on the user. The status is
+            # non-terminal by design, so `cancel` still works on it and the
+            # reconciler — which sweeps QUEUED and RUNNING only — leaves it be.
+            run.status = (
+                RunStatus.NEEDS_CLARIFICATION
+                if state.clarification is not None
+                else RunStatus.SUCCEEDED
+            )
 
         run.finished_at = utcnow()
         run.attempt_count = len(state.attempts)
@@ -424,6 +449,22 @@ class RunService:
             .limit(1)
         )
         return (result.scalar_one_or_none() or 0) + 1
+
+    async def _previous_run_asked(self, run: Run) -> bool:
+        """Did the turn immediately before this one end in a question?
+
+        This is what stops a clarification loop. The model cannot be trusted to
+        notice from the transcript that it already asked, and a user who has
+        just answered must get an answer — so the second run in an exchange
+        never gets to ask again, whatever it thinks of the reply.
+        """
+        result = await self._db.execute(
+            select(Run.status)
+            .where(Run.conversation_id == run.conversation_id, Run.id != run.id)
+            .order_by(Run.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none() == RunStatus.NEEDS_CLARIFICATION
 
     async def _question_of(self, run: Run) -> str:
         message = await self._db.get(Message, run.user_message_id)

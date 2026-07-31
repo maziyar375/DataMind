@@ -12,7 +12,9 @@
  * objects — a result table, the SQL — keep a border of their own.
  */
 import { useMemo, useState } from 'react'
-import type { Artifact, GeneratedQuery, RunDetail, RunStep, TableArtifactSpec } from '../api/types'
+import type {
+  Artifact, ClarificationSpec, GeneratedQuery, RunDetail, RunStep, TableArtifactSpec,
+} from '../api/types'
 import { Chip, CopyButton, Dot, dirOf, Icon, Spinner } from './ui'
 import { VegaChart } from './VegaChart'
 import { NODE_META } from '../theme/tokens'
@@ -605,18 +607,91 @@ export function RunErrorCard({ run }: { run: RunDetail }) {
   )
 }
 
+/**
+ * The readings offered when a run stopped to ask rather than guess.
+ *
+ * Chips, not a form: the question is already the assistant's message, so this
+ * is only the shortcut. Picking one sends it as the next message, and typing
+ * an answer instead works exactly as it always did — which is why nothing here
+ * blocks the composer or marks the turn as unfinished.
+ */
+export function ClarificationOptions({
+  spec, onPick, disabled,
+}: {
+  spec: ClarificationSpec
+  onPick: (text: string) => void
+  disabled?: boolean
+}) {
+  if (!spec.options?.length) return null
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 2 }}>
+      <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
+        Pick one, or just say it in your own words.
+      </span>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {spec.options.map((option) => (
+          <OptionChip
+            key={option}
+            text={option}
+            disabled={disabled}
+            onClick={() => onPick(option)}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function OptionChip({
+  text, onClick, disabled,
+}: {
+  text: string
+  onClick: () => void
+  disabled?: boolean
+}) {
+  const [hover, setHover] = useState(false)
+  const lit = hover && !disabled
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        fontSize: 12.5,
+        fontWeight: 500,
+        textAlign: 'left',
+        color: lit ? 'var(--text-strong)' : 'var(--text-dim)',
+        background: lit ? 'var(--panel-hover)' : 'var(--panel)',
+        border: `1px solid ${lit ? 'var(--accent-border)' : 'var(--border)'}`,
+        padding: '8px 13px',
+        borderRadius: 20,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.5 : 1,
+        transition: 'background .12s ease, border-color .12s ease, color .12s ease',
+      }}
+    >
+      {text}
+    </button>
+  )
+}
+
 // ── assistant turn ────────────────────────────────────────────────────────
 export function AssistantTurn({
-  text, run, streaming,
+  text, run, streaming, onPickOption, optionsDisabled,
 }: {
   text: string
   run: RunDetail | null
   streaming?: boolean
+  onPickOption?: (text: string) => void
+  optionsDisabled?: boolean
 }) {
   const table = run?.artifacts.find((a) => a.kind === 'TABLE')
   const spec = table?.spec as TableArtifactSpec | undefined
   const chart = run?.artifacts.find((a) => a.kind === 'CHART')
   const chartSpec = chart?.spec as Record<string, unknown> | undefined
+  const clarification = run?.artifacts.find((a) => a.kind === 'CLARIFICATION')
+  const clarifySpec = clarification?.spec as unknown as ClarificationSpec | undefined
 
   return (
     <Turn avatar={<AssistantAvatar busy={streaming} />}>
@@ -647,6 +722,14 @@ export function AssistantTurn({
           />
         )}
       </div>
+
+      {clarifySpec && onPickOption && (
+        <ClarificationOptions
+          spec={clarifySpec}
+          onPick={onPickOption}
+          disabled={optionsDisabled}
+        />
+      )}
 
       {chartSpec ? (
         <VegaChart spec={chartSpec} />

@@ -25,6 +25,10 @@ NodeFn = Callable[[RunState, NodeDeps], Awaitable[NodeResult]]
 ORDER: list[tuple[str, NodeFn]] = [
     (StepName.ROUTE, nodes.route),
     (StepName.RETRIEVE, nodes.retrieve),
+    # After retrieve, so the question is judged against the schema block the
+    # generator will see; before generate, so an unanswerable question costs
+    # no SQL. HALTs when it asks — the user's reply arrives as a new run.
+    (StepName.CLARIFY, nodes.clarify),
     (StepName.GENERATE, nodes.generate),
     (StepName.VALIDATE, nodes.validate),
     (StepName.EXECUTE, nodes.execute),

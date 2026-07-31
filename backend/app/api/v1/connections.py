@@ -82,6 +82,7 @@ async def create_connection(
         max_rows=payload.max_rows,
         statement_timeout_ms=payload.statement_timeout_ms,
         disclosure_policy=payload.disclosure_policy,
+        clarify_enabled=payload.clarify_enabled,
     )
     db.add(connection)
     await db.flush()

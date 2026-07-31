@@ -31,6 +31,7 @@ export interface Connection {
   statement_timeout_ms: number
   disclosure_policy: 'NONE' | 'AGGREGATE' | 'SAMPLE' | 'FULL'
   semantic_layer_enabled: boolean
+  clarify_enabled: boolean
   status: string
   readonly_confirmed: boolean
   server_version: string | null
@@ -258,6 +259,12 @@ export interface TableArtifactSpec {
   rows: unknown[][]
   row_count: number
   truncated: boolean
+}
+
+/** The CLARIFICATION artifact: what the run asked, and the readings offered. */
+export interface ClarificationSpec {
+  question: string
+  options: string[]
 }
 
 export type ArtifactSpec = TableArtifactSpec & Record<string, unknown>

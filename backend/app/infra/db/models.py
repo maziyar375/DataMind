@@ -126,6 +126,10 @@ class DatabaseConnection(Base, TimestampMixin):
     # switch rather than "delete the layer": turning it off is how you A/B a
     # layer against the bare schema without throwing the work away.
     semantic_layer_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Whether an unanswerable question stops to ask instead of guessing. Off is
+    # the pre-feature behaviour exactly: the `clarify` node is skipped, so the
+    # prompt, the step trail and the eval baseline are unchanged.
+    clarify_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(20), default="UNTESTED")
     readonly_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)

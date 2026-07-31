@@ -14,12 +14,14 @@ from app.core.errors import ConnectorError, LLMError
 from app.core.logging import get_logger
 from app.domain.ports.database import DatabaseConnector
 from app.domain.ports.llm import ChatMessage, LLMGateway, ResolvedLLM
-from app.pipeline.contracts import SqlProposal
+from app.pipeline.contracts import ClarificationProposal, SqlProposal
 from app.pipeline.prompts import (
     ANSWER_SYSTEM,
     ANSWER_USER,
     CHART_SYSTEM,
     CHART_USER,
+    CLARIFY_SYSTEM,
+    CLARIFY_USER,
     GENERATE_SYSTEM,
     GENERATE_USER,
     REPAIR_SYSTEM,
@@ -27,6 +29,7 @@ from app.pipeline.prompts import (
     ROUTE_SYSTEM,
 )
 from app.pipeline.state import (
+    ClarificationRequest,
     ExecutionResult,
     NodeResult,
     RetrievedContext,
@@ -52,6 +55,10 @@ class NodeDeps:
     # The connection's semantic layer, or None when it has none or has
     # switched it off. Passed through `retrieve` into the schema block.
     semantic: dict[str, Any] | None = None
+    # Whether `clarify` may stop the run to ask. False both when the
+    # connection has the switch off and when this run *is* the answer to a
+    # question we already asked — see `run_service.execute_run`.
+    clarify_enabled: bool = False
 
 
 # ── route ────────────────────────────────────────────────────────────────
@@ -199,6 +206,86 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
     return NodeResult(
         detail=detail + (f" · {described} described" if described else "")
     )
+
+
+# ── clarify ──────────────────────────────────────────────────────────────
+def _clean_options(options: list[str], limit: int = 4) -> list[str]:
+    """De-duplicated, trimmed, capped. A chip the user cannot read is noise."""
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for option in options:
+        text = " ".join(str(option).split())[:120]
+        key = text.casefold()
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(text)
+        if len(cleaned) == limit:
+            break
+    return cleaned
+
+
+async def clarify(state: RunState, deps: NodeDeps) -> NodeResult:
+    """Ask, once, rather than answer a question the user did not ask.
+
+    Placed after `retrieve` so the judgement is made against the same schema
+    block and semantic layer the generator will see: "which revenue column?"
+    is only answerable with the columns in hand, and a metric definition that
+    already settles the question must be visible or this node invents doubt.
+
+    Fails open in every direction. A model error, a malformed proposal, or an
+    empty question all mean "proceed" — an unanswered question is a worse
+    outcome than a guessed one, and the guessed one is still shown with its
+    SQL for the user to check.
+    """
+    if not deps.clarify_enabled:
+        return NodeResult(status="SKIPPED", detail="Clarification off for this run")
+
+    assert state.context is not None
+    started = time.perf_counter()
+    history_text = ""
+    if state.context.history:
+        turns = "\n".join(
+            f"{h['role']}: {h['content'][:300]}" for h in state.context.history
+        )
+        history_text = f"Earlier in this conversation:\n{turns}"
+
+    try:
+        proposal = await deps.llm_gateway.structured(
+            deps.llm,
+            [
+                ChatMessage(
+                    role="system",
+                    content=CLARIFY_SYSTEM.format(
+                        schema=state.context.render(state.disclosure_policy),
+                        history=history_text,
+                    ),
+                ),
+                ChatMessage(
+                    role="user", content=CLARIFY_USER.format(question=state.question)
+                ),
+            ],
+            ClarificationProposal,
+        )
+    except (LLMError, ValueError) as err:
+        log.warning("clarify_failed", run_id=str(state.run_id), error=str(err))
+        return NodeResult(status="SKIPPED", detail="Clarification check unavailable")
+
+    elapsed = int((time.perf_counter() - started) * 1000)
+    question = " ".join(proposal.question.split())
+    if proposal.answerable or not question:
+        return NodeResult(detail=f"Answerable as asked, in {elapsed}ms")
+
+    state.clarification = ClarificationRequest(
+        question=question, options=_clean_options(proposal.options)
+    )
+    # The question *is* the answer for this turn: it becomes the assistant
+    # message, so the thread reads as a conversation rather than a dead run.
+    state.answer = question
+    await deps.emit(
+        "CLARIFICATION_REQUESTED", state.clarification.model_dump(mode="json")
+    )
+    return NodeResult(status="HALT", detail=f"Asked the user in {elapsed}ms")
 
 
 # ── generate ─────────────────────────────────────────────────────────────

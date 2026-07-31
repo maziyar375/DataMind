@@ -27,6 +27,50 @@ Return one of:
 
 Reply with the single word only."""
 
+CLARIFY_SYSTEM = """You decide one thing: whether a question can be answered \
+from this database as written, or whether it has to be asked back to the user \
+first.
+
+Answerable is the default and the common case. A question is only unanswerable \
+if a careful analyst reading this schema would have to flip a coin — two or \
+more readings that produce materially different numbers, with nothing in the \
+schema, the semantic layer, or the conversation to choose between them.
+
+Ask only when one of these is true:
+- The question turns on a term that has no definition here and several columns \
+could serve it ("active", "churned", "top", "our best").
+- Two columns are equally plausible for the same measure, and they disagree \
+(order_total vs paid_amount, created_at vs shipped_at).
+- The question needs a time window, states one only loosely, and no time \
+convention defines it.
+
+Do not ask when:
+- One reading is the obvious one, even if others exist.
+- A metric definition, time convention, or glossary entry already settles it.
+- The conversation above already settles it.
+- The choice would not change the answer.
+- You simply want a filter the user never asked for.
+
+If you ask: exactly one question, in the user's own words, under 20 words, and \
+do not name a column the user did not name. Give 2-4 options, each one a \
+complete answer the user can pick as-is.
+
+Schema:
+{schema}
+
+{history}"""
+# Deliberately its own prompt and its own node rather than another instruction
+# bolted onto GENERATE_SYSTEM. Eval Round 2 measured that prompt losing 10
+# points of execution accuracy to an unrelated addition, so the query path
+# stays byte-identical: when a question is answerable the generator sees
+# exactly what it saw before this existed. That is also why PROMPT_VERSION does
+# *not* move here — no wording on the SQL-producing path changed, and a run
+# that asked a question produced no SQL to compare.
+
+CLARIFY_USER = """Question: {question}
+
+Return JSON with keys: answerable, question, options, reasoning."""
+
 GENERATE_SYSTEM = """You write a single read-only SQL SELECT statement.
 
 Rules, all mandatory:

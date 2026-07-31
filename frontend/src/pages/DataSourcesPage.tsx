@@ -3,7 +3,7 @@ import { connections as api } from '../api/client'
 import type { Connection, SchemaSnapshot, SchemaTable, TestResult } from '../api/types'
 import {
   Chip, DangerButton, EmptyState, ErrorNote, Field, GhostButton, Icon,
-  PrimaryButton, Select, Spinner, TextInput, relativeTime,
+  PrimaryButton, Select, Spinner, TextInput, Toggle, relativeTime,
 } from '../components/ui'
 import {
   DetailBody, DetailHeader, FieldRow, MasterColumn, MasterItem, Section,
@@ -25,6 +25,7 @@ const BLANK = {
   max_rows: 1000,
   statement_timeout_ms: 30000,
   disclosure_policy: 'SAMPLE',
+  clarify_enabled: true,
 }
 
 export default function DataSourcesPage() {
@@ -95,6 +96,7 @@ export default function DataSourcesPage() {
       max_rows: selected.max_rows,
       statement_timeout_ms: selected.statement_timeout_ms,
       disclosure_policy: selected.disclosure_policy,
+      clarify_enabled: selected.clarify_enabled,
     })
     api
       .schema(selected.id)
@@ -490,6 +492,23 @@ export default function DataSourcesPage() {
                       <option value="SAMPLE">A sample of rows</option>
                       <option value="FULL">All returned rows</option>
                     </Select>
+                  </Field>
+
+                  <Field
+                    label="Ambiguous questions"
+                    hint="Only fires when a question genuinely cannot be answered without guessing; everything else runs straight through."
+                  >
+                    <Toggle
+                      checked={draft.clarify_enabled !== false}
+                      onChange={(next) =>
+                        setDraft({ ...draft, clarify_enabled: next })
+                      }
+                      label={
+                        draft.clarify_enabled !== false
+                          ? 'Ask before answering'
+                          : 'Always answer, never ask'
+                      }
+                    />
                   </Field>
 
                   <FieldRow>
