@@ -34,6 +34,19 @@
  * side — fold the tail into "Other" rather than adding a ninth hue.
  * If you change a value here, re-run the validator for BOTH modes; a hue
  * swapped by eye is how a palette silently stops being readable.
+ *
+ * ── The sequential ramp ──────────────────────────────────────────────────
+ *
+ * Five steps of the accent's own hue (OKLCH 315), for the *ordered* colour
+ * jobs — an ordinal split, a continuous magnitude. It exists because Vega
+ * chooses the scale family from the encoding type and gives each family its
+ * own default range: overriding `category` alone left `ramp` and `ordinal` on
+ * Vega's built-in `blues`, so one chart in the app came out blue while the
+ * rest were plum. Validated as an ordinal ramp (monotone L, adjacent ΔL ≥
+ * 0.06, surface-nearest step ≥ 2:1) against each mode's `--panel`: dark
+ * 2.13:1 at #722d8d, light 2.05:1 at #d0a4e4. Dark runs dark→light and light
+ * runs light→dark — low magnitude first in both, so "near zero" is always the
+ * end that recedes toward that mode's surface.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import embed, { type VisualizationSpec } from 'vega-embed'
@@ -41,7 +54,7 @@ import embed, { type VisualizationSpec } from 'vega-embed'
 type ThemeName = 'dark' | 'light'
 
 const PALETTES: Record<ThemeName, {
-  text: string; dim: string; grid: string; category: string[]
+  text: string; dim: string; grid: string; category: string[]; ramp: string[]
 }> = {
   dark: {
     text: '#eaeff5',
@@ -53,6 +66,10 @@ const PALETTES: Record<ThemeName, {
     // at equal lightness the pair collapses under deuteranopia (ΔE 6.5) the
     // moment a scatter puts them side by side. Spread this way it clears 9.7.
     category: ['#a40ed2', '#519c03', '#6786fd', '#eb087d', '#a38207', '#0e94ba', '#d75a07', '#0f9b89'],
+    // Low magnitude first. On dark the anchor flips — "near zero" recedes
+    // toward the surface — so this ramp runs dark→light, the mirror of light
+    // mode, rather than the same array reversed by eye.
+    ramp: ['#722d8d', '#973bba', '#b35ed6', '#c987e6', '#dfaef5'],
   },
   light: {
     // Warm neutrals, matching the light theme's paper — the previous cold
@@ -62,6 +79,7 @@ const PALETTES: Record<ThemeName, {
     grid: '#dfdad2',
     //         plum      green     indigo    rose      amber     cyan      ember     teal
     category: ['#903ab2', '#448502', '#6d8cfd', '#b90461', '#8a6e08', '#007e9f', '#b94a00', '#018e7d'],
+    ramp: ['#d0a4e4', '#b97cd3', '#9e4ebe', '#7a2f97', '#56206b'],
   },
 }
 
@@ -142,7 +160,13 @@ export function VegaChart({ spec }: { spec: Record<string, unknown> }) {
         labelPadding: 4,
       },
       legend: { labelColor: p.dim, titleColor: p.text, labelFontSize: 11, titleFontSize: 11 },
-      range: { category: p.category },
+      // Vega picks the scale *family* from the encoding type, and each family
+      // has its own default range: `category` for discrete colour, but `ramp`
+      // for continuous and `ordinal` for ordered. Overriding only `category`
+      // left the other two on Vega's built-in `blues`, so a chart split by a
+      // numeric field came out blue while every other chart was plum — one
+      // product, two palettes. All three now draw from the same accent hue.
+      range: { category: p.category, ramp: p.ramp, ordinal: p.ramp },
       // Rounded only at the data end, anchored to the baseline, so the mark
       // still reads as a measurement rather than a lozenge.
       bar: { cornerRadiusEnd: 4 },

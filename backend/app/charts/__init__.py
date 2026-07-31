@@ -329,6 +329,13 @@ def _fit(
         if py.is_id_like:
             return None, False
 
+        # Bars and slices are *per category*: a continuous x has no categories
+        # to be per, so Vega bins or gradients it into something nobody asked
+        # for. Reject and let the heuristic pick a form that suits two
+        # measures — usually a scatter.
+        if chart_type in ("bar", "horizontal_bar", "pie") and px.is_numeric:
+            return None, False
+
         if chart_type == "pie":
             # A pie reads parts of a whole: too many slices, or any negative
             # part, and the angles stop meaning anything.
@@ -361,6 +368,12 @@ def _fit(
         x_axis = x_axis.model_copy(update={"aggregation": "none"})
         changed = True
 
+    # A pie's "x" is a colour channel, not a position one — same discreteness
+    # rule as `series` below.
+    if chart_type == "pie" and x_axis.type not in ("nominal", "ordinal"):
+        x_axis = x_axis.model_copy(update={"type": "ordinal"})
+        changed = True
+
     series: AxisSpec | None = None
     if intent.series is not None:
         ps = profile.get(intent.series.field)
@@ -372,6 +385,15 @@ def _fit(
             and 1 < ps.distinct <= MAX_SERIES
         ):
             series = _axis_for(ps, intent.series)
+            # Colour on a split is *identity*, which is always discrete. Left
+            # continuous — a split by year, by rating — Vega picks a different
+            # scale family (`ramp`) with a gradient legend, and that family
+            # carries a different default palette, which is how one product
+            # ends up with purple charts and blue ones. Ordinal keeps the
+            # reading order of a numeric split and one set of colours.
+            if series.type not in ("nominal", "ordinal"):
+                series = series.model_copy(update={"type": "ordinal"})
+                changed = True
         else:
             changed = True
 

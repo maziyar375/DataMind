@@ -111,7 +111,9 @@ async def route(state: RunState, deps: NodeDeps) -> NodeResult:
         # through generate/validate would make the LLM write SQL against
         # information_schema, which the guard always rejects as a system
         # table — the run would fail before an answer ever existed.
-        state.answer = _describe_schema(deps.snapshot.get("tables", []))
+        from app.pipeline.metadata import answer_metadata
+
+        state.answer = answer_metadata(state.question, deps.snapshot.get("tables", []))
         return NodeResult(status="HALT", detail=f"Classified METADATA in {elapsed}ms")
 
     return NodeResult(detail=f"Classified {state.intent} in {elapsed}ms")

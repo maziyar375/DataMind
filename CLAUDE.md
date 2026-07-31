@@ -195,7 +195,13 @@ present → chart
 ```
 
 - `route` classifies intent. **METADATA** questions ("what tables do I have?")
-  are answered from the schema snapshot and **HALT before any SQL**.
+  are answered from the schema snapshot and **HALT before any SQL**, by
+  `pipeline/metadata.py`, at the granularity the question asked: an inventory
+  (name, rows, column count — one line each, largest first) unless the question
+  names a table, in which case that table's columns with types. The match is on
+  the snapshot's own names, so this still costs no model call. The exhaustive
+  `_describe_schema` render stays for the *model*-facing follow-up-suggestions
+  prompt, which does need every column name.
 - `retrieve` selects tables, then attaches the connection's **semantic layer**;
   `RetrievedContext.render` appends a block describing only the retrieved
   tables — business names, grain, defined metrics with their SQL, time

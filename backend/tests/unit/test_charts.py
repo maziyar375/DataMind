@@ -317,6 +317,55 @@ def test_plan_corrects_a_mislabelled_axis_type() -> None:
     assert plan.intent.chart_type == "line"  # still a trend, not demoted
 
 
+def test_plan_makes_a_numeric_series_discrete() -> None:
+    # Colour encodes identity, so it must be discrete. Left quantitative, Vega
+    # switches scale family (`ramp`) and paints the chart from a different
+    # default palette than every other chart in the app.
+    cols = _cols(("month", "temporal"), ("year", "quantitative"), ("revenue", "quantitative"))
+    rows = [
+        [date(2024, m, 1), float(y), float(m * y)]
+        for y in (2022, 2023, 2024)
+        for m in range(1, 13)
+    ]
+    split = ChartIntent(
+        chart_type="line",
+        x_axis=AxisSpec(field="month", type="temporal"),
+        y_axis=AxisSpec(field="revenue", type="quantitative"),
+        series=AxisSpec(field="year", type="quantitative"),
+    )
+    plan = plan_chart(profile_result(cols, rows), split)
+    assert plan.intent is not None and plan.intent.series is not None
+    assert plan.intent.series.field == "year"
+    assert plan.intent.series.type == "ordinal"
+
+
+def test_pie_colour_axis_is_always_discrete() -> None:
+    cols = _cols(("month", "temporal"), ("revenue", "quantitative"))
+    rows = [[date(2024, m, 1), float(m)] for m in range(1, 5)]
+    pie = ChartIntent(
+        chart_type="pie",
+        x_axis=AxisSpec(field="month", type="temporal"),
+        y_axis=AxisSpec(field="revenue", type="quantitative"),
+    )
+    plan = plan_chart(profile_result(cols, rows), pie)
+    assert plan.intent is not None and plan.intent.x_axis
+    assert plan.intent.x_axis.type == "ordinal"
+
+
+def test_plan_refuses_bars_over_a_continuous_axis() -> None:
+    # Two measures is a scatter, not a bar chart of a continuous x.
+    cols = _cols(("price", "quantitative"), ("units", "quantitative"))
+    rows = [[float(i), float(i * 3 % 11)] for i in range(20)]
+    bad = ChartIntent(
+        chart_type="bar",
+        x_axis=AxisSpec(field="price", type="quantitative"),
+        y_axis=AxisSpec(field="units", type="quantitative"),
+    )
+    plan = plan_chart(profile_result(cols, rows), bad)
+    assert plan.intent is not None and plan.intent.chart_type == "scatter"
+    assert plan.source == "heuristic"
+
+
 def test_plan_drops_a_high_cardinality_series() -> None:
     rows = _ranked(40)
     crowded = _intent("bar", series=AxisSpec(field="name", type="nominal"))
