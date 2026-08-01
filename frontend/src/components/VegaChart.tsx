@@ -224,11 +224,33 @@ export function VegaChart({ spec, frameless = false }: {
 
     let cancelled = false
     let result: Awaited<ReturnType<typeof embed>> | null = null
+    let observer: ResizeObserver | null = null
+    let resizeTimer: number | null = null
     setFailed(false)
     embed(el, full as unknown as VisualizationSpec, { actions: false, renderer: 'svg' })
       .then((r) => {
-        if (cancelled) r.finalize()
-        else result = r
+        if (cancelled) {
+          r.finalize()
+          return
+        }
+        result = r
+        // A 'container' width only re-measures on window:resize — that is the
+        // sole trigger Vega-Lite compiles into the width signal. A dashboard
+        // tile resizes its element without one (react-grid-layout, the
+        // settings drawer opening), leaving the chart at its stale width until
+        // the next refresh re-embeds it. So watch the element and hand the new
+        // width to the view ourselves, debounced so a resize drag re-lays-out
+        // once at rest, not sixty times a second.
+        if (width === 'container') {
+          observer = new ResizeObserver(() => {
+            if (resizeTimer !== null) window.clearTimeout(resizeTimer)
+            resizeTimer = window.setTimeout(() => {
+              const w = el.clientWidth
+              if (w > 0) void r.view.width(w).resize().runAsync()
+            }, 60)
+          })
+          observer.observe(el)
+        }
       })
       .catch(() => {
         if (!cancelled) setFailed(true)
@@ -236,6 +258,8 @@ export function VegaChart({ spec, frameless = false }: {
 
     return () => {
       cancelled = true
+      observer?.disconnect()
+      if (resizeTimer !== null) window.clearTimeout(resizeTimer)
       result?.finalize()
     }
   }, [spec, theme, layout])

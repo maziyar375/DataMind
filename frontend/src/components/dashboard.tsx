@@ -474,12 +474,16 @@ function TileBody({
   if (tile.tile_type === 'CHART' && result.vega_spec) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, height: '100%' }}>
-        <VegaChart spec={result.vega_spec} frameless />
         {/* When the backend demoted the chart, the tile says so rather than
-            quietly drawing something else. */}
+            quietly drawing something else. Above the chart, not below it: the
+            plot has a fixed height, so anything under it sits below the tile's
+            scroll fold — a substitution notice nobody can see isn't one. */}
         {result.chart_note && (
-          <span style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>{result.chart_note}</span>
+          <span style={{ fontSize: 10.5, color: 'var(--text-faint)', flexShrink: 0 }}>
+            {result.chart_note}
+          </span>
         )}
+        <VegaChart spec={result.vega_spec} frameless />
       </div>
     )
   }
