@@ -339,6 +339,9 @@ function GridGuide({
   )
 }
 
+/** The header's ghost buttons, one notch tighter than the default. */
+const toolbarBtn: React.CSSProperties = { fontSize: 12.5, padding: '7px 12px' }
+
 // ── one dashboard ─────────────────────────────────────────────────────────
 function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null)
@@ -534,82 +537,90 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
             style={{
               display: 'flex',
               flexDirection: 'column',
+              gap: 1,
               minWidth: 0,
               flex: 1,
-              maxWidth: 420,
+              maxWidth: 480,
             }}
           >
-            {/* Edit mode edits the dashboard, not only its tiles: the name and
-                the description are part of the document, and renaming it from
-                a card on another screen is a strange place to have to go. */}
-            {editing ? (
-              <>
-                <InlineEdit
-                  ariaLabel="Dashboard name"
-                  value={dashboard.name}
-                  required
-                  style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-strong)' }}
-                  onCommit={(name) => void patchDashboard({ name })}
-                />
-                <InlineEdit
-                  ariaLabel="Dashboard description"
-                  value={dashboard.description ?? ''}
-                  placeholder="Add a description"
-                  style={{ fontSize: 11.5, color: 'var(--text-dim)' }}
-                  onCommit={(description) => void patchDashboard({ description: description || null })}
-                />
-              </>
-            ) : (
-              <>
-                <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-strong)' }}>
-                  {dashboard.name}
-                </span>
-                <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
-                  {dashboard.description
-                    ? dashboard.description
-                    : `${tiles.length} ${tiles.length === 1 ? 'tile' : 'tiles'}`}
-                  {data.pending.size > 0 ? ' · refreshing' : ''}
-                </span>
-              </>
-            )}
+            {/* The name and description are edited where they are read, in
+                any mode: invisible fields until approached (see
+                .rm-inline-edit), committed on blur or Enter, reverted on
+                Escape. A drawer or dialog for renaming would be a longer road
+                to the same PATCH. The empty description's placeholder carries
+                the tile count, so the line is never blank. */}
+            <InlineEdit
+              ariaLabel="Dashboard name"
+              value={dashboard.name}
+              required
+              style={{
+                fontSize: 16.5,
+                fontWeight: 700,
+                letterSpacing: '-0.01em',
+                color: 'var(--text-strong)',
+              }}
+              onCommit={(name) => void patchDashboard({ name })}
+            />
+            <InlineEdit
+              ariaLabel="Dashboard description"
+              value={dashboard.description ?? ''}
+              placeholder={`${tiles.length} ${tiles.length === 1 ? 'tile' : 'tiles'} — add a description`}
+              style={{ fontSize: 12, color: 'var(--text-dim)' }}
+              onCommit={(description) => void patchDashboard({ description: description || null })}
+            />
           </div>
 
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
             {/* While arranging, the toolbar clears down to the one way out —
                 a mode should look like a mode, and Refresh/Settings mid-drag
                 are distractions. A tile's edit/duplicate/delete live on the
-                tile's own kebab in either mode; "Add tile" is the standing
-                slot at the bottom of the grid. */}
+                tile's own kebab in either mode. */}
             {editing ? (
-              <GhostButton
-                onClick={() => setEditing(false)}
-                style={{
-                  background: 'var(--accent-bg)',
-                  borderColor: 'var(--accent-border)',
-                  color: 'var(--accent)',
-                }}
-              >
-                <Icon.Check size={13} /> Done
-              </GhostButton>
+              <>
+                <span className="rm-dash-edithint">
+                  Drag a header to move · pull a corner to resize
+                </span>
+                <GhostButton
+                  onClick={() => setEditing(false)}
+                  style={{
+                    ...toolbarBtn,
+                    background: 'var(--accent-bg)',
+                    borderColor: 'var(--accent-border)',
+                    color: 'var(--accent)',
+                  }}
+                >
+                  <Icon.Check size={13} /> Done
+                </GhostButton>
+              </>
             ) : (
               <>
-                <GhostButton onClick={() => data.refreshNow(tiles.map((t) => t.id))}>
-                  <Icon.Refresh size={13} /> Refresh all
+                <GhostButton
+                  style={toolbarBtn}
+                  onClick={() => data.refreshNow(tiles.map((t) => t.id))}
+                >
+                  {data.pending.size > 0 ? <Spinner size={13} /> : <Icon.Refresh size={13} />}
+                  Refresh all
                 </GhostButton>
                 <GhostButton
                   onClick={() => setShowSettings((open) => !open)}
-                  style={
-                    showSettings
+                  style={{
+                    ...toolbarBtn,
+                    ...(showSettings
                       ? { background: 'var(--panel-alt)', borderColor: 'var(--border-strong)' }
-                      : undefined
-                  }
+                      : undefined),
+                  }}
                 >
                   <Icon.Gear size={13} /> Settings
                 </GhostButton>
-                <GhostButton onClick={() => setEditing(true)}>
+                <GhostButton style={toolbarBtn} onClick={() => setEditing(true)}>
                   <Icon.Grid size={13} /> Edit grid
                 </GhostButton>
-                <PrimaryButton onClick={() => setEditorTile(null)}>
+                {/* A quiet rule between "act on what is here" and "add more". */}
+                <span
+                  aria-hidden
+                  style={{ width: 1, height: 22, background: 'var(--border)', margin: '0 2px' }}
+                />
+                <PrimaryButton style={{ padding: '8px 14px' }} onClick={() => setEditorTile(null)}>
                   <Icon.Plus /> Add tile
                 </PrimaryButton>
               </>

@@ -361,7 +361,18 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
    own measured width, because the number that matters there is the grid's
    width, not the viewport's.) */
 .rm-page-pad { padding: 28px 32px; }
-.rm-dash-header { padding: 14px 20px; }
+
+/* The dashboard header reads as a toolbar: a whisper of panel tone lifts it
+   off the recessed canvas below without adding another hard box. */
+.rm-dash-header {
+  padding: 12px 20px;
+  background: color-mix(in oklch, var(--panel) 45%, transparent);
+}
+
+/* What edit mode is for, said once, next to the way out. Dropped on small
+   screens — the gesture teaches itself there. */
+.rm-dash-edithint { font-size: 11.5px; color: var(--text-faint); white-space: nowrap; }
+@media (max-width: 760px) { .rm-dash-edithint { display: none; } }
 
 @media (max-width: 860px) {
   /* !important throughout: the shell declares these inline. */
