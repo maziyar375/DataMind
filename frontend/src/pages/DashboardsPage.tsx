@@ -108,11 +108,21 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
   )
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '26px 30px' }}>
-      <header style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <h1 style={{ margin: 0, fontSize: 19, fontWeight: 700 }}>Dashboards</h1>
-          <span style={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
+    <div style={{ flex: 1, overflowY: 'auto', padding: '28px 32px' }}>
+      <header style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 22 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <h1
+            style={{
+              margin: 0,
+              fontSize: 20,
+              fontWeight: 700,
+              letterSpacing: '-0.01em',
+              color: 'var(--text-strong)',
+            }}
+          >
+            Dashboards
+          </h1>
+          <span style={{ fontSize: 13, color: 'var(--text-dim)' }}>
             Tiles you keep. Each one has its own connection and its own refresh rate.
           </span>
         </div>
@@ -133,6 +143,7 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
         </div>
       ) : cards.length === 0 ? (
         <EmptyState
+          icon={<Icon.Grid size={20} />}
           title="No dashboards yet"
           body="A dashboard is a grid of saved queries. Create one, then add a tile by asking a question in plain language or writing the SQL yourself."
           action={<PrimaryButton onClick={() => setCreating(true)}>New dashboard</PrimaryButton>}
@@ -141,8 +152,8 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
-            gap: 14,
+            gridTemplateColumns: 'repeat(auto-fill, minmax(270px, 1fr))',
+            gap: 16,
           }}
         >
           {cards.map((card) => (
@@ -298,6 +309,29 @@ function InlineEdit({
         }
       }}
       style={style}
+    />
+  )
+}
+
+/** The edit-mode alignment guide: thin lines through the middle of each gap. */
+function GridGuide({
+  width, columns, rowHeight, gap,
+}: {
+  width: number
+  columns: number
+  rowHeight: number
+  gap: number
+}) {
+  const cell = (width - gap * (columns + 1)) / columns
+  if (!(cell > 0)) return null
+  return (
+    <div
+      aria-hidden
+      className="rm-grid-guide"
+      style={{
+        backgroundSize: `${cell + gap}px ${rowHeight + gap}px`,
+        backgroundPosition: `${gap / 2}px ${gap / 2}px`,
+      }}
     />
   )
 }
@@ -478,18 +512,19 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
             className="rm-icon-btn"
             style={{
               display: 'flex',
-              width: 28,
-              height: 28,
+              width: 30,
+              height: 30,
               alignItems: 'center',
               justifyContent: 'center',
-              borderRadius: 7,
-              border: '1px solid var(--border-strong)',
+              borderRadius: 8,
+              border: 'none',
               background: 'transparent',
               color: 'var(--text-dim)',
               cursor: 'pointer',
+              ['--rm-hover-bg' as string]: 'var(--panel-alt)',
             }}
           >
-            <Icon.ArrowLeft size={14} />
+            <Icon.ArrowLeft size={15} />
           </button>
           <div
             style={{
@@ -539,13 +574,40 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
             <GhostButton onClick={() => data.refreshNow(tiles.map((t) => t.id))}>
               <Icon.Refresh size={13} /> Refresh all
             </GhostButton>
-            <GhostButton onClick={() => setShowSettings((open) => !open)}>Settings</GhostButton>
-            {/* One toggle, as §7 asks: reading or arranging, never both. */}
+            <GhostButton
+              onClick={() => setShowSettings((open) => !open)}
+              style={
+                showSettings
+                  ? { background: 'var(--panel-alt)', borderColor: 'var(--border-strong)' }
+                  : undefined
+              }
+            >
+              <Icon.Gear size={13} /> Settings
+            </GhostButton>
+            {/* One toggle, as §7 asks: reading or arranging, never both. The
+                filled state is the mode indicator: while arranging, the way
+                back to reading stays lit. */}
             <GhostButton
               onClick={() => setEditing((on) => !on)}
-              style={editing ? { borderColor: 'var(--accent)', color: 'var(--accent)' } : undefined}
+              style={
+                editing
+                  ? {
+                      background: 'var(--accent-bg)',
+                      borderColor: 'var(--accent-border)',
+                      color: 'var(--accent)',
+                    }
+                  : undefined
+              }
             >
-              {editing ? 'Done' : 'Edit'}
+              {editing ? (
+                <>
+                  <Icon.Check size={13} /> Done
+                </>
+              ) : (
+                <>
+                  <Icon.Pencil size={12} /> Edit
+                </>
+              )}
             </GhostButton>
             {editing && (
               <PrimaryButton onClick={() => setEditorTile(null)}>
@@ -564,6 +626,7 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
         <div ref={gridRef} style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
           {tiles.length === 0 ? (
             <EmptyState
+              icon={<Icon.Grid size={20} />}
               title="This dashboard is empty"
               body="A tile is a saved query on its own clock. Add one by asking a question in plain language, or by writing the SQL yourself."
               action={
@@ -579,15 +642,30 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
             />
           ) : (
             width > 0 && (
-              <DashboardGrid
-                dashboard={dashboard}
-                tiles={tiles}
-                data={data}
-                editing={editing}
-                width={width}
-                onLayout={saveLayout}
-                onTileAction={(action, tile) => void onTileAction(action, tile)}
-              />
+              <div style={{ position: 'relative' }}>
+                {/* While arranging, a faint guide at the dashboard's own cell
+                    geometry — react-grid-layout pads the container by one gap
+                    and puts one gap between cells, so a line every
+                    (cell + gap) starting half a gap in sits in the middle of
+                    every gap. Behind the tiles, and gone in view mode. */}
+                {editing && (
+                  <GridGuide
+                    width={width}
+                    columns={dashboard.grid_columns}
+                    rowHeight={dashboard.row_height_px}
+                    gap={dashboard.gap_px}
+                  />
+                )}
+                <DashboardGrid
+                  dashboard={dashboard}
+                  tiles={tiles}
+                  data={data}
+                  editing={editing}
+                  width={width}
+                  onLayout={saveLayout}
+                  onTileAction={(action, tile) => void onTileAction(action, tile)}
+                />
+              </div>
             )
           )}
         </div>

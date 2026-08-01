@@ -310,6 +310,62 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .rm-tile-drag { cursor: grab; }
 .rm-tile-drag:active { cursor: grabbing; }
 
+/* Tiles rest flat and lift gently on hover — enough to say "this is a unit
+   you can act on" (the kebab fades in at the same moment) without the page
+   shimmering while you read it. */
+.rm-tile {
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.rm-tile:hover {
+  border-color: var(--border-strong);
+  box-shadow: 0 8px 24px -14px rgba(0, 0, 0, 0.4);
+}
+/* While arranging, the picked-up tile floats above its neighbours. */
+.react-grid-item.react-draggable-dragging .rm-tile,
+.react-grid-item.resizing .rm-tile {
+  border-color: var(--accent-border);
+  box-shadow: 0 18px 44px -18px rgba(0, 0, 0, 0.55);
+}
+
+/* Index cards: the whole card is the link (the title button stretches over
+   it), so the card itself carries the affordance — pointer, lift, and a
+   border that warms on approach. */
+.rm-dash-card {
+  cursor: pointer;
+  transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease;
+}
+.rm-dash-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: 0 10px 30px -16px rgba(0, 0, 0, 0.45);
+  transform: translateY(-1px);
+}
+.rm-dash-card-link::after { content: ''; position: absolute; inset: 0; }
+.rm-dash-card:hover .rm-tile-actions { opacity: 1; }
+
+/* The alignment guide shown while a dashboard is being edited: the same
+   thin-line grid motif the welcome and auth screens use, drawn at the
+   dashboard's own cell geometry (size and offset are set inline, because
+   they come from the dashboard's settings). Faded in so entering edit mode
+   reads as a mode, not a glitch. */
+.rm-grid-guide {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, var(--border) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--border) 1px, transparent 1px);
+  opacity: 0;
+  animation: rm-guide-in .25s ease forwards;
+}
+@keyframes rm-guide-in { to { opacity: 0.5; } }
+
+/* The settings drawer slides in from its edge instead of popping. */
+.rm-drawer { animation: rm-drawer-in .18s ease-out; }
+@keyframes rm-drawer-in {
+  from { opacity: 0; transform: translateX(10px); }
+  to { opacity: 1; transform: none; }
+}
+
 /* The dashboard's name and description, edited where they are read rather
    than in a dialog reached from somewhere else. Invisible until you go near
    it: a heading that always looks like a form field reads as an unfinished

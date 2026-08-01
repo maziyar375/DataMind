@@ -264,6 +264,13 @@ export function TileShell({
           flexShrink: 0,
         }}
       >
+        {/* In edit mode the header is the drag handle; the grip says so
+            before the cursor does. */}
+        {editing && (
+          <span aria-hidden style={{ display: 'flex', color: 'var(--text-faint)', flexShrink: 0 }}>
+            <Icon.Grip size={13} />
+          </span>
+        )}
         <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
           <span
             style={{
@@ -305,16 +312,17 @@ export function TileShell({
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                width: 24,
-                height: 24,
-                borderRadius: 6,
-                border: '1px solid var(--border-strong)',
-                background: 'transparent',
+                width: 26,
+                height: 26,
+                borderRadius: 7,
+                border: 'none',
+                background: menuOpen ? 'var(--panel-alt)' : 'transparent',
                 color: 'var(--text-dim)',
                 cursor: 'pointer',
+                ['--rm-hover-bg' as string]: 'var(--panel-alt)',
               }}
             >
-              <Icon.More size={13} />
+              <Icon.More size={14} />
             </button>
             {menuOpen && (
               <TileMenu
@@ -372,17 +380,18 @@ function TileMenu({
       />
       <div
         role="menu"
+        className="rm-enter"
         style={{
           position: 'absolute',
-          top: 28,
+          top: 30,
           right: 0,
           zIndex: 41,
-          minWidth: 148,
-          padding: 4,
+          minWidth: 150,
+          padding: 5,
           background: 'var(--panel)',
           border: '1px solid var(--border-strong)',
-          borderRadius: 9,
-          boxShadow: '0 12px 30px -12px rgba(0,0,0,.45)',
+          borderRadius: 10,
+          boxShadow: '0 16px 40px -14px rgba(0,0,0,.5)',
         }}
       >
         {items.map((item) => (
@@ -395,7 +404,7 @@ function TileMenu({
               display: 'block',
               width: '100%',
               textAlign: 'left',
-              padding: '7px 9px',
+              padding: '7px 10px',
               borderRadius: 6,
               border: 'none',
               background: 'transparent',
@@ -518,11 +527,27 @@ function MetricBody({ result }: { result: TileResult }) {
     >
       <span
         className="mono"
-        style={{ fontSize: 30, fontWeight: 700, color: 'var(--text-strong)', lineHeight: 1.1 }}
+        style={{
+          fontSize: 34,
+          fontWeight: 700,
+          color: 'var(--text-strong)',
+          lineHeight: 1.1,
+          letterSpacing: '-0.01em',
+          fontVariantNumeric: 'tabular-nums',
+        }}
       >
         {typeof value === 'number' ? value.toLocaleString() : String(value ?? '—')}
       </span>
-      <span style={{ fontSize: 11.5, color: 'var(--text-dim)' }}>{label}</span>
+      <span
+        style={{
+          fontSize: 11,
+          color: 'var(--text-dim)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.05em',
+        }}
+      >
+        {label}
+      </span>
       {result.row_count > 1 && (
         <span style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>
           first of {result.row_count.toLocaleString()} rows
@@ -554,36 +579,50 @@ export function DashboardSettings({
   return (
     <aside
       aria-label="Dashboard settings"
+      className="rm-drawer"
       style={{
         width: 300,
         flexShrink: 0,
         borderLeft: '1px solid var(--border)',
         background: 'var(--sidebar-bg)',
-        padding: 16,
+        padding: '16px 18px',
         display: 'flex',
         flexDirection: 'column',
         gap: 14,
         overflowY: 'auto',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center' }}>
-        <span style={{ fontSize: 13, fontWeight: 600 }}>Dashboard settings</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span aria-hidden style={{ display: 'flex', color: 'var(--text-dim)' }}>
+          <Icon.Gear size={14} />
+        </span>
+        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-strong)' }}>
+          Dashboard settings
+        </span>
         <button
           onClick={onClose}
           aria-label="Close settings"
           className="rm-icon-btn"
           style={{
             marginLeft: 'auto',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 26,
+            height: 26,
+            borderRadius: 7,
             border: 'none',
             background: 'transparent',
             color: 'var(--text-dim)',
             cursor: 'pointer',
+            ['--rm-hover-bg' as string]: 'var(--panel-alt)',
           }}
         >
           <Icon.Close size={14} />
         </button>
       </div>
 
+      <SectionLabel>Grid</SectionLabel>
       <NumberSetting
         label="Grid columns"
         value={dashboard.grid_columns}
@@ -625,6 +664,7 @@ export function DashboardSettings({
         </span>
       </label>
 
+      <SectionLabel>Appearance</SectionLabel>
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>Chart palette</span>
         <select
@@ -653,6 +693,7 @@ export function DashboardSettings({
         </select>
       </label>
 
+      <SectionLabel>Refresh</SectionLabel>
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>Default refresh rate</span>
         <select
@@ -673,6 +714,25 @@ export function DashboardSettings({
         </span>
       </label>
     </aside>
+  )
+}
+
+/** A quiet group heading, so the drawer scans as three topics, not one list. */
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <span
+      style={{
+        fontSize: 10.5,
+        fontWeight: 600,
+        color: 'var(--text-faint)',
+        textTransform: 'uppercase',
+        letterSpacing: '0.07em',
+        marginTop: 6,
+        marginBottom: -6,
+      }}
+    >
+      {children}
+    </span>
   )
 }
 
@@ -744,24 +804,42 @@ export function DashboardCard({
 
   return (
     <div
-      className="rm-tile"
+      className="rm-dash-card"
       style={{
         position: 'relative',
         display: 'flex',
         flexDirection: 'column',
-        gap: 8,
+        gap: 10,
         padding: 16,
         background: 'var(--panel)',
         border: '1px solid var(--border)',
         borderRadius: 12,
+        opacity: dashboard.status === 'ARCHIVED' ? 0.72 : 1,
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+        <span
+          aria-hidden
+          style={{
+            display: 'grid',
+            placeItems: 'center',
+            width: 32,
+            height: 32,
+            flexShrink: 0,
+            borderRadius: 9,
+            background: 'var(--accent-bg)',
+            color: 'var(--accent)',
+          }}
+        >
+          <Icon.Grid size={16} />
+        </span>
         <button
+          className="rm-dash-card-link"
           onClick={onOpen}
           style={{
             flex: 1,
             minWidth: 0,
+            marginTop: 5,
             textAlign: 'left',
             background: 'transparent',
             border: 'none',
@@ -770,30 +848,35 @@ export function DashboardCard({
             color: 'var(--text-strong)',
             fontSize: 14.5,
             fontWeight: 600,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
           }}
         >
           {dashboard.name}
         </button>
         {dashboard.status === 'ARCHIVED' && <Chip tone="amber">Archived</Chip>}
-        <div className="rm-tile-actions" style={{ position: 'relative' }}>
+        {/* Above the card-wide link overlay, so the kebab stays clickable. */}
+        <div className="rm-tile-actions" style={{ position: 'relative', zIndex: 1 }}>
           <button
             className="rm-icon-btn"
             aria-label="Dashboard actions"
             onClick={() => setMenuOpen((open) => !open)}
             style={{
               display: 'flex',
-              width: 24,
-              height: 24,
+              width: 26,
+              height: 26,
               alignItems: 'center',
               justifyContent: 'center',
-              borderRadius: 6,
-              border: '1px solid var(--border-strong)',
-              background: 'transparent',
+              borderRadius: 7,
+              border: 'none',
+              background: menuOpen ? 'var(--panel-alt)' : 'transparent',
               color: 'var(--text-dim)',
               cursor: 'pointer',
+              ['--rm-hover-bg' as string]: 'var(--panel-alt)',
             }}
           >
-            <Icon.More size={13} />
+            <Icon.More size={14} />
           </button>
           {menuOpen && (
             <>
@@ -804,17 +887,18 @@ export function DashboardCard({
               />
               <div
                 role="menu"
+                className="rm-enter"
                 style={{
                   position: 'absolute',
-                  top: 28,
+                  top: 30,
                   right: 0,
                   zIndex: 41,
                   minWidth: 150,
-                  padding: 4,
+                  padding: 5,
                   background: 'var(--panel)',
                   border: '1px solid var(--border-strong)',
-                  borderRadius: 9,
-                  boxShadow: '0 12px 30px -12px rgba(0,0,0,.45)',
+                  borderRadius: 10,
+                  boxShadow: '0 16px 40px -14px rgba(0,0,0,.5)',
                 }}
               >
                 {[
@@ -857,16 +941,37 @@ export function DashboardCard({
       </div>
 
       {dashboard.description && (
-        <span style={{ fontSize: 12.5, color: 'var(--text-dim)', lineHeight: 1.5 }}>
+        <span
+          style={{
+            fontSize: 12.5,
+            color: 'var(--text-dim)',
+            lineHeight: 1.5,
+            display: '-webkit-box',
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: 'vertical',
+            overflow: 'hidden',
+          }}
+        >
           {dashboard.description}
         </span>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 'auto' }}>
-        <Chip>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          marginTop: 'auto',
+          paddingTop: 4,
+          fontSize: 11.5,
+          color: 'var(--text-faint)',
+        }}
+      >
+        <span>
           {dashboard.tile_count} {dashboard.tile_count === 1 ? 'tile' : 'tiles'}
-        </Chip>
-        <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+        </span>
+        <span aria-hidden>·</span>
+        <span>
           {dashboard.last_refreshed_at
             ? `refreshed ${relativeTime(dashboard.last_refreshed_at)}`
             : 'never refreshed'}

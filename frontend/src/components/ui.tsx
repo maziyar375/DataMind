@@ -304,6 +304,19 @@ export const Icon = {
       <path d="M21 21l-4.3-4.3" />
     </svg>
   ),
+  Gear: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  ),
+  Grip: ({ size = 13, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <circle cx="9" cy="6" r="1.2" /><circle cx="15" cy="6" r="1.2" />
+      <circle cx="9" cy="12" r="1.2" /><circle cx="15" cy="12" r="1.2" />
+      <circle cx="9" cy="18" r="1.2" /><circle cx="15" cy="18" r="1.2" />
+    </svg>
+  ),
 }
 
 // ── hoverable button ──────────────────────────────────────────────────────
@@ -674,11 +687,13 @@ export function ErrorNote({ children }: { children: React.ReactNode }) {
 }
 
 export function EmptyState({
-  title, body, action,
+  title, body, action, icon,
 }: {
   title: string
   body: string
   action?: React.ReactNode
+  /** An optional glyph drawn in an accent-tinted badge above the title. */
+  icon?: React.ReactNode
 }) {
   return (
     <div
@@ -692,6 +707,24 @@ export function EmptyState({
         textAlign: 'center',
       }}
     >
+      {icon && (
+        <div
+          aria-hidden
+          style={{
+            display: 'grid',
+            placeItems: 'center',
+            width: 44,
+            height: 44,
+            borderRadius: 12,
+            background: 'var(--accent-bg)',
+            border: '1px solid var(--accent-border)',
+            color: 'var(--accent)',
+            marginBottom: 2,
+          }}
+        >
+          {icon}
+        </div>
+      )}
       <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-strong)' }}>
         {title}
       </div>
