@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
@@ -189,6 +189,31 @@ class TileResult:
     error_code: str | None = None
     error_message: str | None = None
 
+    def to_payload(self) -> dict[str, Any]:
+        """The wire shape, in one place.
+
+        The API maps this to a DTO and the cache stores it; both need the same
+        bytes, and `ResultColumn` is a slots dataclass with no `__dict__`, so
+        `asdict` is what actually serialises the columns.
+        """
+        return {
+            "status": self.status,
+            "columns": [asdict(c) for c in self.columns],
+            "rows": self.rows,
+            "row_count": self.row_count,
+            "truncated": self.truncated,
+            "duration_ms": self.duration_ms,
+            "computed_at": self.computed_at,
+            "vega_spec": self.vega_spec,
+            "chart_source": self.chart_source,
+            "chart_note": self.chart_note,
+            "error": (
+                None
+                if self.error_code is None
+                else {"code": self.error_code, "message": self.error_message or ""}
+            ),
+        }
+
 
 def _failed(code: str, message: str, *, duration_ms: int = 0) -> TileResult:
     return TileResult(
@@ -264,7 +289,7 @@ async def execute_saved_sql(
             return _guard_failure(report, duration_ms=elapsed())
 
         if owns_connector:
-            connector = bind_connector(connection, _box(settings))
+            connector = bind_connector(connection, secret_box(settings))
         assert connector is not None
 
         try:
@@ -303,7 +328,9 @@ async def execute_saved_sql(
             await connector.close()
 
 
-def _box(settings: Settings) -> AesGcmSecretBox:
+def secret_box(settings: Settings) -> AesGcmSecretBox:
+    """The one place a `SecretBox` is built from settings outside a service's
+    `__init__`. Callers that already hold one (`run_service`) pass theirs."""
     return AesGcmSecretBox(
         settings.secret_box_key.get_secret_value(), settings.secret_box_key_version
     )
@@ -459,7 +486,7 @@ async def execute_many(
 
         connector: DatabaseConnector | None = None
         try:
-            connector = bind_connector(connection, _box(settings))
+            connector = bind_connector(connection, secret_box(settings))
         except Exception as err:  # noqa: BLE001
             log.warning(
                 "tile_connector_failed",

@@ -22,15 +22,16 @@ is trusted: the guard runs at preview, at save, and at every single refresh.
 | 2026-08-01 | Spec rewritten to this scope: NL-authoring is the primary path (was "promote from chat"), refresh rate is **per tile**, chart type is user-selectable. Still no code. |
 | 2026-08-01 | **§12 item 1 built.** `services/query_service.py` with `execute_saved_sql` + `execute_many`, the four helpers lifted out of `run_service` (`latest_snapshot`, `policy_from_snapshot`, `resolve_llm`, `bind_connector`; `semantic_service` now shares `resolve_llm` too), and `tests/unit/test_query_service.py` (55 tests, incl. the hostile corpus replayed through a tile). `make test` / `make guard` / `make lint` green. |
 | 2026-08-01 | **§12 item 2 built.** `Dashboard` / `DashboardTile` / `DashboardTileCache` in `infra/db/models.py`, `DashboardStatus` / `TileType` / `SqlOrigin` in `domain/value_objects`, migration `0005_dashboards.py` — applied to the dev database (`0004 → 0005`) and the DDL read back. `tests/unit/test_dashboard_models.py` (16 tests) replays the migration against a recorder and diffs it against the ORM column by column, so the two definitions cannot drift apart unnoticed. |
+| 2026-08-01 | **§12 item 3 built.** `services/sql_draft_service.py` (`draft_sql` + `validate_sql`), `api/v1/drafts.py` with `POST /sql/drafts` and `POST /sql/drafts/validate`, `SqlDraftRead`/`TileResultRead` in `api/schemas.py`. `tests/unit/test_sql_drafts.py` (18) + `tests/unit/test_drafts_api.py` (9), and `test_openapi_has_no_secrets.py` now walks every schema the app can *return* rather than two named models. Exercised against the running stack: hand-written SQL and a plain-language question both come back VALID with a live preview off the `sales` fixture; `SELECT … ; DROP TABLE …` comes back REJECTED with `E_MULTI_STATEMENT` and no preview. |
 
-Still absent: `services/sql_draft_service.py`, `services/dashboard_service.py`,
-`api/v1/dashboards.py`, `api/v1/drafts.py`, and every frontend dashboard
-page/component (`DashboardsPage.tsx`, `dashboard.tsx`, `tile-editor.tsx`).
-§3's `dashboard_service.refresh` is now unblocked — the tables exist, and the
-part of it that is not CRUD (group by connection, one connector per connection,
-`Semaphore(4)`) is already built and tested as `query_service.execute_many`, so
-item 4 maps `dashboard_tiles` rows to `TileRequest`s and does the caching around
-it. Next step is §12, item 3.
+Still absent: `services/dashboard_service.py`, `api/v1/dashboards.py`, and every
+frontend dashboard page/component (`DashboardsPage.tsx`, `dashboard.tsx`,
+`tile-editor.tsx`). The backend is now three-quarters of the way to "curl can
+build a dashboard": SQL can be drafted, guarded and previewed over HTTP, and a
+saved statement can be executed. What is left of the backend is item 4 — CRUD,
+the routes, and the per-tile cache; the part of `refresh` that is not CRUD
+(group by connection, one connector per connection, `Semaphore(4)`) is already
+built and tested as `query_service.execute_many`. Next step is §12, item 4.
 
 Companion to [pipeline.md](pipeline.md) (the AI run),
 [architecture.md](architecture.md) (the why) and [CODEBASE.md](CODEBASE.md)
@@ -275,6 +276,33 @@ The second is the hand-written path *and* the "I edited what the model gave me"
 path — one endpoint, because they are the same thing. It runs the guard and a
 capped preview; it never calls a model.
 
+**As built.** Both routes answer with one DTO, `SqlDraftRead`, whose `preview`
+is a `TileResultRead` — *the same shape a tile returns after a refresh* (§6),
+because a preview that could differ from a refresh is a preview that lies. The
+cap is `PREVIEW_MAX_ROWS = 50`, well under any connection's own, and it reaches
+both the rewriter's `LIMIT` and the driver. `draft_sql` opens **one** connector
+and lends it to the preview; `validate_sql` has none to lend, so
+`execute_saved_sql` opens and closes its own.
+
+A rejection is a **200 with `validation_status: "REJECTED"`**, not a 4xx: the
+editor renders the guard's reasons inline the way the metric editor does, and a
+4xx would make "the model wrote something I can show you" indistinguishable from
+"your request was malformed". `chart_suggestion` is the *heuristic's* read of
+the preview's shape (`plan_chart` with no suggestion) — deterministic, free, and
+only ever a default for the editor's pickers.
+
+> **Inherited from the run path, not introduced here:** `generate` asks the
+> provider for structured output with the config's `max_tokens`. A provider that
+> pads a `json_schema strict` reply can hit `finish_reason=length` and return
+> truncated JSON, which surfaces as `E_LLM` ("did not return valid SqlProposal
+> JSON") — intermittently, on the widest schema blocks. Verified on the dev
+> stack: 2 of 3 attempts failed on a 28 kB block, and the same call through
+> `complete()` returned 737 bytes of valid JSON. This is the chat pipeline's
+> behaviour too, unchanged; the fix belongs there (a larger `max_tokens` for the
+> config, or `supports_structured_output: false` so the instructed-JSON path is
+> used), not in a draft-only workaround that would make a draft and its run
+> diverge.
+
 ---
 
 ## 6. Phase 4 — the dashboard API
@@ -502,7 +530,7 @@ Gate before claiming any phase done: `make test`, `make guard`, `make lint`.
 [x] 1  query_service.py + lift _policy_from_snapshot / _latest_snapshot /
        _resolve_llm / _bind_connection                                    (§3)
 [x] 2  models + migration 0005                                            (§4)
-[ ] 3  sql_draft_service.py + POST /sql/drafts + /sql/drafts/validate     (§5)
+[x] 3  sql_draft_service.py + POST /sql/drafts + /sql/drafts/validate     (§5)
 [ ] 4  dashboard_service.py + /dashboards routes + per-tile cache         (§6)
 [ ] 5  DashboardsPage: list, grid, tile shell, one-tick refresh scheduler (§7)
 [ ] 6  Tile editor: Ask tab + Write-SQL tab + chart picker + rate picker  (§8)

@@ -336,6 +336,74 @@ class SemanticExpressionResult(BaseModel):
     issue: str = ""
 
 
+# ── SQL drafts & tile results ────────────────────────────────────────────
+# These are the dashboard's two shared shapes. `TileResultRead` is what a tile
+# returns after a refresh *and* what the editor previews with — one shape,
+# because a preview that could differ from a refresh is a preview that lies.
+class TileErrorRead(BaseModel):
+    code: str
+    message: str = ""
+
+
+class TileColumnRead(BaseModel):
+    name: str
+    db_type: str = ""
+    semantic_type: str = "nominal"
+
+
+class TileResultRead(BaseModel):
+    status: Literal["OK", "ERROR"] = "OK"
+    columns: list[TileColumnRead] = Field(default_factory=list)
+    rows: list[list[Any]] = Field(default_factory=list)
+    row_count: int = 0
+    truncated: bool = False
+    duration_ms: int = 0
+    # Not optional: with every tile on its own clock, "as of 14:32" is the only
+    # way a reader tells a 30-second tile from the hourly one beside it.
+    computed_at: datetime
+    vega_spec: dict[str, Any] | None = None
+    # Who chose the chart — model | model_adjusted | heuristic | none — and, when
+    # the pick was overruled, what happened. A demoted chart says so out loud
+    # rather than quietly drawing something else.
+    chart_source: str = "none"
+    chart_note: str | None = None
+    error: TileErrorRead | None = None
+
+
+class SqlDraftRequest(BaseModel):
+    connection_id: UUID
+    llm_config_id: UUID
+    question: str = Field(min_length=1, max_length=2000)
+
+
+class SqlValidateRequest(BaseModel):
+    """The hand-written path *and* the "I edited the model's draft" path."""
+
+    connection_id: UUID
+    sql: str = Field(min_length=1, max_length=100_000)
+
+
+class SqlDraftRead(BaseModel):
+    """A statement, why the guard accepted or refused it, and what it returns.
+
+    `validation_status` is REJECTED for a refused draft and the response is
+    still a 200: the editor renders the guard's reasons inline the way the
+    metric editor does, and a 4xx would make "the model wrote SQL I can show
+    you" indistinguishable from "your request was malformed".
+    """
+
+    sql: str
+    validation_status: str
+    validation_report: dict[str, Any] = Field(default_factory=dict)
+    referenced_tables: list[str] = Field(default_factory=list)
+    # A `ChartIntent` for the editor's pickers to default from; null when the
+    # preview's shape suggests nothing.
+    chart_suggestion: dict[str, Any] | None = None
+    preview: TileResultRead | None = None
+    question: str | None = None
+    llm_config_id: UUID | None = None
+
+
 # ── conversations & messages ─────────────────────────────────────────────
 class ConversationCreate(BaseModel):
     title: str | None = None
