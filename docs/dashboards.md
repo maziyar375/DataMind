@@ -7,6 +7,19 @@ connection; per-dashboard grid/palette/refresh settings; tile SQL either
 hand-written, generated from a plain-language question, or promoted from a chat
 answer.
 
+## Progress so far
+
+| Date | What happened |
+|---|---|
+| 2026-07-31 | This spec written and committed (`plan creating dashboard`). No code yet. |
+
+Nothing in §11's build order is checked off. Concretely, none of the following
+exist in the codebase yet: `services/query_service.py`,
+`services/dashboard_service.py`, migration `0005_dashboards.py`,
+`api/v1/dashboards.py`, or any frontend dashboard page/component
+(`DashboardsPage.tsx`, `dashboard.tsx`, `tile-editor.tsx`). Next step is §11,
+item 1.
+
 Companion to [pipeline.md](pipeline.md) (the AI run),
 [architecture.md](architecture.md) (the why) and [CODEBASE.md](CODEBASE.md)
 (the stack). Read [../CLAUDE.md](../CLAUDE.md) first — the four invariants
