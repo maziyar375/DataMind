@@ -144,6 +144,7 @@ function Sidebar({
   return (
     <nav
       aria-label="Main"
+      className="rm-sidebar"
       style={{
         width: 224,
         flexShrink: 0,
@@ -154,12 +155,13 @@ function Sidebar({
         padding: '20px 14px',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '0 8px 20px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: '0 8px 20px' }}>
         <Logo />
-        <div style={{ fontWeight: 700, fontSize: 15, letterSpacing: '-0.01em' }}>
+        <div className="rm-sidebar-text" style={{ fontWeight: 700, fontSize: 15, letterSpacing: '-0.01em' }}>
           DataMind
         </div>
         <div
+          className="rm-sidebar-text"
           style={{
             marginLeft: 'auto',
             fontSize: 10,
@@ -190,6 +192,7 @@ function Sidebar({
         <button
           onClick={onToggleTheme}
           aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+          className="rm-sidebar-theme"
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -226,10 +229,11 @@ function Sidebar({
               }}
             />
           </span>
-          {theme === 'dark' ? 'Dark' : 'Light'}
+          <span className="rm-sidebar-text">{theme === 'dark' ? 'Dark' : 'Light'}</span>
         </button>
 
         <div
+          className="rm-sidebar-user"
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -256,7 +260,7 @@ function Sidebar({
           >
             {initialOf(user.display_name || user.email)}
           </span>
-          <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.2 }}>
+          <div className="rm-sidebar-text" style={{ display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.2 }}>
             <span
               style={{
                 fontSize: 12.5,
@@ -277,6 +281,7 @@ function Sidebar({
             onClick={onLogout}
             title="Sign out"
             aria-label="Sign out"
+            className="rm-sidebar-logout"
             style={{
               marginLeft: 'auto',
               flexShrink: 0,
@@ -315,6 +320,8 @@ function NavButton({
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       aria-current={active ? 'page' : undefined}
+      className="rm-nav-btn"
+      title={label}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -336,7 +343,7 @@ function NavButton({
       }}
     >
       {icon}
-      {label}
+      <span className="rm-sidebar-text">{label}</span>
     </button>
   )
 }

@@ -166,7 +166,73 @@ export function useTileScheduler(
 }
 
 // ── the grid ──────────────────────────────────────────────────────────────
+/** Below this measured grid width, side-by-side tiles stop making sense. */
+export const STACK_BELOW_PX = 620
+
 export function DashboardGrid({
+  dashboard, tiles, data, editing, width, onLayout, onTileAction,
+}: {
+  dashboard: Dashboard
+  tiles: DashboardTile[]
+  data: TileData
+  editing: boolean
+  width: number
+  onLayout: (layout: Layout[]) => void
+  onTileAction: (action: TileAction, tile: DashboardTile) => void
+}) {
+  // On a narrow surface (phone, tablet portrait, a squeezed window) the grid
+  // gives way to a single column in reading order — the same top-to-bottom,
+  // left-to-right order `position` persists — with each tile keeping the
+  // height its author gave it. Nothing is written back: the stored layout is
+  // the desktop's, and widening the window restores it untouched. Dragging
+  // and resizing are off here (there is no grid to drag on); the kebab keeps
+  // edit, duplicate, and delete.
+  if (width < STACK_BELOW_PX) {
+    const ordered = [...tiles].sort((a, b) => a.grid_y - b.grid_y || a.grid_x - b.grid_x)
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: dashboard.gap_px }}>
+        {ordered.map((tile) => (
+          <div
+            key={tile.id}
+            style={
+              tile.tile_type === 'TEXT'
+                ? undefined
+                : {
+                    height:
+                      tile.grid_h * dashboard.row_height_px
+                      + (tile.grid_h - 1) * dashboard.gap_px,
+                    minHeight: 120,
+                  }
+            }
+          >
+            <TileShell
+              tile={tile}
+              result={data.results[tile.id]}
+              loading={data.pending.has(tile.id)}
+              editing={editing}
+              draggable={false}
+              onAction={(action) => onTileAction(action, tile)}
+            />
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <SizedGrid
+      dashboard={dashboard}
+      tiles={tiles}
+      data={data}
+      editing={editing}
+      width={width}
+      onLayout={onLayout}
+      onTileAction={onTileAction}
+    />
+  )
+}
+
+function SizedGrid({
   dashboard, tiles, data, editing, width, onLayout, onTileAction,
 }: {
   dashboard: Dashboard
@@ -229,12 +295,15 @@ export function DashboardGrid({
 export type TileAction = 'refresh' | 'edit' | 'duplicate' | 'delete'
 
 export function TileShell({
-  tile, result, loading, editing, onAction,
+  tile, result, loading, editing, draggable = editing, onAction,
 }: {
   tile: DashboardTile
   result?: TileResult
   loading: boolean
   editing: boolean
+  /** Whether the header is a drag handle. Off in the stacked (narrow) layout,
+      where there is no grid to drag on even in edit mode. */
+  draggable?: boolean
   onAction: (action: TileAction) => void
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -257,7 +326,7 @@ export function TileShell({
           the title labels the content the way an axis label does, and the
           divider was chrome the data paid for. */}
       <div
-        className={editing ? 'rm-tile-drag' : undefined}
+        className={draggable ? 'rm-tile-drag' : undefined}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -268,7 +337,7 @@ export function TileShell({
       >
         {/* In edit mode the header is the drag handle; the grip says so
             before the cursor does. */}
-        {editing && (
+        {draggable && (
           <span aria-hidden style={{ display: 'flex', color: 'var(--text-faint)', flexShrink: 0 }}>
             <Icon.Grip size={13} />
           </span>

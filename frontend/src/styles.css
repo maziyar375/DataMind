@@ -349,6 +349,49 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
    data costs legibility. */
 .rm-dash-canvas {
   background: color-mix(in oklch, var(--sidebar-bg) 60%, transparent);
+  padding: 16px;
+}
+
+/* ── responsive reflow ──────────────────────────────────────────────────
+   The layouts are flex/grid and reflow on their own; what needs stating is
+   where they *stop compressing* and change shape instead: the sidebar
+   collapses to an icon rail, page padding tightens, the settings drawer
+   overlays rather than squeezing the grid, and fixed-column form rows
+   stack. (The dashboard grid itself stacks in `DashboardGrid`, keyed on its
+   own measured width, because the number that matters there is the grid's
+   width, not the viewport's.) */
+.rm-page-pad { padding: 28px 32px; }
+.rm-dash-header { padding: 14px 20px; }
+
+@media (max-width: 860px) {
+  /* !important throughout: the shell declares these inline. */
+  .rm-sidebar { width: 66px !important; padding: 20px 10px !important; }
+  .rm-sidebar-text { display: none; }
+  .rm-sidebar .rm-nav-btn { justify-content: center; padding: 9px !important; }
+  .rm-sidebar-theme { justify-content: center; }
+  .rm-sidebar-user { flex-direction: column; align-items: center; gap: 8px; }
+  .rm-sidebar-logout { margin-left: 0 !important; }
+}
+
+@media (max-width: 900px) {
+  /* The drawer floats over the grid instead of halving it. */
+  .rm-drawer {
+    position: fixed;
+    top: 0; right: 0; bottom: 0;
+    z-index: 60;
+    width: min(320px, 86vw) !important;
+    border-left: 1px solid var(--border-strong);
+    box-shadow: -18px 0 50px rgba(0, 0, 0, 0.4);
+  }
+}
+
+@media (max-width: 640px) {
+  .rm-page-pad { padding: 18px 14px; }
+  .rm-dash-header { padding: 10px 12px; }
+  .rm-dash-canvas { padding: 10px; }
+  /* Two-column form rows (tile editor, settings) stack rather than crush.
+     !important because the columns are declared inline. */
+  .rm-col-2 { grid-template-columns: 1fr !important; }
 }
 
 /* Chips that are metadata, not data — a tile's connection and model — stay

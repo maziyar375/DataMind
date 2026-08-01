@@ -397,7 +397,7 @@ export function TileEditor({
         </div>
       ) : (
         <>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 200px', gap: 12 }}>
+          <div className="rm-col-2" style={{ display: 'grid', gridTemplateColumns: '1fr 200px', gap: 12 }}>
             <Field label="Title">
               <TextInput
                 autoFocus
@@ -536,7 +536,7 @@ export function TileEditor({
           {/* A TEXT tile computes nothing, so it has no clock and no row cap
               — offering either would be a control that does nothing. */}
           {needsSql && (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div className="rm-col-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               <Field label="Refresh" hint="This tile's own clock.">
                 <Select value={refresh} onChange={(event) => setRefresh(event.target.value)}>
                   <option value="">{inheritLabel}</option>
@@ -597,7 +597,7 @@ function AskPanel({
 
   const ready = Boolean(llmConfigId && question.trim()) && !disabled
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr auto', gap: 10, alignItems: 'end' }}>
+    <div className="rm-col-2" style={{ display: 'grid', gridTemplateColumns: '200px 1fr auto', gap: 10, alignItems: 'end' }}>
       <Field label="Model">
         <Select value={llmConfigId} onChange={(event) => onModel(event.target.value)}>
           <option value="">Choose a model…</option>
@@ -896,7 +896,7 @@ function TablePicker({
         })}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+      <div className="rm-col-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
         <Field label="Sort by">
           <Select
             value={config.sort_column ?? ''}

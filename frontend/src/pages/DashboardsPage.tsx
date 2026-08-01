@@ -16,7 +16,8 @@ import { ApiError, dashboards as api } from '../api/client'
 import { applyTheme, type ThemeName } from '../theme/tokens'
 import type { Dashboard, DashboardSummary, DashboardTile } from '../api/types'
 import {
-  DashboardCard, DashboardGrid, DashboardSettings, type TileAction, useTileScheduler,
+  DashboardCard, DashboardGrid, DashboardSettings, STACK_BELOW_PX,
+  type TileAction, useTileScheduler,
 } from '../components/dashboard'
 import { TileEditor } from '../components/tile-editor'
 import {
@@ -108,8 +109,10 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
   )
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '28px 32px' }}>
-      <header style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 22 }}>
+    <div className="rm-page-pad" style={{ flex: 1, overflowY: 'auto' }}>
+      <header
+        style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, marginBottom: 22 }}
+      >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <h1
             style={{
@@ -497,11 +500,12 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
     <div style={{ flex: 1, display: 'flex', minWidth: 0 }}>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <header
+          className="rm-dash-header"
           style={{
             display: 'flex',
+            flexWrap: 'wrap',
             alignItems: 'center',
             gap: 10,
-            padding: '14px 20px',
             borderBottom: '1px solid var(--border)',
             flexShrink: 0,
           }}
@@ -623,7 +627,7 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
           </div>
         )}
 
-        <div ref={gridRef} className="rm-dash-canvas" style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
+        <div ref={gridRef} className="rm-dash-canvas" style={{ flex: 1, overflowY: 'auto' }}>
           {tiles.length === 0 ? (
             <EmptyState
               icon={<Icon.Grid size={20} />}
@@ -648,7 +652,8 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
                     and puts one gap between cells, so a line every
                     (cell + gap) starting half a gap in sits in the middle of
                     every gap. Behind the tiles, and gone in view mode. */}
-                {editing && (
+                {/* No guide in the stacked layout — there is no grid to align to. */}
+                {editing && width >= STACK_BELOW_PX && (
                   <GridGuide
                     width={width}
                     columns={dashboard.grid_columns}
