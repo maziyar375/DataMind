@@ -1,6 +1,7 @@
 # Dashboards — the build spec
 
-**Status: not built. This file is the instruction, not a description.**
+**Status: backend built (§12 items 1–4); the frontend (items 5–6) is not.**
+**This file is the instruction as well as the record — see "Progress so far".**
 
 Multiple dashboards per user; a Superset/Power-BI-shaped grid of tiles; each
 tile bound to *its own* connection **and its own refresh rate**. A tile's SQL is
@@ -23,15 +24,14 @@ is trusted: the guard runs at preview, at save, and at every single refresh.
 | 2026-08-01 | **§12 item 1 built.** `services/query_service.py` with `execute_saved_sql` + `execute_many`, the four helpers lifted out of `run_service` (`latest_snapshot`, `policy_from_snapshot`, `resolve_llm`, `bind_connector`; `semantic_service` now shares `resolve_llm` too), and `tests/unit/test_query_service.py` (55 tests, incl. the hostile corpus replayed through a tile). `make test` / `make guard` / `make lint` green. |
 | 2026-08-01 | **§12 item 2 built.** `Dashboard` / `DashboardTile` / `DashboardTileCache` in `infra/db/models.py`, `DashboardStatus` / `TileType` / `SqlOrigin` in `domain/value_objects`, migration `0005_dashboards.py` — applied to the dev database (`0004 → 0005`) and the DDL read back. `tests/unit/test_dashboard_models.py` (16 tests) replays the migration against a recorder and diffs it against the ORM column by column, so the two definitions cannot drift apart unnoticed. |
 | 2026-08-01 | **§12 item 3 built.** `services/sql_draft_service.py` (`draft_sql` + `validate_sql`), `api/v1/drafts.py` with `POST /sql/drafts` and `POST /sql/drafts/validate`, `SqlDraftRead`/`TileResultRead` in `api/schemas.py`. `tests/unit/test_sql_drafts.py` (18) + `tests/unit/test_drafts_api.py` (9), and `test_openapi_has_no_secrets.py` now walks every schema the app can *return* rather than two named models. Exercised against the running stack: hand-written SQL and a plain-language question both come back VALID with a live preview off the `sales` fixture; `SELECT … ; DROP TABLE …` comes back REJECTED with `E_MULTI_STATEMENT` and no preview. |
+| 2026-08-01 | **§12 item 4 built.** `services/dashboard_service.py` (CRUD, guard-on-save, the per-tile cache, `refresh`), `api/v1/dashboards.py` with all twelve routes, and the dashboard DTOs in `api/schemas.py`. `tests/unit/test_dashboards_api.py` (30), `test_dashboard_cache.py` (20), `test_dashboard_service.py` (12). **Steps 1–4 verified end to end with curl** against the running stack: create → draft from a question → save as a tile → refresh (ran, 5 rows) → refresh again (served from cache, same `computed_at`) → `force=true` (new stamp) → edit the SQL (missed the cache inside its TTL) → duplicate → layout → delete (tiles and cache rows went with it). Hostile SQL was refused at save with `E_SQL_REJECTED`. |
 
-Still absent: `services/dashboard_service.py`, `api/v1/dashboards.py`, and every
-frontend dashboard page/component (`DashboardsPage.tsx`, `dashboard.tsx`,
-`tile-editor.tsx`). The backend is now three-quarters of the way to "curl can
-build a dashboard": SQL can be drafted, guarded and previewed over HTTP, and a
-saved statement can be executed. What is left of the backend is item 4 — CRUD,
-the routes, and the per-tile cache; the part of `refresh` that is not CRUD
-(group by connection, one connector per connection, `Semaphore(4)`) is already
-built and tested as `query_service.execute_many`. Next step is §12, item 4.
+Still absent: the frontend. `DashboardsPage.tsx`, `dashboard.tsx` and
+`tile-editor.tsx` do not exist, and `ResultTable` is still inside `chat.tsx`
+waiting to be extracted (§2). **The backend is complete**: curl can create a
+dashboard, draft SQL from a question, save it as a tile and refresh it, which
+is exactly the gate §12 sets before any grid code. Next step is §12, item 5 —
+and note §7's `react-grid-layout` needs the owner's yes before `npm install`.
 
 Companion to [pipeline.md](pipeline.md) (the AI run),
 [architecture.md](architecture.md) (the why) and [CODEBASE.md](CODEBASE.md)
@@ -343,6 +343,31 @@ when that resolves to `0` the cache is served on any hit until the user presses
 refresh. Without this, five people with a 30-second tile open is a load
 generator pointed at the customer's database.
 
+**As built.** The stored hash is a fingerprint of `(connection_id, sql,
+max_rows, chart_config)`, not of the SQL alone — the column keeps the name it
+was given in §4, but a tile switched from a pie to a line may not keep serving
+the pie until its interval happens to elapse. **Failures are cached too**,
+which is what `error_code`/`error_message` on the cache row are for: a tile
+whose query is broken would otherwise re-run it on every tick of every open
+browser. A tile whose connection was deleted (`SET NULL`, §4) answers
+`E_CONNECTION_REMOVED` without opening anything.
+
+`GET /dashboards/{id}` returns each tile with `effective_refresh_interval_
+seconds` resolved and its connection/model *names* — the chips §7 draws — so
+the scheduler needs no second copy of the inheritance rule and the grid needs
+no extra round trip. Names only: no host, no username, nothing else from inside
+a connection. Every tile-returning route resolves them, including `POST
+/tiles`, so the editor can render the tile it just saved.
+
+> **Two bugs the unit tests could not see**, both the `onupdate` + async gotcha
+> from CLAUDE.md, both found by the curl run and now covered by
+> `test_dashboard_service.py`: `PATCH /layout` flushed and serialised rows
+> whose `updated_at` was expired (`MissingGreenlet`, a 500), and
+> `DashboardRead.model_validate(dashboard)` read the lazy `Dashboard.tiles`
+> relationship during serialisation. A detached ORM object in a fake answers
+> both happily; a real session does not. The response builder now copies every
+> field *except* `tiles`, and every UPDATE is followed by a `refresh`.
+
 ---
 
 ## 7. Phase 5 — the dashboard UI
@@ -531,7 +556,7 @@ Gate before claiming any phase done: `make test`, `make guard`, `make lint`.
        _resolve_llm / _bind_connection                                    (§3)
 [x] 2  models + migration 0005                                            (§4)
 [x] 3  sql_draft_service.py + POST /sql/drafts + /sql/drafts/validate     (§5)
-[ ] 4  dashboard_service.py + /dashboards routes + per-tile cache         (§6)
+[x] 4  dashboard_service.py + /dashboards routes + per-tile cache         (§6)
 [ ] 5  DashboardsPage: list, grid, tile shell, one-tick refresh scheduler (§7)
 [ ] 6  Tile editor: Ask tab + Write-SQL tab + chart picker + rate picker  (§8)
 [ ] 7  Later: filters · sharing · export · "add to dashboard" from a chat

@@ -4,6 +4,7 @@ from app.api.v1 import (
     auth,
     connections,
     conversations,
+    dashboards,
     drafts,
     llm_configs,
     semantic,
@@ -22,3 +23,4 @@ api_router.include_router(conversations.router)
 # Drafting SQL is not scoped to a connection the way the semantic layer is —
 # the connection is an input to a draft, not its owner.
 api_router.include_router(drafts.router)
+api_router.include_router(dashboards.router)

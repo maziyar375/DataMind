@@ -404,6 +404,172 @@ class SqlDraftRead(BaseModel):
     llm_config_id: UUID | None = None
 
 
+# ── dashboards ───────────────────────────────────────────────────────────
+class DashboardTileRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    dashboard_id: UUID
+    connection_id: UUID | None = None
+    # Names only, for the tile's chips. A tile never carries a host, a
+    # username, or anything else from inside a connection.
+    connection_name: str | None = None
+    llm_config_id: UUID | None = None
+    llm_config_name: str | None = None
+    title: str = ""
+    tile_type: str = "CHART"
+    question: str | None = None
+    sql: str = ""
+    sql_origin: str = "GENERATED"
+    # null means Auto: the chart is re-planned from each result.
+    chart_config: dict[str, Any] | None = None
+    max_rows: int | None = None
+    # null means "inherit the dashboard's default"; 0 means manual only. The
+    # resolved number is sent alongside so the scheduler needs no second rule.
+    refresh_interval_seconds: int | None = None
+    effective_refresh_interval_seconds: int = 0
+    grid_x: int = 0
+    grid_y: int = 0
+    grid_w: int = 4
+    grid_h: int = 4
+    position: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class DashboardRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    name: str
+    description: str | None = None
+    status: str = "ACTIVE"
+    grid_columns: int = 12
+    row_height_px: int = 60
+    gap_px: int = 12
+    compact_mode: str = "VERTICAL"
+    palette: str = "default"
+    theme_override: str = "INHERIT"
+    default_refresh_interval_seconds: int = 0
+    created_at: datetime
+    updated_at: datetime
+    # The dashboard and its tiles, never their results: a tile's data is asked
+    # for separately, because each tile is on its own clock.
+    tiles: list[DashboardTileRead] = Field(default_factory=list)
+
+
+class DashboardSummaryRead(BaseModel):
+    """One card on the index: what it is, how big, and how fresh."""
+
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    name: str
+    description: str | None = None
+    status: str = "ACTIVE"
+    default_refresh_interval_seconds: int = 0
+    tile_count: int = 0
+    last_refreshed_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class DashboardCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    description: str | None = None
+    grid_columns: int = Field(default=12, ge=1, le=48)
+    row_height_px: int = Field(default=60, ge=10, le=400)
+    gap_px: int = Field(default=12, ge=0, le=64)
+    palette: str = Field(default="default", max_length=30)
+    theme_override: Literal["INHERIT", "DARK", "LIGHT"] = "INHERIT"
+    default_refresh_interval_seconds: int = Field(default=0, ge=0, le=86_400)
+
+
+class DashboardUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    description: str | None = None
+    status: Literal["ACTIVE", "ARCHIVED"] | None = None
+    grid_columns: int | None = Field(default=None, ge=1, le=48)
+    row_height_px: int | None = Field(default=None, ge=10, le=400)
+    gap_px: int | None = Field(default=None, ge=0, le=64)
+    compact_mode: Literal["VERTICAL", "NONE"] | None = None
+    palette: str | None = Field(default=None, max_length=30)
+    theme_override: Literal["INHERIT", "DARK", "LIGHT"] | None = None
+    default_refresh_interval_seconds: int | None = Field(default=None, ge=0, le=86_400)
+
+
+class TileCreate(BaseModel):
+    title: str = Field(default="", max_length=200)
+    tile_type: Literal["CHART", "TABLE", "METRIC", "TEXT"] = "CHART"
+    connection_id: UUID | None = None
+    llm_config_id: UUID | None = None
+    question: str | None = None
+    sql: str = ""
+    # Provenance, never trust: the guard cannot tell these apart and does not
+    # look. It exists so the editor knows which tab it opened on.
+    sql_origin: Literal["GENERATED", "GENERATED_EDITED", "HANDWRITTEN"] = "GENERATED"
+    chart_config: dict[str, Any] | None = None
+    max_rows: int | None = Field(default=None, ge=1)
+    refresh_interval_seconds: int | None = Field(default=None, ge=0, le=86_400)
+    grid_x: int = Field(default=0, ge=0)
+    grid_y: int = Field(default=0, ge=0)
+    grid_w: int = Field(default=4, ge=1)
+    grid_h: int = Field(default=4, ge=1)
+    position: int = Field(default=0, ge=0)
+
+
+class TileUpdate(BaseModel):
+    """Every field optional; only what is sent is changed.
+
+    `chart_config` and `refresh_interval_seconds` can be set back to null on
+    purpose — "Auto" and "inherit" are values, not the absence of one — so a
+    client clears them by sending an explicit null, and omitting a field leaves
+    it alone.
+    """
+
+    title: str | None = Field(default=None, max_length=200)
+    tile_type: Literal["CHART", "TABLE", "METRIC", "TEXT"] | None = None
+    connection_id: UUID | None = None
+    llm_config_id: UUID | None = None
+    question: str | None = None
+    sql: str | None = None
+    sql_origin: Literal["GENERATED", "GENERATED_EDITED", "HANDWRITTEN"] | None = None
+    chart_config: dict[str, Any] | None = None
+    max_rows: int | None = Field(default=None, ge=1)
+    refresh_interval_seconds: int | None = Field(default=None, ge=0, le=86_400)
+    grid_x: int | None = Field(default=None, ge=0)
+    grid_y: int | None = Field(default=None, ge=0)
+    grid_w: int | None = Field(default=None, ge=1)
+    grid_h: int | None = Field(default=None, ge=1)
+    position: int | None = Field(default=None, ge=0)
+
+
+class TilePosition(BaseModel):
+    tile_id: UUID
+    grid_x: int | None = Field(default=None, ge=0)
+    grid_y: int | None = Field(default=None, ge=0)
+    grid_w: int | None = Field(default=None, ge=1)
+    grid_h: int | None = Field(default=None, ge=1)
+    position: int | None = Field(default=None, ge=0)
+
+
+class LayoutUpdate(BaseModel):
+    """One call per drag-end, carrying every tile the drag moved."""
+
+    positions: list[TilePosition] = Field(default_factory=list)
+
+
+class DashboardDataRequest(BaseModel):
+    """Which tiles to compute. Empty means the whole dashboard.
+
+    The normal call is a list: with per-tile rates the browser asks for the
+    tiles that are *due*, and the whole dashboard is the first-paint case.
+    """
+
+    tile_ids: list[UUID] = Field(default_factory=list)
+
+
+class DashboardDataRead(BaseModel):
+    results: dict[UUID, TileResultRead] = Field(default_factory=dict)
+
+
 # ── conversations & messages ─────────────────────────────────────────────
 class ConversationCreate(BaseModel):
     title: str | None = None

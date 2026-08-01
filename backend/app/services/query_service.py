@@ -214,6 +214,35 @@ class TileResult:
             ),
         }
 
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> TileResult:
+        """Rebuild a result the cache wrote. The inverse of `to_payload`.
+
+        A served-from-cache tile has to be indistinguishable from a freshly
+        computed one — including `computed_at`, which is the whole point of
+        serving it: the reader is told how old the number is.
+        """
+        error = payload.get("error") or {}
+        computed_at = payload.get("computed_at")
+        return cls(
+            status=payload.get("status", "OK"),
+            columns=[ResultColumn(**c) for c in payload.get("columns", [])],
+            rows=[list(r) for r in payload.get("rows", [])],
+            row_count=payload.get("row_count", 0),
+            truncated=payload.get("truncated", False),
+            duration_ms=payload.get("duration_ms", 0),
+            computed_at=(
+                datetime.fromisoformat(computed_at)
+                if isinstance(computed_at, str)
+                else (computed_at or utcnow())
+            ),
+            vega_spec=payload.get("vega_spec"),
+            chart_source=payload.get("chart_source", "none"),
+            chart_note=payload.get("chart_note"),
+            error_code=error.get("code"),
+            error_message=error.get("message"),
+        )
+
 
 def _failed(code: str, message: str, *, duration_ms: int = 0) -> TileResult:
     return TileResult(
