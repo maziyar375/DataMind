@@ -18,6 +18,7 @@ import type { Dashboard, DashboardSummary, DashboardTile } from '../api/types'
 import {
   DashboardCard, DashboardGrid, DashboardSettings, type TileAction, useTileScheduler,
 } from '../components/dashboard'
+import { TileEditor } from '../components/tile-editor'
 import {
   EmptyState, ErrorNote, GhostButton, Icon, Modal, PrimaryButton, Spinner, TextInput,
 } from '../components/ui'
@@ -262,6 +263,8 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
   const [error, setError] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  // `undefined` = closed; `null` = adding; a tile = editing that one.
+  const [editorTile, setEditorTile] = useState<DashboardTile | null | undefined>(undefined)
 
   const gridRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(0)
@@ -368,18 +371,23 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
     async (action: TileAction, tile: DashboardTile) => {
       try {
         if (action === 'refresh') return data.refreshNow([tile.id])
+        if (action === 'edit') return setEditorTile(tile)
+        // Both of these apply the change locally rather than re-reading, for
+        // the same reason the editor does — see `onSaved` below.
         if (action === 'delete') {
           await api.removeTile(id, tile.id)
-        } else if (action === 'duplicate') {
-          await api.duplicateTile(id, tile.id)
-        } else if (action === 'edit') {
-          // The tile editor is §8 (build order item 6). Until it lands, a
-          // tile is edited through the API; saying so is better than a button
-          // that silently does nothing.
-          setError('The tile editor is not built yet — it lands with the next step.')
-          return
+          return setDashboard((current) =>
+            current
+              ? { ...current, tiles: current.tiles.filter((t) => t.id !== tile.id) }
+              : current,
+          )
         }
-        setDashboard(await api.get(id))
+        if (action === 'duplicate') {
+          const copy = await api.duplicateTile(id, tile.id)
+          setDashboard((current) =>
+            current ? { ...current, tiles: [...current.tiles, copy] } : current,
+          )
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'That did not work.')
       }
@@ -461,10 +469,7 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
               {editing ? 'Done' : 'Edit'}
             </GhostButton>
             {editing && (
-              <PrimaryButton
-                disabled
-                title="The tile editor lands with the next step (§8)"
-              >
+              <PrimaryButton onClick={() => setEditorTile(null)}>
                 <Icon.Plus /> Add tile
               </PrimaryButton>
             )}
@@ -481,7 +486,17 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
           {tiles.length === 0 ? (
             <EmptyState
               title="This dashboard is empty"
-              body="Tiles are added from the editor, which lands with the next step. Until then a tile can be created through the API and it will appear here."
+              body="A tile is a saved query on its own clock. Add one by asking a question in plain language, or by writing the SQL yourself."
+              action={
+                <PrimaryButton
+                  onClick={() => {
+                    setEditing(true)
+                    setEditorTile(null)
+                  }}
+                >
+                  <Icon.Plus /> Add tile
+                </PrimaryButton>
+              }
             />
           ) : (
             width > 0 && (
@@ -504,6 +519,37 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
           dashboard={dashboard}
           onChange={(patch) => void patchDashboard(patch)}
           onClose={() => setShowSettings(false)}
+        />
+      )}
+
+      {editorTile !== undefined && (
+        <TileEditor
+          dashboard={dashboard}
+          tile={editorTile}
+          onClose={() => setEditorTile(undefined)}
+          onSaved={(saved) => {
+            setEditorTile(undefined)
+            // The save response is the tile as stored — clamped row cap,
+            // resolved rate, connection and model names and all (§6) — so it
+            // is spliced in rather than re-read. A GET fired immediately after
+            // a write can also beat the write's commit: `get_db` commits in
+            // dependency teardown, which is not ordered before the response
+            // reaches the client, and a re-read that loses the tile the user
+            // just saved would look exactly like a save that failed.
+            setDashboard((current) =>
+              current
+                ? {
+                    ...current,
+                    tiles: current.tiles.some((t) => t.id === saved.id)
+                      ? current.tiles.map((t) => (t.id === saved.id ? saved : t))
+                      : [...current.tiles, saved],
+                  }
+                : current,
+            )
+            // Its fingerprint changed, so whatever is cached answers the old
+            // query. Waiting for the interval to elapse would show it anyway.
+            data.refreshNow([saved.id])
+          }}
         />
       )}
     </div>

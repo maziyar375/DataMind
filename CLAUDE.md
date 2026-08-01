@@ -122,9 +122,15 @@ frontend/src/
   main.tsx, App.tsx        entry + router/layout
   theme/tokens.ts          design tokens (oklch), DATABASE_TYPES, dark+light palettes
   api/client.ts, types.ts  typed client, SSE streaming + polling fallback
-  components/               ui.tsx (primitives, icons, Logo), chat.tsx,
-                            settings.tsx, semantic.tsx (the layer editor)
-  pages/                    Login, Chat, DataSources, LlmProviders, Users
+  components/               ui.tsx (primitives, icons, Logo, ResultTable),
+                            chat.tsx, settings.tsx, semantic.tsx (the layer
+                            editor), dashboard.tsx (grid + tile shell + the
+                            one-tick refresh scheduler), dashboard-schedule.ts
+                            (the due-tile rule, DOM-free, + its .test.ts —
+                            `npm run test:schedule`), tile-editor.tsx (ask or
+                            write the SQL; one guard check for both)
+  pages/                    Login, Chat, DataSources, LlmProviders, Users,
+                            Dashboards
 ```
 
 ---

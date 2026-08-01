@@ -1,7 +1,9 @@
 # Dashboards — the build spec
 
-**Status: backend built (§12 items 1–4) and the grid (item 5). The tile
-editor (item 6) is not — "Add tile" is still disabled.**
+**Status: §12 items 1–6 built — the feature works end to end. A user can
+create a dashboard, add a tile by asking or by writing SQL, pick its chart and
+its refresh rate, and watch it refresh. Item 7 (filters, sharing, export,
+"add to dashboard" from a chat run, scheduled warm refresh) is not started.**
 **This file is the instruction as well as the record — see "Progress so far".**
 
 Multiple dashboards per user; a Superset/Power-BI-shaped grid of tiles; each
@@ -27,16 +29,12 @@ is trusted: the guard runs at preview, at save, and at every single refresh.
 | 2026-08-01 | **§12 item 3 built.** `services/sql_draft_service.py` (`draft_sql` + `validate_sql`), `api/v1/drafts.py` with `POST /sql/drafts` and `POST /sql/drafts/validate`, `SqlDraftRead`/`TileResultRead` in `api/schemas.py`. `tests/unit/test_sql_drafts.py` (18) + `tests/unit/test_drafts_api.py` (9), and `test_openapi_has_no_secrets.py` now walks every schema the app can *return* rather than two named models. Exercised against the running stack: hand-written SQL and a plain-language question both come back VALID with a live preview off the `sales` fixture; `SELECT … ; DROP TABLE …` comes back REJECTED with `E_MULTI_STATEMENT` and no preview. |
 | 2026-08-01 | **§12 item 4 built.** `services/dashboard_service.py` (CRUD, guard-on-save, the per-tile cache, `refresh`), `api/v1/dashboards.py` with all twelve routes, and the dashboard DTOs in `api/schemas.py`. `tests/unit/test_dashboards_api.py` (30), `test_dashboard_cache.py` (20), `test_dashboard_service.py` (12). **Steps 1–4 verified end to end with curl** against the running stack: create → draft from a question → save as a tile → refresh (ran, 5 rows) → refresh again (served from cache, same `computed_at`) → `force=true` (new stamp) → edit the SQL (missed the cache inside its TTL) → duplicate → layout → delete (tiles and cache rows went with it). Hostile SQL was refused at save with `E_SQL_REJECTED`. |
 | 2026-08-01 | **§12 item 5 built.** `pages/DashboardsPage.tsx` (index → open, view/edit toggle, settings drawer), `components/dashboard.tsx` (grid, tile shell, the four tile bodies, the one-tick scheduler), `components/dashboard-schedule.ts` (the due-tile rule, DOM-free) with a runnable check (`npm run test:schedule`, 9 cases). `ResultTable` **moved** from `chat.tsx` to `ui.tsx` (§2). `react-grid-layout@1.5.4` added **with the owner's approval**, and the web image rebuilt so a fresh container has it. `npm run typecheck` + `npm run build` green. |
-
-Still absent: **the tile editor** (§8, item 6) — so the grid can show tiles,
-rearrange them and refresh them, but "Add tile" is disabled and a tile is
-created through the API. §12 says items 5 and 6 belong in the same stretch for
-exactly this reason; item 6 is the next step and the last one before the
-feature is usable end to end.
+| 2026-08-01 | **§12 item 6 built.** `components/tile-editor.tsx` — one modal, two tabs, one textarea, one debounced guard check; the chart, refresh, row-cap and tile-type pickers; `DashboardsPage` wires it to "Add tile" and to a tile's *Edit*. `tests/unit/test_tile_charts.py` (19) pins the exact `chart_config` payload the editor builds against `ChartIntent`, which is `extra="forbid"` and silently degrades to Auto when it disagrees. Replayed against the running stack: check → save with a picked bar (`chart_source: model`) → back to Auto (`heuristic`) → a row cap of 99,999 stored as the connection's 1,000 → a hostile edit refused with `E_SQL_REJECTED` → a TEXT tile stored with no SQL and no connection → deleted. **A read-after-write race was found and designed around** — see §8. |
 
 Not verified visually: this sandbox has no browser, so the UI was checked by
-`typecheck`, `build`, the dev server transforming every new module, and the
-scheduler rule run against a controlled clock. Someone should open it.
+`typecheck`, `build`, the dev server transforming every new module, the
+scheduler rule run against a controlled clock, and every request the editor
+makes replayed against the running stack. Someone should open it.
 
 Companion to [pipeline.md](pipeline.md) (the AI run),
 [architecture.md](architecture.md) (the why) and [CODEBASE.md](CODEBASE.md)
@@ -500,6 +498,54 @@ with no LLM provider configured can still build a whole dashboard.
 
 **The model's SQL is a draft and hand-edits are allowed; neither is trusted.**
 
+**As built.** [`components/tile-editor.tsx`](../frontend/src/components/tile-editor.tsx),
+one modal, opened from "Add tile" (edit mode) or a tile's kebab → *Edit*.
+
+*One check, not one per tab.* The debounced `POST /sql/drafts/validate` watches
+the textarea whatever put text in it, so editing what the model wrote is
+checked exactly like typing it yourself. **Connection sits above the tabs**
+rather than inside the Ask tab as the sketch has it: tab 2 needs it just as
+much — the guard resolves every name against that connection's snapshot — and
+one control that means one thing beats two that mean the same. Changing it
+clears the report, which described a different database.
+
+*Provenance follows whoever last wrote the text*, not the tab in front.
+`GENERATED` → `GENERATED_EDITED` on the first keystroke; a tile that starts on
+tab 2 is `HANDWRITTEN` and stays so; switching tabs changes nothing, because
+switching to tab 2 to fix one join does not erase the fact that a model wrote
+the other twenty lines. The model chip is only shown, and `llm_config_id` only
+stored, when a model was actually involved.
+
+> **"Table only" is a tile type, not a chart intent.** Storing
+> `chart_type: "none"` reads like "draw nothing" and does the opposite:
+> [`validate_intent`](../backend/app/charts/__init__.py#L264) refuses that
+> intent, so `plan_chart` falls through to the heuristic and draws whatever the
+> shape suggests. The picker's *Table only* therefore sets `tile_type = TABLE`.
+> `test_tile_charts.py` pins this, because the next person to read §8's option
+> list will reach for `"none"` exactly as I did.
+
+*The axis pickers are populated from the preview's columns*, never from the SQL
+text — a name the result does not have loses the chart. When a re-check returns
+different columns, a pick the new result can still honour is kept and one it
+cannot is replaced from the fresh suggestion. **The suggestion defaults the
+axes, not the type**: the type stays *Auto* (`chart_config = NULL`, re-planned
+per refresh) until the user says otherwise, which is the right default for a
+tile whose data changes shape.
+
+> **A read-after-write race, found by the end-to-end run and designed around.**
+> `get_db` commits in FastAPI's dependency teardown, which is **not** ordered
+> before the response reaches the client: a `GET` issued the moment a write
+> returns can be served from before that write's commit. Reproduced on
+> `DELETE /dashboards/{id}` → `GET` returning **200** (then 404 half a second
+> later); not reproduced on a tile insert in 10 tries, but the window is the
+> same one. So the page splices the **returned** row into its state instead of
+> re-reading — which every tile-returning route already makes possible by
+> resolving the display names (§6). A re-read that lost the tile the user just
+> saved would look exactly like a save that failed. **The race itself is
+> pre-existing and app-wide**, not a dashboards bug, and fixing it means
+> changing the session dependency for every route — worth doing, out of scope
+> here.
+
 ---
 
 ## 9. Invariants — how CLAUDE.md's four apply here
@@ -539,9 +585,17 @@ with no LLM provider configured can still build a whole dashboard.
 - `tests/unit/test_dashboards_api.py` — ownership scoping on every route; one
   failing tile still returns 200 with the others' data; `POST /data` with
   `tile_ids` touches only those tiles.
-- `tests/unit/test_tile_charts.py` — a stored `ChartIntent` naming a column the
-  result no longer has degrades to a table with a note, not a 500; a `NULL`
-  `chart_config` re-plans per result.
+- `tests/unit/test_tile_charts.py` — the two cases originally listed here (a
+  stored `ChartIntent` naming a column the result no longer has degrades rather
+  than raising; a `NULL` `chart_config` re-plans per result) were already
+  covered where the behaviour lives, in `test_query_service.py` ("rule 6: the
+  chart is decided here") and `test_dashboard_cache.py`. What this file covers
+  instead is the seam item 6 opened: `chart_config` is a JSON column written by
+  a TypeScript file with no compile-time knowledge of `ChartIntent`, which is
+  `extra="forbid"` — and a config it refuses is **indistinguishable from Auto**,
+  so the user's explicit pick vanishes without an error. Every payload the
+  editor can build is pinned against the model, along with the fact that all
+  four connectors emit only axis types the model accepts.
 - `test_dashboard_cache.py` — a changed `sql_hash` invalidates regardless of
   TTL; two tiles with different rates on one dashboard expire independently.
 - The new read models are covered automatically by
@@ -583,7 +637,7 @@ Gate before claiming any phase done: `make test`, `make guard`, `make lint`.
 [x] 3  sql_draft_service.py + POST /sql/drafts + /sql/drafts/validate     (§5)
 [x] 4  dashboard_service.py + /dashboards routes + per-tile cache         (§6)
 [x] 5  DashboardsPage: list, grid, tile shell, one-tick refresh scheduler (§7)
-[ ] 6  Tile editor: Ask tab + Write-SQL tab + chart picker + rate picker  (§8)
+[x] 6  Tile editor: Ask tab + Write-SQL tab + chart picker + rate picker  (§8)
 [ ] 7  Later: filters · sharing · export · "add to dashboard" from a chat
        run · scheduled server-side warm refresh
 ```
