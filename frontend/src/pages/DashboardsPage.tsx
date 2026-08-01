@@ -257,6 +257,51 @@ function NameDialog({
   )
 }
 
+/**
+ * A heading you can type into.
+ *
+ * Committed on blur or Enter, never per keystroke: one PATCH per edit, not one
+ * per letter. Escape puts back what was there — the usual contract for editing
+ * in place, and the reason this is not just an `<input>` with an `onChange`.
+ */
+function InlineEdit({
+  value, onCommit, ariaLabel, placeholder, required = false, style,
+}: {
+  value: string
+  onCommit: (value: string) => void
+  ariaLabel: string
+  placeholder?: string
+  /** A dashboard must have a name, so an empty commit reverts instead. */
+  required?: boolean
+  style?: React.CSSProperties
+}) {
+  const [draft, setDraft] = useState(value)
+  useEffect(() => setDraft(value), [value])
+
+  return (
+    <input
+      className="rm-inline-edit"
+      aria-label={ariaLabel}
+      value={draft}
+      placeholder={placeholder}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => {
+        const next = draft.trim()
+        if (required && !next) return setDraft(value)
+        if (next !== value) onCommit(next)
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') event.currentTarget.blur()
+        if (event.key === 'Escape') {
+          setDraft(value)
+          event.currentTarget.blur()
+        }
+      }}
+      style={style}
+    />
+  )
+}
+
 // ── one dashboard ─────────────────────────────────────────────────────────
 function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null)
@@ -446,14 +491,48 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
           >
             <Icon.ArrowLeft size={14} />
           </button>
-          <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-            <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-strong)' }}>
-              {dashboard.name}
-            </span>
-            <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
-              {tiles.length} {tiles.length === 1 ? 'tile' : 'tiles'}
-              {data.pending.size > 0 ? ' · refreshing' : ''}
-            </span>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              minWidth: 0,
+              flex: 1,
+              maxWidth: 420,
+            }}
+          >
+            {/* Edit mode edits the dashboard, not only its tiles: the name and
+                the description are part of the document, and renaming it from
+                a card on another screen is a strange place to have to go. */}
+            {editing ? (
+              <>
+                <InlineEdit
+                  ariaLabel="Dashboard name"
+                  value={dashboard.name}
+                  required
+                  style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-strong)' }}
+                  onCommit={(name) => void patchDashboard({ name })}
+                />
+                <InlineEdit
+                  ariaLabel="Dashboard description"
+                  value={dashboard.description ?? ''}
+                  placeholder="Add a description"
+                  style={{ fontSize: 11.5, color: 'var(--text-dim)' }}
+                  onCommit={(description) => void patchDashboard({ description: description || null })}
+                />
+              </>
+            ) : (
+              <>
+                <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-strong)' }}>
+                  {dashboard.name}
+                </span>
+                <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
+                  {dashboard.description
+                    ? dashboard.description
+                    : `${tiles.length} ${tiles.length === 1 ? 'tile' : 'tiles'}`}
+                  {data.pending.size > 0 ? ' · refreshing' : ''}
+                </span>
+              </>
+            )}
           </div>
 
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>

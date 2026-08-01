@@ -597,6 +597,25 @@ export function DashboardSettings({
         onCommit={(value) => onChange({ gap_px: value })}
       />
 
+      {/* The grid has read this since the first tile was drawn and nothing
+          could set it, so every dashboard was stuck compacting upward. Free
+          placement is the whole reason the layout is stored per tile. */}
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>Tile placement</span>
+        <select
+          value={dashboard.compact_mode}
+          onChange={(event) => onChange({ compact_mode: event.target.value })}
+          style={selectStyle}
+        >
+          <option value="VERTICAL">Pull tiles upward</option>
+          <option value="NONE">Leave tiles where they are put</option>
+        </select>
+        <span style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>
+          Pulling up closes the gaps for you; leaving them lets you park a tile
+          with space around it.
+        </span>
+      </label>
+
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>Chart palette</span>
         <select

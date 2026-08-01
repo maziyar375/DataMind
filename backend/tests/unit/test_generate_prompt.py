@@ -151,7 +151,7 @@ class FakeGateway:
 
     async def structured(self, _llm: Any, messages: Any, _schema: Any) -> Any:
         self.messages = list(messages)
-        return SqlProposal(sql="SELECT 1", tables_used=[], reasoning="")
+        return SqlProposal(sql="SELECT 1", reasoning="")
 
 
 def _state_with_history() -> RunState:

@@ -233,8 +233,34 @@ clarify existed.
 
 ### 4. `generate` — the only node that writes SQL
 
-`structured(SqlProposal)` → `{sql, tables_used, reasoning}`. **Three different
+`structured(SqlProposal)` → `{sql, reasoning}`. **Three different
 prompts depending on why we're here:**
+
+> **`PROMPT_VERSION` v7 — the runaway-reply fix. Read this before changing
+> `SqlProposal` or the three SQL prompts.**
+>
+> Handed a wide schema, a model writes correct SQL in ~90 tokens and then keeps
+> going, filling whatever **unbounded field** the contract offers until
+> `max_tokens` cuts the reply mid-string. The JSON never closes, `_parse_into`
+> throws, and a correct query is discarded as `E_LLM` ("did not return valid
+> SqlProposal JSON"). Measured on the 42-table `sales` schema (28,892-char
+> prompt):
+>
+> * `tables_used` was the first sink — 1,350 entries, the same 42 tables
+>   repeated 61 times. **Removed.** Nothing read it: the referenced-table list
+>   the platform trusts is the one `sqlguard` parses out of the SQL, because a
+>   model's claim about which tables it used is not evidence.
+> * With that gone the deliberation moved *into the `sql` string* — a query,
+>   then `-- but the question might mean…`, then another query. **`_OUTPUT_RULES`**
+>   ("put the statement in `sql` and nothing else") now ends all three SQL
+>   prompts. 2/6 failures → 0/6; median reply 750 tokens → 95.
+>
+> Two non-fixes, both measured, both tempting: **raising `max_tokens` makes it
+> worse** (6/8 failures at 4,096 vs 5/8 at 2,048 — the median reply is exactly
+> the cap at either size, because the rambling expands to fill the budget), and
+> **`maxItems` is ignored** by the provider's constrained decoder, so schema
+> bounds do not restrain it. **Keep every field in a structured-output contract
+> bounded, and say what the envelope is for.**
 
 | when | system prompt | user turn |
 |---|---|---|

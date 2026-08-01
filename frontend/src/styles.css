@@ -309,3 +309,27 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
    table or a chart must not start a drag. */
 .rm-tile-drag { cursor: grab; }
 .rm-tile-drag:active { cursor: grabbing; }
+
+/* The dashboard's name and description, edited where they are read rather
+   than in a dialog reached from somewhere else. Invisible until you go near
+   it: a heading that always looks like a form field reads as an unfinished
+   page, and a heading that gives no sign of being editable never gets
+   edited. */
+.rm-inline-edit {
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 7px;
+  padding: 2px 6px;
+  margin-left: -6px;
+  width: 100%;
+  outline: none;
+  font: inherit;
+  color: inherit;
+  transition: background .12s ease, border-color .12s ease;
+}
+.rm-inline-edit:hover { background: var(--panel-alt); }
+.rm-inline-edit:focus {
+  background: var(--input-bg);
+  border-color: var(--border-strong);
+}
+.rm-inline-edit::placeholder { color: var(--text-faint); font-weight: 400; }

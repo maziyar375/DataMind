@@ -30,6 +30,8 @@ is trusted: the guard runs at preview, at save, and at every single refresh.
 | 2026-08-01 | **§12 item 4 built.** `services/dashboard_service.py` (CRUD, guard-on-save, the per-tile cache, `refresh`), `api/v1/dashboards.py` with all twelve routes, and the dashboard DTOs in `api/schemas.py`. `tests/unit/test_dashboards_api.py` (30), `test_dashboard_cache.py` (20), `test_dashboard_service.py` (12). **Steps 1–4 verified end to end with curl** against the running stack: create → draft from a question → save as a tile → refresh (ran, 5 rows) → refresh again (served from cache, same `computed_at`) → `force=true` (new stamp) → edit the SQL (missed the cache inside its TTL) → duplicate → layout → delete (tiles and cache rows went with it). Hostile SQL was refused at save with `E_SQL_REJECTED`. |
 | 2026-08-01 | **§12 item 5 built.** `pages/DashboardsPage.tsx` (index → open, view/edit toggle, settings drawer), `components/dashboard.tsx` (grid, tile shell, the four tile bodies, the one-tick scheduler), `components/dashboard-schedule.ts` (the due-tile rule, DOM-free) with a runnable check (`npm run test:schedule`, 9 cases). `ResultTable` **moved** from `chat.tsx` to `ui.tsx` (§2). `react-grid-layout@1.5.4` added **with the owner's approval**, and the web image rebuilt so a fresh container has it. `npm run typecheck` + `npm run build` green. |
 | 2026-08-01 | **§12 item 6 built.** `components/tile-editor.tsx` — one modal, two tabs, one textarea, one debounced guard check; the chart, refresh, row-cap and tile-type pickers; `DashboardsPage` wires it to "Add tile" and to a tile's *Edit*. `tests/unit/test_tile_charts.py` (19) pins the exact `chart_config` payload the editor builds against `ChartIntent`, which is `extra="forbid"` and silently degrades to Auto when it disagrees. Replayed against the running stack: check → save with a picked bar (`chart_source: model`) → back to Auto (`heuristic`) → a row cap of 99,999 stored as the connection's 1,000 → a hostile edit refused with `E_SQL_REJECTED` → a TEXT tile stored with no SQL and no connection → deleted. **A read-after-write race was found and designed around** — see §8. |
+| 2026-08-01 | **`E_LLM` on the Ask tab traced and fixed** — `PROMPT_VERSION` **v6 → v7**. Not a dashboards bug: unbounded fields in `SqlProposal` let a model ramble past `max_tokens` and truncate its own JSON, losing correct SQL. `tables_used` deleted (read nowhere) and an `_OUTPUT_RULES` envelope added to the three SQL prompts. Measured 2/6 failures → 0/6, median reply 750 → 95 tokens; raising `max_tokens` was measured and makes it worse. 8/8 drafts and a full chat run green afterwards. See [pipeline.md](pipeline.md) §4. |
+| 2026-08-01 | **The dashboard itself made editable** (§7): name and description edited in place in the header under edit mode, and `compact_mode` given the control it never had — the grid read it from the start and nothing could set it, so free tile placement was unreachable. PATCH round-trips verified against the running stack, including the two 422s (empty name, unknown compact mode) the UI now avoids sending. |
 
 Not verified visually: this sandbox has no browser, so the UI was checked by
 `typecheck`, `build`, the dev server transforming every new module, the
@@ -294,17 +296,23 @@ editor renders the guard's reasons inline the way the metric editor does, and a
 the preview's shape (`plan_chart` with no suggestion) — deterministic, free, and
 only ever a default for the editor's pickers.
 
-> **Inherited from the run path, not introduced here:** `generate` asks the
-> provider for structured output with the config's `max_tokens`. A provider that
-> pads a `json_schema strict` reply can hit `finish_reason=length` and return
-> truncated JSON, which surfaces as `E_LLM` ("did not return valid SqlProposal
-> JSON") — intermittently, on the widest schema blocks. Verified on the dev
-> stack: 2 of 3 attempts failed on a 28 kB block, and the same call through
-> `complete()` returned 737 bytes of valid JSON. This is the chat pipeline's
-> behaviour too, unchanged; the fix belongs there (a larger `max_tokens` for the
-> config, or `supports_structured_output: false` so the instructed-JSON path is
-> used), not in a draft-only workaround that would make a draft and its run
-> diverge.
+> **Fixed in `PROMPT_VERSION` v7 — it was never a drafts bug.** Drafts made an
+> inherited failure obvious: `generate` asks the provider for structured output
+> with the config's `max_tokens`, and on the widest schema blocks the reply came
+> back `finish_reason=length` with truncated JSON, surfacing as `E_LLM` ("did
+> not return valid SqlProposal JSON"). The cause was **unbounded fields in the
+> structured-output contract**, not the provider padding: given a 28,892-char
+> schema block the model wrote correct SQL in ~90 tokens and then kept going —
+> first filling `tables_used` with 1,350 entries (42 tables repeated 61 times),
+> and once that field was removed, deliberating *inside the `sql` string* — until
+> the cap cut the reply mid-string. Two changes in `pipeline/prompts` and
+> `pipeline/contracts` fixed it for the run path and the draft path at once:
+> `tables_used` deleted (nothing read it; the trusted table list is the guard's)
+> and an `_OUTPUT_RULES` envelope instruction added to all three SQL prompts.
+> Measured: 2/6 failures → 0/6, median reply 750 tokens → 95. **Raising
+> `max_tokens` was measured and is not the fix** — at 4,096 the failure rate got
+> *worse* and the median reply was exactly the cap at both sizes, because the
+> rambling expands to fill whatever budget it is given.
 
 ---
 
@@ -402,6 +410,16 @@ Shape it like Superset/Power BI, because that is what users expect:
   text, no SQL, no connection.
 - **Settings drawer:** grid columns, row height, gap, palette, theme override,
   default refresh rate.
+
+**The dashboard is editable, not only its tiles.** Edit mode turns the header's
+name and description into fields, committed on blur or Enter and reverted on
+Escape — one PATCH per edit, not one per keystroke, and an empty name reverts
+rather than sending a 422. Renaming from a card on the index screen still
+works; it is just no longer the only way. The settings drawer also carries
+**tile placement** (`compact_mode`), which the grid had been reading since the
+first tile was drawn with nothing able to set it — so every dashboard was stuck
+compacting upward, and "leave a tile where it is put" was unreachable despite
+being the reason the layout is stored per tile (§11).
 
 ### Per-tile refresh — one scheduler, not one timer per tile
 

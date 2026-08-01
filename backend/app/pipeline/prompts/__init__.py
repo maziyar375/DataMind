@@ -3,7 +3,37 @@ wording never silently invalidates historical comparisons.
 """
 from __future__ import annotations
 
-PROMPT_VERSION = "v6"
+PROMPT_VERSION = "v7"
+# v7: two changes, both about the *envelope* the SQL arrives in rather than the
+# SQL itself. Together they turn "did not return valid SqlProposal JSON" from a
+# routine failure on a wide schema into one I could not reproduce.
+#
+# The failure: a model handed a 28,892-char schema block writes a correct query
+# in ~90 tokens and then keeps going — filling whatever unbounded field the
+# contract offers until `max_tokens` cuts the reply mid-string. The JSON never
+# closes, so `_parse_into` throws and a correct statement is discarded.
+#
+# 1. **`tables_used` removed from `SqlProposal`** and from the three "Return
+#    JSON with keys" lines. Nothing read it: the table list the platform trusts
+#    is the one `sqlguard` parses out of the SQL, because a model's claim about
+#    which tables it used is not evidence. As an unbounded array it was where
+#    the runaway went first — measured at 1,350 entries, the same 42 tables
+#    repeated 61 times.
+#
+# 2. **`_OUTPUT_RULES`** appended to all three SQL prompts. With `tables_used`
+#    gone the deliberation simply moved into the `sql` string ("-- but the
+#    question might mean…", then another query). Telling the model to put the
+#    statement and nothing else in that field is what actually stops it. See
+#    the measurements at `_OUTPUT_RULES`.
+#
+# Raising `max_tokens` is **not** a fix and was measured: at 4,096 the failure
+# rate was worse than at 2,048, and the median reply was exactly the cap at
+# both sizes — the rambling expands to fill whatever it is given.
+#
+# The version moves because the rendered prompt does. A v6 and a v7 run are
+# otherwise indistinguishable from the outside, and the difference between them
+# is the wide-schema failure rate.
+#
 # v6: two changes to how the conversation reaches the model, one widening and
 # one narrowing, both on the SQL-producing path.
 #
@@ -145,6 +175,31 @@ _SQL_RULES = """\
 # That is the addition eval Round 2 measured as harmful; keep this list to
 # constraints the guard actually enforces, and re-measure when it changes.
 
+_OUTPUT_RULES = """\
+Reply with the JSON object only. Put the statement in `sql` and nothing else —
+no SQL comments, no alternatives, no commentary inside the string. Keep
+`reasoning` under two sentences, or omit it."""
+# This is about the *envelope*, not about the SQL, and it is the difference
+# between a working feature and a broken one on a wide schema. Without it, a
+# model handed an ambiguous question deliberates **inside the `sql` string** —
+# writing a query, then `-- but the question might mean…`, then another query —
+# until `max_tokens` truncates the reply mid-string and a correct statement is
+# thrown away as `E_LLM`.
+#
+# Measured on the 42-table `sales` schema, "which customers spent the most last
+# quarter", 6 trials each: without it 2/6 failed and the median reply was 750
+# completion tokens (max 2,048 — the cap, i.e. truncated); with it 0/6 failed
+# and the median was 95 (max 96). Raising `max_tokens` is *not* the fix and was
+# measured too: at 4,096 the failure rate got worse (6/8 vs 5/8) because the
+# rambling simply expands to fill whatever budget it is given — the median
+# reply was exactly the cap at both sizes.
+#
+# It is deliberately about output shape only. The eval Round 2 note below is
+# about adding *SQL guidance*, which crowded out the schema; this subtracts
+# from the reply rather than adding to the instructions, and it is the one
+# addition here that makes the prompt cheaper. Re-measure on the eval suite
+# anyway — that note exists because this prompt has surprised us before.
+
 GENERATE_SYSTEM = f"""You write a single read-only SQL SELECT statement.
 
 Rules, all mandatory:
@@ -153,7 +208,9 @@ Rules, all mandatory:
 Schema:
 {{schema}}
 
-{{history}}"""
+{{history}}
+
+{_OUTPUT_RULES}"""
 # NB (eval Round 2, reverted): adding a "getting the answer right" block of
 # general SQL guidance here *lowered* execution accuracy on the small eval model
 # (36% -> 26%) and hurt parse (98% -> 88%) and guard-pass (96% -> 86%) — the
@@ -162,7 +219,7 @@ Schema:
 
 GENERATE_USER = """Question: {question}
 
-Return JSON with keys: sql, tables_used, reasoning."""
+Return JSON with keys: sql, reasoning."""
 
 REVIEW_SYSTEM = f"""Your previous SQL ran successfully, but the result looks wrong.
 
@@ -179,7 +236,8 @@ Schema:
 
 {{history}}
 
-Return JSON with keys: sql, tables_used, reasoning."""
+Return JSON with keys: sql, reasoning.
+{_OUTPUT_RULES}"""
 # The rules block is repeated rather than assumed remembered: this is a fresh
 # two-message conversation, not a continuation, so the model has never seen
 # GENERATE_SYSTEM. "The rules have not changed" frames it as a restatement, so
@@ -198,7 +256,8 @@ Schema:
 
 {{history}}
 
-Return JSON with keys: sql, tables_used, reasoning."""
+Return JSON with keys: sql, reasoning.
+{_OUTPUT_RULES}"""
 
 ANSWER_SYSTEM = """You explain a query result to a business user.
 
