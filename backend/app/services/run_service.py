@@ -20,15 +20,13 @@ from app.core.clock import utcnow
 from app.core.config import Settings
 from app.core.errors import NotFoundError, RunTimeoutError, ValidationError
 from app.core.logging import get_logger
-from app.domain.ports.llm import ChatMessage, ProviderCapabilities, ResolvedLLM
+from app.domain.ports.llm import ChatMessage
 from app.domain.value_objects import (
     ArtifactKind,
-    DatabaseKind,
     MessageRole,
     RunStatus,
     StepStatus,
 )
-from app.infra.connectors.factory import build_connector
 from app.infra.crypto.aesgcm_box import AesGcmSecretBox
 from app.infra.db.models import (
     Artifact,
@@ -41,15 +39,19 @@ from app.infra.db.models import (
     Run,
     RunEventRow,
     RunStep,
-    SchemaSnapshotRow,
 )
 from app.infra.events.bus import event_bus
 from app.infra.llm.litellm_gateway import LiteLLMGateway
 from app.pipeline.nodes import NodeDeps, _describe_schema, _render_history
 from app.pipeline.pipeline import AnalyticsPipeline
 from app.pipeline.state import RunState
+from app.services.query_service import (
+    bind_connector,
+    latest_snapshot,
+    policy_from_snapshot,
+    resolve_llm,
+)
 from app.services.semantic_service import load_document
-from app.sqlguard import GuardPolicy
 
 log = get_logger(__name__)
 
@@ -159,7 +161,7 @@ class RunService:
         llm_config = await self._db.get(LlmConfig, run.llm_config_id)
         assert connection is not None and llm_config is not None
 
-        snapshot = await self._latest_snapshot(connection.id)
+        snapshot = await latest_snapshot(self._db, connection.id)
         # Loaded once per run, not per attempt: a repair regenerates against
         # the same schema block, and the layer is part of that block.
         semantic = await load_document(self._db, connection)
@@ -176,25 +178,15 @@ class RunService:
             deadline_at=utcnow() + timedelta(seconds=self._settings.run_deadline_seconds),
         )
 
-        connector = build_connector(
-            kind=connection.database_type,
-            host=connection.host,
-            port=connection.port,
-            database=connection.database_name,
-            username=connection.username,
-            password=self._box.decrypt(
-                connection.encrypted_password, aad=f"connection:{connection.id}"
-            ),
-            ssl_mode=connection.ssl_mode,
-        )
+        connector = bind_connector(connection, self._box)
 
         deps = NodeDeps(
             llm_gateway=LiteLLMGateway.from_settings(self._settings),
-            llm=self._resolve_llm(llm_config),
+            llm=resolve_llm(llm_config, self._box),
             connector=connector,
             snapshot=snapshot,
             history=await self._recent_history(run.conversation_id, connection.id),
-            policy=_policy_from_snapshot(snapshot, connection),
+            policy=policy_from_snapshot(snapshot, connection),
             emit=lambda t, d: self._emit(run_id, t, d),
             semantic=(semantic.model_dump(mode="json") if semantic else None),
             clarify_enabled=(
@@ -630,7 +622,7 @@ class RunService:
         if connection is None or llm_config is None:
             return []
 
-        snapshot = await self._latest_snapshot(conn_id)
+        snapshot = await latest_snapshot(self._db, conn_id)
         tables = snapshot.get("tables", [])
         if not tables:
             return []
@@ -666,7 +658,7 @@ class RunService:
         try:
             gateway = LiteLLMGateway.from_settings(self._settings)
             completion = await gateway.complete(
-                self._resolve_llm(llm_config),
+                resolve_llm(llm_config, self._box),
                 [
                     ChatMessage(role="system", content=system),
                     ChatMessage(role="user", content=user),
@@ -679,43 +671,6 @@ class RunService:
             return []
 
         return _parse_suggestions(completion.text, limit, history)
-
-    async def _latest_snapshot(self, connection_id: UUID) -> dict[str, Any]:
-        result = await self._db.execute(
-            select(SchemaSnapshotRow)
-            .where(SchemaSnapshotRow.connection_id == connection_id)
-            .order_by(SchemaSnapshotRow.version.desc())
-            .limit(1)
-        )
-        row = result.scalar_one_or_none()
-        if row is None:
-            return {"tables": [], "relationships": [], "dialect": "postgres"}
-        return {
-            "tables": row.tables,
-            "relationships": row.relationships,
-            "dialect": row.dialect,
-        }
-
-    def _resolve_llm(self, config: LlmConfig) -> ResolvedLLM:
-        api_key = ""
-        if config.encrypted_api_key:
-            api_key = self._box.decrypt(
-                config.encrypted_api_key, aad=f"llm_config:{config.id}"
-            )
-        caps = config.capabilities or {}
-        return ResolvedLLM(
-            config_id=config.id,
-            provider=config.provider,
-            model=config.model,
-            base_url=config.base_url,
-            api_key=api_key,
-            temperature=config.temperature,
-            max_tokens=config.max_tokens,
-            capabilities=ProviderCapabilities(
-                supports_structured_output=caps.get("supports_structured_output", False),
-                supports_streaming=caps.get("supports_streaming", True),
-            ),
-        )
 
 
 def _bind_connection(
@@ -778,23 +733,3 @@ def _parse_suggestions(
             break
     return out
 
-
-def _policy_from_snapshot(
-    snapshot: dict[str, Any], connection: DatabaseConnection
-) -> GuardPolicy:
-    allowed_tables: set[str] = set()
-    allowed_columns: dict[str, set[str]] = {}
-    for table in snapshot.get("tables", []):
-        qualified = f"{table['schema']}.{table['name']}".lower()
-        allowed_tables.add(qualified)
-        allowed_columns[qualified] = {
-            c["name"].lower() for c in table.get("columns", [])
-        }
-    return GuardPolicy(
-        # sqlglot names the SQL Server dialect `tsql`, not `mssql`, so the
-        # connection's own kind cannot be handed over unmapped.
-        dialect=DatabaseKind(connection.database_type).sqlglot_dialect,
-        max_rows=connection.max_rows,
-        allowed_tables=allowed_tables,
-        allowed_columns=allowed_columns,
-    )

@@ -26,7 +26,6 @@ from app.core.clock import utcnow
 from app.core.config import Settings
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.core.logging import get_logger
-from app.domain.ports.llm import ProviderCapabilities, ResolvedLLM
 from app.domain.value_objects import HintBudget
 from app.infra.crypto.aesgcm_box import AesGcmSecretBox
 from app.infra.db.models import (
@@ -49,6 +48,7 @@ from app.semantic import (
     merge_documents,
     validate_document,
 )
+from app.services.query_service import resolve_llm
 
 log = get_logger(__name__)
 
@@ -240,7 +240,9 @@ class SemanticService:
             if existing_row and existing_row.document
             else SemanticDocument()
         )
-        llm = self._resolve_llm(config)
+        # A description is prose, not SQL, so the output budget gets a floor
+        # the run path does not need.
+        llm = resolve_llm(config, self._box, min_max_tokens=2048)
         # Generation reads the same schema block a run does, under the same
         # policy: a layer can never be built from data the model would not
         # have been shown anyway.
@@ -431,29 +433,6 @@ class SemanticService:
             "version": row.version,
         }
 
-    def _resolve_llm(self, config: LlmConfig) -> ResolvedLLM:
-        api_key = ""
-        if config.encrypted_api_key:
-            api_key = self._box.decrypt(
-                config.encrypted_api_key, aad=f"llm_config:{config.id}"
-            )
-        caps = config.capabilities or {}
-        return ResolvedLLM(
-            config_id=config.id,
-            provider=config.provider,
-            model=config.model,
-            base_url=config.base_url,
-            api_key=api_key,
-            # A description is prose, not SQL: a little variety reads better
-            # than a deterministic monotone, and nothing downstream compares
-            # two generations for equality.
-            temperature=config.temperature,
-            max_tokens=max(config.max_tokens, 2048),
-            capabilities=ProviderCapabilities(
-                supports_structured_output=caps.get("supports_structured_output", False),
-                supports_streaming=caps.get("supports_streaming", True),
-            ),
-        )
 
 
 async def load_document(

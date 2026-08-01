@@ -20,13 +20,16 @@ is trusted: the guard runs at preview, at save, and at every single refresh.
 |---|---|
 | 2026-07-31 | First spec written and committed (`plan creating dashboard`). No code. |
 | 2026-08-01 | Spec rewritten to this scope: NL-authoring is the primary path (was "promote from chat"), refresh rate is **per tile**, chart type is user-selectable. Still no code. |
+| 2026-08-01 | **§12 item 1 built.** `services/query_service.py` with `execute_saved_sql` + `execute_many`, the four helpers lifted out of `run_service` (`latest_snapshot`, `policy_from_snapshot`, `resolve_llm`, `bind_connector` — `semantic_service` now shares the last of those too), and `tests/unit/test_query_service.py` (55 tests, incl. the hostile corpus replayed through a tile). `make test` / `make guard` / `make lint` green. |
 
-Nothing in §12's build order is checked off. Concretely, none of the following
-exist in the codebase yet: `services/query_service.py`,
-`services/sql_draft_service.py`, `services/dashboard_service.py`, migration
-`0005_dashboards.py`, `api/v1/dashboards.py`, `api/v1/drafts.py`, or any
-frontend dashboard page/component (`DashboardsPage.tsx`, `dashboard.tsx`,
-`tile-editor.tsx`). Next step is §12, item 1.
+Still absent: `services/sql_draft_service.py`, `services/dashboard_service.py`,
+migration `0005_dashboards.py`, `api/v1/dashboards.py`, `api/v1/drafts.py`, and
+every frontend dashboard page/component (`DashboardsPage.tsx`, `dashboard.tsx`,
+`tile-editor.tsx`). §3's `dashboard_service.refresh` cannot be written until the
+tables exist, but the part of it that is not CRUD — group by connection, one
+connector per connection, `Semaphore(4)` — is already built and tested as
+`query_service.execute_many`, so item 4 maps `dashboard_tiles` rows to
+`TileRequest`s and does the caching around it. Next step is §12, item 2.
 
 Companion to [pipeline.md](pipeline.md) (the AI run),
 [architecture.md](architecture.md) (the why) and [CODEBASE.md](CODEBASE.md)
@@ -56,22 +59,24 @@ output that happens to be user-visible. §3 is the whole feature; build it first
 | Need | Already exists | File |
 |---|---|---|
 | SQL validation + rewrite | `guard(sql, policy) -> (report, executable)` | [`sqlguard/__init__.py:12`](../backend/app/sqlguard/__init__.py#L12) |
-| Build a `GuardPolicy` from a snapshot | `_policy_from_snapshot` (private to `run_service` — **lift it**, §3) | [`services/run_service.py:782`](../backend/app/services/run_service.py#L782) |
-| Latest schema snapshot for a connection | `RunService._latest_snapshot` (same — lift it) | [`services/run_service.py:683`](../backend/app/services/run_service.py#L683) |
-| Decrypt a connection's password / bind a connector | `_bind_connection` | [`services/run_service.py:721`](../backend/app/services/run_service.py#L721) |
+| Build a `GuardPolicy` from a snapshot | `policy_from_snapshot` (**lifted**, §3 — takes an optional lower `max_rows`) | [`services/query_service.py`](../backend/app/services/query_service.py) |
+| Latest schema snapshot for a connection | `latest_snapshot(db, connection_id)` (lifted) | [`services/query_service.py`](../backend/app/services/query_service.py) |
+| Decrypt a connection's password / bind a connector | `bind_connector(connection, box)` (lifted; was inline in `execute_run`) | [`services/query_service.py`](../backend/app/services/query_service.py) |
 | Read-only execution, timeouts, row caps | `build_connector(...)` → `DatabaseConnector` | [`infra/connectors/factory.py:24`](../backend/app/infra/connectors/factory.py#L24) |
 | Decide/repair a chart for a result shape | `profile_result` → `plan_chart` → `compile_vega_lite` | [`charts/__init__.py:170,469,564`](../backend/app/charts/__init__.py#L469) |
 | Chart intent schema | `ChartIntent` (serialise this into `tiles.chart_config`) | [`charts/__init__.py:59`](../backend/app/charts/__init__.py#L59) |
 | Render a Vega-Lite spec, theme-aware | `<VegaChart spec={...}/>` | [`VegaChart.tsx`](../frontend/src/components/VegaChart.tsx) |
 | Render a result table | `ResultTable` — **extract to `ui.tsx`**, don't copy | [`chat.tsx:345`](../frontend/src/components/chat.tsx#L345) |
 | NL → SQL | `retrieve` → `generate` → `validate` nodes | [`pipeline/nodes/__init__.py:237,418,518`](../backend/app/pipeline/nodes/__init__.py#L418) |
-| Resolve an `LlmConfig` into a callable model | `RunService._resolve_llm` (**lift it too**, §5) | [`services/run_service.py:699`](../backend/app/services/run_service.py#L699) |
+| Resolve an `LlmConfig` into a callable model | `resolve_llm(config, box, min_max_tokens=0)` (lifted; `run_service` and `semantic_service` both use it) | [`services/query_service.py`](../backend/app/services/query_service.py) |
 | Auth/session/db deps | `CtxDep`, `DbDep`, `SettingsDep` | [`api/deps.py`](../backend/app/api/deps.py) |
 
 Two copies of the policy builder is how one of them silently stops matching the
 guard. Lift, don't copy — that applies to `_resolve_llm` and `ResultTable` too.
 The natural home for the lifted backend helpers is the new
-`services/query_service.py`; `run_service` then imports them from there.
+`services/query_service.py`; `run_service` then imports them from there. (The
+backend half of that is done — `run_service` and `semantic_service` now import
+all four. `ResultTable` is still to extract, in §7.)
 
 ---
 
@@ -84,6 +89,10 @@ async def execute_saved_sql(
     db, settings, *, sql: str, connection: DatabaseConnection,
     owner_id: UUID, chart_intent: ChartIntent | None = None,
     max_rows: int | None = None,
+    # As built: the batch path passes both, and then owns closing the
+    # connector. Omitted, this function loads and opens (and closes) its own.
+    connector: DatabaseConnector | None = None,
+    snapshot: dict | None = None,
 ) -> TileResult: ...
 ```
 
@@ -119,6 +128,15 @@ Six rules, each of which is a test in §10:
 `computed_at`, `vega_spec`, `chart_source`, `chart_note`, `error_code`,
 `error_message`.
 
+`error_code` as built, for the UI to branch on: `E_SCHEMA_CHANGED` (the guard
+refused a name the snapshot no longer has — re-sync and edit the tile),
+`E_NO_SNAPSHOT` (never synced; nothing is dialled), `E_FORBIDDEN` (the
+connection is not the caller's; nothing is decrypted or dialled),
+`E_QUERY_FAILED` (the driver refused or timed out), `E_INTERNAL`, and otherwise
+the guard's own `rule_id` verbatim (`E_NOT_A_SELECT`, `E_FORBIDDEN_CONSTRUCT`,
+…) so a hand-written statement gets the same sentence the semantic-layer editor
+would have shown.
+
 **Then `backend/app/services/dashboard_service.py`:** CRUD plus
 
 ```python
@@ -130,6 +148,15 @@ connection**, running tiles under an `asyncio.Semaphore` (cap 4). Twelve tiles
 on one database must not open twelve connections. `tile_ids` is not an
 optimisation — with per-tile refresh rates (§7) it is the normal call shape: the
 browser asks for the tiles that are *due*, not for the whole dashboard.
+
+That grouping is already built, as
+`query_service.execute_many(db, settings, *, requests: list[TileRequest],
+owner_id) -> dict[UUID, TileResult]` — it needs no dashboard tables, so it
+landed with item 1. `refresh` maps rows to `TileRequest`s and owns the cache;
+it does not re-implement the fan-out. One rule it adds that is easy to lose:
+**every database read happens before the tiles fan out** — one snapshot per
+connection, awaited in sequence — because an `AsyncSession` is not safe for
+concurrent use.
 
 Layering: `services` may reach `infra`; nothing here touches `app.domain`'s
 purity or the self-containment of `sqlguard`/`semantic`. Confirm with
@@ -462,7 +489,7 @@ Gate before claiming any phase done: `make test`, `make guard`, `make lint`.
 ## 12. Build order
 
 ```
-[ ] 1  query_service.py + lift _policy_from_snapshot / _latest_snapshot /
+[x] 1  query_service.py + lift _policy_from_snapshot / _latest_snapshot /
        _resolve_llm / _bind_connection                                    (§3)
 [ ] 2  models + migration 0005                                            (§4)
 [ ] 3  sql_draft_service.py + POST /sql/drafts + /sql/drafts/validate     (§5)
