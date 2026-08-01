@@ -112,7 +112,7 @@ function useThemeName(): ThemeName {
   return name
 }
 
-export function VegaChart({ spec, frameless = false }: {
+export function VegaChart({ spec, frameless = false, fill = false }: {
   spec: Record<string, unknown>
   /**
    * Drop the border, padding and panel background. A dashboard tile already
@@ -120,6 +120,15 @@ export function VegaChart({ spec, frameless = false }: {
    * that failed to fill its box.
    */
   frameless?: boolean
+  /**
+   * Fill the parent's height too, not only its width. In a dashboard tile the
+   * box is the tile the user sized, and a fixed-height plot floating in a
+   * taller tile reads as wasted space. The parent must give this component a
+   * definite height (flex: 1 / height: 100%). Horizontal bars are exempt:
+   * their height must grow with the category count so labels stay legible,
+   * and they scroll instead.
+   */
+  fill?: boolean
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const [failed, setFailed] = useState(false)
@@ -141,11 +150,13 @@ export function VegaChart({ spec, frameless = false }: {
     // height so the marks, not the labels, own the box.
     const isHorizontalBar = mark === 'bar' && encoding.y?.type === 'nominal'
     const PER_BAR = 22
-    const height = isHorizontalBar
+    const height: number | 'container' = isHorizontalBar
       ? Math.min(60_000, Math.max(200, rowCount * PER_BAR))
-      : mark === 'arc'
-        ? 260
-        : 300
+      : fill
+        ? 'container'
+        : mark === 'arc'
+          ? 260
+          : 300
     const xIsCategorical = encoding.x?.type === 'nominal' || encoding.x?.type === 'ordinal'
     // The same rule on the other axis: a vertical bar chart squeezed to the
     // container turns its categories into a smear once there are more of them
@@ -157,7 +168,7 @@ export function VegaChart({ spec, frameless = false }: {
     const width: number | 'container' =
       xIsCategorical && rowCount > 12 ? rowCount * PER_COLUMN : 'container'
     return { encoding, isHorizontalBar, height, width, xIsCategorical }
-  }, [spec])
+  }, [spec, fill])
 
   useEffect(() => {
     const el = ref.current
@@ -217,7 +228,14 @@ export function VegaChart({ spec, frameless = false }: {
       encoding: encodingOverride,
       width,
       height,
-      autosize: { type: width === 'container' ? 'fit-x' : 'pad', contains: 'padding' },
+      autosize: {
+        type:
+          width === 'container' && height === 'container' ? 'fit'
+          : width === 'container' ? 'fit-x'
+          : height === 'container' ? 'fit-y'
+          : 'pad',
+        contains: 'padding',
+      },
       background: 'transparent',
       config,
     }
@@ -234,19 +252,30 @@ export function VegaChart({ spec, frameless = false }: {
           return
         }
         result = r
-        // A 'container' width only re-measures on window:resize — that is the
-        // sole trigger Vega-Lite compiles into the width signal. A dashboard
-        // tile resizes its element without one (react-grid-layout, the
-        // settings drawer opening), leaving the chart at its stale width until
-        // the next refresh re-embeds it. So watch the element and hand the new
-        // width to the view ourselves, debounced so a resize drag re-lays-out
-        // once at rest, not sixty times a second.
-        if (width === 'container') {
+        // A 'container' size only re-measures on window:resize — that is the
+        // sole trigger Vega-Lite compiles into the width/height signals. A
+        // dashboard tile resizes its element without one (react-grid-layout,
+        // the settings drawer opening), leaving the chart at its stale size
+        // until the next refresh re-embeds it. So watch the element and hand
+        // the new size to the view ourselves, debounced so a resize drag
+        // re-lays-out once at rest, not sixty times a second.
+        if (width === 'container' || height === 'container') {
+          // Sub-2px changes are ignored: fit autosize can overshoot the box by
+          // a pixel, and reacting to our own overshoot would loop forever.
+          let lastW = -1
+          let lastH = -1
           observer = new ResizeObserver(() => {
             if (resizeTimer !== null) window.clearTimeout(resizeTimer)
             resizeTimer = window.setTimeout(() => {
               const w = el.clientWidth
-              if (w > 0) void r.view.width(w).resize().runAsync()
+              const h = el.clientHeight
+              if (Math.abs(w - lastW) < 2 && Math.abs(h - lastH) < 2) return
+              lastW = w
+              lastH = h
+              let view = r.view
+              if (width === 'container' && w > 0) view = view.width(w)
+              if (height === 'container' && h > 0) view = view.height(h)
+              void view.resize().runAsync()
             }, 60)
           })
           observer.observe(el)
@@ -271,19 +300,38 @@ export function VegaChart({ spec, frameless = false }: {
     <div
       style={{
         width: '100%',
+        // In fill mode the box's height comes from the parent, and the inner
+        // div must inherit it as a definite length: Vega measures the
+        // container to size the plot, and measuring an auto-height element
+        // would read back the plot's own height — a feedback loop.
+        height: fill ? '100%' : undefined,
         marginTop: frameless ? 0 : 6,
         padding: frameless ? 0 : '8px 10px',
         border: frameless ? 'none' : '1px solid var(--border)',
         borderRadius: frameless ? 0 : 10,
         background: frameless ? 'transparent' : 'var(--panel)',
-        overflowX: 'auto',
+        // Fill mode clips instead of scrolling: the chart is fitted to this
+        // box, and a scrollbar triggered by a pixel of overshoot would change
+        // the box's size and start a fit/unfit oscillation. Two exemptions
+        // scroll on purpose, and are stable because their content size is
+        // fixed rather than fitted: horizontal bars (per-category height) and
+        // wide categorical charts (per-column width).
+        overflowX:
+          fill && !layout.isHorizontalBar && layout.width === 'container' ? 'hidden' : 'auto',
         // A tall, many-bar horizontal chart scrolls inside a bounded box rather
         // than stretching the whole conversation down the page.
-        overflowY: layout.isHorizontalBar ? 'auto' : 'visible',
+        overflowY: layout.isHorizontalBar ? 'auto' : fill ? 'hidden' : 'visible',
         maxHeight: layout.isHorizontalBar ? 'min(70vh, 640px)' : undefined,
       }}
     >
-      <div ref={ref} style={{ width: '100%', minHeight: 40 }} />
+      <div
+        ref={ref}
+        style={{
+          width: '100%',
+          minHeight: 40,
+          height: fill && !layout.isHorizontalBar ? '100%' : undefined,
+        }}
+      />
     </div>
   )
 }

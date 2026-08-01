@@ -575,50 +575,41 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
           </div>
 
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <GhostButton onClick={() => data.refreshNow(tiles.map((t) => t.id))}>
-              <Icon.Refresh size={13} /> Refresh all
-            </GhostButton>
-            <GhostButton
-              onClick={() => setShowSettings((open) => !open)}
-              style={
-                showSettings
-                  ? { background: 'var(--panel-alt)', borderColor: 'var(--border-strong)' }
-                  : undefined
-              }
-            >
-              <Icon.Gear size={13} /> Settings
-            </GhostButton>
-            {/* One toggle: reading or arranging, never both. It governs the
-                grid — dragging, resizing, adding, the inline name — while a
-                single tile's edit/duplicate/delete live on the tile's own
-                kebab in either mode. The filled state is the mode indicator:
-                while arranging, the way back to reading stays lit. */}
-            <GhostButton
-              onClick={() => setEditing((on) => !on)}
-              style={
-                editing
-                  ? {
-                      background: 'var(--accent-bg)',
-                      borderColor: 'var(--accent-border)',
-                      color: 'var(--accent)',
-                    }
-                  : undefined
-              }
-            >
-              {editing ? (
-                <>
-                  <Icon.Check size={13} /> Done
-                </>
-              ) : (
-                <>
+            {/* While arranging, the toolbar clears down to the one way out —
+                a mode should look like a mode, and Refresh/Settings mid-drag
+                are distractions. A tile's edit/duplicate/delete live on the
+                tile's own kebab in either mode; "Add tile" is the standing
+                slot at the bottom of the grid. */}
+            {editing ? (
+              <GhostButton
+                onClick={() => setEditing(false)}
+                style={{
+                  background: 'var(--accent-bg)',
+                  borderColor: 'var(--accent-border)',
+                  color: 'var(--accent)',
+                }}
+              >
+                <Icon.Check size={13} /> Done
+              </GhostButton>
+            ) : (
+              <>
+                <GhostButton onClick={() => data.refreshNow(tiles.map((t) => t.id))}>
+                  <Icon.Refresh size={13} /> Refresh all
+                </GhostButton>
+                <GhostButton
+                  onClick={() => setShowSettings((open) => !open)}
+                  style={
+                    showSettings
+                      ? { background: 'var(--panel-alt)', borderColor: 'var(--border-strong)' }
+                      : undefined
+                  }
+                >
+                  <Icon.Gear size={13} /> Settings
+                </GhostButton>
+                <GhostButton onClick={() => setEditing(true)}>
                   <Icon.Grid size={13} /> Edit grid
-                </>
-              )}
-            </GhostButton>
-            {editing && (
-              <PrimaryButton onClick={() => setEditorTile(null)}>
-                <Icon.Plus /> Add tile
-              </PrimaryButton>
+                </GhostButton>
+              </>
             )}
           </div>
         </header>
@@ -636,18 +627,14 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
               title="This dashboard is empty"
               body="A tile is a saved query on its own clock. Add one by asking a question in plain language, or by writing the SQL yourself."
               action={
-                <PrimaryButton
-                  onClick={() => {
-                    setEditing(true)
-                    setEditorTile(null)
-                  }}
-                >
+                <PrimaryButton onClick={() => setEditorTile(null)}>
                   <Icon.Plus /> Add tile
                 </PrimaryButton>
               }
             />
           ) : (
             width > 0 && (
+              <>
               <div style={{ position: 'relative' }}>
                 {/* While arranging, a faint guide at the dashboard's own cell
                     geometry — react-grid-layout pads the container by one gap
@@ -673,6 +660,12 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
                   onTileAction={(action, tile) => void onTileAction(action, tile)}
                 />
               </div>
+              {/* A standing slot, drawn like the empty cell it will become —
+                  adding a tile is not a mode, so it does not hide behind one. */}
+              <button className="rm-add-tile" onClick={() => setEditorTile(null)}>
+                <Icon.Plus size={14} /> Add tile
+              </button>
+              </>
             )
           )}
         </div>

@@ -413,7 +413,19 @@ export function TileShell({
         </div>
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '4px 12px 12px' }}>
+      {/* A filled chart must not sit in a scroll container: the chart sizes
+          itself to the box, so any pixel of overshoot summons a scrollbar,
+          which shrinks the box, which re-fits the chart, which dismisses the
+          scrollbar — a visible oscillation. The chart fits by construction;
+          everything else (tables, text) scrolls as before. */}
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflow: tile.tile_type === 'CHART' && result?.vega_spec ? 'hidden' : 'auto',
+          padding: '4px 12px 12px',
+        }}
+      >
         <TileBody tile={tile} result={result} loading={loading} />
       </div>
     </div>
@@ -556,7 +568,11 @@ function TileBody({
             {result.chart_note}
           </span>
         )}
-        <VegaChart spec={result.vega_spec} frameless />
+        {/* The chart owns whatever height the tile has left — a fixed plot
+            floating at the top of a taller tile reads as wasted space. */}
+        <div style={{ flex: 1, minHeight: 0 }}>
+          <VegaChart spec={result.vega_spec} frameless fill />
+        </div>
       </div>
     )
   }

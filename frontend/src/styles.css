@@ -418,6 +418,31 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 }
 @keyframes rm-guide-in { to { opacity: 0.5; } }
 
+/* The standing "Add tile" slot at the foot of the grid: drawn as the dashed
+   outline of the tile it will become. Quiet until approached. */
+.rm-add-tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 14px;
+  margin-top: 14px;
+  background: transparent;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: 12px;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color .15s ease, border-color .15s ease, background .15s ease;
+}
+.rm-add-tile:hover {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
 /* The settings drawer slides in from its edge instead of popping. */
 .rm-drawer { animation: rm-drawer-in .18s ease-out; }
 @keyframes rm-drawer-in {
