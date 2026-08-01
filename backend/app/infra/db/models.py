@@ -421,6 +421,147 @@ class RunEventRow(Base):
     )
 
 
+# ── dashboards ───────────────────────────────────────────────────────────
+class Dashboard(Base, TimestampMixin):
+    """A grid of tiles, owned by one user.
+
+    Owner-only in v1 and deliberately so: a shared dashboard would let user B
+    read data pulled with user A's stored credentials, through a connection B
+    does not own. That is an authorization model, not a UI feature — see §11 of
+    `docs/dashboards.md`.
+    """
+
+    __tablename__ = "dashboards"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "name", name="uq_dashboard_owner_name"),
+        Index("ix_dashboards_owner_updated", "owner_id", "updated_at"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
+
+    # Grid geometry. Held on the dashboard rather than in the client so two
+    # browsers draw the same layout from the same numbers.
+    grid_columns: Mapped[int] = mapped_column(Integer, nullable=False, default=12)
+    row_height_px: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
+    gap_px: Mapped[int] = mapped_column(Integer, nullable=False, default=12)
+    compact_mode: Mapped[str] = mapped_column(String(20), default="VERTICAL")
+
+    # A key into the pre-validated palette set, never a hex value: the chart
+    # palette is measured (OKLab ΔE, CVD simulation, contrast against the
+    # chart's own surface), and a free colour destroys that silently.
+    palette: Mapped[str] = mapped_column(String(30), default="default")
+    theme_override: Mapped[str] = mapped_column(String(20), default="INHERIT")
+
+    # The *fallback* for tiles that set no rate of their own; 0 = manual only.
+    # The rate that matters is the tile's — see `DashboardTile`.
+    default_refresh_interval_seconds: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+
+    tiles: Mapped[list[DashboardTile]] = relationship(
+        back_populates="dashboard",
+        cascade="all, delete-orphan",
+        order_by="DashboardTile.position",
+    )
+
+
+class DashboardTile(Base, TimestampMixin):
+    """One tile: its own connection, its own SQL, its own refresh rate.
+
+    `sql` is hostile input by definition — the tile editor hands the user a
+    textarea — so it is re-validated against the connection's *current* snapshot
+    on every execution. `sql_origin` records where the text came from and grants
+    nothing.
+    """
+
+    __tablename__ = "dashboard_tiles"
+    __table_args__ = (
+        Index("ix_dashboard_tiles_dashboard_position", "dashboard_id", "position"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    dashboard_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("dashboards.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # SET NULL, emphatically **not** CASCADE: deleting a connection must leave a
+    # tile that says "connection removed", not silently delete the layout the
+    # user built.
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("database_connections.id", ondelete="SET NULL")
+    )
+    # Which provider drafted the SQL. Provenance and "re-ask" only — never
+    # consulted at refresh, where no model is involved at all.
+    llm_config_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("llm_configs.id", ondelete="SET NULL")
+    )
+
+    title: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    tile_type: Mapped[str] = mapped_column(String(20), nullable=False, default="CHART")
+    # The plain-language question that produced the draft, kept so "edit →
+    # re-ask" works and so the user can see what they meant six weeks later.
+    question: Mapped[str | None] = mapped_column(Text)
+    sql: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    sql_origin: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="GENERATED"
+    )
+
+    # A serialised `ChartIntent`. **NULL means Auto** — `plan_chart` decides
+    # afresh on each result — which is why this column is nullable rather than
+    # defaulting to an empty object.
+    chart_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # May only *lower* the connection's cap; `query_service.effective_max_rows`
+    # is where that is enforced.
+    max_rows: Mapped[int | None] = mapped_column(Integer)
+    # The per-tile rate, and the point of the feature: NULL = inherit the
+    # dashboard's default, 0 = manual only. Do not collapse this into a
+    # dashboard-level setting.
+    refresh_interval_seconds: Mapped[int | None] = mapped_column(Integer)
+
+    # Layout per tile, not one dashboard-level JSONB: a drag saves one row, so
+    # two open tabs cannot lose each other's edits.
+    grid_x: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    grid_y: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    grid_w: Mapped[int] = mapped_column(Integer, nullable=False, default=4)
+    grid_h: Mapped[int] = mapped_column(Integer, nullable=False, default=4)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    dashboard: Mapped[Dashboard] = relationship(back_populates="tiles")
+
+
+class DashboardTileCache(Base):
+    """The last computed result for a tile, keyed by the tile itself.
+
+    In Postgres rather than in-process because the reconciler already assumes
+    several workers may exist, and an in-process cache would go stale per
+    worker. Written in Phase 4; the table lands here so there is one DDL step.
+    """
+
+    __tablename__ = "dashboard_tile_cache"
+
+    tile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("dashboard_tiles.id", ondelete="CASCADE"), primary_key=True
+    )
+    # The hash of the SQL that produced `result`. A tile whose SQL was edited
+    # must miss the cache however fresh the row is.
+    sql_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    result: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # A failed refresh is cached too: without it, a tile pointed at a broken
+    # query re-runs it on every tick of every open browser.
+    error_code: Mapped[str | None] = mapped_column(String(60))
+    error_message: Mapped[str | None] = mapped_column(Text)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     __table_args__ = (

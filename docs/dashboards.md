@@ -20,16 +20,17 @@ is trusted: the guard runs at preview, at save, and at every single refresh.
 |---|---|
 | 2026-07-31 | First spec written and committed (`plan creating dashboard`). No code. |
 | 2026-08-01 | Spec rewritten to this scope: NL-authoring is the primary path (was "promote from chat"), refresh rate is **per tile**, chart type is user-selectable. Still no code. |
-| 2026-08-01 | **§12 item 1 built.** `services/query_service.py` with `execute_saved_sql` + `execute_many`, the four helpers lifted out of `run_service` (`latest_snapshot`, `policy_from_snapshot`, `resolve_llm`, `bind_connector` — `semantic_service` now shares the last of those too), and `tests/unit/test_query_service.py` (55 tests, incl. the hostile corpus replayed through a tile). `make test` / `make guard` / `make lint` green. |
+| 2026-08-01 | **§12 item 1 built.** `services/query_service.py` with `execute_saved_sql` + `execute_many`, the four helpers lifted out of `run_service` (`latest_snapshot`, `policy_from_snapshot`, `resolve_llm`, `bind_connector`; `semantic_service` now shares `resolve_llm` too), and `tests/unit/test_query_service.py` (55 tests, incl. the hostile corpus replayed through a tile). `make test` / `make guard` / `make lint` green. |
+| 2026-08-01 | **§12 item 2 built.** `Dashboard` / `DashboardTile` / `DashboardTileCache` in `infra/db/models.py`, `DashboardStatus` / `TileType` / `SqlOrigin` in `domain/value_objects`, migration `0005_dashboards.py` — applied to the dev database (`0004 → 0005`) and the DDL read back. `tests/unit/test_dashboard_models.py` (16 tests) replays the migration against a recorder and diffs it against the ORM column by column, so the two definitions cannot drift apart unnoticed. |
 
 Still absent: `services/sql_draft_service.py`, `services/dashboard_service.py`,
-migration `0005_dashboards.py`, `api/v1/dashboards.py`, `api/v1/drafts.py`, and
-every frontend dashboard page/component (`DashboardsPage.tsx`, `dashboard.tsx`,
-`tile-editor.tsx`). §3's `dashboard_service.refresh` cannot be written until the
-tables exist, but the part of it that is not CRUD — group by connection, one
-connector per connection, `Semaphore(4)` — is already built and tested as
-`query_service.execute_many`, so item 4 maps `dashboard_tiles` rows to
-`TileRequest`s and does the caching around it. Next step is §12, item 2.
+`api/v1/dashboards.py`, `api/v1/drafts.py`, and every frontend dashboard
+page/component (`DashboardsPage.tsx`, `dashboard.tsx`, `tile-editor.tsx`).
+§3's `dashboard_service.refresh` is now unblocked — the tables exist, and the
+part of it that is not CRUD (group by connection, one connector per connection,
+`Semaphore(4)`) is already built and tested as `query_service.execute_many`, so
+item 4 maps `dashboard_tiles` rows to `TileRequest`s and does the caching around
+it. Next step is §12, item 3.
 
 Companion to [pipeline.md](pipeline.md) (the AI run),
 [architecture.md](architecture.md) (the why) and [CODEBASE.md](CODEBASE.md)
@@ -215,6 +216,15 @@ Add `DashboardStatus`, `TileType`, `SqlOrigin` to
 [`domain/value_objects`](../backend/app/domain/value_objects/__init__.py).
 Keep the columns plain `String` — like `runs.status`, so a new member needs no
 DDL.
+
+**As built**, the few things the table above left open: `palette` defaults to
+`"default"` (the measured palette already in `VegaChart.tsx` — §7's five named
+sets do not exist yet, and a default naming one of them would be a dangling
+key); a new tile is `4 × 4` at `0,0`; `dashboard_tile_cache` caches **failures
+too**, which is what its `error_code`/`error_message` are for — without that, a
+tile whose query is broken re-runs it on every tick of every open browser. The
+ORM adds `Dashboard.tiles` (`cascade="all, delete-orphan"`, ordered by
+`position`) so Phase 4 loads a dashboard in one go.
 
 ---
 
@@ -491,7 +501,7 @@ Gate before claiming any phase done: `make test`, `make guard`, `make lint`.
 ```
 [x] 1  query_service.py + lift _policy_from_snapshot / _latest_snapshot /
        _resolve_llm / _bind_connection                                    (§3)
-[ ] 2  models + migration 0005                                            (§4)
+[x] 2  models + migration 0005                                            (§4)
 [ ] 3  sql_draft_service.py + POST /sql/drafts + /sql/drafts/validate     (§5)
 [ ] 4  dashboard_service.py + /dashboards routes + per-tile cache         (§6)
 [ ] 5  DashboardsPage: list, grid, tile shell, one-tick refresh scheduler (§7)

@@ -104,6 +104,33 @@ class ArtifactKind(StrEnum):
     SQL_SUMMARY = "SQL_SUMMARY"
 
 
+# ── dashboards ───────────────────────────────────────────────────────────
+class DashboardStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    ARCHIVED = "ARCHIVED"
+
+
+class TileType(StrEnum):
+    CHART = "CHART"
+    TABLE = "TABLE"
+    METRIC = "METRIC"    # one row, one numeric column, drawn big
+    TEXT = "TEXT"        # prose; no SQL, no connection
+
+
+class SqlOrigin(StrEnum):
+    """How a tile's SQL came to be. **Provenance only, never a trust signal.**
+
+    The guard cannot tell these apart and must not try: a `HANDWRITTEN`
+    statement is re-validated exactly as a `GENERATED` one is, on every single
+    execution. This exists so the editor can show where the text came from and
+    so "edit → re-ask" knows whether the draft is still the model's.
+    """
+
+    GENERATED = "GENERATED"
+    GENERATED_EDITED = "GENERATED_EDITED"
+    HANDWRITTEN = "HANDWRITTEN"
+
+
 class DisclosurePolicy(StrEnum):
     """What may leave the customer database and reach an external model."""
 
