@@ -31,6 +31,7 @@ is trusted: the guard runs at preview, at save, and at every single refresh.
 | 2026-08-01 | **§12 item 5 built.** `pages/DashboardsPage.tsx` (index → open, view/edit toggle, settings drawer), `components/dashboard.tsx` (grid, tile shell, the four tile bodies, the one-tick scheduler), `components/dashboard-schedule.ts` (the due-tile rule, DOM-free) with a runnable check (`npm run test:schedule`, 9 cases). `ResultTable` **moved** from `chat.tsx` to `ui.tsx` (§2). `react-grid-layout@1.5.4` added **with the owner's approval**, and the web image rebuilt so a fresh container has it. `npm run typecheck` + `npm run build` green. |
 | 2026-08-01 | **§12 item 6 built.** `components/tile-editor.tsx` — one modal, two tabs, one textarea, one debounced guard check; the chart, refresh, row-cap and tile-type pickers; `DashboardsPage` wires it to "Add tile" and to a tile's *Edit*. `tests/unit/test_tile_charts.py` (19) pins the exact `chart_config` payload the editor builds against `ChartIntent`, which is `extra="forbid"` and silently degrades to Auto when it disagrees. Replayed against the running stack: check → save with a picked bar (`chart_source: model`) → back to Auto (`heuristic`) → a row cap of 99,999 stored as the connection's 1,000 → a hostile edit refused with `E_SQL_REJECTED` → a TEXT tile stored with no SQL and no connection → deleted. **A read-after-write race was found and designed around** — see §8. |
 | 2026-08-01 | **`E_LLM` on the Ask tab traced and fixed** — `PROMPT_VERSION` **v6 → v7**. Not a dashboards bug: unbounded fields in `SqlProposal` let a model ramble past `max_tokens` and truncate its own JSON, losing correct SQL. `tables_used` deleted (read nowhere) and an `_OUTPUT_RULES` envelope added to the three SQL prompts. Measured 2/6 failures → 0/6, median reply 750 → 95 tokens; raising `max_tokens` was measured and makes it worse. 8/8 drafts and a full chat run green afterwards. See [pipeline.md](pipeline.md) §4. |
+| 2026-08-01 | **Table tiles made configurable** (beyond the spec, the symmetric half of §8: charts had pickers, tables had nothing). New `dashboard_tiles.table_config` + migration **0006**, `TableConfig` validated on write in `api/schemas.py`, a Table section in the tile editor, and `components/table-format.ts` — the resolve/sort/format rules, DOM-free, with `npm run test:format` (24 cases). Deliberately **not** in `result_fingerprint`: it redraws rows the browser already has. Verified against the running stack, including the real payload rendered through the shipped rule. |
 | 2026-08-01 | **The dashboard itself made editable** (§7): name and description edited in place in the header under edit mode, and `compact_mode` given the control it never had — the grid read it from the start and nothing could set it, so free tile placement was unreachable. PATCH round-trips verified against the running stack, including the two 422s (empty name, unknown compact mode) the UI now avoids sending. |
 
 Not verified visually: this sandbox has no browser, so the UI was checked by
@@ -207,6 +208,7 @@ the shape of [`0004_clarify_switch.py`](../backend/app/infra/db/migrations/versi
 | `sql` | text | empty for `TEXT` tiles |
 | `sql_origin` | str(20) | `GENERATED \| GENERATED_EDITED \| HANDWRITTEN` — provenance only, **never a trust signal**. The guard cannot tell them apart and must not |
 | `chart_config` | jsonb, **nullable** | a serialised `ChartIntent`, optionally with a single-colour override. **`NULL` means Auto**: `plan_chart` decides afresh on each result |
+| `table_config` | jsonb, **nullable** | added later, migration **0006**. How a `TABLE` tile is drawn: column order, hidden columns, headings, alignment, number format, default sort. **`NULL` means "as the query returned it"**. Unlike `chart_config` it never reaches the backend's own rendering — the browser applies it to rows it already has — so it is **not** in `result_fingerprint`, and hiding a column hides it rather than withholding it |
 | `max_rows` | int, nullable | may only lower the connection's |
 | `refresh_interval_seconds` | int, nullable | **the per-tile rate.** `NULL` = inherit the dashboard's default; `0` = manual only. This column is the feature — do not collapse it into a dashboard-level setting |
 | `grid_x/y/w/h`, `position` | int | layout lives **per tile**, not in one dashboard-level JSONB: a drag then saves one row and two open tabs cannot lose each other's edits |
@@ -541,6 +543,36 @@ stored, when a model was actually involved.
 > shape suggests. The picker's *Table only* therefore sets `tile_type = TABLE`.
 > `test_tile_charts.py` pins this, because the next person to read §8's option
 > list will reach for `"none"` exactly as I did.
+
+**A Table section, beyond the spec** (asked for after §8 was built, and the
+symmetric half of it: charts had pickers, tables had nothing at all). For a
+`TABLE` tile the editor lists the preview's columns and lets each one be
+hidden, reordered, relabelled, aligned and number-formatted, plus a default
+sort. It is stored in `table_config` (§4) and three properties make it safe:
+
+* **It never re-runs a query.** The browser applies it to rows it already has,
+  so it is not part of `result_fingerprint` — renaming a column header must not
+  send a query to the customer's database. A test pins that, next to the one
+  pinning that a `max_rows` edit *does* invalidate.
+* **`NULL` still means "as the query returned it."** A picker that was merely
+  looked at stores nothing, so a tile never silently pins a column order the
+  user did not ask for and would be surprised by when the query changes.
+* **A column the query adds later appears**, at the end, visible — the opposite
+  default from "hide anything not on the list", and the one that cannot lose
+  data. A configured column the result loses is greyed in the editor rather
+  than deleted, so a vanished column is explained rather than mysterious.
+
+The rules live in
+[`components/table-format.ts`](../frontend/src/components/table-format.ts) —
+no React, no DOM, like `dashboard-schedule.ts` and for the same reason: every
+way they can be wrong is quiet (a new column missing from the tile, a
+descending sort opening on blanks, a format turning a value into `NaN`).
+`npm run test:format` runs 24 cases against them.
+
+> **Hiding a column hides it; it does not withhold it.** The value is in the
+> payload that reached the browser. Anything that must not be sent belongs to
+> the connection's disclosure policy or to the SQL — this is presentation, and
+> §9.4 is where the actual gate lives.
 
 *The axis pickers are populated from the preview's columns*, never from the SQL
 text — a name the result does not have loses the chart. When a re-check returns

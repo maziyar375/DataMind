@@ -515,6 +515,18 @@ class DashboardTile(Base, TimestampMixin):
     # afresh on each result — which is why this column is nullable rather than
     # defaulting to an empty object.
     chart_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # How a TABLE tile is drawn: column order, which columns are hidden, their
+    # labels, alignment, number format, and a default sort. **NULL means "as
+    # the query returned it"**, the same way NULL chart_config means Auto.
+    #
+    # Unlike `chart_config` this never reaches the backend's own rendering: the
+    # browser applies it to rows it already has, so it is **not** part of
+    # `result_fingerprint` — re-running a query because someone renamed a
+    # column header would be absurd. It follows that hiding a column is
+    # presentation, not redaction: the value is still in the payload. Anything
+    # that must not reach the owner's browser belongs to the disclosure policy
+    # or the SQL, never here.
+    table_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     # May only *lower* the connection's cap; `query_service.effective_max_rows`
     # is where that is enforced.
     max_rows: Mapped[int | None] = mapped_column(Integer)

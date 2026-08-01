@@ -405,6 +405,43 @@ class SqlDraftRead(BaseModel):
 
 
 # ── dashboards ───────────────────────────────────────────────────────────
+class TableColumnConfig(BaseModel):
+    """One column of a TABLE tile, as the editor configured it.
+
+    Position in the list *is* the display order. A column the result returns
+    but this list does not mention is shown at the end rather than hidden: a
+    query that gains a column must not silently drop it from the tile.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200)
+    hidden: bool = False
+    # None keeps the column's own name. An empty string is a real choice — a
+    # blank header — so this is nullable rather than defaulting to "".
+    label: str | None = Field(default=None, max_length=200)
+    align: Literal["auto", "left", "right", "center"] = "auto"
+    # "auto" is what the table did before this existed: integers grouped,
+    # decimals to two places, everything else as text.
+    format: Literal["auto", "integer", "decimal", "percent", "text"] = "auto"
+
+
+class TableConfig(BaseModel):
+    """How a TABLE tile is drawn. Presentation only — see `models.py`.
+
+    Validated here, on the way in, rather than trusted from the browser; but
+    `DashboardTileRead.table_config` stays a plain dict, because a row that
+    somehow holds a shape this model refuses must still be *readable* — the
+    alternative is one bad tile turning its whole dashboard into a 500.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    columns: list[TableColumnConfig] = Field(default_factory=list, max_length=500)
+    sort_column: str | None = Field(default=None, max_length=200)
+    sort_direction: Literal["asc", "desc"] = "asc"
+
+
 class DashboardTileRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
@@ -422,6 +459,8 @@ class DashboardTileRead(BaseModel):
     sql_origin: str = "GENERATED"
     # null means Auto: the chart is re-planned from each result.
     chart_config: dict[str, Any] | None = None
+    # null means "as the query returned it": every column, in query order.
+    table_config: dict[str, Any] | None = None
     max_rows: int | None = None
     # null means "inherit the dashboard's default"; 0 means manual only. The
     # resolved number is sent alongside so the scheduler needs no second rule.
@@ -506,6 +545,7 @@ class TileCreate(BaseModel):
     # look. It exists so the editor knows which tab it opened on.
     sql_origin: Literal["GENERATED", "GENERATED_EDITED", "HANDWRITTEN"] = "GENERATED"
     chart_config: dict[str, Any] | None = None
+    table_config: TableConfig | None = None
     max_rows: int | None = Field(default=None, ge=1)
     refresh_interval_seconds: int | None = Field(default=None, ge=0, le=86_400)
     grid_x: int = Field(default=0, ge=0)
@@ -532,6 +572,7 @@ class TileUpdate(BaseModel):
     sql: str | None = None
     sql_origin: Literal["GENERATED", "GENERATED_EDITED", "HANDWRITTEN"] | None = None
     chart_config: dict[str, Any] | None = None
+    table_config: TableConfig | None = None
     max_rows: int | None = Field(default=None, ge=1)
     refresh_interval_seconds: int | None = Field(default=None, ge=0, le=86_400)
     grid_x: int | None = Field(default=None, ge=0)

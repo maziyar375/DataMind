@@ -127,8 +127,10 @@ frontend/src/
                             editor), dashboard.tsx (grid + tile shell + the
                             one-tick refresh scheduler), dashboard-schedule.ts
                             (the due-tile rule, DOM-free, + its .test.ts —
-                            `npm run test:schedule`), tile-editor.tsx (ask or
-                            write the SQL; one guard check for both)
+                            `npm run test:schedule`), table-format.ts (how a
+                            configured table resolves/sorts/formats, also
+                            DOM-free — `npm run test:format`), tile-editor.tsx
+                            (ask or write the SQL; one guard check for both)
   pages/                    Login, Chat, DataSources, LlmProviders, Users,
                             Dashboards
 ```

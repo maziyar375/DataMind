@@ -341,6 +341,29 @@ export interface TileResult {
 export type TileType = 'CHART' | 'TABLE' | 'METRIC' | 'TEXT'
 export type SqlOrigin = 'GENERATED' | 'GENERATED_EDITED' | 'HANDWRITTEN'
 
+/**
+ * How a TABLE tile is drawn. Mirrors `TableConfig` in `api/schemas.py`.
+ *
+ * Presentation only, applied in the browser to rows it already has — which is
+ * why it is not part of the tile's cache fingerprint, and why hiding a column
+ * hides it rather than withholding it.
+ */
+export interface TableColumnConfig {
+  name: string
+  hidden?: boolean
+  /** null keeps the column's own name; '' is a deliberate blank heading. */
+  label?: string | null
+  align?: 'auto' | 'left' | 'right' | 'center'
+  format?: 'auto' | 'integer' | 'decimal' | 'percent' | 'text'
+}
+
+export interface TableConfig {
+  /** Position in this list is the display order. */
+  columns: TableColumnConfig[]
+  sort_column?: string | null
+  sort_direction?: 'asc' | 'desc'
+}
+
 export interface DashboardTile {
   id: string
   dashboard_id: string
@@ -355,6 +378,8 @@ export interface DashboardTile {
   sql_origin: SqlOrigin
   /** null means Auto: the chart is re-planned from every result. */
   chart_config: Record<string, unknown> | null
+  /** null means "as the query returned it": every column, in query order. */
+  table_config: TableConfig | null
   max_rows: number | null
   /** null means "inherit the dashboard's default"; 0 means manual only. */
   refresh_interval_seconds: number | null

@@ -1,10 +1,12 @@
 """The dashboard tables, and the promises their DDL makes.
 
 Two definitions of the same three tables now exist — the ORM in `models.py` and
-migration `0005_dashboards.py` — and nothing but a running database usually
-notices when they drift apart. So the migration is replayed here against a
-recorder instead of a connection, and compared to `Base.metadata` column by
-column.
+the migrations under `versions/` — and nothing but a running database usually
+notices when they drift apart. So **every** dashboard migration is replayed
+here in order against a recorder instead of a connection, and the result is
+compared to `Base.metadata` column by column. A new revision that touches these
+tables belongs in `MIGRATIONS` below; leaving it out is how the check quietly
+stops covering the newest column.
 
 The rest of the file pins the choices in §4 of `docs/dashboards.md` that are
 easy to "tidy" into a bug: a tile survives its connection, NULL means Auto,
@@ -34,9 +36,14 @@ if "alembic" not in sys.modules:
         stub.op = None  # type: ignore[attr-defined]
         sys.modules["alembic"] = stub
 
-# Not an `import` statement: the module's name starts with a digit, as every
-# revision in `versions/` does.
-MIGRATION = importlib.import_module("app.infra.db.migrations.versions.0005_dashboards")
+# Not `import` statements: the module names start with a digit, as every
+# revision in `versions/` does. Order matters — 0006 adds a column to a table
+# 0005 creates.
+MIGRATIONS = [
+    importlib.import_module("app.infra.db.migrations.versions.0005_dashboards"),
+    importlib.import_module("app.infra.db.migrations.versions.0006_tile_table_config"),
+]
+MIGRATION = MIGRATIONS[0]
 
 TABLES = ("dashboards", "dashboard_tiles", "dashboard_tile_cache")
 
@@ -49,6 +56,7 @@ class OpRecorder:
         self.indexes: list[tuple[str, str, list[str]]] = []
         self.dropped_tables: list[str] = []
         self.dropped_indexes: list[str] = []
+        self.dropped_columns: list[tuple[str, str]] = []
         self._metadata = sa.MetaData()
 
     def create_table(self, name: str, *columns: Any, **_kw: Any) -> None:
@@ -65,15 +73,29 @@ class OpRecorder:
     def drop_index(self, name: str, **_kw: Any) -> None:
         self.dropped_indexes.append(name)
 
+    def add_column(self, table: str, column: sa.Column[Any], **_kw: Any) -> None:
+        self.tables[table].append_column(column)
+
+    def drop_column(self, table: str, name: str, **_kw: Any) -> None:
+        self.dropped_columns.append((table, name))
+
 
 def _replay(direction: str = "upgrade") -> OpRecorder:
+    """Every dashboard migration, in order, against one recorder.
+
+    Downgrades run in reverse, which is the only order in which dropping a
+    column from a table the next revision drops entirely makes sense.
+    """
     recorder = OpRecorder()
-    original = MIGRATION.op
-    MIGRATION.op = recorder
+    modules = MIGRATIONS if direction == "upgrade" else list(reversed(MIGRATIONS))
+    originals = [m.op for m in modules]
     try:
-        getattr(MIGRATION, direction)()
+        for module in modules:
+            module.op = recorder
+            getattr(module, direction)()
     finally:
-        MIGRATION.op = original
+        for module, original in zip(modules, originals, strict=True):
+            module.op = original
     return recorder
 
 
@@ -125,8 +147,12 @@ def test_they_agree_on_every_foreign_key_and_its_delete_rule() -> None:
 
 
 def test_the_revision_chain_is_unbroken() -> None:
-    assert MIGRATION.revision == "0005"
-    assert MIGRATION.down_revision == "0004"
+    assert [m.revision for m in MIGRATIONS] == ["0005", "0006"]
+    assert MIGRATIONS[0].down_revision == "0004"
+    # Each revision hangs off the one before it: a fork here is two heads and
+    # an `alembic upgrade` that refuses to run.
+    for earlier, later in zip(MIGRATIONS, MIGRATIONS[1:], strict=False):
+        assert later.down_revision == earlier.revision
 
 
 def test_the_downgrade_drops_exactly_what_the_upgrade_created() -> None:
@@ -134,6 +160,9 @@ def test_the_downgrade_drops_exactly_what_the_upgrade_created() -> None:
 
     assert set(down.dropped_tables) == set(up.tables)
     assert set(down.dropped_indexes) == {name for name, _t, _c in up.indexes}
+    # 0006 adds one column and its downgrade drops that column — dropping the
+    # table instead would take the other twenty with it.
+    assert down.dropped_columns == [("dashboard_tiles", "table_config")]
 
 
 # ── the choices that must survive a tidy-up ──────────────────────────────
@@ -166,6 +195,17 @@ def test_null_chart_config_means_auto() -> None:
     assert chart_config.nullable
     assert chart_config.default is None
     assert chart_config.server_default is None
+
+
+def test_null_table_config_means_as_the_query_returned_it() -> None:
+    """Same shape of promise as chart_config: NULL is a meaning, not an
+    absence. Every column, in query order, no sort — which is what the table
+    did before the column existed, so no tile needed backfilling."""
+    table_config = Base.metadata.tables["dashboard_tiles"].c.table_config
+
+    assert table_config.nullable
+    assert table_config.default is None
+    assert table_config.server_default is None
 
 
 def test_null_refresh_interval_means_inherit_and_zero_means_manual() -> None:

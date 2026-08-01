@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "lint": "eslint src --ext ts,tsx",
     "typecheck": "tsc --noEmit",
-    "test:schedule": "node --experimental-strip-types src/components/dashboard-schedule.test.ts"
+    "test:schedule": "node --experimental-strip-types src/components/dashboard-schedule.test.ts",
+    "test:format": "node --experimental-strip-types src/components/table-format.test.ts"
   },
   "dependencies": {
     "react": "^18.3.1",

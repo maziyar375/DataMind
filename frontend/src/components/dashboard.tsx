@@ -482,7 +482,16 @@ function TileBody({
       {tile.tile_type === 'CHART' && result.chart_note && (
         <span style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>{result.chart_note}</span>
       )}
-      <ResultTable spec={result} previewRows={Number.POSITIVE_INFINITY} maxHeight="none" />
+      {/* `table_config` is a TABLE tile's own setting. A CHART tile that fell
+          back to the table draws it as the query returned it, because there is
+          nowhere in the editor to configure a fallback the user did not ask
+          for — and invisible stored state is worse than none. */}
+      <ResultTable
+        spec={result}
+        previewRows={Number.POSITIVE_INFINITY}
+        maxHeight="none"
+        config={tile.tile_type === 'TABLE' ? tile.table_config : null}
+      />
     </div>
   )
 }

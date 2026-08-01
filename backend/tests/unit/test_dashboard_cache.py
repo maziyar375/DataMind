@@ -182,6 +182,24 @@ def test_a_changed_chart_or_row_cap_invalidates_too() -> None:
     assert not is_fresh(row, interval_seconds=3600, fingerprint=result_fingerprint(tile))
 
 
+def test_a_table_setting_does_not_re_run_the_query() -> None:
+    """The other half of the rule above, and the one that is easy to get wrong
+    by symmetry: `table_config` changes how the *browser* draws rows it already
+    has. Renaming a column header must not invalidate the cache and send a
+    query to the customer's database."""
+    dashboard = _dashboard()
+    tile = _tile(dashboard, interval=3600)
+    row = _cached(tile, age_seconds=1)
+
+    tile.table_config = {
+        "columns": [{"name": "status", "label": "Order status", "hidden": False}],
+        "sort_column": "total",
+        "sort_direction": "desc",
+    }
+
+    assert is_fresh(row, interval_seconds=3600, fingerprint=result_fingerprint(tile))
+
+
 def test_a_manual_tile_serves_its_cache_until_someone_presses_refresh() -> None:
     """`force` never reaches `is_fresh`; a manual tile has no expiry of its own."""
     dashboard = _dashboard()

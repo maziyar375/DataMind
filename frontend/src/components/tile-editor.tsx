@@ -31,7 +31,8 @@ import {
   llmConfigs as llmConfigsApi, sqlDrafts,
 } from '../api/client'
 import type {
-  Connection, Dashboard, DashboardTile, LlmConfig, SqlDraft, SqlOrigin, TileType,
+  Connection, Dashboard, DashboardTile, LlmConfig, SqlDraft, SqlOrigin,
+  TableColumnConfig, TableConfig, TileType,
 } from '../api/types'
 import { REFRESH_OPTIONS, rateLabel } from './dashboard'
 import {
@@ -114,6 +115,9 @@ export function TileEditor({
     tile?.refresh_interval_seconds == null ? '' : String(tile.refresh_interval_seconds),
   )
   const [axes, setAxes] = useState<AxisState>(() => axisStateFrom(tile?.chart_config))
+  const [table, setTable] = useState<TableConfig>(
+    () => tile?.table_config ?? { columns: [], sort_column: null, sort_direction: 'asc' },
+  )
 
   const [draft, setDraft] = useState<SqlDraft | null>(null)
   /** The exact text the current `draft` describes — so a keystroke re-checks. */
@@ -209,6 +213,23 @@ export function TileEditor({
     })
   }, [draft])
 
+  // Every column the result has gets a row in the picker, appended in query
+  // order. Entries already configured keep their place — including ones whose
+  // column has since disappeared, which the picker greys rather than deletes.
+  useEffect(() => {
+    const preview = draft?.preview
+    if (!preview) return
+    setTable((current) => {
+      const known = new Set(current.columns.map((column) => column.name))
+      const added = preview.columns
+        .filter((column) => !known.has(column.name))
+        .map((column) => ({ name: column.name }))
+      return added.length === 0
+        ? current
+        : { ...current, columns: [...current.columns, ...added] }
+    })
+  }, [draft])
+
   const generate = useCallback(async () => {
     if (!connectionId || !llmConfigId || !question.trim()) return
     setGenerating(true)
@@ -259,6 +280,28 @@ export function TileEditor({
     return intent
   }, [axes, columns, tileType])
 
+  /**
+   * The table settings, or null when they say nothing.
+   *
+   * NULL is a documented meaning — "as the query returned it" — so a tile
+   * whose picker was merely *looked at* stays NULL rather than pinning a
+   * column order the user never asked for and would be surprised by when the
+   * query changes.
+   */
+  const tableConfig = useCallback((): TableConfig | null => {
+    if (tileType !== 'TABLE') return null
+    const said = (column: TableColumnConfig) =>
+      column.hidden === true
+      || (column.label != null && column.label !== '')
+      || (column.align != null && column.align !== 'auto')
+      || (column.format != null && column.format !== 'auto')
+    const reordered = table.columns.some(
+      (column, index) => columns[index]?.name !== undefined && columns[index].name !== column.name,
+    )
+    if (!table.sort_column && !reordered && !table.columns.some(said)) return null
+    return table
+  }, [columns, table, tileType])
+
   /** A new tile lands under everything already on the grid, full width of 4. */
   const placement = useMemo(() => {
     const bottom = dashboard.tiles.reduce((low, t) => Math.max(low, t.grid_y + t.grid_h), 0)
@@ -284,6 +327,7 @@ export function TileEditor({
       sql: needsSql ? sql : '',
       sql_origin: origin,
       chart_config: chartConfig(),
+      table_config: tableConfig(),
       max_rows: maxRows.trim() ? Number(maxRows) : null,
       refresh_interval_seconds: refresh === '' ? null : Number(refresh),
     }
@@ -300,7 +344,7 @@ export function TileEditor({
     }
   }, [
     chartConfig, connectionId, dashboard.id, llmConfigId, maxRows, needsSql, onSaved,
-    origin, placement, question, refresh, sql, tile, tileType, title,
+    origin, placement, question, refresh, sql, tableConfig, tile, tileType, title,
   ])
 
   const canSave = needsSql ? Boolean(connectionId && sql.trim()) : true
@@ -440,6 +484,15 @@ export function TileEditor({
               </Field>
 
               <GuardReport draft={draft} checking={checking} origin={origin} />
+
+              {tileType === 'TABLE' && (
+                <Field
+                  label="Table"
+                  hint="Which columns show, in what order, and how they read."
+                >
+                  <TablePicker columns={columns} config={table} onChange={setTable} />
+                </Field>
+              )}
 
               {tileType === 'CHART' && (
                 <ChartPicker
@@ -678,6 +731,222 @@ function GuardReport({
 
 function originLabel(origin: SqlOrigin): string {
   return origin === 'GENERATED' ? 'Model-written' : 'Model-written, edited'
+}
+
+// ── the table pickers ─────────────────────────────────────────────────────
+const ALIGNS: { value: string; label: string }[] = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'left', label: 'Left' },
+  { value: 'right', label: 'Right' },
+  { value: 'center', label: 'Center' },
+]
+
+const FORMATS: { value: string; label: string }[] = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'integer', label: '1,235' },
+  { value: 'decimal', label: '1,234.50' },
+  { value: 'percent', label: '42%' },
+  { value: 'text', label: 'As-is' },
+]
+
+/**
+ * Which columns a TABLE tile shows, in what order, and how.
+ *
+ * Driven by the preview's columns, like the chart pickers and for the same
+ * reason: a column name typed from the SQL is a guess at what the database
+ * will call it. A stored entry whose column the result no longer has is shown
+ * greyed rather than dropped, so the user can see why their column vanished
+ * instead of finding the setting silently gone.
+ */
+function TablePicker({
+  columns, config, onChange,
+}: {
+  columns: { name: string; semantic_type: string }[]
+  config: TableConfig
+  onChange: (config: TableConfig) => void
+}) {
+  if (columns.length === 0) {
+    return (
+      <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
+        Run the SQL above to choose columns — they come from the result, not from
+        the text.
+      </span>
+    )
+  }
+
+  const patch = (name: string, change: Partial<TableColumnConfig>) =>
+    onChange({
+      ...config,
+      columns: config.columns.map((column) =>
+        column.name === name ? { ...column, ...change } : column,
+      ),
+    })
+
+  const move = (index: number, by: number) => {
+    const next = [...config.columns]
+    const to = index + by
+    if (to < 0 || to >= next.length) return
+    ;[next[index], next[to]] = [next[to], next[index]]
+    onChange({ ...config, columns: next })
+  }
+
+  const known = new Set(columns.map((column) => column.name))
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div
+        style={{
+          border: '1px solid var(--border)',
+          borderRadius: 9,
+          overflow: 'hidden',
+        }}
+      >
+        {config.columns.map((entry, index) => {
+          const missing = !known.has(entry.name)
+          return (
+            <div
+              key={entry.name}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '22px minmax(90px, 1fr) minmax(90px, 1fr) 96px 104px 44px',
+                gap: 8,
+                alignItems: 'center',
+                padding: '7px 9px',
+                borderTop: index === 0 ? 'none' : '1px solid var(--border)',
+                opacity: missing ? 0.55 : 1,
+              }}
+            >
+              <input
+                type="checkbox"
+                aria-label={`Show ${entry.name}`}
+                checked={!entry.hidden}
+                disabled={missing}
+                onChange={(event) => patch(entry.name, { hidden: !event.target.checked })}
+                style={{ accentColor: 'var(--accent)', cursor: 'pointer' }}
+              />
+              <span
+                className="mono"
+                title={missing ? 'This column is not in the current result' : entry.name}
+                style={{
+                  fontSize: 11.5,
+                  color: 'var(--text-dim)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {entry.name}
+                {missing && ' (gone)'}
+              </span>
+              <TextInput
+                aria-label={`Heading for ${entry.name}`}
+                value={entry.label ?? ''}
+                placeholder={entry.name}
+                onChange={(event) => patch(entry.name, { label: event.target.value || null })}
+                style={{ fontSize: 12, padding: '5px 8px' }}
+              />
+              <Select
+                aria-label={`Alignment of ${entry.name}`}
+                value={entry.align ?? 'auto'}
+                onChange={(event) => patch(entry.name, { align: event.target.value as never })}
+                style={{ fontSize: 12, padding: '5px 6px' }}
+              >
+                {ALIGNS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </Select>
+              <Select
+                aria-label={`Format of ${entry.name}`}
+                value={entry.format ?? 'auto'}
+                onChange={(event) => patch(entry.name, { format: event.target.value as never })}
+                style={{ fontSize: 12, padding: '5px 6px' }}
+              >
+                {FORMATS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </Select>
+              <div style={{ display: 'flex', gap: 2 }}>
+                <MoveButton label={`Move ${entry.name} up`} up
+                  disabled={index === 0} onClick={() => move(index, -1)} />
+                <MoveButton label={`Move ${entry.name} down`}
+                  disabled={index === config.columns.length - 1} onClick={() => move(index, 1)} />
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <Field label="Sort by">
+          <Select
+            value={config.sort_column ?? ''}
+            onChange={(event) =>
+              onChange({ ...config, sort_column: event.target.value || null })
+            }
+          >
+            <option value="">The order the query returned</option>
+            {columns.map((column) => (
+              <option key={column.name} value={column.name}>{column.name}</option>
+            ))}
+          </Select>
+        </Field>
+        <Field label="Direction">
+          <Select
+            value={config.sort_direction ?? 'asc'}
+            disabled={!config.sort_column}
+            onChange={(event) =>
+              onChange({ ...config, sort_direction: event.target.value as 'asc' | 'desc' })
+            }
+          >
+            <option value="asc">Ascending</option>
+            <option value="desc">Descending</option>
+          </Select>
+        </Field>
+      </div>
+
+      <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+        Presentation only, applied in the browser — none of it re-runs the query,
+        and hiding a column hides it rather than withholding it. A column the
+        query adds later appears at the end.
+      </span>
+    </div>
+  )
+}
+
+function MoveButton({
+  label, up = false, disabled, onClick,
+}: {
+  label: string
+  up?: boolean
+  disabled: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+      className="rm-icon-btn"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 20,
+        height: 20,
+        borderRadius: 5,
+        border: '1px solid var(--border-strong)',
+        background: 'transparent',
+        color: 'var(--text-dim)',
+        cursor: disabled ? 'default' : 'pointer',
+        opacity: disabled ? 0.35 : 1,
+        // One chevron asset, turned: the icon set has no up/down pair and
+        // inventing one for two 20px buttons is not worth the divergence.
+        transform: up ? 'rotate(-90deg)' : 'rotate(90deg)',
+      }}
+    >
+      <Icon.Chevron size={11} />
+    </button>
+  )
 }
 
 // ── the chart pickers ─────────────────────────────────────────────────────

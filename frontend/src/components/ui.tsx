@@ -4,7 +4,12 @@
  * Every dimension, radius, and font size here is lifted from the design
  * concept rather than invented. The mock is the specification.
  */
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
+
+import {
+  formatCell, resolveColumns, sortRows,
+  type ResultTableConfig,
+} from './table-format'
 
 // ── logo ──────────────────────────────────────────────────────────────────
 //
@@ -907,19 +912,28 @@ export function dirOf(value: string): 'rtl' | 'ltr' {
  * carries — columns, rows, and the semantic type that decides which cells
  * are right-aligned.
  */
+// Re-exported so a caller needs one import for the table and its settings.
+export type {
+  ResultTableColumnConfig, ResultTableConfig,
+} from './table-format'
+
 export interface ResultTableSpec {
   columns: { name: string; db_type?: string; semantic_type: string }[]
   rows: unknown[][]
 }
 
-export function ResultTable({ spec, previewRows = 5, maxHeight = 420 }: {
+export function ResultTable({ spec, previewRows = 5, maxHeight = 420, config }: {
   spec: ResultTableSpec
   /** How many rows before "show all". */
   previewRows?: number
   maxHeight?: number | 'none'
+  /** Omitted: every column, in query order, unsorted — as the query returned it. */
+  config?: ResultTableConfig | null
 }) {
   const [expanded, setExpanded] = useState(false)
-  const rows = expanded ? spec.rows : spec.rows.slice(0, previewRows)
+  const columns = useMemo(() => resolveColumns(spec, config), [spec, config])
+  const sorted = useMemo(() => sortRows(spec.rows, spec, config), [spec, config])
+  const rows = expanded ? sorted : sorted.slice(0, previewRows)
 
   if (spec.columns.length === 0) {
     return (
@@ -948,13 +962,13 @@ export function ResultTable({ spec, previewRows = 5, maxHeight = 420 }: {
         >
           <thead>
             <tr>
-              {spec.columns.map((column) => (
+              {columns.map((column) => (
                 <th
                   key={column.name}
                   style={{
                     position: 'sticky',
                     top: 0,
-                    textAlign: column.semantic_type === 'quantitative' ? 'right' : 'left',
+                    textAlign: column.align,
                     padding: '9px 12px',
                     background: 'var(--panel-alt)',
                     color: 'var(--text-dim)',
@@ -965,7 +979,7 @@ export function ResultTable({ spec, previewRows = 5, maxHeight = 420 }: {
                     whiteSpace: 'nowrap',
                   }}
                 >
-                  {column.name}
+                  {column.heading}
                 </th>
               ))}
             </tr>
@@ -973,24 +987,20 @@ export function ResultTable({ spec, previewRows = 5, maxHeight = 420 }: {
           <tbody>
             {rows.map((row, rowIndex) => (
               <tr key={rowIndex} style={{ borderTop: '1px solid var(--border)' }}>
-                {row.map((cell, cellIndex) => {
-                  const column = spec.columns[cellIndex]
-                  const numeric = column?.semantic_type === 'quantitative'
-                  return (
-                    <td
-                      key={cellIndex}
-                      className={numeric ? 'mono' : undefined}
-                      style={{
-                        padding: '8px 12px',
-                        textAlign: numeric ? 'right' : 'left',
-                        color: 'var(--text2)',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {formatCell(cell)}
-                    </td>
-                  )
-                })}
+                {columns.map((column) => (
+                  <td
+                    key={column.name}
+                    className={column.numeric ? 'mono' : undefined}
+                    style={{
+                      padding: '8px 12px',
+                      textAlign: column.align,
+                      color: 'var(--text2)',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {formatCell(row[column.index], column.format)}
+                  </td>
+                ))}
               </tr>
             ))}
           </tbody>
@@ -1017,14 +1027,4 @@ export function ResultTable({ spec, previewRows = 5, maxHeight = 420 }: {
       )}
     </div>
   )
-}
-
-function formatCell(value: unknown): string {
-  if (value === null || value === undefined) return '—'
-  if (typeof value === 'number') {
-    return Number.isInteger(value)
-      ? value.toLocaleString()
-      : value.toLocaleString(undefined, { maximumFractionDigits: 2 })
-  }
-  return String(value)
 }

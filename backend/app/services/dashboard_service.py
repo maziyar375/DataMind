@@ -77,6 +77,12 @@ def result_fingerprint(tile: DashboardTile) -> str:
     the chart intent and the row cap shape the payload too, so an edit to
     either has to miss the cache. Without that, changing a tile from a pie to a
     line would keep serving the pie until its interval happened to elapse.
+
+    `table_config` is **deliberately absent**. It decides how the browser draws
+    rows it already has — column order, labels, a sort — and nothing about what
+    the query returns, so renaming a column header must not re-run a query
+    against the customer's database. If a table setting is ever added that
+    changes the *payload*, it belongs here; today none does.
     """
     material = json.dumps(
         {
@@ -259,6 +265,7 @@ class DashboardService:
             sql=source.sql,
             sql_origin=source.sql_origin,
             chart_config=source.chart_config,
+            table_config=source.table_config,
             max_rows=source.max_rows,
             refresh_interval_seconds=source.refresh_interval_seconds,
             grid_x=source.grid_x,
