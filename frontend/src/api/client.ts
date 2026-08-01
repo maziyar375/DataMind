@@ -8,9 +8,10 @@
  */
 
 import type {
-  ArtifactSpec, Connection, ConversationSummary, LlmConfig, MessageWithRun,
-  ProblemDetail, RunDetail, RunEvent, SchemaSnapshot, SemanticDocument,
-  SemanticJob, SemanticLayer, TestResult, User,
+  ArtifactSpec, Connection, ConversationSummary, Dashboard, DashboardSummary,
+  DashboardTile, LlmConfig, MessageWithRun, ProblemDetail, RunDetail, RunEvent,
+  SchemaSnapshot, SemanticDocument, SemanticJob, SemanticLayer, SqlDraft,
+  TilePosition, TileResult, TestResult, User,
 } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? '/api/v1'
@@ -250,6 +251,50 @@ export const conversations = {
     post<{ run_id: string; message_id: string }>(`/conversations/${id}/messages`, payload),
   suggestions: (id: string) =>
     get<{ suggestions: string[] }>(`/conversations/${id}/suggestions`),
+}
+
+// ── SQL drafts ────────────────────────────────────────────────────────────
+// Two ways to reach one shape. `draft` asks a model; `validate` never does, so
+// a user with no provider configured can still build a whole dashboard.
+export const sqlDrafts = {
+  draft: (payload: { connection_id: string; llm_config_id: string; question: string }) =>
+    post<SqlDraft>('/sql/drafts', payload),
+  validate: (payload: { connection_id: string; sql: string }) =>
+    post<SqlDraft>('/sql/drafts/validate', payload),
+}
+
+// ── dashboards ────────────────────────────────────────────────────────────
+// `data` is the only call that returns numbers: reading a dashboard returns
+// its layout, and the tiles that are *due* are asked for separately, because
+// each one is on its own clock.
+export const dashboards = {
+  list: () => get<DashboardSummary[]>('/dashboards'),
+  create: (payload: Record<string, unknown>) => post<Dashboard>('/dashboards', payload),
+  get: (id: string) => get<Dashboard>(`/dashboards/${id}`),
+  update: (id: string, payload: Record<string, unknown>) =>
+    patch<Dashboard>(`/dashboards/${id}`, payload),
+  remove: (id: string) => del(`/dashboards/${id}`),
+
+  addTile: (id: string, payload: Record<string, unknown>) =>
+    post<DashboardTile>(`/dashboards/${id}/tiles`, payload),
+  updateTile: (id: string, tileId: string, payload: Record<string, unknown>) =>
+    patch<DashboardTile>(`/dashboards/${id}/tiles/${tileId}`, payload),
+  removeTile: (id: string, tileId: string) => del(`/dashboards/${id}/tiles/${tileId}`),
+  duplicateTile: (id: string, tileId: string) =>
+    post<DashboardTile>(`/dashboards/${id}/tiles/${tileId}/duplicate`),
+  // One call per drag-end, carrying every tile the drag moved.
+  setLayout: (id: string, positions: TilePosition[]) =>
+    patch<DashboardTile[]>(`/dashboards/${id}/layout`, { positions }),
+
+  data: (id: string, tileIds: string[] = [], force = false) =>
+    post<{ results: Record<string, TileResult> }>(
+      `/dashboards/${id}/data${force ? '?force=true' : ''}`,
+      { tile_ids: tileIds },
+    ),
+  tileData: (id: string, tileId: string, force = false) =>
+    post<TileResult>(
+      `/dashboards/${id}/tiles/${tileId}/data${force ? '?force=true' : ''}`,
+    ),
 }
 
 // ── runs ──────────────────────────────────────────────────────────────────

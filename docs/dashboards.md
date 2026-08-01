@@ -1,6 +1,7 @@
 # Dashboards — the build spec
 
-**Status: backend built (§12 items 1–4); the frontend (items 5–6) is not.**
+**Status: backend built (§12 items 1–4) and the grid (item 5). The tile
+editor (item 6) is not — "Add tile" is still disabled.**
 **This file is the instruction as well as the record — see "Progress so far".**
 
 Multiple dashboards per user; a Superset/Power-BI-shaped grid of tiles; each
@@ -25,13 +26,17 @@ is trusted: the guard runs at preview, at save, and at every single refresh.
 | 2026-08-01 | **§12 item 2 built.** `Dashboard` / `DashboardTile` / `DashboardTileCache` in `infra/db/models.py`, `DashboardStatus` / `TileType` / `SqlOrigin` in `domain/value_objects`, migration `0005_dashboards.py` — applied to the dev database (`0004 → 0005`) and the DDL read back. `tests/unit/test_dashboard_models.py` (16 tests) replays the migration against a recorder and diffs it against the ORM column by column, so the two definitions cannot drift apart unnoticed. |
 | 2026-08-01 | **§12 item 3 built.** `services/sql_draft_service.py` (`draft_sql` + `validate_sql`), `api/v1/drafts.py` with `POST /sql/drafts` and `POST /sql/drafts/validate`, `SqlDraftRead`/`TileResultRead` in `api/schemas.py`. `tests/unit/test_sql_drafts.py` (18) + `tests/unit/test_drafts_api.py` (9), and `test_openapi_has_no_secrets.py` now walks every schema the app can *return* rather than two named models. Exercised against the running stack: hand-written SQL and a plain-language question both come back VALID with a live preview off the `sales` fixture; `SELECT … ; DROP TABLE …` comes back REJECTED with `E_MULTI_STATEMENT` and no preview. |
 | 2026-08-01 | **§12 item 4 built.** `services/dashboard_service.py` (CRUD, guard-on-save, the per-tile cache, `refresh`), `api/v1/dashboards.py` with all twelve routes, and the dashboard DTOs in `api/schemas.py`. `tests/unit/test_dashboards_api.py` (30), `test_dashboard_cache.py` (20), `test_dashboard_service.py` (12). **Steps 1–4 verified end to end with curl** against the running stack: create → draft from a question → save as a tile → refresh (ran, 5 rows) → refresh again (served from cache, same `computed_at`) → `force=true` (new stamp) → edit the SQL (missed the cache inside its TTL) → duplicate → layout → delete (tiles and cache rows went with it). Hostile SQL was refused at save with `E_SQL_REJECTED`. |
+| 2026-08-01 | **§12 item 5 built.** `pages/DashboardsPage.tsx` (index → open, view/edit toggle, settings drawer), `components/dashboard.tsx` (grid, tile shell, the four tile bodies, the one-tick scheduler), `components/dashboard-schedule.ts` (the due-tile rule, DOM-free) with a runnable check (`npm run test:schedule`, 9 cases). `ResultTable` **moved** from `chat.tsx` to `ui.tsx` (§2). `react-grid-layout@1.5.4` added **with the owner's approval**, and the web image rebuilt so a fresh container has it. `npm run typecheck` + `npm run build` green. |
 
-Still absent: the frontend. `DashboardsPage.tsx`, `dashboard.tsx` and
-`tile-editor.tsx` do not exist, and `ResultTable` is still inside `chat.tsx`
-waiting to be extracted (§2). **The backend is complete**: curl can create a
-dashboard, draft SQL from a question, save it as a tile and refresh it, which
-is exactly the gate §12 sets before any grid code. Next step is §12, item 5 —
-and note §7's `react-grid-layout` needs the owner's yes before `npm install`.
+Still absent: **the tile editor** (§8, item 6) — so the grid can show tiles,
+rearrange them and refresh them, but "Add tile" is disabled and a tile is
+created through the API. §12 says items 5 and 6 belong in the same stretch for
+exactly this reason; item 6 is the next step and the last one before the
+feature is usable end to end.
+
+Not verified visually: this sandbox has no browser, so the UI was checked by
+`typecheck`, `build`, the dev server transforming every new module, and the
+scheduler rule run against a controlled clock. Someone should open it.
 
 Companion to [pipeline.md](pipeline.md) (the AI run),
 [architecture.md](architecture.md) (the why) and [CODEBASE.md](CODEBASE.md)
@@ -68,7 +73,7 @@ output that happens to be user-visible. §3 is the whole feature; build it first
 | Decide/repair a chart for a result shape | `profile_result` → `plan_chart` → `compile_vega_lite` | [`charts/__init__.py:170,469,564`](../backend/app/charts/__init__.py#L469) |
 | Chart intent schema | `ChartIntent` (serialise this into `tiles.chart_config`) | [`charts/__init__.py:59`](../backend/app/charts/__init__.py#L59) |
 | Render a Vega-Lite spec, theme-aware | `<VegaChart spec={...}/>` | [`VegaChart.tsx`](../frontend/src/components/VegaChart.tsx) |
-| Render a result table | `ResultTable` — **extract to `ui.tsx`**, don't copy | [`chat.tsx:345`](../frontend/src/components/chat.tsx#L345) |
+| Render a result table | `ResultTable` (**moved** to `ui.tsx`, §7 — `chat.tsx` imports it from there now) | [`ui.tsx`](../frontend/src/components/ui.tsx) |
 | NL → SQL | `retrieve` → `generate` → `validate` nodes | [`pipeline/nodes/__init__.py:237,418,518`](../backend/app/pipeline/nodes/__init__.py#L418) |
 | Resolve an `LlmConfig` into a callable model | `resolve_llm(config, box, min_max_tokens=0)` (lifted; `run_service` and `semantic_service` both use it) | [`services/query_service.py`](../backend/app/services/query_service.py) |
 | Auth/session/db deps | `CtxDep`, `DbDep`, `SettingsDep` | [`api/deps.py`](../backend/app/api/deps.py) |
@@ -76,9 +81,9 @@ output that happens to be user-visible. §3 is the whole feature; build it first
 Two copies of the policy builder is how one of them silently stops matching the
 guard. Lift, don't copy — that applies to `_resolve_llm` and `ResultTable` too.
 The natural home for the lifted backend helpers is the new
-`services/query_service.py`; `run_service` then imports them from there. (The
-backend half of that is done — `run_service` and `semantic_service` now import
-all four. `ResultTable` is still to extract, in §7.)
+`services/query_service.py`; `run_service` then imports them from there. (All
+of this is now done: `run_service` and `semantic_service` import the four
+helpers, and `ResultTable` was moved — not copied — into `ui.tsx`.)
 
 ---
 
@@ -421,6 +426,19 @@ reason someone's production database is slow.
 Rate options: `Manual / 15s / 30s / 1m / 5m / 15m / 1h / 6h / 24h`, plus
 "Inherit dashboard default" as a tile's initial value.
 
+**As built.** The due-tile rule is a pure function in
+[`dashboard-schedule.ts`](../frontend/src/components/dashboard-schedule.ts) —
+no React, no DOM — because its two failure modes are "a background tab hammers
+the customer's database" and "a 30-second tile silently shows ten-minute-old
+numbers". `npm run test:schedule` runs it against a frozen clock (Node strips
+the types; no test framework, no new dependency). The backend already resolves
+`NULL` → the dashboard's rate and ships it as
+`effective_refresh_interval_seconds`, so the browser holds no second copy of
+the inheritance rule. A tile that is *re*-loading keeps its numbers on screen
+with "refreshing" in the header: blanking a good result for half a second reads
+as a fault. A failed poll leaves the last results in place — a stale number
+carrying its own timestamp beats an empty grid.
+
 ### Colour — read this before adding a picker
 
 The palette in [`VegaChart.tsx`](../frontend/src/components/VegaChart.tsx) is
@@ -433,6 +451,13 @@ cool), each run through the same validator in both themes, plus a single-colour
 override for single-series tiles. If a palette is added or changed, re-run the
 validator **for both modes** — a hue swapped by eye is how a palette quietly
 stops being readable.
+
+> **Not built, deliberately.** The settings drawer offers exactly one palette,
+> "Default (measured)", and says why. Shipping four more chosen by eye is the
+> precise failure the paragraph above forbids, and the validator those numbers
+> came from is not in the repo — it produced the table in `VegaChart.tsx`'s
+> header. Adding a palette means re-running it for **both** modes first; the
+> column, the API field and the picker are all in place for when someone does.
 
 ---
 
@@ -557,7 +582,7 @@ Gate before claiming any phase done: `make test`, `make guard`, `make lint`.
 [x] 2  models + migration 0005                                            (§4)
 [x] 3  sql_draft_service.py + POST /sql/drafts + /sql/drafts/validate     (§5)
 [x] 4  dashboard_service.py + /dashboards routes + per-tile cache         (§6)
-[ ] 5  DashboardsPage: list, grid, tile shell, one-tick refresh scheduler (§7)
+[x] 5  DashboardsPage: list, grid, tile shell, one-tick refresh scheduler (§7)
 [ ] 6  Tile editor: Ask tab + Write-SQL tab + chart picker + rate picker  (§8)
 [ ] 7  Later: filters · sharing · export · "add to dashboard" from a chat
        run · scheduled server-side warm refresh

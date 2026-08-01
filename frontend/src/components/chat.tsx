@@ -15,7 +15,7 @@ import { useState } from 'react'
 import type {
   Artifact, ClarificationSpec, GeneratedQuery, RunDetail, RunStep, TableArtifactSpec,
 } from '../api/types'
-import { Chip, CopyButton, Dot, dirOf, Icon, Spinner } from './ui'
+import { Chip, CopyButton, Dot, dirOf, Icon, ResultTable, Spinner } from './ui'
 import { VegaChart } from './VegaChart'
 import { NODE_META } from '../theme/tokens'
 
@@ -338,120 +338,6 @@ export function SqlPanel({ queries }: { queries: GeneratedQuery[] }) {
       )}
     </div>
   )
-}
-
-// ── result table ──────────────────────────────────────────────────────────
-
-export function ResultTable({ spec }: { spec: TableArtifactSpec }) {
-  const [expanded, setExpanded] = useState(false)
-  const rows = expanded ? spec.rows : spec.rows.slice(0, 5)
-
-  if (spec.columns.length === 0) {
-    return (
-      <div style={{ fontSize: 13, color: 'var(--text-dim)' }}>
-        The query ran successfully but returned no rows.
-      </div>
-    )
-  }
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div
-        style={{
-          border: '1px solid var(--border)',
-          borderRadius: 10,
-          overflow: 'auto',
-          maxHeight: expanded ? 420 : 'none',
-        }}
-      >
-        <table
-          style={{
-            width: '100%',
-            borderCollapse: 'collapse',
-            fontSize: 12.5,
-          }}
-        >
-          <thead>
-            <tr>
-              {spec.columns.map((column) => (
-                <th
-                  key={column.name}
-                  style={{
-                    position: 'sticky',
-                    top: 0,
-                    textAlign: column.semantic_type === 'quantitative' ? 'right' : 'left',
-                    padding: '9px 12px',
-                    background: 'var(--panel-alt)',
-                    color: 'var(--text-dim)',
-                    fontWeight: 600,
-                    fontSize: 11,
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.04em',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {column.name}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, rowIndex) => (
-              <tr key={rowIndex} style={{ borderTop: '1px solid var(--border)' }}>
-                {row.map((cell, cellIndex) => {
-                  const column = spec.columns[cellIndex]
-                  const numeric = column?.semantic_type === 'quantitative'
-                  return (
-                    <td
-                      key={cellIndex}
-                      className={numeric ? 'mono' : undefined}
-                      style={{
-                        padding: '8px 12px',
-                        textAlign: numeric ? 'right' : 'left',
-                        color: 'var(--text2)',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {formatCell(cell)}
-                    </td>
-                  )
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {spec.rows.length > 5 && (
-        <button
-          onClick={() => setExpanded(!expanded)}
-          style={{
-            alignSelf: 'flex-start',
-            fontSize: 12,
-            color: 'var(--accent)',
-            background: 'transparent',
-            border: 'none',
-            cursor: 'pointer',
-            padding: 0,
-          }}
-        >
-          {expanded
-            ? 'Show fewer rows'
-            : `Show all ${spec.rows.length.toLocaleString()} rows`}
-        </button>
-      )}
-    </div>
-  )
-}
-
-function formatCell(value: unknown): string {
-  if (value === null || value === undefined) return '—'
-  if (typeof value === 'number') {
-    return Number.isInteger(value)
-      ? value.toLocaleString()
-      : value.toLocaleString(undefined, { maximumFractionDigits: 2 })
-  }
-  return String(value)
 }
 
 // ── metadata chips ────────────────────────────────────────────────────────

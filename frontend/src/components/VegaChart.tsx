@@ -112,7 +112,15 @@ function useThemeName(): ThemeName {
   return name
 }
 
-export function VegaChart({ spec }: { spec: Record<string, unknown> }) {
+export function VegaChart({ spec, frameless = false }: {
+  spec: Record<string, unknown>
+  /**
+   * Drop the border, padding and panel background. A dashboard tile already
+   * is a bordered panel, and nesting a second one inside it reads as a chart
+   * that failed to fill its box.
+   */
+  frameless?: boolean
+}) {
   const ref = useRef<HTMLDivElement>(null)
   const [failed, setFailed] = useState(false)
   const theme = useThemeName()
@@ -239,11 +247,11 @@ export function VegaChart({ spec }: { spec: Record<string, unknown> }) {
     <div
       style={{
         width: '100%',
-        marginTop: 6,
-        padding: '8px 10px',
-        border: '1px solid var(--border)',
-        borderRadius: 10,
-        background: 'var(--panel)',
+        marginTop: frameless ? 0 : 6,
+        padding: frameless ? 0 : '8px 10px',
+        border: frameless ? 'none' : '1px solid var(--border)',
+        borderRadius: frameless ? 0 : 10,
+        background: frameless ? 'transparent' : 'var(--panel)',
         overflowX: 'auto',
         // A tall, many-bar horizontal chart scrolls inside a bounded box rather
         // than stretching the whole conversation down the page.

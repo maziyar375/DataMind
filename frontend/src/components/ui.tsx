@@ -267,6 +267,32 @@ export const Icon = {
       <path d="M8 11V7a4 4 0 0 1 8 0v4" />
     </svg>
   ),
+  ArrowLeft: ({ size = 15, stroke = 'currentColor', strokeWidth = 2.2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <path d="M19 12H5M12 19l-7-7 7-7" />
+    </svg>
+  ),
+  More: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <circle cx="12" cy="5" r="1.4" />
+      <circle cx="12" cy="12" r="1.4" />
+      <circle cx="12" cy="19" r="1.4" />
+    </svg>
+  ),
+  Refresh: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <path d="M21 12a9 9 0 1 1-2.6-6.4" />
+      <path d="M21 3v6h-6" />
+    </svg>
+  ),
+  Grid: ({ size = 17, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <rect x="3" y="3" width="7" height="9" rx="1.5" />
+      <rect x="14" y="3" width="7" height="5" rx="1.5" />
+      <rect x="14" y="12" width="7" height="9" rx="1.5" />
+      <rect x="3" y="16" width="7" height="5" rx="1.5" />
+    </svg>
+  ),
   Search: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
     <svg {...iconBase(size, stroke, strokeWidth)}>
       <circle cx="11" cy="11" r="7" />
@@ -868,4 +894,137 @@ export function dirOf(value: string): 'rtl' | 'ltr' {
     if (/[A-Za-z]/.test(char)) return 'ltr'
   }
   return 'ltr'
+}
+
+// ── result table ────────────────────────────────────────────
+/**
+ * A query result as a table. It lived in `chat.tsx` until dashboards
+ * needed it: a TABLE tile and a chat answer render the same thing, and a
+ * second copy is how the two quietly stop agreeing about what a null cell
+ * or an empty result looks like. Moved, not copied (docs/dashboards.md §2).
+ *
+ * The shape is the artifact spec, which is also the shape a tile result
+ * carries — columns, rows, and the semantic type that decides which cells
+ * are right-aligned.
+ */
+export interface ResultTableSpec {
+  columns: { name: string; db_type?: string; semantic_type: string }[]
+  rows: unknown[][]
+}
+
+export function ResultTable({ spec, previewRows = 5, maxHeight = 420 }: {
+  spec: ResultTableSpec
+  /** How many rows before "show all". */
+  previewRows?: number
+  maxHeight?: number | 'none'
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const rows = expanded ? spec.rows : spec.rows.slice(0, previewRows)
+
+  if (spec.columns.length === 0) {
+    return (
+      <div style={{ fontSize: 13, color: 'var(--text-dim)' }}>
+        The query ran successfully but returned no rows.
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div
+        style={{
+          border: '1px solid var(--border)',
+          borderRadius: 10,
+          overflow: 'auto',
+          maxHeight: expanded ? maxHeight : 'none',
+        }}
+      >
+        <table
+          style={{
+            width: '100%',
+            borderCollapse: 'collapse',
+            fontSize: 12.5,
+          }}
+        >
+          <thead>
+            <tr>
+              {spec.columns.map((column) => (
+                <th
+                  key={column.name}
+                  style={{
+                    position: 'sticky',
+                    top: 0,
+                    textAlign: column.semantic_type === 'quantitative' ? 'right' : 'left',
+                    padding: '9px 12px',
+                    background: 'var(--panel-alt)',
+                    color: 'var(--text-dim)',
+                    fontWeight: 600,
+                    fontSize: 11,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.04em',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {column.name}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, rowIndex) => (
+              <tr key={rowIndex} style={{ borderTop: '1px solid var(--border)' }}>
+                {row.map((cell, cellIndex) => {
+                  const column = spec.columns[cellIndex]
+                  const numeric = column?.semantic_type === 'quantitative'
+                  return (
+                    <td
+                      key={cellIndex}
+                      className={numeric ? 'mono' : undefined}
+                      style={{
+                        padding: '8px 12px',
+                        textAlign: numeric ? 'right' : 'left',
+                        color: 'var(--text2)',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {formatCell(cell)}
+                    </td>
+                  )
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {spec.rows.length > previewRows && (
+        <button
+          onClick={() => setExpanded(!expanded)}
+          style={{
+            alignSelf: 'flex-start',
+            fontSize: 12,
+            color: 'var(--accent)',
+            background: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+            padding: 0,
+          }}
+        >
+          {expanded
+            ? 'Show fewer rows'
+            : `Show all ${spec.rows.length.toLocaleString()} rows`}
+        </button>
+      )}
+    </div>
+  )
+}
+
+function formatCell(value: unknown): string {
+  if (value === null || value === undefined) return '—'
+  if (typeof value === 'number') {
+    return Number.isInteger(value)
+      ? value.toLocaleString()
+      : value.toLocaleString(undefined, { maximumFractionDigits: 2 })
+  }
+  return String(value)
 }

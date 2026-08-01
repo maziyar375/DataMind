@@ -282,3 +282,30 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   border: 1px solid var(--border);
   color: var(--text-dim);
 }
+
+/* ── dashboard grid ─────────────────────────────────────────────────────
+   react-grid-layout ships a layout engine and two cosmetic defaults that do
+   not belong in this design system: a red drop placeholder and a light-grey
+   resize handle drawn as a background image. Both are re-stated here in the
+   theme's own variables so the grid inherits the app rather than sitting in
+   it. Nothing else about the library is styled. */
+.react-grid-item.react-grid-placeholder {
+  background: var(--accent);
+  opacity: 0.16;
+  border-radius: 12px;
+  transition-duration: 100ms;
+}
+.react-grid-item > .react-resizable-handle::after {
+  border-right-color: var(--text-faint);
+  border-bottom-color: var(--text-faint);
+}
+/* View mode hides the handle entirely — nothing to grab means nothing to
+   wonder about. */
+.rm-grid-locked .react-grid-item > .react-resizable-handle { display: none; }
+.rm-tile-actions { opacity: 0; transition: opacity .12s ease; }
+.rm-tile:hover .rm-tile-actions,
+.rm-tile-actions:focus-within { opacity: 1; }
+/* The drag surface is the tile's header, not the whole tile: a click inside a
+   table or a chart must not start a drag. */
+.rm-tile-drag { cursor: grab; }
+.rm-tile-drag:active { cursor: grabbing; }

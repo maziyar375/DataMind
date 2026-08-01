@@ -318,3 +318,108 @@ export interface RunEvent {
   type: string
   data: Record<string, any>
 }
+
+// ── dashboards ────────────────────────────────────────────────────────────
+// One shape for a tile's data whether it was just computed or served from the
+// cache — `computed_at` is how the reader tells which, and how old it is.
+export interface TileResult {
+  status: 'OK' | 'ERROR'
+  columns: { name: string; db_type: string; semantic_type: string }[]
+  rows: unknown[][]
+  row_count: number
+  truncated: boolean
+  duration_ms: number
+  computed_at: string
+  vega_spec: Record<string, unknown> | null
+  /** model | model_adjusted | heuristic | none — who chose the chart. */
+  chart_source: string
+  /** Set when the pick was overruled: "a pie does not fit; showing a bar". */
+  chart_note: string | null
+  error: { code: string; message: string } | null
+}
+
+export type TileType = 'CHART' | 'TABLE' | 'METRIC' | 'TEXT'
+export type SqlOrigin = 'GENERATED' | 'GENERATED_EDITED' | 'HANDWRITTEN'
+
+export interface DashboardTile {
+  id: string
+  dashboard_id: string
+  connection_id: string | null
+  connection_name: string | null
+  llm_config_id: string | null
+  llm_config_name: string | null
+  title: string
+  tile_type: TileType
+  question: string | null
+  sql: string
+  sql_origin: SqlOrigin
+  /** null means Auto: the chart is re-planned from every result. */
+  chart_config: Record<string, unknown> | null
+  max_rows: number | null
+  /** null means "inherit the dashboard's default"; 0 means manual only. */
+  refresh_interval_seconds: number | null
+  /** The resolved rate, so the scheduler needs no copy of the inherit rule. */
+  effective_refresh_interval_seconds: number
+  grid_x: number
+  grid_y: number
+  grid_w: number
+  grid_h: number
+  position: number
+  created_at: string
+  updated_at: string
+}
+
+export interface Dashboard {
+  id: string
+  name: string
+  description: string | null
+  status: 'ACTIVE' | 'ARCHIVED'
+  grid_columns: number
+  row_height_px: number
+  gap_px: number
+  compact_mode: 'VERTICAL' | 'NONE'
+  palette: string
+  theme_override: 'INHERIT' | 'DARK' | 'LIGHT'
+  default_refresh_interval_seconds: number
+  created_at: string
+  updated_at: string
+  tiles: DashboardTile[]
+}
+
+export interface DashboardSummary {
+  id: string
+  name: string
+  description: string | null
+  status: 'ACTIVE' | 'ARCHIVED'
+  default_refresh_interval_seconds: number
+  tile_count: number
+  last_refreshed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface TilePosition {
+  tile_id: string
+  grid_x?: number
+  grid_y?: number
+  grid_w?: number
+  grid_h?: number
+  position?: number
+}
+
+/** A statement, the guard's verdict on it, and what it returns. */
+export interface SqlDraft {
+  sql: string
+  validation_status: 'VALID' | 'REJECTED'
+  validation_report: {
+    status?: string
+    issues?: { rule_id: string; severity: string; message: string; hint?: string | null }[]
+    referenced_tables?: string[]
+    limit_applied?: number | null
+  }
+  referenced_tables: string[]
+  chart_suggestion: Record<string, unknown> | null
+  preview: TileResult | null
+  question: string | null
+  llm_config_id: string | null
+}
