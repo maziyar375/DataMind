@@ -171,14 +171,22 @@ litellm` outside `app/infra/llm/`** — CI greps for it.
    `api_key`**; a test asserts this against the generated schemas.
 4. **Disclosure is explicit and visible.** Each connection declares how much
    result data may reach the model: `NONE | AGGREGATE | SAMPLE | FULL`. The
-   chat header shows the policy in force *at ask time*. The policy has **two
-   halves**: `pipeline/disclosure.py` gates the result, and `HintBudget`
-   (`domain/value_objects`) gates the per-column content hints in the schema
-   block. Hints are filtered at *render* time, never only at sync, so
-   tightening a policy takes effect without a re-sync — and the sensitive-name
-   floor (`is_sensitive_column`) applies at capture under every policy,
-   including FULL, because the schema block is sent on every question while a
-   result is only sent for the query the user asked for.
+   chat header shows the policy in force *at ask time*. The policy governs
+   **three** things, all in `pipeline/disclosure.py` except the second:
+   `disclose()` gates the result, `HintBudget` (`domain/value_objects`) gates
+   the per-column content hints in the schema block, and `disclose_history()`
+   gates the **conversation** — the assistant message is prose the model wrote
+   *from* result rows, and the next turn sends it back. All three filter at
+   *render* time, never only at write time, so tightening a policy takes effect
+   on the next question without a re-sync and without a leak from the
+   transcript. Under `SAMPLE`/`FULL` the history filter is the identity
+   function; under `NONE`/`AGGREGATE` an earlier answer's prose is withheld
+   while its **SQL survives**, which is what a follow-up actually builds on.
+   A conversation is pinned to one connection (`_bind_connection`) so history
+   can never cross policies. The sensitive-name floor (`is_sensitive_column`)
+   applies at capture under every policy, including FULL, because the schema
+   block is sent on every question while a result is only sent for the query
+   the user asked for.
 
 ---
 
@@ -198,7 +206,11 @@ route → retrieve → clarify → generate → validate → execute → inspect
 present → chart
 ```
 
-- `route` classifies intent. **METADATA** questions ("what tables do I have?")
+- `route` classifies intent, reading the recent turns once a thread has any: a
+  follow-up carries no subject of its own ("and by month?"), and classified
+  alone it could come back CHITCHAT or UNSUPPORTED and halt the run before any
+  SQL. A first turn sends the old history-free prompt byte-identically.
+  **METADATA** questions ("what tables do I have?")
   are answered from the schema snapshot and **HALT before any SQL**, by
   `pipeline/metadata.py`, at the granularity the question asked: an inventory
   (name, rows, column count — one line each, largest first) unless the question
@@ -206,7 +218,9 @@ present → chart
   the snapshot's own names, so this still costs no model call. The exhaustive
   `_describe_schema` render stays for the *model*-facing follow-up-suggestions
   prompt, which does need every column name.
-- `retrieve` selects tables, then attaches the connection's **semantic layer**;
+- `retrieve` selects tables — from the question, plus the tables the recent
+  turns' SQL actually queried, so a follow-up inherits its subject instead of
+  falling to an arbitrary `tables[:20]` — then attaches the **semantic layer**;
   `RetrievedContext.render` appends a block describing only the retrieved
   tables — business names, grain, defined metrics with their SQL, time
   conventions, fan-out cautions. See "The semantic layer" below.
@@ -251,7 +265,13 @@ present → chart
   header before the first message; the pickers lock once the transcript is
   non-empty. The choice is stored as the conversation's `default_connection_id`
   / `default_llm_config_id`. `create_run` still accepts a per-message override
-  and snapshots what it used onto the run, so earlier turns stay explainable.
+  and snapshots what it used onto the run, so earlier turns stay explainable —
+  but the **connection** override is now refused once the transcript is
+  non-empty (`_bind_connection`, 422). History is keyed on the conversation, so
+  a thread spanning two connections would hand one connection's answers to the
+  other's prompt under the other's disclosure policy. The model may still be
+  switched mid-thread; that changes who reads the transcript, not what is in
+  it.
 - Terminal states: `SUCCEEDED | FAILED | TIMED_OUT | CANCELLED`.
   `NEEDS_CLARIFICATION` is deliberately **not** terminal — a run that asked a
   question is mid-exchange, so `cancel` still applies to it while the

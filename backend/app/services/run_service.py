@@ -13,12 +13,12 @@ from datetime import timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clock import utcnow
 from app.core.config import Settings
-from app.core.errors import NotFoundError, RunTimeoutError
+from app.core.errors import NotFoundError, RunTimeoutError, ValidationError
 from app.core.logging import get_logger
 from app.domain.ports.llm import ChatMessage, ProviderCapabilities, ResolvedLLM
 from app.domain.value_objects import (
@@ -45,7 +45,7 @@ from app.infra.db.models import (
 )
 from app.infra.events.bus import event_bus
 from app.infra.llm.litellm_gateway import LiteLLMGateway
-from app.pipeline.nodes import NodeDeps, _describe_schema
+from app.pipeline.nodes import NodeDeps, _describe_schema, _render_history
 from app.pipeline.pipeline import AnalyticsPipeline
 from app.pipeline.state import RunState
 from app.services.semantic_service import load_document
@@ -88,6 +88,8 @@ class RunService:
         llm_config = await self._owned(LlmConfig, llm_id, owner_id)
 
         next_seq = await self._next_message_seq(conversation_id)
+        _bind_connection(conversation, connection.id, transcript_empty=next_seq == 1)
+
         user_message = Message(
             id=uuid.uuid4(),
             conversation_id=conversation_id,
@@ -191,7 +193,7 @@ class RunService:
             llm=self._resolve_llm(llm_config),
             connector=connector,
             snapshot=snapshot,
-            history=await self._recent_history(run.conversation_id),
+            history=await self._recent_history(run.conversation_id, connection.id),
             policy=_policy_from_snapshot(snapshot, connection),
             emit=lambda t, d: self._emit(run_id, t, d),
             semantic=(semantic.model_dump(mode="json") if semantic else None),
@@ -471,26 +473,97 @@ class RunService:
         return (message.content if message else "") or ""
 
     async def _recent_history(
-        self, conversation_id: UUID, limit: int = 6
+        self,
+        conversation_id: UUID,
+        connection_id: UUID,
+        *,
+        limit: int = 6,
+        drop_latest: bool = True,
     ) -> list[dict[str, str]]:
+        """The recent turns of one thread, against one connection.
+
+        The single place history is assembled — the run path and the follow-up
+        suggestions both come here, because a transcript sent to a model is a
+        disclosure whichever prompt it lands in, and two builders would mean
+        two chances to forget that.
+
+        `connection_id` is a filter, not decoration. `_bind_connection` stops
+        new threads from mixing connections, but rows written before it, or by
+        any future path that sets `Run.connection_id` directly, would still
+        carry one database's answers into another's prompt. A turn that cannot
+        be attributed to a run on *this* connection is dropped: the same
+        fail-closed reading the rest of the disclosure code uses.
+
+        `drop_latest` removes the message that started the current run — it is
+        the question being asked, not context for it. Suggestions have no such
+        message and pass False.
+        """
         result = await self._db.execute(
             select(Message)
             .where(Message.conversation_id == conversation_id)
             .order_by(Message.seq.desc())
-            .limit(limit + 1)
+            .limit(limit + (1 if drop_latest else 0))
         )
-        rows = list(result.scalars())[1:]  # drop the message that started this run
+        rows = list(result.scalars())
+        if drop_latest:
+            rows = rows[1:]
+        if not rows:
+            return []
+
+        runs = await self._runs_behind([r.id for r in rows])
+        kept = [r for r in rows if r.id in runs and runs[r.id][0] == connection_id]
         sql_by_message = await self._sql_behind(
-            [r.id for r in rows if r.role == MessageRole.ASSISTANT]
+            [r.id for r in kept if r.role == MessageRole.ASSISTANT]
         )
         turns: list[dict[str, str]] = []
-        for row in reversed(rows):
+        for row in reversed(kept):
             turn = {"role": row.role.lower(), "content": row.content or ""}
-            sql = sql_by_message.get(row.id)
-            if sql:
-                turn["sql"] = sql
+            if row.role == MessageRole.ASSISTANT:
+                # A clarifying question is the assistant's turn but not an
+                # answer: it is asked before any SQL runs, so it holds no
+                # result data and survives every disclosure policy. Without
+                # the marker it would be withheld as prose, and the user's
+                # next message — the reply to it — would read as a non
+                # sequitur.
+                if runs[row.id][1] == RunStatus.NEEDS_CLARIFICATION:
+                    turn["kind"] = "clarification"
+                sql = sql_by_message.get(row.id)
+                if sql:
+                    turn["sql"] = sql
             turns.append(turn)
         return turns
+
+    async def _runs_behind(
+        self, message_ids: list[UUID]
+    ) -> dict[UUID, tuple[UUID, str]]:
+        """`message_id -> (connection_id, run status)`, for both roles.
+
+        A message belongs to the run that wrote it: the user's as
+        `user_message_id`, the assistant's as `assistant_message_id`. One query
+        covers both, and a message matching neither is simply absent from the
+        map — which the caller reads as "cannot attribute" and drops.
+        """
+        if not message_ids:
+            return {}
+        result = await self._db.execute(
+            select(
+                Run.user_message_id,
+                Run.assistant_message_id,
+                Run.connection_id,
+                Run.status,
+            ).where(
+                or_(
+                    Run.user_message_id.in_(message_ids),
+                    Run.assistant_message_id.in_(message_ids),
+                )
+            )
+        )
+        attribution: dict[UUID, tuple[UUID, str]] = {}
+        for user_message_id, assistant_message_id, conn_id, status in result.all():
+            for message_id in (user_message_id, assistant_message_id):
+                if message_id is not None:
+                    attribution[message_id] = (conn_id, status)
+        return attribution
 
     async def _sql_behind(
         self, assistant_message_ids: list[UUID]
@@ -537,6 +610,11 @@ class RunService:
         conversation, so every suggestion is answerable over the same tables.
         Deliberately best-effort: a missing schema, an unconfigured model, or a
         provider error yields an empty list rather than disturbing the chat.
+
+        Everything it sends is gated by the connection's disclosure policy —
+        the schema description by `HintBudget`, the transcript by
+        `disclose_history`. This prompt reaches the same third-party model the
+        run path does; being a convenience feature buys it no exemption.
         """
         conversation = await self._db.get(Conversation, conversation_id)
         if conversation is None or conversation.owner_id != owner_id:
@@ -557,14 +635,18 @@ class RunService:
         if not tables:
             return []
 
-        history = await self._history_for_suggestions(conversation_id)
+        history = await self._recent_history(
+            conversation_id, conn_id, limit=8, drop_latest=False
+        )
         # Only suggest once the thread has at least one answered turn.
         if not any(m["role"] == "assistant" for m in history):
             return []
 
-        transcript = "\n".join(
-            f"{m['role'].capitalize()}: {m['content']}" for m in history
-        )
+        # Rendered by the same function the run path uses, so the transcript
+        # reaches this prompt on the same disclosure terms — this call is not
+        # a question the user asked, it fires on its own when the SPA refreshes
+        # a thread, and it was the one path that sent the raw messages.
+        transcript = _render_history(history, connection.disclosure_policy)
         system = (
             "You help a business user explore a SQL database in plain language. "
             "Given the database schema and the conversation so far, propose "
@@ -576,8 +658,9 @@ class RunService:
             "other text."
         )
         user = (
-            f"Database schema:\n{_describe_schema(tables)}\n\n"
-            f"Conversation so far:\n{transcript}"
+            f"Database schema:\n"
+            f"{_describe_schema(tables, connection.disclosure_policy)}\n\n"
+            f"{transcript}"
         )
 
         try:
@@ -596,22 +679,6 @@ class RunService:
             return []
 
         return _parse_suggestions(completion.text, limit, history)
-
-    async def _history_for_suggestions(
-        self, conversation_id: UUID, limit: int = 8
-    ) -> list[dict[str, str]]:
-        result = await self._db.execute(
-            select(Message)
-            .where(Message.conversation_id == conversation_id)
-            .order_by(Message.seq.desc())
-            .limit(limit)
-        )
-        rows = list(reversed(list(result.scalars())))
-        return [
-            {"role": r.role.lower(), "content": content}
-            for r in rows
-            if (content := (r.content or "").strip())
-        ]
 
     async def _latest_snapshot(self, connection_id: UUID) -> dict[str, Any]:
         result = await self._db.execute(
@@ -649,6 +716,38 @@ class RunService:
                 supports_streaming=caps.get("supports_streaming", True),
             ),
         )
+
+
+def _bind_connection(
+    conversation: Conversation, connection_id: UUID, *, transcript_empty: bool
+) -> None:
+    """Hold a conversation to one database once it has started.
+
+    A per-message `connection_id` may differ from the conversation's — the API
+    has always accepted the override, and the run snapshots what it used. But
+    history is keyed on the conversation, so a thread whose turns ran against
+    two connections carries one connection's answers into the other's prompt,
+    under the other's disclosure policy. A connection tightened to NONE would
+    then be told what a FULL connection returned, by a route that never
+    consults either policy.
+
+    The SPA already behaves this way — the pickers lock once the transcript is
+    non-empty — so this only closes the API path that bypasses them. Switching
+    is still free while nothing has been said, and the conversation adopts the
+    connection it is switched to rather than leaving the default stale.
+    """
+    if conversation.default_connection_id is None:
+        conversation.default_connection_id = connection_id
+        return
+    if conversation.default_connection_id == connection_id:
+        return
+    if not transcript_empty:
+        raise ValidationError(
+            "This conversation is already bound to a different database "
+            "connection. Start a new conversation to ask against another one.",
+            conversation_id=str(conversation.id),
+        )
+    conversation.default_connection_id = connection_id
 
 
 _LIST_MARKER = re.compile(r"^\s*(?:\d+[.)]|[-*•])\s*")

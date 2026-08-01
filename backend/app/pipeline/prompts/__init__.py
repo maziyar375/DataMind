@@ -3,7 +3,26 @@ wording never silently invalidates historical comparisons.
 """
 from __future__ import annotations
 
-PROMPT_VERSION = "v5"
+PROMPT_VERSION = "v6"
+# v6: two changes to how the conversation reaches the model, one widening and
+# one narrowing, both on the SQL-producing path.
+#
+# `route` can now be sent the history (`ROUTE_SYSTEM_WITH_HISTORY`). It used to
+# classify the bare question, so a follow-up carrying no data noun of its own —
+# "and by month?", "what about last year" — was judged on nine characters and
+# could come back CHITCHAT or UNSUPPORTED, halting the run before any SQL was
+# written. The history-free `ROUTE_SYSTEM` is unchanged and is still what a
+# first turn sends, so a conversation's opening question is byte-identical to
+# v5.
+#
+# The history itself is now filtered by the connection's disclosure policy
+# before it is rendered (`disclosure.disclose_history`). Under SAMPLE and FULL
+# that filter is the identity function and every SQL prompt is byte-identical
+# to v5; under NONE and AGGREGATE an earlier answer's prose is replaced by a
+# placeholder while its SQL survives. The version moves because the rendered
+# prompt does, and a v5 and a v6 run on a narrow policy are otherwise
+# indistinguishable from the outside.
+#
 # v5: the two repair prompts now *extend* the first-attempt prompt instead of
 # replacing it. They previously carried only the feedback and the schema, so a
 # repair attempt was never told "SELECT only", "never guess a name" or "do not
@@ -34,15 +53,32 @@ PROMPT_VERSION = "v5"
 # the version moves because the *rendered* prompt does, and comparing a v3 run
 # against the v2 baseline would otherwise silently mix two schema formats.
 
-ROUTE_SYSTEM = """You classify a user's question about a SQL database.
+_ROUTE_LABELS = """You classify a user's question about a SQL database.
 
 Return one of:
 - ANALYTICAL: needs data from the database to answer.
 - METADATA: asks about the schema itself (what tables/columns exist).
 - CHITCHAT: greeting or small talk, no data needed.
-- UNSUPPORTED: asks to modify data, or is outside the database's scope.
+- UNSUPPORTED: asks to modify data, or is outside the database's scope."""
+
+ROUTE_SYSTEM = f"""{_ROUTE_LABELS}
 
 Reply with the single word only."""
+
+ROUTE_SYSTEM_WITH_HISTORY = f"""{_ROUTE_LABELS}
+
+Classify the last question, reading it in the light of the turns before it. A
+follow-up rarely repeats what it is about: "and by month?" after a revenue
+question is ANALYTICAL, and "what columns does it have?" after a table was
+named is METADATA. The earlier turns are context for reading the question —
+never themselves the thing being classified.
+
+{{history}}
+
+Reply with the single word only."""
+# Two prompts rather than one with an empty `{history}`, so the opening
+# question of a conversation sends the bytes it sent before follow-ups were
+# understood — the eval suite is single-turn, and its baseline is this prompt.
 
 CLARIFY_SYSTEM = """You decide one thing: whether a question can be answered \
 from this database as written, or whether it has to be asked back to the user \

@@ -42,7 +42,7 @@ Code: [`backend/app/pipeline/`](../backend/app/pipeline/) —
 ```
                                     ┌─── CHITCHAT / UNSUPPORTED / METADATA ──► HALT (answer, no SQL)
                                     │
-  route ──────────────────────────► ┤
+  route ──────────────────────────► ┤   (history, once there is one)
                                     │ ANALYTICAL
                                     ▼
   retrieve  (no LLM — schema block + semantic layer + history)
@@ -97,8 +97,23 @@ beyond an optional `goto`.
 
 ### 1. `route` — classify before spending a schema-sized prompt
 
-**Prompt:** `ROUTE_SYSTEM` + the raw question. **No schema, no history, no
-semantic layer** — deliberately the cheapest call in the run.
+**Prompt:** the question, plus **`ROUTE_SYSTEM` on the first turn of a
+conversation** and **`ROUTE_SYSTEM_WITH_HISTORY` once there is one**. Still no
+schema and no semantic layer — the cheapest call in the run.
+
+The history is there because a follow-up leaves its subject out. "and by
+month?" is nine characters with no data noun in them, and classified alone it
+put CHITCHAT and UNSUPPORTED within reach of a question that plainly needs the
+database — either of which HALTs the run before a line of SQL is written. The
+earlier turns are context for reading the question; the question itself stays
+the user message, so what is being classified never changes.
+
+A first turn has no history and sends `ROUTE_SYSTEM` **byte-identically** to
+the way it always did. That matters: the eval suite is single-turn, so its
+baseline is exactly this prompt.
+
+The turns are rendered by `_render_history`, so they arrive filtered by the
+connection's disclosure policy like every other prompt — see §3.8.
 
 **Logic:**
 1. `complete()`, take `text.strip().upper().split()[0]`.
@@ -132,11 +147,27 @@ semantic layer** — deliberately the cheapest call in the run.
 3. **Over budget → `EXACT_MATCH`**:
    - seed = tables whose *name*, or any of whose *column names*, appears as a
      lowercase **substring of the question**;
+   - plus the tables the recent turns actually **queried** —
+     `_tables_from_history` reads the qualified names out of the SQL behind an
+     earlier answer, which is exact rather than approximate because
+     `_SQL_RULES` requires every table to be schema-qualified. This is the
+     follow-up case: "and by month?" matches no table on its own and would
+     otherwise fall to the `tables[:20]` fallback, an arbitrary twenty that
+     need not contain the table the question it continues was answered from.
+     It reads the SQL and not the prose deliberately — "revenue rose in June"
+     names no table, and substring-searching narration matches `id` inside
+     "identify";
    - `_expand_by_fk(seed, …)` grows it by **exactly one FK hop in either
      direction** — a question names `orders` and `products` but never the
      `order_items` bridge that joins them, and substring matching structurally
      cannot find bridges;
    - no seed at all → `tables[:20]` in snapshot order.
+
+   Retrieval reads the **raw** history, before the disclosure filter of §3.8:
+   the selection never leaves the process, and what is rendered from it is
+   gated by `RetrievedContext.render` exactly as before. No policy governs
+   which of the customer's own tables the customer's own question may be
+   answered from.
 4. Keep only relationships touching a selected table.
 5. Attach `deps.history` (last ≤6 messages) and `deps.semantic` (the layer, or
    `None`), build `RetrievedContext`.
@@ -328,6 +359,54 @@ otherwise fire on nearly every query.
    half a sentence with the fallback stitched on. The data is already correct; a
    narration failure must not lose it.
 
+**The sentence this node writes is result data, and it is persisted.** That is
+the third thing the policy governs, alongside the result and the schema block:
+
+- `disclose_history(history, policy)`
+  ([disclosure.py](../backend/app/pipeline/disclosure.py)) filters the
+  transcript at **read** time, against the policy in force *now* — the same
+  rule `HintBudget` follows, and the same rule the chat header promises. Under
+  `SAMPLE` and `FULL` it is the **identity function**, so a wide connection
+  builds the prompt it built before this existed.
+- Under `NONE`, `AGGREGATE` and anything unrecognised, an earlier answer's
+  prose is replaced by a placeholder. Without that, a connection tightened from
+  FULL to NONE went on replaying yesterday's figures to the model under a
+  policy whose entire meaning is that no result data reaches it — the messages
+  were rendered once, at write time, and nothing re-read them.
+- **What survives every policy:** the user's own turns, the **SQL** behind an
+  earlier answer, and a **clarifying question** (asked before any SQL runs, so
+  it has seen no result — and withholding it would leave the user's reply,
+  which is the very next turn, answering a question the model can no longer
+  see). The SQL is also the part a follow-up actually needs: under `NONE` it is
+  the only thing carrying "and by region?" back to the 2024 window the previous
+  turn established.
+- **Accepted residual:** a literal inside kept SQL (`WHERE status = 'churned'`)
+  may have come from a column value list a wider policy's `HintBudget` once
+  allowed. One token, already on screen in the SQL artifact the user is invited
+  to audit, and stripping it would cost the follow-up its subject.
+- **Not per-turn-precise.** The policy a message was *written* under is not
+  recorded, so the filter reads the current one and fails closed. Under a
+  narrow policy that withholds prose which may have been harmless — an answer
+  written under `AGGREGATE` holds counts `AGGREGATE` permits. Making it exact
+  needs a policy snapshot on `runs` and a migration; the loss is small because
+  the SQL, which is what the next turn reads, is kept either way.
+
+Both other paths that send a transcript to a model — `route` (§3.1) and the
+follow-up suggestions (`run_service.suggest_followups`) — go through the same
+filter. Suggestions in particular fire on their own when the SPA refreshes a
+thread rather than because a user asked something, and their schema block goes
+through `HintBudget` too: `_describe_schema` used to print approximate row
+counts unconditionally, which is a figure derived from customer data that every
+other prompt withholds under `NONE`.
+
+**History is also scoped to one connection.** It is keyed on the conversation,
+so a thread whose turns ran against two connections would hand one connection's
+answers to the other's prompt under the other's policy. `_bind_connection`
+refuses a per-message `connection_id` that differs from the conversation's once
+the transcript is non-empty (the SPA already locks the picker there; this
+closes the API route around it), and `_recent_history` additionally drops any
+turn it cannot attribute to a run on *this* connection.
+
 ### 9. `chart` — the data gets a veto before the model gets a vote
 
 Best-effort and fail-open (the opposite of the guard): the answer and table are
@@ -392,7 +471,7 @@ valued feature; keep it visible, don't collapse it behind "Thought for Xs".
 
 ## 5. Prompt versioning
 
-`PROMPT_VERSION` (currently **v5**) is recorded on every run.
+`PROMPT_VERSION` (currently **v6**) is recorded on every run.
 [prompts/__init__.py](../backend/app/pipeline/prompts/__init__.py) is the only
 place run prompts live — except the semantic-layer *generation* prompts, which
 live in `app/semantic/prompts.py` under `SEMANTIC_PROMPT_VERSION`, because
@@ -400,9 +479,32 @@ live in `app/semantic/prompts.py` under `SEMANTIC_PROMPT_VERSION`, because
 knows nothing about a run.
 
 **Move `PROMPT_VERSION` when the bytes the SQL-producing path sends change.**
-That's why v3 → v4 for the semantic block and v4 → v5 for the shared rules and
-history on repairs, and why clarify, caveats and chart prompt changes *don't*
-move it — the eval scores generated SQL, and none of those touch it.
+That's why v3 → v4 for the semantic block, v4 → v5 for the shared rules and
+history on repairs, and v5 → v6 for `ROUTE_SYSTEM_WITH_HISTORY` plus the
+disclosure filter over the history — and why clarify, caveats and chart prompt
+changes *don't* move it, since the eval scores generated SQL and none of those
+touch it.
+
+v6 is worth reading closely before you compare numbers across it, because it
+moves for two changes that are each conditional:
+
+| connection | v6 vs v5 |
+|---|---|
+| first turn of a thread, any policy | byte-identical (`ROUTE_SYSTEM`, no history to filter) |
+| follow-up, `SAMPLE` or `FULL` | route prompt gains the history; every SQL prompt identical |
+| follow-up, `NONE` or `AGGREGATE` | route prompt gains the history; SQL prompts lose earlier answers' prose, keep their SQL |
+
+The eval suite is single-turn against a `SAMPLE` fixture, so it sits in the
+first row: **v6 does not move the baseline**, and a v5 score is still
+comparable. That is a property of the eval, not a general guarantee — a
+multi-turn suite would need re-measuring.
+
+> **Recorded version drift, pre-existing:** `runs.prompt_version` comes from
+> `settings.prompt_version` ([config.py](../backend/app/core/config.py), default
+> `"v2"`), not from the `PROMPT_VERSION` constant the prompts actually carry.
+> Unless `PROMPT_VERSION` is also set in the environment, every run is recorded
+> under the wrong version. Worth fixing before the next eval round; not part of
+> the v6 change.
 
 ---
 
@@ -476,6 +578,11 @@ is a lateral move — don't take the dependency for cosmetics.
    FK-expands to the whole schema. Too narrow on tables, far too loose on
    columns. Tokenizing both sides with a 3-4 char minimum fixes both.
 
+   `_tables_from_history` narrows one case of this — a follow-up now inherits
+   the previous statement's tables instead of matching nothing — but it is not
+   a fix for the matcher. A *first* question is still matched exactly this way,
+   and it is the first question that decides what the follow-up inherits.
+
 5. **No budget re-check after `_expand_by_fk`.** The branch that exists to
    respect `_RETRIEVE_BUDGET_CHARS` can emit well past it, unbounded.
 
@@ -514,3 +621,20 @@ is a lateral move — don't take the dependency for cosmetics.
    later statement rather than the one that produced the answer. It is a hint
    for the next question, not something a run depends on — fixing it means
    joining `query_executions` as well.
+
+8. **v6's history filter is fail-closed, not per-turn-exact** (§3.8). The
+   policy a message was written under is not recorded, so a narrow policy
+   withholds prose that may have been permissible when written. Exactness needs
+   a `disclosure_policy` snapshot on `runs` and a migration. Two smaller
+   residuals sit with it: a value literal inside kept SQL, and a clarifying
+   question, both of which can carry a column value that a wider policy's
+   `HintBudget` once put in the schema block. All three are deliberate — see
+   the reasoning in §3.8 before "fixing" one.
+
+9. **v6 is shipped and unmeasured, on top of an unmeasured v5** (gap 6). Its
+   route change is a *conditional* addition — a follow-up's classifier prompt
+   grows, a first question's does not — so the single-turn eval cannot see it
+   at all. What it cannot see it cannot catch: if history in `route` starts
+   dragging classifications toward the previous turn's label ("what tables do I
+   have?" after a revenue question coming back ANALYTICAL), the suite will read
+   clean. A multi-turn eval case is the only thing that would measure this.

@@ -14,8 +14,10 @@ from app.core.errors import ConnectorError, LLMError
 from app.core.logging import get_logger
 from app.domain.ports.database import DatabaseConnector
 from app.domain.ports.llm import ChatMessage, LLMGateway, ResolvedLLM
+from app.domain.value_objects import DisclosurePolicy, HintBudget
 from app.pipeline.checks import Finding
 from app.pipeline.contracts import ClarificationProposal, SqlProposal
+from app.pipeline.disclosure import disclose_history
 from app.pipeline.prompts import (
     ANSWER_SYSTEM,
     ANSWER_USER,
@@ -28,6 +30,7 @@ from app.pipeline.prompts import (
     REPAIR_SYSTEM,
     REVIEW_SYSTEM,
     ROUTE_SYSTEM,
+    ROUTE_SYSTEM_WITH_HISTORY,
 )
 from app.pipeline.state import (
     ClarificationRequest,
@@ -64,13 +67,32 @@ class NodeDeps:
 
 # ── route ────────────────────────────────────────────────────────────────
 async def route(state: RunState, deps: NodeDeps) -> NodeResult:
-    """Classify before spending a schema-sized prompt on small talk."""
+    """Classify before spending a schema-sized prompt on small talk.
+
+    Reads the conversation when there is one. A follow-up carries almost none
+    of its own subject — "and by month?" is nine characters with no data noun
+    in them — so classifying it alone put the two cheapest labels within reach
+    of a question that plainly needs the database, and CHITCHAT or UNSUPPORTED
+    halts the run before a single line of SQL is written. The turns before it
+    are what make it readable.
+
+    A first turn has no history and takes the prompt it always took, so the
+    opening question of every conversation is unchanged.
+    """
     started = time.perf_counter()
+    # Same policy filter as every other prompt: `route` sees an earlier answer
+    # only on the terms the connection's disclosure policy allows now.
+    history_text = _render_history(deps.history, state.disclosure_policy)
+    system = (
+        ROUTE_SYSTEM_WITH_HISTORY.format(history=history_text)
+        if history_text
+        else ROUTE_SYSTEM
+    )
     try:
         completion = await deps.llm_gateway.complete(
             deps.llm,
             [
-                ChatMessage(role="system", content=ROUTE_SYSTEM),
+                ChatMessage(role="system", content=system),
                 ChatMessage(role="user", content=state.question),
             ],
         )
@@ -119,6 +141,35 @@ async def route(state: RunState, deps: NodeDeps) -> NodeResult:
     return NodeResult(detail=f"Classified {state.intent} in {elapsed}ms")
 
 
+def _tables_from_history(
+    history: list[dict[str, str]], tables: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """The tables the recent turns actually queried, in snapshot order.
+
+    Matched on the qualified name inside the SQL behind an earlier answer,
+    which is exact rather than approximate: `_SQL_RULES` requires every table
+    to be schema-qualified, so `public.orders` appears verbatim in any
+    statement the guard let through. That is the whole reason this reads the
+    SQL and not the prose — "revenue rose in June" names no table, and a
+    substring search over narration matches `id` in "identify".
+
+    The result never leaves the process: it selects rows *from the snapshot*,
+    which `RetrievedContext.render` then gates by the disclosure policy like
+    any other schema block. So this reads the raw history, before
+    `disclose_history` — no policy governs which of the customer's own tables
+    the customer's own question may be answered from.
+    """
+    statements = " ".join(
+        turn["sql"].lower() for turn in history if turn.get("sql")
+    )
+    if not statements:
+        return []
+    return [
+        t for t in tables
+        if f"{t['schema']}.{t['name']}".lower() in statements
+    ]
+
+
 def _expand_by_fk(
     seed: list[dict[str, Any]],
     tables: list[dict[str, Any]],
@@ -143,14 +194,27 @@ def _expand_by_fk(
     return [t for t in tables if f"{t['schema']}.{t['name']}" in reachable]
 
 
-def _describe_schema(tables: list[dict[str, Any]]) -> str:
+def _describe_schema(
+    tables: list[dict[str, Any]], policy: str = DisclosurePolicy.NONE
+) -> str:
+    """Every table and column name, for a model-facing prompt.
+
+    `policy` defaults to NONE so a caller that forgets one emits structure
+    only — the same fail-closed default as `RetrievedContext.render`, and for
+    the same reason: a row count is derived from the customer's data, and
+    `HintBudget` withholds it under NONE. Names are not gated here because they
+    never were: the schema block goes to the model on every question under
+    every policy, and a question cannot be answered against a schema the model
+    cannot see.
+    """
     if not tables:
         return "This connection has no tables in its current schema snapshot."
+    budget = HintBudget.from_policy(policy)
     lines = [f"You have {len(tables)} table{'' if len(tables) == 1 else 's'}:"]
     for table in tables:
         cols = ", ".join(c["name"] for c in table.get("columns", []))
         rows = table.get("approx_row_count")
-        suffix = f" (~{rows:,} rows)" if rows else ""
+        suffix = f" (~{rows:,} rows)" if rows and budget.row_counts else ""
         lines.append(f"- {table['schema']}.{table['name']}{suffix}: {cols}")
     return "\n".join(lines)
 
@@ -191,12 +255,23 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
             if t["name"].lower() in needle
             or any(c["name"].lower() in needle for c in t.get("columns", []))
         ]
+        # A follow-up names nothing: "and by month?" matches no table, and on
+        # its own would fall through to `tables[:20]` — an arbitrary twenty
+        # that need not include the table the question it continues was
+        # answered from. The tables the previous statement ran against are the
+        # subject it inherits, so they seed retrieval alongside anything this
+        # question named itself.
+        carried = _tables_from_history(deps.history, tables)
+        seen = {f"{t['schema']}.{t['name']}" for t in matched}
+        seed = matched + [
+            t for t in carried if f"{t['schema']}.{t['name']}" not in seen
+        ]
         # A question names its entities ("orders", "products") but almost never
         # the junction/bridge tables that join them ("order_items",
         # "product_tags"). Pull in every table one foreign-key hop from a matched
         # table so those bridges reach the generator; substring matching alone
         # structurally cannot find them.
-        selected = _expand_by_fk(matched, tables, relationships) if matched else tables[:20]
+        selected = _expand_by_fk(seed, tables, relationships) if seed else tables[:20]
         strategy = "EXACT_MATCH"
 
     names = {f"{t['schema']}.{t['name']}" for t in selected}
@@ -232,7 +307,9 @@ _HISTORY_CONTENT_CHARS = 300
 _HISTORY_SQL_CHARS = 400
 
 
-def _render_history(history: list[dict[str, str]]) -> str:
+def _render_history(
+    history: list[dict[str, str]], policy: str = DisclosurePolicy.NONE
+) -> str:
     """The recent turns as the model sees them, or `""` when there are none.
 
     An assistant turn carries the SQL that produced it when one is known.
@@ -241,13 +318,20 @@ def _render_history(history: list[dict[str, str]]) -> str:
     difficulty of a follow-up like "now break that down by month" — the answer
     it is building on is a sentence, not a statement it can extend.
 
+    The turns are first put through `disclose_history`, because an earlier
+    answer's prose is result data the model wrote down: the policy that gated
+    the result has to gate the transcript that quotes it, or tightening a
+    connection would take effect for one turn and be undone by the next. As
+    everywhere else in the pipeline, `policy` defaults to the narrowest so a
+    caller that forgets one cannot widen a disclosure.
+
     The SQL is whitespace-collapsed onto one line so a multi-line statement
     cannot break the `role: content` structure the turns are read by.
     """
     if not history:
         return ""
     lines: list[str] = []
-    for turn in history:
+    for turn in disclose_history(history, policy):
         lines.append(f"{turn['role']}: {turn['content'][:_HISTORY_CONTENT_CHARS]}")
         sql = turn.get("sql")
         if sql:
@@ -290,7 +374,7 @@ async def clarify(state: RunState, deps: NodeDeps) -> NodeResult:
 
     assert state.context is not None
     started = time.perf_counter()
-    history_text = _render_history(state.context.history)
+    history_text = _render_history(state.context.history, state.disclosure_policy)
 
     try:
         proposal = await deps.llm_gateway.structured(
@@ -339,12 +423,13 @@ async def generate(state: RunState, deps: NodeDeps) -> NodeResult:
     # same disclosure policy that governs the result in `present`.
     schema_text = state.context.render(state.disclosure_policy)
 
-    # Every SQL-producing prompt gets the same history. A repair is a fresh
+    # Every SQL-producing prompt gets the same history, on the same disclosure
+    # terms as the schema block above it. A repair is a fresh
     # two-message conversation with the model, so anything the first attempt
     # was told and the repair is not is simply lost — which is how the repair
     # path came to be the only one that could not see what the user asked two
     # turns ago.
-    history_text = _render_history(state.context.history)
+    history_text = _render_history(state.context.history, state.disclosure_policy)
 
     if attempt_no == 1:
         messages = [

@@ -20,6 +20,7 @@ from uuid import uuid4
 import pytest
 
 from app.core.clock import utcnow
+from app.domain.value_objects import DisclosurePolicy
 from app.pipeline.checks import Finding
 from app.pipeline.contracts import SqlProposal
 from app.pipeline.nodes import NodeDeps, _render_history, generate
@@ -88,8 +89,15 @@ def test_every_sql_producing_prompt_carries_the_history(template: str) -> None:
 
 
 # ── rendering the history ────────────────────────────────────────────────────
+# `_render_history` takes the disclosure policy and defaults to the narrowest,
+# which withholds an earlier answer's prose. These tests are about the *shape*
+# of a rendered turn, so they pass a wide policy explicitly; what the narrow
+# ones withhold is tested in `test_history_disclosure.py`.
+WIDE = DisclosurePolicy.FULL
+
+
 def test_history_is_empty_when_there_are_no_turns() -> None:
-    assert _render_history([]) == ""
+    assert _render_history([], WIDE) == ""
 
 
 def test_assistant_turn_carries_the_sql_behind_it() -> None:
@@ -102,7 +110,8 @@ def test_assistant_turn_carries_the_sql_behind_it() -> None:
                 "content": "Revenue was $1.2M in June.",
                 "sql": "SELECT SUM(total) FROM public.orders",
             },
-        ]
+        ],
+        WIDE,
     )
     assert "user: What was revenue in June?" in rendered
     assert "assistant: Revenue was $1.2M in June." in rendered
@@ -113,7 +122,8 @@ def test_multi_line_sql_is_collapsed_onto_one_line() -> None:
     """Otherwise a statement's own newlines break the `role: content` structure
     the turns are read by, and a continuation line reads as a new turn."""
     rendered = _render_history(
-        [{"role": "assistant", "content": "a", "sql": "SELECT 1\nFROM t\nWHERE x = 1"}]
+        [{"role": "assistant", "content": "a", "sql": "SELECT 1\nFROM t\nWHERE x = 1"}],
+        WIDE,
     )
     sql_lines = [ln for ln in rendered.splitlines() if "SELECT" in ln]
     assert sql_lines == ["  SQL: SELECT 1 FROM t WHERE x = 1"]
@@ -123,12 +133,12 @@ def test_a_turn_without_sql_renders_exactly_as_before() -> None:
     """A conversation with no query behind it — chitchat, a clarification, a
     failed run — must produce the bytes it produced before SQL was carried."""
     turns = [{"role": "user", "content": "hello"}]
-    assert _render_history(turns) == "Earlier in this conversation:\nuser: hello"
+    assert _render_history(turns, WIDE) == "Earlier in this conversation:\nuser: hello"
 
 
 def test_long_content_and_sql_are_both_truncated() -> None:
     rendered = _render_history(
-        [{"role": "assistant", "content": "x" * 900, "sql": "y" * 900}]
+        [{"role": "assistant", "content": "x" * 900, "sql": "y" * 900}], WIDE
     )
     assert "x" * 300 in rendered and "x" * 301 not in rendered
     assert "y" * 400 in rendered and "y" * 401 not in rendered
