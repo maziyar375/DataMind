@@ -609,6 +609,9 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
                 <GhostButton onClick={() => setEditing(true)}>
                   <Icon.Grid size={13} /> Edit grid
                 </GhostButton>
+                <PrimaryButton onClick={() => setEditorTile(null)}>
+                  <Icon.Plus /> Add tile
+                </PrimaryButton>
               </>
             )}
           </div>
@@ -634,7 +637,6 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
             />
           ) : (
             width > 0 && (
-              <>
               <div style={{ position: 'relative' }}>
                 {/* While arranging, a faint guide at the dashboard's own cell
                     geometry — react-grid-layout pads the container by one gap
@@ -660,12 +662,6 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
                   onTileAction={(action, tile) => void onTileAction(action, tile)}
                 />
               </div>
-              {/* A standing slot, drawn like the empty cell it will become —
-                  adding a tile is not a mode, so it does not hide behind one. */}
-              <button className="rm-add-tile" onClick={() => setEditorTile(null)}>
-                <Icon.Plus size={14} /> Add tile
-              </button>
-              </>
             )
           )}
         </div>

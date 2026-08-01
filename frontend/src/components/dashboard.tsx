@@ -773,19 +773,6 @@ export function DashboardSettings({
         </span>
       </label>
 
-      <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>Theme</span>
-        <select
-          value={dashboard.theme_override}
-          onChange={(event) => onChange({ theme_override: event.target.value })}
-          style={selectStyle}
-        >
-          <option value="INHERIT">Follow the app</option>
-          <option value="DARK">Always dark</option>
-          <option value="LIGHT">Always light</option>
-        </select>
-      </label>
-
       <SectionLabel>Refresh</SectionLabel>
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>Default refresh rate</span>
