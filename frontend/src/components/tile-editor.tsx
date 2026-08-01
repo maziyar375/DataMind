@@ -302,17 +302,37 @@ export function TileEditor({
     return table
   }, [columns, table, tileType])
 
-  /** A new tile lands under everything already on the grid, full width of 4. */
+  /**
+   * A new tile lands under everything already on the grid, sized so its own
+   * content fits without an inner scrollbar: a chart's plot is a fixed 300px
+   * (`VegaChart`), a metric is one big number, a table settles around a few
+   * rows. Row count is computed against the dashboard's actual row height and
+   * gap — a denser grid gets more rows, not a taller tile — so the first
+   * paint is right whatever the grid settings say.
+   */
   const placement = useMemo(() => {
     const bottom = dashboard.tiles.reduce((low, t) => Math.max(low, t.grid_y + t.grid_h), 0)
+    const { grid_columns: cols, row_height_px: rowH, gap_px: gap } = dashboard
+    // Pixel budget per type: header ≈ 50px + body padding + the content itself.
+    const needed =
+      tileType === 'CHART' ? 400
+      : tileType === 'TABLE' ? 330
+      : tileType === 'METRIC' ? 150
+      : 130
+    // Smallest h where h·rowH + (h−1)·gap ≥ needed.
+    const rows = Math.max(2, Math.ceil((needed + gap) / (rowH + gap)))
+    const fraction =
+      tileType === 'CHART' || tileType === 'TABLE' ? 1 / 2
+      : tileType === 'METRIC' ? 1 / 4
+      : 1 / 3
     return {
       grid_x: 0,
       grid_y: bottom,
-      grid_w: Math.min(4, dashboard.grid_columns),
-      grid_h: 4,
+      grid_w: Math.max(2, Math.min(cols, Math.round(cols * fraction))),
+      grid_h: rows,
       position: dashboard.tiles.length,
     }
-  }, [dashboard])
+  }, [dashboard, tileType])
 
   const save = useCallback(async () => {
     setSaving(true)

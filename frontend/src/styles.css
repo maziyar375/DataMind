@@ -342,6 +342,22 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .rm-dash-card-link::after { content: ''; position: absolute; inset: 0; }
 .rm-dash-card:hover .rm-tile-actions { opacity: 1; }
 
+/* The dashboard canvas is slightly recessed — the sidebar's tone, translucent
+   so the light theme's warm wash still breathes through — which makes the
+   tiles read as cards sitting *on* a surface rather than lines drawn on the
+   page. The tiles themselves keep solid panel backgrounds, so nothing behind
+   data costs legibility. */
+.rm-dash-canvas {
+  background: color-mix(in oklch, var(--sidebar-bg) 60%, transparent);
+}
+
+/* Chips that are metadata, not data — a tile's connection and model — stay
+   quiet until the tile is approached, like the kebab. The refresh-rate chip
+   is exempt: it says whether the number is live, which is worth a glance. */
+.rm-tile-meta { opacity: 0; transition: opacity .12s ease; }
+.rm-tile:hover .rm-tile-meta,
+.rm-tile:focus-within .rm-tile-meta { opacity: 1; }
+
 /* The alignment guide shown while a dashboard is being edited: the same
    thin-line grid motif the welcome and auth screens use, drawn at the
    dashboard's own cell geometry (size and offset are set inline, because

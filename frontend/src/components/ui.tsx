@@ -604,10 +604,12 @@ export function DangerButton({
 export type ChipTone = 'neutral' | 'green' | 'amber' | 'red' | 'accent'
 
 export function Chip({
-  children, tone = 'neutral',
+  children, tone = 'neutral', small = false,
 }: {
   children: React.ReactNode
   tone?: ChipTone
+  /** A quieter pill for dense chrome (dashboard tile headers). */
+  small?: boolean
 }) {
   const tones: Record<string, React.CSSProperties> = {
     neutral: { color: 'var(--text-dim)', background: 'var(--panel-alt)' },
@@ -619,10 +621,14 @@ export function Chip({
   return (
     <span
       style={{
-        fontSize: 11,
-        padding: '4px 9px',
-        borderRadius: 5,
+        fontSize: small ? 10 : 11,
+        fontWeight: small ? 500 : undefined,
+        padding: small ? '2.5px 8px' : '4px 9px',
+        borderRadius: small ? 999 : 5,
         whiteSpace: 'nowrap',
+        maxWidth: small ? 120 : undefined,
+        overflow: small ? 'hidden' : undefined,
+        textOverflow: small ? 'ellipsis' : undefined,
         ...tones[tone],
       }}
     >

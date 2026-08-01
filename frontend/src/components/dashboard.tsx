@@ -253,14 +253,16 @@ export function TileShell({
         overflow: 'hidden',
       }}
     >
+      {/* The header floats over the body rather than sitting behind a rule:
+          the title labels the content the way an axis label does, and the
+          divider was chrome the data paid for. */}
       <div
         className={editing ? 'rm-tile-drag' : undefined}
         style={{
           display: 'flex',
           alignItems: 'center',
           gap: 8,
-          padding: '10px 12px',
-          borderBottom: '1px solid var(--border)',
+          padding: '10px 12px 6px',
           flexShrink: 0,
         }}
       >
@@ -295,11 +297,16 @@ export function TileShell({
         </div>
 
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
-          {tile.connection_name && <Chip>{tile.connection_name}</Chip>}
-          {tile.llm_config_name && tile.sql_origin !== 'HANDWRITTEN' && (
-            <Chip tone="accent">{tile.llm_config_name}</Chip>
-          )}
-          <Chip tone={rate > 0 ? 'green' : 'neutral'}>
+          {/* Connection and model are provenance, not data: revealed with the
+              kebab on approach. The rate chip stays — whether the number is
+              live is worth a glance. */}
+          <span className="rm-tile-meta" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {tile.connection_name && <Chip small>{tile.connection_name}</Chip>}
+            {tile.llm_config_name && tile.sql_origin !== 'HANDWRITTEN' && (
+              <Chip small tone="accent">{tile.llm_config_name}</Chip>
+            )}
+          </span>
+          <Chip small tone={rate > 0 ? 'green' : 'neutral'}>
             {rate > 0 ? rateLabel(rate) : 'Manual'}
           </Chip>
 
@@ -338,7 +345,7 @@ export function TileShell({
         </div>
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 10 }}>
+      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '4px 12px 12px' }}>
         <TileBody tile={tile} result={result} loading={loading} />
       </div>
     </div>

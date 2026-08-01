@@ -623,7 +623,7 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
           </div>
         )}
 
-        <div ref={gridRef} style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
+        <div ref={gridRef} className="rm-dash-canvas" style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
           {tiles.length === 0 ? (
             <EmptyState
               icon={<Icon.Grid size={20} />}
