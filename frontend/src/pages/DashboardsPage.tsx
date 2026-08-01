@@ -588,9 +588,11 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
             >
               <Icon.Gear size={13} /> Settings
             </GhostButton>
-            {/* One toggle, as §7 asks: reading or arranging, never both. The
-                filled state is the mode indicator: while arranging, the way
-                back to reading stays lit. */}
+            {/* One toggle: reading or arranging, never both. It governs the
+                grid — dragging, resizing, adding, the inline name — while a
+                single tile's edit/duplicate/delete live on the tile's own
+                kebab in either mode. The filled state is the mode indicator:
+                while arranging, the way back to reading stays lit. */}
             <GhostButton
               onClick={() => setEditing((on) => !on)}
               style={
@@ -609,7 +611,7 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
                 </>
               ) : (
                 <>
-                  <Icon.Pencil size={12} /> Edit
+                  <Icon.Grid size={13} /> Edit grid
                 </>
               )}
             </GhostButton>

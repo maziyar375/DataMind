@@ -402,7 +402,6 @@ export function TileShell({
             </button>
             {menuOpen && (
               <TileMenu
-                editing={editing}
                 onClose={() => setMenuOpen(false)}
                 onAction={(action) => {
                   setMenuOpen(false)
@@ -422,9 +421,8 @@ export function TileShell({
 }
 
 function TileMenu({
-  editing, onAction, onClose,
+  onAction, onClose,
 }: {
-  editing: boolean
   onAction: (action: TileAction) => void
   onClose: () => void
 }) {
@@ -436,15 +434,14 @@ function TileMenu({
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
 
+  // The full set in every mode: the header's toggle governs the *grid* —
+  // dragging, resizing, adding — while a single tile's own life cycle (edit,
+  // duplicate, delete) belongs to the tile, reachable without a mode switch.
   const items: { action: TileAction; label: string; danger?: boolean }[] = [
     { action: 'refresh', label: 'Refresh now' },
-    ...(editing
-      ? ([
-          { action: 'edit', label: 'Edit' },
-          { action: 'duplicate', label: 'Duplicate' },
-          { action: 'delete', label: 'Delete', danger: true },
-        ] as const)
-      : []),
+    { action: 'edit', label: 'Edit' },
+    { action: 'duplicate', label: 'Duplicate' },
+    { action: 'delete', label: 'Delete', danger: true },
   ]
 
   return (
