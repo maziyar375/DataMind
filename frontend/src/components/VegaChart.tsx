@@ -157,13 +157,20 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
     // persist their spec, so those are still on screen, and the guess is the
     // same one that was in force when they were written.
     const meta = (spec.usermeta as
-      { datamind?: { chart_type?: string; orientation?: string } } | undefined)?.datamind
+      { datamind?: {
+        chart_type?: string; orientation?: string; stack?: string; categories?: number
+      } } | undefined)?.datamind
     const isHorizontalBar = meta
       ? meta.chart_type === 'bar' && meta.orientation === 'horizontal'
       : mark === 'bar' && encoding.y?.type === 'nominal'
     const PER_BAR = 22
+    // Bars drawn along the category axis. A stacked split puts its parts on
+    // one bar, so the count is the categories; a grouped one gives each part
+    // its own bar, so it is back to the row count.
+    const barCount =
+      meta?.stack === 'grouped' ? rowCount : meta?.categories ?? rowCount
     const height: number | 'container' = isHorizontalBar
-      ? Math.min(60_000, Math.max(200, rowCount * PER_BAR))
+      ? Math.min(60_000, Math.max(200, barCount * PER_BAR))
       : fill
         ? 'container'
         : mark === 'arc'
@@ -176,9 +183,16 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
     // width and let the box scroll sideways instead. The backend caps category
     // charts long before this matters — this is the floor that holds if that
     // cap ever changes, not the primary defence.
+    //
+    // What is counted is *columns*, not rows, and once a chart is split by a
+    // series those stop being the same number: eight regions over twelve
+    // months is 96 rows and twelve columns. The backend states the column
+    // count in `usermeta`; the row count is only the fallback for specs
+    // compiled before it did, where no split was expressible anyway.
+    const columnCount = meta?.categories ?? rowCount
     const PER_COLUMN = 34
     const width: number | 'container' =
-      xIsCategorical && rowCount > 12 ? rowCount * PER_COLUMN : 'container'
+      xIsCategorical && columnCount > 12 ? columnCount * PER_COLUMN : 'container'
     return { encoding, isHorizontalBar, height, width, xIsCategorical }
   }, [spec, fill])
 

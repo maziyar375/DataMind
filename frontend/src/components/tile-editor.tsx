@@ -50,6 +50,9 @@ const TILE_TYPES: { value: TileType; label: string; hint: string }[] = [
   { value: 'TEXT', label: 'Text', hint: 'A note. No connection, no SQL, nothing to run.' },
 ]
 
+/** The marks with area to divide between a split. */
+const STACKABLE = ['bar', 'area']
+
 /** The chart picker. `auto` stores null — see the header. */
 const CHART_TYPES: { value: string; label: string }[] = [
   { value: 'auto', label: 'Auto' },
@@ -73,12 +76,26 @@ const ORIENTATIONS: { value: string; label: string }[] = [
   { value: 'horizontal', label: 'Horizontal' },
 ]
 
+/**
+ * How a split shares the space. Shown only for a bar or area that *has* a
+ * series — one series has nothing to stack against, and the backend resets the
+ * field to its default in that case rather than storing a claim the chart
+ * cannot honour.
+ */
+const STACKS: { value: string; label: string; hint: string }[] = [
+  { value: 'stacked', label: 'Stacked', hint: 'The parts add up to a total.' },
+  { value: 'grouped', label: 'Grouped', hint: 'The parts are compared with each other.' },
+  { value: 'normalize', label: '100%', hint: 'Share of the whole, not absolute size.' },
+]
+
 interface AxisState {
   type: string
   orientation: string
+  stack: string
   x: string
   y: string
   series: string
+  size: string
 }
 
 /** Read the editor's controls back out of a stored `ChartIntent`. */
@@ -86,9 +103,11 @@ function axisStateFrom(config: Record<string, unknown> | null | undefined): Axis
   const intent = (config ?? {}) as {
     chart_type?: string
     orientation?: string
+    stack?: string
     x_axis?: { field?: string }
     y_axis?: { field?: string }
     series?: { field?: string }
+    size?: { field?: string }
   }
   // The pre-consolidation spelling, read the way the backend reads it. A tile
   // the migration has not reached yet still opens showing what it draws.
@@ -96,9 +115,11 @@ function axisStateFrom(config: Record<string, unknown> | null | undefined): Axis
   return {
     type: legacy ? 'bar' : intent.chart_type ?? 'auto',
     orientation: legacy ? 'horizontal' : intent.orientation ?? 'auto',
+    stack: intent.stack ?? 'stacked',
     x: intent.x_axis?.field ?? '',
     y: intent.y_axis?.field ?? '',
     series: intent.series?.field ?? '',
+    size: intent.size?.field ?? '',
   }
 }
 
@@ -220,8 +241,14 @@ export function TileEditor({
         x: keep(current.x) || suggested.x,
         y: keep(current.y) || suggested.y,
         series: keep(current.series),
+        size: keep(current.size),
       }
-      return next.x === current.x && next.y === current.y && next.series === current.series
+      return (
+        next.x === current.x
+        && next.y === current.y
+        && next.series === current.series
+        && next.size === current.size
+      )
         ? current
         : next
     })
@@ -288,13 +315,20 @@ export function TileEditor({
       x_axis: { field: axes.x, type: axisType(axes.x), aggregation: 'none' },
       y_axis: { field: axes.y, type: axisType(axes.y), aggregation: 'none' },
     }
-    // Bars only, and only when it says something: "auto" is already the
-    // field's default, so writing it would store a preference nobody expressed.
+    // Only when it says something: each of these has a default the backend
+    // already applies, so writing it would store a preference nobody expressed
+    // and freeze a decision the platform should keep making.
     if (axes.type === 'bar' && axes.orientation !== 'auto') {
       intent.orientation = axes.orientation
     }
     if (axes.series && axes.type !== 'pie') {
       intent.series = { field: axes.series, type: axisType(axes.series), aggregation: 'none' }
+      if (STACKABLE.includes(axes.type) && axes.stack !== 'stacked') {
+        intent.stack = axes.stack
+      }
+    }
+    if (axes.size && axes.type === 'scatter') {
+      intent.size = { field: axes.size, type: axisType(axes.size), aggregation: 'none' }
     }
     return intent
   }, [axes, columns, tileType])
@@ -1049,8 +1083,10 @@ function ChartPicker({
                 </Select>
               </Field>
             )}
-            {/* Flows onto a second row of the grid, under the type it belongs
-                to. Bars only — every other mark has one way to run. */}
+            {/* These flow onto a second row of the grid, under the type they
+                belong to. Each appears only where it means something: an
+                orientation on a pie, or a stack with nothing split, would be a
+                control that does nothing whichever way it is set. */}
             {axes.type === 'bar' && (
               <Field label="Bars">
                 <Select
@@ -1060,6 +1096,36 @@ function ChartPicker({
                   {ORIENTATIONS.map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            )}
+            {STACKABLE.includes(axes.type) && axes.series !== '' && (
+              <Field label="Split" hint={STACKS.find((s) => s.value === axes.stack)?.hint}>
+                <Select
+                  value={axes.stack}
+                  onChange={(event) => onChange({ ...axes, stack: event.target.value })}
+                >
+                  {STACKS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            )}
+            {axes.type === 'scatter' && (
+              <Field label="Size" hint="A third measure, read as the point's area.">
+                <Select
+                  value={axes.size}
+                  disabled={!known}
+                  onChange={(event) => onChange({ ...axes, size: event.target.value })}
+                >
+                  <option value="">None</option>
+                  {columns.map((column) => (
+                    <option key={column.name} value={column.name}>
+                      {column.name}
                     </option>
                   ))}
                 </Select>

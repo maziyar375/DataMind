@@ -39,9 +39,18 @@ EDITOR_CHART_TYPES = ["bar", "line", "area", "scatter", "pie"]
 # expressed — so only these two ever reach the column.
 EDITOR_ORIENTATIONS = ["vertical", "horizontal"]
 
+# The `Split` control, shown for a bar or area that has a series. As above,
+# the default is never sent.
+EDITOR_STACKS = ["grouped", "normalize"]
+
 
 def editor_payload(
-    chart_type: str, *, series: bool = False, orientation: str | None = None
+    chart_type: str,
+    *,
+    series: bool = False,
+    orientation: str | None = None,
+    stack: str | None = None,
+    size: bool = False,
 ) -> dict[str, Any]:
     """Exactly what `chartConfig()` in `tile-editor.tsx` puts on the wire.
 
@@ -58,6 +67,10 @@ def editor_payload(
         payload["orientation"] = orientation
     if series:
         payload["series"] = {"field": "region", "type": "nominal", "aggregation": "none"}
+        if stack is not None:
+            payload["stack"] = stack
+    if size:
+        payload["size"] = {"field": "weight", "type": "quantitative", "aggregation": "none"}
     return payload
 
 
@@ -96,6 +109,27 @@ def test_the_orientation_control_round_trips(orientation: str) -> None:
 def test_orientation_defaults_to_auto_when_the_editor_omits_it() -> None:
     """Which is what it does for every non-bar type, and for `Bars: Auto`."""
     assert ChartIntent.model_validate(editor_payload("line")).orientation == "auto"
+
+
+@pytest.mark.parametrize("stack", EDITOR_STACKS)
+def test_the_split_control_round_trips(stack: str) -> None:
+    from app.charts import StackMode
+
+    assert stack in set(StackMode.__args__)  # type: ignore[attr-defined]
+    payload = editor_payload("bar", series=True, stack=stack)
+    assert ChartIntent.model_validate(payload).stack == stack
+
+
+def test_stack_defaults_to_stacked_when_the_editor_omits_it() -> None:
+    """The editor shows the control only for a split bar or area, and never
+    sends the default — so an unsplit chart's payload has no `stack` key, and
+    must land on the value Vega-Lite would have used anyway."""
+    assert ChartIntent.model_validate(editor_payload("bar")).stack == "stacked"
+
+
+def test_the_size_control_round_trips() -> None:
+    intent = ChartIntent.model_validate(editor_payload("scatter", size=True))
+    assert intent.size is not None and intent.size.field == "weight"
 
 
 def test_a_tile_stored_before_the_consolidation_still_draws_sideways() -> None:

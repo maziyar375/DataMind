@@ -320,6 +320,13 @@ Rules:
   for dates/timestamps, nominal for text, ordinal for ranked categories.
 - Use "series" only to split a chart by a small dimension (<=8 distinct
   values); leave it unset otherwise.
+- With a series on a bar or area chart, pick a "stack":
+  - "stacked" (the default): the split parts add up to a meaningful total.
+  - "grouped": the parts are being compared with each other, not summed.
+  - "normalize": the question is about share or mix, not absolute size.
+  Leave it alone unless the question points at one of the other two.
+- Use "size" only on a scatter, and only for a third measure worth reading as
+  magnitude — it makes the points a bubble chart. Never an id.
 
 Return JSON matching the ChartIntent schema."""
 

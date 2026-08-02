@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -23,6 +23,7 @@ from app.charts import (
     MAX_CATEGORY_MARKS,
     AxisSpec,
     ChartIntent,
+    _fit,
     compile_vega_lite,
     heuristic_intent,
     plan_chart,
@@ -136,9 +137,13 @@ def test_compile_marks(chart_type: str, mark: str) -> None:
 
 def test_pie_uses_theta_and_color_not_xy() -> None:
     spec = compile_vega_lite(_intent("pie"), PROFILE, COLUMNS, ROWS)
-    assert set(spec["encoding"]) == {"theta", "color"}
+    assert set(spec["encoding"]) == {"theta", "color", "tooltip"}
     assert spec["encoding"]["theta"]["field"] == "total"
     assert spec["encoding"]["color"]["field"] == "name"
+    # `axis` belongs to positional channels alone. On theta or colour it is not
+    # ignored — Vega-Lite rejects the spec, and the tile loses its chart.
+    assert "axis" not in spec["encoding"]["theta"]
+    assert "axis" not in spec["encoding"]["color"]
 
 
 def test_horizontal_bar_swaps_axes() -> None:
@@ -173,7 +178,12 @@ def test_the_spec_states_the_chart_it_is() -> None:
     reads that decision here rather than inferring it from mark plus axis type,
     which a stacked bar or a future `rect` mark could satisfy by accident."""
     assert compile_vega_lite(_sideways(), PROFILE, COLUMNS, ROWS)["usermeta"] == {
-        "datamind": {"chart_type": "bar", "orientation": "horizontal"}
+        "datamind": {
+            "chart_type": "bar",
+            "orientation": "horizontal",
+            "stack": "stacked",
+            "categories": 3,
+        }
     }
     upright = compile_vega_lite(_intent("bar", orientation="vertical"), PROFILE, COLUMNS, ROWS)
     assert upright["usermeta"]["datamind"]["orientation"] == "vertical"
@@ -204,6 +214,244 @@ def test_series_adds_color_for_cartesian_charts() -> None:
     )
     spec = compile_vega_lite(intent, PROFILE, COLUMNS, ROWS)
     assert spec["encoding"]["color"]["field"] == "name"
+
+
+# ── how a value is written on an axis ────────────────────────────────────
+# Every expectation below was read back out of a real Vega render, not reasoned
+# about: `vl.compile` then `view.scenegraph()`, then the axis-label texts. Three
+# of these rules exist *because* the obvious version was wrong on screen.
+def _dated(stamps: list) -> dict:
+    """The x-axis config of a line chart over `stamps`, or {} if it got none."""
+    cols = _cols(("when", "temporal"), ("amount", "quantitative"))
+    rows: list[list] = [[s, float(i)] for i, s in enumerate(stamps, start=1)]
+    intent = ChartIntent(
+        chart_type="line",
+        x_axis=AxisSpec(field="when", type="temporal"),
+        y_axis=AxisSpec(field="amount", type="quantitative"),
+    )
+    spec = compile_vega_lite(intent, profile_result(cols, rows), cols, rows)
+    return spec["encoding"]["x"].get("axis", {})
+
+
+def test_a_monthly_axis_is_labelled_in_months_not_a_bare_year() -> None:
+    """The reported bug. Unformatted, Vega uses D3's multi-scale time format,
+    which labels each tick with the largest unit that changes there — so the
+    January tick of a monthly series reads "2025" while its neighbours read
+    "September" and "November"."""
+    months = [date(2024, 10, 1), date(2024, 11, 1), date(2024, 12, 1), date(2025, 1, 1)]
+    assert _dated(months)["format"] == "%b %Y"
+
+
+def test_a_temporal_axis_ticks_on_its_own_grain() -> None:
+    """The half that a format alone does not fix, and would have made worse.
+
+    Ticks are placed before they are labelled, and Vega spaces them for the
+    pixels available: a three-month series gets four ticks inside every month,
+    which `%b %Y` renders as "Jan 2025" four times in a row. Pinning the
+    interval to the grain is what keeps every label distinct.
+    """
+    quarter = [date(2025, 1, 1), date(2025, 2, 1), date(2025, 3, 1)]
+    assert _dated(quarter)["tickCount"] == {"interval": "month"}
+
+
+def test_a_long_axis_escalates_the_interval_rather_than_stepping_it() -> None:
+    """`interval.every(n)` filters by divisibility instead of striding, so
+    `date` every 30 yields Jan 1, Jan 31, Feb 1, Mar 1 — clumped. A coarser
+    unit is evenly spaced and cannot clump."""
+    five_years = [date(2021, 1, 1) + timedelta(days=i) for i in range(1800)]
+    assert _dated(five_years)["tickCount"] == {"interval": "year"}
+    assert _dated(five_years)["format"] == "%b %d, %Y"  # still dated to the day
+
+    nineteen_months = [date(2024 + (9 + i) // 12, (9 + i) % 12 + 1, 1) for i in range(19)]
+    assert _dated(nineteen_months)["tickCount"] == {"interval": "quarter"}
+
+
+def test_an_intraday_axis_sets_no_interval_at_all() -> None:
+    """`vega-time` has no "hour" interval — `timeInterval("hour")` is
+    undefined and Vega throws inside its own tick generator, which in the
+    browser means `embed()` rejects and the chart disappears. Format only."""
+    hours = [datetime(2025, 3, 1, h, 30) for h in range(24)]
+    axis = _dated(hours)
+    assert axis["format"] == "%b %d, %H:%M"
+    assert "tickCount" not in axis
+
+
+def test_a_yearly_axis_says_only_the_year() -> None:
+    assert _dated([date(2019 + i, 1, 1) for i in range(6)])["format"] == "%Y"
+
+
+def test_a_column_of_strings_gets_no_time_format() -> None:
+    """A connector that pre-formats dates hands back text. A time format
+    applied to text is how an axis goes blank."""
+    assert "format" not in _dated(["last week", "this week"])
+
+
+def test_a_big_measure_axis_is_abbreviated_and_a_small_one_is_left_alone() -> None:
+    """`~s` past ten thousand. Below it, nothing — and that restraint is the
+    measured part: an axis format reaches d3 via `tickFormat`, which fills in a
+    precision when the specifier has no type, so a plain "," turns 100, 150,
+    200 into 1e+2, 1.5e+2, 2e+2. Vega's own default is already right there.
+    """
+    cols = _cols(("name", "nominal"), ("amount", "quantitative"))
+    intent = ChartIntent(
+        chart_type="bar",
+        x_axis=AxisSpec(field="name", type="nominal"),
+        y_axis=AxisSpec(field="amount", type="quantitative"),
+    )
+
+    def measure_axis(rows: list[list]) -> dict:
+        spec = compile_vega_lite(intent, profile_result(cols, rows), cols, rows)
+        return spec["encoding"]["y"].get("axis", {})
+
+    assert measure_axis([["A", 1_000_000.0], ["B", 2_500_000.0]])["format"] == "~s"
+    assert measure_axis([["A", 50.0], ["B", 350.0]]) == {}
+
+
+# ── stacking ─────────────────────────────────────────────────────────────
+def _split(stack: str, **kw) -> dict:
+    cols = _cols(("region", "nominal"), ("quarter", "nominal"), ("sales", "quantitative"))
+    rows = [[f"R{i}", f"Q{j}", float(100 * i + j)] for i in range(4) for j in range(3)]
+    intent = ChartIntent(
+        chart_type="bar",
+        x_axis=AxisSpec(field="region", type="nominal"),
+        y_axis=AxisSpec(field="sales", type="quantitative"),
+        series=AxisSpec(field="quarter", type="nominal"),
+        stack=stack,
+        **kw,
+    )
+    fitted, _ = _fit(intent, profile_result(cols, rows))
+    assert fitted is not None
+    return compile_vega_lite(fitted, profile_result(cols, rows), cols, rows)["encoding"]
+
+
+def test_stacked_is_the_default_and_writes_nothing() -> None:
+    """Vega-Lite already stacks a bar with a colour channel, so an intent that
+    expresses no preference must compile to the bytes it compiled to before
+    this field existed."""
+    encoding = _split("stacked")
+    assert "stack" not in encoding["y"]
+    assert "xOffset" not in encoding
+
+
+def test_grouped_stops_stacking_and_offsets_the_split() -> None:
+    """Without the offset the bars overplot and only the last series drawn is
+    visible — a chart that looks finished and is missing most of its data."""
+    encoding = _split("grouped")
+    assert encoding["y"]["stack"] is None
+    assert encoding["xOffset"] == {"field": "quarter"}
+
+
+def test_grouped_horizontal_bars_offset_on_the_other_channel() -> None:
+    encoding = _split("grouped", orientation="horizontal")
+    assert encoding["x"]["stack"] is None
+    assert encoding["yOffset"] == {"field": "quarter"}
+
+
+def test_normalize_relabels_the_axis_as_a_proportion() -> None:
+    """The axis now runs 0-1 and means share, so the measure's own format —
+    currency, an SI-abbreviated count — would be a lie about it."""
+    encoding = _split("normalize")
+    assert encoding["y"]["stack"] == "normalize"
+    assert encoding["y"]["axis"]["format"] == "%"
+
+
+def test_stacking_needs_a_split_to_stack() -> None:
+    """A lone series has nothing to share the space with, so the field is reset
+    rather than carried — a stored intent never claims a layout it does not
+    have. It is not an *adjustment*, though: the picture is identical, so the
+    tile reports nothing."""
+    plan = plan_chart(PROFILE, _intent("bar", stack="grouped"))
+    assert plan.intent is not None
+    assert plan.intent.stack == "stacked"
+    assert plan.source == "model"
+
+
+# ── the size channel ─────────────────────────────────────────────────────
+def test_a_third_measure_becomes_the_bubble_area() -> None:
+    cols = _cols(("spend", "quantitative"), ("revenue", "quantitative"),
+                 ("orders", "quantitative"))
+    rows = [[float(i * 10), float(i * i), float(i + 1)] for i in range(1, 20)]
+    profile = profile_result(cols, rows)
+
+    intent = heuristic_intent(profile)
+    assert intent is not None and intent.chart_type == "scatter"
+    assert intent.size is not None and intent.size.field == "orders"
+
+    spec = compile_vega_lite(plan_chart(profile).intent, profile, cols, rows)  # type: ignore[arg-type]
+    assert spec["encoding"]["size"]["field"] == "orders"
+    # `axis` is positional-only; on a size channel it is a schema violation.
+    assert "axis" not in spec["encoding"]["size"]
+
+
+def test_a_size_that_is_not_a_measure_is_dropped() -> None:
+    """Same disqualifications as any measure — an id is not a magnitude — plus
+    one of its own: a column already carrying a position says nothing extra by
+    also carrying an area."""
+    cols = _cols(("spend", "quantitative"), ("revenue", "quantitative"),
+                 ("customer_id", "quantitative"))
+    rows = [[float(i), float(i * 2), float(i)] for i in range(1, 20)]
+    profile = profile_result(cols, rows)
+
+    def sized(field: str) -> ChartIntent:
+        return ChartIntent(
+            chart_type="scatter",
+            x_axis=AxisSpec(field="spend", type="quantitative"),
+            y_axis=AxisSpec(field="revenue", type="quantitative"),
+            size=AxisSpec(field=field, type="quantitative"),
+        )
+
+    assert plan_chart(profile, sized("customer_id")).intent.size is None  # type: ignore[union-attr]
+    assert plan_chart(profile, sized("spend")).intent.size is None  # type: ignore[union-attr]
+
+
+def test_size_is_scatter_only() -> None:
+    cols = _cols(("name", "nominal"), ("total", "quantitative"), ("weight", "quantitative"))
+    rows = [["A", 10.0, 1.0], ["B", 20.0, 2.0], ["C", 30.0, 3.0]]
+    intent = ChartIntent(
+        chart_type="bar",
+        x_axis=AxisSpec(field="name", type="nominal"),
+        y_axis=AxisSpec(field="total", type="quantitative"),
+        size=AxisSpec(field="weight", type="quantitative"),
+    )
+    plan = plan_chart(profile_result(cols, rows), intent)
+    assert plan.intent is not None and plan.intent.size is None
+
+
+# ── the tooltip ──────────────────────────────────────────────────────────
+def test_the_tooltip_names_every_column_and_formats_them() -> None:
+    """`mark.tooltip: true` shows all of the datum's fields and formats none,
+    so a hovered bar reads `1247318.4`. Naming fields is the only way to attach
+    a format, and the cost is that anything unnamed disappears — hence *every*
+    column, not only the encoded ones."""
+    cols = _cols(("when", "temporal"), ("amount", "quantitative"), ("note", "nominal"))
+    rows = [[date(2025, 1, 1), 1234.5, "a"], [date(2025, 2, 1), 99.0, "b"]]
+    intent = ChartIntent(
+        chart_type="line",
+        x_axis=AxisSpec(field="when", type="temporal"),
+        y_axis=AxisSpec(field="amount", type="quantitative"),
+    )
+    spec = compile_vega_lite(intent, profile_result(cols, rows), cols, rows)
+
+    tooltip = {t["field"]: t for t in spec["encoding"]["tooltip"]}
+    assert set(tooltip) == {"when", "amount", "note"}
+    assert tooltip["amount"]["format"] == ",.2f"   # full precision, unlike the axis
+    assert tooltip["when"]["format"] == "%b %Y"
+    assert "format" not in tooltip["note"]
+    assert "tooltip" not in spec["mark"]           # the encoding channel owns it
+
+
+def test_an_aggregating_axis_keeps_vegas_own_tooltip() -> None:
+    """A named-field tooltip would report raw row values beside a mark showing
+    their roll-up. That is worse than an unformatted number: it is a different
+    number."""
+    rolled = ChartIntent(
+        chart_type="bar",
+        x_axis=AxisSpec(field="name", type="nominal"),
+        y_axis=AxisSpec(field="total", type="quantitative", aggregation="sum"),
+    )
+    spec = compile_vega_lite(rolled, PROFILE, COLUMNS, ROWS)
+    assert spec["mark"]["tooltip"] is True
+    assert "tooltip" not in spec["encoding"]
 
 
 # ── the mark budget ──────────────────────────────────────────────────────

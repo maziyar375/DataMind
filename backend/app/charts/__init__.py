@@ -21,6 +21,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -34,6 +35,8 @@ MAX_CATEGORY_MARKS = 25   # bars past this are a texture, not a comparison
 MAX_PIE_SLICES = 6        # angles stop being comparable well before this
 MAX_SERIES = 8            # matches the categorical palette in VegaChart.tsx
 HORIZONTAL_BAR_FROM = 8   # above this, labels stack better down the side
+TOOLTIP_FIELDS = 8        # a hover is read at a glance or not at all
+MAX_TIME_TICKS = 12        # dated labels are wide; a year of months is plenty
 
 # Columns whose *name* says they are an identifier: never a measure, however
 # numeric they look. Charting `customer_id` as a quantity is the classic
@@ -54,6 +57,17 @@ AxisType = Literal["quantitative", "temporal", "nominal", "ordinal"]
 # separable: `auto` asks the platform to decide, and an explicit pick is kept.
 Orientation = Literal["auto", "vertical", "horizontal"]
 
+# How a split shares the space. Only meaningful with a `series` — one series
+# has nothing to stack against — and only for the marks that have area to
+# divide, so lines and points ignore it.
+#
+# "stacked" is the default because it is what Vega-Lite already did: a bar or
+# area with a colour channel stacks unless told otherwise, so an intent that
+# says nothing compiles to the spec it compiled to before this field existed.
+# The other two were simply unreachable, which is the gap that mattered — every
+# comparable tool treats grouped and 100% as first-class.
+StackMode = Literal["stacked", "grouped", "normalize"]
+
 
 class AxisSpec(BaseModel):
     field: str
@@ -69,9 +83,14 @@ class ChartIntent(BaseModel):
     x_axis: AxisSpec | None = None
     y_axis: AxisSpec | None = None
     series: AxisSpec | None = None
+    #: Scatter only: a third measure, read as the mark's area. A bubble chart
+    #: is a scatter with this set, not a chart type of its own.
+    size: AxisSpec | None = None
     #: Bars only; ignored by every other type. A *fitted* bar intent never
     #: carries "auto" — the plan states which way the chart actually runs.
     orientation: Orientation = "auto"
+    #: Bars and areas with a `series`; ignored otherwise.
+    stack: StackMode = "stacked"
     title: str | None = Field(default=None, max_length=120)
 
     @model_validator(mode="before")
@@ -177,6 +196,21 @@ class ResultProfile:
         return "\n".join(c.describe() for c in self.columns)
 
 
+def _distinct(values: Sequence[Any]) -> int:
+    """How many different values, counting the unhashable ones too.
+
+    JSON and array columns come back as dicts and lists, which a set refuses.
+    Falling back to their text form counts them as a reader would.
+    """
+    seen: set[Any] = set()
+    for value in values:
+        try:
+            seen.add(value)
+        except TypeError:
+            seen.add(str(value))
+    return len(seen)
+
+
 def _as_float(value: Any) -> float | None:
     if isinstance(value, bool):
         return None
@@ -203,19 +237,12 @@ def profile_result(
         values = [row[i] for row in rows if i < len(row)]
         non_null = [v for v in values if v is not None]
 
-        seen: set[Any] = set()
-        for v in non_null:
-            try:
-                seen.add(v)
-            except TypeError:  # JSON/array columns are not hashable
-                seen.add(str(v))
-
         numbers = [f for f in (_as_float(v) for v in non_null) if f is not None]
         profiles.append(
             ColumnProfile(
                 name=col.name,
                 semantic_type=col.semantic_type,
-                distinct=len(seen),
+                distinct=_distinct(non_null),
                 non_null=len(non_null),
                 minimum=min(numbers) if numbers else None,
                 maximum=max(numbers) if numbers else None,
@@ -433,12 +460,42 @@ def _fit(
         else:
             changed = True
 
+    # A third measure read as the mark's area — what makes a scatter a bubble
+    # chart. Same disqualifications as any other measure (an id is not a
+    # magnitude, a constant is not a comparison), plus one of its own: a column
+    # already carrying a position says nothing extra by also carrying an area.
+    size: AxisSpec | None = None
+    if intent.size is not None:
+        ps = profile.get(intent.size.field)
+        if (
+            chart_type == "scatter"
+            and ps is not None
+            and ps.is_numeric
+            and not ps.is_constant
+            and not ps.is_id_like
+            and ps.name not in (x_axis.field, y_axis.field)
+        ):
+            size = _axis_for(ps, intent.size)
+        else:
+            changed = True
+
+    # Stacking needs something to stack: a split, and a mark with area to
+    # divide. Where it cannot apply it is reset rather than carried, so a
+    # stored intent never claims a layout the chart does not have. That is not
+    # an *adjustment* — the picture is identical either way — so `changed`
+    # stays where it is and the tile reports nothing.
+    stack: StackMode = "stacked"
+    if series is not None and chart_type in ("bar", "area"):
+        stack = intent.stack
+
     fitted = ChartIntent(
         chart_type=chart_type,
         x_axis=x_axis,
         y_axis=y_axis,
         series=series,
+        size=size,
         orientation=orientation,
+        stack=stack,
         title=intent.title,
     )
     return fitted, changed
@@ -485,12 +542,15 @@ def heuristic_intent(profile: ResultProfile) -> ChartIntent | None:
             y_axis=_axis_for(measure),
         )
 
-    # Two measures and nothing to group by: show their relationship.
+    # Two measures and nothing to group by: show their relationship. A third
+    # goes to the mark's area rather than being dropped — the reader gets it
+    # for free, and the alternative is a chart that silently ignores a column.
     if len(measures) >= 2:
         return ChartIntent(
             chart_type="scatter",
             x_axis=_axis_for(measures[0]),
             y_axis=_axis_for(measures[1]),
+            size=_axis_for(measures[2]) if len(measures) >= 3 else None,
         )
     return None
 
@@ -530,6 +590,143 @@ def plan_chart(
             return ChartPlan(fitted, "heuristic")
 
     return ChartPlan(None, "none", "No chart fits this result's shape.")
+
+
+# ── how a value is written on an axis ────────────────────────────────────
+# Vega will label an axis without being told how, and both of its defaults are
+# wrong often enough to be worth overriding.
+def _temporal_axis(values: Sequence[Any]) -> dict[str, Any] | None:
+    """A complete time axis — format *and* tick placement — from the data grain.
+
+    Left to itself, Vega labels a temporal axis with D3's *multi-scale* time
+    format, which writes each tick in the largest unit that changes there. On a
+    monthly series that reads "September, November, **2025**, March": the
+    January tick is labelled with its year rather than its month, because
+    January is where the year turns over. Not a stray value and not wrong —
+    just an axis that changes units halfway along, which nobody reads that way.
+    It also leaves a bare "September" saying nothing about *which* September,
+    and any series long enough to contain a January spans more than one year by
+    definition.
+
+    **The format alone is not the fix, and shipping it alone would swap one bug
+    for a worse one.** Ticks are placed before they are labelled, and Vega
+    spaces them for the pixels available, not for the data's grain: a
+    three-month series gets four ticks inside every month, and `%b %Y` renders
+    that as `Jan 2025, Jan 2025, Jan 2025, Jan 2025, Feb 2025`. Measured, not
+    reasoned about. So the interval is pinned to the grain as well, and the
+    step is chosen to keep the count near `MAX_TIME_TICKS` — which is what
+    makes a five-year daily series land on ~12 ticks instead of 1,800.
+
+    Returns None when the column holds something other than dates — a connector
+    handing back pre-formatted strings, say — because a time format applied to
+    a string is how an axis goes blank.
+    """
+    stamps = [v for v in values if isinstance(v, (date, datetime))]
+    if not stamps:
+        return None
+
+    axis: dict[str, Any] = {
+        # Explicit formats are wider than the bare month names Vega picked for
+        # itself, and a band scale — a bar chart's own time axis — does not
+        # thin labels unless it is told to.
+        "labelOverlap": "greedy",
+    }
+
+    if any(
+        isinstance(v, datetime) and (v.hour or v.minute or v.second or v.microsecond)
+        for v in stamps
+    ):
+        # Sub-day ticks are the one case left to Vega. `vega-time` has no
+        # "hour", "minute" or "second" interval — `timeInterval("hour")` is
+        # undefined, and Vega then throws inside its own tick generator, which
+        # in the browser means `embed()` rejects and the chart vanishes
+        # entirely. The format alone is safe: it carries minutes, so ticks
+        # collide only on a sub-minute domain.
+        axis["format"] = "%b %d, %H:%M"
+        return axis
+
+    # Every value on a year boundary is a yearly series; on a month boundary, a
+    # monthly (or quarterly) one. Anything else is dated to the day.
+    if all(v.month == 1 and v.day == 1 for v in stamps):
+        axis["format"], floor = "%Y", "year"
+    elif all(v.day == 1 for v in stamps):
+        axis["format"], floor = "%b %Y", "month"
+    else:
+        axis["format"], floor = "%b %d, %Y", "date"
+
+    days = [v.date() if isinstance(v, datetime) else v for v in stamps]
+    axis["tickCount"] = {"interval": _tick_interval(floor, (max(days) - min(days)).days)}
+    return axis
+
+
+# Approximate days per tick, finest first. `date` rather than `day`: in Vega's
+# time vocabulary those are day-of-month and day-of-week respectively, and only
+# the first is a calendar stride.
+_TICK_LADDER: tuple[tuple[str, float], ...] = (
+    ("date", 1.0), ("week", 7.0), ("month", 30.44), ("quarter", 91.31), ("year", 365.25),
+)
+
+
+def _tick_interval(floor: str, span_days: int) -> str:
+    """The finest interval that keeps the tick count readable, never finer than
+    the data's own grain.
+
+    Escalating the *interval* rather than stepping one interval is deliberate,
+    and the reason is a d3 subtlety worth writing down: `interval.every(n)`
+    does not stride by n, it **filters** the interval's values by
+    divisibility. `timeDay.every(30)` therefore yields Jan 1, Jan 31, Feb 1,
+    Mar 1 — clumped, not regular — because it keeps the days whose day-of-month
+    divides by 30 and the month boundary resets the count. Choosing a coarser
+    unit gives evenly spaced ticks with no such trap.
+
+    The floor is what keeps labels distinct: ticks never fall between the
+    points the data actually has, so a monthly series cannot be ticked daily
+    and print "Jan 2025" four times in a row.
+    """
+    start = next(i for i, (name, _) in enumerate(_TICK_LADDER) if name == floor)
+    for name, per_tick in _TICK_LADDER[start:]:
+        if span_days / per_tick <= MAX_TIME_TICKS:
+            return name
+    return "year"
+
+
+def _axis_number_format(values: Sequence[Any]) -> str | None:
+    """SI notation for a large axis, and *nothing at all* for a small one.
+
+    An axis has room for a shape, not a figure: `1.2M` is read at a glance
+    where `1,247,318` is counted. Below the threshold there is nothing to fix —
+    Vega already groups thousands and picks a sensible precision per tick — so
+    this returns None and stays out of the way.
+
+    That restraint is not a preference, it is a correctness rule, and it was
+    measured rather than assumed. An axis format reaches d3 through
+    `scale.tickFormat(count, specifier)`, which **fills in a precision when the
+    specifier has no type**, and a typeless specifier with a precision formats
+    like `g` — so the obvious `","` turns a perfectly good `100, 150, 200` axis
+    into `1e+2, 1.5e+2, 2e+2`. The obvious repair, `",d"`, is worse in the
+    other direction: forcing integers onto a 0-to-1 axis labels its ticks
+    `0, 0, 0, 1, 1, 1`. `~s` carries an explicit type, so it survives the round
+    trip intact — which is exactly why it is the only one used here.
+
+    The known wart: d3's SI prefix for 10^9 is `G`, so a billion reads `1.2G`
+    rather than the `1.2B` a finance reader expects. Still an enormous
+    improvement on ten unseparated digits, and the alternative — a bespoke
+    suffix table — is a formatting library nobody asked this module to become.
+    """
+    numbers = [f for f in (_as_float(v) for v in values) if f is not None]
+    if not numbers or max(abs(n) for n in numbers) < 10_000:
+        return None
+    return "~s"
+
+
+def _exact_number_format(numbers: Sequence[float]) -> str:
+    """Full precision with separators — for tooltips, which have the room."""
+    return ",.2f" if any(n != int(n) for n in numbers) else ","
+
+
+def _tooltip_number_format(values: Sequence[Any]) -> str | None:
+    numbers = [f for f in (_as_float(v) for v in values) if f is not None]
+    return _exact_number_format(numbers) if numbers else None
 
 
 # ── compilation ──────────────────────────────────────────────────────────
@@ -599,6 +796,90 @@ def _layout(
     return kept, order, f"{lead} {budget} of {total}"
 
 
+def _apply_stack(
+    encoding: dict[str, Any],
+    intent: ChartIntent,
+    category_channel: str,
+    measure_channel: str,
+) -> None:
+    """Say how a split shares the space, when Vega's default is not the answer.
+
+    Only bars and areas have area to divide; a split line or scatter is drawn
+    once per series whatever this says. "stacked" writes nothing at all, since
+    that is already what Vega-Lite does with a colour channel — an intent that
+    expresses no preference must compile to the bytes it compiled to before
+    this existed.
+    """
+    if intent.chart_type not in ("bar", "area") or intent.stack == "stacked":
+        return
+
+    measure = encoding[measure_channel]
+    if intent.stack == "normalize":
+        measure["stack"] = "normalize"
+        # The axis now runs 0-1 and means proportion, so the measure's own
+        # format — currency, SI-abbreviated counts — would be a lie about it.
+        measure["axis"] = {"format": "%"}
+        return
+
+    # Grouped: stop stacking, then give each series its own slot beside the
+    # category rather than on top of it. Without the offset the bars overplot
+    # and only the last series drawn is visible.
+    measure["stack"] = None
+    assert intent.series is not None
+    if intent.chart_type == "bar":
+        offset = "xOffset" if category_channel == "x" else "yOffset"
+        encoding[offset] = {"field": intent.series.field}
+
+
+def _tooltip(
+    intent: ChartIntent,
+    columns: Sequence[ResultColumn],
+    shown: dict[str, list[Any]],
+) -> list[dict[str, Any]] | None:
+    """Every column, formatted — or None to keep Vega's own bare listing.
+
+    `mark.tooltip: true` shows all of the datum's fields and formats none of
+    them, so a hovered bar reads `1247318.4` and `2025-03-01T00:00:00`. Naming
+    the fields is the only way to attach formats, and the cost of naming them
+    is that anything unnamed disappears — so this lists *every* result column,
+    not only the encoded ones, and the hover keeps saying what it used to say.
+
+    Returns None when an axis aggregates. The tooltip would then be reporting
+    raw row values beside a mark that shows their roll-up, which is worse than
+    an unformatted number: it is a different number.
+    """
+    axes = (intent.x_axis, intent.y_axis, intent.series, intent.size)
+    if any(a is not None and a.aggregation != "none" for a in axes):
+        return None
+
+    # Encoded fields first — what the reader is pointing at should be the first
+    # line of what they read — then the rest, up to a hover nobody scrolls.
+    encoded = [a.field for a in axes if a is not None]
+
+    def rank(column: ResultColumn) -> int:
+        return encoded.index(column.name) if column.name in encoded else len(encoded)
+
+    ordered = sorted(columns, key=rank)
+
+    entries: list[dict[str, Any]] = []
+    for column in ordered[:TOOLTIP_FIELDS]:
+        axis_type = _SEM_TO_VEGA.get(column.semantic_type, "nominal")
+        entry: dict[str, Any] = {"field": column.name, "type": axis_type}
+        values = shown.get(column.name, [])
+        if axis_type == "temporal":
+            # The format only — a tooltip has no ticks to place, and a
+            # `tickCount` on this channel is a schema violation.
+            config = _temporal_axis(values)
+            if config:
+                entry["format"] = config["format"]
+        elif axis_type == "quantitative":
+            fmt = _tooltip_number_format(values)
+            if fmt:
+                entry["format"] = fmt
+        entries.append(entry)
+    return entries
+
+
 def compile_vega_lite(
     intent: ChartIntent,
     profile: ResultProfile,
@@ -608,50 +889,79 @@ def compile_vega_lite(
     names = [c.name for c in columns]
     kept, order, note = _layout(intent, profile, columns, rows)
     data = [dict(zip(names, row, strict=False)) for row in kept]
+    # The values actually plotted, not the whole result: a capped chart's axis
+    # is labelled for the 25 bars on it, not the 400 rows behind them.
+    shown = {name: [row.get(name) for row in data] for name in names}
 
     assert intent.x_axis is not None and intent.y_axis is not None
 
-    def encode(axis: AxisSpec) -> dict[str, Any]:
+    def encode(axis: AxisSpec, *, positional: bool = True) -> dict[str, Any]:
         enc: dict[str, Any] = {"field": axis.field, "type": axis.type}
         if axis.aggregation != "none":
             enc["aggregate"] = axis.aggregation
         if axis.label:
             enc["title"] = axis.label
+        # `axis` is a property of positional channels alone. Setting it on a
+        # colour, size or theta channel is not merely ignored — it is a schema
+        # violation, and Vega-Lite refuses the whole spec.
+        if positional:
+            values = shown.get(axis.field, ())
+            if axis.type == "temporal":
+                config = _temporal_axis(values)
+                if config:
+                    enc["axis"] = config
+            elif axis.type == "quantitative":
+                fmt = _axis_number_format(values)
+                if fmt:
+                    enc["axis"] = {"format": fmt}
         return enc
 
     spec: dict[str, Any] = {
         "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
         "data": {"values": data},
-        "mark": {"type": _MARKS[intent.chart_type], "tooltip": True},
+        "mark": {"type": _MARKS[intent.chart_type]},
     }
+
+    encoding: dict[str, Any] = {}
+    spec["encoding"] = encoding
 
     if intent.chart_type == "pie":
         # An `arc` mark is encoded by angle (the measure) and colour (the
         # category), not by x/y — an x/y encoding renders nothing.
-        spec["encoding"] = {
-            "theta": encode(intent.y_axis),
-            "color": encode(intent.x_axis),
-        }
+        encoding["theta"] = encode(intent.y_axis, positional=False)
+        encoding["color"] = encode(intent.x_axis, positional=False)
     else:
         x, y = intent.x_axis, intent.y_axis
         category_channel = "x"
         if intent.chart_type == "bar" and intent.orientation == "horizontal":
             x, y = y, x
             category_channel = "y"
-        spec["encoding"] = {"x": encode(x), "y": encode(y)}
+        measure_channel = "y" if category_channel == "x" else "x"
+        encoding["x"] = encode(x)
+        encoding["y"] = encode(y)
         # Rank the bars by the measure. Without this Vega orders categories
         # alphabetically, which hides the very thing a "highest/lowest"
         # question asked for.
-        if order is not None and spec["encoding"][category_channel]["type"] in (
+        if order is not None and encoding[category_channel]["type"] in (
             "nominal",
             "ordinal",
         ):
-            measure_channel = "y" if category_channel == "x" else "x"
-            spec["encoding"][category_channel]["sort"] = (
+            encoding[category_channel]["sort"] = (
                 f"-{measure_channel}" if order == "descending" else measure_channel
             )
         if intent.series is not None:
-            spec["encoding"]["color"] = encode(intent.series)
+            encoding["color"] = encode(intent.series, positional=False)
+            _apply_stack(encoding, intent, category_channel, measure_channel)
+        if intent.size is not None and intent.chart_type == "scatter":
+            encoding["size"] = encode(intent.size, positional=False)
+
+    tooltip = _tooltip(intent, columns, shown)
+    if tooltip is not None:
+        encoding["tooltip"] = tooltip
+    else:
+        # No formatting to add, so let Vega show every field of the datum —
+        # which is more than an explicit list would have named.
+        spec["mark"]["tooltip"] = True
 
     # What the renderer needs to know that the encoding does not say.
     #
@@ -662,8 +972,23 @@ def compile_vega_lite(
     # 'nominal'`, which is a guess that a stacked bar or a `rect` mark can
     # satisfy by accident. Stating the decision is cheaper than re-deriving it,
     # and it stays right when the mark table grows.
+    #
+    # `categories` is the count of *marks along the category axis*, which is
+    # not `len(data)` once a series is in play: eight regions over twelve
+    # months is 96 rows and twelve columns. The browser gives each column a
+    # minimum width and scrolls past a dozen of them, so reading that off the
+    # row count made a split chart demand eight times the width it needed.
+    #
+    # It is always `x_axis` regardless of orientation: the horizontal swap is a
+    # rendering detail of this function, and a fitted intent always carries the
+    # category on x.
     spec["usermeta"] = {
-        "datamind": {"chart_type": intent.chart_type, "orientation": intent.orientation}
+        "datamind": {
+            "chart_type": intent.chart_type,
+            "orientation": intent.orientation,
+            "stack": intent.stack,
+            "categories": _distinct(shown.get(intent.x_axis.field, ())),
+        }
     }
 
     # The reduction is part of what the chart claims, so it is shown, never
