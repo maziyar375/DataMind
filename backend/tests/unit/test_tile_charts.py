@@ -32,7 +32,19 @@ from app.domain.ports.database import ResultColumn
 
 # Every chart type the editor's picker offers, minus `auto` — which is not a
 # type at all: it stores null and asks `plan_chart` to re-decide per result.
-EDITOR_CHART_TYPES = ["bar", "line", "area", "scatter", "pie"]
+EDITOR_CHART_TYPES = [
+    "bar", "line", "area", "combo", "scatter", "pie", "heatmap", "histogram",
+]
+
+# The types whose x/y are not "the axes", and what the editor labels them. Kept
+# here because a mislabelled picker is not a rendering bug — it is a user
+# choosing a column for a channel the chart does not have.
+EDITOR_AXIS_LABELS = {
+    "pie": ("Slices", "Size"),
+    "heatmap": ("Rows", "Columns"),
+    "histogram": ("Values", None),
+    "combo": ("X", "Bars"),
+}
 
 # The `Bars` control, which the editor shows for `bar` alone. "auto" is the
 # default and is never sent — writing it would store a preference nobody
@@ -61,8 +73,16 @@ def editor_payload(
     payload: dict[str, Any] = {
         "chart_type": chart_type,
         "x_axis": {"field": "status", "type": "nominal", "aggregation": "none"},
-        "y_axis": {"field": "total", "type": "quantitative", "aggregation": "none"},
     }
+    # A histogram counts its own rows, so the editor sends no y_axis: there is
+    # no column to name, and an empty one would fail validation and land the
+    # tile on Auto.
+    if EDITOR_AXIS_LABELS.get(chart_type, ("X", "Y"))[1] is not None:
+        payload["y_axis"] = {"field": "total", "type": "quantitative", "aggregation": "none"}
+    if chart_type == "heatmap":
+        payload["color"] = {"field": "total", "type": "quantitative", "aggregation": "none"}
+    if chart_type == "combo":
+        payload["y2_axis"] = {"field": "other", "type": "quantitative", "aggregation": "none"}
     if orientation is not None:
         payload["orientation"] = orientation
     if series:
@@ -81,15 +101,32 @@ def test_every_type_the_picker_offers_round_trips(chart_type: str) -> None:
 
     assert intent.chart_type == chart_type
     assert intent.x_axis is not None and intent.x_axis.field == "status"
-    assert intent.y_axis is not None and intent.y_axis.field == "total"
+    if EDITOR_AXIS_LABELS.get(chart_type, ("X", "Y"))[1] is None:
+        assert intent.y_axis is None      # a histogram derives its own
+    else:
+        assert intent.y_axis is not None and intent.y_axis.field == "total"
 
 
-@pytest.mark.parametrize("chart_type", EDITOR_CHART_TYPES)
+# The types that offer a Series picker. The rest have already spent the colour
+# channel on something else — a pie's slices, a heatmap's measure, a combo's
+# two layers — so offering a split there would be a control with nowhere to go.
+EDITOR_SPLITTABLE = ["bar", "line", "area", "scatter"]
+
+
+@pytest.mark.parametrize("chart_type", EDITOR_SPLITTABLE)
 def test_the_series_picker_round_trips_too(chart_type: str) -> None:
     intent = ChartIntent.model_validate(editor_payload(chart_type, series=True))
 
     assert intent.series is not None
     assert intent.series.field == "region"
+
+
+def test_the_types_that_spend_colour_elsewhere_offer_no_series() -> None:
+    """Not a rendering rule — a picker rule, pinned here because the editor is
+    the only place it is written down."""
+    assert set(EDITOR_SPLITTABLE) | {"pie", "heatmap", "histogram", "combo"} == set(
+        EDITOR_CHART_TYPES
+    )
 
 
 def test_the_picker_offers_no_type_the_model_does_not_have() -> None:

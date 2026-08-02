@@ -59,9 +59,29 @@ const CHART_TYPES: { value: string; label: string }[] = [
   { value: 'bar', label: 'Bar' },
   { value: 'line', label: 'Line' },
   { value: 'area', label: 'Area' },
+  { value: 'combo', label: 'Bar + line' },
   { value: 'scatter', label: 'Scatter' },
   { value: 'pie', label: 'Pie' },
+  { value: 'heatmap', label: 'Heatmap' },
+  { value: 'histogram', label: 'Histogram' },
 ]
+
+/**
+ * What the two positional pickers mean for each type.
+ *
+ * Every chart here puts *something* on x and y, but only for the cartesian
+ * family are they "the axes". A pie's are a slice and its angle, a heatmap's
+ * are the two sides of a matrix whose measure is a third channel, and a
+ * histogram has no y to pick at all — it counts its own rows. Labelling all of
+ * them "X" and "Y" is how someone ends up choosing a column for an axis that
+ * does not exist on the chart in front of them.
+ */
+const AXIS_LABELS: Record<string, { x: string; y: string | null }> = {
+  pie: { x: 'Slices', y: 'Size' },
+  heatmap: { x: 'Rows', y: 'Columns' },
+  histogram: { x: 'Values', y: null },
+  combo: { x: 'X', y: 'Bars' },
+}
 
 /**
  * Which way the bars run. Its own control rather than two entries in the list
@@ -96,6 +116,9 @@ interface AxisState {
   y: string
   series: string
   size: string
+  /** Heatmap: the measure in the cells. Combo: the measure drawn as a line. */
+  color: string
+  y2: string
 }
 
 /** Read the editor's controls back out of a stored `ChartIntent`. */
@@ -108,6 +131,8 @@ function axisStateFrom(config: Record<string, unknown> | null | undefined): Axis
     y_axis?: { field?: string }
     series?: { field?: string }
     size?: { field?: string }
+    color?: { field?: string }
+    y2_axis?: { field?: string }
   }
   // The pre-consolidation spelling, read the way the backend reads it. A tile
   // the migration has not reached yet still opens showing what it draws.
@@ -120,6 +145,8 @@ function axisStateFrom(config: Record<string, unknown> | null | undefined): Axis
     y: intent.y_axis?.field ?? '',
     series: intent.series?.field ?? '',
     size: intent.size?.field ?? '',
+    color: intent.color?.field ?? '',
+    y2: intent.y2_axis?.field ?? '',
   }
 }
 
@@ -242,12 +269,11 @@ export function TileEditor({
         y: keep(current.y) || suggested.y,
         series: keep(current.series),
         size: keep(current.size),
+        color: keep(current.color),
+        y2: keep(current.y2),
       }
-      return (
-        next.x === current.x
-        && next.y === current.y
-        && next.series === current.series
-        && next.size === current.size
+      return (['x', 'y', 'series', 'size', 'color', 'y2'] as const).every(
+        (key) => next[key] === current[key],
       )
         ? current
         : next
@@ -305,16 +331,25 @@ export function TileEditor({
 
   const chartConfig = useCallback((): Record<string, unknown> | null => {
     if (tileType !== 'CHART' || axes.type === 'auto') return null
-    if (!axes.x || !axes.y) return null
+    const wantsY = AXIS_LABELS[axes.type]?.y !== null
+    if (!axes.x || (wantsY && !axes.y)) return null
     const axisType = (field: string): string =>
       columns.find((column) => column.name === field)?.semantic_type ?? 'nominal'
+    const channel = (field: string) => ({
+      field, type: axisType(field), aggregation: 'none',
+    })
     // Exactly the keys `ChartIntent` declares: it is `extra="forbid"`, and a
     // config it refuses is silently treated as Auto at refresh time.
     const intent: Record<string, unknown> = {
       chart_type: axes.type,
-      x_axis: { field: axes.x, type: axisType(axes.x), aggregation: 'none' },
-      y_axis: { field: axes.y, type: axisType(axes.y), aggregation: 'none' },
+      x_axis: channel(axes.x),
     }
+    // A histogram counts its own rows, so it has no y column to name and the
+    // model derives one. Sending an empty y_axis would fail validation and
+    // land the tile on Auto.
+    if (wantsY) intent.y_axis = channel(axes.y)
+    if (axes.type === 'heatmap' && axes.color) intent.color = channel(axes.color)
+    if (axes.type === 'combo' && axes.y2) intent.y2_axis = channel(axes.y2)
     // Only when it says something: each of these has a default the backend
     // already applies, so writing it would store a preference nobody expressed
     // and freeze a decision the platform should keep making.
@@ -1021,6 +1056,29 @@ function ChartPicker({
   // Offering names from the SQL text would be guessing at what the database
   // will call them.
   const known = columns.length >= 2
+  const labels = AXIS_LABELS[axes.type] ?? { x: 'X', y: 'Y' }
+
+  /** One column dropdown, bound to a key of the picker's own state. */
+  const pick = (
+    key: 'x' | 'y' | 'series' | 'size' | 'color' | 'y2',
+    label: string,
+    { empty = 'None', hint }: { empty?: string; hint?: string } = {},
+  ) => (
+    <Field label={label} hint={hint}>
+      <Select
+        value={axes[key]}
+        disabled={!known}
+        onChange={(event) => onChange({ ...axes, [key]: event.target.value })}
+      >
+        <option value="">{empty}</option>
+        {columns.map((column) => (
+          <option key={column.name} value={column.name}>
+            {column.name}
+          </option>
+        ))}
+      </Select>
+    </Field>
+  )
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1039,50 +1097,14 @@ function ChartPicker({
         </Field>
         {axes.type !== 'auto' && (
           <>
-            <Field label={axes.type === 'pie' ? 'Slices' : 'X'}>
-              <Select
-                value={axes.x}
-                disabled={!known}
-                onChange={(event) => onChange({ ...axes, x: event.target.value })}
-              >
-                <option value="">—</option>
-                {columns.map((column) => (
-                  <option key={column.name} value={column.name}>
-                    {column.name}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Field label={axes.type === 'pie' ? 'Size' : 'Y'}>
-              <Select
-                value={axes.y}
-                disabled={!known}
-                onChange={(event) => onChange({ ...axes, y: event.target.value })}
-              >
-                <option value="">—</option>
-                {columns.map((column) => (
-                  <option key={column.name} value={column.name}>
-                    {column.name}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            {axes.type !== 'pie' && (
-              <Field label="Series">
-                <Select
-                  value={axes.series}
-                  disabled={!known}
-                  onChange={(event) => onChange({ ...axes, series: event.target.value })}
-                >
-                  <option value="">None</option>
-                  {columns.map((column) => (
-                    <option key={column.name} value={column.name}>
-                      {column.name}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-            )}
+            {pick('x', labels.x, { empty: '—' })}
+            {labels.y !== null && pick('y', labels.y, { empty: '—' })}
+            {axes.type === 'heatmap'
+              && pick('color', 'Measure', { empty: '—', hint: 'The value in each cell.' })}
+            {axes.type === 'combo'
+              && pick('y2', 'Line', { empty: '—', hint: 'The second measure, over the bars.' })}
+            {!['pie', 'heatmap', 'histogram', 'combo'].includes(axes.type)
+              && pick('series', 'Series')}
             {/* These flow onto a second row of the grid, under the type they
                 belong to. Each appears only where it means something: an
                 orientation on a pie, or a stack with nothing split, would be a
@@ -1115,22 +1137,8 @@ function ChartPicker({
                 </Select>
               </Field>
             )}
-            {axes.type === 'scatter' && (
-              <Field label="Size" hint="A third measure, read as the point's area.">
-                <Select
-                  value={axes.size}
-                  disabled={!known}
-                  onChange={(event) => onChange({ ...axes, size: event.target.value })}
-                >
-                  <option value="">None</option>
-                  {columns.map((column) => (
-                    <option key={column.name} value={column.name}>
-                      {column.name}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
-            )}
+            {axes.type === 'scatter'
+              && pick('size', 'Size', { hint: "A third measure, read as the point's area." })}
           </>
         )}
       </div>

@@ -124,9 +124,10 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
    * Fill the parent's height too, not only its width. In a dashboard tile the
    * box is the tile the user sized, and a fixed-height plot floating in a
    * taller tile reads as wasted space. The parent must give this component a
-   * definite height (flex: 1 / height: 100%). Horizontal bars are exempt:
-   * their height must grow with the category count so labels stay legible,
-   * and they scroll instead.
+   * definite height (flex: 1 / height: 100%). The charts that grow downward
+   * are exempt — a horizontal bar's height must follow its category count and
+   * a heatmap's its second dimension, so labels and cells stay legible; those
+   * scroll instead.
    */
   fill?: boolean
 }) {
@@ -158,19 +159,29 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
     // same one that was in force when they were written.
     const meta = (spec.usermeta as
       { datamind?: {
-        chart_type?: string; orientation?: string; stack?: string; categories?: number
+        chart_type?: string; orientation?: string; stack?: string
+        categories?: number; bands?: number
       } } | undefined)?.datamind
     const isHorizontalBar = meta
       ? meta.chart_type === 'bar' && meta.orientation === 'horizontal'
       : mark === 'bar' && encoding.y?.type === 'nominal'
-    const PER_BAR = 22
-    // Bars drawn along the category axis. A stacked split puts its parts on
-    // one bar, so the count is the categories; a grouped one gives each part
-    // its own bar, so it is back to the row count.
-    const barCount =
-      meta?.stack === 'grouped' ? rowCount : meta?.categories ?? rowCount
-    const height: number | 'container' = isHorizontalBar
-      ? Math.min(60_000, Math.max(200, barCount * PER_BAR))
+    // A heatmap has the same problem for the same reason — rows of cells
+    // stacked down the page — but its own row count, and it needs a taller
+    // band than a bar because a cell is read as an area, not a length.
+    const isHeatmap = meta?.chart_type === 'heatmap'
+    const PER_BAND = isHeatmap ? 26 : 22
+    // Marks drawn along the vertical category axis. For a heatmap that is the
+    // second dimension; for bars, a stacked split puts its parts on one bar so
+    // the count is the categories, while a grouped one gives each part its own
+    // bar and it is back to the row count.
+    const bandCount = isHeatmap
+      ? meta?.bands ?? 0
+      : meta?.stack === 'grouped' ? rowCount : meta?.categories ?? rowCount
+    // Past a dozen bands the fixed plot height starts crushing them; below it,
+    // filling the tile looks better than a short chart floating in a tall box.
+    const growsDown = isHorizontalBar || (isHeatmap && bandCount > 12)
+    const height: number | 'container' = growsDown
+      ? Math.min(60_000, Math.max(200, bandCount * PER_BAND))
       : fill
         ? 'container'
         : mark === 'arc'
@@ -193,7 +204,7 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
     const PER_COLUMN = 34
     const width: number | 'container' =
       xIsCategorical && columnCount > 12 ? columnCount * PER_COLUMN : 'container'
-    return { encoding, isHorizontalBar, height, width, xIsCategorical }
+    return { encoding, growsDown, height, width, xIsCategorical }
   }, [spec, fill])
 
   useEffect(() => {
@@ -340,14 +351,15 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
         // box, and a scrollbar triggered by a pixel of overshoot would change
         // the box's size and start a fit/unfit oscillation. Two exemptions
         // scroll on purpose, and are stable because their content size is
-        // fixed rather than fitted: horizontal bars (per-category height) and
-        // wide categorical charts (per-column width).
+        // fixed rather than fitted: the charts that grow downward with their
+        // rows (horizontal bars, tall heatmaps) and wide categorical charts
+        // (per-column width).
         overflowX:
-          fill && !layout.isHorizontalBar && layout.width === 'container' ? 'hidden' : 'auto',
+          fill && !layout.growsDown && layout.width === 'container' ? 'hidden' : 'auto',
         // A tall, many-bar horizontal chart scrolls inside a bounded box rather
         // than stretching the whole conversation down the page.
-        overflowY: layout.isHorizontalBar ? 'auto' : fill ? 'hidden' : 'visible',
-        maxHeight: layout.isHorizontalBar ? 'min(70vh, 640px)' : undefined,
+        overflowY: layout.growsDown ? 'auto' : fill ? 'hidden' : 'visible',
+        maxHeight: layout.growsDown ? 'min(70vh, 640px)' : undefined,
       }}
     >
       <div
@@ -355,7 +367,7 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
         style={{
           width: '100%',
           minHeight: 40,
-          height: fill && !layout.isHorizontalBar ? '100%' : undefined,
+          height: fill && !layout.growsDown ? '100%' : undefined,
         }}
       />
     </div>

@@ -20,7 +20,9 @@ from datetime import date, datetime, timedelta
 import pytest
 
 from app.charts import (
+    HISTOGRAM_BINS,
     MAX_CATEGORY_MARKS,
+    MIN_HISTOGRAM_ROWS,
     AxisSpec,
     ChartIntent,
     _fit,
@@ -452,6 +454,193 @@ def test_an_aggregating_axis_keeps_vegas_own_tooltip() -> None:
     spec = compile_vega_lite(rolled, PROFILE, COLUMNS, ROWS)
     assert spec["mark"]["tooltip"] is True
     assert "tooltip" not in spec["encoding"]
+
+
+# ── heatmap ──────────────────────────────────────────────────────────────
+def _matrix(rows_n: int = 7, cols_n: int = 24) -> tuple[list, list]:
+    cols = _cols(("weekday", "nominal"), ("hour", "nominal"), ("orders", "quantitative"))
+    rows = [
+        [f"D{d}", f"{h:02d}", float((h * 7 + d) % 40)]
+        for d in range(rows_n) for h in range(cols_n)
+    ]
+    return cols, rows
+
+
+def test_two_dimensions_and_a_measure_become_a_heatmap() -> None:
+    """Before this existed the result fell through to a bar of the first
+    dimension, dropping the second on the floor — several rows per category
+    drawn on top of each other, with nothing on screen saying so."""
+    cols, rows = _matrix()
+    plan = plan_chart(profile_result(cols, rows))
+    assert plan.intent is not None and plan.intent.chart_type == "heatmap"
+    assert plan.intent.color is not None and plan.intent.color.field == "orders"
+
+
+def test_a_small_second_dimension_stays_a_split_bar() -> None:
+    """A matrix is harder to read than a legend. Only reach for one when the
+    second dimension is too wide to be a series."""
+    cols, rows = _matrix(rows_n=7, cols_n=3)
+    plan = plan_chart(profile_result(cols, rows))
+    assert plan.intent is not None and plan.intent.chart_type == "bar"
+    assert plan.intent.series is not None and plan.intent.series.field == "hour"
+
+
+def test_a_heatmap_measure_named_on_the_wrong_channel_is_repaired() -> None:
+    """A model that has only drawn bar charts puts the measure on y. The shape
+    is unambiguous once the columns are profiled, so it is moved rather than
+    costing the chart."""
+    cols, rows = _matrix()
+    intent = ChartIntent(
+        chart_type="heatmap",
+        x_axis=AxisSpec(field="weekday", type="nominal"),
+        y_axis=AxisSpec(field="orders", type="quantitative"),
+        color=AxisSpec(field="hour", type="nominal"),
+    )
+    plan = plan_chart(profile_result(cols, rows), intent)
+    assert plan.intent is not None and plan.intent.chart_type == "heatmap"
+    assert plan.intent.color is not None and plan.intent.color.field == "orders"
+    assert plan.source == "model_adjusted"
+
+
+def test_a_heatmap_past_the_cell_budget_is_refused() -> None:
+    """No honest reduction exists: dropping rows from a matrix leaves gaps that
+    read as zeroes, so this is a veto rather than a cap."""
+    cols, rows = _matrix(rows_n=30, cols_n=30)   # 900 cells
+    intent = ChartIntent(
+        chart_type="heatmap",
+        x_axis=AxisSpec(field="weekday", type="nominal"),
+        y_axis=AxisSpec(field="hour", type="nominal"),
+        color=AxisSpec(field="orders", type="quantitative"),
+    )
+    plan = plan_chart(profile_result(cols, rows), intent)
+    assert plan.intent is None or plan.intent.chart_type != "heatmap"
+
+
+def test_a_heatmap_compiles_to_rect_with_the_measure_on_colour() -> None:
+    cols, rows = _matrix()
+    profile = profile_result(cols, rows)
+    spec = compile_vega_lite(plan_chart(profile).intent, profile, cols, rows)  # type: ignore[arg-type]
+
+    assert spec["mark"]["type"] == "rect"
+    assert spec["encoding"]["color"]["field"] == "orders"
+    # Quantitative, so Vega reaches for the `ramp` scale family and its
+    # sequential palette. Made ordinal it would return eight categorical hues
+    # standing for a magnitude.
+    assert spec["encoding"]["color"]["type"] == "quantitative"
+    assert "axis" not in spec["encoding"]["color"]
+    # Every cell is kept — the budget is a veto, not a cap.
+    assert len(spec["data"]["values"]) == 7 * 24
+    assert spec["usermeta"]["datamind"]["bands"] == 24
+
+
+# ── histogram ────────────────────────────────────────────────────────────
+def _observations(n: int = 400) -> tuple[list, list]:
+    cols = _cols(("total_amount", "quantitative"))
+    return cols, [[float((i * 37) % 500) + 0.5] for i in range(n)]
+
+
+def test_a_lone_measure_column_is_no_longer_unchartable() -> None:
+    """"No second column to compare the measure across" was right for a column
+    of totals and wrong for a column of observations — the column is the
+    subject, not one side of a comparison."""
+    cols, rows = _observations()
+    assert unchartable_reason(profile_result(cols, rows)) is None
+
+    intent = heuristic_intent(profile_result(cols, rows))
+    assert intent is not None and intent.chart_type == "histogram"
+
+
+def test_too_few_observations_have_no_shape() -> None:
+    cols, rows = _observations(n=MIN_HISTOGRAM_ROWS - 1)
+    assert unchartable_reason(profile_result(cols, rows)) is not None
+
+
+def test_a_histogram_bins_x_and_counts_rows() -> None:
+    cols, rows = _observations()
+    profile = profile_result(cols, rows)
+    spec = compile_vega_lite(plan_chart(profile).intent, profile, cols, rows)  # type: ignore[arg-type]
+
+    assert spec["encoding"]["x"]["bin"] == {"maxbins": HISTOGRAM_BINS}
+    # Binning replaces the axis with bin edges, so a format chosen from the raw
+    # values no longer describes what is written there.
+    assert "axis" not in spec["encoding"]["x"]
+    # The count carries no field: it counts rows, not values of a column, and
+    # naming one would make it a count of non-nulls instead.
+    assert spec["encoding"]["y"] == {
+        "aggregate": "count", "type": "quantitative", "title": "Rows",
+    }
+    assert len(spec["data"]["values"]) == 400   # every observation, uncapped
+
+
+def test_a_grouped_result_does_not_become_a_histogram() -> None:
+    """The guard is the caller's shape, not the column: grouping leaves its key
+    in the result, so a dimension is present and the heuristic never gets
+    here."""
+    cols = _cols(("customer", "nominal"), ("spend", "quantitative"))
+    rows = [[f"C{i}", float(i * 13 % 900)] for i in range(400)]
+    intent = heuristic_intent(profile_result(cols, rows))
+    assert intent is not None and intent.chart_type != "histogram"
+
+
+# ── combo ────────────────────────────────────────────────────────────────
+def _two_measures(second: list[float]) -> tuple[list, list, ChartIntent]:
+    cols = _cols(("month", "nominal"), ("revenue", "quantitative"), ("other", "quantitative"))
+    rows = [[f"M{i}", 1_000_000.0 + i * 50_000, second[i]] for i in range(len(second))]
+    intent = ChartIntent(
+        chart_type="combo",
+        x_axis=AxisSpec(field="month", type="nominal"),
+        y_axis=AxisSpec(field="revenue", type="quantitative"),
+        y2_axis=AxisSpec(field="other", type="quantitative"),
+    )
+    return cols, rows, intent
+
+
+def test_a_combo_layers_bars_under_a_line() -> None:
+    cols, rows, intent = _two_measures([12.0 + i * 0.3 for i in range(12)])
+    profile = profile_result(cols, rows)
+    spec = compile_vega_lite(plan_chart(profile, intent).intent, profile, cols, rows)  # type: ignore[arg-type]
+
+    assert "mark" not in spec          # a layer of two, not one
+    assert [layer["mark"]["type"] for layer in spec["layer"]] == ["bar", "line"]
+    # x is hoisted so both layers share it — and so the browser, which reads
+    # `spec.encoding.x` for label angles and column widths, sees the shape it
+    # sees for every other chart.
+    assert spec["encoding"]["x"]["field"] == "month"
+    assert spec["layer"][0]["encoding"]["y"]["field"] == "revenue"
+    assert spec["layer"][1]["encoding"]["y"]["field"] == "other"
+
+
+def test_measures_on_different_scales_get_their_own_axes() -> None:
+    cols, rows, intent = _two_measures([12.0 + i * 0.3 for i in range(12)])
+    profile = profile_result(cols, rows)
+    spec = compile_vega_lite(plan_chart(profile, intent).intent, profile, cols, rows)  # type: ignore[arg-type]
+    assert spec["resolve"] == {"scale": {"y": "independent"}}
+
+
+def test_comparable_measures_share_one_axis() -> None:
+    """Sharing a scale that did not need sharing is the lesser evil: two
+    independent axes let a reader see a crossover that is an artefact of where
+    the scales happened to land."""
+    cols, rows, intent = _two_measures([900_000.0 + i * 40_000 for i in range(12)])
+    profile = profile_result(cols, rows)
+    spec = compile_vega_lite(plan_chart(profile, intent).intent, profile, cols, rows)  # type: ignore[arg-type]
+    assert "resolve" not in spec
+
+
+def test_a_combo_needs_two_distinct_measures() -> None:
+    cols, rows, intent = _two_measures([12.0 + i for i in range(12)])
+    profile = profile_result(cols, rows)
+
+    same = intent.model_copy(update={"y2_axis": intent.y_axis})
+    assert plan_chart(profile, same).intent is not None
+    assert plan_chart(profile, same).intent.chart_type != "combo"  # type: ignore[union-attr]
+
+    missing = ChartIntent(
+        chart_type="combo",
+        x_axis=AxisSpec(field="month", type="nominal"),
+        y_axis=AxisSpec(field="revenue", type="quantitative"),
+    )
+    assert plan_chart(profile, missing).intent.chart_type != "combo"  # type: ignore[union-attr]
 
 
 # ── the mark budget ──────────────────────────────────────────────────────

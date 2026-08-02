@@ -291,6 +291,14 @@ Pick one chart_type:
 - "area": a trend where the filled magnitude matters.
 - "scatter": the relationship between two quantitative fields.
 - "pie": parts of a single whole, only for a few categories (<=6).
+- "heatmap": a measure across TWO dimensions at once — day by hour, region by
+  category. Put the dimensions on x_axis and y_axis and the measure on "color".
+- "histogram": how one measure is spread, when the rows are individual
+  observations rather than groups. Only x_axis; the count is derived. Never for
+  a result that already has one row per category.
+- "combo": bars for one measure with a line over them for another, when the two
+  are on different scales — revenue and a percentage, volume and an average.
+  y_axis is the bars, y2_axis is the line.
 - "none": nothing a chart would clarify. Prefer "none" over a chart nobody can
   read — an unreadable chart is worse than no chart.
 
@@ -309,7 +317,7 @@ top N), in which case the platform keeps the leading 25 and labels the chart as
 a subset.
 
 Rules:
-- x_axis and y_axis are required unless chart_type is "none".
+- x_axis and y_axis are required unless chart_type is "none" or "histogram".
 - Only reference column names that appear in the result schema below.
 - Put the category/time field on x_axis and the numeric measure on y_axis,
   always — including for bars that will end up running sideways. The platform

@@ -36,7 +36,12 @@ MAX_PIE_SLICES = 6        # angles stop being comparable well before this
 MAX_SERIES = 8            # matches the categorical palette in VegaChart.tsx
 HORIZONTAL_BAR_FROM = 8   # above this, labels stack better down the side
 TOOLTIP_FIELDS = 8        # a hover is read at a glance or not at all
-MAX_TIME_TICKS = 12        # dated labels are wide; a year of months is plenty
+MAX_TIME_TICKS = 12       # dated labels are wide; a year of months is plenty
+MAX_HEATMAP_CELLS = 400   # past this the cells are smaller than the eye resolves
+DUAL_AXIS_RATIO = 10      # when one measure dwarfs another, share no scale
+HISTOGRAM_BINS = 20       # Vega's target, not a promise; it snaps to round edges
+MIN_HISTOGRAM_ROWS = 20   # fewer observations than this is a list, not a shape
+MIN_HISTOGRAM_LEVELS = 10  # ten repeated values are categories, not a spread
 
 # Columns whose *name* says they are an identifier: never a measure, however
 # numeric they look. Charting `customer_id` as a quantity is the classic
@@ -46,7 +51,9 @@ _ID_NAME = re.compile(
 )
 
 
-ChartType = Literal["line", "bar", "area", "scatter", "pie", "none"]
+ChartType = Literal[
+    "line", "bar", "area", "scatter", "pie", "heatmap", "histogram", "combo", "none"
+]
 AxisType = Literal["quantitative", "temporal", "nominal", "ordinal"]
 
 # Which way the bars run. Not a chart type: a vertical and a horizontal bar
@@ -83,6 +90,17 @@ class ChartIntent(BaseModel):
     x_axis: AxisSpec | None = None
     y_axis: AxisSpec | None = None
     series: AxisSpec | None = None
+    #: Heatmap only: the measure, read as colour *intensity*.
+    #:
+    #: The same Vega channel as `series` and a different job, which is why it
+    #: is a different field. `series` colours by identity — one hue per region,
+    #: drawn from the categorical palette. `color` colours by magnitude — one
+    #: ramp from low to high. Vega picks the scale family, and therefore the
+    #: palette, from the encoding *type*, so conflating the two is how a chart
+    #: ends up with eight unrelated hues standing for a quantity.
+    color: AxisSpec | None = None
+    #: Combo only: the second measure, drawn as a line over the bars.
+    y2_axis: AxisSpec | None = None
     #: Scatter only: a third measure, read as the mark's area. A bubble chart
     #: is a scatter with this set, not a chart type of its own.
     size: AxisSpec | None = None
@@ -110,15 +128,31 @@ class ChartIntent(BaseModel):
 
     @model_validator(mode="after")
     def _axes_required(self) -> ChartIntent:
-        if self.chart_type != "none" and (self.x_axis is None or self.y_axis is None):
-            raise ValueError("x_axis and y_axis are required unless chart_type is 'none'")
+        if self.chart_type == "none":
+            return self
+        if self.x_axis is None:
+            raise ValueError("x_axis is required unless chart_type is 'none'")
+        # A histogram's y is a count of its own x, so there is nothing for the
+        # model to name. Every other type needs both. The channels that only
+        # *some* types use — `color`, `y2_axis` — are checked in `_fit` rather
+        # than here: a missing one should cost the chart, not the whole
+        # structured reply, and `_fit` already falls back to the heuristic.
+        if self.chart_type != "histogram" and self.y_axis is None:
+            raise ValueError("y_axis is required for this chart_type")
         return self
 
 
 _MARKS = {
     "line": "line", "bar": "bar",
     "area": "area", "scatter": "point", "pie": "arc",
+    "heatmap": "rect", "histogram": "bar",
+    # "combo" has no single mark — it is a layer of two, built in the compiler.
 }
+
+# Types whose rows are a shape rather than a list of things to compare, so the
+# mark budget does not apply: a thousand points is a distribution, a thousand
+# bars is a smear. A heatmap is capped by cells instead, a histogram by bins.
+_CONTINUOUS = ("line", "area", "scatter", "heatmap", "histogram")
 
 _SEM_TO_VEGA: dict[str, AxisType] = {
     "quantitative": "quantitative",
@@ -298,9 +332,45 @@ def unchartable_reason(profile: ResultProfile) -> str | None:
             )
         return "The only numeric columns are identifiers, not measures."
 
-    if not _dimension_candidates(profile) and len(measures) < 2:
+    # One lone measure and nothing to compare it across — unless the column is
+    # a raw distribution, which is a chart of *itself*. That is the one shape
+    # where a single measure says something, and vetoing it here is what used
+    # to make "every order total" answerable only as a table.
+    if (
+        not _dimension_candidates(profile)
+        and len(measures) < 2
+        and _histogram_candidate(profile) is None
+    ):
         return "No second column to compare the measure across."
     return None
+
+
+def _histogram_candidate(profile: ResultProfile) -> ColumnProfile | None:
+    """The column a histogram would bin, if this result holds one.
+
+    Only two conditions, and it is worth being straight about why they are so
+    weak: **nothing in a result set distinguishes raw observations from group
+    totals.** Both are numeric, both vary, and `SELECT total FROM orders` and
+    `SELECT customer, SUM(total) ... GROUP BY customer` produce columns that
+    profile identically. There is no test to write.
+
+    What does the real work is *where* this is consulted. The heuristic only
+    reaches for a histogram when the result has no dimension to compare across
+    — which is exactly the case a GROUP BY does not produce, since grouping
+    leaves its key in the result. So the discrimination lives in the caller's
+    shape, and these two checks only rule out the results that are too small or
+    too repetitive to have a distribution at all.
+    """
+    if profile.row_count < MIN_HISTOGRAM_ROWS:
+        return None
+    return next(
+        (
+            column
+            for column in _measure_candidates(profile)
+            if column.distinct >= MIN_HISTOGRAM_LEVELS
+        ),
+        None,
+    )
 
 
 # ── validation & fitting ─────────────────────────────────────────────────
@@ -314,7 +384,10 @@ def validate_intent(
     """
     if intent.chart_type == "none":
         return False, "The model declined to chart this result."
-    for axis in (intent.x_axis, intent.y_axis, intent.series):
+    for axis in (
+        intent.x_axis, intent.y_axis, intent.series,
+        intent.color, intent.y2_axis, intent.size,
+    ):
         if axis is not None and profile.get(axis.field) is None:
             return False, f"Chart referenced unknown column {axis.field!r}."
     return True, None
@@ -341,6 +414,135 @@ def _axis_for(col: ColumnProfile, template: AxisSpec | None = None) -> AxisSpec:
     )
 
 
+def _fit_heatmap(
+    intent: ChartIntent, profile: ResultProfile
+) -> tuple[ChartIntent | None, bool]:
+    """Two dimensions crossed, a measure in the cells.
+
+    The measure may arrive on `color` (where it belongs) or on `y_axis` (where
+    a model that has only ever seen bar charts will put it). Both are repaired
+    rather than rejected: the shape is unambiguous once the columns are
+    profiled, and the alternative is losing a chart to a naming convention.
+    """
+    assert intent.x_axis is not None
+    axes = [intent.x_axis, intent.y_axis, intent.color]
+    named = [profile.get(a.field) for a in axes if a is not None]
+    if any(c is None for c in named):
+        return None, False
+
+    dimensions = [c for c in named if c is not None and not c.is_numeric]
+    measures = [
+        c for c in named
+        if c is not None and c.is_numeric and not c.is_id_like and not c.is_constant
+    ]
+    if len(dimensions) < 2 or not measures:
+        return None, False
+
+    rows, columns = dimensions[0], dimensions[1]
+    if rows.is_constant or columns.is_constant:
+        return None, False
+    # A cell smaller than the eye resolves is a texture. Unlike a bar chart
+    # there is no honest way to keep the leading N — dropping rows from a
+    # matrix leaves gaps that read as zeroes.
+    if rows.distinct * columns.distinct > MAX_HEATMAP_CELLS:
+        return None, False
+
+    changed = (
+        intent.color is None
+        or intent.color.field != measures[0].name
+        or intent.y_axis is None
+        or intent.y_axis.field != columns.name
+    )
+    return (
+        ChartIntent(
+            chart_type="heatmap",
+            x_axis=_axis_for(rows, intent.x_axis),
+            y_axis=_axis_for(columns),
+            color=_axis_for(measures[0], intent.color),
+            title=intent.title,
+        ),
+        changed,
+    )
+
+
+def _fit_histogram(
+    intent: ChartIntent, profile: ResultProfile
+) -> tuple[ChartIntent | None, bool]:
+    """One measure, binned, counted. The y axis is derived, never named."""
+    assert intent.x_axis is not None
+    column = profile.get(intent.x_axis.field)
+    candidate = _histogram_candidate(profile)
+    if column is None or candidate is None:
+        return None, False
+    # An explicit pick is honoured if the column can carry it; otherwise the
+    # one that can is used instead.
+    if not (
+        column.is_numeric
+        and not column.is_id_like
+        and not column.is_constant
+        and column.distinct >= MIN_HISTOGRAM_LEVELS
+    ):
+        column = candidate
+
+    return (
+        ChartIntent(
+            chart_type="histogram",
+            x_axis=_axis_for(column, intent.x_axis),
+            # Counted, so there is no measure column and no aggregation to
+            # apply to one. The compiler emits a fieldless count.
+            y_axis=AxisSpec(field=column.name, type="quantitative", aggregation="count"),
+            title=intent.title,
+        ),
+        column.name != intent.x_axis.field,
+    )
+
+
+def _fit_combo(
+    intent: ChartIntent, profile: ResultProfile
+) -> tuple[ChartIntent | None, bool]:
+    """A dimension, bars for one measure, a line for another.
+
+    The two measures keep their own y scales when their magnitudes differ
+    enough to make a shared one useless — revenue in millions beside a margin
+    in percent. When they are comparable the scale is shared, because two axes
+    that did not need to differ let a reader infer a crossover that is an
+    artefact of the drawing.
+    """
+    assert intent.x_axis is not None
+    px = profile.get(intent.x_axis.field)
+    first = profile.get(intent.y_axis.field) if intent.y_axis else None
+    second = profile.get(intent.y2_axis.field) if intent.y2_axis else None
+    if px is None or first is None or second is None:
+        return None, False
+    if px.is_constant or px.is_numeric:
+        return None, False
+    for measure in (first, second):
+        if not measure.is_numeric or measure.is_constant or measure.is_id_like:
+            return None, False
+    if first.name == second.name:
+        return None, False
+
+    assert intent.y_axis is not None and intent.y2_axis is not None
+    return (
+        ChartIntent(
+            chart_type="combo",
+            x_axis=_axis_for(px, intent.x_axis),
+            y_axis=_axis_for(first, intent.y_axis),
+            y2_axis=_axis_for(second, intent.y2_axis),
+            title=intent.title,
+        ),
+        False,
+    )
+
+
+def _independent_scales(first: ColumnProfile, second: ColumnProfile) -> bool:
+    """Whether a combo's two measures are too far apart to share an axis."""
+    peaks = sorted(abs(c.maximum or 0.0) for c in (first, second))
+    if peaks[0] == 0:
+        return peaks[1] > 0
+    return peaks[1] / peaks[0] >= DUAL_AXIS_RATIO
+
+
 def _fit(
     intent: ChartIntent, profile: ResultProfile
 ) -> tuple[ChartIntent | None, bool]:
@@ -352,6 +554,16 @@ def _fit(
     demotion (pie → bar, line → bar) over rejection, because a legible chart of
     the wrong family still shows the numbers.
     """
+    # The three types whose channels mean something different get their own
+    # rules. Folding them into the category/measure logic below would mean
+    # every branch there re-asking which kind of chart it is.
+    if intent.chart_type == "heatmap":
+        return _fit_heatmap(intent, profile)
+    if intent.chart_type == "histogram":
+        return _fit_histogram(intent, profile)
+    if intent.chart_type == "combo":
+        return _fit_combo(intent, profile)
+
     assert intent.x_axis is not None and intent.y_axis is not None
     px = profile.get(intent.x_axis.field)
     py = profile.get(intent.y_axis.field)
@@ -532,6 +744,28 @@ def heuristic_intent(profile: ResultProfile) -> ChartIntent | None:
             series=_axis_for(series) if series is not None else None,
         )
 
+    # Two dimensions crossed by a measure. Before heatmaps existed this fell
+    # through to the bar below, which charted the first dimension and dropped
+    # the second on the floor — several rows per category, drawn on top of each
+    # other, with nothing on screen saying a column had been ignored.
+    if len(categorical) >= 2:
+        first, second = categorical[0], categorical[1]
+        if second.distinct <= MAX_SERIES:
+            # Small enough to read as a legend, which is easier than a matrix.
+            return ChartIntent(
+                chart_type="bar",
+                x_axis=_axis_for(first),
+                y_axis=_axis_for(measure),
+                series=_axis_for(second),
+            )
+        if first.distinct * second.distinct <= MAX_HEATMAP_CELLS:
+            return ChartIntent(
+                chart_type="heatmap",
+                x_axis=_axis_for(first),
+                y_axis=_axis_for(second),
+                color=_axis_for(measure),
+            )
+
     # A measure across categories: bars. The orientation is left to `_fit`,
     # which every path through `plan_chart` runs afterwards — deciding it twice
     # is how the two paths drift apart.
@@ -545,6 +779,9 @@ def heuristic_intent(profile: ResultProfile) -> ChartIntent | None:
     # Two measures and nothing to group by: show their relationship. A third
     # goes to the mark's area rather than being dropped — the reader gets it
     # for free, and the alternative is a chart that silently ignores a column.
+    #
+    # Ahead of the histogram below on purpose: with two measures in hand, how
+    # they move together says more than how either is spread.
     if len(measures) >= 2:
         return ChartIntent(
             chart_type="scatter",
@@ -552,6 +789,13 @@ def heuristic_intent(profile: ResultProfile) -> ChartIntent | None:
             y_axis=_axis_for(measures[1]),
             size=_axis_for(measures[2]) if len(measures) >= 3 else None,
         )
+
+    # One column, nothing to compare it across, and enough of it to have a
+    # shape: the column is the subject. `unchartable_reason` stops vetoing this
+    # case for the same reason.
+    lone = _histogram_candidate(profile)
+    if lone is not None:
+        return ChartIntent(chart_type="histogram", x_axis=_axis_for(lone))
     return None
 
 
@@ -755,15 +999,17 @@ def _layout(
 ) -> tuple[list[list[Any]], str | None, str | None]:
     """Reduce rows to the mark budget and decide the category sort order.
 
-    Returns `(rows, sort_order, note)`. Continuous charts (line/area/scatter)
-    keep every row — a thousand points is a shape, a thousand bars is a smear —
-    so only category charts are capped, and the cap is reported in the title
-    rather than applied silently.
+    Returns `(rows, sort_order, note)`. `_CONTINUOUS` types keep every row — a
+    thousand points is a shape, a thousand bars is a smear — so only category
+    charts are capped, and the cap is reported in the title rather than applied
+    silently. A heatmap is in that set for a different reason than a line:
+    dropping rows from a matrix leaves gaps that read as zeroes, so its budget
+    is a veto on cells rather than a cap on rows.
     """
     all_rows = [list(r) for r in rows]
     assert intent.x_axis is not None and intent.y_axis is not None
 
-    if intent.chart_type in ("line", "area", "scatter"):
+    if intent.chart_type in _CONTINUOUS:
         note = f"first {profile.row_count:,} rows" if profile.truncated else None
         return all_rows, None, note
 
@@ -848,7 +1094,10 @@ def _tooltip(
     raw row values beside a mark that shows their roll-up, which is worse than
     an unformatted number: it is a different number.
     """
-    axes = (intent.x_axis, intent.y_axis, intent.series, intent.size)
+    axes = (
+        intent.x_axis, intent.y_axis, intent.series,
+        intent.color, intent.y2_axis, intent.size,
+    )
     if any(a is not None and a.aggregation != "none" for a in axes):
         return None
 
@@ -919,8 +1168,9 @@ def compile_vega_lite(
     spec: dict[str, Any] = {
         "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
         "data": {"values": data},
-        "mark": {"type": _MARKS[intent.chart_type]},
     }
+    if intent.chart_type != "combo":
+        spec["mark"] = {"type": _MARKS[intent.chart_type]}
 
     encoding: dict[str, Any] = {}
     spec["encoding"] = encoding
@@ -930,6 +1180,57 @@ def compile_vega_lite(
         # category), not by x/y — an x/y encoding renders nothing.
         encoding["theta"] = encode(intent.y_axis, positional=False)
         encoding["color"] = encode(intent.x_axis, positional=False)
+    elif intent.chart_type == "heatmap":
+        # Two dimensions position the cell; the measure is its colour. The
+        # measure stays **quantitative** so Vega reaches for the `ramp` scale
+        # family and its sequential palette — made ordinal it would come back
+        # with eight categorical hues standing for a magnitude.
+        assert intent.color is not None
+        encoding["x"] = encode(intent.x_axis)
+        encoding["y"] = encode(intent.y_axis)
+        encoding["color"] = encode(intent.color, positional=False)
+    elif intent.chart_type == "histogram":
+        # Bins on x, a count of rows on y. The count channel carries no field:
+        # it counts rows, not values of a column, and naming one would make it
+        # a count of non-nulls instead.
+        encoding["x"] = {
+            **encode(intent.x_axis),
+            "bin": {"maxbins": HISTOGRAM_BINS},
+        }
+        # Binning replaces the axis with bin edges, so a format chosen from the
+        # raw values no longer describes what is written there.
+        encoding["x"].pop("axis", None)
+        encoding["y"] = {"aggregate": "count", "type": "quantitative", "title": "Rows"}
+    elif intent.chart_type == "combo":
+        assert intent.y2_axis is not None
+        first = profile.get(intent.y_axis.field)
+        second = profile.get(intent.y2_axis.field)
+        # x is hoisted to the top level so both layers share it — and so the
+        # browser, which reads `spec.encoding.x` to decide label angles and
+        # column widths, sees the same shape it sees for every other chart.
+        encoding["x"] = encode(intent.x_axis)
+        spec["layer"] = [
+            {
+                "mark": {"type": "bar"},
+                "encoding": {
+                    "y": encode(intent.y_axis),
+                    "color": {"datum": intent.y_axis.label or intent.y_axis.field},
+                },
+            },
+            {
+                "mark": {"type": "line", "point": True},
+                "encoding": {
+                    "y": encode(intent.y2_axis),
+                    "color": {"datum": intent.y2_axis.label or intent.y2_axis.field},
+                },
+            },
+        ]
+        # Two scales only when one measure would otherwise flatten the other.
+        # Sharing an axis that did not need sharing is the lesser evil: two
+        # independent axes let a reader see a crossover that is an artefact of
+        # where the scales happened to land.
+        if first is not None and second is not None and _independent_scales(first, second):
+            spec["resolve"] = {"scale": {"y": "independent"}}
     else:
         x, y = intent.x_axis, intent.y_axis
         category_channel = "x"
@@ -958,9 +1259,11 @@ def compile_vega_lite(
     tooltip = _tooltip(intent, columns, shown)
     if tooltip is not None:
         encoding["tooltip"] = tooltip
-    else:
+    elif "mark" in spec:
         # No formatting to add, so let Vega show every field of the datum —
-        # which is more than an explicit list would have named.
+        # which is more than an explicit list would have named. A combo has no
+        # top-level mark to hang that on, and its tooltip is always the
+        # explicit one, since neither of its measures may aggregate.
         spec["mark"]["tooltip"] = True
 
     # What the renderer needs to know that the encoding does not say.
@@ -982,14 +1285,18 @@ def compile_vega_lite(
     # It is always `x_axis` regardless of orientation: the horizontal swap is a
     # rendering detail of this function, and a fitted intent always carries the
     # category on x.
-    spec["usermeta"] = {
-        "datamind": {
-            "chart_type": intent.chart_type,
-            "orientation": intent.orientation,
-            "stack": intent.stack,
-            "categories": _distinct(shown.get(intent.x_axis.field, ())),
-        }
+    meta: dict[str, Any] = {
+        "chart_type": intent.chart_type,
+        "orientation": intent.orientation,
+        "stack": intent.stack,
+        "categories": _distinct(shown.get(intent.x_axis.field, ())),
     }
+    # A heatmap's height has to grow with its *other* dimension the way a
+    # horizontal bar's grows with its categories — a 30-row matrix squeezed
+    # into 300px is a smear whichever axis you read it along.
+    if intent.chart_type == "heatmap" and intent.y_axis is not None:
+        meta["bands"] = _distinct(shown.get(intent.y_axis.field, ()))
+    spec["usermeta"] = {"datamind": meta}
 
     # The reduction is part of what the chart claims, so it is shown, never
     # implied: a capped chart that looks whole is a lie about the data.

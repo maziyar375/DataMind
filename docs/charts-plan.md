@@ -315,7 +315,7 @@ cannot draw, which is worse than not having started it.
 |---|---|---|---|---|
 | ✅ | **1. Consolidate** | `horizontal_bar` folded into `bar` + `orientation`; `table only` removed from the chart picker | `charts/__init__.py`, `0007_chart_orientation.py`, `prompts/__init__.py`, `tile-editor.tsx`, `VegaChart.tsx`, `test_charts.py`, `test_tile_charts.py` | **done** — 596 backend tests, ruff + 5 import-linter contracts, typecheck, build, migration round-trip verified against live Postgres |
 | ✅ | **2. Encoder** | stack mode (stacked/grouped/100%), temporal axis format **and tick interval** (the "2025" bug), SI axis numbers, formatted tooltips, `size` → bubble | `charts/__init__.py`, `prompts/__init__.py`, `tile-editor.tsx`, `VegaChart.tsx`, both chart test files | **done** — 617 backend tests, ruff + contracts, typecheck, build, and 12 specs compiled and *rendered* through the installed Vega with their axis labels read back |
-| ☐ | **3. New types** | heatmap, combo, histogram (box plot optional) | `charts/__init__.py`, `prompts/__init__.py`, `tile-editor.tsx`, `test_charts.py` | each type has a `_fit` veto, a heuristic path and tests; `make test` |
+| ✅ | **3. New types** | heatmap, combo, histogram (box plot deferred) | `charts/__init__.py`, `prompts/__init__.py`, `tile-editor.tsx`, `VegaChart.tsx`, both chart test files | **done** — 633 backend tests, ruff + contracts, typecheck, build, and all 17 specs (12 from Phase 2 + 5 new) compiled and rendered through the installed Vega |
 | ☐ | **4. Big number** | `KPI` artifact; single-row results stop being a dead end; replaces the bespoke `METRIC` renderer | `charts/__init__.py`, `pipeline/nodes/`, `api/schemas.py`, `chat.tsx`, `dashboard.tsx` | a one-row result renders a KPI in **both** chat and a tile, from one component |
 | ☐ | **5. Selection** | deterministic shape router; model picks from 2–3 candidates only | `charts/__init__.py` (new router), `prompts/__init__.py`, `eval/suites/` | every signature row in the Phase 5 table has a unit test; eval ≥ baseline |
 | ☐ | **6. Colour** | diverging ramp, semantic +/- pair, `npm run test:palette` | `VegaChart.tsx`, `theme/tokens.ts`, new validator script | validator passes for **both** dark and light |
@@ -331,7 +331,8 @@ the heatmap) and can be done at any point after it.
 |---|---|---|---|
 | 0 | 2026-08-02 | — | Findings above. The premise "many duplicate chart types" turned out to be one real duplicate; the wider problem is a *narrow* set plus a missing stacking control. |
 | 1 | 2026-08-02 | `6fde6d7` | Two plan steps corrected against the code — see the struck-through items in Phase 1. Migration **0007 applies on the next `make up`**: the running `api` container has the pre-change image baked in (no volume mount), and its start command is `alembic upgrade head`. The dev DB has zero affected rows, so it is a no-op there either way. |
-| 2 | 2026-08-02 | *(uncommitted)* | Three defects caught by rendering rather than reasoning — see "What rendering caught" below. Scope went slightly past the plan's four bullets: the `Split` and `Size` controls in the tile editor, and a `categories` count in `usermeta`, because stack and size were otherwise reachable only from chat, and the browser's width rule counted rows where a split chart needs columns. |
+| 2 | 2026-08-02 | `cabfd0f` | Three defects caught by rendering rather than reasoning — see "What rendering caught" below. Scope went slightly past the plan's four bullets: the `Split` and `Size` controls in the tile editor, and a `categories` count in `usermeta`, because stack and size were otherwise reachable only from chat, and the browser's width rule counted rows where a split chart needs columns. |
+| 3 | 2026-08-02 | *(uncommitted)* | Box plot deferred, per the open decision. Two design calls worth knowing about: a new `color` channel distinct from `series` (colour-as-magnitude vs colour-as-identity), and a **heuristic change** — a result with two dimensions now becomes a split bar or a heatmap instead of a bar that silently dropped the second dimension. That last one changes what existing `Auto` tiles draw. |
 
 ### What rendering caught (Phase 2)
 
@@ -361,6 +362,41 @@ filled in by `tickFormat` and then formats like `g`. `",d"` fixes that and
 breaks fractional axes instead (`0, 0, 0, 1, 1, 1`). Hence the rule that ended
 up in the code: `~s` above ten thousand, and *nothing at all* below it, where
 Vega's own default was already right.
+
+### Design notes (Phase 3)
+
+**`color` is a separate channel from `series`, deliberately.** They compile to
+the same Vega channel and do opposite jobs: `series` colours by *identity* (one
+hue per region, categorical palette), `color` colours by *magnitude* (one ramp,
+low to high). Vega picks the scale family — and therefore the palette — from
+the encoding type, so conflating them is exactly how a chart ends up with eight
+unrelated hues standing for a quantity. `VegaChart.tsx` already documents the
+same split on the palette side, which is why the heatmap's measure is kept
+`quantitative` rather than made ordinal.
+
+**A histogram cannot be identified from its column, only from its result.**
+Nothing distinguishes raw observations from group totals: `SELECT total FROM
+orders` and `SELECT customer, SUM(total) … GROUP BY customer` produce columns
+that profile identically. There is no test to write. What does the work is
+*where* the check is consulted — the heuristic only reaches for a histogram
+when the result has no dimension at all, which is the one thing a GROUP BY
+never produces, since grouping leaves its key in the result. The two conditions
+in `_histogram_candidate` only rule out results too small or too repetitive to
+have a distribution.
+
+**A combo's two y axes are conditional.** They separate only when the measures'
+magnitudes differ by `DUAL_AXIS_RATIO` or more. Sharing a scale that did not
+need sharing is the lesser evil: two independent axes let a reader see a
+crossover that is purely an artefact of where the scales happened to land. Both
+branches were verified by rendering — three axes in the dual case, two in the
+shared one.
+
+**One heuristic change is visible to existing tiles.** A result with two
+dimensions and a measure used to fall through to a bar of the *first*
+dimension, drawing several rows per category on top of each other with nothing
+saying a column had been ignored. It now becomes a split bar (second dimension
+≤ `MAX_SERIES`) or a heatmap (larger, and within `MAX_HEATMAP_CELLS`). Tiles
+set to `Auto` will redraw accordingly.
 
 ### Carried forward
 
