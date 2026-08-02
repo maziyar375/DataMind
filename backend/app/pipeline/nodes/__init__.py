@@ -769,12 +769,13 @@ async def chart(state: RunState, deps: NodeDeps) -> NodeResult:
         ChartIntent,
         compile_vega_lite,
         plan_chart,
+        plan_kpi,
         profile_result,
         unchartable_reason,
     )
 
     execution = state.execution
-    if execution is None or execution.row_count == 0 or len(execution.columns) < 2:
+    if execution is None or execution.row_count == 0:
         return NodeResult(status="SKIPPED", detail="Nothing chartable")
 
     profile = profile_result(
@@ -786,7 +787,26 @@ async def chart(state: RunState, deps: NodeDeps) -> NodeResult:
     # so the call is skipped entirely — no tokens, no latency, and the step
     # trail shows a fact about the result instead of "the model declined".
     if (blocked := unchartable_reason(profile)) is not None:
-        return NodeResult(status="SKIPPED", detail=blocked)
+        # One veto is not really about the data being uninteresting. "A single
+        # row is a value, not a chart" is a correct statement about plotting
+        # and a poor outcome for the reader, because a single-row result is the
+        # shape a KPI is *made* of. So that one case gets a second question —
+        # is there a number here worth drawing large? — before the turn ends
+        # with nothing to look at.
+        #
+        # Only that case. The other vetoes describe results where no number is
+        # worth enlarging either: a thousand tied totals drawn big is still a
+        # thousand tied totals, and an id is not a metric however large it is
+        # set. Rescuing those would trade "no picture" for a confident wrong
+        # one.
+        if execution.row_count != 1:
+            return NodeResult(status="SKIPPED", detail=blocked)
+        kpi = plan_kpi(profile, execution.columns, execution.rows)
+        if kpi is None:
+            return NodeResult(status="SKIPPED", detail=blocked)
+        state.kpi = kpi.model_dump(mode="json")
+        await deps.emit("ARTIFACT_CREATED", {"kind": "KPI"})
+        return NodeResult(detail="big number")
 
     # A provider error, or a model that cannot emit a valid nested ChartIntent
     # (common with small models), falls through to a deterministic choice from

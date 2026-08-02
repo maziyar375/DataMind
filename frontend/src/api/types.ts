@@ -271,8 +271,24 @@ export type ArtifactSpec = TableArtifactSpec & Record<string, unknown>
 
 export interface Artifact {
   id: string
-  kind: 'TABLE' | 'CHART' | 'CLARIFICATION' | 'ERROR' | 'SQL_SUMMARY'
+  kind: 'TABLE' | 'CHART' | 'KPI' | 'CLARIFICATION' | 'ERROR' | 'SQL_SUMMARY'
   spec: ArtifactSpec
+}
+
+/**
+ * One number drawn big — what a single-row result becomes instead of nothing.
+ *
+ * `value` and `delta.text` arrive already written out. The backend formats
+ * them so that a tile and a chat turn showing the same number cannot disagree
+ * about it, and so the figure is written the same way as the axis beside it.
+ */
+export interface KpiSpec {
+  value: string
+  raw: number | null
+  label: string
+  caption: string | null
+  delta: { text: string; direction: 'up' | 'down' | 'flat'; caption: string } | null
+  sparkline: number[]
 }
 
 export interface GeneratedQuery {
@@ -335,6 +351,8 @@ export interface TileResult {
   chart_source: string
   /** Set when the pick was overruled: "a pie does not fit; showing a bar". */
   chart_note: string | null
+  /** A METRIC tile's big number, planned by the backend. Null for every other type. */
+  kpi: KpiSpec | null
   error: { code: string; message: string } | null
 }
 

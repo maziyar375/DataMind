@@ -111,6 +111,10 @@ class MessageRole(StrEnum):
 class ArtifactKind(StrEnum):
     TABLE = "TABLE"
     CHART = "CHART"
+    # One number drawn big. Its own kind rather than a chart with an unusual
+    # spec: it carries no Vega-Lite, and a reader that expected one would find
+    # nothing to render.
+    KPI = "KPI"
     CLARIFICATION = "CLARIFICATION"
     ERROR = "ERROR"
     SQL_SUMMARY = "SQL_SUMMARY"

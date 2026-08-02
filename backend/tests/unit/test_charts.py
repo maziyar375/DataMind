@@ -29,6 +29,7 @@ from app.charts import (
     compile_vega_lite,
     heuristic_intent,
     plan_chart,
+    plan_kpi,
     profile_result,
     unchartable_reason,
     validate_intent,
@@ -643,6 +644,109 @@ def test_a_combo_needs_two_distinct_measures() -> None:
     assert plan_chart(profile, missing).intent.chart_type != "combo"  # type: ignore[union-attr]
 
 
+# ── the big number ───────────────────────────────────────────────────────
+def test_a_single_row_has_a_number_even_though_every_column_is_constant() -> None:
+    """The trap this planner exists to avoid.
+
+    A one-row result has exactly one distinct value in every column, so
+    `_measure_candidates` — which excludes constant columns, correctly, for
+    charts — rejects the very thing a KPI is made of. Picking the measure a
+    different way is the whole reason `plan_kpi` does not reuse it.
+    """
+    cols = _cols(("total_revenue", "quantitative"))
+    rows = [[1_247_318.4]]
+    profile = profile_result(cols, rows)
+
+    assert not [c for c in profile.columns if not c.is_constant]
+    spec = plan_kpi(profile, cols, rows)
+    assert spec is not None
+    assert spec.value == "1,247,318.40"
+    assert spec.raw == 1_247_318.4
+    assert spec.label == "total_revenue"
+    assert spec.delta is None and spec.sparkline == []
+
+
+def test_an_identifier_is_not_a_metric_however_large_it_is_set() -> None:
+    cols = _cols(("customer_id", "quantitative"))
+    assert plan_kpi(profile_result(cols, [[4051]]), cols, [[4051]]) is None
+
+
+def test_a_time_series_kpi_reports_the_latest_with_its_move() -> None:
+    cols = _cols(("month", "temporal"), ("revenue", "quantitative"))
+    rows = [[date(2025, m, 1), 1_000_000.0 + m * 50_000] for m in range(1, 13)]
+
+    spec = plan_kpi(profile_result(cols, rows), cols, rows)
+
+    assert spec is not None
+    assert spec.value == "1,600,000"                 # December, not January
+    assert spec.delta is not None
+    assert spec.delta.text == "+3.2%"
+    assert spec.delta.direction == "up"
+    assert spec.delta.caption == "vs Nov 2025"
+    assert len(spec.sparkline) == 12
+
+
+def test_the_latest_value_is_the_latest_not_the_last_row() -> None:
+    """A result is usually sorted by its own ORDER BY, and "usually" is not
+    "always" — reading the newest number off the wrong end of an unsorted
+    series is an error a big number states with total confidence."""
+    cols = _cols(("month", "temporal"), ("revenue", "quantitative"))
+    rows = [
+        [date(2025, 3, 1), 300.0],
+        [date(2025, 1, 1), 100.0],
+        [date(2025, 2, 1), 200.0],
+    ]
+    spec = plan_kpi(profile_result(cols, rows), cols, rows)
+    assert spec is not None and spec.value == "300"
+    assert spec.sparkline == [100.0, 200.0, 300.0]
+    assert spec.delta is not None and spec.delta.text == "+50.0%"
+
+
+def test_many_rows_with_no_time_axis_keep_the_old_first_of_n_reading() -> None:
+    cols = _cols(("region", "nominal"), ("revenue", "quantitative"))
+    rows = [[f"R{i}", float(i * 100)] for i in range(1, 6)]
+
+    spec = plan_kpi(profile_result(cols, rows), cols, rows)
+
+    assert spec is not None
+    assert spec.value == "100" and spec.caption == "first of 5 rows"
+    assert spec.delta is None
+
+
+def test_a_move_from_zero_is_stated_absolutely() -> None:
+    """A percentage against zero is undefined or infinite, and both render as
+    nonsense."""
+    cols = _cols(("month", "temporal"), ("signups", "quantitative"))
+    rows = [[date(2025, 1, 1), 0.0], [date(2025, 2, 1), 42.0]]
+
+    spec = plan_kpi(profile_result(cols, rows), cols, rows)
+
+    assert spec is not None and spec.delta is not None
+    assert spec.delta.text == "+42" and spec.delta.direction == "up"
+
+
+def test_an_unchanged_metric_says_so_rather_than_showing_zero_percent() -> None:
+    cols = _cols(("month", "temporal"), ("signups", "quantitative"))
+    rows = [[date(2025, 1, 1), 42.0], [date(2025, 2, 1), 42.0]]
+
+    spec = plan_kpi(profile_result(cols, rows), cols, rows)
+
+    assert spec is not None and spec.delta is not None
+    assert spec.delta.direction == "flat" and spec.delta.text == "no change"
+
+
+def test_a_gap_in_the_series_drops_the_sparkline_rather_than_faking_it() -> None:
+    """A line drawn through a missing point asserts a value that is not
+    there, so the strip is all-or-nothing."""
+    cols = _cols(("month", "temporal"), ("revenue", "quantitative"))
+    rows: list[list] = [
+        [date(2025, 1, 1), 100.0], [date(2025, 2, 1), None], [date(2025, 3, 1), 300.0],
+    ]
+    spec = plan_kpi(profile_result(cols, rows), cols, rows)
+    assert spec is not None and spec.sparkline == []
+    assert spec.value == "300"
+
+
 # ── the mark budget ──────────────────────────────────────────────────────
 def _ranked(n: int, *, descending: bool = True) -> list[list]:
     values = range(n, 0, -1) if descending else range(1, n + 1)
@@ -1077,11 +1181,42 @@ async def test_chart_node_does_not_call_the_model_for_a_hopeless_result() -> Non
 
 
 @pytest.mark.asyncio
-async def test_chart_node_skips_a_single_row() -> None:
-    deps, _ = _deps(_Gateway(returns=_intent("bar")))
+async def test_a_single_row_becomes_a_big_number_not_nothing() -> None:
+    """The veto is right and the old outcome was wrong.
+
+    "A single row is a value, not a chart" is a true statement about plotting,
+    and it used to end the turn with nothing to look at — for the result shape
+    a KPI is *made* of. The chart is still refused; what changed is that the
+    reader gets the number instead of an empty space.
+    """
+    gateway = _Gateway(returns=_intent("bar"))
+    deps, events = _deps(gateway)
     state = _state(rows=[["A", 10]])
 
     result = await chart(state, deps)
 
+    assert result.status == "OK"
+    assert state.chart is None               # still not a chart
+    assert state.kpi is not None
+    assert state.kpi["value"] == "10"
+    assert state.kpi["label"] == "total"
+    # And it costs nothing: the veto still runs before the model is asked.
+    assert gateway.calls == 0
+    assert [kind for _, payload in events for kind in [payload.get("kind")]] == ["KPI"]
+
+
+@pytest.mark.asyncio
+async def test_the_other_vetoes_are_not_rescued_by_a_big_number() -> None:
+    """A thousand tied totals drawn large is still a thousand tied totals.
+
+    Only the single-row veto describes a result whose number is worth
+    enlarging; rescuing the rest would trade "no picture" for a confident wrong
+    one.
+    """
+    deps, _ = _deps(_Gateway(returns=_intent("bar")))
+    state = _state(rows=[[f"Customer {i}", 3881.64] for i in range(1000)])
+
+    result = await chart(state, deps)
+
     assert result.status == "SKIPPED"
-    assert state.chart is None
+    assert state.kpi is None and state.chart is None

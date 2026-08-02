@@ -967,6 +967,145 @@ export function dirOf(value: string): 'rtl' | 'ltr' {
  * carries — columns, rows, and the semantic type that decides which cells
  * are right-aligned.
  */
+// ── the big number ────────────────────────────────────────────────────────
+/**
+ * One number drawn large, with whatever context the result supported.
+ *
+ * Lives here rather than beside either caller because it has two: a dashboard
+ * METRIC tile and a chat turn whose result was a single row. Those used to be
+ * different things — the tile had a bespoke renderer that picked its own
+ * column and called `toLocaleString`, and chat had nothing at all.
+ *
+ * It renders what it is given and decides nothing. Which column, how the
+ * figure is written, what the comparison is against — all of that is
+ * `plan_kpi` on the backend, which is what stops the tile and the chat turn
+ * from disagreeing about the same number.
+ */
+export function Kpi({ spec, compact = false }: {
+  spec: KpiSpecView
+  /** Tighter type for a dashboard tile, which is a smaller box than a turn. */
+  compact?: boolean
+}) {
+  return (
+    <div
+      style={{
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 4,
+      }}
+    >
+      <span
+        className="mono"
+        style={{
+          fontSize: compact ? 34 : 40,
+          fontWeight: 700,
+          color: 'var(--text-strong)',
+          lineHeight: 1.1,
+          letterSpacing: '-0.01em',
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      >
+        {spec.value}
+      </span>
+      <span
+        style={{
+          fontSize: 11,
+          color: 'var(--text-dim)',
+          textTransform: 'uppercase',
+          letterSpacing: '0.05em',
+          textAlign: 'center',
+        }}
+      >
+        {spec.label}
+      </span>
+      {spec.delta && (
+        <span
+          style={{
+            fontSize: 11.5,
+            color: 'var(--text-dim)',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            fontVariantNumeric: 'tabular-nums',
+          }}
+        >
+          {/* Direction is drawn, never coloured. Green-for-up is a judgement
+              the data does not carry: a rising refund rate is not good news,
+              and the backend cannot know which metric this is. A semantic
+              pair is Phase 6 of docs/charts-plan.md, where it can be measured
+              against the palette rather than guessed at here. */}
+          <span aria-hidden style={{ opacity: 0.8 }}>
+            {spec.delta.direction === 'up' ? '▲'
+              : spec.delta.direction === 'down' ? '▼' : '—'}
+          </span>
+          {spec.delta.text}
+          <span style={{ color: 'var(--text-faint)' }}>{spec.delta.caption}</span>
+        </span>
+      )}
+      {spec.sparkline.length > 1 && <Sparkline points={spec.sparkline} />}
+      {spec.caption && (
+        <span style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>{spec.caption}</span>
+      )}
+    </div>
+  )
+}
+
+export interface KpiSpecView {
+  value: string
+  label: string
+  caption: string | null
+  delta: { text: string; direction: 'up' | 'down' | 'flat'; caption: string } | null
+  sparkline: number[]
+}
+
+/**
+ * The series behind the number, as a bare polyline.
+ *
+ * Hand-drawn rather than a Vega view, and that is the deliberate exception to
+ * "use the stable component". A sparkline has no axes, no ticks, no legend and
+ * no scale to read — it is a shape, not a chart — while a Vega view brings a
+ * dataflow runtime, a ResizeObserver and a finalize() per tile for a strip 60
+ * pixels wide. Twelve lines of SVG is the smaller commitment.
+ */
+function Sparkline({ points }: { points: number[] }) {
+  const width = 64
+  const height = 18
+  const low = Math.min(...points)
+  const high = Math.max(...points)
+  // A flat series would divide by zero; drawn down the middle it still says
+  // the true thing, which is that nothing moved.
+  const span = high - low || 1
+  const path = points
+    .map((value, i) => {
+      const x = (i / (points.length - 1)) * width
+      const y = height - ((value - low) / span) * height
+      return `${x.toFixed(1)},${y.toFixed(1)}`
+    })
+    .join(' ')
+
+  return (
+    <svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      aria-hidden
+      style={{ overflow: 'visible', marginTop: 2 }}
+    >
+      <polyline
+        points={path}
+        fill="none"
+        stroke="var(--text-faint)"
+        strokeWidth={1.5}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
 // Re-exported so a caller needs one import for the table and its settings.
 export type {
   ResultTableColumnConfig, ResultTableConfig,

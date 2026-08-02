@@ -186,6 +186,10 @@ class TileResult:
     # the difference and must not, since both get the same shape check.
     chart_source: str = "none"
     chart_note: str | None = None
+    # A serialised `KpiSpec` for a METRIC tile. Computed here rather than in the
+    # browser so the tile and a chat turn showing the same number agree on
+    # which column it is, how it is written, and what it is compared against.
+    kpi: dict[str, Any] | None = None
     error_code: str | None = None
     error_message: str | None = None
 
@@ -207,6 +211,7 @@ class TileResult:
             "vega_spec": self.vega_spec,
             "chart_source": self.chart_source,
             "chart_note": self.chart_note,
+            "kpi": self.kpi,
             "error": (
                 None
                 if self.error_code is None
@@ -239,6 +244,9 @@ class TileResult:
             vega_spec=payload.get("vega_spec"),
             chart_source=payload.get("chart_source", "none"),
             chart_note=payload.get("chart_note"),
+            # `.get`, so a payload the cache wrote before big numbers existed
+            # rebuilds as a tile without one rather than raising.
+            kpi=payload.get("kpi"),
             error_code=error.get("code"),
             error_message=error.get("message"),
         )
@@ -262,6 +270,7 @@ async def execute_saved_sql(
     connection: DatabaseConnection,
     owner_id: UUID,
     chart_intent: Any | None = None,
+    want_kpi: bool = False,
     max_rows: int | None = None,
     connector: DatabaseConnector | None = None,
     snapshot: dict[str, Any] | None = None,
@@ -277,6 +286,10 @@ async def execute_saved_sql(
     `chart_intent` is a `ChartIntent | None`; it is typed loosely because
     `app.charts` is imported lazily, as the pipeline's chart node does, to keep
     the chart machinery off the import path of everything that touches SQL.
+
+    `want_kpi` is asked for rather than inferred: only a METRIC tile draws a
+    big number, and profiling a five-thousand-row TABLE tile to build one
+    nobody will look at is work with no reader.
     """
     started = time.perf_counter()
 
@@ -344,6 +357,7 @@ async def execute_saved_sql(
             vega_spec=spec,
             chart_source=source,
             chart_note=note,
+            kpi=_kpi(result.columns, result.rows) if want_kpi else None,
         )
     except AppError as err:
         return _failed(err.code, err.message, duration_ms=elapsed())
@@ -427,6 +441,28 @@ def _chart(
     return spec, plan.source, _chart_note(intent, plan)
 
 
+def _kpi(
+    columns: list[ResultColumn], rows: list[list[Any]]
+) -> dict[str, Any] | None:
+    """The big number for a METRIC tile — the same planner a chat turn uses.
+
+    Which column is the value, how it is written, and whether the extra rows
+    are context or clutter were decided in the browser until now, by a
+    component that knew nothing about the one answering the same question in
+    chat. One planner is what keeps the two from drifting.
+    """
+    from app.charts import plan_kpi, profile_result
+
+    if not rows:
+        return None
+    try:
+        spec = plan_kpi(profile_result(columns, rows), columns, rows)
+    except Exception:  # noqa: BLE001 — a tile's numbers outrank its presentation
+        log.exception("tile_kpi_failed")
+        return None
+    return spec.model_dump(mode="json") if spec is not None else None
+
+
 def _chart_note(intent: Any | None, plan: Any) -> str | None:
     if intent is None or plan.intent is None:
         return None
@@ -454,6 +490,7 @@ class TileRequest:
     sql: str
     connection: DatabaseConnection
     chart_intent: Any | None = None
+    want_kpi: bool = False
     max_rows: int | None = None
 
 
@@ -535,6 +572,7 @@ async def execute_many(
                     connection=request.connection,
                     owner_id=owner_id,
                     chart_intent=request.chart_intent,
+                    want_kpi=request.want_kpi,
                     max_rows=request.max_rows,
                     connector=connector,
                     snapshot=snapshot,

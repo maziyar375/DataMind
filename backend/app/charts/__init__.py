@@ -836,6 +836,167 @@ def plan_chart(
     return ChartPlan(None, "none", "No chart fits this result's shape.")
 
 
+# ── the big number ───────────────────────────────────────────────────────
+# The one presentation that is not a chart. `unchartable_reason` is right that
+# a single row cannot be plotted — and then the turn used to end with nothing
+# to look at, which is wrong about a result that is the *canonical* KPI. So the
+# veto stays and the dead end goes.
+#
+# Deciding it here rather than in the browser is what makes chat and a
+# dashboard tile agree: which column is the value, how it is written, and
+# whether there is a comparison worth showing are all one function's answer.
+SPARKLINE_POINTS = 60     # a strip 60px wide has no room for more
+
+
+class KpiDelta(BaseModel):
+    """A comparison against the previous period, when the data carries one."""
+
+    text: str                                       # "+12.4%", "-1,204"
+    direction: Literal["up", "down", "flat"]
+    caption: str                                    # "vs Nov 2025"
+
+
+class KpiSpec(BaseModel):
+    """One number, drawn big, with whatever context the result supports.
+
+    `value` and `delta.text` arrive already written out. Formatting numbers is
+    the kind of decision that goes quietly wrong when two implementations each
+    make it — the browser reaching for `toLocaleString` while the axis beside
+    it uses a d3 specifier — so the string crosses the wire and `raw` comes
+    along for anything that needs to compute rather than display.
+    """
+
+    value: str
+    raw: float | None = None
+    label: str
+    caption: str | None = None
+    delta: KpiDelta | None = None
+    sparkline: list[float] = Field(default_factory=list)
+
+
+def _kpi_measure(profile: ResultProfile) -> ColumnProfile | None:
+    """The column a big number would show.
+
+    Deliberately *not* `_measure_candidates`: that excludes constant columns,
+    and a one-row result has exactly one distinct value in every column — so it
+    would reject the very thing a KPI is made of. Identifiers are still out;
+    "customer #4051, drawn large" is not a metric.
+    """
+    numeric = [c for c in profile.columns if c.is_numeric and not c.is_id_like]
+    # Rightmost, matching the heuristic's reading of SQL convention: the thing
+    # being measured comes last.
+    return numeric[-1] if numeric else None
+
+
+def _chronological(
+    rows: Sequence[Sequence[Any]], index: int
+) -> list[int] | None:
+    """Row positions in time order, or None if they cannot be ordered.
+
+    A result is usually already sorted by its own ORDER BY, but "usually" is
+    not "always", and reading the latest value off the wrong end of an
+    unsorted series is the kind of error a KPI shows with total confidence.
+    """
+    try:
+        return sorted(
+            range(len(rows)),
+            key=lambda i: rows[i][index],  # type: ignore[index,return-value]
+        )
+    except (TypeError, IndexError):
+        # Mixed types, or None among the timestamps. Neither is worth guessing
+        # about when the fallback — the order the query returned — is what the
+        # user asked for anyway.
+        return None
+
+
+def _delta(current: float, previous: float, caption: str) -> KpiDelta | None:
+    if current == previous:
+        return KpiDelta(text="no change", direction="flat", caption=caption)
+    if previous == 0:
+        # A percentage against zero is either undefined or infinite, and both
+        # render as nonsense. The absolute move is the honest statement.
+        change = current - previous
+        return KpiDelta(
+            text=f"{'+' if change > 0 else ''}{_fmt_number(change)}",
+            direction="up" if change > 0 else "down",
+            caption=caption,
+        )
+    pct = (current - previous) / abs(previous) * 100
+    return KpiDelta(
+        text=f"{'+' if pct > 0 else ''}{pct:,.1f}%",
+        direction="up" if pct > 0 else "down",
+        caption=caption,
+    )
+
+
+def plan_kpi(
+    profile: ResultProfile,
+    columns: Sequence[ResultColumn],
+    rows: Sequence[Sequence[Any]],
+) -> KpiSpec | None:
+    """A big number for this result, or None if it has no number to show."""
+    measure = _kpi_measure(profile)
+    if measure is None or not rows:
+        return None
+
+    names = [c.name for c in columns]
+    index = names.index(measure.name)
+    values = [_as_float(row[index]) if index < len(row) else None for row in rows]
+
+    if len(rows) == 1:
+        return _kpi(values[0], measure.name)
+
+    # More than one row. A time column turns the extra rows from clutter into
+    # context: the latest value, how it moved, and the shape it moved through.
+    temporal = [c for c in profile.columns if c.is_temporal and not c.is_constant]
+    order = (
+        _chronological(rows, names.index(temporal[0].name)) if temporal else None
+    )
+    if order is None:
+        # No time axis, or one that could not be sorted. Report the first row
+        # and say plainly that there were others — the behaviour a METRIC tile
+        # has always had.
+        return _kpi(
+            values[0], measure.name,
+            caption=f"first of {profile.row_count:,} rows",
+        )
+
+    ordered = [values[i] for i in order]
+    current, previous = ordered[-1], ordered[-2]
+    spec = _kpi(current, measure.name)
+    if spec is None:
+        return None
+
+    when = rows[order[-2]][names.index(temporal[0].name)]
+    if current is not None and previous is not None:
+        spec = spec.model_copy(
+            update={"delta": _delta(current, previous, f"vs {_moment(when)}")}
+        )
+    # A gap in the series would draw a line through a point that is not there,
+    # so a sparkline is all-or-nothing.
+    trail = ordered[-SPARKLINE_POINTS:]
+    if all(v is not None for v in trail) and len(trail) > 1:
+        spec = spec.model_copy(update={"sparkline": [float(v) for v in trail]})
+    return spec
+
+
+def _kpi(value: float | None, label: str, caption: str | None = None) -> KpiSpec | None:
+    if value is None:
+        return None
+    return KpiSpec(
+        value=_fmt_number(value), raw=value, label=label, caption=caption
+    )
+
+
+def _moment(value: Any) -> str:
+    """A timestamp written the way the delta caption needs it — short."""
+    if isinstance(value, datetime) and (value.hour or value.minute):
+        return value.strftime("%b %d, %H:%M")
+    if isinstance(value, (date, datetime)):
+        return value.strftime("%b %Y") if value.day == 1 else value.strftime("%b %d, %Y")
+    return str(value)
+
+
 # ── how a value is written on an axis ────────────────────────────────────
 # Vega will label an axis without being told how, and both of its defaults are
 # wrong often enough to be worth overriding.

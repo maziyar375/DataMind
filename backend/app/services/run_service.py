@@ -288,6 +288,19 @@ class RunService:
                 "artifact_id": str(chart_artifact.id), "kind": ArtifactKind.CHART,
             })
 
+        if state.kpi is not None:
+            kpi_artifact = Artifact(
+                id=uuid.uuid4(),
+                run_id=run.id,
+                kind=ArtifactKind.KPI,
+                spec=state.kpi,
+            )
+            self._db.add(kpi_artifact)
+            await self._db.flush()
+            await self._emit(run.id, "ARTIFACT_CREATED", {
+                "artifact_id": str(kpi_artifact.id), "kind": ArtifactKind.KPI,
+            })
+
         if state.clarification is not None:
             # Persisted as an artifact rather than a column: it rides to the
             # SPA on the run detail the chat already fetches, exactly as the

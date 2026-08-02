@@ -367,6 +367,10 @@ class TileResultRead(BaseModel):
     # rather than quietly drawing something else.
     chart_source: str = "none"
     chart_note: str | None = None
+    # A `KpiSpec` for a METRIC tile: the value already written out, its label,
+    # and whatever comparison the result supported. Decided on this side so a
+    # tile and a chat turn showing the same number agree about it.
+    kpi: dict[str, Any] | None = None
     error: TileErrorRead | None = None
 
 

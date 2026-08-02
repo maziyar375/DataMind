@@ -28,7 +28,7 @@ import 'react-resizable/css/styles.css'
 import { dashboards as api } from '../api/client'
 import { dueTileIds } from './dashboard-schedule'
 import type { Dashboard, DashboardTile, TileResult } from '../api/types'
-import { Chip, ErrorNote, Icon, ResultTable, Spinner, relativeTime } from './ui'
+import { Chip, ErrorNote, Icon, Kpi, ResultTable, Spinner, relativeTime } from './ui'
 import { VegaChart } from './VegaChart'
 
 // ── refresh rates ─────────────────────────────────────────────────────────
@@ -598,56 +598,18 @@ function TileBody({
   )
 }
 
-/** One row, one numeric column, drawn big. */
+/**
+ * One row, one numeric column, drawn big.
+ *
+ * The number itself is planned on the backend now — which column, how it is
+ * written, whether the extra rows are a comparison or just clutter — so this
+ * only has to decide what to do when there is no number at all. A tile whose
+ * query stopped returning one falls back to the table rather than drawing a
+ * dash where a metric used to be.
+ */
 function MetricBody({ result }: { result: TileResult }) {
-  const index = Math.max(
-    0,
-    result.columns.findIndex((column) => column.semantic_type === 'quantitative'),
-  )
-  const value = result.rows[0]?.[index]
-  const label = result.columns[index]?.name ?? ''
-
-  return (
-    <div
-      style={{
-        height: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 4,
-      }}
-    >
-      <span
-        className="mono"
-        style={{
-          fontSize: 34,
-          fontWeight: 700,
-          color: 'var(--text-strong)',
-          lineHeight: 1.1,
-          letterSpacing: '-0.01em',
-          fontVariantNumeric: 'tabular-nums',
-        }}
-      >
-        {typeof value === 'number' ? value.toLocaleString() : String(value ?? '—')}
-      </span>
-      <span
-        style={{
-          fontSize: 11,
-          color: 'var(--text-dim)',
-          textTransform: 'uppercase',
-          letterSpacing: '0.05em',
-        }}
-      >
-        {label}
-      </span>
-      {result.row_count > 1 && (
-        <span style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>
-          first of {result.row_count.toLocaleString()} rows
-        </span>
-      )}
-    </div>
-  )
+  if (!result.kpi) return <ResultTable spec={result} previewRows={5} maxHeight="none" />
+  return <Kpi spec={result.kpi} compact />
 }
 
 // ── settings drawer ───────────────────────────────────────────────────────

@@ -13,9 +13,10 @@
  */
 import { useState } from 'react'
 import type {
-  Artifact, ClarificationSpec, GeneratedQuery, RunDetail, RunStep, TableArtifactSpec,
+  Artifact, ClarificationSpec, GeneratedQuery, KpiSpec, RunDetail, RunStep,
+  TableArtifactSpec,
 } from '../api/types'
-import { Chip, CopyButton, Dot, dirOf, Icon, ResultTable, Spinner } from './ui'
+import { Chip, CopyButton, Dot, dirOf, Icon, Kpi, ResultTable, Spinner } from './ui'
 import { VegaChart } from './VegaChart'
 import { NODE_META } from '../theme/tokens'
 
@@ -557,6 +558,8 @@ export function AssistantTurn({
   const spec = table?.spec as TableArtifactSpec | undefined
   const chart = run?.artifacts.find((a) => a.kind === 'CHART')
   const chartSpec = chart?.spec as Record<string, unknown> | undefined
+  const kpi = run?.artifacts.find((a) => a.kind === 'KPI')
+  const kpiSpec = kpi?.spec as unknown as KpiSpec | undefined
   const clarification = run?.artifacts.find((a) => a.kind === 'CLARIFICATION')
   const clarifySpec = clarification?.spec as unknown as ClarificationSpec | undefined
 
@@ -608,6 +611,23 @@ export function AssistantTurn({
         under an answer that said they were all tied.
       */}
       {chartSpec && <VegaChart spec={chartSpec} />}
+      {/* The other half of that decision. A single-row result is refused as a
+          chart for a good reason and is the shape a KPI is made of, so the
+          `chart` node answers it with a number instead of nothing. Never both:
+          the node reaches for one only where it declined the other. */}
+      {kpiSpec && (
+        <div
+          style={{
+            marginTop: 6,
+            padding: '18px 10px',
+            border: '1px solid var(--border)',
+            borderRadius: 10,
+            background: 'var(--panel)',
+          }}
+        >
+          <Kpi spec={kpiSpec} />
+        </div>
+      )}
       {spec && <ResultTable spec={spec} />}
       {run && run.queries.length > 0 && <SqlPanel queries={run.queries} />}
       {run && <RunMetadata run={run} />}

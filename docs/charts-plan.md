@@ -316,7 +316,7 @@ cannot draw, which is worse than not having started it.
 | ✅ | **1. Consolidate** | `horizontal_bar` folded into `bar` + `orientation`; `table only` removed from the chart picker | `charts/__init__.py`, `0007_chart_orientation.py`, `prompts/__init__.py`, `tile-editor.tsx`, `VegaChart.tsx`, `test_charts.py`, `test_tile_charts.py` | **done** — 596 backend tests, ruff + 5 import-linter contracts, typecheck, build, migration round-trip verified against live Postgres |
 | ✅ | **2. Encoder** | stack mode (stacked/grouped/100%), temporal axis format **and tick interval** (the "2025" bug), SI axis numbers, formatted tooltips, `size` → bubble | `charts/__init__.py`, `prompts/__init__.py`, `tile-editor.tsx`, `VegaChart.tsx`, both chart test files | **done** — 617 backend tests, ruff + contracts, typecheck, build, and 12 specs compiled and *rendered* through the installed Vega with their axis labels read back |
 | ✅ | **3. New types** | heatmap, combo, histogram (box plot deferred) | `charts/__init__.py`, `prompts/__init__.py`, `tile-editor.tsx`, `VegaChart.tsx`, both chart test files | **done** — 633 backend tests, ruff + contracts, typecheck, build, and all 17 specs (12 from Phase 2 + 5 new) compiled and rendered through the installed Vega |
-| ☐ | **4. Big number** | `KPI` artifact; single-row results stop being a dead end; replaces the bespoke `METRIC` renderer | `charts/__init__.py`, `pipeline/nodes/`, `api/schemas.py`, `chat.tsx`, `dashboard.tsx` | a one-row result renders a KPI in **both** chat and a tile, from one component |
+| ✅ | **4. Big number** | `KPI` artifact; single-row results stop being a dead end; replaces the bespoke `METRIC` renderer; delta + sparkline when the data carries a time axis | `charts/__init__.py`, `pipeline/{nodes,state}`, `domain/value_objects`, `services/{run,query,dashboard}_service`, `api/schemas.py`, `types.ts`, `ui.tsx`, `chat.tsx`, `dashboard.tsx` | **done** — 643 backend tests, ruff + contracts, typecheck, build; one `plan_kpi` and one `<Kpi>` serve both surfaces |
 | ☐ | **5. Selection** | deterministic shape router; model picks from 2–3 candidates only | `charts/__init__.py` (new router), `prompts/__init__.py`, `eval/suites/` | every signature row in the Phase 5 table has a unit test; eval ≥ baseline |
 | ☐ | **6. Colour** | diverging ramp, semantic +/- pair, `npm run test:palette` | `VegaChart.tsx`, `theme/tokens.ts`, new validator script | validator passes for **both** dark and light |
 | ☐ | **7. Picker UI** | icon grid, options filtered by what the result supports, "change chart" in chat | `tile-editor.tsx`, `chat.tsx`, `ui.tsx` | an unsupported type is disabled with a reason, never offered then demoted |
@@ -332,7 +332,8 @@ the heatmap) and can be done at any point after it.
 | 0 | 2026-08-02 | — | Findings above. The premise "many duplicate chart types" turned out to be one real duplicate; the wider problem is a *narrow* set plus a missing stacking control. |
 | 1 | 2026-08-02 | `6fde6d7` | Two plan steps corrected against the code — see the struck-through items in Phase 1. Migration **0007 applies on the next `make up`**: the running `api` container has the pre-change image baked in (no volume mount), and its start command is `alembic upgrade head`. The dev DB has zero affected rows, so it is a no-op there either way. |
 | 2 | 2026-08-02 | `cabfd0f` | Three defects caught by rendering rather than reasoning — see "What rendering caught" below. Scope went slightly past the plan's four bullets: the `Split` and `Size` controls in the tile editor, and a `categories` count in `usermeta`, because stack and size were otherwise reachable only from chat, and the browser's width rule counted rows where a split chart needs columns. |
-| 3 | 2026-08-02 | *(uncommitted)* | Box plot deferred, per the open decision. Two design calls worth knowing about: a new `color` channel distinct from `series` (colour-as-magnitude vs colour-as-identity), and a **heuristic change** — a result with two dimensions now becomes a split bar or a heatmap instead of a bar that silently dropped the second dimension. That last one changes what existing `Auto` tiles draw. |
+| 4 | 2026-08-02 | *(uncommitted)* | Scoped **narrower** than the plan implied: only the single-row veto is rescued by a big number, not every veto — see the design note below. The `METRIC` tile keeps its "first of N rows" reading and gains delta + sparkline when its query has a time axis. |
+| 3 | 2026-08-02 | `db8b7fb` | Box plot deferred, per the open decision. Two design calls worth knowing about: a new `color` channel distinct from `series` (colour-as-magnitude vs colour-as-identity), and a **heuristic change** — a result with two dimensions now becomes a split bar or a heatmap instead of a bar that silently dropped the second dimension. That last one changes what existing `Auto` tiles draw. |
 
 ### What rendering caught (Phase 2)
 
@@ -397,6 +398,42 @@ dimension, drawing several rows per category on top of each other with nothing
 saying a column had been ignored. It now becomes a split bar (second dimension
 ≤ `MAX_SERIES`) or a heatmap (larger, and within `MAX_HEATMAP_CELLS`). Tiles
 set to `Auto` will redraw accordingly.
+
+### Design notes (Phase 4)
+
+**Only the single-row veto is rescued.** The plan said "a single-row result is
+the canonical KPI", and the tempting generalisation is to answer *every* veto
+with a big number. It is wrong: a thousand tied totals drawn large is still a
+thousand tied totals, and an id is not a metric however large it is set. Those
+vetoes describe results whose numbers are not worth enlarging either, so
+rescuing them would trade "no picture" for a confident wrong one. The node
+therefore checks `row_count == 1` before reaching for `plan_kpi`.
+
+**A one-row result defeats `_measure_candidates`.** It excludes constant
+columns — correctly, for charts — and a single row has exactly one distinct
+value in *every* column, so it rejects the very thing a KPI is made of.
+`_kpi_measure` picks differently: numeric, not an identifier, rightmost. This
+is the kind of trap that only shows up when the same helper is reused across
+two questions that sound alike.
+
+**The delta is drawn, never coloured.** Green-for-up is a judgement the data
+does not carry — a rising refund rate is not good news, and nothing in the
+result says which metric this is. The direction gets an arrow and neutral text.
+A semantic positive/negative pair is Phase 6, where it can be measured against
+the palette rather than guessed at in a component.
+
+**The sparkline is hand-drawn SVG, and that is the one deliberate exception**
+to "use the stable component". A sparkline has no axes, ticks, legend or
+readable scale — it is a shape, not a chart — while a Vega view brings a
+dataflow runtime, a `ResizeObserver` and a `finalize()` per tile for a strip 64
+pixels wide. Twelve lines of `<polyline>` is the smaller commitment. If it ever
+grows an axis, it should become a real chart instead.
+
+**Formatting happens on the backend.** `value` and `delta.text` cross the wire
+already written out. Two implementations formatting the same number is how a
+tile ends up saying `1,247,318.4` while the axis beside it says `1.2M`; one
+planner is also what stops the tile and a chat turn from disagreeing about
+which column the number even is.
 
 ### Carried forward
 

@@ -14,6 +14,7 @@ express. "Show me the numbers" looks like `chart_type: "none"` and is not — se
 """
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 import pytest
@@ -28,6 +29,7 @@ from app.charts import (
     profile_result,
     validate_intent,
 )
+from app.core.clock import utcnow
 from app.domain.ports.database import ResultColumn
 
 # Every chart type the editor's picker offers, minus `auto` — which is not a
@@ -261,6 +263,44 @@ def test_a_picked_type_survives_a_shape_that_fits() -> None:
     # surface as "the chart could not be built" on every refresh.
     spec = compile_vega_lite(plan.intent, profile, columns, rows)
     assert spec["mark"]["type"] == "bar"
+
+
+# ── the big number's wire shape ──────────────────────────────────────────
+def test_the_kpi_a_tile_serialises_is_the_one_the_browser_reads() -> None:
+    """`KpiSpec` crosses to two readers — a dashboard tile and a chat turn —
+    through two different endpoints, and both destructure it by name in
+    `frontend/src/api/types.ts`. A renamed field would not raise anywhere; the
+    number would simply render as `undefined`.
+    """
+    from app.api.schemas import TileResultRead
+    from app.charts import KpiSpec, plan_kpi, profile_result
+
+    cols = [
+        ResultColumn(name="month", db_type="date", semantic_type="temporal"),
+        ResultColumn(name="revenue", db_type="numeric", semantic_type="quantitative"),
+    ]
+    rows: list[list[Any]] = [
+        [date(2025, 1, 1), 100.0], [date(2025, 2, 1), 150.0],
+    ]
+    spec = plan_kpi(profile_result(cols, rows), cols, rows)
+    assert spec is not None
+    payload = spec.model_dump(mode="json")
+
+    # Exactly the fields `interface KpiSpec` declares.
+    assert set(payload) == {"value", "raw", "label", "caption", "delta", "sparkline"}
+    assert set(payload["delta"]) == {"text", "direction", "caption"}
+    # Written out on this side, so a tile and a turn cannot disagree about the
+    # same number and the figure matches the axis beside it.
+    assert isinstance(payload["value"], str)
+    assert isinstance(spec.raw, float)
+
+    # And it survives the DTO the tile endpoint actually returns.
+    tile = TileResultRead.model_validate(
+        {"computed_at": utcnow(), "kpi": payload}
+    )
+    assert tile.kpi == payload
+    assert TileResultRead.model_validate({"computed_at": utcnow()}).kpi is None
+    assert KpiSpec.model_validate(payload) == spec
 
 
 def test_an_axis_naming_a_column_the_result_lacks_is_refused_by_name() -> None:

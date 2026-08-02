@@ -227,6 +227,10 @@ class RunState(BaseModel):
     check_repair_used: bool = False
     disclosed: DisclosedResult | None = None
     chart: dict[str, Any] | None = None
+    # A serialised `KpiSpec`. Mutually exclusive with `chart` by construction:
+    # the `chart` node reaches for a big number only where a chart was vetoed,
+    # so a turn never carries both.
+    kpi: dict[str, Any] | None = None
     answer: str | None = None
     error: RunError | None = None
 

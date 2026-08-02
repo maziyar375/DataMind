@@ -503,6 +503,7 @@ class DashboardService:
                     sql=tile.sql,
                     connection=connection,
                     chart_intent=_chart_intent(tile),
+                    want_kpi=tile.tile_type == TileType.METRIC,
                     max_rows=tile.max_rows,
                 )
             )
