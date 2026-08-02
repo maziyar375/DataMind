@@ -652,6 +652,75 @@ def test_a_malformed_combo_is_rebuilt_rather_than_drawn() -> None:
         assert plan.intent.y2_axis.field != plan.intent.y_axis.field  # type: ignore[union-attr]
 
 
+# ── sign-aware colour ────────────────────────────────────────────────────
+# This side decides the *facts* — does the measure cross zero, which field to
+# test — and `VegaChart.tsx` decides the colours, because only it holds the
+# theme. These tests pin the handover; the colours themselves are measured by
+# `npm run test:palette`.
+def _signed_matrix(values: list[float]) -> tuple[list, list]:
+    cols = _cols(("region", "nominal"), ("month", "nominal"), ("change", "quantitative"))
+    rows = [
+        [f"R{r}", f"M{m:02d}", values[(r * 12 + m) % len(values)]]
+        for r in range(6) for m in range(12)
+    ]
+    return cols, rows
+
+
+def test_a_heatmap_that_crosses_zero_asks_for_the_diverging_ramp() -> None:
+    """A sequential ramp says a large negative and a large positive are equally
+    "a lot", which is the opposite of what the reader needs."""
+    cols, rows = _signed_matrix([float(v) for v in range(-20, 21)])
+    profile = profile_result(cols, rows)
+    spec = compile_vega_lite(plan_chart(profile).intent, profile, cols, rows)  # type: ignore[arg-type]
+
+    assert spec["usermeta"]["datamind"]["color_scale"] == "diverging"
+    # Where the neutral step belongs is a fact about the data, so it is pinned
+    # here rather than left to whatever the ramp's midpoint happens to hit.
+    assert spec["encoding"]["color"]["scale"] == {"domainMid": 0}
+
+
+def test_a_heatmap_of_counts_keeps_the_sequential_ramp() -> None:
+    cols, rows = _signed_matrix([float(v) for v in range(0, 41)])
+    profile = profile_result(cols, rows)
+    spec = compile_vega_lite(plan_chart(profile).intent, profile, cols, rows)  # type: ignore[arg-type]
+
+    assert spec["usermeta"]["datamind"]["color_scale"] == "sequential"
+    assert "scale" not in spec["encoding"]["color"]
+
+
+def test_bars_below_the_axis_carry_a_test_the_browser_can_run() -> None:
+    """The expression is written here because only this side knows the field
+    name and can escape it; the two colours it selects between belong to the
+    theme."""
+    cols = _cols(("region", "nominal"), ("net change", "quantitative"))
+    rows = [[f"R{i}", float(i * 40 - 120)] for i in range(8)]
+    profile = profile_result(cols, rows)
+    spec = compile_vega_lite(plan_chart(profile).intent, profile, cols, rows)  # type: ignore[arg-type]
+
+    # A field name with a space in it must survive into a Vega expression.
+    assert spec["usermeta"]["datamind"]["negative_test"] == 'datum["net change"] < 0'
+
+
+def test_an_all_positive_measure_gets_no_sign_test() -> None:
+    cols = _cols(("region", "nominal"), ("total", "quantitative"))
+    rows = [[f"R{i}", float(i * 40 + 10)] for i in range(8)]
+    profile = profile_result(cols, rows)
+    spec = compile_vega_lite(plan_chart(profile).intent, profile, cols, rows)  # type: ignore[arg-type]
+    assert "negative_test" not in spec["usermeta"]["datamind"]
+
+
+def test_a_split_chart_does_not_repaint_its_negatives() -> None:
+    """The colour channel is already carrying identity. Sign would be fighting
+    it for the same ink, and identity is what the legend explains."""
+    cols = _cols(("region", "nominal"), ("kind", "nominal"), ("net", "quantitative"))
+    rows = [[f"R{i}", f"K{k}", float(i * 30 - 90 + k)] for i in range(6) for k in range(3)]
+    profile = profile_result(cols, rows)
+    plan = plan_chart(profile)
+    assert plan.intent is not None and plan.intent.series is not None
+    spec = compile_vega_lite(plan.intent, profile, cols, rows)
+    assert "negative_test" not in spec["usermeta"]["datamind"]
+
+
 # ── the big number ───────────────────────────────────────────────────────
 def test_a_single_row_has_a_number_even_though_every_column_is_constant() -> None:
     """The trap this planner exists to avoid.

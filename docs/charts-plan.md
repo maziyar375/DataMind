@@ -318,7 +318,7 @@ cannot draw, which is worse than not having started it.
 | ✅ | **3. New types** | heatmap, combo, histogram (box plot deferred) | `charts/__init__.py`, `prompts/__init__.py`, `tile-editor.tsx`, `VegaChart.tsx`, both chart test files | **done** — 633 backend tests, ruff + contracts, typecheck, build, and all 17 specs (12 from Phase 2 + 5 new) compiled and rendered through the installed Vega |
 | ✅ | **4. Big number** | `KPI` artifact; single-row results stop being a dead end; replaces the bespoke `METRIC` renderer; delta + sparkline when the data carries a time axis | `charts/__init__.py`, `pipeline/{nodes,state}`, `domain/value_objects`, `services/{run,query,dashboard}_service`, `api/schemas.py`, `types.ts`, `ui.tsx`, `chat.tsx`, `dashboard.tsx` | **done** — 643 backend tests, ruff + contracts, typecheck, build; one `plan_kpi` and one `<Kpi>` serve both surfaces |
 | ✅ | **5. Selection** | deterministic shape router; the model picks from 2–4 candidates only, an off-list pick is declined | `charts/__init__.py` (`chart_candidates`, `plan_chart`), `prompts/__init__.py`, `pipeline/nodes/` | **done** — 659 backend tests, ruff + contracts, typecheck, build; every signature has a unit test |
-| ☐ | **6. Colour** | diverging ramp, semantic +/- pair, `npm run test:palette` | `VegaChart.tsx`, `theme/tokens.ts`, new validator script | validator passes for **both** dark and light |
+| ✅ | **6. Colour** | diverging ramp, semantic +/- pair, `npm run test:palette` (50 checks) | new `theme/color.ts`, `theme/palette.ts`, `theme/palette.test.ts`; `charts/__init__.py`, `VegaChart.tsx` | **done** — 664 backend tests, ruff + contracts, typecheck, build, all three frontend test scripts; every colour path rendered through the installed Vega |
 | ☐ | **7. Picker UI** | icon grid, options filtered by what the result supports, "change chart" in chat | `tile-editor.tsx`, `chat.tsx`, `ui.tsx` | an unsupported type is disabled with a reason, never offered then demoted |
 
 **Dependencies:** 1 → 2 → 3 → 5 → 7 is the spine. Phase 4 depends only on 1.
@@ -332,7 +332,8 @@ the heatmap) and can be done at any point after it.
 | 0 | 2026-08-02 | — | Findings above. The premise "many duplicate chart types" turned out to be one real duplicate; the wider problem is a *narrow* set plus a missing stacking control. |
 | 1 | 2026-08-02 | `6fde6d7` | Two plan steps corrected against the code — see the struck-through items in Phase 1. Migration **0007 applies on the next `make up`**: the running `api` container has the pre-change image baked in (no volume mount), and its start command is `alembic upgrade head`. The dev DB has zero affected rows, so it is a no-op there either way. |
 | 2 | 2026-08-02 | `cabfd0f` | Three defects caught by rendering rather than reasoning — see "What rendering caught" below. Scope went slightly past the plan's four bullets: the `Split` and `Size` controls in the tile editor, and a `categories` count in `usermeta`, because stack and size were otherwise reachable only from chat, and the browser's width rule counted rows where a split chart needs columns. |
-| 5 | 2026-08-02 | *(uncommitted)* | The candidate lists came out **more generous** than the plan's table — see the design note. `CHART_SYSTEM` no longer enumerates chart types at all; the shortlist arrives per-result in `CHART_USER`. The eval suite was not touched: `expected_chart_type` is still inert (Phase 1), so the signatures are pinned as unit tests instead, which is what the plan expected. |
+| 6 | 2026-08-02 | *(uncommitted)* | Writing the validator found two things the palette was claiming and not doing — see the design note. The palette moved to `theme/palette.ts` so a DOM-free test can import it without React. |
+| 5 | 2026-08-02 | `4dc6e18` | The candidate lists came out **more generous** than the plan's table — see the design note. `CHART_SYSTEM` no longer enumerates chart types at all; the shortlist arrives per-result in `CHART_USER`. The eval suite was not touched: `expected_chart_type` is still inert (Phase 1), so the signatures are pinned as unit tests instead, which is what the plan expected. |
 | 4 | 2026-08-02 | `ede4ccb` | Scoped **narrower** than the plan implied: only the single-row veto is rescued by a big number, not every veto — see the design note below. The `METRIC` tile keeps its "first of N rows" reading and gains delta + sparkline when its query has a time axis. |
 | 3 | 2026-08-02 | `db8b7fb` | Box plot deferred, per the open decision. Two design calls worth knowing about: a new `color` channel distinct from `series` (colour-as-magnitude vs colour-as-identity), and a **heuristic change** — a result with two dimensions now becomes a split bar or a heatmap instead of a bar that silently dropped the second dimension. That last one changes what existing `Auto` tiles draw. |
 
@@ -469,6 +470,57 @@ tenth with every type added, while a choice from three does not.
 that made it safe: `ANSWER_SYSTEM` never mentions a chart, so the narration
 cannot promise a picture the pipeline may not produce. That is now pinned by a
 test rather than left as an observation.
+
+### What the validator caught (Phase 6)
+
+The plan said "add a validator so the claims stay checkable". Writing it found
+that two of them were already false.
+
+**1. The recorded CVD numbers were deuteranopia only.** The palette's table
+listed one colour-blindness figure per mode — light 9.8, dark 15.5 — without
+naming a deficiency, implying all of them had been checked. Both reproduce
+*exactly* under deuteranopia and neither is the worst case. Measured against
+all three, the dark set's violet/olive pair separates by **7.3 under
+tritanopia**, below the ≥8 bar the file claimed to hold.
+
+It was **not** re-tuned, and that is a judgement worth stating. Tritanopia is
+roughly 1 in 10,000 and not sex-linked; red-green deficiency is about 1 man in
+12. Buying a blue-yellow margin with a measured red-green one would help far
+fewer readers than it hurt. So the table now names each deficiency, records the
+tritanopia column, and the validator holds it to an explicitly lower floor. The
+number is visible and bounded instead of unmeasured.
+
+**2. Every heatmap has been rendering in viridis since Phase 3.** The config
+overrode `range.category`, `range.ramp` and `range.ordinal` — but a `rect`
+mark's continuous colour scale asks Vega for the **`heatmap`** range, which was
+still on its built-in green-to-yellow. Phase 3's tests asserted the colour
+channel stayed `quantitative` (so it would reach a ramp family at all) and
+never checked which colours came out; rendering the spec and reading the
+painted fills did. This is the second time this exact bug has appeared in this
+file, which is why the comment now says to read the compiled scale rather than
+assume `ramp` covers a new mark.
+
+### Design notes (Phase 6)
+
+**The diverging ramp does not chase the accent,** unlike the sequential one.
+Its job is to encode *sign*, and ember ↔ blue is the reading a business
+audience already has. A plum-anchored diverging ramp in light mode would be
+on-brand and unreadable. The midpoint is a near-neutral that recedes toward
+each mode's own surface, so "no change" is the value that disappears.
+
+**The semantic pair is sign, not judgement.** Nothing in it says a rise is good
+news — a climbing refund rate is not, and the platform cannot know which metric
+it is looking at. So it paints *negative values*, and a KPI's delta stays an
+arrow with neutral text. `positive` is deliberately the same value as
+`category[0]`: a chart with negatives keeps the colour it would have had, and
+only the negatives depart from it. Note what is **not** used: green/red, the
+conventional pair and the classic red-green failure.
+
+**The split of responsibility is the same one `usermeta` already established.**
+The backend answers "does this measure cross zero" and "which field, escaped,
+does a negative test read" — facts about the data. The browser answers "what
+colour is a negative" — a fact about the theme. Neither could answer the
+other's question.
 
 ### Carried forward
 

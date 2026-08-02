@@ -18,6 +18,7 @@ path here ends in "no chart", never in a failed run.
 """
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -1333,6 +1334,18 @@ def _layout(
     return kept, order, f"{lead} {budget} of {total}"
 
 
+def _crosses_zero(column: ColumnProfile | None) -> bool:
+    """Whether a measure has values on both sides of zero.
+
+    The trigger for both of this module's sign-aware colour signals. It is a
+    fact about the data, which is why it is decided here; what colour to *paint*
+    a negative is a fact about the theme, which is why it is not.
+    """
+    if column is None or column.minimum is None or column.maximum is None:
+        return False
+    return column.minimum < 0 < column.maximum
+
+
 def _apply_stack(
     encoding: dict[str, Any],
     intent: ChartIntent,
@@ -1480,6 +1493,13 @@ def compile_vega_lite(
         encoding["x"] = encode(intent.x_axis)
         encoding["y"] = encode(intent.y_axis)
         encoding["color"] = encode(intent.color, positional=False)
+        # A measure that crosses zero needs its zero pinned to the ramp's
+        # neutral step, or the colour that means "no change" lands wherever the
+        # data's midpoint happens to fall. The *ramp* is the browser's to
+        # choose — it holds the theme — but where its middle belongs is a fact
+        # about the data, and only this side knows it.
+        if _crosses_zero(profile.get(intent.color.field)):
+            encoding["color"]["scale"] = {"domainMid": 0}
     elif intent.chart_type == "histogram":
         # Bins on x, a count of rows on y. The count channel carries no field:
         # it counts rows, not values of a column, and naming one would make it
@@ -1582,6 +1602,25 @@ def compile_vega_lite(
         "stack": intent.stack,
         "categories": _distinct(shown.get(intent.x_axis.field, ())),
     }
+    # Which *kind* of colour scale the measure wants. A magnitude that crosses
+    # zero is not the same story as one that only grows: a sequential ramp says
+    # a large negative and a large positive are equally "a lot", which is the
+    # opposite of what the reader needs.
+    if intent.chart_type == "heatmap" and intent.color is not None:
+        meta["color_scale"] = (
+            "diverging" if _crosses_zero(profile.get(intent.color.field)) else "sequential"
+        )
+    # A bar or area with values below the axis. The *test* is written here
+    # because only this side knows the field name and can escape it; the two
+    # colours it selects between belong to the theme, so the browser supplies
+    # them. Skipped when a series is present — the colour channel is already
+    # carrying identity, and sign would be fighting it for the same ink.
+    if (
+        intent.chart_type in ("bar", "area")
+        and intent.series is None
+        and _crosses_zero(profile.get(intent.y_axis.field))
+    ):
+        meta["negative_test"] = f"datum[{json.dumps(intent.y_axis.field)}] < 0"
     # A heatmap's height has to grow with its *other* dimension the way a
     # horizontal bar's grows with its categories — a 30-row matrix squeezed
     # into 300px is a smear whichever axis you read it along.
