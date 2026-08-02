@@ -54,6 +54,11 @@ def _intent(chart_type: str, **kw) -> ChartIntent:
     )
 
 
+def _sideways() -> ChartIntent:
+    """A bar chart that runs sideways — what `horizontal_bar` used to name."""
+    return _intent("bar", orientation="horizontal")
+
+
 def _cols(*pairs: tuple[str, str]) -> list[ResultColumn]:
     return [ResultColumn(name=n, db_type="text", semantic_type=t) for n, t in pairs]
 
@@ -113,7 +118,6 @@ def test_chartable_result_has_no_veto() -> None:
     "chart_type,mark",
     [
         ("bar", "bar"),
-        ("horizontal_bar", "bar"),
         ("line", "line"),
         ("area", "area"),
         ("scatter", "point"),
@@ -138,7 +142,7 @@ def test_pie_uses_theta_and_color_not_xy() -> None:
 
 
 def test_horizontal_bar_swaps_axes() -> None:
-    spec = compile_vega_lite(_intent("horizontal_bar"), PROFILE, COLUMNS, ROWS)
+    spec = compile_vega_lite(_sideways(), PROFILE, COLUMNS, ROWS)
     # The measure goes on x, the category on y.
     assert spec["encoding"]["x"]["field"] == "total"
     assert spec["encoding"]["y"]["field"] == "name"
@@ -147,9 +151,34 @@ def test_horizontal_bar_swaps_axes() -> None:
 
     ranked = _ranked(6)
     spec = compile_vega_lite(
-        _intent("horizontal_bar"), profile_result(COLUMNS, ranked), COLUMNS, ranked
+        _sideways(), profile_result(COLUMNS, ranked), COLUMNS, ranked
     )
     assert spec["encoding"]["y"]["sort"] == "-x"
+
+
+def test_a_vertical_bar_keeps_the_category_on_x() -> None:
+    """The other half of the pair, and the one that used to be unreachable: a
+    bar chart of 40 categories was rewritten to horizontal whatever was asked
+    for."""
+    rows = _ranked(40)
+    spec = compile_vega_lite(
+        _intent("bar", orientation="vertical"), profile_result(COLUMNS, rows), COLUMNS, rows
+    )
+    assert spec["encoding"]["x"]["field"] == "name"
+    assert spec["encoding"]["y"]["field"] == "total"
+
+
+def test_the_spec_states_the_chart_it_is() -> None:
+    """The renderer sizes horizontal bars per category and scrolls them. It
+    reads that decision here rather than inferring it from mark plus axis type,
+    which a stacked bar or a future `rect` mark could satisfy by accident."""
+    assert compile_vega_lite(_sideways(), PROFILE, COLUMNS, ROWS)["usermeta"] == {
+        "datamind": {"chart_type": "bar", "orientation": "horizontal"}
+    }
+    upright = compile_vega_lite(_intent("bar", orientation="vertical"), PROFILE, COLUMNS, ROWS)
+    assert upright["usermeta"]["datamind"]["orientation"] == "vertical"
+    pie = compile_vega_lite(_intent("pie"), PROFILE, COLUMNS, ROWS)
+    assert pie["usermeta"]["datamind"]["chart_type"] == "pie"
 
 
 def test_bar_keeps_axes_and_adds_aggregate_only_when_asked() -> None:
@@ -186,7 +215,7 @@ def _ranked(n: int, *, descending: bool = True) -> list[list]:
 def test_compile_caps_category_marks_and_says_so() -> None:
     rows = _ranked(400)
     spec = compile_vega_lite(
-        _intent("horizontal_bar"), profile_result(COLUMNS, rows), COLUMNS, rows
+        _sideways(), profile_result(COLUMNS, rows), COLUMNS, rows
     )
     assert len(spec["data"]["values"]) == MAX_CATEGORY_MARKS
     assert "top 25 of 400" in spec["title"].lower()
@@ -197,7 +226,7 @@ def test_cap_keeps_the_end_the_query_ranked_by() -> None:
     # opposite question, so the cap follows the result's own order.
     rows = _ranked(400, descending=False)
     profile = profile_result(COLUMNS, rows)
-    spec = compile_vega_lite(_intent("horizontal_bar"), profile, COLUMNS, rows)
+    spec = compile_vega_lite(_sideways(), profile, COLUMNS, rows)
     kept = [v["total"] for v in spec["data"]["values"]]
     assert kept == [float(v) for v in range(1, MAX_CATEGORY_MARKS + 1)]
     assert "lowest 25 of 400" in spec["title"].lower()
@@ -207,7 +236,7 @@ def test_cap_keeps_the_end_the_query_ranked_by() -> None:
 def test_cap_takes_the_largest_when_rows_are_unordered() -> None:
     rows = [[f"C{i}", float((i * 37) % 400)] for i in range(400)]
     profile = profile_result(COLUMNS, rows)
-    spec = compile_vega_lite(_intent("horizontal_bar"), profile, COLUMNS, rows)
+    spec = compile_vega_lite(_sideways(), profile, COLUMNS, rows)
     kept = [v["total"] for v in spec["data"]["values"]]
     assert kept == sorted(kept, reverse=True) and len(kept) == MAX_CATEGORY_MARKS
 
@@ -267,17 +296,48 @@ def test_plan_refuses_a_chart_of_a_constant_measure() -> None:
 
 
 def test_plan_flips_a_crowded_bar_to_horizontal() -> None:
+    """Still the default — but now a *layout* decision, not a different chart.
+
+    `source` stays "model": the platform choosing how to lay out bars nobody
+    had an opinion about is not an adjustment to the model's answer, and
+    calling it one made the tile apologise for a chart that was exactly right.
+    """
     rows = _ranked(40)
     plan = plan_chart(profile_result(COLUMNS, rows), _intent("bar"))
     assert plan.intent is not None
-    assert plan.intent.chart_type == "horizontal_bar"
-    assert plan.source == "model_adjusted"
+    assert plan.intent.chart_type == "bar"
+    assert plan.intent.orientation == "horizontal"
+    assert plan.source == "model"
+
+
+def test_an_explicit_orientation_survives_the_cardinality_rule() -> None:
+    """The bug this consolidation exists for. 40 categories is well past
+    `HORIZONTAL_BAR_FROM`, and the old code rewrote the pick and then told the
+    user it "does not fit this result"."""
+    rows = _ranked(40)
+    plan = plan_chart(
+        profile_result(COLUMNS, rows), _intent("bar", orientation="vertical")
+    )
+    assert plan.intent is not None
+    assert plan.intent.orientation == "vertical"
+    assert plan.source == "model"
+
+
+def test_a_demoted_pie_does_not_inherit_its_orientation() -> None:
+    """An orientation riding along on a pie was never a choice about bars, so
+    the platform re-decides it rather than obeying it."""
+    rows = _ranked(30)
+    plan = plan_chart(
+        profile_result(COLUMNS, rows), _intent("pie", orientation="vertical")
+    )
+    assert plan.intent is not None and plan.intent.chart_type == "bar"
+    assert plan.intent.orientation == "horizontal"  # 30 categories
 
 
 def test_plan_demotes_a_pie_with_too_many_slices() -> None:
     rows = _ranked(30)
     plan = plan_chart(profile_result(COLUMNS, rows), _intent("pie"))
-    assert plan.intent is not None and plan.intent.chart_type == "horizontal_bar"
+    assert plan.intent is not None and plan.intent.chart_type == "bar"
 
 
 def test_plan_keeps_a_small_pie() -> None:
@@ -396,9 +456,17 @@ def test_heuristic_bars_a_category_measure() -> None:
     assert intent.y_axis and intent.y_axis.field == "total"
 
 
-def test_heuristic_uses_horizontal_bar_for_many_categories() -> None:
-    intent = heuristic_intent(profile_result(COLUMNS, _ranked(40)))
-    assert intent is not None and intent.chart_type == "horizontal_bar"
+def test_heuristic_leaves_the_orientation_to_the_fit() -> None:
+    """The heuristic names the chart; `_fit` — which every path through
+    `plan_chart` runs afterwards — lays it out. Deciding it in both places is
+    how the two paths drift apart."""
+    profile = profile_result(COLUMNS, _ranked(40))
+    intent = heuristic_intent(profile)
+    assert intent is not None and intent.chart_type == "bar"
+    assert intent.orientation == "auto"
+
+    plan = plan_chart(profile)
+    assert plan.intent is not None and plan.intent.orientation == "horizontal"
 
 
 def test_heuristic_lines_a_time_series() -> None:

@@ -50,38 +50,52 @@ const TILE_TYPES: { value: TileType; label: string; hint: string }[] = [
   { value: 'TEXT', label: 'Text', hint: 'A note. No connection, no SQL, nothing to run.' },
 ]
 
-/**
- * The chart picker. `auto` stores null; `table` is not a chart at all and
- * switches the tile's type — see the header.
- */
+/** The chart picker. `auto` stores null — see the header. */
 const CHART_TYPES: { value: string; label: string }[] = [
   { value: 'auto', label: 'Auto' },
   { value: 'bar', label: 'Bar' },
-  { value: 'horizontal_bar', label: 'Horizontal bar' },
   { value: 'line', label: 'Line' },
   { value: 'area', label: 'Area' },
   { value: 'scatter', label: 'Scatter' },
   { value: 'pie', label: 'Pie' },
-  { value: 'table', label: 'Table only' },
+]
+
+/**
+ * Which way the bars run. Its own control rather than two entries in the list
+ * above, because they were never two charts: same mark, same comparison, same
+ * reading. As two types the backend's cardinality rule replaced the pick and
+ * then reported that the pick "does not fit this result" — a control that
+ * argues with you. Here `auto` is the one that defers, and it is the default.
+ */
+const ORIENTATIONS: { value: string; label: string }[] = [
+  { value: 'auto', label: 'Auto' },
+  { value: 'vertical', label: 'Vertical' },
+  { value: 'horizontal', label: 'Horizontal' },
 ]
 
 interface AxisState {
   type: string
+  orientation: string
   x: string
   y: string
   series: string
 }
 
-/** Read the editor's four controls back out of a stored `ChartIntent`. */
+/** Read the editor's controls back out of a stored `ChartIntent`. */
 function axisStateFrom(config: Record<string, unknown> | null | undefined): AxisState {
   const intent = (config ?? {}) as {
     chart_type?: string
+    orientation?: string
     x_axis?: { field?: string }
     y_axis?: { field?: string }
     series?: { field?: string }
   }
+  // The pre-consolidation spelling, read the way the backend reads it. A tile
+  // the migration has not reached yet still opens showing what it draws.
+  const legacy = intent.chart_type === 'horizontal_bar'
   return {
-    type: intent.chart_type ?? 'auto',
+    type: legacy ? 'bar' : intent.chart_type ?? 'auto',
+    orientation: legacy ? 'horizontal' : intent.orientation ?? 'auto',
     x: intent.x_axis?.field ?? '',
     y: intent.y_axis?.field ?? '',
     series: intent.series?.field ?? '',
@@ -263,7 +277,7 @@ export function TileEditor({
   }, [])
 
   const chartConfig = useCallback((): Record<string, unknown> | null => {
-    if (tileType !== 'CHART' || axes.type === 'auto' || axes.type === 'table') return null
+    if (tileType !== 'CHART' || axes.type === 'auto') return null
     if (!axes.x || !axes.y) return null
     const axisType = (field: string): string =>
       columns.find((column) => column.name === field)?.semantic_type ?? 'nominal'
@@ -273,6 +287,11 @@ export function TileEditor({
       chart_type: axes.type,
       x_axis: { field: axes.x, type: axisType(axes.x), aggregation: 'none' },
       y_axis: { field: axes.y, type: axisType(axes.y), aggregation: 'none' },
+    }
+    // Bars only, and only when it says something: "auto" is already the
+    // field's default, so writing it would store a preference nobody expressed.
+    if (axes.type === 'bar' && axes.orientation !== 'auto') {
+      intent.orientation = axes.orientation
     }
     if (axes.series && axes.type !== 'pie') {
       intent.series = { field: axes.series, type: axisType(axes.series), aggregation: 'none' }
@@ -515,20 +534,7 @@ export function TileEditor({
               )}
 
               {tileType === 'CHART' && (
-                <ChartPicker
-                  axes={axes}
-                  columns={columns}
-                  onChange={(next) => {
-                    if (next.type === 'table') {
-                      // Not a chart at all: the honest storage of "show me the
-                      // numbers" is the tile's type.
-                      setTileType('TABLE')
-                      setAxes({ ...next, type: 'auto' })
-                      return
-                    }
-                    setAxes(next)
-                  }}
-                />
+                <ChartPicker axes={axes} columns={columns} onChange={setAxes} />
               )}
             </>
           )}
@@ -1038,6 +1044,22 @@ function ChartPicker({
                   {columns.map((column) => (
                     <option key={column.name} value={column.name}>
                       {column.name}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            )}
+            {/* Flows onto a second row of the grid, under the type it belongs
+                to. Bars only — every other mark has one way to run. */}
+            {axes.type === 'bar' && (
+              <Field label="Bars">
+                <Select
+                  value={axes.orientation}
+                  onChange={(event) => onChange({ ...axes, orientation: event.target.value })}
+                >
+                  {ORIENTATIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
                     </option>
                   ))}
                 </Select>

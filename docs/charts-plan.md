@@ -136,9 +136,19 @@ The cleanup phase. Nothing here adds a chart type.
 4. Drop `table only` from `CHART_TYPES`; the tile-type control keeps that job.
    Delete the special case in the editor's save path.
 5. `CHART_SYSTEM` loses the `horizontal_bar` bullet and its "do not pre-swap"
-   caveat; bump `PROMPT_VERSION`.
-6. Re-key `sales_v1.json` expectations; re-run the eval and record a new
-   baseline.
+   caveat. ~~Bump `PROMPT_VERSION`.~~ **Corrected during implementation:**
+   `prompts/__init__.py` states the opposite convention right below
+   `CHART_USER` — *"PROMPT_VERSION does not move for chart-prompt changes: the
+   eval scores generated SQL, and nothing on the SQL-producing path changed"*,
+   the same reasoning as the `CLARIFY_SYSTEM` note. Moving it would invalidate
+   every historical run comparison for a change no run's SQL can see. It stays
+   at v7.
+6. ~~Re-key `sales_v1.json` expectations; re-run the eval and record a new
+   baseline.~~ **Not needed:** the suite contains no `horizontal_bar`
+   expectation (34 `bar`, 2 `line`, 14 `none`), and `expected_chart_type` is
+   declared on `GoldRecord` as a plain `str` that **no scorer reads** — it is
+   inert data. Worth knowing on its own: any future phase that wants chart
+   accuracy measured has to write that metric first.
 7. Replace `VegaChart.tsx:151` mark-sniffing with an explicit hint written into
    the spec by `compile_vega_lite`.
 
@@ -303,7 +313,7 @@ cannot draw, which is worse than not having started it.
 
 | ✔ | Phase | What it delivers | Touches | Done when |
 |---|---|---|---|---|
-| ☐ | **1. Consolidate** | `horizontal_bar` folded into `bar` + `orientation`; `table only` removed from the chart picker | `charts/__init__.py`, new Alembic revision, `dashboard_service.py`, `prompts/__init__.py`, `tile-editor.tsx`, `VegaChart.tsx`, `sales_v1.json` + baseline | `make test`, `npm run typecheck && npm run build`, migration round-trip on a saved horizontal-bar tile, eval baseline re-recorded |
+| ✅ | **1. Consolidate** | `horizontal_bar` folded into `bar` + `orientation`; `table only` removed from the chart picker | `charts/__init__.py`, `0007_chart_orientation.py`, `prompts/__init__.py`, `tile-editor.tsx`, `VegaChart.tsx`, `test_charts.py`, `test_tile_charts.py` | **done** — 596 backend tests, ruff + 5 import-linter contracts, typecheck, build, migration round-trip verified against live Postgres |
 | ☐ | **2. Encoder** | stack mode, temporal axis format (the "2025" bug), number formatting, `size` channel | `charts/__init__.py` (`encode`, `compile_vega_lite`) | `make test` with new compile-level spec assertions |
 | ☐ | **3. New types** | heatmap, combo, histogram (box plot optional) | `charts/__init__.py`, `prompts/__init__.py`, `tile-editor.tsx`, `test_charts.py` | each type has a `_fit` veto, a heuristic path and tests; `make test` |
 | ☐ | **4. Big number** | `KPI` artifact; single-row results stop being a dead end; replaces the bespoke `METRIC` renderer | `charts/__init__.py`, `pipeline/nodes/`, `api/schemas.py`, `chat.tsx`, `dashboard.tsx` | a one-row result renders a KPI in **both** chat and a tile, from one component |
@@ -319,4 +329,17 @@ the heatmap) and can be done at any point after it.
 
 | Phase | Completed | Commit | Notes |
 |---|---|---|---|
-| — | — | — | *(nothing landed yet)* |
+| 0 | 2026-08-02 | — | Findings above. The premise "many duplicate chart types" turned out to be one real duplicate; the wider problem is a *narrow* set plus a missing stacking control. |
+| 1 | 2026-08-02 | *(uncommitted)* | Two plan steps corrected against the code — see the struck-through items in Phase 1. Migration **0007 is written but not applied**: the running `api` container has the pre-change image baked in (no volume mount), so it applies on the next `make up`, which runs `alembic upgrade head` at start. The dev DB has zero affected rows, so it is a no-op there either way. |
+
+### Carried forward
+
+- `docs/architecture.md:1174` still shows `horizontal_bar` in the `ChartIntent`
+  contract. Left deliberately: that file is the *original proposal*, and
+  rewriting a proposal to match what was later built erases the record. If it
+  should instead read as a live contract reference, it needs a pass — but that
+  is a decision about the document, not a leftover from this phase.
+- The `sort` a bar chart gets is still keyed off the *category channel*, so a
+  horizontal bar sorts by `-x` and a vertical one by `-y`. Correct today, and
+  worth re-reading in Phase 2 when stacking arrives — a stacked bar's sort and
+  its stack order are different questions.

@@ -285,8 +285,8 @@ Result ({row_count} rows):
 CHART_SYSTEM = """You choose the single best chart for a query result, or decline.
 
 Pick one chart_type:
-- "bar": compare a measure across a handful of categories (<=8 of them).
-- "horizontal_bar": same, but when the category labels are long or many (>8).
+- "bar": compare a measure across categories. Do not worry about which way the
+  bars run — the platform lays them out for the label count.
 - "line": a measure over an ordered or time axis (a trend).
 - "area": a trend where the filled magnitude matters.
 - "scatter": the relationship between two quantitative fields.
@@ -311,8 +311,9 @@ a subset.
 Rules:
 - x_axis and y_axis are required unless chart_type is "none".
 - Only reference column names that appear in the result schema below.
-- Put the category/time field on x_axis and the numeric measure on y_axis
-  (for horizontal_bar the platform flips them for you — do not pre-swap).
+- Put the category/time field on x_axis and the numeric measure on y_axis,
+  always — including for bars that will end up running sideways. The platform
+  flips them for you; do not pre-swap.
 - The result is ALREADY aggregated by SQL. Set each axis aggregation to "none"
   unless you are certain a further roll-up is needed.
 - Set the axis "type" to match the column: quantitative for numbers, temporal

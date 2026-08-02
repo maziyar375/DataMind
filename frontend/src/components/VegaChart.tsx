@@ -148,7 +148,19 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
     // result is large. Capping the height (as an earlier version did) crushes
     // hundreds of bars into a few pixels. Every other chart gets a fixed plot
     // height so the marks, not the labels, own the box.
-    const isHorizontalBar = mark === 'bar' && encoding.y?.type === 'nominal'
+    //
+    // Which chart this *is* comes from `usermeta`, where the backend states its
+    // decision, rather than from re-deriving it out of the encoding. The old
+    // test — bar mark plus a nominal y — is a guess that a stacked bar or a
+    // future `rect` mark can satisfy by accident. It survives only as the
+    // fallback for specs compiled before `usermeta` existed: chat artifacts
+    // persist their spec, so those are still on screen, and the guess is the
+    // same one that was in force when they were written.
+    const meta = (spec.usermeta as
+      { datamind?: { chart_type?: string; orientation?: string } } | undefined)?.datamind
+    const isHorizontalBar = meta
+      ? meta.chart_type === 'bar' && meta.orientation === 'horizontal'
+      : mark === 'bar' && encoding.y?.type === 'nominal'
     const PER_BAR = 22
     const height: number | 'container' = isHorizontalBar
       ? Math.min(60_000, Math.max(200, rowCount * PER_BAR))

@@ -9,7 +9,7 @@ user's explicit pick is silently discarded. That silence is why the exact
 payloads `components/tile-editor.tsx` builds are pinned here.
 
 The other half is the reverse direction: what the editor is *not* allowed to
-express. "Table only" looks like `chart_type: "none"` and is not — see
+express. "Show me the numbers" looks like `chart_type: "none"` and is not — see
 `test_a_none_intent_does_not_suppress_the_chart`.
 """
 from __future__ import annotations
@@ -30,12 +30,19 @@ from app.charts import (
 )
 from app.domain.ports.database import ResultColumn
 
-# Every chart type the editor's picker offers, minus its two non-chart
-# options: `auto` (which stores null) and `table` (which is a tile type).
-EDITOR_CHART_TYPES = ["bar", "horizontal_bar", "line", "area", "scatter", "pie"]
+# Every chart type the editor's picker offers, minus `auto` — which is not a
+# type at all: it stores null and asks `plan_chart` to re-decide per result.
+EDITOR_CHART_TYPES = ["bar", "line", "area", "scatter", "pie"]
+
+# The `Bars` control, which the editor shows for `bar` alone. "auto" is the
+# default and is never sent — writing it would store a preference nobody
+# expressed — so only these two ever reach the column.
+EDITOR_ORIENTATIONS = ["vertical", "horizontal"]
 
 
-def editor_payload(chart_type: str, *, series: bool = False) -> dict[str, Any]:
+def editor_payload(
+    chart_type: str, *, series: bool = False, orientation: str | None = None
+) -> dict[str, Any]:
     """Exactly what `chartConfig()` in `tile-editor.tsx` puts on the wire.
 
     Keep this function and that one identical. `type` is copied straight from
@@ -47,6 +54,8 @@ def editor_payload(chart_type: str, *, series: bool = False) -> dict[str, Any]:
         "x_axis": {"field": "status", "type": "nominal", "aggregation": "none"},
         "y_axis": {"field": "total", "type": "quantitative", "aggregation": "none"},
     }
+    if orientation is not None:
+        payload["orientation"] = orientation
     if series:
         payload["series"] = {"field": "region", "type": "nominal", "aggregation": "none"}
     return payload
@@ -73,6 +82,40 @@ def test_the_series_picker_round_trips_too(chart_type: str) -> None:
 def test_the_picker_offers_no_type_the_model_does_not_have() -> None:
     """A renamed `ChartType` member would otherwise reach a tile as Auto."""
     assert set(EDITOR_CHART_TYPES) <= set(ChartType.__args__)  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("orientation", EDITOR_ORIENTATIONS)
+def test_the_orientation_control_round_trips(orientation: str) -> None:
+    from app.charts import Orientation
+
+    assert orientation in set(Orientation.__args__)  # type: ignore[attr-defined]
+    intent = ChartIntent.model_validate(editor_payload("bar", orientation=orientation))
+    assert intent.orientation == orientation
+
+
+def test_orientation_defaults_to_auto_when_the_editor_omits_it() -> None:
+    """Which is what it does for every non-bar type, and for `Bars: Auto`."""
+    assert ChartIntent.model_validate(editor_payload("line")).orientation == "auto"
+
+
+def test_a_tile_stored_before_the_consolidation_still_draws_sideways() -> None:
+    """`horizontal_bar` was a `chart_type` until migration 0007 folded it into
+    bar + orientation.
+
+    The migration rewrites the rows it can reach. This is the other defence,
+    for the rows it cannot: an older API instance writing during a rollout, a
+    restored backup. Without it `extra="forbid"` would reject the stored config
+    and `_chart_intent` would log it and return None — the tile would keep
+    working and quietly stop honouring the pick, which is the exact failure
+    this whole module exists to catch.
+    """
+    legacy = editor_payload("bar")
+    legacy["chart_type"] = "horizontal_bar"
+
+    intent = ChartIntent.model_validate(legacy)
+
+    assert intent.chart_type == "bar"
+    assert intent.orientation == "horizontal"
 
 
 def test_the_semantic_types_a_connector_emits_are_all_valid_axis_types() -> None:

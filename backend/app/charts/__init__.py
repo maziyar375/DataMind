@@ -43,10 +43,16 @@ _ID_NAME = re.compile(
 )
 
 
-ChartType = Literal[
-    "line", "bar", "horizontal_bar", "area", "scatter", "pie", "none"
-]
+ChartType = Literal["line", "bar", "area", "scatter", "pie", "none"]
 AxisType = Literal["quantitative", "temporal", "nominal", "ordinal"]
+
+# Which way the bars run. Not a chart type: a vertical and a horizontal bar
+# chart are the same mark, the same comparison and the same reading — only the
+# label budget differs. Modelling the flip as a second `chart_type` meant the
+# platform's own cardinality rule silently *replaced* whatever the user picked,
+# and then told them their pick "does not fit this result". Here the two are
+# separable: `auto` asks the platform to decide, and an explicit pick is kept.
+Orientation = Literal["auto", "vertical", "horizontal"]
 
 
 class AxisSpec(BaseModel):
@@ -63,7 +69,25 @@ class ChartIntent(BaseModel):
     x_axis: AxisSpec | None = None
     y_axis: AxisSpec | None = None
     series: AxisSpec | None = None
+    #: Bars only; ignored by every other type. A *fitted* bar intent never
+    #: carries "auto" — the plan states which way the chart actually runs.
+    orientation: Orientation = "auto"
     title: str | None = Field(default=None, max_length=120)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_horizontal_bar(cls, data: Any) -> Any:
+        """Read the pre-consolidation spelling as bar + horizontal.
+
+        Two sources still produce it: a `dashboard_tiles.chart_config` row the
+        migration did not reach (an older API instance writing during a rollout,
+        a restored backup), and a model whose priors are stronger than the
+        prompt. Both used to fail `extra="forbid"` and land as Auto, throwing
+        away a pick this class can perfectly well understand.
+        """
+        if isinstance(data, dict) and data.get("chart_type") == "horizontal_bar":
+            data = {**data, "chart_type": "bar", "orientation": "horizontal"}
+        return data
 
     @model_validator(mode="after")
     def _axes_required(self) -> ChartIntent:
@@ -73,7 +97,7 @@ class ChartIntent(BaseModel):
 
 
 _MARKS = {
-    "line": "line", "bar": "bar", "horizontal_bar": "bar",
+    "line": "line", "bar": "bar",
     "area": "area", "scatter": "point", "pie": "arc",
 }
 
@@ -269,8 +293,10 @@ def validate_intent(
     return True, None
 
 
-def _bar_type(distinct: int) -> ChartType:
-    return "horizontal_bar" if distinct > HORIZONTAL_BAR_FROM else "bar"
+def _bar_orientation(distinct: int) -> Orientation:
+    """Which way bars run when nobody has said. Past a handful of categories
+    the labels stack better down the side than angled under the axis."""
+    return "horizontal" if distinct > HORIZONTAL_BAR_FROM else "vertical"
 
 
 def _axis_for(col: ColumnProfile, template: AxisSpec | None = None) -> AxisSpec:
@@ -333,26 +359,20 @@ def _fit(
         # to be per, so Vega bins or gradients it into something nobody asked
         # for. Reject and let the heuristic pick a form that suits two
         # measures — usually a scatter.
-        if chart_type in ("bar", "horizontal_bar", "pie") and px.is_numeric:
+        if chart_type in ("bar", "pie") and px.is_numeric:
             return None, False
 
         if chart_type == "pie":
             # A pie reads parts of a whole: too many slices, or any negative
             # part, and the angles stop meaning anything.
             if px.distinct > MAX_PIE_SLICES or (py.minimum is not None and py.minimum < 0):
-                chart_type = _bar_type(px.distinct)
+                chart_type = "bar"
                 changed = True
-        elif chart_type in ("line", "area"):
-            # A line between unordered categories draws a continuity that does
-            # not exist in the data.
-            if px.semantic_type == "nominal":
-                chart_type = _bar_type(px.distinct)
-                changed = True
-        elif chart_type in ("bar", "horizontal_bar") and px.is_categorical:
-            want = _bar_type(px.distinct)
-            if want != chart_type:
-                chart_type = want
-                changed = True
+        # A line between unordered categories draws a continuity that does not
+        # exist in the data.
+        elif chart_type in ("line", "area") and px.semantic_type == "nominal":
+            chart_type = "bar"
+            changed = True
 
     x_axis = _axis_for(px, x_tpl)
     y_axis = _axis_for(py, y_tpl)
@@ -373,6 +393,22 @@ def _fit(
     if chart_type == "pie" and x_axis.type not in ("nominal", "ordinal"):
         x_axis = x_axis.model_copy(update={"type": "ordinal"})
         changed = True
+
+    # Resolve the orientation once, here, so the plan *states* which way the
+    # chart runs and nothing downstream re-derives it from the encoding.
+    #
+    # An explicit pick survives — that is the whole point of separating it from
+    # the type — but only when the user asked for bars in the first place. An
+    # orientation riding along on a pie that got demoted to bars was never a
+    # choice about bars, so it is re-decided rather than obeyed. Note what is
+    # deliberately absent: no cardinality veto on an explicit pick. Category
+    # charts are already capped at `MAX_CATEGORY_MARKS`, so the worst an
+    # awkward pick can produce is 25 angled labels, and overriding the user to
+    # spare them that is exactly the behaviour this change exists to remove.
+    orientation: Orientation = "auto"
+    if chart_type == "bar":
+        asked = intent.orientation if intent.chart_type == "bar" else "auto"
+        orientation = asked if asked != "auto" else _bar_orientation(px.distinct)
 
     series: AxisSpec | None = None
     if intent.series is not None:
@@ -402,6 +438,7 @@ def _fit(
         x_axis=x_axis,
         y_axis=y_axis,
         series=series,
+        orientation=orientation,
         title=intent.title,
     )
     return fitted, changed
@@ -438,12 +475,13 @@ def heuristic_intent(profile: ResultProfile) -> ChartIntent | None:
             series=_axis_for(series) if series is not None else None,
         )
 
-    # A measure across categories: bars, laid out for the label count.
+    # A measure across categories: bars. The orientation is left to `_fit`,
+    # which every path through `plan_chart` runs afterwards — deciding it twice
+    # is how the two paths drift apart.
     if categorical:
-        cat = categorical[0]
         return ChartIntent(
-            chart_type=_bar_type(cat.distinct),
-            x_axis=_axis_for(cat),
+            chart_type="bar",
+            x_axis=_axis_for(categorical[0]),
             y_axis=_axis_for(measure),
         )
 
@@ -597,7 +635,7 @@ def compile_vega_lite(
     else:
         x, y = intent.x_axis, intent.y_axis
         category_channel = "x"
-        if intent.chart_type == "horizontal_bar":
+        if intent.chart_type == "bar" and intent.orientation == "horizontal":
             x, y = y, x
             category_channel = "y"
         spec["encoding"] = {"x": encode(x), "y": encode(y)}
@@ -614,6 +652,19 @@ def compile_vega_lite(
             )
         if intent.series is not None:
             spec["encoding"]["color"] = encode(intent.series)
+
+    # What the renderer needs to know that the encoding does not say.
+    #
+    # `usermeta` is Vega-Lite's own free-form slot: the compiler carries it
+    # through untouched and never interprets it. The browser sizes horizontal
+    # bars per category and scrolls them, so it has to recognise one — and it
+    # used to do that by sniffing `mark === 'bar' && encoding.y.type ===
+    # 'nominal'`, which is a guess that a stacked bar or a `rect` mark can
+    # satisfy by accident. Stating the decision is cheaper than re-deriving it,
+    # and it stays right when the mark table grows.
+    spec["usermeta"] = {
+        "datamind": {"chart_type": intent.chart_type, "orientation": intent.orientation}
+    }
 
     # The reduction is part of what the chart claims, so it is shown, never
     # implied: a capped chart that looks whole is a lie about the data.
