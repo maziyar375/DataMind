@@ -319,7 +319,7 @@ cannot draw, which is worse than not having started it.
 | ✅ | **4. Big number** | `KPI` artifact; single-row results stop being a dead end; replaces the bespoke `METRIC` renderer; delta + sparkline when the data carries a time axis | `charts/__init__.py`, `pipeline/{nodes,state}`, `domain/value_objects`, `services/{run,query,dashboard}_service`, `api/schemas.py`, `types.ts`, `ui.tsx`, `chat.tsx`, `dashboard.tsx` | **done** — 643 backend tests, ruff + contracts, typecheck, build; one `plan_kpi` and one `<Kpi>` serve both surfaces |
 | ✅ | **5. Selection** | deterministic shape router; the model picks from 2–4 candidates only, an off-list pick is declined | `charts/__init__.py` (`chart_candidates`, `plan_chart`), `prompts/__init__.py`, `pipeline/nodes/` | **done** — 659 backend tests, ruff + contracts, typecheck, build; every signature has a unit test |
 | ✅ | **6. Colour** | diverging ramp, semantic +/- pair, `npm run test:palette` (50 checks) | new `theme/color.ts`, `theme/palette.ts`, `theme/palette.test.ts`; `charts/__init__.py`, `VegaChart.tsx` | **done** — 664 backend tests, ruff + contracts, typecheck, build, all three frontend test scripts; every colour path rendered through the installed Vega |
-| ☐ | **7. Picker UI** | icon grid, options filtered by what the result supports, "change chart" in chat | `tile-editor.tsx`, `chat.tsx`, `ui.tsx` | an unsupported type is disabled with a reason, never offered then demoted |
+| ✅ | **7. Picker UI** | icon grid, options filtered by what the result supports, "change chart" in chat | `charts/__init__.py` (`chart_options`, `intent_for`), `run_service.py`, `conversations.py`, `sql_draft_service.py`, `ui.tsx`, `tile-editor.tsx`, `chat.tsx` | **done** — 684 backend tests, ruff + contracts, typecheck, build, all three frontend test scripts; 15 picker-reachable specs rendered, and the redraw driven against the live app database |
 
 **Dependencies:** 1 → 2 → 3 → 5 → 7 is the spine. Phase 4 depends only on 1.
 Phase 6 is independent of everything except 3 (the diverging ramp exists for
@@ -335,6 +335,7 @@ the heatmap) and can be done at any point after it.
 | 6 | 2026-08-02 | *(uncommitted)* | Writing the validator found two things the palette was claiming and not doing — see the design note. The palette moved to `theme/palette.ts` so a DOM-free test can import it without React. |
 | 5 | 2026-08-02 | `4dc6e18` | The candidate lists came out **more generous** than the plan's table — see the design note. `CHART_SYSTEM` no longer enumerates chart types at all; the shortlist arrives per-result in `CHART_USER`. The eval suite was not touched: `expected_chart_type` is still inert (Phase 1), so the signatures are pinned as unit tests instead, which is what the plan expected. |
 | 4 | 2026-08-02 | `ede4ccb` | Scoped **narrower** than the plan implied: only the single-row veto is rescued by a big number, not every veto — see the design note below. The `METRIC` tile keeps its "first of N rows" reading and gains delta + sparkline when its query has a time axis. |
+| 7 | 2026-08-02 | *(uncommitted)* | Went **wider than the plan's "Touches"**, which named only three frontend files. A picker that filters by what the result supports needs the backend to say what that is, and a "change chart" in chat needs somewhere to recompile — drawing a second spec in the browser is the thing `chat.tsx` already refuses. So this phase added `chart_options`/`intent_for` to the charts module, `chart_options` to the SQL draft, and one new route, `POST /runs/{run_id}/chart`. See the design note. |
 | 3 | 2026-08-02 | `db8b7fb` | Box plot deferred, per the open decision. Two design calls worth knowing about: a new `color` channel distinct from `series` (colour-as-magnitude vs colour-as-identity), and a **heuristic change** — a result with two dimensions now becomes a split bar or a heatmap instead of a bar that silently dropped the second dimension. That last one changes what existing `Auto` tiles draw. |
 
 ### What rendering caught (Phase 2)
@@ -521,6 +522,67 @@ The backend answers "does this measure cross zero" and "which field, escaped,
 does a negative test read" — facts about the data. The browser answers "what
 colour is a negative" — a fact about the theme. Neither could answer the
 other's question.
+
+### What rendering caught (Phase 7)
+
+Nothing, this time — and that is the finding worth recording, because it is the
+first phase where it was true. Fifteen specs, one per type the picker can reach
+across six shapes, compiled and rendered: 3 lines × 12 points for a split
+trend, 4 arcs for a pie of quarters, 24 rects for the matrix built out of a
+split bar, 8 symbols for a scatter of two measures. All drew.
+
+The reason is structural rather than lucky. `intent_for` builds nothing new; it
+moves columns between channels and hands the result to `_fit`, which is the
+same last gate every other path already goes through. The rendering probe was
+still worth running: it is the only check that would have caught a translation
+putting a measure on a channel that compiles and paints nothing, which is
+exactly what the heatmap translation does for a living.
+
+The redraw was also driven against the **live app database** — 21 stored TABLE
+artifacts, every offered type compiled for six real results, inside a
+rolled-back transaction. That is where the SQLAlchemy statement and the
+`ArtifactKind` comparison were exercised for real; the unit tests fake the
+session and would not have caught a `where` clause that matched nothing.
+
+### Design notes (Phase 7)
+
+**The reason lives on the backend.** "Needs two dimensions crossed by one
+measure. This result is a measure across categories." is two facts, and only
+the backend holds both: what a type requires, and what this result *is*. The
+signature the shape router already computes for the prompt turned out to be
+exactly the second half. The browser composes nothing — it renders a string and
+sets a `title`.
+
+**Shown and greyed, never hidden.** A list that shrank between one result and
+the next reads as a bug in the app rather than a fact about the data, and the
+hover reason is the only place a user ever learns *why* a heatmap needs two
+dimensions. This is also the phase's stated bar, from the progress table: an
+unsupported type is disabled with a reason, never offered and then demoted.
+
+**`aria-disabled`, not `disabled`.** A `disabled` button swallows pointer
+events in every browser, and the tooltip goes with them — which would have
+removed the entire point of drawing the refused option. The click is refused in
+the handler instead.
+
+**The picker sends a type and nothing else.** Someone changing a chart in chat
+is saying "draw this differently", not re-assigning columns, so the columns
+come from rank 1 — the intent the shape router already worked out — and only
+the channels that mean something different under the new type move. Three do:
+scatter takes the combo's two measures off y and y2 and plots them against each
+other; heatmap takes the split bar's legend to the other axis and its height to
+the colour; pie drops the split, because slices of slices is a sunburst.
+
+**The redraw is a round trip.** Compiling a second spec in the browser would
+put a chart on screen the backend never approved — the same objection
+`chat.tsx` already records against a client-side fallback renderer. Re-running
+the SQL would be worse: the picture could drift away from the table printed
+underneath it. So the server recompiles from the rows already stored in the
+run's TABLE artifact, which are the same rows the `chart` node profiled.
+
+**The CHART artifact is replaced, not appended.** It is a presentation of the
+TABLE, not a record of what happened; two of them would leave nothing saying
+which one the reader is looking at. What the pipeline decided on its own stays
+legible in the step trail and the `ARTIFACT_CREATED` event, both untouched.
 
 ### Carried forward
 

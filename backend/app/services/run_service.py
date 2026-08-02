@@ -20,6 +20,7 @@ from app.core.clock import utcnow
 from app.core.config import Settings
 from app.core.errors import NotFoundError, RunTimeoutError, ValidationError
 from app.core.logging import get_logger
+from app.domain.ports.database import ResultColumn
 from app.domain.ports.llm import ChatMessage
 from app.domain.value_objects import (
     ArtifactKind,
@@ -716,6 +717,79 @@ def _bind_connection(
             conversation_id=str(conversation.id),
         )
     conversation.default_connection_id = connection_id
+
+
+async def redraw_chart(
+    db: AsyncSession, *, run_id: UUID, owner_id: UUID, chart_type: str
+) -> Artifact:
+    """Draw a finished run's result as a different chart type.
+
+    Nothing is re-run and nothing is re-queried: the rows are already in the
+    run's TABLE artifact, which is the same list the `chart` node profiled, so
+    the redraw sees exactly the data the original chart was drawn from. That is
+    the property worth protecting — a picker that re-executed the SQL could
+    quietly show a different answer than the table sitting underneath it.
+
+    The CHART artifact is *replaced* rather than appended. It is a presentation
+    of the TABLE, not a record of what happened; what the pipeline decided on
+    its own stays legible in the step trail and in the `ARTIFACT_CREATED`
+    event, both of which are untouched here. Appending instead would leave two
+    CHART artifacts and no statement of which one the reader is looking at.
+    """
+    from app.charts import compile_vega_lite, intent_for, profile_result
+
+    run = await db.get(Run, run_id)
+    if run is None or run.owner_id != owner_id:
+        raise NotFoundError("Run not found.")
+
+    rows = (
+        await db.execute(
+            select(Artifact).where(
+                Artifact.run_id == run_id, Artifact.kind == ArtifactKind.TABLE
+            )
+        )
+    ).scalars().all()
+    table = rows[0] if rows else None
+    if table is None:
+        raise NotFoundError("This run has no result to draw.")
+
+    columns = [
+        ResultColumn(
+            name=c["name"], db_type=c["db_type"], semantic_type=c["semantic_type"]
+        )
+        for c in table.spec.get("columns", [])
+    ]
+    data = table.spec.get("rows", [])
+    profile = profile_result(columns, data, truncated=bool(table.spec.get("truncated")))
+
+    intent = intent_for(profile, chart_type)
+    if intent is None:
+        # The same list that disabled the button server-side. Reaching here
+        # means the client asked for something it was told it could not have,
+        # so it is a 400 and not a silent substitution.
+        raise ValidationError(
+            "This result cannot be drawn as that chart type.",
+            chart_type=chart_type,
+        )
+
+    spec = compile_vega_lite(intent, profile, columns, data)
+
+    existing = (
+        await db.execute(
+            select(Artifact).where(
+                Artifact.run_id == run_id, Artifact.kind == ArtifactKind.CHART
+            )
+        )
+    ).scalars().all()
+    for old in existing[1:]:
+        await db.delete(old)
+    artifact = existing[0] if existing else None
+    if artifact is None:
+        artifact = Artifact(id=uuid.uuid4(), run_id=run_id, kind=ArtifactKind.CHART)
+        db.add(artifact)
+    artifact.spec = spec
+    await db.flush()
+    return artifact
 
 
 _LIST_MARKER = re.compile(r"^\s*(?:\d+[.)]|[-*•])\s*")

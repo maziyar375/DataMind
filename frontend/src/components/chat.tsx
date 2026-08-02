@@ -12,11 +12,16 @@
  * objects — a result table, the SQL — keep a border of their own.
  */
 import { useState } from 'react'
+import { runs as runsApi } from '../api/client'
 import type {
   Artifact, ClarificationSpec, GeneratedQuery, KpiSpec, RunDetail, RunStep,
   TableArtifactSpec,
 } from '../api/types'
-import { Chip, CopyButton, Dot, dirOf, Icon, Kpi, ResultTable, Spinner } from './ui'
+import type { ChartOption } from './ui'
+import {
+  ChartTypePicker, Chip, CopyButton, Dot, dirOf, ErrorNote, Icon, Kpi,
+  ResultTable, Spinner,
+} from './ui'
 import { VegaChart } from './VegaChart'
 import { NODE_META } from '../theme/tokens'
 
@@ -544,6 +549,86 @@ function OptionChip({
   )
 }
 
+// ── the chart, and the way to disagree with it ────────────────────────────
+/**
+ * A run's chart with a "change chart" affordance under it.
+ *
+ * The redraw is a round trip, not a re-render. Compiling a second spec in the
+ * browser would put a chart on screen that the backend never approved — the
+ * same objection as the fallback renderer this file refuses below — so the
+ * server recompiles from the rows already stored with the run, which is also
+ * how the picture stays a picture of the table underneath it.
+ *
+ * The picker is hidden, not disabled, when the spec carries no options: those
+ * are charts compiled before the list existed, and enabling everything would
+ * offer types this result may not support — the one thing the picker is for.
+ */
+function ChartBlock({ runId, spec }: { runId: string; spec: Record<string, unknown> }) {
+  const [drawn, setDrawn] = useState<Record<string, unknown> | null>(null)
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [failed, setFailed] = useState<string | null>(null)
+
+  const current = drawn ?? spec
+  const meta = (current.usermeta as {
+    datamind?: { chart_type?: string; options?: ChartOption[] }
+  } | undefined)?.datamind
+  const options = meta?.options ?? []
+
+  const pick = async (type: string) => {
+    if (type === meta?.chart_type) return
+    setBusy(type)
+    setFailed(null)
+    try {
+      setDrawn((await runsApi.chart(runId, type)).spec)
+    } catch (err) {
+      setFailed(err instanceof Error ? err.message : 'This chart could not be redrawn.')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <VegaChart spec={current} />
+      {options.length > 0 && (
+        <>
+          <button
+            type="button"
+            onClick={() => setOpen((was) => !was)}
+            style={{
+              alignSelf: 'flex-start',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              padding: '3px 6px',
+              marginLeft: -6,
+              border: 'none',
+              background: 'none',
+              borderRadius: 6,
+              cursor: 'pointer',
+              fontSize: 11.5,
+              color: 'var(--text-faint)',
+            }}
+          >
+            <Icon.Chevron size={11} open={open} />
+            Change chart
+          </button>
+          {open && (
+            <ChartTypePicker
+              value={meta?.chart_type ?? ''}
+              options={options}
+              onChange={pick}
+              busy={busy}
+            />
+          )}
+        </>
+      )}
+      {failed && <ErrorNote>{failed}</ErrorNote>}
+    </div>
+  )
+}
+
 // ── assistant turn ────────────────────────────────────────────────────────
 export function AssistantTurn({
   text, run, streaming, onPickOption, optionsDisabled,
@@ -610,7 +695,7 @@ export function AssistantTurn({
         called unchartable ended up as a wall of equal-length bars sitting
         under an answer that said they were all tied.
       */}
-      {chartSpec && <VegaChart spec={chartSpec} />}
+      {chartSpec && run && <ChartBlock runId={run.id} spec={chartSpec} />}
       {/* The other half of that decision. A single-row result is refused as a
           chart for a good reason and is the shape a KPI is made of, so the
           `chart` node answers it with a number instead of nothing. Never both:

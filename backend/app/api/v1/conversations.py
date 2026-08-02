@@ -13,6 +13,7 @@ from sqlalchemy import func, select
 from app.api.deps import CtxDep, DbDep, SettingsDep
 from app.api.schemas import (
     ArtifactRead,
+    ChartRedrawRequest,
     ConversationCreate,
     ConversationRead,
     ConversationUpdate,
@@ -36,7 +37,7 @@ from app.infra.db.models import (
     RunStep,
 )
 from app.infra.events.bus import event_bus
-from app.services.run_service import RunService
+from app.services.run_service import RunService, redraw_chart
 
 router = APIRouter(tags=["conversations"])
 
@@ -282,6 +283,22 @@ async def get_run_sql(run_id: UUID, ctx: CtxDep, db: DbDep) -> list[GeneratedQue
         .order_by(GeneratedQuery.attempt_no)
     )
     return [GeneratedQueryRead.model_validate(q) for q in result.scalars()]
+
+
+@router.post("/runs/{run_id}/chart", response_model=ArtifactRead)
+async def redraw_run_chart(
+    run_id: UUID, body: ChartRedrawRequest, ctx: CtxDep, db: DbDep
+) -> ArtifactRead:
+    """Redraw a finished run's result as another type the shape allows.
+
+    A POST rather than a query parameter on the artifact GET because it does
+    change something: the run's CHART artifact is replaced, so the choice
+    survives a reload the way any other edit would.
+    """
+    artifact = await redraw_chart(
+        db, run_id=run_id, owner_id=ctx.user_id, chart_type=body.chart_type
+    )
+    return ArtifactRead.model_validate(artifact)
 
 
 @router.post("/runs/{run_id}/cancel", status_code=status.HTTP_202_ACCEPTED)

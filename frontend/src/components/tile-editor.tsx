@@ -35,9 +35,10 @@ import type {
   TableColumnConfig, TableConfig, TileType,
 } from '../api/types'
 import { REFRESH_OPTIONS, rateLabel } from './dashboard'
+import type { ChartOption } from './ui'
 import {
-  Chip, ErrorNote, Field, GhostButton, Icon, Modal, PrimaryButton, ResultTable,
-  Select, Spinner, TextArea, TextInput,
+  ChartTypePicker, Chip, ErrorNote, Field, GhostButton, Icon, Modal,
+  PrimaryButton, ResultTable, Select, Spinner, TextArea, TextInput,
 } from './ui'
 
 /** How long the textarea sits still before the guard is asked about it. */
@@ -52,19 +53,6 @@ const TILE_TYPES: { value: TileType; label: string; hint: string }[] = [
 
 /** The marks with area to divide between a split. */
 const STACKABLE = ['bar', 'area']
-
-/** The chart picker. `auto` stores null — see the header. */
-const CHART_TYPES: { value: string; label: string }[] = [
-  { value: 'auto', label: 'Auto' },
-  { value: 'bar', label: 'Bar' },
-  { value: 'line', label: 'Line' },
-  { value: 'area', label: 'Area' },
-  { value: 'combo', label: 'Bar + line' },
-  { value: 'scatter', label: 'Scatter' },
-  { value: 'pie', label: 'Pie' },
-  { value: 'heatmap', label: 'Heatmap' },
-  { value: 'histogram', label: 'Histogram' },
-]
 
 /**
  * What the two positional pickers mean for each type.
@@ -603,7 +591,12 @@ export function TileEditor({
               )}
 
               {tileType === 'CHART' && (
-                <ChartPicker axes={axes} columns={columns} onChange={setAxes} />
+                <ChartPicker
+                  axes={axes}
+                  columns={columns}
+                  options={draft?.chart_options ?? []}
+                  onChange={setAxes}
+                />
               )}
             </>
           )}
@@ -1046,10 +1039,12 @@ function MoveButton({
 
 // ── the chart pickers ─────────────────────────────────────────────────────
 function ChartPicker({
-  axes, columns, onChange,
+  axes, columns, options, onChange,
 }: {
   axes: AxisState
   columns: { name: string; semantic_type: string }[]
+  /** What the preview's shape allows. Empty until the SQL has been run. */
+  options: ChartOption[]
   onChange: (axes: AxisState) => void
 }) {
   // Axes can only be picked from columns we have actually seen come back.
@@ -1081,21 +1076,17 @@ function ChartPicker({
   )
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
-        <Field label="Chart">
-          <Select
-            value={axes.type}
-            onChange={(event) => onChange({ ...axes, type: event.target.value })}
-          >
-            {CHART_TYPES.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        {axes.type !== 'auto' && (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <Field label="Chart">
+        <ChartTypePicker
+          auto
+          value={axes.type}
+          options={options}
+          onChange={(type) => onChange({ ...axes, type })}
+        />
+      </Field>
+      {axes.type !== 'auto' && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
           <>
             {pick('x', labels.x, { empty: '—' })}
             {labels.y !== null && pick('y', labels.y, { empty: '—' })}
@@ -1140,8 +1131,8 @@ function ChartPicker({
             {axes.type === 'scatter'
               && pick('size', 'Size', { hint: "A third measure, read as the point's area." })}
           </>
-        )}
-      </div>
+        </div>
+      )}
 
       <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
         {axes.type === 'auto'

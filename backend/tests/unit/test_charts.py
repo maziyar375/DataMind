@@ -27,9 +27,11 @@ from app.charts import (
     ChartIntent,
     _fit,
     chart_candidates,
+    chart_options,
     compile_vega_lite,
     describe_candidates,
     heuristic_intent,
+    intent_for,
     plan_chart,
     plan_kpi,
     profile_result,
@@ -182,13 +184,12 @@ def test_the_spec_states_the_chart_it_is() -> None:
     """The renderer sizes horizontal bars per category and scrolls them. It
     reads that decision here rather than inferring it from mark plus axis type,
     which a stacked bar or a future `rect` mark could satisfy by accident."""
-    assert compile_vega_lite(_sideways(), PROFILE, COLUMNS, ROWS)["usermeta"] == {
-        "datamind": {
-            "chart_type": "bar",
-            "orientation": "horizontal",
-            "stack": "stacked",
-            "categories": 3,
-        }
+    meta = compile_vega_lite(_sideways(), PROFILE, COLUMNS, ROWS)["usermeta"]["datamind"]
+    assert {k: v for k, v in meta.items() if k != "options"} == {
+        "chart_type": "bar",
+        "orientation": "horizontal",
+        "stack": "stacked",
+        "categories": 3,
     }
     upright = compile_vega_lite(_intent("bar", orientation="vertical"), PROFILE, COLUMNS, ROWS)
     assert upright["usermeta"]["datamind"]["orientation"] == "vertical"
@@ -1179,6 +1180,152 @@ def test_every_offered_type_has_a_line_for_the_prompt() -> None:
     rendered = describe_candidates(chart_candidates(profile_result(cols, rows)))
     assert rendered.count("\n") == 2                  # three offered types
     assert all(line.startswith('- "') for line in rendered.splitlines())
+
+
+# ── the picker ───────────────────────────────────────────────────────────
+# The list the browser draws, and the promise behind it: every button that is
+# not greyed out produces a chart. A supported type that `intent_for` cannot
+# resolve is a button that fails when clicked, which is the failure the whole
+# phase exists to remove.
+def test_the_picker_shows_every_type_not_only_the_offered_ones() -> None:
+    """A list that shrank between one result and the next would read as a bug
+    in the editor rather than a fact about the data."""
+    cols = _cols(("status", "nominal"), ("total", "quantitative"))
+    rows = [[f"S{i}", float(i)] for i in range(1, 5)]
+    options = chart_options(profile_result(cols, rows))
+
+    assert len(options) == 8
+    assert {o.type for o in options if o.supported} == {"bar", "pie"}
+
+
+def test_a_refused_type_says_what_it_needs_and_what_this_is() -> None:
+    """Both halves matter. "Needs two dimensions" alone leaves the reader
+    counting columns; "this is a measure over time" alone does not say what
+    would fix it."""
+    cols = _cols(("month", "temporal"), ("revenue", "quantitative"))
+    rows = [[date(2025, m, 1), float(m * 1000)] for m in range(1, 13)]
+    heatmap = next(
+        o for o in chart_options(profile_result(cols, rows)) if o.type == "heatmap"
+    )
+
+    assert heatmap.supported is False
+    assert heatmap.reason == (
+        "Needs two dimensions crossed by one measure. This result is a measure over time."
+    )
+
+
+def test_a_vetoed_result_refuses_every_type_with_the_data_s_own_reason() -> None:
+    """No chart type rescues a single row, so all eight carry one reason — the
+    veto's — rather than eight guesses about missing columns."""
+    options = chart_options(profile_result(COLUMNS, [["A", 10]]))
+
+    assert not any(o.supported for o in options)
+    assert {o.reason for o in options} == {unchartable_reason(profile_result(COLUMNS, [["A", 10]]))}
+
+
+@pytest.mark.parametrize(
+    ("cols", "rows"),
+    [
+        # A measure over time, split — the trend family plus a pie when short.
+        (
+            _cols(("month", "temporal"), ("kind", "nominal"), ("revenue", "quantitative")),
+            [[date(2025, m, 1), f"K{k}", float(m * k + 1)] for m in range(1, 13) for k in range(3)],
+        ),
+        # Two dimensions: the split bar, and the matrix behind it.
+        (
+            _cols(("region", "nominal"), ("kind", "nominal"), ("total", "quantitative")),
+            [[f"R{i}", f"K{k}", float(i * 10 + k)] for i in range(6) for k in range(4)],
+        ),
+        # Two measures on scales too far apart to share an axis.
+        (
+            _cols(("month", "nominal"), ("revenue", "quantitative"), ("margin", "quantitative")),
+            [[f"M{i}", float(i * 100_000), float(i * 0.5)] for i in range(8)],
+        ),
+        # Four quarters: short enough that a pie joins the trend family.
+        (
+            _cols(("quarter", "temporal"), ("revenue", "quantitative")),
+            [[date(2025, m, 1), float(m)] for m in (1, 4, 7, 10)],
+        ),
+        # One measure's distribution.
+        (
+            _cols(("amount", "quantitative"),),
+            [[float(i % 37)] for i in range(200)],
+        ),
+    ],
+)
+def test_every_enabled_button_draws_something(cols, rows) -> None:
+    """The picker's one promise. `intent_for` returning None for an offered
+    type would be a button that greys nothing out and then fails on click."""
+    profile = profile_result(cols, rows)
+    offered = [o.type for o in chart_options(profile) if o.supported]
+    assert offered, "a shape that offers nothing has nothing to test"
+
+    for chart_type in offered:
+        intent = intent_for(profile, chart_type)
+        assert intent is not None, f"{chart_type} was offered and could not be built"
+        assert intent.chart_type == chart_type
+        # And it compiles: an intent that fits but will not draw is the same
+        # broken button one step later.
+        assert compile_vega_lite(intent, profile, cols, rows)
+
+
+def test_a_type_the_shape_does_not_offer_is_refused_not_repaired() -> None:
+    """The picker disables it and the endpoint refuses it — the same list,
+    twice, because a client that asks anyway must not get a silent
+    substitution."""
+    cols = _cols(("status", "nominal"), ("total", "quantitative"))
+    rows = [[f"S{i}", float(i)] for i in range(1, 5)]
+    assert intent_for(profile_result(cols, rows), "scatter") is None
+
+
+def test_moving_to_a_matrix_puts_the_split_on_the_other_axis() -> None:
+    """The translation that is not a type swap: in a split bar the second
+    dimension is the legend and the measure is the height; in a matrix the
+    legend becomes the other side and the height becomes the colour."""
+    cols, rows = _matrix(rows_n=7, cols_n=3)
+    profile = profile_result(cols, rows)
+    bar, heat = intent_for(profile, "bar"), intent_for(profile, "heatmap")
+
+    assert bar is not None and heat is not None
+    assert (bar.x_axis.field, bar.series.field) == (heat.x_axis.field, heat.y_axis.field)
+    assert heat.color is not None and heat.color.field == bar.y_axis.field
+    assert heat.series is None
+
+
+def test_a_pie_does_not_inherit_a_split() -> None:
+    """Slices of slices is a sunburst, which is not on the list."""
+    cols = _cols(("quarter", "temporal"), ("kind", "nominal"), ("revenue", "quantitative"))
+    rows = [[date(2025, m, 1), f"K{k}", float(m + k)] for m in (1, 4, 7, 10) for k in range(3)]
+    profile = profile_result(cols, rows)
+
+    line = intent_for(profile, "line")
+    assert line is not None and line.series is not None    # the split is there
+    pie = intent_for(profile, "pie")
+    assert pie is not None and pie.series is None
+
+
+def test_a_scatter_beside_a_combo_plots_the_measures_not_the_dimension() -> None:
+    """The combo separates the two measures onto y and y2 already. Plotting one
+    of them against the *dimension* would be a strip plot wearing a scatter's
+    name."""
+    cols = _cols(("month", "nominal"), ("revenue", "quantitative"), ("margin", "quantitative"))
+    rows = [[f"M{i}", float(i * 100_000), float(i * 0.5)] for i in range(8)]
+    scatter = intent_for(profile_result(cols, rows), "scatter")
+
+    assert scatter is not None
+    assert (scatter.x_axis.field, scatter.y_axis.field) == ("revenue", "margin")
+
+
+def test_the_spec_carries_the_alternatives_it_could_have_been() -> None:
+    """Chat has nowhere else to read them from: the artifact *is* the spec."""
+    cols = _cols(("status", "nominal"), ("total", "quantitative"))
+    rows = [[f"S{i}", float(i)] for i in range(1, 5)]
+    profile = profile_result(cols, rows)
+    spec = compile_vega_lite(intent_for(profile, "bar"), profile, cols, rows)
+
+    options = spec["usermeta"]["datamind"]["options"]
+    assert [o["type"] for o in options if o["supported"]] == ["bar", "pie"]
+    assert all(o["reason"] for o in options if not o["supported"])
 
 
 # ── the model chooses from the list, or rank 1 does ──────────────────────

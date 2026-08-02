@@ -762,6 +762,119 @@ def describe_candidates(candidates: Candidates) -> str:
     return "\n".join(f'- "{t}": {_TYPE_HELP[t]}' for t in candidates.types)
 
 
+# What each type wants from the data, phrased as the thing that is missing.
+# `_TYPE_HELP` above answers "what would I see?" for a model choosing; this
+# answers "why can I not have it?" for a person whose cursor is on a disabled
+# button. Two dicts rather than one because they are read in opposite
+# directions and a single sentence doing both does neither well.
+_TYPE_NEEDS: dict[str, str] = {
+    "line": "an ordered or time axis to run along",
+    "area": "an ordered or time axis to run along",
+    "bar": "a category to compare a measure across",
+    "pie": f"one dimension of at most {MAX_PIE_SLICES} parts, all positive",
+    "scatter": "two measures to plot against each other",
+    "heatmap": "two dimensions crossed by one measure",
+    "histogram": "one measure, unaggregated, with enough distinct values",
+    "combo": "two measures on scales too far apart to share an axis",
+}
+
+
+class ChartOption(BaseModel):
+    """One entry in the picker: whether this result can carry it, and if not why.
+
+    The reason is written here rather than in the browser because it is made of
+    two things only this side knows — what the type requires, and what this
+    result actually *is*. A picker that offered every type and then apologised
+    afterwards was the old behaviour; the point of this list is that the
+    apology happens before the click, on hover, while it is still advice.
+    """
+
+    type: str
+    supported: bool
+    reason: str | None = None
+
+
+def chart_options(profile: ResultProfile) -> list[ChartOption]:
+    """Every type the picker shows, in `_TYPE_HELP` order, with its verdict.
+
+    Deliberately not `Candidates.types`: the picker needs the *whole* list, or
+    a type that quietly vanished between one result and the next would look
+    like a bug in the editor rather than a fact about the data.
+    """
+    blocked = unchartable_reason(profile)
+    if blocked is not None:
+        # One reason for all of them, because it is one reason: no chart type
+        # rescues a result the data itself has vetoed.
+        return [ChartOption(type=t, supported=False, reason=blocked) for t in _TYPE_HELP]
+
+    candidates = chart_candidates(profile)
+    return [
+        ChartOption(type=t, supported=True)
+        if candidates.offers(t)
+        else ChartOption(
+            type=t,
+            supported=False,
+            reason=f"Needs {_TYPE_NEEDS[t]}. This result is {candidates.signature}.",
+        )
+        for t in _TYPE_HELP
+    ]
+
+
+def intent_for(profile: ResultProfile, chart_type: str) -> ChartIntent | None:
+    """A fully specified intent of a *named* type — what the picker asks for.
+
+    The picker sends a type and nothing else, which is the whole point of it:
+    someone changing a chart in chat is saying "draw this differently", not
+    re-assigning columns. So the columns come from rank 1, the intent the shape
+    router already worked out, and only the ones that mean something different
+    under the new type are moved.
+
+    `None` for a type this shape does not offer. That is not defensiveness
+    about the UI — the same list disables the button — it is the guarantee that
+    the only way to reach `compile_vega_lite` is through a type the data can
+    carry, whatever calls it.
+    """
+    candidates = chart_candidates(profile)
+    base = candidates.intent
+    if base is None or not candidates.offers(chart_type):
+        return None
+
+    moved = base
+    if chart_type != base.chart_type:
+        if chart_type == "scatter":
+            # Only ever offered beside a combo, whose two measures are already
+            # separated onto y and y2. Against each other rather than against
+            # the dimension: a scatter of a category is a strip plot.
+            if base.y2_axis is None:
+                return None
+            moved = ChartIntent(chart_type="scatter", x_axis=base.y_axis, y_axis=base.y2_axis)
+        elif chart_type == "heatmap":
+            # Only ever offered beside a split bar, where the second dimension
+            # is the legend and the measure is the height. In a matrix the
+            # legend becomes the other side and the height becomes the colour.
+            if base.series is None:
+                return None
+            moved = ChartIntent(
+                chart_type="heatmap",
+                x_axis=base.x_axis,
+                y_axis=base.series,
+                color=base.y_axis,
+            )
+        elif chart_type == "pie":
+            # A pie has one dimension. Carrying the split over would ask for
+            # slices of slices, which is a sunburst and not on the list.
+            moved = ChartIntent(chart_type="pie", x_axis=base.x_axis, y_axis=base.y_axis)
+        else:
+            moved = base.model_copy(update={"chart_type": chart_type, "y2_axis": None})
+        moved = moved.model_copy(update={"title": base.title})
+
+    # Same last gate as every other path: the router says which types are
+    # *offered*, `_fit` says what is actually drawable, and deciding
+    # orientation or demoting a split is its job in both.
+    fitted, _ = _fit(moved, profile)
+    return fitted
+
+
 def chart_candidates(profile: ResultProfile) -> Candidates:
     """Read the result's shape once: what it allows, ranked, and the default.
 
@@ -1626,6 +1739,13 @@ def compile_vega_lite(
     # into 300px is a smear whichever axis you read it along.
     if intent.chart_type == "heatmap" and intent.y_axis is not None:
         meta["bands"] = _distinct(shown.get(intent.y_axis.field, ()))
+    # What else this result could have been drawn as, so a reader who disagrees
+    # with the choice can see the alternatives without another round trip — and
+    # so the ones that were never possible are greyed out with a reason rather
+    # than offered and then refused. It rides in the spec because the spec is
+    # already the one thing every surface has: chat holds it as an artifact, a
+    # tile holds it in its result, and neither had anywhere else to put it.
+    meta["options"] = [o.model_dump() for o in chart_options(profile)]
     spec["usermeta"] = {"datamind": meta}
 
     # The reduction is part of what the chart claims, so it is shown, never

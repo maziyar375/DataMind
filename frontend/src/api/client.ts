@@ -302,6 +302,15 @@ export const runs = {
   get: (id: string) => get<RunDetail>(`/runs/${id}`),
   cancel: (id: string) => post<{ cancelled: boolean }>(`/runs/${id}/cancel`),
   artifact: (id: string) => get<{ id: string; kind: string; spec: ArtifactSpec }>(`/artifacts/${id}`),
+  /**
+   * Draw this run's result as another type. Compiled on the server from the
+   * rows already stored with the run — nothing is re-queried, so the new
+   * picture is of exactly the table underneath it.
+   */
+  chart: (id: string, chartType: string) =>
+    post<{ id: string; kind: string; spec: Record<string, unknown> }>(
+      `/runs/${id}/chart`, { chart_type: chartType },
+    ),
   poll: (id: string, after: number) =>
     get<RunEvent[]>(`/runs/${id}/events/poll?after=${after}`),
 }

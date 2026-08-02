@@ -403,6 +403,9 @@ class SqlDraftRead(BaseModel):
     # A `ChartIntent` for the editor's pickers to default from; null when the
     # preview's shape suggests nothing.
     chart_suggestion: dict[str, Any] | None = None
+    # `ChartOption` per type: which ones this preview's shape can carry, and
+    # for the rest, the reason the picker greys them out.
+    chart_options: list[dict[str, Any]] = Field(default_factory=list)
     preview: TileResultRead | None = None
     question: str | None = None
     llm_config_id: UUID | None = None
@@ -662,6 +665,17 @@ class ArtifactRead(BaseModel):
     id: UUID
     kind: str
     spec: dict[str, Any]
+
+
+class ChartRedrawRequest(BaseModel):
+    """A type and nothing else — the picker never re-assigns columns.
+
+    Not a `ChartType` literal: the set is the charts module's to own, and the
+    only answer that matters is whether *this result* can carry it, which
+    `intent_for` decides against the data rather than against a list.
+    """
+
+    chart_type: str = Field(min_length=1, max_length=30)
 
 
 class GeneratedQueryRead(BaseModel):

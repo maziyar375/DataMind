@@ -33,6 +33,7 @@ def _read(draft: SqlDraft) -> SqlDraftRead:
         validation_report=draft.validation_report,
         referenced_tables=draft.referenced_tables,
         chart_suggestion=draft.chart_suggestion,
+        chart_options=draft.chart_options,
         preview=(
             None
             if draft.preview is None

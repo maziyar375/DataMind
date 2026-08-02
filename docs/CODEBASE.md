@@ -165,7 +165,14 @@ so an unsynced connection can query nothing. The hostile corpus in
 
 ### `backend/app/charts` — presentation
 Turns a `ChartIntent` into a validated **Vega-Lite** spec (the model does not
-author raw chart JSON).
+author raw chart JSON). The result's shape is read first and decides most of
+it: `chart_candidates` works out which of the nine types this data can carry
+and the model picks from that shortlist rather than the whole list, `plan_chart`
+vetoes / repairs / falls back, and a single-row result becomes a `KpiSpec`
+instead of nothing. `chart_options` turns the same reading into the picker the
+browser draws — every type, with a reason on the ones this result refuses — and
+`intent_for` builds the intent behind a picked type. Full design and its
+history: **[docs/charts-plan.md](charts-plan.md)**.
 
 ### `backend/app/infra` — the adapters
 - `db/` — SQLAlchemy models (13 tables, below), Alembic migrations, async

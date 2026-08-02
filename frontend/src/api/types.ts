@@ -462,6 +462,8 @@ export interface SqlDraft {
   }
   referenced_tables: string[]
   chart_suggestion: Record<string, unknown> | null
+  /** Which types the preview's shape allows, and for the rest, why not. */
+  chart_options: { type: string; supported: boolean; reason: string | null }[]
   preview: TileResult | null
   question: string | null
   llm_config_id: string | null

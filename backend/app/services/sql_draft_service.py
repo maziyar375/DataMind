@@ -20,7 +20,7 @@ dashboard through it.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 from uuid import UUID
@@ -75,6 +75,11 @@ class SqlDraft:
     # chart pickers. Deterministic and free: no model is asked what to draw,
     # and the user overrides it anyway.
     chart_suggestion: dict[str, Any] | None = None
+    # Which types that shape can carry, and for the rest, why not. The editor
+    # disables what this list refuses instead of accepting the pick and letting
+    # the tile demote it on the next refresh, which is a correction the user
+    # only sees once the dashboard is already saved.
+    chart_options: list[dict[str, Any]] = field(default_factory=list)
     preview: TileResult | None = None
     question: str | None = None
     llm_config_id: UUID | None = None
@@ -207,40 +212,49 @@ async def _draft(
             snapshot=snapshot,
         )
 
+    suggestion, options = _chart_defaults(preview)
     return SqlDraft(
         sql=sql,
         validation_status=report.status,
         validation_report=report.model_dump(mode="json"),
         referenced_tables=list(report.referenced_tables),
-        chart_suggestion=_chart_suggestion(preview),
+        chart_suggestion=suggestion,
+        chart_options=options,
         preview=preview,
         question=question,
         llm_config_id=llm_config_id,
     )
 
 
-def _chart_suggestion(preview: TileResult | None) -> dict[str, Any] | None:
-    """What the data shape says it should be drawn as, if anything.
+def _chart_defaults(
+    preview: TileResult | None,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """What the shape says to draw, and what else it would allow.
 
     The *heuristic*, not a model: the chart node's question ("what does this
     question want to see?") needs a run behind it, while the editor only needs
     sensible defaults in its pickers that the user is about to override.
+
+    Both come from one profiling of the same preview, so the type the editor
+    lands on is never one its own picker would have disabled.
     """
     if preview is None or preview.status != "OK" or len(preview.columns) < 2:
-        return None
+        return None, []
 
-    from app.charts import plan_chart, profile_result
+    from app.charts import chart_options, plan_chart, profile_result
 
     try:
         profile = profile_result(
             preview.columns, preview.rows, truncated=preview.truncated
         )
         plan = plan_chart(profile)
+        options = [o.model_dump(mode="json") for o in chart_options(profile)]
     except Exception:  # noqa: BLE001 — a defaulted picker is never worth a 500
         log.exception("draft_chart_suggestion_failed")
-        return None
+        return None, []
 
-    return plan.intent.model_dump(mode="json") if plan.intent is not None else None
+    intent = plan.intent.model_dump(mode="json") if plan.intent is not None else None
+    return intent, options
 
 
 # ── loading ──────────────────────────────────────────────────────────────
