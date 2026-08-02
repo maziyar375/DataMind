@@ -604,12 +604,24 @@ export function DangerButton({
 export type ChipTone = 'neutral' | 'green' | 'amber' | 'red' | 'accent'
 
 export function Chip({
-  children, tone = 'neutral', small = false,
+  children, tone = 'neutral', small = false, wrap = false,
 }: {
   children: React.ReactNode
   tone?: ChipTone
   /** A quieter pill for dense chrome (dashboard tile headers). */
   small?: boolean
+  /**
+   * Let the label run onto several lines instead of one clipped one.
+   *
+   * A chip is a nowrap pill because its label is normally a few words. The
+   * exception is a chip whose content is unbounded — the list of tables a run
+   * referenced, which for a metadata question is the whole schema — and there
+   * clipping hides the very thing being shown. Wrapping also blockifies the
+   * span so `max-width` actually binds; a nowrap inline chip that is not a
+   * flex item cannot be constrained, which is how one long label used to push
+   * the whole transcript sideways.
+   */
+  wrap?: boolean
 }) {
   const tones: Record<string, React.CSSProperties> = {
     neutral: { color: 'var(--text-dim)', background: 'var(--panel-alt)' },
@@ -625,8 +637,12 @@ export function Chip({
         fontWeight: small ? 500 : undefined,
         padding: small ? '2.5px 8px' : '4px 9px',
         borderRadius: small ? 999 : 5,
-        whiteSpace: 'nowrap',
-        maxWidth: small ? 120 : undefined,
+        display: wrap ? 'inline-block' : undefined,
+        whiteSpace: wrap ? 'normal' : 'nowrap',
+        wordBreak: wrap ? 'break-word' : undefined,
+        lineHeight: wrap ? 1.6 : undefined,
+        minWidth: 0,
+        maxWidth: small ? 120 : '100%',
         overflow: small ? 'hidden' : undefined,
         textOverflow: small ? 'ellipsis' : undefined,
         ...tones[tone],

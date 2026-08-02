@@ -341,15 +341,62 @@ export function SqlPanel({ queries }: { queries: GeneratedQuery[] }) {
 }
 
 // ── metadata chips ────────────────────────────────────────────────────────
+/**
+ * The referenced-table list is the one piece of run metadata with no natural
+ * ceiling: an ordinary question touches two or three tables, a question about
+ * the schema itself touches all forty-two. Printed in full it is a single
+ * unbreakable line wider than the transcript, and since the message list only
+ * scrolls vertically, that line scrolls the whole conversation sideways. So it
+ * collapses to a character budget and opens on click.
+ */
+const TABLE_LABEL_BUDGET = 56
+
+function splitTableLabel(names: string[]): { shown: string[]; hidden: number } {
+  const shown: string[] = []
+  let used = 0
+  for (const name of names) {
+    if (shown.length > 0 && used + name.length + 2 > TABLE_LABEL_BUDGET) break
+    used += name.length + 2
+    shown.push(name)
+  }
+  return { shown, hidden: names.length - shown.length }
+}
+
+function TablesChip({ names }: { names: string[] }) {
+  const [open, setOpen] = useState(false)
+  const { shown, hidden } = splitTableLabel(names)
+  if (hidden === 0) return <Chip>tables: {names.join(', ')}</Chip>
+
+  return (
+    <button
+      onClick={() => setOpen(!open)}
+      aria-expanded={open}
+      title={open ? 'Show fewer' : names.join(', ')}
+      style={{
+        minWidth: 0,
+        maxWidth: '100%',
+        padding: 0,
+        border: 'none',
+        background: 'transparent',
+        font: 'inherit',
+        textAlign: 'left',
+        cursor: 'pointer',
+      }}
+    >
+      <Chip wrap={open}>
+        tables: {open ? names.join(', ') : `${shown.join(', ')} +${hidden} more`}
+      </Chip>
+    </button>
+  )
+}
+
 export function RunMetadata({ run }: { run: RunDetail }) {
   const tables = run.queries.at(-1)?.referenced_tables ?? []
   const chips: React.ReactNode[] = []
 
   if (tables.length > 0) {
     chips.push(
-      <Chip key="tables">
-        tables: {tables.map((t) => t.split('.').pop()).join(', ')}
-      </Chip>,
+      <TablesChip key="tables" names={tables.map((t) => t.split('.').pop() ?? t)} />,
     )
   }
   if (run.db_latency_ms != null) {
@@ -369,7 +416,16 @@ export function RunMetadata({ run }: { run: RunDetail }) {
 
   if (chips.length === 0) return null
   return (
-    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+    <div
+      style={{
+        display: 'flex',
+        gap: 6,
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        minWidth: 0,
+        maxWidth: '100%',
+      }}
+    >
       {chips}
     </div>
   )
