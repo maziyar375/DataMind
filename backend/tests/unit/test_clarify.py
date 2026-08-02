@@ -263,3 +263,33 @@ def test_the_generate_prompt_is_untouched_by_this_feature() -> None:
     lowered = GENERATE_SYSTEM.lower()
     assert "clarif" not in lowered
     assert "ambigu" not in lowered
+
+
+# ── waiting on the user is not waiting on the server ─────────────────────────
+def test_a_run_that_asked_is_not_terminal_but_is_not_in_flight_either() -> None:
+    """The two questions a status gets asked are different questions.
+
+    `is_terminal` asks whether the *exchange* is over — it is not, which is why
+    cancel still applies to a run that asked and why the reconciler leaves it
+    alone. `is_in_flight` asks whether the executor may still emit events — it
+    may not, because the run wrote its question and closed its stream. Reading
+    the second off `not is_terminal` is what made the SPA reattach to a
+    finished run, replay its RUN_FINISHED, reload, and reattach again, looping
+    the step trail and locking the composer while the user was being asked to
+    reply.
+    """
+    from app.domain.value_objects import RunStatus
+
+    assert RunStatus.NEEDS_CLARIFICATION.is_terminal is False
+    assert RunStatus.NEEDS_CLARIFICATION.is_in_flight is False
+
+    for status in (RunStatus.QUEUED, RunStatus.RUNNING):
+        assert status.is_in_flight is True
+        assert status.is_terminal is False
+
+    for status in (
+        RunStatus.SUCCEEDED, RunStatus.FAILED,
+        RunStatus.CANCELLED, RunStatus.TIMED_OUT,
+    ):
+        assert status.is_terminal is True
+        assert status.is_in_flight is False

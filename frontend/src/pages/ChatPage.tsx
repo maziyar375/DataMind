@@ -91,9 +91,10 @@ export default function ChatPage() {
     // If the newest run is still in flight, reattach to its stream instead of
     // showing a conversation that looks frozen.
     const lastRun = loaded.at(-1)?.run
-    if (lastRun && !isTerminal(lastRun.status)) {
+    if (lastRun && isInFlight(lastRun.status)) {
       attachStream(lastRun.id, conversationId)
     }
+    return loaded
   }, [])
 
   // Fetch follow-up suggestions for a thread. Best-effort — a failure just
@@ -207,14 +208,18 @@ export default function ChatPage() {
         setActiveRunId(null)
         setLiveSteps([])
         setLiveText('')
+        let asked = false
         try {
-          await loadMessages(conversationId)
+          const loaded = await loadMessages(conversationId)
+          asked = loaded.at(-1)?.run?.status === 'NEEDS_CLARIFICATION'
           setConversationList(await conversations.list())
         } catch {
           /* the run finished; a list refresh failure is not worth an error */
         }
-        // After the answer lands, offer where the reader might go next.
-        void refreshSuggestions(conversationId)
+        // After the answer lands, offer where the reader might go next — but
+        // not when the turn ended by asking a question of its own. The row is
+        // hidden in that state anyway, and computing it is a model call.
+        if (!asked) void refreshSuggestions(conversationId)
       },
       onError: () => {
         /* the client falls back to polling internally */
@@ -1438,8 +1443,22 @@ function DisclosureBadge({ policy }: { policy?: string }) {
   )
 }
 
-function isTerminal(status: string): boolean {
-  return ['SUCCEEDED', 'FAILED', 'CANCELLED', 'TIMED_OUT'].includes(status)
+/**
+ * Whether the server may still emit events for this run — the only reason to
+ * open a stream for it.
+ *
+ * Asked positively, not as "not terminal". `NEEDS_CLARIFICATION` is
+ * deliberately non-terminal on the backend (the exchange is unfinished, so
+ * `cancel` still applies and the reconciler leaves it alone), but nothing more
+ * will happen until the user answers. Treating it as in-flight here reattached
+ * the stream to a run that immediately replayed its `RUN_FINISHED`, whose
+ * `onDone` reloaded the thread and reattached again — a tight loop that
+ * flickered the step trail and, because `send` refuses while `activeRunId` is
+ * set, locked the composer and the option chips at exactly the moment the user
+ * was being asked to reply.
+ */
+function isInFlight(status: string): boolean {
+  return status === 'QUEUED' || status === 'RUNNING'
 }
 
 /** Terminal states that owe the reader an explanation. */

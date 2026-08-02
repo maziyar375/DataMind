@@ -69,6 +69,18 @@ class RunStatus(StrEnum):
             RunStatus.CANCELLED, RunStatus.TIMED_OUT,
         }
 
+    @property
+    def is_in_flight(self) -> bool:
+        """Whether the executor may still emit events for this run.
+
+        Not the inverse of `is_terminal`: `NEEDS_CLARIFICATION` is neither.
+        The run is over as far as the event stream is concerned — it wrote its
+        question and closed — while the *exchange* is unfinished, which is what
+        `is_terminal` speaks to (cancel still applies, the reconciler stays
+        away). Anything deciding whether to wait for more events wants this one.
+        """
+        return self in {RunStatus.QUEUED, RunStatus.RUNNING}
+
 
 class StepName(StrEnum):
     ROUTE = "route"

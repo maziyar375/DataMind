@@ -313,10 +313,15 @@ async def stream_events(
         except ValueError:
             start_from = after
 
-    terminal = RunStatus(run.status).is_terminal
+    # In flight, not "not terminal": a run that stopped to ask a question is
+    # non-terminal because the exchange is unfinished, but it has already
+    # emitted its last event. Subscribing to it waits for a run nobody is
+    # executing, which after a restart — when the bus has no history for it and
+    # never saw it close — is a stream that hangs open until the client gives up.
+    in_flight = RunStatus(run.status).is_in_flight
 
     async def generate():
-        if terminal:
+        if not in_flight:
             # The run already finished; replay from the durable log and close.
             result = await db.execute(
                 select(RunEventRow)
