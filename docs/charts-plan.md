@@ -317,7 +317,7 @@ cannot draw, which is worse than not having started it.
 | ✅ | **2. Encoder** | stack mode (stacked/grouped/100%), temporal axis format **and tick interval** (the "2025" bug), SI axis numbers, formatted tooltips, `size` → bubble | `charts/__init__.py`, `prompts/__init__.py`, `tile-editor.tsx`, `VegaChart.tsx`, both chart test files | **done** — 617 backend tests, ruff + contracts, typecheck, build, and 12 specs compiled and *rendered* through the installed Vega with their axis labels read back |
 | ✅ | **3. New types** | heatmap, combo, histogram (box plot deferred) | `charts/__init__.py`, `prompts/__init__.py`, `tile-editor.tsx`, `VegaChart.tsx`, both chart test files | **done** — 633 backend tests, ruff + contracts, typecheck, build, and all 17 specs (12 from Phase 2 + 5 new) compiled and rendered through the installed Vega |
 | ✅ | **4. Big number** | `KPI` artifact; single-row results stop being a dead end; replaces the bespoke `METRIC` renderer; delta + sparkline when the data carries a time axis | `charts/__init__.py`, `pipeline/{nodes,state}`, `domain/value_objects`, `services/{run,query,dashboard}_service`, `api/schemas.py`, `types.ts`, `ui.tsx`, `chat.tsx`, `dashboard.tsx` | **done** — 643 backend tests, ruff + contracts, typecheck, build; one `plan_kpi` and one `<Kpi>` serve both surfaces |
-| ☐ | **5. Selection** | deterministic shape router; model picks from 2–3 candidates only | `charts/__init__.py` (new router), `prompts/__init__.py`, `eval/suites/` | every signature row in the Phase 5 table has a unit test; eval ≥ baseline |
+| ✅ | **5. Selection** | deterministic shape router; the model picks from 2–4 candidates only, an off-list pick is declined | `charts/__init__.py` (`chart_candidates`, `plan_chart`), `prompts/__init__.py`, `pipeline/nodes/` | **done** — 659 backend tests, ruff + contracts, typecheck, build; every signature has a unit test |
 | ☐ | **6. Colour** | diverging ramp, semantic +/- pair, `npm run test:palette` | `VegaChart.tsx`, `theme/tokens.ts`, new validator script | validator passes for **both** dark and light |
 | ☐ | **7. Picker UI** | icon grid, options filtered by what the result supports, "change chart" in chat | `tile-editor.tsx`, `chat.tsx`, `ui.tsx` | an unsupported type is disabled with a reason, never offered then demoted |
 
@@ -332,7 +332,8 @@ the heatmap) and can be done at any point after it.
 | 0 | 2026-08-02 | — | Findings above. The premise "many duplicate chart types" turned out to be one real duplicate; the wider problem is a *narrow* set plus a missing stacking control. |
 | 1 | 2026-08-02 | `6fde6d7` | Two plan steps corrected against the code — see the struck-through items in Phase 1. Migration **0007 applies on the next `make up`**: the running `api` container has the pre-change image baked in (no volume mount), and its start command is `alembic upgrade head`. The dev DB has zero affected rows, so it is a no-op there either way. |
 | 2 | 2026-08-02 | `cabfd0f` | Three defects caught by rendering rather than reasoning — see "What rendering caught" below. Scope went slightly past the plan's four bullets: the `Split` and `Size` controls in the tile editor, and a `categories` count in `usermeta`, because stack and size were otherwise reachable only from chat, and the browser's width rule counted rows where a split chart needs columns. |
-| 4 | 2026-08-02 | *(uncommitted)* | Scoped **narrower** than the plan implied: only the single-row veto is rescued by a big number, not every veto — see the design note below. The `METRIC` tile keeps its "first of N rows" reading and gains delta + sparkline when its query has a time axis. |
+| 5 | 2026-08-02 | *(uncommitted)* | The candidate lists came out **more generous** than the plan's table — see the design note. `CHART_SYSTEM` no longer enumerates chart types at all; the shortlist arrives per-result in `CHART_USER`. The eval suite was not touched: `expected_chart_type` is still inert (Phase 1), so the signatures are pinned as unit tests instead, which is what the plan expected. |
+| 4 | 2026-08-02 | `ede4ccb` | Scoped **narrower** than the plan implied: only the single-row veto is rescued by a big number, not every veto — see the design note below. The `METRIC` tile keeps its "first of N rows" reading and gains delta + sparkline when its query has a time axis. |
 | 3 | 2026-08-02 | `db8b7fb` | Box plot deferred, per the open decision. Two design calls worth knowing about: a new `color` channel distinct from `series` (colour-as-magnitude vs colour-as-identity), and a **heuristic change** — a result with two dimensions now becomes a split bar or a heatmap instead of a bar that silently dropped the second dimension. That last one changes what existing `Auto` tiles draw. |
 
 ### What rendering caught (Phase 2)
@@ -434,6 +435,40 @@ already written out. Two implementations formatting the same number is how a
 tile ends up saying `1,247,318.4` while the axis beside it says `1.2M`; one
 planner is also what stops the tile and a chat turn from disagreeing about
 which column the number even is.
+
+### Design notes (Phase 5)
+
+**The candidate lists are more generous than the plan's table.** The first
+implementation followed it literally, and a test immediately caught the cost: a
+pie over four quarters was declined, because the plan's temporal row offers
+only line → area → bar. But "share of revenue by quarter" is an ordinary
+request, and refusing it would overrule a user who picked **Pie** in the tile
+editor — the exact failure Phase 1 existed to remove. So the rule became:
+**offer any type a reader might reasonably want, and let `_fit` catch the ones
+the data cannot carry.** Being too strict here costs a user their choice; being
+too loose costs one extra line in a prompt.
+
+**An off-list pick is declined, not repaired.** Previously any suggestion went
+to `_fit`, which would salvage what it could. Now a type the shape does not
+offer causes rank 1 to answer instead — because a model that asked for a
+scatter of one categorical column misread the shape, and its *column*
+assignment is no more trustworthy than its type. The user still sees why:
+`_chart_note` reports "a scatter does not fit this result; showing a bar
+chart."
+
+**The title survives a declined type.** It is the one part of a suggestion that
+comes from reading the question rather than the shape, so it is carried onto
+the fallback intent.
+
+**`CHART_SYSTEM` no longer lists chart types.** It describes the job; the
+shortlist arrives per-result in `CHART_USER`. That is what makes the strategy
+scale — a free choice from nine types has nine ways to be wrong and grows a
+tenth with every type added, while a choice from three does not.
+
+**The `present` → `chart` ordering was left alone,** as recommended. The check
+that made it safe: `ANSWER_SYSTEM` never mentions a chart, so the narration
+cannot promise a picture the pipeline may not produce. That is now pinned by a
+test rather than left as an observation.
 
 ### Carried forward
 

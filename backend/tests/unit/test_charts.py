@@ -26,7 +26,9 @@ from app.charts import (
     AxisSpec,
     ChartIntent,
     _fit,
+    chart_candidates,
     compile_vega_lite,
+    describe_candidates,
     heuristic_intent,
     plan_chart,
     plan_kpi,
@@ -628,20 +630,26 @@ def test_comparable_measures_share_one_axis() -> None:
     assert "resolve" not in spec
 
 
-def test_a_combo_needs_two_distinct_measures() -> None:
+def test_a_malformed_combo_is_rebuilt_rather_than_drawn() -> None:
+    """Both halves of the same guarantee.
+
+    `_fit_combo` refuses a combo that names one measure twice, or omits the
+    second entirely. The *shape* still supports one, so the router builds a
+    well-formed combo instead — the model's broken intent is discarded, not its
+    reading that two measures belong on this chart.
+    """
     cols, rows, intent = _two_measures([12.0 + i for i in range(12)])
     profile = profile_result(cols, rows)
 
-    same = intent.model_copy(update={"y2_axis": intent.y_axis})
-    assert plan_chart(profile, same).intent is not None
-    assert plan_chart(profile, same).intent.chart_type != "combo"  # type: ignore[union-attr]
-
-    missing = ChartIntent(
-        chart_type="combo",
-        x_axis=AxisSpec(field="month", type="nominal"),
-        y_axis=AxisSpec(field="revenue", type="quantitative"),
-    )
-    assert plan_chart(profile, missing).intent.chart_type != "combo"  # type: ignore[union-attr]
+    for broken in (
+        intent.model_copy(update={"y2_axis": intent.y_axis}),      # named twice
+        intent.model_copy(update={"y2_axis": None}),               # omitted
+    ):
+        plan = plan_chart(profile, broken)
+        assert plan.intent is not None and plan.source == "heuristic"
+        assert plan.intent.chart_type == "combo"
+        assert plan.intent.y2_axis is not None
+        assert plan.intent.y2_axis.field != plan.intent.y_axis.field  # type: ignore[union-attr]
 
 
 # ── the big number ───────────────────────────────────────────────────────
@@ -986,6 +994,179 @@ def test_plan_falls_back_when_the_model_charts_an_id_as_a_measure() -> None:
     assert plan.source == "heuristic"
     assert plan.intent is not None and plan.intent.y_axis
     assert plan.intent.y_axis.field == "sales"
+
+
+# ── the shape router ─────────────────────────────────────────────────────
+# One row per shape the router recognises. These are the *whole* strategy: the
+# model is shown `types` and nothing else, so a shape that offers the wrong
+# list cannot be recovered from downstream — an omitted type is one the model
+# can no longer ask for, whatever the question said.
+def test_a_measure_over_time_offers_the_trend_family() -> None:
+    cols = _cols(("month", "temporal"), ("revenue", "quantitative"))
+    rows = [[date(2025, m, 1), float(m * 1000)] for m in range(1, 13)]
+    found = chart_candidates(profile_result(cols, rows))
+
+    assert found.signature == "a measure over time"
+    assert found.types == ("line", "area", "bar")
+    assert found.intent is not None and found.intent.chart_type == "line"
+
+
+def test_a_short_time_series_also_offers_a_pie() -> None:
+    """"Share of revenue by quarter" is an ordinary request. A list that
+    refused it would overrule a user who picked Pie in the editor — the exact
+    failure Phase 1 removed — so the list is generous and `_fit` stays the
+    thing that catches a pick the data cannot carry."""
+    cols = _cols(("quarter", "temporal"), ("revenue", "quantitative"))
+    rows = [[date(2025, m, 1), float(m)] for m in (1, 4, 7, 10)]
+    assert "pie" in chart_candidates(profile_result(cols, rows)).types
+
+
+def test_a_measure_across_few_categories_offers_a_pie() -> None:
+    cols = _cols(("status", "nominal"), ("total", "quantitative"))
+    rows = [[f"S{i}", float(i)] for i in range(1, 5)]
+    found = chart_candidates(profile_result(cols, rows))
+
+    assert found.signature == "a measure across categories"
+    assert found.types == ("bar", "pie")
+
+
+def test_a_measure_across_many_categories_does_not() -> None:
+    """Past six slices the angles stop being comparable, and `_fit` would
+    demote the pie back to bars anyway — offering it would be a control that
+    exists only to be overruled."""
+    cols = _cols(("customer", "nominal"), ("total", "quantitative"))
+    rows = [[f"C{i}", float(i)] for i in range(20)]
+    assert chart_candidates(profile_result(cols, rows)).types == ("bar",)
+
+
+def test_two_dimensions_offer_the_split_bar_first_and_the_matrix_behind_it() -> None:
+    cols, rows = _matrix(rows_n=7, cols_n=3)
+    found = chart_candidates(profile_result(cols, rows))
+    assert found.types == ("bar", "heatmap")
+    assert found.intent is not None and found.intent.chart_type == "bar"
+
+    # A second dimension too wide for a legend leaves only the matrix.
+    cols, rows = _matrix(rows_n=7, cols_n=24)
+    found = chart_candidates(profile_result(cols, rows))
+    assert found.types == ("heatmap",)
+
+
+def test_two_measures_on_different_scales_lead_with_a_combo() -> None:
+    cols = _cols(("month", "nominal"), ("revenue", "quantitative"),
+                 ("margin_pct", "quantitative"))
+    rows = [[f"M{i}", 1_000_000.0 + i, 12.0 + i * 0.1] for i in range(12)]
+    found = chart_candidates(profile_result(cols, rows))
+
+    assert found.signature == "two measures on different scales"
+    assert found.types[0] == "combo"
+    assert found.intent is not None and found.intent.y2_axis is not None
+
+
+def test_comparable_measures_are_not_a_combo() -> None:
+    """A second axis is for magnitudes that would flatten each other. Two
+    similar measures get the ordinary reading, with the rightmost charted."""
+    cols = _cols(("month", "nominal"), ("won", "quantitative"), ("lost", "quantitative"))
+    rows = [[f"M{i}", float(50 + i), float(40 + i)] for i in range(12)]
+    found = chart_candidates(profile_result(cols, rows))
+    assert found.types[0] != "combo"
+
+
+def test_three_measures_keep_the_ordinary_reading() -> None:
+    """A combo carries two, and choosing which two is a question about the
+    question, not about the shape."""
+    cols = _cols(("month", "nominal"), ("a", "quantitative"), ("b", "quantitative"),
+                 ("c", "quantitative"))
+    rows = [[f"M{i}", 1_000_000.0 + i, 12.0 + i, 3.0 + i] for i in range(12)]
+    assert "combo" not in chart_candidates(profile_result(cols, rows)).types
+
+
+def test_two_measures_and_nothing_to_group_by_offer_a_scatter() -> None:
+    cols = _cols(("spend", "quantitative"), ("revenue", "quantitative"))
+    rows = [[float(i * 10), float(i * i)] for i in range(1, 20)]
+    found = chart_candidates(profile_result(cols, rows))
+    assert found.types == ("scatter",)
+
+
+def test_a_lone_distribution_offers_a_histogram() -> None:
+    cols, rows = _observations()
+    found = chart_candidates(profile_result(cols, rows))
+    assert found.signature == "one measure's distribution"
+    assert found.types == ("histogram",)
+
+
+def test_a_result_with_no_measure_offers_nothing() -> None:
+    cols = _cols(("city", "nominal"), ("country", "nominal"))
+    rows = [["Paris", "FR"], ["Rome", "IT"]]
+    found = chart_candidates(profile_result(cols, rows))
+    assert found.types == () and found.intent is None
+
+
+def test_every_offered_type_has_a_line_for_the_prompt() -> None:
+    """`describe_candidates` renders the shortlist the model reads. A type in
+    a candidate list with no description would reach the prompt as a bare
+    name, or raise — either way the model is picking blind."""
+    cols = _cols(("month", "temporal"), ("revenue", "quantitative"))
+    rows = [[date(2025, m, 1), float(m)] for m in range(1, 13)]
+    rendered = describe_candidates(chart_candidates(profile_result(cols, rows)))
+    assert rendered.count("\n") == 2                  # three offered types
+    assert all(line.startswith('- "') for line in rendered.splitlines())
+
+
+# ── the model chooses from the list, or rank 1 does ──────────────────────
+def test_an_on_list_pick_is_honoured() -> None:
+    cols = _cols(("month", "temporal"), ("revenue", "quantitative"))
+    rows = [[date(2025, m, 1), float(m * 1000)] for m in range(1, 13)]
+    area = ChartIntent(
+        chart_type="area",
+        x_axis=AxisSpec(field="month", type="temporal"),
+        y_axis=AxisSpec(field="revenue", type="quantitative"),
+    )
+    plan = plan_chart(profile_result(cols, rows), area)
+    assert plan.source == "model"
+    assert plan.intent is not None and plan.intent.chart_type == "area"
+
+
+def test_an_off_list_pick_is_declined_rather_than_repaired() -> None:
+    """A model that asked for a scatter of one categorical column misread the
+    shape, and its column assignment is no more trustworthy than its type — so
+    rank 1 answers instead of `_fit` trying to salvage the fields."""
+    cols = _cols(("status", "nominal"), ("total", "quantitative"))
+    rows = [[f"S{i}", float(i)] for i in range(1, 5)]
+    scatter = ChartIntent(
+        chart_type="scatter",
+        x_axis=AxisSpec(field="status", type="nominal"),
+        y_axis=AxisSpec(field="total", type="quantitative"),
+    )
+    plan = plan_chart(profile_result(cols, rows), scatter)
+    assert plan.source == "heuristic"
+    assert plan.intent is not None and plan.intent.chart_type == "bar"
+
+
+def test_a_declined_type_does_not_cost_the_reader_its_title() -> None:
+    """The title is the one part of a suggestion that comes from reading the
+    *question* rather than the shape."""
+    cols = _cols(("status", "nominal"), ("total", "quantitative"))
+    rows = [[f"S{i}", float(i)] for i in range(1, 5)]
+    scatter = ChartIntent(
+        chart_type="scatter",
+        x_axis=AxisSpec(field="status", type="nominal"),
+        y_axis=AxisSpec(field="total", type="quantitative"),
+        title="Orders by status",
+    )
+    plan = plan_chart(profile_result(cols, rows), scatter)
+    assert plan.intent is not None and plan.intent.title == "Orders by status"
+
+
+def test_the_narration_never_claims_a_chart_exists() -> None:
+    """`chart` runs *after* `present`, so the answer text is written before
+    anything knows whether there will be a picture. Prose that says "as the
+    chart shows" would be a promise the pipeline cannot keep — and the fix is
+    to keep the prompt silent rather than to reorder two nodes.
+    """
+    from app.pipeline.prompts import ANSWER_SYSTEM, ANSWER_USER
+
+    for word in ("chart", "graph", "plot", "visual", "below"):
+        assert word not in (ANSWER_SYSTEM + ANSWER_USER).lower()
 
 
 # ── heuristic fallback ───────────────────────────────────────────────────

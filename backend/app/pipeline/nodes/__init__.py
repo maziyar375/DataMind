@@ -767,7 +767,9 @@ async def chart(state: RunState, deps: NodeDeps) -> NodeResult:
     """
     from app.charts import (
         ChartIntent,
+        chart_candidates,
         compile_vega_lite,
+        describe_candidates,
         plan_chart,
         plan_kpi,
         profile_result,
@@ -808,6 +810,14 @@ async def chart(state: RunState, deps: NodeDeps) -> NodeResult:
         await deps.emit("ARTIFACT_CREATED", {"kind": "KPI"})
         return NodeResult(detail="big number")
 
+    # Which types this shape can carry, worked out before the model is asked.
+    # The model chooses among them rather than from the whole list — see the
+    # note under `CHART_SYSTEM` — and a result that offers nothing skips the
+    # call entirely, since there would be nothing to offer.
+    candidates = chart_candidates(profile)
+    if not candidates.types:
+        return NodeResult(status="SKIPPED", detail="No chart fits this result's shape")
+
     # A provider error, or a model that cannot emit a valid nested ChartIntent
     # (common with small models), falls through to a deterministic choice from
     # the data shape, so a chart still appears and still varies by question.
@@ -827,7 +837,9 @@ async def chart(state: RunState, deps: NodeDeps) -> NodeResult:
                             if execution.truncated
                             else ""
                         ),
+                        signature=candidates.signature,
                         columns=profile.describe(),
+                        candidates=describe_candidates(candidates),
                     ),
                 ),
             ],

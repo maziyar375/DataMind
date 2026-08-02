@@ -713,18 +713,69 @@ def _fit(
     return fitted, changed
 
 
-def heuristic_intent(profile: ResultProfile) -> ChartIntent | None:
-    """Pick a chart from the result's shape, with no model call.
+# ── which chart, and who decides ─────────────────────────────────────────
+# The shape of a result already rules out most of the type list, and it does so
+# *deterministically*. Working that out first and asking the model to choose
+# only among what survives is the whole strategy here, and it gets better as
+# the type list grows: a free choice from nine types has nine ways to be wrong,
+# a choice from three has three. The model still does the part it is uniquely
+# good at — reading which column the *question* was about — while the part that
+# is a fact about the data stays a fact about the data.
 
-    Both the fallback for when the model declines or hallucinates, and the
-    reference for what "a sensible default" means. It chooses columns by what
-    they *contain* — a non-identifier measure that actually varies, a dimension
-    that actually splits the rows — rather than by their position in the
-    SELECT, which is how an id column ends up plotted as a quantity.
+
+@dataclass(frozen=True, slots=True)
+class Candidates:
+    """The chart types this result's shape allows, ranked, and the default.
+
+    `intent` is rank 1, fully specified: the chart drawn when the model
+    declines, errors, or picks something the shape does not offer. `types` is
+    what the model is shown. They are produced together, from one reading of
+    the profile, so the offered list and the fallback can never disagree.
+    """
+
+    signature: str
+    types: tuple[ChartType, ...] = ()
+    intent: ChartIntent | None = None
+
+    def offers(self, chart_type: str) -> bool:
+        return chart_type in self.types
+
+
+# One line each, for the prompt. Written as *what the reader gets*, not what
+# the mark is: "a trend over time" is a question a model can match a question
+# against; "a line mark" is not.
+_TYPE_HELP: dict[str, str] = {
+    "line": "a trend over an ordered or time axis",
+    "area": "the same trend, where the filled magnitude matters",
+    "bar": "a measure compared across categories",
+    "pie": "parts of a single whole",
+    "scatter": "how two quantitative fields relate",
+    "heatmap": "a measure across two dimensions at once",
+    "histogram": "how one measure is spread across its range",
+    "combo": "bars for one measure with a line over them for another",
+}
+
+
+def describe_candidates(candidates: Candidates) -> str:
+    """The list the chart prompt shows. Empty when nothing fits."""
+    return "\n".join(f'- "{t}": {_TYPE_HELP[t]}' for t in candidates.types)
+
+
+def chart_candidates(profile: ResultProfile) -> Candidates:
+    """Read the result's shape once: what it allows, ranked, and the default.
+
+    Columns are chosen by what they *contain* — a non-identifier measure that
+    actually varies, a dimension that actually splits the rows — rather than by
+    their position in the SELECT, which is how an id column ends up plotted as
+    a quantity.
+
+    One shape is deliberately absent: a single row. That is a KPI, not a chart,
+    and it is `unchartable_reason` plus `plan_kpi` that answer it — this
+    function is only reached for results that survived the veto.
     """
     measures = _measure_candidates(profile)
     if not measures:
-        return None
+        return Candidates("nothing to measure")
     # Rightmost measure: SQL convention puts the thing being measured last.
     measure = measures[-1]
 
@@ -734,14 +785,44 @@ def heuristic_intent(profile: ResultProfile) -> ChartIntent | None:
         if c.is_categorical and not c.is_constant and c.name != measure.name
     ]
 
+    # Exactly two measures on scales far enough apart that one would flatten
+    # the other. Drawing only one of them is what happened before combo
+    # existed, and it silently dropped a column the query asked for. Three or
+    # more stays on the old reading: a combo can carry two, and choosing which
+    # two is a question about the question, not about the shape.
+    dimension = temporal[0] if temporal else (categorical[0] if categorical else None)
+    if dimension is not None and len(measures) == 2 and _independent_scales(*measures):
+        return Candidates(
+            "two measures on different scales",
+            ("combo", "scatter", "line" if temporal else "bar"),
+            ChartIntent(
+                chart_type="combo",
+                x_axis=_axis_for(dimension),
+                y_axis=_axis_for(measures[0]),
+                y2_axis=_axis_for(measures[1]),
+            ),
+        )
+
     # A time axis reads as a trend, optionally split by a small dimension.
     if temporal:
         series = next((c for c in categorical if 1 < c.distinct <= MAX_SERIES), None)
-        return ChartIntent(
-            chart_type="line",
-            x_axis=_axis_for(temporal[0]),
-            y_axis=_axis_for(measure),
-            series=_axis_for(series) if series is not None else None,
+        return Candidates(
+            "a measure over time" + (", split" if series is not None else ""),
+            # Pie belongs here too when the periods are few. "Share of revenue
+            # by quarter" is an ordinary request, and a list that refused it
+            # would be overruling a user who picked Pie in the editor — the
+            # exact failure Phase 1 removed. Generosity is the rule for this
+            # list: `_fit` is still downstream to catch a pick the *data*
+            # cannot carry, so the cost of offering one type too many is far
+            # lower than the cost of withholding one.
+            ("line", "area", "bar")
+            + (("pie",) if temporal[0].distinct <= MAX_PIE_SLICES else ()),
+            ChartIntent(
+                chart_type="line",
+                x_axis=_axis_for(temporal[0]),
+                y_axis=_axis_for(measure),
+                series=_axis_for(series) if series is not None else None,
+            ),
         )
 
     # Two dimensions crossed by a measure. Before heatmaps existed this fell
@@ -750,30 +831,48 @@ def heuristic_intent(profile: ResultProfile) -> ChartIntent | None:
     # other, with nothing on screen saying a column had been ignored.
     if len(categorical) >= 2:
         first, second = categorical[0], categorical[1]
+        fits_a_matrix = first.distinct * second.distinct <= MAX_HEATMAP_CELLS
         if second.distinct <= MAX_SERIES:
-            # Small enough to read as a legend, which is easier than a matrix.
-            return ChartIntent(
+            # Small enough to read as a legend, which is easier than a matrix —
+            # so a split bar leads, and the matrix is offered behind it.
+            return Candidates(
+                "a measure across two dimensions",
+                ("bar", "heatmap") if fits_a_matrix else ("bar",),
+                ChartIntent(
+                    chart_type="bar",
+                    x_axis=_axis_for(first),
+                    y_axis=_axis_for(measure),
+                    series=_axis_for(second),
+                ),
+            )
+        if fits_a_matrix:
+            return Candidates(
+                "a measure across two wide dimensions",
+                ("heatmap",),
+                ChartIntent(
+                    chart_type="heatmap",
+                    x_axis=_axis_for(first),
+                    y_axis=_axis_for(second),
+                    color=_axis_for(measure),
+                ),
+            )
+
+    # A measure across categories. A pie is only ever offered here, and only
+    # when the slices stay countable; past that the angles stop meaning
+    # anything and `_fit` would demote it back to bars anyway.
+    if categorical:
+        first = categorical[0]
+        return Candidates(
+            "a measure across categories",
+            ("bar", "pie") if first.distinct <= MAX_PIE_SLICES else ("bar",),
+            # The orientation is left to `_fit`, which every path through
+            # `plan_chart` runs afterwards — deciding it twice is how the two
+            # paths drift apart.
+            ChartIntent(
                 chart_type="bar",
                 x_axis=_axis_for(first),
                 y_axis=_axis_for(measure),
-                series=_axis_for(second),
-            )
-        if first.distinct * second.distinct <= MAX_HEATMAP_CELLS:
-            return ChartIntent(
-                chart_type="heatmap",
-                x_axis=_axis_for(first),
-                y_axis=_axis_for(second),
-                color=_axis_for(measure),
-            )
-
-    # A measure across categories: bars. The orientation is left to `_fit`,
-    # which every path through `plan_chart` runs afterwards — deciding it twice
-    # is how the two paths drift apart.
-    if categorical:
-        return ChartIntent(
-            chart_type="bar",
-            x_axis=_axis_for(categorical[0]),
-            y_axis=_axis_for(measure),
+            ),
         )
 
     # Two measures and nothing to group by: show their relationship. A third
@@ -783,11 +882,15 @@ def heuristic_intent(profile: ResultProfile) -> ChartIntent | None:
     # Ahead of the histogram below on purpose: with two measures in hand, how
     # they move together says more than how either is spread.
     if len(measures) >= 2:
-        return ChartIntent(
-            chart_type="scatter",
-            x_axis=_axis_for(measures[0]),
-            y_axis=_axis_for(measures[1]),
-            size=_axis_for(measures[2]) if len(measures) >= 3 else None,
+        return Candidates(
+            "two measures, nothing to group by",
+            ("scatter",),
+            ChartIntent(
+                chart_type="scatter",
+                x_axis=_axis_for(measures[0]),
+                y_axis=_axis_for(measures[1]),
+                size=_axis_for(measures[2]) if len(measures) >= 3 else None,
+            ),
         )
 
     # One column, nothing to compare it across, and enough of it to have a
@@ -795,8 +898,17 @@ def heuristic_intent(profile: ResultProfile) -> ChartIntent | None:
     # case for the same reason.
     lone = _histogram_candidate(profile)
     if lone is not None:
-        return ChartIntent(chart_type="histogram", x_axis=_axis_for(lone))
-    return None
+        return Candidates(
+            "one measure's distribution",
+            ("histogram",),
+            ChartIntent(chart_type="histogram", x_axis=_axis_for(lone)),
+        )
+    return Candidates("no shape a chart fits")
+
+
+def heuristic_intent(profile: ResultProfile) -> ChartIntent | None:
+    """The chart this result gets with no model call — rank 1 of the router."""
+    return chart_candidates(profile).intent
 
 
 @dataclass(frozen=True, slots=True)
@@ -813,22 +925,40 @@ def plan_chart(
 ) -> ChartPlan:
     """Decide what to draw for this result. The one entry point.
 
-    Order matters: the data's own veto comes first (no model opinion can make a
-    constant column interesting), then the model's suggestion if it survives
-    fitting, then the deterministic heuristic — itself fitted, so one set of
-    rules governs both paths.
+    Three gates, narrowing:
+
+    1. **The data's veto.** No model opinion can make a constant column
+       interesting, and no chart type rescues a single row.
+    2. **The shape's offer.** `chart_candidates` says which types this result
+       can carry. A suggestion outside that list is not repaired, it is
+       *declined* — a model that asked for a scatter of one categorical column
+       misread the shape, and its column assignment is no more trustworthy
+       than its type. Rank 1 answers instead.
+    3. **The fit.** An on-list suggestion still goes through `_fit`, which
+       repairs swapped axes, mislabelled types and unreadable splits. That is
+       unchanged and deliberately so: it is the chart guard, not the chooser.
+
+    The model's `title` survives all three. It is the one part of the
+    suggestion that comes from reading the *question* rather than the shape, so
+    a declined type does not cost the reader a title that named what they
+    asked.
     """
     blocked = unchartable_reason(profile)
     if blocked is not None:
         return ChartPlan(None, "none", blocked)
 
-    if suggestion is not None and validate_intent(suggestion, profile)[0]:
-        fitted, changed = _fit(suggestion, profile)
+    candidates = chart_candidates(profile)
+
+    named = suggestion is not None and validate_intent(suggestion, profile)[0]
+    if named and candidates.offers(suggestion.chart_type):  # type: ignore[union-attr]
+        fitted, changed = _fit(suggestion, profile)  # type: ignore[arg-type]
         if fitted is not None:
             return ChartPlan(fitted, "model_adjusted" if changed else "model")
 
-    guess = heuristic_intent(profile)
+    guess = candidates.intent
     if guess is not None:
+        if named and suggestion is not None and suggestion.title:
+            guess = guess.model_copy(update={"title": suggestion.title})
         fitted, _ = _fit(guess, profile)
         if fitted is not None:
             return ChartPlan(fitted, "heuristic")

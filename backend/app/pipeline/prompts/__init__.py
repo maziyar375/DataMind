@@ -282,46 +282,37 @@ Result ({row_count} rows):
 # scores generated SQL, not the wording of the narration (same reasoning as the
 # CLARIFY_SYSTEM note above).
 
-CHART_SYSTEM = """You choose the single best chart for a query result, or decline.
+CHART_SYSTEM = """You choose a chart for a query result from a shortlist, or decline.
 
-Pick one chart_type:
-- "bar": compare a measure across categories. Do not worry about which way the
-  bars run — the platform lays them out for the label count.
-- "line": a measure over an ordered or time axis (a trend).
-- "area": a trend where the filled magnitude matters.
-- "scatter": the relationship between two quantitative fields.
-- "pie": parts of a single whole, only for a few categories (<=6).
-- "heatmap": a measure across TWO dimensions at once — day by hour, region by
-  category. Put the dimensions on x_axis and y_axis and the measure on "color".
-- "histogram": how one measure is spread, when the rows are individual
-  observations rather than groups. Only x_axis; the count is derived. Never for
-  a result that already has one row per category.
-- "combo": bars for one measure with a line over them for another, when the two
-  are on different scales — revenue and a percentage, volume and an average.
-  y_axis is the bars, y2_axis is the line.
-- "none": nothing a chart would clarify. Prefer "none" over a chart nobody can
-  read — an unreadable chart is worse than no chart.
+The shortlist is worked out from the result's shape before you see it, so every
+type offered can actually be drawn from these columns. Pick from it or pick
+"none" — those are the only valid answers. Your job is the part the shape
+cannot settle: which columns the *question* was about, and what to title the
+chart.
 
-Choose "none" when:
-- the result is a single row, or a single number;
+Choose "none" when a picture would not help:
 - the measure is the same in every row (a flat chart says nothing);
-- the only numeric column is an identifier (id, code, number, year, zip);
 - the rows are a list of records to read (names, addresses, statuses) rather
-  than a comparison of magnitudes.
+  than a comparison of magnitudes;
+- the question asked for a specific value rather than a pattern.
+An unreadable chart is worse than no chart.
 
-Each column below shows its distinct-value count. That count is the category
-count of a bar or pie chart — treat it as the number of marks a reader must
-compare. Past ~25 categories, a bar chart is a texture, not a comparison: pick
-"none" unless the rows are ranked (the question asked for the highest/lowest or
-top N), in which case the platform keeps the leading 25 and labels the chart as
-a subset.
+Each column shows its distinct-value count. That count is the number of marks a
+reader must compare. Past ~25 categories a bar chart is a texture, not a
+comparison: pick "none" unless the rows are ranked (the question asked for the
+highest/lowest or top N), in which case the platform keeps the leading 25 and
+labels the chart as a subset.
 
 Rules:
-- x_axis and y_axis are required unless chart_type is "none" or "histogram".
 - Only reference column names that appear in the result schema below.
+- x_axis and y_axis are required, except for "histogram" (x only — the count is
+  derived) and "none".
 - Put the category/time field on x_axis and the numeric measure on y_axis,
   always — including for bars that will end up running sideways. The platform
-  flips them for you; do not pre-swap.
+  flips them for you; do not pre-swap, and do not choose an orientation.
+- "heatmap" is the exception: its x_axis and y_axis are the two *dimensions*
+  and the measure goes on "color".
+- "combo" draws y_axis as bars and y2_axis as a line over them.
 - The result is ALREADY aggregated by SQL. Set each axis aggregation to "none"
   unless you are certain a further roll-up is needed.
 - Set the axis "type" to match the column: quantitative for numbers, temporal
@@ -337,13 +328,25 @@ Rules:
   magnitude — it makes the points a bubble chart. Never an id.
 
 Return JSON matching the ChartIntent schema."""
+# The shortlist is the point, and it is why this prompt no longer describes
+# nine chart types. A free choice from the whole list has nine ways to be
+# wrong and grows a tenth with every type added; a choice from two or three
+# does not. `charts.chart_candidates` works out which types the *shape* can
+# carry — a fact about the data, needing no model — and the model spends its
+# judgement on the part that genuinely needs reading the question. An answer
+# off the list is declined rather than repaired, because a model that misread
+# the shape badly enough to pick an impossible type has not earned trust in its
+# column assignment either. PROMPT_VERSION does not move: see the note below.
 
 CHART_USER = """Question: {question}
 
-Result shape ({row_count} rows{truncated}):
+Result shape ({row_count} rows{truncated}) — {signature}:
 {columns}
 
-Choose the best chart, or "none"."""
+Chart types that fit this shape:
+{candidates}
+
+Choose one of those, or "none"."""
 # The model sees cardinality and numeric range, never a row value: a chart
 # decision needs to know that a column holds 1,000 distinct names or one
 # repeated total, and a count is not disclosure. PROMPT_VERSION does not move
