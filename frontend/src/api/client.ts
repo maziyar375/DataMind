@@ -298,6 +298,17 @@ export const dashboards = {
 }
 
 // ── runs ──────────────────────────────────────────────────────────────────
+/**
+ * Whether the executor may still emit events for this run — the mirror of
+ * `RunStatus.is_in_flight` on the backend, and deliberately *not* the inverse
+ * of "terminal". `NEEDS_CLARIFICATION` is neither: the run wrote its question
+ * and closed, while the exchange is unfinished. Anything deciding whether to
+ * wait for more events wants this one.
+ */
+export function isRunInFlight(status: string): boolean {
+  return status === 'QUEUED' || status === 'RUNNING'
+}
+
 export const runs = {
   get: (id: string) => get<RunDetail>(`/runs/${id}`),
   cancel: (id: string) => post<{ cancelled: boolean }>(`/runs/${id}/cancel`),
@@ -372,7 +383,17 @@ export function streamRun(
           }
         }
       }
-      if (!stopped) handlers.onDone()
+      // The body ended and `RUN_FINISHED` never arrived — the `return` above
+      // is the only exit for a run that actually completed. So the server went
+      // away mid-run: an API restart, a proxy idle timeout, a dropped
+      // connection. That is not "done", and reporting it as done is what makes
+      // the step trail lurch: the caller clears the live view, reloads the
+      // thread, finds the run still in flight, re-attaches from seq 0, and the
+      // whole pipeline replays in one burst with the chart on the end of it.
+      //
+      // A clean EOF and a thrown read are the same event with different
+      // plumbing, so they take the same recovery.
+      if (!stopped) await pollUntilDone(runId, lastSeq, handlers, () => stopped)
     } catch (error) {
       if (stopped) return
       handlers.onError?.(error as Error)
@@ -391,9 +412,16 @@ async function pollUntilDone(
   isStopped: () => boolean,
 ): Promise<void> {
   let seq = fromSeq
+  // Polling is the recovery path, so it is reached exactly when the server is
+  // unreachable — a restart, a redeploy, a blip. Giving up on the first failed
+  // poll hands the reader a run frozen mid-pipeline at the one moment the
+  // fallback exists for. A few attempts cover a restart; a run that stays
+  // unreachable past that is reported rather than polled forever.
+  let failures = 0
   while (!isStopped()) {
     try {
       const events = await runs.poll(runId, seq)
+      failures = 0
       for (const event of events) {
         seq = event.seq
         handlers.onEvent(event)
@@ -402,10 +430,28 @@ async function pollUntilDone(
           return
         }
       }
+      if (events.length === 0) {
+        // `RUN_FINISHED` is not guaranteed to arrive. A run whose executor died
+        // with the process is swept by the reconciler, which marks the row
+        // FAILED with a plain UPDATE and emits nothing — there is no event left
+        // to wait for, and the loop above would wait for it every 1.2s forever.
+        // Quiet polls are the only moment worth the extra request, and they are
+        // exactly the moment this happens.
+        const { status } = await runs.get(runId)
+        if (!isRunInFlight(status)) {
+          handlers.onDone()
+          return
+        }
+      }
     } catch {
-      handlers.onDone()
-      return
+      if ((failures += 1) >= POLL_MAX_FAILURES) {
+        handlers.onDone()
+        return
+      }
     }
-    await new Promise((resolve) => setTimeout(resolve, 1200))
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
   }
 }
+
+const POLL_INTERVAL_MS = 1200
+const POLL_MAX_FAILURES = 5   // ~6s, comfortably longer than an API restart

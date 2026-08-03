@@ -1,5 +1,8 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
-import { conversations, connections as connectionsApi, llmConfigs, streamRun } from '../api/client'
+import {
+  conversations, connections as connectionsApi, llmConfigs,
+  isRunInFlight, streamRun,
+} from '../api/client'
 import type {
   Connection, ConversationSummary, LlmConfig, MessageWithRun, RunStep,
 } from '../api/types'
@@ -21,8 +24,16 @@ export default function ChatPage() {
   const [draft, setDraft] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  // Model-proposed follow-ups, refreshed after each answered turn.
+  // Model-proposed follow-ups, refreshed after each answered turn. This is a
+  // full completion against the whole schema on the connection's own model,
+  // measured at 12-18s on a 42-table snapshot — several times longer than the
+  // answer it follows, because the answer streams and this does not. So it
+  // carries a pending flag (an empty row for twenty seconds reads as "there
+  // are none") and a ticket (a reply that lands after the reader has moved on
+  // belongs to a turn that is over, and must not repopulate the row).
   const [suggestions, setSuggestions] = useState<string[]>([])
+  const [suggestionsPending, setSuggestionsPending] = useState(false)
+  const suggestionTicket = useRef(0)
 
   // Live run state, kept separate from persisted messages so a refresh
   // mid-run recovers from the server rather than from this component.
@@ -90,8 +101,19 @@ export default function ChatPage() {
 
     // If the newest run is still in flight, reattach to its stream instead of
     // showing a conversation that looks frozen.
+    //
+    // `isRunInFlight` and not "not terminal", which is why it is worth the
+    // import rather than a local guess. `NEEDS_CLARIFICATION` is deliberately
+    // non-terminal on the backend — the exchange is unfinished, so `cancel`
+    // still applies and the reconciler leaves it alone — but nothing more will
+    // happen until the user answers. Counting it as in-flight here reattached
+    // the stream to a run that immediately replayed its `RUN_FINISHED`, whose
+    // `onDone` reloaded the thread and reattached again: a tight loop that
+    // flickered the step trail and, because `send` refuses while `activeRunId`
+    // is set, locked the composer and the option chips at exactly the moment
+    // the user was being asked to reply.
     const lastRun = loaded.at(-1)?.run
-    if (lastRun && isInFlight(lastRun.status)) {
+    if (lastRun && isRunInFlight(lastRun.status)) {
       attachStream(lastRun.id, conversationId)
     }
     return loaded
@@ -100,18 +122,30 @@ export default function ChatPage() {
   // Fetch follow-up suggestions for a thread. Best-effort — a failure just
   // leaves the row empty and never surfaces an error to the reader.
   const refreshSuggestions = useCallback(async (conversationId: string) => {
+    const ticket = (suggestionTicket.current += 1)
+    setSuggestionsPending(true)
     try {
       const { suggestions: next } = await conversations.suggestions(conversationId)
+      if (ticket !== suggestionTicket.current) return
       setSuggestions(next)
     } catch {
-      setSuggestions([])
+      if (ticket === suggestionTicket.current) setSuggestions([])
+    } finally {
+      if (ticket === suggestionTicket.current) setSuggestionsPending(false)
     }
+  }, [])
+
+  /** Abandon whatever follow-ups are in flight: they belong to a past turn. */
+  const dropSuggestions = useCallback(() => {
+    suggestionTicket.current += 1
+    setSuggestions([])
+    setSuggestionsPending(false)
   }, [])
 
   useEffect(() => {
     if (!activeId) {
       setMessages([])
-      setSuggestions([])
+      dropSuggestions()
       return
     }
     // A conversation `send` just created already holds the optimistic turn and
@@ -121,7 +155,7 @@ export default function ChatPage() {
       justCreatedRef.current = null
       return
     }
-    setSuggestions([])
+    dropSuggestions()
     loadMessages(activeId).catch(() => setError('Could not load this conversation.'))
     const conversation = conversationList.find((c) => c.id === activeId)
     if (conversation?.default_connection_id) setConnectionId(conversation.default_connection_id)
@@ -240,7 +274,7 @@ export default function ChatPage() {
 
     setError(null)
     setDraft('')
-    setSuggestions([])  // the prior turn's follow-ups no longer apply
+    dropSuggestions()  // the prior turn's follow-ups no longer apply
 
     try {
       let conversationId = activeId
@@ -291,7 +325,7 @@ export default function ChatPage() {
     setLiveText('')
     setActiveId(null)
     setMessages([])
-    setSuggestions([])
+    dropSuggestions()
     setConnectionId('')
     setModelId('')
     setDraft('')
@@ -506,9 +540,11 @@ export default function ChatPage() {
               {/* Not while the thread is waiting on an answer: the turn
                   already offers chips, and a second row of unrelated ones
                   reads as a choice between them. */}
-              {!activeRunId && !awaitingAnswer && suggestions.length > 0 && (
+              {!activeRunId && !awaitingAnswer &&
+                (suggestions.length > 0 || suggestionsPending) && (
                 <SuggestedFollowups
                   items={suggestions}
+                  pending={suggestionsPending}
                   onPick={(text) => void send(text)}
                 />
               )}
@@ -680,9 +716,12 @@ function StarterChip({
  * question directly, reusing the starter-chip affordance for consistency.
  */
 function SuggestedFollowups({
-  items, onPick,
+  items, pending, onPick,
 }: {
   items: string[]
+  /** The request is out. It is a full completion on the connection's model and
+   *  runs long enough that an empty row would read as "there are none". */
+  pending: boolean
   onPick: (text: string) => void
 }) {
   return (
@@ -712,11 +751,35 @@ function SuggestedFollowups({
         Suggested follow-ups
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-        {items.map((text) => (
-          <StarterChip key={text} text={text} onClick={() => onPick(text)} />
-        ))}
+        {items.length > 0
+          ? items.map((text) => (
+              <StarterChip key={text} text={text} onClick={() => onPick(text)} />
+            ))
+          : pending && <SuggestionSkeleton />}
       </div>
     </div>
+  )
+}
+
+/** Three chip-shaped placeholders, sized so the row does not jump when the
+ *  real questions replace them. */
+function SuggestionSkeleton() {
+  return (
+    <>
+      {[168, 208, 144].map((width) => (
+        <div
+          key={width}
+          className="rm-pulse"
+          style={{
+            width,
+            height: 32,
+            borderRadius: 16,
+            border: '1px solid var(--border-subtle)',
+            background: 'var(--surface-2)',
+          }}
+        />
+      ))}
+    </>
   )
 }
 
@@ -1441,24 +1504,6 @@ function DisclosureBadge({ policy }: { policy?: string }) {
       {entry.short}
     </span>
   )
-}
-
-/**
- * Whether the server may still emit events for this run — the only reason to
- * open a stream for it.
- *
- * Asked positively, not as "not terminal". `NEEDS_CLARIFICATION` is
- * deliberately non-terminal on the backend (the exchange is unfinished, so
- * `cancel` still applies and the reconciler leaves it alone), but nothing more
- * will happen until the user answers. Treating it as in-flight here reattached
- * the stream to a run that immediately replayed its `RUN_FINISHED`, whose
- * `onDone` reloaded the thread and reattached again — a tight loop that
- * flickered the step trail and, because `send` refuses while `activeRunId` is
- * set, locked the composer and the option chips at exactly the moment the user
- * was being asked to reply.
- */
-function isInFlight(status: string): boolean {
-  return status === 'QUEUED' || status === 'RUNNING'
 }
 
 /** Terminal states that owe the reader an explanation. */
