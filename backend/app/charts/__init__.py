@@ -28,6 +28,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.domain.ports.database import ResultColumn
+from app.domain.value_objects import DisclosurePolicy, HintBudget
 
 # ── budgets ──────────────────────────────────────────────────────────────
 # What a reader can actually take in, not what Vega will happily draw.
@@ -55,6 +56,11 @@ ChartType = Literal[
     "line", "bar", "area", "scatter", "pie", "heatmap", "histogram", "combo", "none"
 ]
 AxisType = Literal["quantitative", "temporal", "nominal", "ordinal"]
+
+# How a date column is spaced. Not part of the intent — the model never picks
+# it — but a fact about the result that both the prompt and the time axis are
+# written against.
+TemporalGrain = Literal["intraday", "daily", "monthly", "yearly"]
 
 # Which way the bars run. Not a chart type: a vertical and a horizontal bar
 # chart are the same mark, the same comparison and the same reading — only the
@@ -178,6 +184,11 @@ class ColumnProfile:
     non_null: int
     minimum: float | None = None
     maximum: float | None = None
+    #: Temporal columns only: how the dates are spaced ("monthly"), and how far
+    #: the column runs end to end. The *length* of the span, never its
+    #: endpoints — see `ResultProfile.describe`.
+    grain: TemporalGrain | None = None
+    span_days: int | None = None
 
     @property
     def is_numeric(self) -> bool:
@@ -200,14 +211,32 @@ class ColumnProfile:
     def is_id_like(self) -> bool:
         return bool(_ID_NAME.search(self.name.lower()))
 
-    def describe(self) -> str:
+    def describe(self, budget: HintBudget, row_count: int) -> str:
         parts = [f"{self.distinct} distinct"]
-        if self.is_numeric and self.minimum is not None and self.maximum is not None:
+        if self.grain is not None:
+            parts.append(_span_text(self.grain, self.span_days))
+        # The one fact in this block that is a *value* rather than a count, so
+        # the one the disclosure policy governs. `numeric_range` is the same
+        # gate the schema block's column hints use, which keeps a single ladder
+        # in the codebase: whatever a connection is willing to tell the model
+        # about the extremes of a column, it tells it in both places.
+        if (
+            self.is_numeric
+            and budget.numeric_range
+            and self.minimum is not None
+            and self.maximum is not None
+        ):
             parts.append(
                 f"min {_fmt_number(self.minimum)}, max {_fmt_number(self.maximum)}"
             )
         if self.is_constant:
             parts.append("SAME VALUE IN EVERY ROW")
+        elif not self.is_numeric and self.distinct == row_count:
+            # A group key, not a repeated attribute — the closest a result set
+            # comes to saying "already aggregated by this column". It is what
+            # tells the model a further roll-up is a double count, and what
+            # rules a histogram out.
+            parts.append("one row per value")
         return f"- {self.name} ({self.semantic_type}; {'; '.join(parts)})"
 
 
@@ -220,14 +249,110 @@ class ResultProfile:
     def get(self, name: str) -> ColumnProfile | None:
         return next((c for c in self.columns if c.name == name), None)
 
-    def describe(self) -> str:
-        """The column block the chart prompt shows the model.
+    def describe(self, policy: str = DisclosurePolicy.NONE) -> str:
+        """The result block the chart prompt shows the model.
 
         Types alone let the model pick a bar chart for a thousand categories,
         because nothing in the prompt said there were a thousand. Cardinality,
-        range and the constant flag are what make "none" a reachable answer.
+        grain, the crossing arithmetic and the constant flag are what make
+        "none" — and heatmap, and combo — reachable answers.
+
+        Every rule in `CHART_SYSTEM` is stated in terms of a count, a ratio or
+        a grain, and the notes below are those same quantities computed once
+        here rather than asked of a model reading numbers off column summaries.
+        A rule the model cannot evaluate is a rule `_fit` ends up enforcing by
+        overriding it, which costs a round trip and a repaired chart.
+
+        **`policy` is the connection's result-sharing policy, and it defaults
+        to the narrowest** — the same convention `_render_history` and
+        `_describe_schema` follow, so a caller that forgets one discloses
+        nothing. What it gates is narrow on purpose: a count, a ratio, a span
+        *length* and a grain are facts about the result's shape and are shared
+        under every policy, while an extreme (`min`, `max`) is one specific
+        row's value and is shared only where row values already are. Nothing a
+        chart decision needs sits on the far side of that line — no bullet in
+        the prompt asks the model what the largest revenue *is*, only how it
+        compares to the measure beside it, which is the ratio.
         """
-        return "\n".join(c.describe() for c in self.columns)
+        block = "\n".join(
+            c.describe(HintBudget.from_policy(policy), self.row_count)
+            for c in self.columns
+        )
+        notes = self._shape_notes()
+        if not notes:
+            return block
+        return block + "\n\nShape notes:\n" + "\n".join(f"- {n}" for n in notes)
+
+    def _shape_notes(self) -> list[str]:
+        """Result-level arithmetic each chart type's rule is written in terms of.
+
+        Per-column lines cannot carry any of this: a crossing is a product of
+        two columns, a scale gap is a ratio between two others, and the mark
+        budget is a comparison against a platform constant the model has no
+        reason to know.
+        """
+        notes: list[str] = []
+        measures = _measure_candidates(self)
+        dimensions = _dimension_candidates(self)
+
+        if len(measures) >= 2:
+            ranked = sorted(measures, key=lambda c: abs(c.maximum or 0.0))
+            small, large = ranked[0], ranked[-1]
+            ratio = _scale_ratio(small, large)
+            if ratio is None:
+                pass
+            elif not _finite(ratio):
+                notes.append(
+                    f"{large.name} and {small.name} are not on a comparable "
+                    "scale at all, so they cannot share a y axis."
+                )
+            elif ratio >= DUAL_AXIS_RATIO:
+                notes.append(
+                    f"{large.name} peaks about {ratio:,.0f}x higher than "
+                    f"{small.name}; measures {DUAL_AXIS_RATIO}x apart or more "
+                    "get their own y axes (that is what combo is for)."
+                )
+            else:
+                notes.append(
+                    f"{large.name} and {small.name} are within "
+                    f"{max(ratio, 1.0):,.0f}x of each other, so one y axis holds both."
+                )
+
+        crossable = [c for c in dimensions if not c.is_numeric]
+        if len(crossable) >= 2:
+            first, second = crossable[0], crossable[1]
+            cells = first.distinct * second.distinct
+            verdict = (
+                f"within the {MAX_HEATMAP_CELLS}-cell budget"
+                if cells <= MAX_HEATMAP_CELLS
+                else f"past the {MAX_HEATMAP_CELLS}-cell budget, so a heatmap "
+                "would be a texture"
+            )
+            notes.append(
+                f"{first.name} x {second.name} crosses to {cells:,} cells — {verdict}."
+            )
+
+        # Temporal columns included on purpose. The cap is on the mark, not on
+        # the column kind — a bar chart of 400 days is trimmed exactly like a
+        # bar chart of 400 customers — and the note is more useful there than
+        # anywhere, because the form that takes every row is a line and this is
+        # the only thing in the block that says so.
+        widest = max(dimensions, key=lambda c: c.distinct, default=None)
+        if widest is not None and widest.distinct > MAX_CATEGORY_MARKS:
+            notes.append(
+                f"{widest.name} would be {widest.distinct:,} marks on a bar or pie, "
+                f"so the platform would draw the leading {MAX_CATEGORY_MARKS} and "
+                "label the chart a subset. Worth it only if the question asked for "
+                "a top N; otherwise pick a form that takes every row."
+            )
+
+        if not dimensions and measures:
+            notes.append(
+                "No dimension to compare across — these rows are individual "
+                "observations rather than one row per group, which is the shape "
+                "a histogram reads."
+            )
+        return notes
 
 
 def _distinct(values: Sequence[Any]) -> int:
@@ -259,6 +384,86 @@ def _fmt_number(value: float) -> str:
     return f"{value:,.2f}"
 
 
+def _finite(value: float) -> bool:
+    return value not in (float("inf"), float("-inf"))
+
+
+def _temporal_grain(values: Sequence[Any]) -> tuple[TemporalGrain, int] | None:
+    """How a date column is spaced, and how many days it runs end to end.
+
+    One classifier, two readers: the prompt says the grain in words so the
+    model can tell a 40-point monthly series from a 1,200-point daily one, and
+    `_temporal_axis` maps the same grain to a tick format and interval. They
+    were separate for exactly one commit, which was long enough to notice that
+    a prompt calling a series "monthly" while the axis ticked it daily is worse
+    than either alone.
+
+    None when the column holds something other than dates — a connector handing
+    back pre-formatted strings — which is also the case `_temporal_axis`
+    declines to format.
+    """
+    stamps = [v for v in values if isinstance(v, (date, datetime))]
+    if not stamps:
+        return None
+
+    grain: TemporalGrain
+    if any(
+        isinstance(v, datetime) and (v.hour or v.minute or v.second or v.microsecond)
+        for v in stamps
+    ):
+        grain = "intraday"
+    elif all(v.month == 1 and v.day == 1 for v in stamps):
+        grain = "yearly"
+    elif all(v.day == 1 for v in stamps):
+        grain = "monthly"
+    else:
+        grain = "daily"
+
+    days = [v.date() if isinstance(v, datetime) else v for v in stamps]
+    return grain, (max(days) - min(days)).days
+
+
+# Days per unit, for writing a span as a length. Deliberately the *length* and
+# never the endpoints: "spans 14 months" is a fact about the shape of the
+# result, "Jan 2024 to Feb 2025" is two values out of the data.
+_SPAN_UNITS: dict[TemporalGrain, tuple[str, float]] = {
+    "yearly": ("years", 365.25),
+    "monthly": ("months", 30.44),
+    "daily": ("days", 1.0),
+    "intraday": ("days", 1.0),
+}
+
+
+def _span_text(grain: TemporalGrain, span_days: int | None) -> str:
+    """How much time the column covers, in its own unit.
+
+    Coverage, not the distance between the endpoints: twelve monthly points run
+    Jan to Dec, which is 334 days between the two but twelve months of data,
+    and twelve is the number that sits sensibly beside "12 distinct". Where the
+    two *disagree* — 24 distinct over 36 months — the gap is the fact worth
+    having, and it is the reason the span is printed at all.
+    """
+    if span_days is None:
+        return f"{grain} grain"
+    unit, per = _SPAN_UNITS[grain]
+    length = round(span_days / per) + 1
+    return f"{grain} grain; spans about {length:,} {unit if length != 1 else unit[:-1]}"
+
+
+def _scale_ratio(first: ColumnProfile, second: ColumnProfile) -> float | None:
+    """How far apart two measures' magnitudes are, or None when neither has one.
+
+    A ratio rather than the two peaks it came from: dimensionless, so it says
+    what the dual-axis rule needs without saying what either column contains.
+    """
+    peaks = sorted(abs(c.maximum or 0.0) for c in (first, second))
+    if peaks[1] == 0:
+        return None
+    if peaks[0] == 0:
+        return float("inf")
+    return peaks[1] / peaks[0]
+
+
 def profile_result(
     columns: Sequence[ResultColumn],
     rows: Sequence[Sequence[Any]],
@@ -272,6 +477,7 @@ def profile_result(
         non_null = [v for v in values if v is not None]
 
         numbers = [f for f in (_as_float(v) for v in non_null) if f is not None]
+        grain = _temporal_grain(non_null) if col.semantic_type == "temporal" else None
         profiles.append(
             ColumnProfile(
                 name=col.name,
@@ -280,6 +486,8 @@ def profile_result(
                 non_null=len(non_null),
                 minimum=min(numbers) if numbers else None,
                 maximum=max(numbers) if numbers else None,
+                grain=grain[0] if grain else None,
+                span_days=grain[1] if grain else None,
             )
         )
     return ResultProfile(
@@ -536,11 +744,13 @@ def _fit_combo(
 
 
 def _independent_scales(first: ColumnProfile, second: ColumnProfile) -> bool:
-    """Whether a combo's two measures are too far apart to share an axis."""
-    peaks = sorted(abs(c.maximum or 0.0) for c in (first, second))
-    if peaks[0] == 0:
-        return peaks[1] > 0
-    return peaks[1] / peaks[0] >= DUAL_AXIS_RATIO
+    """Whether a combo's two measures are too far apart to share an axis.
+
+    The same ratio the prompt states, so the model is judged against the rule
+    it was given rather than a second one spelled out here.
+    """
+    ratio = _scale_ratio(first, second)
+    return ratio is not None and ratio >= DUAL_AXIS_RATIO
 
 
 def _fit(
@@ -1026,9 +1236,10 @@ def _temporal_axis(values: Sequence[Any]) -> dict[str, Any] | None:
     handing back pre-formatted strings, say — because a time format applied to
     a string is how an axis goes blank.
     """
-    stamps = [v for v in values if isinstance(v, (date, datetime))]
-    if not stamps:
+    measured = _temporal_grain(values)
+    if measured is None:
         return None
+    grain, span_days = measured
 
     axis: dict[str, Any] = {
         # Explicit formats are wider than the bare month names Vega picked for
@@ -1037,10 +1248,7 @@ def _temporal_axis(values: Sequence[Any]) -> dict[str, Any] | None:
         "labelOverlap": "greedy",
     }
 
-    if any(
-        isinstance(v, datetime) and (v.hour or v.minute or v.second or v.microsecond)
-        for v in stamps
-    ):
+    if grain == "intraday":
         # Sub-day ticks are the one case left to Vega. `vega-time` has no
         # "hour", "minute" or "second" interval — `timeInterval("hour")` is
         # undefined, and Vega then throws inside its own tick generator, which
@@ -1050,18 +1258,22 @@ def _temporal_axis(values: Sequence[Any]) -> dict[str, Any] | None:
         axis["format"] = "%b %d, %H:%M"
         return axis
 
-    # Every value on a year boundary is a yearly series; on a month boundary, a
-    # monthly (or quarterly) one. Anything else is dated to the day.
-    if all(v.month == 1 and v.day == 1 for v in stamps):
-        axis["format"], floor = "%Y", "year"
-    elif all(v.day == 1 for v in stamps):
-        axis["format"], floor = "%b %Y", "month"
-    else:
-        axis["format"], floor = "%b %d, %Y", "date"
-
-    days = [v.date() if isinstance(v, datetime) else v for v in stamps]
-    axis["tickCount"] = {"interval": _tick_interval(floor, (max(days) - min(days)).days)}
+    # A yearly series is one whose values all sit on a year boundary, a monthly
+    # (or quarterly) one on a month boundary; anything else is dated to the day.
+    # The classification itself lives in `_temporal_grain`, which the prompt
+    # reads too — see the note there.
+    axis["format"], floor = _GRAIN_AXIS[grain]
+    axis["tickCount"] = {"interval": _tick_interval(floor, span_days)}
     return axis
+
+
+# What each grain looks like on an axis: a d3 time format, and the finest tick
+# interval that can be used without printing the same label twice.
+_GRAIN_AXIS: dict[TemporalGrain, tuple[str, str]] = {
+    "yearly": ("%Y", "year"),
+    "monthly": ("%b %Y", "month"),
+    "daily": ("%b %d, %Y", "date"),
+}
 
 
 # Approximate days per tick, finest first. `date` rather than `day`: in Vega's

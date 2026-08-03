@@ -183,6 +183,29 @@ class SqlValidator:
         # names), so registering the alias weakens nothing.
         cte_aliases: set[str] = set()
 
+        # A derived table — `CROSS JOIN (SELECT SUM(...) AS total_sales) AS
+        # total` — introduces an alias that `find_all(exp.Table)` cannot see:
+        # its node is an `exp.Subquery`, not an `exp.Table`, so `total` never
+        # reached `alias_to_table` and every `total.total_sales` reference was
+        # reported as an unknown alias. Valid SQL, rejected — the same shape of
+        # bug the CTE aliases above were fixed for.
+        #
+        # Registering them weakens nothing, and for the same reason as the CTE
+        # case: the subquery's *body* is walked by this very loop, so the tables
+        # it reads are resolved and allow-listed exactly as any other. What
+        # cannot be checked is the column *behind* the alias — `total_sales` is
+        # an output name of an inner SELECT, not a schema column — so those
+        # references are skipped rather than asserted, and skipped one alias at
+        # a time. Deliberately not folded into `cte_names`: that set also
+        # switches off column verification for the whole statement, which is
+        # the right trade for a CTE and much too wide for a derived table
+        # sitting beside four ordinary joins.
+        derived_aliases = {
+            subquery.alias.lower()
+            for subquery in tree.find_all(exp.Subquery)
+            if subquery.alias
+        }
+
         for table in tree.find_all(exp.Table):
             bare = (table.name or "").lower()
             if not bare:
@@ -239,7 +262,13 @@ class SqlValidator:
         report.referenced_tables = sorted(resolved)
         output_aliases = _collect_output_aliases(tree)
         self._resolve_columns(
-            tree, alias_to_table, cte_names | cte_aliases, resolved, output_aliases, report
+            tree,
+            alias_to_table,
+            cte_names | cte_aliases,
+            resolved,
+            output_aliases,
+            derived_aliases,
+            report,
         )
 
     def _resolve_columns(
@@ -249,6 +278,7 @@ class SqlValidator:
         cte_names: set[str],
         resolved_tables: set[str],
         output_aliases: set[str],
+        derived_aliases: set[str],
         report: ValidationReport,
     ) -> None:
         if cte_names:
@@ -275,7 +305,7 @@ class SqlValidator:
                 continue
 
             if table_ref:
-                if table_ref in cte_names:
+                if table_ref in cte_names or table_ref in derived_aliases:
                     continue
                 owner = alias_to_table.get(table_ref)
                 if owner is None:

@@ -3,6 +3,14 @@ wording never silently invalidates historical comparisons.
 """
 from __future__ import annotations
 
+from app.charts import (
+    DUAL_AXIS_RATIO,
+    MAX_HEATMAP_CELLS,
+    MAX_PIE_SLICES,
+    MAX_SERIES,
+    MIN_HISTOGRAM_ROWS,
+)
+
 PROMPT_VERSION = "v7"
 # v7: two changes, both about the *envelope* the SQL arrives in rather than the
 # SQL itself. Together they turn "did not return valid SqlProposal JSON" from a
@@ -282,43 +290,55 @@ Result ({row_count} rows):
 # scores generated SQL, not the wording of the narration (same reasoning as the
 # CLARIFY_SYSTEM note above).
 
-CHART_SYSTEM = """You choose the single best chart for a query result, or decline.
+CHART_SYSTEM = f"""You choose the single best chart for a query result, or decline.
 
 Pick one chart_type:
-- "bar": compare a measure across categories. Do not worry about which way the
-  bars run — the platform lays them out for the label count.
-- "line": a measure over an ordered or time axis (a trend).
-- "area": a trend where the filled magnitude matters.
-- "scatter": the relationship between two quantitative fields.
-- "pie": parts of a single whole, only for a few categories (<=6).
-- "heatmap": a measure across TWO dimensions at once — day by hour, region by
-  category. Put the dimensions on x_axis and y_axis and the measure on "color".
+- "bar": compare a measure across categories. The platform decides which way
+  the bars run and how they are sorted — do not try to control either.
+- "line": a measure over a time or ordered axis (a trend). The column's grain
+  is given below; a trend needs several points, not two.
+- "area": the same shape as a line, when the filled magnitude is the point —
+  volume over time, or composition over time when it is split and stacked.
+- "scatter": the relationship between two measures, one per axis. Both axes
+  must be numeric and neither may be a category.
+- "pie": parts of a single whole, {MAX_PIE_SLICES} categories at most, and never
+  with a negative value in the measure — a negative slice has no angle. Past
+  that the platform draws bars instead.
+- "heatmap": one measure across TWO dimensions at once — day by hour, region by
+  category. Dimensions on x_axis and y_axis, the measure on "color". The notes
+  below say what the two dimensions cross to; past {MAX_HEATMAP_CELLS} cells the
+  squares are smaller than the eye resolves, and unlike a bar chart there is no
+  honest way to keep only some of them, so pick something else.
 - "histogram": how one measure is spread, when the rows are individual
-  observations rather than groups. Only x_axis; the count is derived. Never for
-  a result that already has one row per category.
+  observations. Only x_axis; the count is derived, so name no y_axis. A column
+  marked "one row per value" is a group key and its result is already
+  aggregated — never a histogram. Needs {MIN_HISTOGRAM_ROWS} rows at least.
 - "combo": bars for one measure with a line over them for another, when the two
   are on different scales — revenue and a percentage, volume and an average.
-  y_axis is the bars, y2_axis is the line.
+  y_axis is the bars, y2_axis is the line. The notes below say how far apart the
+  measures are; separate axes come only past {DUAL_AXIS_RATIO}x, so a combo of
+  two comparable measures just shares one.
 - "none": nothing a chart would clarify. Prefer "none" over a chart nobody can
   read — an unreadable chart is worse than no chart.
 
-Choose "none" when:
-- the result is a single row, or a single number;
-- the measure is the same in every row (a flat chart says nothing);
-- the only numeric column is an identifier (id, code, number, year, zip);
-- the rows are a list of records to read (names, addresses, statuses) rather
-  than a comparison of magnitudes.
+Reach for "none" when the rows are a list of records to read — names,
+addresses, statuses, one unique row each — rather than a comparison of
+magnitudes, and when a category count is so high that the marks stop being
+comparable. Results that could not be charted at all (a single row, a measure
+identical in every row, an id as the only number) never reach you: the platform
+checks the data before asking, so you are only ever shown a result something
+could be drawn from.
 
-Each column below shows its distinct-value count. That count is the category
-count of a bar or pie chart — treat it as the number of marks a reader must
-compare. Past ~25 categories, a bar chart is a texture, not a comparison: pick
-"none" unless the rows are ranked (the question asked for the highest/lowest or
-top N), in which case the platform keeps the leading 25 and labels the chart as
-a subset.
+Read the result block as facts, not hints. Each column carries its
+distinct-value count, which for a bar or pie is exactly the number of marks a
+reader has to compare; a date column also carries its grain and span. The
+"shape notes" underneath are the arithmetic the rules above are stated in —
+crossings, scale gaps, and what the platform will trim. Nothing there needs
+recomputing.
 
 Rules:
 - x_axis and y_axis are required unless chart_type is "none" or "histogram".
-- Only reference column names that appear in the result schema below.
+- Only reference column names that appear in the result block below.
 - Put the category/time field on x_axis and the numeric measure on y_axis,
   always — including for bars that will end up running sideways. The platform
   flips them for you; do not pre-swap.
@@ -326,8 +346,8 @@ Rules:
   unless you are certain a further roll-up is needed.
 - Set the axis "type" to match the column: quantitative for numbers, temporal
   for dates/timestamps, nominal for text, ordinal for ranked categories.
-- Use "series" only to split a chart by a small dimension (<=8 distinct
-  values); leave it unset otherwise.
+- Use "series" only to split a chart by a small dimension — {MAX_SERIES} distinct
+  values at most; leave it unset otherwise.
 - With a series on a bar or area chart, pick a "stack":
   - "stacked" (the default): the split parts add up to a meaningful total.
   - "grouped": the parts are being compared with each other, not summed.
@@ -337,6 +357,18 @@ Rules:
   magnitude — it makes the points a bubble chart. Never an id.
 
 Return JSON matching the ChartIntent schema."""
+# Every threshold above is interpolated from `app.charts`, never typed out. The
+# budgets move — `MAX_HEATMAP_CELLS` and `DUAL_AXIS_RATIO` are both tuning
+# constants — and a prompt quoting a stale number is worse than one quoting
+# none: the model applies the rule it was given, `_fit` applies the rule in the
+# code, and the difference shows up as a chart the platform "repaired" for no
+# reason the reader can see.
+#
+# The same rule in the other direction: a chart type is not added or edited
+# until it has a bullet here saying when to pick it and when not to, and until
+# the result block carries the figure that bullet is compared against.
+# `test_charts.py::test_every_chart_type_is_described` holds the first half of
+# that; the second half is a reading, not a test.
 
 CHART_USER = """Question: {question}
 
@@ -344,8 +376,16 @@ Result shape ({row_count} rows{truncated}):
 {columns}
 
 Choose the best chart, or "none"."""
-# The model sees cardinality and numeric range, never a row value: a chart
-# decision needs to know that a column holds 1,000 distinct names or one
-# repeated total, and a count is not disclosure. PROMPT_VERSION does not move
-# for chart-prompt changes — the eval scores generated SQL, and nothing on the
-# SQL-producing path changed (same reasoning as the CLARIFY_SYSTEM note above).
+# What crosses the wire here is shape, not data. Counts, ratios, a time grain
+# and a span *length* are facts about the result rather than values out of it,
+# and they go under every disclosure policy — a chart decision has to know that
+# a column holds 1,000 distinct names or one repeated total, and a count is not
+# disclosure. A numeric column's min/max is the exception, being one specific
+# row's value, so it rides the same `HintBudget` gate as the schema block's
+# column hints and appears only where result values already do. No rule above
+# asks what the largest revenue *is*, only how it compares to the measure
+# beside it, so the narrow block costs the decision nothing.
+#
+# PROMPT_VERSION does not move for chart-prompt changes — the eval scores
+# generated SQL, and nothing on the SQL-producing path changed (same reasoning
+# as the CLARIFY_SYSTEM note above).

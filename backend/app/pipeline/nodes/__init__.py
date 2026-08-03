@@ -756,10 +756,16 @@ async def chart(state: RunState, deps: NodeDeps) -> NodeResult:
     """Let the model choose a chart for the result, then fit it and compile.
 
     Best-effort and fail-closed for the chart alone: the answer and the table
-    are already persisted, so any failure here just yields no chart. The model
-    only sees the result's *shape* (column names, types, cardinality, numeric
-    range), never a row value, so charting never widens what the disclosure
-    policy already allows — cardinality is a count, not data.
+    are already persisted, so any failure here just yields no chart.
+
+    The model sees the result's *shape* — column names and types, cardinality,
+    time grain, and the crossing and scale arithmetic the chart rules are
+    written in terms of. Counts and ratios are shared under every policy; the
+    one part of that block that is a row value, a numeric column's `min`/`max`,
+    is gated by the same `HintBudget` the schema block uses, which is why
+    `state.disclosure_policy` is passed to `describe` rather than the block
+    being assumed safe. Charting therefore widens nothing the connection had
+    not already agreed to.
 
     The model's answer is a suggestion, not a verdict: `plan_chart` measures the
     result first, refuses outright when the data cannot say anything, repairs a
@@ -827,7 +833,7 @@ async def chart(state: RunState, deps: NodeDeps) -> NodeResult:
                             if execution.truncated
                             else ""
                         ),
-                        columns=profile.describe(),
+                        columns=profile.describe(state.disclosure_policy),
                     ),
                 ),
             ],

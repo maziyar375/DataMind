@@ -267,9 +267,9 @@ The split is clean, and it falls out of what a chart decision actually needs:
 | cell count, truncation note, mark budget | platform arithmetic | ✅ | ✅ |
 | temporal grain, span **length** | a shape | ✅ | ✅ |
 | range **ratio** between two measures | derived, dimensionless | ✅ | ✅ |
-| magnitude band (`~10³`) | one significant figure | ✅ | ✅ |
-| `min` / `max` **values** | a row value | ❌ withheld | ✅ |
-| date first/last | a row value | ❌ withheld | ✅ |
+| ~~magnitude band (`~10³`)~~ | ~~one significant figure~~ | *dropped — redundant beside the ratio* | *(design notes)* |
+| `min` / `max` **values** | a row value | ❌ withheld | ✅ **`FULL` only** |
+| date first/last | a row value | ❌ withheld | ❌ never emitted |
 
 Note what the narrow column costs: **nothing that matters here.** Every rule in
 `CHART_SYSTEM` is written in terms of counts, ratios and grain — no bullet
@@ -401,7 +401,7 @@ cannot draw, which is worse than not having started it.
 | ✅ | **2. Encoder** | stack mode (stacked/grouped/100%), temporal axis format **and tick interval** (the "2025" bug), SI axis numbers, formatted tooltips, `size` → bubble | `charts/__init__.py`, `prompts/__init__.py`, `tile-editor.tsx`, `VegaChart.tsx`, both chart test files | **done** — 617 backend tests, ruff + contracts, typecheck, build, and 12 specs compiled and *rendered* through the installed Vega with their axis labels read back |
 | ✅ | **3. New types** | heatmap, combo, histogram (box plot deferred) | `charts/__init__.py`, `prompts/__init__.py`, `tile-editor.tsx`, `VegaChart.tsx`, both chart test files | **done** — 633 backend tests, ruff + contracts, typecheck, build, and all 17 specs (12 from Phase 2 + 5 new) compiled and rendered through the installed Vega |
 | ✅ | **4. Big number** | `KPI` artifact; single-row results stop being a dead end; replaces the bespoke `METRIC` renderer; delta + sparkline when the data carries a time axis | `charts/__init__.py`, `pipeline/{nodes,state}`, `domain/value_objects`, `services/{run,query,dashboard}_service`, `api/schemas.py`, `types.ts`, `ui.tsx`, `chat.tsx`, `dashboard.tsx` | **done** — 643 backend tests, ruff + contracts, typecheck, build; one `plan_kpi` and one `<Kpi>` serve both surfaces |
-| ☐ | **5. Selection** | the model keeps the choice and is finally given the facts it turns on — widened result block, **gated by the connection's Result sharing policy**, audited type bullets, prompt/type parity rule | `charts/__init__.py` (`describe(policy)`), `pipeline/nodes` (pass `state.disclosure_policy`), `prompts/__init__.py`, `test_charts.py` | every fact in the Phase 5 list appears in the block with a unit test; a test asserts no result **value** (incl. `min`/`max`) appears under `NONE`/`AGGREGATE`; parity test passes; no eval |
+| ✅ | **5. Selection** | the model keeps the choice and is finally given the facts it turns on — widened result block, **gated by the connection's Result sharing policy**, audited type bullets, prompt/type parity tests | `charts/__init__.py` (`describe(policy)`, `_temporal_grain`, `_scale_ratio`), `pipeline/nodes` (passes `state.disclosure_policy`), `prompts/__init__.py`, `test_charts.py` | **done** — 668 backend tests, ruff + 5 import-linter contracts, mypy unchanged at its pre-existing baseline; no eval, and no frontend surface until Phase 7 |
 | ☐ | **6. Colour** | diverging ramp, semantic +/- pair, `npm run test:palette` | `VegaChart.tsx`, `theme/tokens.ts`, new validator script | validator passes for **both** dark and light |
 | ☐ | **7. Picker UI** | icon grid, options filtered by what the result supports, "change chart" in chat | `tile-editor.tsx`, `chat.tsx`, `ui.tsx` | an unsupported type is disabled with a reason, never offered then demoted |
 
@@ -420,6 +420,7 @@ the heatmap) and can be done at any point after it.
 | 1 | 2026-08-02 | `6fde6d7` | Two plan steps corrected against the code — see the struck-through items in Phase 1. Migration **0007 applies on the next `make up`**: the running `api` container has the pre-change image baked in (no volume mount), and its start command is `alembic upgrade head`. The dev DB has zero affected rows, so it is a no-op there either way. |
 | 2 | 2026-08-02 | `cabfd0f` | Three defects caught by rendering rather than reasoning — see "What rendering caught" below. Scope went slightly past the plan's four bullets: the `Split` and `Size` controls in the tile editor, and a `categories` count in `usermeta`, because stack and size were otherwise reachable only from chat, and the browser's width rule counted rows where a split chart needs columns. |
 | 4 | 2026-08-02 | *(uncommitted)* | Scoped **narrower** than the plan implied: only the single-row veto is rescued by a big number, not every veto — see the design note below. The `METRIC` tile keeps its "first of N rows" reading and gains delta + sparkline when its query has a time axis. |
+| 5 | 2026-08-03 | *(uncommitted)* | Two deliberate narrowings against the plan above, and one finding the audit was for — see the design notes below. The prompt now interpolates every budget it quotes, so `MAX_HEATMAP_CELLS` and `DUAL_AXIS_RATIO` can be tuned without leaving the model applying a rule the code no longer enforces. |
 | 3 | 2026-08-02 | `db8b7fb` | Box plot deferred, per the open decision. Two design calls worth knowing about: a new `color` channel distinct from `series` (colour-as-magnitude vs colour-as-identity), and a **heuristic change** — a result with two dimensions now becomes a split bar or a heatmap instead of a bar that silently dropped the second dimension. That last one changes what existing `Auto` tiles draw. |
 
 ### What rendering caught (Phase 2)
@@ -521,6 +522,58 @@ already written out. Two implementations formatting the same number is how a
 tile ends up saying `1,247,318.4` while the axis beside it says `1.2M`; one
 planner is also what stops the tile and a chat turn from disagreeing about
 which column the number even is.
+
+### Design notes (Phase 5)
+
+**The disclosure gate reuses `HintBudget` rather than adding a second ladder,
+so it landed one step narrower than the table above.** That table put `min`/`max`
+in the `SAMPLE`/`FULL` column; the code gates them on
+`HintBudget.from_policy(policy).numeric_range`, which is **`FULL` only** —
+`SAMPLE` gets `temporal_range` but not `numeric_range`. Writing a second,
+looser ladder for the chart block would have meant a connection set to `SAMPLE`
+disclosing an extreme to the chart prompt that it withholds from the schema
+block, and no one reading either file would have known which was authoritative.
+Costs nothing, for the reason the phase is built on: no chart rule asks what
+the largest revenue *is*.
+
+**The magnitude band was dropped.** The plan listed a per-column `~10³` as a
+narrow-policy substitute for the range. Implementing the rest made it
+redundant: for two or more measures the ratio says the same thing better and
+without a unit, and for a lone measure no rule in `CHART_SYSTEM` consults its
+size at all. One fewer arguable disclosure for no loss.
+
+**What the audit actually found: three of the four "choose `none`" bullets
+described results the model is never shown.** A single row, a measure identical
+in every row, and an id as the only numeric column are all `unchartable_reason`
+vetoes, and that runs *before* the model call — so the prompt spent four lines
+instructing the model to decline cases that cannot reach it, and biased it
+toward `none` for the cases that can. They are now one sentence saying the
+platform already checked. This is the whole argument for the parity rule in one
+example: the bullets were correct when written and became fiction when the veto
+moved ahead of the call, and nothing failed in between.
+
+**The mark-budget note fires for time columns too.** The budget is a property
+of the mark, not of the column kind — `_layout` trims a bar of 400 days exactly
+as it trims a bar of 400 customers — and the note earns its place most there,
+because "pick a form that takes every row" is the only thing in the block that
+points at a line.
+
+**One grain classifier, two readers.** `_temporal_grain` now feeds both the
+prompt and `_temporal_axis`. They were written separately, and a block calling
+a series "monthly" while the axis ticked it daily would have been worse than
+either alone — the model would have chosen a chart for a shape the picture did
+not have.
+
+**A span is coverage, not the distance between endpoints.** Twelve monthly
+points run 334 days, which is eleven months of subtraction and twelve months of
+data; twelve is the number that sits sensibly beside "12 distinct". The case
+the span is printed *for* is when the two disagree — 24 distinct over 36 months
+is a series with holes in it, and that is a fact about whether a line will look
+like the data.
+
+**No frontend in this phase, deliberately.** Nothing here is visible in the UI:
+the picker still offers every type and still demotes after the fact. That is
+Phase 7's job, and it reads `_fit`, not anything added here.
 
 ### Carried forward
 

@@ -16,15 +16,21 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta
+from typing import get_args
 
 import pytest
 
 from app.charts import (
+    DUAL_AXIS_RATIO,
     HISTOGRAM_BINS,
     MAX_CATEGORY_MARKS,
+    MAX_HEATMAP_CELLS,
+    MAX_PIE_SLICES,
+    MAX_SERIES,
     MIN_HISTOGRAM_ROWS,
     AxisSpec,
     ChartIntent,
+    ChartType,
     _fit,
     compile_vega_lite,
     heuristic_intent,
@@ -39,6 +45,7 @@ from app.core.errors import LLMError
 from app.domain.ports.database import ResultColumn
 from app.domain.ports.llm import ChatMessage, ResolvedLLM
 from app.pipeline.nodes import NodeDeps, chart
+from app.pipeline.prompts import CHART_SYSTEM
 from app.pipeline.state import ExecutionResult, RunState
 
 COLUMNS = [
@@ -87,6 +94,117 @@ def test_profile_survives_unhashable_values() -> None:
     cols = _cols(("payload", "nominal"), ("n", "quantitative"))
     profile = profile_result(cols, [[{"a": 1}, 1], [{"a": 2}, 2]])
     assert profile.columns[0].distinct == 2
+
+
+# ── the block the model is shown ─────────────────────────────────────────
+# Every rule in CHART_SYSTEM is stated in terms of a count, a ratio or a grain,
+# so these tests are the other half of the prompt: a rule the block cannot
+# answer is a rule the model has to guess at and `_fit` has to enforce after
+# the fact.
+def _monthly(months: int = 12) -> tuple[list[ResultColumn], list[list[object]]]:
+    cols = _cols(
+        ("month", "temporal"), ("revenue", "quantitative"), ("orders", "quantitative")
+    )
+    rows: list[list[object]] = [
+        [date(2025, m, 1), 10_000.0 * m, 3 * m] for m in range(1, months + 1)
+    ]
+    return cols, rows
+
+
+def test_describe_states_the_time_grain_and_span() -> None:
+    cols, rows = _monthly()
+    line = profile_result(cols, rows).describe().splitlines()[0]
+    assert "monthly grain" in line and "12 months" in line
+
+
+def test_describe_marks_a_group_key_as_one_row_per_value() -> None:
+    cols, rows = _monthly()
+    assert "one row per value" in profile_result(cols, rows).describe()
+
+
+def test_describe_computes_the_scale_gap_between_measures() -> None:
+    cols, rows = _monthly()
+    notes = profile_result(cols, rows).describe()
+    # The combo rule is stated as a ratio, so the block states the ratio —
+    # rather than leaving the model to compare two min/max pairs by eye.
+    assert "revenue peaks about 3,333x higher than orders" in notes
+
+
+def test_describe_says_when_two_measures_share_a_scale() -> None:
+    cols = _cols(("day", "nominal"), ("won", "quantitative"), ("lost", "quantitative"))
+    rows = [["Mon", 10.0, 4.0], ["Tue", 12.0, 6.0], ["Wed", 9.0, 3.0]]
+    assert "one y axis holds both" in profile_result(cols, rows).describe()
+
+
+def test_describe_crosses_two_dimensions_for_the_heatmap_rule() -> None:
+    cols = _cols(("region", "nominal"), ("cat", "nominal"), ("sales", "quantitative"))
+    small = [[f"R{i}", f"C{j}", float(i + j + 1)] for i in range(7) for j in range(6)]
+    assert "42 cells" in profile_result(cols, small).describe()
+    assert "within the 400-cell budget" in profile_result(cols, small).describe()
+
+    big = [[f"R{i}", f"C{j}", float(i + j + 1)] for i in range(40) for j in range(30)]
+    assert "past the 400-cell budget" in profile_result(cols, big).describe()
+
+
+def test_describe_warns_before_the_mark_budget_trims() -> None:
+    rows = [[f"cust {i}", float(i)] for i in range(MAX_CATEGORY_MARKS + 20)]
+    notes = profile_result(COLUMNS, rows).describe()
+    assert f"leading {MAX_CATEGORY_MARKS}" in notes and "top N" in notes
+
+
+def test_describe_warns_about_a_long_time_axis_too() -> None:
+    """The budget is a property of the mark, not of the column kind.
+
+    `_layout` caps a bar chart of 400 days exactly as it caps a bar chart of
+    400 customers, and here the note is doing more work than anywhere else: it
+    is the only line in the block that points at the form which keeps every row.
+    """
+    cols = _cols(("day", "temporal"), ("orders", "quantitative"))
+    rows: list[list[object]] = [
+        [date(2025, 1, 1) + timedelta(days=i), float(i % 17 + 1)] for i in range(400)
+    ]
+    notes = profile_result(cols, rows).describe()
+    assert "400 marks on a bar or pie" in notes
+    assert "takes every row" in notes
+
+
+def test_describe_says_when_rows_are_observations_not_groups() -> None:
+    cols = _cols(("total", "quantitative"))
+    rows = [[float(i % 37)] for i in range(MIN_HISTOGRAM_ROWS * 3)]
+    assert "observations" in profile_result(cols, rows).describe()
+
+
+# ── what the block may say, per disclosure policy ────────────────────────
+# The chart prompt used to be exempt from the policy on the grounds that it
+# "never sees a row value". Cardinality is indeed a count — but a `max` is one
+# specific row's value printed verbatim, which under NONE is precisely what the
+# connection said would not happen.
+@pytest.mark.parametrize("policy", ["NONE", "AGGREGATE", "SAMPLE", "unrecognised"])
+def test_describe_withholds_extremes_under_a_narrow_policy(policy: str) -> None:
+    cols, rows = _monthly()
+    rows[0][1] = 8_675_309.0
+    block = profile_result(cols, rows).describe(policy)
+
+    assert "8,675,309" not in block and "min " not in block and "max " not in block
+    # Withholding the values is not withholding the shape: everything the chart
+    # rules are written in terms of survives the narrowest policy.
+    assert "12 distinct" in block and "monthly grain" in block
+    assert "higher than orders" in block
+
+
+def test_describe_shares_extremes_where_row_values_already_go() -> None:
+    cols, rows = _monthly()
+    block = profile_result(cols, rows).describe("FULL")
+    assert "min 10,000, max 120,000" in block
+
+
+def test_describe_defaults_to_the_narrowest_policy() -> None:
+    # Same convention as `_render_history` and `_describe_schema`: a caller that
+    # forgets the policy discloses nothing.
+    cols, rows = _monthly()
+    assert profile_result(cols, rows).describe() == profile_result(
+        cols, rows
+    ).describe("NONE")
 
 
 # ── the data's veto ──────────────────────────────────────────────────────
@@ -1048,6 +1166,34 @@ def test_heuristic_skips_an_id_column_as_the_measure() -> None:
     assert intent is not None and intent.y_axis and intent.y_axis.field == "sales"
 
 
+# ── prompt / type parity ─────────────────────────────────────────────────
+# A chart type is not "added" when the compiler can draw it. It is added when
+# the model has been told it exists, when to reach for it, and against which
+# number. These two tests hold the mechanical half of that; the other half —
+# whether the bullet *describes* what `_fit` does — is a reading, not a test.
+def test_every_chart_type_is_described_to_the_model() -> None:
+    described = {
+        line.split('"')[1]
+        for line in CHART_SYSTEM.splitlines()
+        if line.startswith('- "')
+    }
+    assert described == set(get_args(ChartType))
+
+
+def test_the_prompt_quotes_live_budgets_not_copied_numbers() -> None:
+    """A threshold in the prompt reads the constant `_fit` reads.
+
+    Otherwise the two drift the moment a budget is tuned, and the model applies
+    a rule the platform no longer enforces — visible to the user only as a
+    chart that was "adjusted to fit this result" for no discernible reason.
+    """
+    for budget in (
+        MAX_PIE_SLICES, MAX_SERIES, MAX_HEATMAP_CELLS,
+        DUAL_AXIS_RATIO, MIN_HISTOGRAM_ROWS,
+    ):
+        assert str(budget) in CHART_SYSTEM
+
+
 # ── the node ─────────────────────────────────────────────────────────────
 class _Gateway:
     """Minimal stand-in for LLMGateway: only `structured` is exercised here."""
@@ -1056,9 +1202,11 @@ class _Gateway:
         self._returns = returns
         self._raises = raises
         self.calls = 0
+        self.sent: list[ChatMessage] = []
 
     async def structured(self, llm, messages: Sequence[ChatMessage], schema):  # type: ignore[no-untyped-def]
         self.calls += 1
+        self.sent = list(messages)
         if self._raises:
             raise LLMError("provider exploded")
         return self._returns
@@ -1116,6 +1264,30 @@ async def test_chart_node_sets_spec_on_success() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("policy", "extremes_visible"),
+    [("NONE", False), ("AGGREGATE", False), ("SAMPLE", False), ("FULL", True)],
+)
+async def test_chart_node_asks_under_the_connections_policy(
+    policy: str, extremes_visible: bool
+) -> None:
+    """The prompt is built for the policy in force, not for the widest one.
+
+    The node is where the two halves meet: `describe` can gate what it likes,
+    but if the caller never hands it the policy the gate is decorative.
+    """
+    deps, _ = _deps(gateway := _Gateway(returns=_intent("bar")))
+    state = _state()
+    state.disclosure_policy = policy
+
+    await chart(state, deps)
+
+    sent = "\n".join(m.content for m in gateway.sent)
+    assert ("max 30" in sent) is extremes_visible
+    assert "3 distinct" in sent  # the shape goes either way
+
+
+@pytest.mark.asyncio
 async def test_chart_node_falls_back_to_heuristic_on_decline() -> None:
     # A category + measure result is chartable even when the model declines.
     deps, events = _deps(_Gateway(returns=ChartIntent(chart_type="none")))
@@ -1168,6 +1340,12 @@ async def test_chart_node_skips_when_nothing_fits() -> None:
 async def test_chart_node_does_not_call_the_model_for_a_hopeless_result() -> None:
     # A thousand tied totals: no chart is possible, so no tokens are spent
     # discovering that.
+    #
+    # This is also what licenses the prompt to say nothing about declining a
+    # single row, a flat measure or an id-only result: those never reach the
+    # model at all, so instructions to refuse them were describing a case that
+    # cannot arrive — and biasing the model toward "none" for the cases that
+    # can. If this test ever stops holding, those bullets need to come back.
     gateway = _Gateway(returns=_intent("bar"))
     deps, _ = _deps(gateway)
     state = _state(rows=[[f"Customer {i}", 3881.64] for i in range(1000)])
