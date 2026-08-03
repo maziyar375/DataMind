@@ -23,7 +23,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -1031,6 +1031,190 @@ class ChartPlan:
     intent: ChartIntent | None
     source: str            # model | model_adjusted | heuristic | none
     reason: str | None = None
+
+
+def candidate_intent(profile: ResultProfile, chart_type: str) -> ChartIntent | None:
+    """The most plausible intent of *this* type for this result, or None.
+
+    `heuristic_intent` answers "what should this be drawn as"; this answers
+    "if it has to be a heatmap, which columns are the heatmap". Two different
+    questions, and the second one is what a picker needs: a reader choosing a
+    type from a grid has not chosen columns, and asking them to is how a
+    control that should take one click takes four.
+
+    Column choice follows the same rules the heuristic uses — a measure that is
+    not an identifier and actually varies, a dimension that actually splits the
+    rows — so a type picked by hand lands on the same columns it would have
+    landed on had the platform chosen that type itself.
+    """
+    measures = _measure_candidates(profile)
+    dimensions = _dimension_candidates(profile)
+    # Rightmost measure: SQL convention puts the thing being measured last.
+    measure = measures[-1] if measures else None
+    temporal = [c for c in dimensions if c.is_temporal]
+    categorical = [c for c in dimensions if c.is_categorical]
+
+    if chart_type == "histogram":
+        column = _histogram_candidate(profile)
+        return (
+            None if column is None
+            else ChartIntent(chart_type="histogram", x_axis=_axis_for(column))
+        )
+
+    if chart_type == "scatter":
+        if len(measures) < 2:
+            return None
+        return ChartIntent(
+            chart_type="scatter",
+            x_axis=_axis_for(measures[0]),
+            y_axis=_axis_for(measures[1]),
+        )
+
+    if measure is None:
+        return None
+
+    if chart_type == "heatmap":
+        if len(dimensions) < 2:
+            return None
+        return ChartIntent(
+            chart_type="heatmap",
+            x_axis=_axis_for(dimensions[0]),
+            y_axis=_axis_for(dimensions[1]),
+            color=_axis_for(measure),
+        )
+
+    if chart_type == "combo":
+        if len(measures) < 2 or not dimensions:
+            return None
+        return ChartIntent(
+            chart_type="combo",
+            x_axis=_axis_for(dimensions[0]),
+            y_axis=_axis_for(measures[0]),
+            y2_axis=_axis_for(measures[1]),
+        )
+
+    if not dimensions:
+        return None
+
+    # An ordered axis first for the trend types, since a line across unordered
+    # categories draws a continuity the data does not have and `_fit` demotes
+    # it. A pie wants the *narrowest* category column — it is the one with any
+    # chance of fitting inside the slice budget.
+    if chart_type in ("line", "area"):
+        ordered = temporal or [c for c in categorical if c.semantic_type == "ordinal"]
+        axis = ordered[0] if ordered else dimensions[0]
+    elif chart_type == "pie":
+        axis = min(categorical, key=lambda c: c.distinct) if categorical else dimensions[0]
+    else:
+        axis = dimensions[0]
+
+    series = next(
+        (c for c in dimensions if c.name != axis.name and 1 < c.distinct <= MAX_SERIES),
+        None,
+    )
+    return ChartIntent(
+        chart_type=chart_type,  # type: ignore[arg-type]  (validated by the caller's list)
+        x_axis=_axis_for(axis),
+        y_axis=_axis_for(measure),
+        series=_axis_for(series) if series is not None and chart_type != "pie" else None,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ChartOption:
+    """Whether this result can be drawn as one type, and if not, why not."""
+
+    chart_type: str
+    supported: bool
+    reason: str | None = None
+
+
+def chart_options(profile: ResultProfile) -> list[ChartOption]:
+    """Every chart type, with a verdict for this result.
+
+    **`supported` is not a second opinion about the vetoes — it is the vetoes.**
+    Each type is answered by building its candidate and running the real
+    `plan_chart`: supported means asking for that type actually returns that
+    type. Anything else would be a parallel rulebook, and a parallel rulebook is
+    how a picker comes to offer a chart the compiler then quietly replaces with
+    another one.
+
+    `reason` is prose for the reader and nothing else. It never decides
+    anything, so it cannot disagree with the verdict beside it — the worst a
+    stale sentence can do is explain a refusal badly, not cause one.
+    """
+    blocked = unchartable_reason(profile)
+    options: list[ChartOption] = []
+    for chart_type in get_args(ChartType):
+        if chart_type == "none":
+            continue
+        if blocked is not None:
+            options.append(ChartOption(chart_type, False, blocked))
+            continue
+        candidate = candidate_intent(profile, chart_type)
+        fitted = plan_chart(profile, candidate).intent if candidate is not None else None
+        supported = fitted is not None and fitted.chart_type == chart_type
+        options.append(
+            ChartOption(
+                chart_type,
+                supported,
+                None if supported else _unsupported_reason(profile, chart_type),
+            )
+        )
+    return options
+
+
+def _unsupported_reason(profile: ResultProfile, chart_type: str) -> str:
+    """Why a type does not fit, in the reader's terms rather than the code's.
+
+    Deliberately reads the same profile the vetoes read, so the sentence names
+    the actual obstacle — "45 categories" beats "does not fit this result",
+    which was the note this whole phase exists to stop showing.
+    """
+    measures = _measure_candidates(profile)
+    dimensions = _dimension_candidates(profile)
+    categorical = [c for c in dimensions if c.is_categorical]
+
+    if chart_type == "histogram":
+        return (
+            f"Needs {MIN_HISTOGRAM_ROWS}+ rows of one numeric column with at "
+            f"least {MIN_HISTOGRAM_LEVELS} distinct values — a spread to bin, "
+            "rather than one row per group."
+        )
+    if chart_type == "scatter":
+        return "Needs two numeric measures to relate to each other."
+    if chart_type == "combo":
+        if len(measures) < 2:
+            return "Needs two measures — one for the bars, one for the line."
+        return "Needs a category or date column to put them both over."
+    if chart_type == "heatmap":
+        if len(dimensions) < 2:
+            return "Needs two category or date columns to cross."
+        cells = dimensions[0].distinct * dimensions[1].distinct
+        return (
+            f"{dimensions[0].name} x {dimensions[1].name} is {cells:,} cells; "
+            f"a heatmap stays legible to about {MAX_HEATMAP_CELLS}."
+        )
+    if not measures:
+        return "No numeric measure in this result."
+    if not dimensions:
+        return "Needs a category or date column to compare the measure across."
+    if chart_type in ("line", "area"):
+        return (
+            "Needs an ordered axis — a date, or a ranked category. Joining "
+            "unordered categories invents a continuity the data does not have."
+        )
+    if chart_type == "pie":
+        if not categorical:
+            return "A pie divides a whole between categories; this has none."
+        if any((c.minimum or 0) < 0 for c in measures):
+            return "A pie cannot show a negative value — an angle has no sign."
+        narrowest = min(c.distinct for c in categorical)
+        return (
+            f"A pie reads about {MAX_PIE_SLICES} slices; the narrowest column "
+            f"here has {narrowest:,}."
+        )
+    return "This result cannot be drawn that way."
 
 
 def plan_chart(

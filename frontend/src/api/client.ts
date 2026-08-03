@@ -8,7 +8,7 @@
  */
 
 import type {
-  ArtifactSpec, Connection, ConversationSummary, Dashboard, DashboardSummary,
+  ArtifactSpec, ChartRedraw, Connection, ConversationSummary, Dashboard, DashboardSummary,
   DashboardTile, LlmConfig, MessageWithRun, ProblemDetail, RunDetail, RunEvent,
   SchemaSnapshot, SemanticDocument, SemanticJob, SemanticLayer, SqlDraft,
   TilePosition, TileResult, TestResult, User,
@@ -315,6 +315,13 @@ export const runs = {
   artifact: (id: string) => get<{ id: string; kind: string; spec: ArtifactSpec }>(`/artifacts/${id}`),
   poll: (id: string, after: number) =>
     get<RunEvent[]>(`/runs/${id}/events/poll?after=${after}`),
+  /**
+   * Redraw a finished run's result as another chart type. The response also
+   * carries fresh per-type verdicts, so opening the picker and changing the
+   * chart are one round trip rather than two.
+   */
+  redrawChart: (id: string, chartType: string) =>
+    post<ChartRedraw>(`/runs/${id}/chart`, { chart_type: chartType }),
 }
 
 /**

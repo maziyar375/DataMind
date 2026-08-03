@@ -351,6 +351,50 @@ class TileColumnRead(BaseModel):
     semantic_type: str = "nominal"
 
 
+class ChartRedrawRequest(BaseModel):
+    """Redraw a finished run's result as a different chart type.
+
+    Only the type: a reader picking "heatmap" from a grid has not picked
+    columns, and the platform already knows which columns a heatmap of this
+    result would use — it is the same choice it would have made itself.
+    """
+
+    chart_type: str
+
+
+class ChartRedrawRead(BaseModel):
+    """A recompiled spec, plus the verdicts the picker needs to stay honest.
+
+    The options travel with every response so a reader who has just redrawn a
+    chart is looking at a picker describing the same result, without a second
+    round trip.
+
+    Nothing here is persisted. A transcript records what a run produced, and
+    quietly rewriting yesterday's chart artifact because someone flipped a
+    picker today would make the step trail ("bar chart (model)") a lie about
+    the row beside it. The new spec lives in the browser for as long as the
+    reader is looking at it.
+    """
+
+    spec: dict[str, Any] | None = None
+    chart_type: str
+    reason: str | None = None
+    options: list[ChartOptionRead] = Field(default_factory=list)
+
+
+class ChartOptionRead(BaseModel):
+    """Whether one chart type fits a given result, and if not, why not.
+
+    `supported` is computed by asking the real planner for that type and seeing
+    whether it comes back unchanged, so it cannot drift from what the compiler
+    would actually do. `reason` is prose for a tooltip and decides nothing.
+    """
+
+    chart_type: str
+    supported: bool
+    reason: str | None = None
+
+
 class TileResultRead(BaseModel):
     status: Literal["OK", "ERROR"] = "OK"
     columns: list[TileColumnRead] = Field(default_factory=list)
@@ -403,6 +447,9 @@ class SqlDraftRead(BaseModel):
     # A `ChartIntent` for the editor's pickers to default from; null when the
     # preview's shape suggests nothing.
     chart_suggestion: dict[str, Any] | None = None
+    # Per-type verdicts for the picker: `{chart_type, supported, reason}`.
+    # Empty means "no opinion" — the editor leaves every type enabled.
+    chart_options: list[ChartOptionRead] = Field(default_factory=list)
     preview: TileResultRead | None = None
     question: str | None = None
     llm_config_id: UUID | None = None

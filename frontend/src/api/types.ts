@@ -450,6 +450,21 @@ export interface TilePosition {
   position?: number
 }
 
+/** Whether one chart type fits a result, and if not, why not. */
+export interface ChartOption {
+  chart_type: string
+  supported: boolean
+  reason: string | null
+}
+
+/** A redrawn chart for a finished run, plus fresh verdicts. */
+export interface ChartRedraw {
+  spec: Record<string, unknown> | null
+  chart_type: string
+  reason: string | null
+  options: ChartOption[]
+}
+
 /** A statement, the guard's verdict on it, and what it returns. */
 export interface SqlDraft {
   sql: string
@@ -462,6 +477,8 @@ export interface SqlDraft {
   }
   referenced_tables: string[]
   chart_suggestion: Record<string, unknown> | null
+  /** Per-type verdicts for the picker; empty means "no opinion yet". */
+  chart_options: ChartOption[]
   preview: TileResult | null
   question: string | null
   llm_config_id: string | null

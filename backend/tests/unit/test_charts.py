@@ -30,8 +30,11 @@ from app.charts import (
     MIN_HISTOGRAM_ROWS,
     AxisSpec,
     ChartIntent,
+    ChartOption,
     ChartType,
     _fit,
+    candidate_intent,
+    chart_options,
     compile_vega_lite,
     heuristic_intent,
     plan_chart,
@@ -1258,6 +1261,99 @@ def test_heuristic_skips_an_id_column_as_the_measure() -> None:
     rows = [["Paris", 1, 10.0], ["Rome", 2, 20.0]]
     intent = heuristic_intent(profile_result(cols, rows))
     assert intent is not None and intent.y_axis and intent.y_axis.field == "sales"
+
+
+# ── what the picker may offer ────────────────────────────────────────────
+# The phase this came from exists to kill one behaviour: a type offered, saved,
+# and then quietly replaced with a note saying it "does not fit this result".
+# So `supported` is not a second opinion about the vetoes — it is defined as
+# "asking for this type returns this type", and these tests hold that.
+def _options(profile) -> dict[str, ChartOption]:
+    return {o.chart_type: o for o in chart_options(profile)}
+
+
+def test_every_offered_type_survives_being_asked_for() -> None:
+    """The whole contract, over a spread of shapes: nothing the picker enables
+    can come back as something else."""
+    shapes = [
+        (COLUMNS, ROWS),
+        _monthly(),
+        _matrix(),
+        _signed_matrix(),
+        (_cols(("total", "quantitative")), [[float(i % 37)] for i in range(60)]),
+        (
+            _cols(("spend", "quantitative"), ("revenue", "quantitative")),
+            [[float(i), float(i * i)] for i in range(1, 30)],
+        ),
+    ]
+    for cols, rows in shapes:
+        profile = profile_result(cols, rows)
+        for option in chart_options(profile):
+            if not option.supported:
+                continue
+            candidate = candidate_intent(profile, option.chart_type)
+            assert candidate is not None, option.chart_type
+            fitted = plan_chart(profile, candidate).intent
+            assert fitted is not None and fitted.chart_type == option.chart_type, (
+                f"{option.chart_type} was offered but came back as "
+                f"{fitted.chart_type if fitted else 'nothing'}"
+            )
+
+
+def test_every_refusal_carries_a_reason() -> None:
+    """A greyed tile with no explanation teaches the reader nothing — it was
+    the note's *content* that was worth keeping, not its timing."""
+    for option in chart_options(profile_result(COLUMNS, ROWS)):
+        assert option.supported or (option.reason or "").strip()
+
+
+def test_a_pie_is_refused_by_slice_count_with_the_number_in_it() -> None:
+    rows = [[f"cust {i}", float(i + 1)] for i in range(40)]
+    pie = _options(profile_result(COLUMNS, rows))["pie"]
+    assert not pie.supported
+    assert "40" in (pie.reason or "") and str(MAX_PIE_SLICES) in (pie.reason or "")
+
+
+def test_a_line_is_refused_over_unordered_categories() -> None:
+    """`_fit` demotes this to a bar, which is exactly the silent replacement
+    the picker exists to pre-empt."""
+    line = _options(PROFILE)["line"]
+    assert not line.supported and "ordered" in (line.reason or "")
+
+
+def test_a_line_is_offered_over_a_date() -> None:
+    cols, rows = _monthly()
+    assert _options(profile_result(cols, rows))["line"].supported
+
+
+def test_a_heatmap_is_refused_by_cell_count_with_the_arithmetic() -> None:
+    cols, rows = _matrix(rows_n=40, cols_n=30)
+    heatmap = _options(profile_result(cols, rows))["heatmap"]
+    assert not heatmap.supported
+    assert "1,200" in (heatmap.reason or "")
+
+
+def test_an_unchartable_result_refuses_everything_with_one_reason() -> None:
+    """One fact about the data, not nine separate complaints."""
+    rows = [[f"Customer {i}", 3881.64] for i in range(50)]
+    profile = profile_result(COLUMNS, rows)
+    options = chart_options(profile)
+    assert options and not any(o.supported for o in options)
+    assert {o.reason for o in options} == {unchartable_reason(profile)}
+
+
+def test_a_candidate_picks_the_same_columns_the_platform_would() -> None:
+    """A reader choosing a type from a grid has not chosen columns, so the
+    platform chooses them — by what they contain, never by position."""
+    cols = _cols(
+        ("order_id", "quantitative"), ("region", "nominal"), ("revenue", "quantitative")
+    )
+    rows = [[float(i), f"R{i % 5}", float(i * 3)] for i in range(1, 21)]
+    candidate = candidate_intent(profile_result(cols, rows), "bar")
+    assert candidate is not None
+    assert candidate.x_axis is not None and candidate.x_axis.field == "region"
+    # `order_id` is numeric and leftmost; it is still not a measure.
+    assert candidate.y_axis is not None and candidate.y_axis.field == "revenue"
 
 
 # ── prompt / type parity ─────────────────────────────────────────────────

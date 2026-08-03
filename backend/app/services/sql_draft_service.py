@@ -20,7 +20,7 @@ dashboard through it.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import timedelta
 from typing import Any
 from uuid import UUID
@@ -75,6 +75,10 @@ class SqlDraft:
     # chart pickers. Deterministic and free: no model is asked what to draw,
     # and the user overrides it anyway.
     chart_suggestion: dict[str, Any] | None = None
+    # Which types this preview can actually be drawn as, and why not for the
+    # rest. The picker disables what will not work rather than offering it and
+    # letting the save path demote it with an apology.
+    chart_options: list[dict[str, Any]] = field(default_factory=list)
     preview: TileResult | None = None
     question: str | None = None
     llm_config_id: UUID | None = None
@@ -213,6 +217,7 @@ async def _draft(
         validation_report=report.model_dump(mode="json"),
         referenced_tables=list(report.referenced_tables),
         chart_suggestion=_chart_suggestion(preview),
+        chart_options=_chart_options(preview),
         preview=preview,
         question=question,
         llm_config_id=llm_config_id,
@@ -241,6 +246,30 @@ def _chart_suggestion(preview: TileResult | None) -> dict[str, Any] | None:
         return None
 
     return plan.intent.model_dump(mode="json") if plan.intent is not None else None
+
+
+def _chart_options(preview: TileResult | None) -> list[dict[str, Any]]:
+    """Per-type verdicts for the editor's picker.
+
+    Empty when there is nothing to judge — no preview, or a result too narrow
+    to chart at all. The editor reads an empty list as "no opinion" and leaves
+    every type enabled, which is the same thing it did before this existed: a
+    picker that greys everything out because the preview failed would be worse
+    than one that lets the save path answer.
+    """
+    if preview is None or preview.status != "OK" or len(preview.columns) < 2:
+        return []
+
+    from app.charts import chart_options, profile_result
+
+    try:
+        profile = profile_result(
+            preview.columns, preview.rows, truncated=preview.truncated
+        )
+        return [asdict(option) for option in chart_options(profile)]
+    except Exception:  # noqa: BLE001 — same posture as the suggestion above
+        log.exception("draft_chart_options_failed")
+        return []
 
 
 # ── loading ──────────────────────────────────────────────────────────────

@@ -20,9 +20,13 @@
  *   the numbers" is `tile_type = TABLE`.
  * * **Auto is a value.** `chart_config = null` means "re-decide from every
  *   result", which is the right default for a tile whose data changes shape.
- *   A picked type is stored and gets re-fitted per refresh, and a pick the
- *   data cannot support is demoted by the backend with a note rather than
- *   blocking the save.
+ *   A picked type is stored and gets re-fitted per refresh.
+ * * **The type grid is filtered by the preview.** Types this result cannot
+ *   carry are disabled with the reason on hover, from the same verdicts the
+ *   planner computes. The backend still re-fits on every refresh and still
+ *   demotes with a note if a tile's data changes shape under it — that is the
+ *   backstop, not the interface. Being told "your pick does not fit this
+ *   result" *after* saving was the thing worth removing.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
@@ -31,9 +35,10 @@ import {
   llmConfigs as llmConfigsApi, sqlDrafts,
 } from '../api/client'
 import type {
-  Connection, Dashboard, DashboardTile, LlmConfig, SqlDraft, SqlOrigin,
-  TableColumnConfig, TableConfig, TileType,
+  ChartOption, Connection, Dashboard, DashboardTile, LlmConfig, SqlDraft,
+  SqlOrigin, TableColumnConfig, TableConfig, TileType,
 } from '../api/types'
+import { ChartTypePicker } from './chart-picker'
 import { REFRESH_OPTIONS, rateLabel } from './dashboard'
 import {
   Chip, ErrorNote, Field, GhostButton, Icon, Modal, PrimaryButton, ResultTable,
@@ -52,19 +57,6 @@ const TILE_TYPES: { value: TileType; label: string; hint: string }[] = [
 
 /** The marks with area to divide between a split. */
 const STACKABLE = ['bar', 'area']
-
-/** The chart picker. `auto` stores null — see the header. */
-const CHART_TYPES: { value: string; label: string }[] = [
-  { value: 'auto', label: 'Auto' },
-  { value: 'bar', label: 'Bar' },
-  { value: 'line', label: 'Line' },
-  { value: 'area', label: 'Area' },
-  { value: 'combo', label: 'Bar + line' },
-  { value: 'scatter', label: 'Scatter' },
-  { value: 'pie', label: 'Pie' },
-  { value: 'heatmap', label: 'Heatmap' },
-  { value: 'histogram', label: 'Histogram' },
-]
 
 /**
  * What the two positional pickers mean for each type.
@@ -603,7 +595,12 @@ export function TileEditor({
               )}
 
               {tileType === 'CHART' && (
-                <ChartPicker axes={axes} columns={columns} onChange={setAxes} />
+                <ChartPicker
+                  axes={axes}
+                  columns={columns}
+                  options={draft?.chart_options ?? []}
+                  onChange={setAxes}
+                />
               )}
             </>
           )}
@@ -1046,10 +1043,12 @@ function MoveButton({
 
 // ── the chart pickers ─────────────────────────────────────────────────────
 function ChartPicker({
-  axes, columns, onChange,
+  axes, columns, options, onChange,
 }: {
   axes: AxisState
   columns: { name: string; semantic_type: string }[]
+  /** Per-type verdicts from the last preview; empty until one has run. */
+  options: ChartOption[]
   onChange: (axes: AxisState) => void
 }) {
   // Axes can only be picked from columns we have actually seen come back.
@@ -1082,19 +1081,15 @@ function ChartPicker({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <Field label="Chart">
+        <ChartTypePicker
+          value={axes.type}
+          options={options}
+          columns={9}
+          onChange={(type) => onChange({ ...axes, type })}
+        />
+      </Field>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
-        <Field label="Chart">
-          <Select
-            value={axes.type}
-            onChange={(event) => onChange({ ...axes, type: event.target.value })}
-          >
-            {CHART_TYPES.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </Select>
-        </Field>
         {axes.type !== 'auto' && (
           <>
             {pick('x', labels.x, { empty: '—' })}

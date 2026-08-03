@@ -16,6 +16,7 @@ from fastapi import APIRouter
 
 from app.api.deps import CtxDep, DbDep, SettingsDep
 from app.api.schemas import (
+    ChartOptionRead,
     SqlDraftRead,
     SqlDraftRequest,
     SqlValidateRequest,
@@ -33,6 +34,7 @@ def _read(draft: SqlDraft) -> SqlDraftRead:
         validation_report=draft.validation_report,
         referenced_tables=draft.referenced_tables,
         chart_suggestion=draft.chart_suggestion,
+        chart_options=[ChartOptionRead(**option) for option in draft.chart_options],
         preview=(
             None
             if draft.preview is None

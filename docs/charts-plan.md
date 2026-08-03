@@ -403,7 +403,7 @@ cannot draw, which is worse than not having started it.
 | ✅ | **4. Big number** | `KPI` artifact; single-row results stop being a dead end; replaces the bespoke `METRIC` renderer; delta + sparkline when the data carries a time axis | `charts/__init__.py`, `pipeline/{nodes,state}`, `domain/value_objects`, `services/{run,query,dashboard}_service`, `api/schemas.py`, `types.ts`, `ui.tsx`, `chat.tsx`, `dashboard.tsx` | **done** — 643 backend tests, ruff + contracts, typecheck, build; one `plan_kpi` and one `<Kpi>` serve both surfaces |
 | ✅ | **5. Selection** | the model keeps the choice and is finally given the facts it turns on — widened result block, **gated by the connection's Result sharing policy**, audited type bullets, prompt/type parity tests | `charts/__init__.py` (`describe(policy)`, `_temporal_grain`, `_scale_ratio`), `pipeline/nodes` (passes `state.disclosure_policy`), `prompts/__init__.py`, `test_charts.py` | **done** — 668 backend tests, ruff + 5 import-linter contracts, mypy unchanged at its pre-existing baseline; no eval, and no frontend surface until Phase 7 |
 | ✅ | **6. Colour** | diverging ramp, polarity pair, `npm run test:palette` — plus the missing `heatmap` scale family the audit turned up | `palette.ts` (new), `palette.test.ts` (new), `VegaChart.tsx`, `charts/__init__.py`, `test_charts.py` | **done** — 31 gates pass in both modes, 680 backend tests, typecheck + build, and every new colour path rendered through the installed Vega |
-| ☐ | **7. Picker UI** | icon grid, options filtered by what the result supports, "change chart" in chat | `tile-editor.tsx`, `chat.tsx`, `ui.tsx` | an unsupported type is disabled with a reason, never offered then demoted |
+| ✅ | **7. Picker UI** | icon grid, options filtered by what the result supports, "change chart" in chat | `charts/__init__.py` (`chart_options`, `candidate_intent`), `api/{schemas,v1/conversations,v1/drafts}.py`, `sql_draft_service.py`, `chart-picker.tsx` (new), `tile-editor.tsx`, `chat.tsx`, `test_charts.py` | **done** — 688 backend tests, ruff + 5 contracts, typecheck + build, and the verdicts exercised against the live API for both surfaces |
 
 **Dependencies:** 1 → 2 → 3 → 5 is the spine — 5 audits the prompt against the
 types 3 adds, so it must follow it. Phase 7 needs 3 (a picker offers the types)
@@ -420,6 +420,7 @@ the heatmap) and can be done at any point after it.
 | 1 | 2026-08-02 | `6fde6d7` | Two plan steps corrected against the code — see the struck-through items in Phase 1. Migration **0007 applies on the next `make up`**: the running `api` container has the pre-change image baked in (no volume mount), and its start command is `alembic upgrade head`. The dev DB has zero affected rows, so it is a no-op there either way. |
 | 2 | 2026-08-02 | `cabfd0f` | Three defects caught by rendering rather than reasoning — see "What rendering caught" below. Scope went slightly past the plan's four bullets: the `Split` and `Size` controls in the tile editor, and a `categories` count in `usermeta`, because stack and size were otherwise reachable only from chat, and the browser's width rule counted rows where a split chart needs columns. |
 | 4 | 2026-08-02 | *(uncommitted)* | Scoped **narrower** than the plan implied: only the single-row veto is rescued by a big number, not every veto — see the design note below. The `METRIC` tile keeps its "first of N rows" reading and gains delta + sparkline when its query has a time axis. |
+| 7 | 2026-08-03 | *(uncommitted)* | `supported` is *defined* as "asking for this type returns this type", so the grid cannot drift from the compiler. The chat redraw is deliberately not persisted — see the design notes. Not visually inspected: no headless browser in this environment. |
 | 6 | 2026-08-03 | *(uncommitted)* | The palette itself was not rebuilt, as the phase instructed. Two findings the validator existed to catch — a stale figure and an entire missing scale family — plus one gate that could not be met as written; see the design notes. |
 | 5 | 2026-08-03 | `bfb147c` | Two deliberate narrowings against the plan above, and one finding the audit was for — see the design notes below. The prompt now interpolates every budget it quotes, so `MAX_HEATMAP_CELLS` and `DUAL_AXIS_RATIO` can be tuned without leaving the model applying a rule the code no longer enforces. |
 | 3 | 2026-08-02 | `db8b7fb` | Box plot deferred, per the open decision. Two design calls worth knowing about: a new `color` channel distinct from `series` (colour-as-magnitude vs colour-as-identity), and a **heuristic change** — a result with two dimensions now becomes a split bar or a heatmap instead of a bar that silently dropped the second dimension. That last one changes what existing `Auto` tiles draw. |
@@ -523,6 +524,51 @@ already written out. Two implementations formatting the same number is how a
 tile ends up saying `1,247,318.4` while the axis beside it says `1.2M`; one
 planner is also what stops the tile and a chat turn from disagreeing about
 which column the number even is.
+
+### Design notes (Phase 7)
+
+**"Supported" is not a second opinion — it is the vetoes.** The tempting build
+is a list of preconditions per type, which is a second rulebook that starts
+correct and drifts. Instead `chart_options` builds each type's candidate and
+runs the real `plan_chart`: supported means *asking for that type returns that
+type*, which is literally the phase's own done-when ("never offered then
+demoted") expressed as code. A test sweeps six result shapes and asserts that
+nothing the picker enables comes back as something else.
+
+The `reason` strings sit beside that verdict and decide nothing, so a stale
+sentence can only explain a refusal badly — it cannot cause one. They are worth
+the care anyway: "45 categories, a pie reads 6" tells the reader something
+about their own data, while the note this phase removes ("does not fit this
+result") told them only that they had been overruled.
+
+**`candidate_intent` is a second question, not a duplicate of the heuristic.**
+`heuristic_intent` answers "what should this be drawn as"; this answers "if it
+has to be a heatmap, which columns are the heatmap". A reader clicking a tile
+in a grid has not chosen columns, and making them is how a one-click control
+becomes four. It picks columns by the same rules — a measure that is not an
+identifier and actually varies — so a hand-picked type lands where the platform
+would have put it.
+
+**The chat redraw is not persisted, deliberately.** A transcript records what a
+run produced. Rewriting yesterday's chart artifact because someone flipped a
+picker today would leave the step trail beside it — "bar chart (model)" —
+describing a chart that is no longer there. The new spec lives in the browser
+for as long as the reader is looking at it, and a reload brings back what the
+run actually produced. It also reads the run's own stored TABLE artifact rather
+than re-running the query: the rows a chart is drawn from must be the rows the
+answer above it was written from, or a database that has moved on will quietly
+make the picture disagree with the prose.
+
+**The endpoint re-checks what the picker already knows.** A type the data
+cannot carry is refused server-side with its reason, even though the grid will
+not offer it. That is not redundancy for its own sake — the verdicts on screen
+can be older than the data behind a dashboard tile, and the rule that matters is
+the one enforced where the chart is actually built.
+
+**Not visually inspected.** The verdicts were exercised against the live API on
+both surfaces and the build and typecheck pass, but this environment has no
+headless browser, so the icon grid itself has not been looked at. Worth a glance
+before this is called finished.
 
 ### Design notes (Phase 6)
 
