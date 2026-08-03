@@ -2,100 +2,16 @@
  * Renders a backend-produced Vega-Lite spec with vega-embed.
  *
  * The spec's data and encodings are chosen by the agent (the `chart` pipeline
- * node); this component only paints it. Colours are hex rather than the app's
- * oklch CSS variables because Vega/D3 cannot parse `oklch()` and would fall
- * back to black — so the values below are the *same* theme colours, converted
- * once. A MutationObserver re-renders the chart when the theme is toggled.
+ * node); this component only paints it. A MutationObserver re-renders the
+ * chart when the theme is toggled.
  *
- * ── The categorical palette ──────────────────────────────────────────────
- *
- * Eight hues spaced evenly around the wheel from the theme's own accent, so
- * the whole set is derived from the brand rather than bolted on beside it.
- * Slot 1 is that accent's hue: a single-series chart paints with slot 1, which
- * is most charts, so it is the colour the product actually reads as.
- *
- * **Each mode anchors on its own accent, and they are different hues.** Light
- * chrome is plum (OKLCH 0.52 0.19 315) and dark chrome is blue (OKLCH 0.7 0.15
- * 250), so the light wheel starts at 315 and the dark wheel at 250 — charts
- * match the theme they are sitting in. The cost, stated plainly: a series does
- * NOT keep its hue when the user flips the theme. That was the earlier
- * arrangement (plum in both modes) and it made dark charts a foreign object on
- * a blue-accented page. Matching the theme was chosen over hue-stability.
- *
- * Still true either way: **no chart may paint from `var(--accent)`.** Slot 1
- * tracks the accent's hue but is stepped for the chart surface; reading the
- * variable directly is what once put a blue chart next to a plum one, and it
- * bypasses every check below.
- *
- * The order is the colourblind-safety mechanism and is NOT cosmetic: it was
- * chosen to maximise the worst separation, then each step was moved toward a
- * refined chroma/lightness only where the gates still held (chroma capped at
- * 0.20 — unconstrained, the search returns a neon set). Both modes were
- * measured, not eyeballed (OKLab ΔE ×100, Machado 2009 at severity 1.0,
- * against the chart's own `--panel` surface):
- *
- *              worst adjacent  worst adjacent   contrast    all-pairs
- *              CVD ΔE (≥8)     normal ΔE (≥15)  vs surface  series cap
- *   light          9.8             19.7         all ≥3:1        4
- *   dark          15.5            16.0          all ≥3:1        4
- *
- * The dark row is the blue-anchored set: it trades normal-vision headroom
- * (22.1 → 16.0, still clear of the 15 floor) for a much stronger CVD margin
- * (10.3 → 15.5). Every slot clears 3:1 unaided, so no chart depends on the
- * relief rule, and the caps above are *clean* passes — nothing sitting in a
- * warn band. Past four series in a scatter/bubble chart — where any two marks
- * can sit side by side — fold the tail into "Other" rather than adding a ninth
- * hue. If you change a value here, re-run the validator for BOTH modes; a hue
- * swapped by eye is how a palette silently stops being readable.
- *
- * ── The sequential ramp ──────────────────────────────────────────────────
- *
- * Five steps of that mode's own anchor hue (dark 250, light 315), for the
- * *ordered* colour jobs — an ordinal split, a continuous magnitude. It exists
- * because Vega chooses the scale family from the encoding type and gives each
- * family its own default range: overriding `category` alone left `ramp` and
- * `ordinal` on Vega's built-in `blues`, so one chart in the app came out a
- * different colour from the rest. Validated as an ordinal ramp (monotone L,
- * adjacent ΔL ≥ 0.06, surface-nearest step ≥ 2:1) against each mode's
- * `--panel`: dark 2.33:1 at #00539b, light 2.05:1 at #d0a4e4. Dark runs
- * dark→light and light runs light→dark — low magnitude first in both, so
- * "near zero" is always the end that recedes toward that mode's surface.
+ * The colours themselves, and the reasoning behind every one of them, live in
+ * `palette.ts` — apart from here so that `npm run test:palette` can measure
+ * them without loading React. Read that file before changing a value.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import embed, { type VisualizationSpec } from 'vega-embed'
-
-type ThemeName = 'dark' | 'light'
-
-const PALETTES: Record<ThemeName, {
-  text: string; dim: string; grid: string; category: string[]; ramp: string[]
-}> = {
-  dark: {
-    text: '#eaeff5',
-    dim: '#889098',
-    grid: '#242a30',
-    //         blue      red       violet    olive     magenta   green     ember     cyan
-    // Chroma is capped at 0.20 — the unconstrained search maximises it and
-    // returns a neon set that reads as eight alarms rather than a palette.
-    // Lightness deliberately varies slot to slot (0.50–0.67) instead of
-    // sitting in one harmonious band: at equal lightness a hue pair collapses
-    // under deuteranopia the moment a scatter puts the two side by side.
-    category: ['#008df2', '#f85452', '#7c4cd5', '#626a00', '#d54db0', '#00764c', '#009daa', '#9b6100'],
-    // Low magnitude first. On dark the anchor flips — "near zero" recedes
-    // toward the surface — so this ramp runs dark→light, the mirror of light
-    // mode, rather than the same array reversed by eye.
-    ramp: ['#00539b', '#006eca', '#008cf0', '#53abff', '#8ccaff'],
-  },
-  light: {
-    // Warm neutrals, matching the light theme's paper — the previous cold
-    // blue-greys read as a foreign element sitting on it.
-    text: '#0f0a06',
-    dim: '#68625b',
-    grid: '#dfdad2',
-    //         plum      green     indigo    rose      amber     cyan      ember     teal
-    category: ['#903ab2', '#448502', '#6d8cfd', '#b90461', '#8a6e08', '#007e9f', '#b94a00', '#018e7d'],
-    ramp: ['#d0a4e4', '#b97cd3', '#9e4ebe', '#7a2f97', '#56206b'],
-  },
-}
+import { PALETTES, type ThemeName } from './palette.ts'
 
 function currentTheme(): ThemeName {
   return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'
@@ -160,7 +76,7 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
     const meta = (spec.usermeta as
       { datamind?: {
         chart_type?: string; orientation?: string; stack?: string
-        categories?: number; bands?: number
+        categories?: number; bands?: number; signed_measure?: string
       } } | undefined)?.datamind
     const isHorizontalBar = meta
       ? meta.chart_type === 'bar' && meta.orientation === 'horizontal'
@@ -204,14 +120,14 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
     const PER_COLUMN = 34
     const width: number | 'container' =
       xIsCategorical && columnCount > 12 ? columnCount * PER_COLUMN : 'container'
-    return { encoding, growsDown, height, width, xIsCategorical }
+    return { encoding, growsDown, height, width, xIsCategorical, signedMeasure: meta?.signed_measure }
   }, [spec, fill])
 
   useEffect(() => {
     const el = ref.current
     if (!el) return
     const p = PALETTES[theme]
-    const { encoding, height, width, xIsCategorical } = layout
+    const { encoding, height, width, xIsCategorical, signedMeasure } = layout
 
     const config = {
       background: 'transparent',
@@ -231,12 +147,21 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
       },
       legend: { labelColor: p.dim, titleColor: p.text, labelFontSize: 11, titleFontSize: 11 },
       // Vega picks the scale *family* from the encoding type, and each family
-      // has its own default range: `category` for discrete colour, but `ramp`
-      // for continuous and `ordinal` for ordered. Overriding only `category`
-      // left the other two on Vega's built-in `blues`, so a chart split by a
-      // numeric field came out blue while every other chart was plum — one
-      // product, two palettes. All three now draw from the same accent hue.
-      range: { category: p.category, ramp: p.ramp, ordinal: p.ramp },
+      // has its own default range: `category` for discrete colour, `ramp` for
+      // continuous, `ordinal` for ordered, `heatmap` for a rect mark's
+      // quantitative colour, and `diverging` once a scale has a `domainMid`.
+      // Every family left unset falls back to a Vega built-in, which is how
+      // one product ends up with two palettes — `ramp` and `ordinal` were once
+      // on `blues` beside a plum chart, and `heatmap` was still on
+      // yellow-green-blue until this line named it. Setting all five is the
+      // only version of this that stays fixed.
+      range: {
+        category: p.category,
+        ramp: p.ramp,
+        ordinal: p.ramp,
+        heatmap: p.ramp,
+        diverging: p.diverging,
+      },
       // Rounded only at the data end, anchored to the baseline, so the mark
       // still reads as a measurement rather than a lozenge.
       bar: { cornerRadiusEnd: 4 },
@@ -257,6 +182,28 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
       encodingOverride = {
         ...encoding,
         x: { ...encoding.x, axis: { labelAngle: -35, labelLimit: 110, labelPadding: 4 } },
+      }
+    }
+
+    // A measure that crosses zero: paint the bars below the line in the
+    // polarity colour. The compiler names the field rather than the colour,
+    // because the pair is a theme value and this same spec is repainted when
+    // the reader flips the theme — see `palette.ts`.
+    //
+    // The sign is already visible in which way the bar points, so this is
+    // reinforcement, not the encoding; it is applied only where colour is
+    // otherwise unused (no series), so nothing that carried identity is
+    // overwritten to carry sign instead.
+    if (signedMeasure) {
+      encodingOverride = {
+        ...(encodingOverride as Record<string, unknown>),
+        color: {
+          condition: {
+            test: `datum[${JSON.stringify(signedMeasure)}] < 0`,
+            value: p.polarity.negative,
+          },
+          value: p.category[0],
+        },
       }
     }
 

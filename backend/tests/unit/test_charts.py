@@ -865,6 +865,100 @@ def test_a_gap_in_the_series_drops_the_sparkline_rather_than_faking_it() -> None
     assert spec.value == "300"
 
 
+# ── polarity: magnitude vs sign ──────────────────────────────────────────
+# Colour answers "how much" with one hue getting darker. That is the wrong
+# question for a measure with both signs, where the reader asks which way each
+# value went first. The compiler says so in the spec; which colours to use is
+# the browser's business, since the pair is a theme value and the same spec is
+# repainted when the reader flips the theme.
+def _signed_matrix() -> tuple[list, list]:
+    cols = _cols(("region", "nominal"), ("month", "nominal"), ("growth", "quantitative"))
+    rows = [
+        [f"R{r}", f"M{m}", float((r * 7 + m) % 21) - 10.0]
+        for r in range(7) for m in range(12)
+    ]
+    return cols, rows
+
+
+def test_a_heatmap_that_crosses_zero_asks_for_a_diverging_scale() -> None:
+    cols, rows = _signed_matrix()
+    profile = profile_result(cols, rows)
+    plan = plan_chart(profile)
+    assert plan.intent is not None and plan.intent.chart_type == "heatmap"
+    spec = compile_vega_lite(plan.intent, profile, cols, rows)
+    # `domainMid` is the switch: it is what makes Vega-Lite resolve the colour
+    # scale to the `diverging` range rather than the sequential one, and it
+    # pins the neutral to zero instead of to the middle of whatever range the
+    # data happened to have.
+    assert spec["encoding"]["color"]["scale"] == {"domainMid": 0}
+
+
+def test_a_heatmap_of_magnitudes_keeps_the_sequential_scale() -> None:
+    """All-positive is a magnitude, not a polarity — one hue, getting darker."""
+    cols, rows = _matrix()
+    profile = profile_result(cols, rows)
+    plan = plan_chart(profile)
+    assert plan.intent is not None
+    spec = compile_vega_lite(plan.intent, profile, cols, rows)
+    assert "scale" not in spec["encoding"]["color"]
+
+
+def test_an_all_negative_measure_is_still_a_magnitude() -> None:
+    """Costs and refunds are negative throughout and have no polarity to show.
+    The test is "crosses zero", not "has a negative value"."""
+    cols = _cols(("region", "nominal"), ("month", "nominal"), ("refund", "quantitative"))
+    rows = [
+        [f"R{r}", f"M{m}", -float((r * 7 + m) % 20) - 1.0]
+        for r in range(7) for m in range(12)
+    ]
+    profile = profile_result(cols, rows)
+    plan = plan_chart(profile)
+    assert plan.intent is not None and plan.intent.chart_type == "heatmap"
+    spec = compile_vega_lite(plan.intent, profile, cols, rows)
+    assert "scale" not in spec["encoding"]["color"]
+
+
+def test_a_bar_measure_that_crosses_zero_is_named_for_the_renderer() -> None:
+    cols = _cols(("month", "nominal"), ("profit", "quantitative"))
+    rows = [["Jan", -400.0], ["Feb", 900.0], ["Mar", 250.0]]
+    profile = profile_result(cols, rows)
+    intent = ChartIntent(
+        chart_type="bar",
+        x_axis=AxisSpec(field="month", type="nominal"),
+        y_axis=AxisSpec(field="profit", type="quantitative"),
+    )
+    fitted, _ = _fit(intent, profile)
+    assert fitted is not None
+    spec = compile_vega_lite(fitted, profile, cols, rows)
+    assert spec["usermeta"]["datamind"]["signed_measure"] == "profit"
+
+
+def test_a_split_bar_keeps_colour_for_identity() -> None:
+    """With a series, colour already means "which one". Repainting it by sign
+    would spend the legend to say what the bar's direction already shows."""
+    cols = _cols(("month", "nominal"), ("region", "nominal"), ("profit", "quantitative"))
+    rows = [
+        ["Jan", "North", -400.0], ["Jan", "South", 200.0],
+        ["Feb", "North", 900.0], ["Feb", "South", -50.0],
+    ]
+    profile = profile_result(cols, rows)
+    intent = ChartIntent(
+        chart_type="bar",
+        x_axis=AxisSpec(field="month", type="nominal"),
+        y_axis=AxisSpec(field="profit", type="quantitative"),
+        series=AxisSpec(field="region", type="nominal"),
+    )
+    fitted, _ = _fit(intent, profile)
+    assert fitted is not None
+    spec = compile_vega_lite(fitted, profile, cols, rows)
+    assert "signed_measure" not in spec["usermeta"]["datamind"]
+
+
+def test_an_all_positive_bar_is_not_flagged() -> None:
+    spec = compile_vega_lite(_intent("bar"), PROFILE, COLUMNS, ROWS)
+    assert "signed_measure" not in spec["usermeta"]["datamind"]
+
+
 # ── the mark budget ──────────────────────────────────────────────────────
 def _ranked(n: int, *, descending: bool = True) -> list[list]:
     values = range(n, 0, -1) if descending else range(1, n + 1)

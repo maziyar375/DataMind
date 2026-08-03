@@ -10,7 +10,8 @@
     "lint": "eslint src --ext ts,tsx",
     "typecheck": "tsc --noEmit",
     "test:schedule": "node --experimental-strip-types src/components/dashboard-schedule.test.ts",
-    "test:format": "node --experimental-strip-types src/components/table-format.test.ts"
+    "test:format": "node --experimental-strip-types src/components/table-format.test.ts",
+    "test:palette": "node --experimental-strip-types src/components/palette.test.ts"
   },
   "dependencies": {
     "react": "^18.3.1",

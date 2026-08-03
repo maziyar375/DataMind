@@ -450,6 +450,21 @@ def _span_text(grain: TemporalGrain, span_days: int | None) -> str:
     return f"{grain} grain; spans about {length:,} {unit if length != 1 else unit[:-1]}"
 
 
+def _crosses_zero(column: ColumnProfile) -> bool:
+    """Whether a measure has values on both sides of zero.
+
+    The test for polarity, and deliberately not "has a negative value": a
+    column that is negative throughout is still a magnitude — costs, refunds,
+    a drawdown — and reads best on one hue getting darker. Only a column with
+    both signs poses the question a diverging scale answers.
+    """
+    return (
+        column.minimum is not None
+        and column.maximum is not None
+        and column.minimum < 0 < column.maximum
+    )
+
+
 def _scale_ratio(first: ColumnProfile, second: ColumnProfile) -> float | None:
     """How far apart two measures' magnitudes are, or None when neither has one.
 
@@ -1555,13 +1570,24 @@ def compile_vega_lite(
         encoding["color"] = encode(intent.x_axis, positional=False)
     elif intent.chart_type == "heatmap":
         # Two dimensions position the cell; the measure is its colour. The
-        # measure stays **quantitative** so Vega reaches for the `ramp` scale
-        # family and its sequential palette — made ordinal it would come back
+        # measure stays **quantitative** so Vega reaches for a continuous scale
+        # family and a sequential palette — made ordinal it would come back
         # with eight categorical hues standing for a magnitude.
         assert intent.color is not None
         encoding["x"] = encode(intent.x_axis)
         encoding["y"] = encode(intent.y_axis)
         encoding["color"] = encode(intent.color, positional=False)
+        # A measure that crosses zero is not a magnitude, it is a polarity: the
+        # reader's first question about -40% beside +40% is which way each one
+        # went, and one hue getting darker cannot answer it. `domainMid` is
+        # what makes Vega-Lite select the `diverging` scale family — and so the
+        # diverging range the frontend defines — instead of the sequential one.
+        # It also pins the neutral colour to zero rather than to the midpoint of
+        # whatever range the data happened to have, without which a grid running
+        # +10 to +90 would paint +50 as "no change".
+        measure = profile.get(intent.color.field)
+        if measure is not None and _crosses_zero(measure):
+            encoding["color"]["scale"] = {"domainMid": 0}
     elif intent.chart_type == "histogram":
         # Bins on x, a count of rows on y. The count channel carries no field:
         # it counts rows, not values of a column, and naming one would make it
@@ -1669,6 +1695,19 @@ def compile_vega_lite(
     # into 300px is a smear whichever axis you read it along.
     if intent.chart_type == "heatmap" and intent.y_axis is not None:
         meta["bands"] = _distinct(shown.get(intent.y_axis.field, ()))
+    # A single-series bar or area whose measure crosses zero. Named here rather
+    # than coloured here: the polarity pair is a *theme* value, and the backend
+    # does not know which theme the reader is in — the same spec is repainted
+    # when they flip it. So the compiler states the fact and the browser, which
+    # owns every colour in this product, decides what to paint.
+    #
+    # Only without a `series`: with one, colour already carries identity, and
+    # overwriting it to carry sign instead would drop the legend's meaning.
+    if intent.chart_type in ("bar", "area") and intent.series is None:
+        measure_name = intent.y_axis.field
+        measure = profile.get(measure_name)
+        if measure is not None and _crosses_zero(measure):
+            meta["signed_measure"] = measure_name
     spec["usermeta"] = {"datamind": meta}
 
     # The reduction is part of what the chart claims, so it is shown, never

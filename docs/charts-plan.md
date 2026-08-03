@@ -402,7 +402,7 @@ cannot draw, which is worse than not having started it.
 | ✅ | **3. New types** | heatmap, combo, histogram (box plot deferred) | `charts/__init__.py`, `prompts/__init__.py`, `tile-editor.tsx`, `VegaChart.tsx`, both chart test files | **done** — 633 backend tests, ruff + contracts, typecheck, build, and all 17 specs (12 from Phase 2 + 5 new) compiled and rendered through the installed Vega |
 | ✅ | **4. Big number** | `KPI` artifact; single-row results stop being a dead end; replaces the bespoke `METRIC` renderer; delta + sparkline when the data carries a time axis | `charts/__init__.py`, `pipeline/{nodes,state}`, `domain/value_objects`, `services/{run,query,dashboard}_service`, `api/schemas.py`, `types.ts`, `ui.tsx`, `chat.tsx`, `dashboard.tsx` | **done** — 643 backend tests, ruff + contracts, typecheck, build; one `plan_kpi` and one `<Kpi>` serve both surfaces |
 | ✅ | **5. Selection** | the model keeps the choice and is finally given the facts it turns on — widened result block, **gated by the connection's Result sharing policy**, audited type bullets, prompt/type parity tests | `charts/__init__.py` (`describe(policy)`, `_temporal_grain`, `_scale_ratio`), `pipeline/nodes` (passes `state.disclosure_policy`), `prompts/__init__.py`, `test_charts.py` | **done** — 668 backend tests, ruff + 5 import-linter contracts, mypy unchanged at its pre-existing baseline; no eval, and no frontend surface until Phase 7 |
-| ☐ | **6. Colour** | diverging ramp, semantic +/- pair, `npm run test:palette` | `VegaChart.tsx`, `theme/tokens.ts`, new validator script | validator passes for **both** dark and light |
+| ✅ | **6. Colour** | diverging ramp, polarity pair, `npm run test:palette` — plus the missing `heatmap` scale family the audit turned up | `palette.ts` (new), `palette.test.ts` (new), `VegaChart.tsx`, `charts/__init__.py`, `test_charts.py` | **done** — 31 gates pass in both modes, 680 backend tests, typecheck + build, and every new colour path rendered through the installed Vega |
 | ☐ | **7. Picker UI** | icon grid, options filtered by what the result supports, "change chart" in chat | `tile-editor.tsx`, `chat.tsx`, `ui.tsx` | an unsupported type is disabled with a reason, never offered then demoted |
 
 **Dependencies:** 1 → 2 → 3 → 5 is the spine — 5 audits the prompt against the
@@ -420,6 +420,7 @@ the heatmap) and can be done at any point after it.
 | 1 | 2026-08-02 | `6fde6d7` | Two plan steps corrected against the code — see the struck-through items in Phase 1. Migration **0007 applies on the next `make up`**: the running `api` container has the pre-change image baked in (no volume mount), and its start command is `alembic upgrade head`. The dev DB has zero affected rows, so it is a no-op there either way. |
 | 2 | 2026-08-02 | `cabfd0f` | Three defects caught by rendering rather than reasoning — see "What rendering caught" below. Scope went slightly past the plan's four bullets: the `Split` and `Size` controls in the tile editor, and a `categories` count in `usermeta`, because stack and size were otherwise reachable only from chat, and the browser's width rule counted rows where a split chart needs columns. |
 | 4 | 2026-08-02 | *(uncommitted)* | Scoped **narrower** than the plan implied: only the single-row veto is rescued by a big number, not every veto — see the design note below. The `METRIC` tile keeps its "first of N rows" reading and gains delta + sparkline when its query has a time axis. |
+| 6 | 2026-08-03 | *(uncommitted)* | The palette itself was not rebuilt, as the phase instructed. Two findings the validator existed to catch — a stale figure and an entire missing scale family — plus one gate that could not be met as written; see the design notes. |
 | 5 | 2026-08-03 | `bfb147c` | Two deliberate narrowings against the plan above, and one finding the audit was for — see the design notes below. The prompt now interpolates every budget it quotes, so `MAX_HEATMAP_CELLS` and `DUAL_AXIS_RATIO` can be tuned without leaving the model applying a rule the code no longer enforces. |
 | 3 | 2026-08-02 | `db8b7fb` | Box plot deferred, per the open decision. Two design calls worth knowing about: a new `color` channel distinct from `series` (colour-as-magnitude vs colour-as-identity), and a **heuristic change** — a result with two dimensions now becomes a split bar or a heatmap instead of a bar that silently dropped the second dimension. That last one changes what existing `Auto` tiles draw. |
 
@@ -522,6 +523,57 @@ already written out. Two implementations formatting the same number is how a
 tile ends up saying `1,247,318.4` while the axis beside it says `1.2M`; one
 planner is also what stops the tile and a chat turn from disagreeing about
 which column the number even is.
+
+### Design notes (Phase 6)
+
+**The validator found a whole missing scale family, which is the argument for
+having written it.** Vega-Lite does not resolve a `rect` mark's quantitative
+colour to `ramp` — it has a separate `heatmap` range, which nothing set. So
+every heatmap since Phase 3 has been drawn in Vega's built-in yellow-green-blue
+next to plum and blue charts: exactly the "one product, two palettes" bug the
+file's own comment describes for `ramp` and `ordinal`, still live one family
+over. Measured rather than reasoned about — compiling a heatmap spec through
+the installed vega-lite and reading the cell fills back gave
+`rgb(239,249,189)` and `rgb(28,49,133)`. Five families are now named, and the
+comment says why naming all of them is the only version that stays fixed.
+
+**The dark all-pairs cap was recorded as 4; the set carries 5.** Re-running the
+measurement is what the phase was for. But the number in the table was still
+the right number to *act* on, for a reason the old note did not give: the same
+chart is repainted when the reader flips the theme, so the cap the product may
+offer is the lower of the two modes. That rule is now its own assertion.
+
+**One gate could not be met as specified, and the plan's wording hid it.**
+"A semantic positive/negative pair" reads as green-up/red-down. Dark mode can
+carry that (a conventional pair measures CVD ΔE 18.6). Light mode cannot: on
+near-white paper both poles must be dark to stay legible, and dark red against
+dark green is the textbook deuteranopia collapse — the best conventional pair
+in light mode reaches **7.5**, inside the 6–8 band that is legal only alongside
+a second, non-colour channel. A bar has one (it points the other way); a
+heatmap cell has none, since colour is the entire encoding. So the gate binds,
+the positive pole is teal, and both modes clear it (9.6 dark, 10.5 light). Warm
+stays negative and cool stays positive in both themes, so the *reading* survives
+a theme flip even though the hue does not — the same trade the categorical
+wheel already makes.
+
+**The KPI delta is still not coloured, and Phase 6 does not overturn that.**
+Phase 4 argued the direction of a change is in the data while whether it is
+*good* is not — a rising refund rate is not good news. Nothing in this phase
+addresses that argument; it only asked for the pair to be defined properly,
+which it now is. The tokens are used where sign is a fact about a value: the
+diverging poles, and a bar below zero. They are ready for the delta the day a
+metric can declare its own polarity.
+
+**Colour stayed in the frontend even for the signed-bar case.** The compiler
+names the field (`usermeta.signed_measure`) rather than a colour, because the
+pair is a theme value and the backend does not know which theme the reader is
+in — the same spec is repainted on a toggle. This is the split `usermeta`
+already existed for.
+
+**Every new path was rendered, not reasoned about.** `domainMid` is what makes
+Vega-Lite select the diverging family, confirmed by compiling both variants and
+reading the resolved scale range; a zero-crossing heatmap then puts 0 exactly
+on the neutral step, and a magnitude-only one keeps the sequential ramp.
 
 ### Design notes (Phase 5)
 
