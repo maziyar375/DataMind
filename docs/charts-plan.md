@@ -205,43 +205,125 @@ label, optional comparison delta and sparkline series. It renders in chat *and*
 replaces the bespoke `METRIC` tile renderer, so one component serves both
 surfaces.
 
-### Phase 5 — Selection strategy (the "which chart" question)
+### Phase 5 — Selection: make the prompt tell the truth
 
-This decides whether the wider set helps or hurts. **Adding four types to
-`CHART_SYSTEM` multiplies the ways the model can be wrong.** So invert the
-current arrangement.
+**The model keeps the choice.** No deterministic router, no candidate list to
+pick from — the arrangement stays exactly as it is today: the model proposes a
+`ChartIntent`, `plan_chart` vetoes/repairs it, the heuristic catches a failure.
+A router would take a judgement the model can make well (*this question is
+about a share, so normalize*) and replace it with a shape lookup that cannot
+read the question at all.
 
-- Today: model proposes freely → `plan_chart` vetoes/repairs → heuristic
-  fallback.
-- Proposed: **shape-first, model-second.**
+What actually costs accuracy is that the model is asked to choose **without
+being told the things the decision turns on.** `CHART_SYSTEM` grew a bullet per
+type across Phases 1–3 while `ResultProfile.describe()` stayed at name, type,
+distinct count and numeric range. So the model is told "use a heatmap for two
+dimensions" and is not told the grid would be 4,000 cells; told "combo when the
+scales differ" with no way to compare two ranges it sees as four separate
+numbers; told "never a histogram for one row per category" while nothing in the
+block says whether the rows are groups or observations.
 
-**1. Deterministic shape signature.** Classify the `ResultProfile` with no
-model call — measure count, dimension count, dimension kinds, cardinalities,
-range ratios:
+This phase closes that gap on both sides — the facts in the prompt, and the
+type descriptions that consume them.
 
-| Signature | Ranked candidates |
-|---|---|
-| 1 temporal dim + 1 measure | line → area → bar |
-| 1 temporal + 1 measure + small split | line (multi) → stacked area |
-| 1 nominal dim (≤6) + 1 measure | bar → pie |
-| 1 nominal dim (7–25) + 1 measure | bar (horizontal) |
-| 2 nominal dims + 1 measure | heatmap → grouped bar → stacked bar |
-| 1 dim + 2 measures, ratio >10× | combo → scatter |
-| 0 dims + 2 measures | scatter |
-| 1 raw numeric column | histogram → box plot |
-| 1 row, 1 measure | **KPI** |
-| anything else | none |
+**1. Widen the result block with the facts `_fit` already computes.** Every
+figure below exists in `charts/__init__.py` at decision time. Add to
+`describe()`:
 
-**2. The model chooses among candidates only** — a pick from 2–3, plus field
-assignment and a title. Answers outside the candidate set are rejected and
-rank-1 wins. Shorter prompt, far smaller error surface, same fail-open posture.
+- **temporal grain** on date columns — `daily` / `monthly` / `yearly`, plus the
+  span as a **length** ("14 months"), never its endpoints. Distinguishes a
+  3-point line from a 400-point one.
+- **range ratio** between measures when a result has two or more — the single
+  number the combo rule is stated in terms of, computed once instead of asked
+  of a model comparing `min/max` pairs by eye.
+- **prospective cell count** when two dimensions are present (`a.distinct ×
+  b.distinct`), and how it compares to `MAX_HEATMAP_CELLS`.
+- **`rows == distinct`** on each dimension — the one available signal for
+  whether a column is a group key or a repeated attribute, which is what the
+  histogram and split rules actually hinge on.
+- **what will be dropped**: when the category count exceeds
+  `MAX_CATEGORY_MARKS`, say so *in the prompt*, so "the platform keeps the
+  leading 25" is a fact about this result rather than a rule the model has to
+  apply to a number.
 
-**3. `_fit` is unchanged.** It is the guard-analogue for charts and should not
-absorb selection logic.
+**2. Gate the block by the connection's Result sharing policy — and fix the
+claim that says it doesn't need to be.** The chart node's docstring
+(`nodes/__init__.py:760-762`) states the model "never sees a row value… so
+charting never widens what the disclosure policy already allows", and the note
+under `CHART_USER` says the same. For cardinality that is true. For
+`min`/`max` it is **not**: an extremum is one specific row's value, printed
+verbatim. Under `NONE` — labelled *"the model never sees result rows"* in
+Safety & limits — a `revenue` column still reaches the provider as `min 12.50,
+max 184320.00`. That is a live gap today, not one this phase introduces, and
+this phase is where it gets closed, because widening the block without a policy
+in front of it makes it bigger.
 
-**4. Eval.** Add `expected_chart_type` cases for each signature. The router is
-deterministic, so most become plain unit tests rather than model-dependent
-evals.
+The split is clean, and it falls out of what a chart decision actually needs:
+
+| Fact | Nature | `NONE` / `AGGREGATE` | `SAMPLE` / `FULL` |
+|---|---|---|---|
+| column name, semantic type | schema, not result | ✅ | ✅ |
+| distinct count, row count, `rows == distinct` | a count | ✅ | ✅ |
+| cell count, truncation note, mark budget | platform arithmetic | ✅ | ✅ |
+| temporal grain, span **length** | a shape | ✅ | ✅ |
+| range **ratio** between two measures | derived, dimensionless | ✅ | ✅ |
+| magnitude band (`~10³`) | one significant figure | ✅ | ✅ |
+| `min` / `max` **values** | a row value | ❌ withheld | ✅ |
+| date first/last | a row value | ❌ withheld | ✅ |
+
+Note what the narrow column costs: **nothing that matters here.** Every rule in
+`CHART_SYSTEM` is written in terms of counts, ratios and grain — no bullet
+anywhere asks the model what the largest revenue *is*. The policy-safe form is
+the more useful form for choosing a chart, which is why this is a fix and not a
+trade-off. `DUAL_AXIS_RATIO` in particular is *better* served by the ratio than
+by two endpoint pairs.
+
+Mechanically: `describe(policy)` mirroring `HintBudget.from_policy` — same
+defaults-to-narrowest convention as `_render_history` and `_describe_schema`, so
+a caller that forgets a policy emits the safe block. The chart node passes
+`state.disclosure_policy`, which is already on the state. Then correct both
+comments to say what is actually true: *counts and derived shape under every
+policy; extremes only where result values are already allowed.*
+
+The other Safety & limits fields need no work but are worth naming, since the
+question "does this respect them" should have one answer per field: **row
+limit** already reaches the model as the truncation note and gets sharper here
+(the mark-budget bullet); **query timeout** never produces a result to chart;
+**ambiguous questions** halts before `chart` runs.
+
+**3. Re-read every type bullet against what the code now does.** The bullets
+were written per phase and never audited together. Each one states its
+requirement in terms the widened block now supplies, and each says what the
+platform decides *for* the model (orientation, sort, axis flip, dual-axis
+threshold) so the model stops trying to encode those in its answer. Any bullet
+describing behaviour the code no longer has is a bug in the prompt.
+
+**4. The rule this phase leaves behind — prompt/type parity.** A chart type is
+not "added" or "edited" when the compiler draws it; it is added when
+`CHART_SYSTEM` describes it correctly and `describe()` carries the facts its
+rule is written in terms of. Concretely, any later change to `ChartType`,
+`_fit`, or a threshold constant is unfinished until:
+
+- the type has a bullet naming *when* to pick it and when not to;
+- every threshold the bullet cites (`≤6` slices, `≤8` series, `~25` marks,
+  `DUAL_AXIS_RATIO`, `MAX_HEATMAP_CELLS`) reads the constant rather than
+  restating a number that will drift;
+- the block gives the model the figure that threshold is compared against.
+
+A parity test enforces the first: every `ChartType` member except `none` appears
+in `CHART_SYSTEM`, and no bullet names a type that no longer exists. Cheap, and
+it fails the moment someone adds a type without telling the model about it.
+
+**5. `_fit` is unchanged.** It is the guard-analogue for charts and stays the
+backstop — a better-informed model should trip it less often, not be trusted in
+its place. Fail-open posture is unchanged.
+
+**No eval.** `expected_chart_type` is inert data that no scorer reads (Phase 1),
+and chart choice is a judgement with more than one defensible answer per result
+— scoring it against one recorded pick would measure agreement with whoever
+recorded it, not quality. Verification is the parity test, the `describe()` unit
+tests (fixed profiles → exact expected block, pure functions), and reading the
+assembled prompt for a handful of real results.
 
 **One decision to flag:** `chart` runs *after* `present` in the pipeline, so
 narration cannot reference the picture ("as the chart shows…"). Passing the
@@ -279,8 +361,9 @@ New values get validated by that script for **both** modes before landing.
 
 Type selection becomes a small icon grid rather than a `<select>` — ten options
 with names alone is a guessing game. Options are **filtered by what the current
-result can support**: the shape signature from Phase 5 already knows, so an
-unsupported type is disabled with a reason on hover, rather than offered and
+result can support**: `_fit`'s veto rules already answer that question for every
+type, so expose them as a per-type "can this result take it, and if not why" and
+an unsupported type is disabled with a reason on hover, rather than offered and
 then demoted with an apology note.
 
 Chat gets a "change chart" affordance for the first time — same component, same
@@ -299,9 +382,10 @@ A recommendation on each; none blocks starting Phase 1.
 3. **Combo axis assignment** — model-chosen or deterministic (larger-range
    measure to bars)? *Recommend: deterministic.* Two-axis charts are the
    easiest thing to render misleadingly.
-4. **Eval baseline** — re-record in Phase 1, or hold the old one and accept
-   known-failing cases until Phase 5? *Recommend: re-record in Phase 1*, so
-   every later phase is measured against a clean line.
+4. ~~**Eval baseline** — re-record in Phase 1, or hold the old one?~~ **Closed
+   in Phase 1:** there was nothing to re-record. `expected_chart_type` is read
+   by no scorer, so chart choice was never in the eval to begin with — and
+   Phase 5 no longer proposes putting it there.
 
 ---
 
@@ -317,11 +401,14 @@ cannot draw, which is worse than not having started it.
 | ✅ | **2. Encoder** | stack mode (stacked/grouped/100%), temporal axis format **and tick interval** (the "2025" bug), SI axis numbers, formatted tooltips, `size` → bubble | `charts/__init__.py`, `prompts/__init__.py`, `tile-editor.tsx`, `VegaChart.tsx`, both chart test files | **done** — 617 backend tests, ruff + contracts, typecheck, build, and 12 specs compiled and *rendered* through the installed Vega with their axis labels read back |
 | ✅ | **3. New types** | heatmap, combo, histogram (box plot deferred) | `charts/__init__.py`, `prompts/__init__.py`, `tile-editor.tsx`, `VegaChart.tsx`, both chart test files | **done** — 633 backend tests, ruff + contracts, typecheck, build, and all 17 specs (12 from Phase 2 + 5 new) compiled and rendered through the installed Vega |
 | ✅ | **4. Big number** | `KPI` artifact; single-row results stop being a dead end; replaces the bespoke `METRIC` renderer; delta + sparkline when the data carries a time axis | `charts/__init__.py`, `pipeline/{nodes,state}`, `domain/value_objects`, `services/{run,query,dashboard}_service`, `api/schemas.py`, `types.ts`, `ui.tsx`, `chat.tsx`, `dashboard.tsx` | **done** — 643 backend tests, ruff + contracts, typecheck, build; one `plan_kpi` and one `<Kpi>` serve both surfaces |
-| ☐ | **5. Selection** | deterministic shape router; model picks from 2–3 candidates only | `charts/__init__.py` (new router), `prompts/__init__.py`, `eval/suites/` | every signature row in the Phase 5 table has a unit test; eval ≥ baseline |
+| ☐ | **5. Selection** | the model keeps the choice and is finally given the facts it turns on — widened result block, **gated by the connection's Result sharing policy**, audited type bullets, prompt/type parity rule | `charts/__init__.py` (`describe(policy)`), `pipeline/nodes` (pass `state.disclosure_policy`), `prompts/__init__.py`, `test_charts.py` | every fact in the Phase 5 list appears in the block with a unit test; a test asserts no result **value** (incl. `min`/`max`) appears under `NONE`/`AGGREGATE`; parity test passes; no eval |
 | ☐ | **6. Colour** | diverging ramp, semantic +/- pair, `npm run test:palette` | `VegaChart.tsx`, `theme/tokens.ts`, new validator script | validator passes for **both** dark and light |
 | ☐ | **7. Picker UI** | icon grid, options filtered by what the result supports, "change chart" in chat | `tile-editor.tsx`, `chat.tsx`, `ui.tsx` | an unsupported type is disabled with a reason, never offered then demoted |
 
-**Dependencies:** 1 → 2 → 3 → 5 → 7 is the spine. Phase 4 depends only on 1.
+**Dependencies:** 1 → 2 → 3 → 5 is the spine — 5 audits the prompt against the
+types 3 adds, so it must follow it. Phase 7 needs 3 (a picker offers the types)
+but **not** 5: its filtering reads `_fit`, not anything Phase 5 produces, so the
+two can land in either order. Phase 4 depends only on 1.
 Phase 6 is independent of everything except 3 (the diverging ramp exists for
 the heatmap) and can be done at any point after it.
 
