@@ -1300,6 +1300,44 @@ def test_every_offered_type_survives_being_asked_for() -> None:
             )
 
 
+def test_an_offered_type_says_which_columns_made_it_fit() -> None:
+    """The verdict is per type but it was reached by fitting *columns*, and a
+    caller that keeps its own selection across a type change is not asking the
+    question this answered — the bug that motivated this: a monthly result with
+    a six-value warehouse column offers a pie, the editor kept `month` on x, and
+    the tile stored a pie the backend then drew as a bar."""
+    cols = _cols(("month", "temporal"), ("warehouse", "nominal"), ("sales", "quantitative"))
+    rows: list[list[object]] = [
+        [date(2025, 1, 1) + timedelta(days=31 * m), f"W{w}", float(m * 10 + w)]
+        for m in range(25) for w in range(6)
+    ]
+    pie = _options(profile_result(cols, rows))["pie"]
+    assert pie.supported
+    # Not `month`: 25 slices is exactly what the slice budget refuses.
+    assert pie.columns == {"x": "warehouse", "y": "sales"}
+
+
+def test_the_offered_columns_are_the_ones_that_produce_that_type() -> None:
+    """Follows the map back through the planner: whatever a verdict names must
+    actually come back as the type it was offered for."""
+    for shape in ((COLUMNS, ROWS), _monthly(), _matrix(), _signed_matrix()):
+        profile = profile_result(*shape)
+        for option in chart_options(profile):
+            if not option.supported:
+                assert option.columns is None
+                continue
+            assert option.columns is not None
+            fitted = plan_chart(profile, candidate_intent(profile, option.chart_type)).intent
+            assert fitted is not None
+            named = {
+                "x": fitted.x_axis, "y": fitted.y_axis, "series": fitted.series,
+                "color": fitted.color, "y2": fitted.y2_axis, "size": fitted.size,
+            }
+            assert option.columns == {
+                channel: axis.field for channel, axis in named.items() if axis is not None
+            }
+
+
 def test_every_refusal_carries_a_reason() -> None:
     """A greyed tile with no explanation teaches the reader nothing — it was
     the note's *content* that was worth keeping, not its timing."""

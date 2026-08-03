@@ -388,11 +388,16 @@ class ChartOptionRead(BaseModel):
     `supported` is computed by asking the real planner for that type and seeing
     whether it comes back unchanged, so it cannot drift from what the compiler
     would actually do. `reason` is prose for a tooltip and decides nothing.
+
+    `columns` is the channel → column map that made the verdict true, and it is
+    what keeps "supported" from being a promise about columns the caller then
+    does not use.
     """
 
     chart_type: str
     supported: bool
     reason: str | None = None
+    columns: dict[str, str] | None = None
 
 
 class TileResultRead(BaseModel):

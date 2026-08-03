@@ -1127,6 +1127,14 @@ class ChartOption:
     chart_type: str
     supported: bool
     reason: str | None = None
+    #: Channel → column name, for the columns that made `supported` true.
+    #:
+    #: The verdict is computed by fitting *specific* columns, so a caller that
+    #: keeps its own column selection across a type change is not asking the
+    #: question this answered. A pie is "supported" for a monthly-by-warehouse
+    #: result because `warehouse_name` has six values — say so, rather than
+    #: leaving the caller to keep `month` on x and receive a bar.
+    columns: dict[str, str] | None = None
 
 
 def chart_options(profile: ResultProfile) -> list[ChartOption]:
@@ -1159,9 +1167,32 @@ def chart_options(profile: ResultProfile) -> list[ChartOption]:
                 chart_type,
                 supported,
                 None if supported else _unsupported_reason(profile, chart_type),
+                _option_columns(fitted) if supported else None,
             )
         )
     return options
+
+
+def _option_columns(intent: ChartIntent | None) -> dict[str, str] | None:
+    """The channel → column map a caller needs to reproduce this verdict.
+
+    Named by the editor's channels rather than `ChartIntent`'s field names, so
+    the browser is not re-deriving that `y2_axis` is the control labelled
+    "Line". Channels the type does not use are absent, not empty, so a caller
+    can tell "this type has no series" from "this type wants one and none was
+    found".
+    """
+    if intent is None:
+        return None
+    channels = {
+        "x": intent.x_axis,
+        "y": intent.y_axis,
+        "series": intent.series,
+        "color": intent.color,
+        "y2": intent.y2_axis,
+        "size": intent.size,
+    }
+    return {name: axis.field for name, axis in channels.items() if axis is not None}
 
 
 def _unsupported_reason(profile: ResultProfile, chart_type: str) -> str:

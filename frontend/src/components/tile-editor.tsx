@@ -113,6 +113,46 @@ interface AxisState {
   y2: string
 }
 
+/**
+ * The columns the backend fitted when it judged this type supported.
+ *
+ * The picker's verdicts are per *type*, and each one was reached by fitting
+ * particular columns: a monthly-by-warehouse result is a supported pie because
+ * `warehouse_name` has six values, not because `month` has twenty-five. Keeping
+ * the previous type's columns across the click is how "supported" became a
+ * promise the save path then broke — the tile stored `pie` over `month` and the
+ * backend, doing exactly what it says it does, drew a bar instead.
+ *
+ * So a type change adopts the columns that verdict was about. A manual override
+ * afterwards is still obeyed, demotion note and all; what is no longer possible
+ * is being demoted for a choice nobody made.
+ */
+function columnsForType(type: string, options: ChartOption[]): Record<string, string> | null {
+  return options.find((option) => option.chart_type === type)?.columns ?? null
+}
+
+/** The channels a chart's columns live in, in the order the editor shows them. */
+const CHANNELS = ['x', 'y', 'series', 'size', 'color', 'y2'] as const
+
+/**
+ * Switch the chart type and move the columns with it.
+ *
+ * Every channel is re-taken from the new type's verdict, including the ones it
+ * does not use — a `series` left over from a bar chart is not a preference a
+ * pie can honour, and carrying it into the stored config is how a control that
+ * looks clean saves something the backend has to ignore. With no verdict yet
+ * (the preview has not run) only the type moves, which is what the picker's
+ * empty-list contract already means everywhere else: no opinion, change
+ * nothing.
+ */
+function withType(axes: AxisState, type: string, options: ChartOption[]): AxisState {
+  const fitted = columnsForType(type, options)
+  if (type === 'auto' || fitted === null) return { ...axes, type }
+  const next = { ...axes, type }
+  for (const channel of CHANNELS) next[channel] = fitted[channel] ?? ''
+  return next
+}
+
 /** Read the editor's controls back out of a stored `ChartIntent`. */
 function axisStateFrom(config: Record<string, unknown> | null | undefined): AxisState {
   const intent = (config ?? {}) as {
@@ -249,28 +289,25 @@ export function TileEditor({
     const preview = draft?.preview
     if (!preview) return
     const names = new Set(preview.columns.map((column) => column.name))
+    // Defaults for the type actually selected, not for the one the heuristic
+    // would have chosen. `chart_suggestion` answers "what should this be
+    // drawn as", which is only the right question while the type is Auto —
+    // once a type is picked, the columns that make *that* type work are the
+    // ones the option carries.
+    const fitted = columnsForType(axes.type, draft.chart_options)
     const suggested = axisStateFrom(draft.chart_suggestion)
     setAxes((current) => {
       // A pick this result can still honour is kept; one it cannot is
       // replaced. Leaving it would store an axis naming a column the query no
       // longer returns, and that degrades to Auto at refresh without a word.
       const keep = (field: string) => (names.has(field) ? field : '')
-      const next = {
-        ...current,
-        x: keep(current.x) || suggested.x,
-        y: keep(current.y) || suggested.y,
-        series: keep(current.series),
-        size: keep(current.size),
-        color: keep(current.color),
-        y2: keep(current.y2),
-      }
-      return (['x', 'y', 'series', 'size', 'color', 'y2'] as const).every(
-        (key) => next[key] === current[key],
-      )
-        ? current
-        : next
+      const fallback = (channel: (typeof CHANNELS)[number]) =>
+        fitted?.[channel] ?? (channel === 'x' || channel === 'y' ? suggested[channel] : '')
+      const next = { ...current }
+      for (const channel of CHANNELS) next[channel] = keep(current[channel]) || fallback(channel)
+      return CHANNELS.every((channel) => next[channel] === current[channel]) ? current : next
     })
-  }, [draft])
+  }, [draft, axes.type])
 
   // Every column the result has gets a row in the picker, appended in query
   // order. Entries already configured keep their place — including ones whose
@@ -1086,7 +1123,7 @@ function ChartPicker({
           value={axes.type}
           options={options}
           columns={9}
-          onChange={(type) => onChange({ ...axes, type })}
+          onChange={(type) => onChange(withType(axes, type, options))}
         />
       </Field>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>

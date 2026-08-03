@@ -455,6 +455,12 @@ export interface ChartOption {
   chart_type: string
   supported: boolean
   reason: string | null
+  /**
+   * Channel → column, for the columns the backend fitted to reach `supported`.
+   * Present only when supported. A picker that keeps its own column selection
+   * across a type change is not asking the question this verdict answered.
+   */
+  columns: Record<string, string> | null
 }
 
 /** A redrawn chart for a finished run, plus fresh verdicts. */
