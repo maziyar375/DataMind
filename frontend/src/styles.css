@@ -502,12 +502,11 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   .rm-col-2 { grid-template-columns: 1fr !important; }
 }
 
-/* Chips that are metadata, not data — a tile's connection and model — stay
-   quiet until the tile is approached, like the kebab. The refresh-rate chip
-   is exempt: it says whether the number is live, which is worth a glance. */
-.rm-tile-meta { opacity: 0; transition: opacity .12s ease; }
-.rm-tile:hover .rm-tile-meta,
-.rm-tile:focus-within .rm-tile-meta { opacity: 1; }
+/* The hover-gated `.rm-tile-meta` wrapper is gone: it held the connection and
+   the model, and both questions have since been settled the other way. The
+   model left the tile entirely, and the connection is now always on — hiding
+   which database a number came from until someone happens to hover was the
+   opposite of what that chip is for. */
 
 /* The alignment guide shown while a dashboard is being edited: the same
    thin-line grid motif the welcome and auth screens use, drawn at the
@@ -834,8 +833,7 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .rm-focus-bar button { background: rgba(255, 255, 255, 0.06); color: #fff; }
 /* Expanded, the tile is the subject: its chrome stops hiding on hover. */
 .rm-tile-focused { box-shadow: 0 30px 80px -34px rgba(0, 0, 0, 0.75); }
-.rm-tile-focused .rm-tile-actions,
-.rm-tile-focused .rm-tile-meta { opacity: 1; }
+.rm-tile-focused .rm-tile-actions { opacity: 1; }
 
 /* A tile whose query failed says so at its edge, not only in its body — on a
    wall of twelve, the border is what you see from across the room. */
@@ -885,7 +883,6 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
    edit, duplicate, and delete — permanently invisible on a tablet. */
 @media (hover: none) {
   .rm-tile-actions,
-  .rm-tile-meta,
   .rm-turn-actions { opacity: 1; }
   /* No pointer means no hover to reveal them, and a resize handle nobody can
      see is a resize handle nobody uses. */

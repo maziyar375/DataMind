@@ -410,15 +410,29 @@ export function TileShell({
         </div>
 
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
-          {/* Connection and model are provenance, not data: revealed with the
-              kebab on approach. The rate chip stays — whether the number is
-              live is worth a glance. */}
-          <span className="rm-tile-meta" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            {tile.connection_name && <Chip small>{tile.connection_name}</Chip>}
-            {tile.llm_config_name && tile.sql_origin !== 'HANDWRITTEN' && (
-              <Chip small tone="accent">{tile.llm_config_name}</Chip>
-            )}
-          </span>
+          {/* Source and freshness, both always on. Which database a figure came
+              from is not decoration — the same question against staging and
+              against production returns different numbers, and a dashboard
+              mixing tiles from several connections is exactly the case where
+              reading one as the other is costly. It used to be hover-gated
+              provenance; on a wall display or a touch screen there is no
+              hover, so it was effectively never shown at all.
+
+              The model that wrote the SQL is deliberately *not* here. That is a
+              fact about how the tile was authored, not about the figure on
+              screen: it does not change with a refresh, it is identical for
+              every tile built the same way, and once the SQL is saved the tile
+              runs that SQL whoever proposed it. It lives on the tile editor,
+              where it is being chosen, and on the run record, where it is
+              being audited. */}
+          {tile.connection_name && (
+            <Chip small>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <Icon.Database size={10} />
+                {tile.connection_name}
+              </span>
+            </Chip>
+          )}
           <Chip small tone={rate > 0 ? 'green' : 'neutral'}>
             {rate > 0 ? rateLabel(rate) : 'Manual'}
           </Chip>
