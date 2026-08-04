@@ -66,10 +66,14 @@ export default function ChatPage() {
         if (cancelled) return
         if (convs.status === 'fulfilled') {
           setConversationList(convs.value)
-          // No preselection beyond this: the reader picks a database and a
-          // model for each conversation from the header. Selecting a saved
-          // conversation below restores whatever it was started with.
-          if (convs.value.length > 0) setActiveId(convs.value[0].id)
+          // Deliberately no preselection: opening the sidebar lands on an
+          // empty new chat, not at the bottom of whatever was asked last.
+          // Arriving mid-thread makes the composer read as a follow-up to a
+          // conversation the reader may have finished days ago, and a thread
+          // is bound to one database — so the header's pickers arrive locked
+          // to a choice nobody just made. `activeId` stays null; the reader
+          // picks a database and a model here, and selecting a saved
+          // conversation from the list restores whatever it was started with.
         }
         if (conns.status === 'fulfilled') setConnections(conns.value)
         if (llms.status === 'fulfilled') setModels(llms.value)
