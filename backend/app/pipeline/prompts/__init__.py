@@ -143,8 +143,12 @@ Do not ask when:
 - You simply want a filter the user never asked for.
 
 If you ask: exactly one question, in the user's own words, under 20 words, and \
-do not name a column the user did not name. Give 2-4 options, each one a \
-complete answer the user can pick as-is.
+do not name a column the user did not name. Always give 2-4 options with it, \
+each one a complete answer the user can pick as-is — a question the user has to \
+answer by guessing what you will accept is worse than not asking. If the \
+question is "did you mean A or B", then A and B are the options.
+
+When answerable is true, send an empty options list and an empty question.
 
 Schema:
 {schema}

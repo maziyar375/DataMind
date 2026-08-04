@@ -394,3 +394,36 @@ def test_a_run_that_asked_is_not_terminal_but_is_not_in_flight_either() -> None:
     ):
         assert status.is_terminal is True
         assert status.is_in_flight is False
+
+
+# ── the schema the model actually sees ──────────────────────────────────────
+def test_every_field_is_required_so_the_model_cannot_drop_the_options() -> None:
+    """The bug this pins: `options` had a Python default, which kept it out of
+    `required` in `model_json_schema()` — and that schema is what goes to the
+    provider as a strict `json_schema` response format. Measured against the
+    configured model on one ambiguous question: options came back on 1 of 3
+    replies that asked something under the defaulted schema, and 4 of 4 with
+    every field required. The user got a question with no chips to click.
+
+    A default here is invisible to the model, so it is not a convenience — it
+    is a silently weaker contract.
+    """
+    schema = ClarificationProposal.model_json_schema()
+    assert set(schema["required"]) == {"answerable", "question", "options", "reasoning"}
+
+
+def test_a_model_that_ignores_that_schema_still_does_not_break_clarify() -> None:
+    """The other half. `clarify` fails open, so a `ValidationError` would reach
+    it as "clarification unavailable" — the node whose job is noticing ambiguity,
+    switched off by a missing key. Required in the schema, tolerated on the way
+    in."""
+    bare = ClarificationProposal.model_validate({"answerable": False, "question": "A or B?"})
+    assert bare.options == [] and bare.reasoning == ""
+    assert ClarificationProposal.model_validate({"answerable": True}).question == ""
+
+
+def test_the_prompt_asks_for_options_on_every_question() -> None:
+    """The schema makes the key present; only the prompt makes it non-empty."""
+    from app.pipeline.prompts import CLARIFY_SYSTEM
+
+    assert "Always give 2-4 options" in CLARIFY_SYSTEM

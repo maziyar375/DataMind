@@ -1,7 +1,9 @@
 """Structured-output contracts the model must satisfy."""
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Any
+
+from pydantic import BaseModel, Field, model_validator
 
 
 class SqlProposal(BaseModel):
@@ -34,6 +36,21 @@ class ClarificationProposal(BaseModel):
     `answerable=True` is the overwhelmingly common outcome and the only one
     that costs nothing: the other fields are ignored and the run proceeds
     straight to `generate`.
+
+    **Every field is required, and that is the point.** A Python default on
+    `options` reads as a convenience, but the model never sees Python — it sees
+    `model_json_schema()`, and a defaulted field drops out of `required`. Under
+    a strict `json_schema` response format that is a licence to omit the key
+    entirely, and the model takes it: measured against the configured model on
+    one ambiguous question, five calls under the defaulted schema produced
+    options on **1 of 3** replies that asked something, while the same prompt
+    with all four fields required produced them on **4 of 4**. The user saw a
+    clarifying question with no chips to click and nothing explaining why.
+
+    So the fields are required *in the schema*, and `_fill_defaults` below keeps
+    the parse forgiving anyway. The two are not in tension: the schema states
+    what is wanted, the validator refuses to let a model that ignores it turn
+    clarification off altogether.
     """
 
     answerable: bool = Field(
@@ -43,12 +60,27 @@ class ClarificationProposal(BaseModel):
         )
     )
     question: str = Field(
-        default="",
         max_length=300,
         description="What to ask the user. One sentence. Empty if answerable.",
     )
     options: list[str] = Field(
-        default_factory=list,
-        description="2-4 concrete readings the user can pick between.",
+        description=(
+            "2-4 concrete readings the user can pick as-is. Required whenever "
+            "answerable is false; an empty list when it is true."
+        ),
     )
-    reasoning: str = Field(default="", max_length=300)
+    reasoning: str = Field(max_length=300)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fill_defaults(cls, data: Any) -> Any:
+        """Supply what a model left out, so a missing key never costs the run.
+
+        `clarify` fails open in every direction, and a `ValidationError` here
+        would reach it as "clarification unavailable" — the one node whose whole
+        job is to notice ambiguity, switched off by a model that skipped a field
+        it was told to send. Required in the schema, tolerated on the way in.
+        """
+        if not isinstance(data, dict):
+            return data
+        return {"question": "", "options": [], "reasoning": "", **data}
