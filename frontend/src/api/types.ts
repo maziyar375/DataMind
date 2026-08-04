@@ -201,6 +201,9 @@ export interface SemanticJob {
     tables_failed?: string[]
     metrics_kept?: number
     metrics_dropped?: number
+    /** The glossary pass ran and its answer was unusable — as opposed to the
+     *  model deciding nothing needed defining, which is also an empty list. */
+    glossary_failed?: boolean
   }
   error_message: string | null
   started_at: string | null

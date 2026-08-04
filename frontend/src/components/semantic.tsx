@@ -578,6 +578,9 @@ function Hero({
           <Note tone="amber">Generation was stopped. Nothing was saved.</Note>
         </div>
       )}
+      {!running && job && job.status === 'SUCCEEDED' && (
+        <PartialOutcome job={job} />
+      )}
 
       {/* Nothing generated yet: the same card teaches what a layer is, so
           there is one box and one call to action rather than two of each. */}
@@ -895,6 +898,74 @@ function Panel({
         </div>
       )}
     </section>
+  )
+}
+
+/**
+ * What a *successful* generation did not manage.
+ *
+ * `SUCCEEDED` meant nothing on screen, whatever was in the job's stats. One
+ * run against a 42-table schema described 21 of them, wrote no glossary, and
+ * reported success — the tables it lost were in `stats.tables_failed` the whole
+ * time, delivered to the browser and read by nobody. A layer with half its
+ * tables missing is not a failure to retry, it is a layer to *finish*, so this
+ * says which tables and how to fill them.
+ *
+ * Silent when there is nothing to report: a clean run draws no box.
+ */
+function PartialOutcome({ job }: { job: SemanticJob }) {
+  const failed = job.stats.tables_failed ?? []
+  const dropped = job.stats.metrics_dropped ?? 0
+  const described = job.stats.tables_described ?? 0
+  if (failed.length === 0 && dropped === 0 && !job.stats.glossary_failed) return null
+
+  return (
+    <div style={{ padding: '0 20px 16px' }}>
+      <Note tone="amber">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+          <span style={{ fontWeight: 600 }}>
+            {failed.length > 0
+              ? `${failed.length} of ${failed.length + described} tables have no description.`
+              : 'Generation finished with gaps.'}
+          </span>
+
+          {failed.length > 0 && (
+            <div
+              className="mono"
+              style={{
+                fontSize: 11,
+                lineHeight: 1.7,
+                maxHeight: 96,
+                overflowY: 'auto',
+                opacity: 0.85,
+                // The names are the actionable part — "21 tables failed" with
+                // no list leaves the reader to diff two schemas by hand.
+                wordBreak: 'break-word',
+              }}
+            >
+              {failed.join(', ')}
+            </div>
+          )}
+
+          {job.stats.glossary_failed && (
+            <span>
+              The glossary could not be written, so there are no business terms.
+            </span>
+          )}
+          {dropped > 0 && (
+            <span>
+              {dropped} generated {dropped === 1 ? 'metric was' : 'metrics were'}{' '}
+              dropped because the SQL did not check out.
+            </span>
+          )}
+
+          <span style={{ opacity: 0.85 }}>
+            Generate again in <strong>Merge</strong> mode to fill these in —
+            everything you have edited is kept.
+          </span>
+        </div>
+      </Note>
+    </div>
   )
 }
 

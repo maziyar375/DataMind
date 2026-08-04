@@ -226,6 +226,10 @@ class GenerationStats:
     tables_failed: list[str] = field(default_factory=list)
     metrics_kept: int = 0
     metrics_dropped: int = 0
+    #: The glossary pass ran and could not be used. Distinct from an empty
+    #: glossary, which is a legitimate answer — "nothing here needs defining".
+    #: Without the flag those two are the same absence on screen.
+    glossary_failed: bool = False
     prompt_tokens: int = 0
     completion_tokens: int = 0
 
@@ -235,6 +239,7 @@ class GenerationStats:
             "tables_failed": self.tables_failed,
             "metrics_kept": self.metrics_kept,
             "metrics_dropped": self.metrics_dropped,
+            "glossary_failed": self.glossary_failed,
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
         }
@@ -458,6 +463,7 @@ async def _glossary(
         )
     except LLMError as err:
         log.warning("semantic_glossary_failed", error=err.message)
+        stats.glossary_failed = True
         return []
 
     return [

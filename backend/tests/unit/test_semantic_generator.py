@@ -357,3 +357,32 @@ async def test_a_glossary_returned_in_the_wrong_shape_still_lands() -> None:
 
     doc, _ = await _run(gateway)
     assert [(t.term, t.maps_to) for t in doc.glossary] == [("aov", ["sales.orders"])]
+
+
+@pytest.mark.asyncio
+async def test_a_glossary_that_could_not_be_written_says_so() -> None:
+    """An empty glossary is a legitimate answer — "nothing needs defining" —
+    so failure has to be a separate fact, or the two look identical on
+    screen and a silently lost glossary reads as a complete one."""
+
+    async def structured(llm: Any, messages: Sequence[ChatMessage], schema: type[T]) -> T:
+        if schema.__name__ == "_GlossaryDraft":
+            raise LLMError("The model did not return valid _GlossaryDraft JSON.")
+        if schema.__name__ == "_Overview":
+            return schema.model_validate({"business_context": "A shop."})
+        return schema.model_validate({"grain": "one row"})
+
+    gateway = ScriptedGateway(lambda table: {"grain": "one row"})
+    gateway.structured = structured  # type: ignore[method-assign]
+
+    doc, stats = await _run(gateway)
+    assert doc.glossary == []
+    assert stats.glossary_failed is True
+    assert stats.as_dict()["glossary_failed"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_glossary_the_model_left_empty_is_not_a_failure() -> None:
+    doc, stats = await _run(ScriptedGateway(lambda table: {"grain": "one row"}))
+    assert doc.glossary == []
+    assert stats.glossary_failed is False
