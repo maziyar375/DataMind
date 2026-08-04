@@ -18,17 +18,17 @@ path here ends in "no chart", never in a failed run.
 """
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.domain.ports.database import ResultColumn
+from app.domain.value_objects import DisclosurePolicy, HintBudget
 
 # ── budgets ──────────────────────────────────────────────────────────────
 # What a reader can actually take in, not what Vega will happily draw.
@@ -56,6 +56,11 @@ ChartType = Literal[
     "line", "bar", "area", "scatter", "pie", "heatmap", "histogram", "combo", "none"
 ]
 AxisType = Literal["quantitative", "temporal", "nominal", "ordinal"]
+
+# How a date column is spaced. Not part of the intent — the model never picks
+# it — but a fact about the result that both the prompt and the time axis are
+# written against.
+TemporalGrain = Literal["intraday", "daily", "monthly", "yearly"]
 
 # Which way the bars run. Not a chart type: a vertical and a horizontal bar
 # chart are the same mark, the same comparison and the same reading — only the
@@ -179,6 +184,11 @@ class ColumnProfile:
     non_null: int
     minimum: float | None = None
     maximum: float | None = None
+    #: Temporal columns only: how the dates are spaced ("monthly"), and how far
+    #: the column runs end to end. The *length* of the span, never its
+    #: endpoints — see `ResultProfile.describe`.
+    grain: TemporalGrain | None = None
+    span_days: int | None = None
 
     @property
     def is_numeric(self) -> bool:
@@ -201,14 +211,32 @@ class ColumnProfile:
     def is_id_like(self) -> bool:
         return bool(_ID_NAME.search(self.name.lower()))
 
-    def describe(self) -> str:
+    def describe(self, budget: HintBudget, row_count: int) -> str:
         parts = [f"{self.distinct} distinct"]
-        if self.is_numeric and self.minimum is not None and self.maximum is not None:
+        if self.grain is not None:
+            parts.append(_span_text(self.grain, self.span_days))
+        # The one fact in this block that is a *value* rather than a count, so
+        # the one the disclosure policy governs. `numeric_range` is the same
+        # gate the schema block's column hints use, which keeps a single ladder
+        # in the codebase: whatever a connection is willing to tell the model
+        # about the extremes of a column, it tells it in both places.
+        if (
+            self.is_numeric
+            and budget.numeric_range
+            and self.minimum is not None
+            and self.maximum is not None
+        ):
             parts.append(
                 f"min {_fmt_number(self.minimum)}, max {_fmt_number(self.maximum)}"
             )
         if self.is_constant:
             parts.append("SAME VALUE IN EVERY ROW")
+        elif not self.is_numeric and self.distinct == row_count:
+            # A group key, not a repeated attribute — the closest a result set
+            # comes to saying "already aggregated by this column". It is what
+            # tells the model a further roll-up is a double count, and what
+            # rules a histogram out.
+            parts.append("one row per value")
         return f"- {self.name} ({self.semantic_type}; {'; '.join(parts)})"
 
 
@@ -221,14 +249,110 @@ class ResultProfile:
     def get(self, name: str) -> ColumnProfile | None:
         return next((c for c in self.columns if c.name == name), None)
 
-    def describe(self) -> str:
-        """The column block the chart prompt shows the model.
+    def describe(self, policy: str = DisclosurePolicy.NONE) -> str:
+        """The result block the chart prompt shows the model.
 
         Types alone let the model pick a bar chart for a thousand categories,
         because nothing in the prompt said there were a thousand. Cardinality,
-        range and the constant flag are what make "none" a reachable answer.
+        grain, the crossing arithmetic and the constant flag are what make
+        "none" — and heatmap, and combo — reachable answers.
+
+        Every rule in `CHART_SYSTEM` is stated in terms of a count, a ratio or
+        a grain, and the notes below are those same quantities computed once
+        here rather than asked of a model reading numbers off column summaries.
+        A rule the model cannot evaluate is a rule `_fit` ends up enforcing by
+        overriding it, which costs a round trip and a repaired chart.
+
+        **`policy` is the connection's result-sharing policy, and it defaults
+        to the narrowest** — the same convention `_render_history` and
+        `_describe_schema` follow, so a caller that forgets one discloses
+        nothing. What it gates is narrow on purpose: a count, a ratio, a span
+        *length* and a grain are facts about the result's shape and are shared
+        under every policy, while an extreme (`min`, `max`) is one specific
+        row's value and is shared only where row values already are. Nothing a
+        chart decision needs sits on the far side of that line — no bullet in
+        the prompt asks the model what the largest revenue *is*, only how it
+        compares to the measure beside it, which is the ratio.
         """
-        return "\n".join(c.describe() for c in self.columns)
+        block = "\n".join(
+            c.describe(HintBudget.from_policy(policy), self.row_count)
+            for c in self.columns
+        )
+        notes = self._shape_notes()
+        if not notes:
+            return block
+        return block + "\n\nShape notes:\n" + "\n".join(f"- {n}" for n in notes)
+
+    def _shape_notes(self) -> list[str]:
+        """Result-level arithmetic each chart type's rule is written in terms of.
+
+        Per-column lines cannot carry any of this: a crossing is a product of
+        two columns, a scale gap is a ratio between two others, and the mark
+        budget is a comparison against a platform constant the model has no
+        reason to know.
+        """
+        notes: list[str] = []
+        measures = _measure_candidates(self)
+        dimensions = _dimension_candidates(self)
+
+        if len(measures) >= 2:
+            ranked = sorted(measures, key=lambda c: abs(c.maximum or 0.0))
+            small, large = ranked[0], ranked[-1]
+            ratio = _scale_ratio(small, large)
+            if ratio is None:
+                pass
+            elif not _finite(ratio):
+                notes.append(
+                    f"{large.name} and {small.name} are not on a comparable "
+                    "scale at all, so they cannot share a y axis."
+                )
+            elif ratio >= DUAL_AXIS_RATIO:
+                notes.append(
+                    f"{large.name} peaks about {ratio:,.0f}x higher than "
+                    f"{small.name}; measures {DUAL_AXIS_RATIO}x apart or more "
+                    "get their own y axes (that is what combo is for)."
+                )
+            else:
+                notes.append(
+                    f"{large.name} and {small.name} are within "
+                    f"{max(ratio, 1.0):,.0f}x of each other, so one y axis holds both."
+                )
+
+        crossable = [c for c in dimensions if not c.is_numeric]
+        if len(crossable) >= 2:
+            first, second = crossable[0], crossable[1]
+            cells = first.distinct * second.distinct
+            verdict = (
+                f"within the {MAX_HEATMAP_CELLS}-cell budget"
+                if cells <= MAX_HEATMAP_CELLS
+                else f"past the {MAX_HEATMAP_CELLS}-cell budget, so a heatmap "
+                "would be a texture"
+            )
+            notes.append(
+                f"{first.name} x {second.name} crosses to {cells:,} cells — {verdict}."
+            )
+
+        # Temporal columns included on purpose. The cap is on the mark, not on
+        # the column kind — a bar chart of 400 days is trimmed exactly like a
+        # bar chart of 400 customers — and the note is more useful there than
+        # anywhere, because the form that takes every row is a line and this is
+        # the only thing in the block that says so.
+        widest = max(dimensions, key=lambda c: c.distinct, default=None)
+        if widest is not None and widest.distinct > MAX_CATEGORY_MARKS:
+            notes.append(
+                f"{widest.name} would be {widest.distinct:,} marks on a bar or pie, "
+                f"so the platform would draw the leading {MAX_CATEGORY_MARKS} and "
+                "label the chart a subset. Worth it only if the question asked for "
+                "a top N; otherwise pick a form that takes every row."
+            )
+
+        if not dimensions and measures:
+            notes.append(
+                "No dimension to compare across — these rows are individual "
+                "observations rather than one row per group, which is the shape "
+                "a histogram reads."
+            )
+        return notes
 
 
 def _distinct(values: Sequence[Any]) -> int:
@@ -260,6 +384,101 @@ def _fmt_number(value: float) -> str:
     return f"{value:,.2f}"
 
 
+def _finite(value: float) -> bool:
+    return value not in (float("inf"), float("-inf"))
+
+
+def _temporal_grain(values: Sequence[Any]) -> tuple[TemporalGrain, int] | None:
+    """How a date column is spaced, and how many days it runs end to end.
+
+    One classifier, two readers: the prompt says the grain in words so the
+    model can tell a 40-point monthly series from a 1,200-point daily one, and
+    `_temporal_axis` maps the same grain to a tick format and interval. They
+    were separate for exactly one commit, which was long enough to notice that
+    a prompt calling a series "monthly" while the axis ticked it daily is worse
+    than either alone.
+
+    None when the column holds something other than dates — a connector handing
+    back pre-formatted strings — which is also the case `_temporal_axis`
+    declines to format.
+    """
+    stamps = [v for v in values if isinstance(v, (date, datetime))]
+    if not stamps:
+        return None
+
+    grain: TemporalGrain
+    if any(
+        isinstance(v, datetime) and (v.hour or v.minute or v.second or v.microsecond)
+        for v in stamps
+    ):
+        grain = "intraday"
+    elif all(v.month == 1 and v.day == 1 for v in stamps):
+        grain = "yearly"
+    elif all(v.day == 1 for v in stamps):
+        grain = "monthly"
+    else:
+        grain = "daily"
+
+    days = [v.date() if isinstance(v, datetime) else v for v in stamps]
+    return grain, (max(days) - min(days)).days
+
+
+# Days per unit, for writing a span as a length. Deliberately the *length* and
+# never the endpoints: "spans 14 months" is a fact about the shape of the
+# result, "Jan 2024 to Feb 2025" is two values out of the data.
+_SPAN_UNITS: dict[TemporalGrain, tuple[str, float]] = {
+    "yearly": ("years", 365.25),
+    "monthly": ("months", 30.44),
+    "daily": ("days", 1.0),
+    "intraday": ("days", 1.0),
+}
+
+
+def _span_text(grain: TemporalGrain, span_days: int | None) -> str:
+    """How much time the column covers, in its own unit.
+
+    Coverage, not the distance between the endpoints: twelve monthly points run
+    Jan to Dec, which is 334 days between the two but twelve months of data,
+    and twelve is the number that sits sensibly beside "12 distinct". Where the
+    two *disagree* — 24 distinct over 36 months — the gap is the fact worth
+    having, and it is the reason the span is printed at all.
+    """
+    if span_days is None:
+        return f"{grain} grain"
+    unit, per = _SPAN_UNITS[grain]
+    length = round(span_days / per) + 1
+    return f"{grain} grain; spans about {length:,} {unit if length != 1 else unit[:-1]}"
+
+
+def _crosses_zero(column: ColumnProfile) -> bool:
+    """Whether a measure has values on both sides of zero.
+
+    The test for polarity, and deliberately not "has a negative value": a
+    column that is negative throughout is still a magnitude — costs, refunds,
+    a drawdown — and reads best on one hue getting darker. Only a column with
+    both signs poses the question a diverging scale answers.
+    """
+    return (
+        column.minimum is not None
+        and column.maximum is not None
+        and column.minimum < 0 < column.maximum
+    )
+
+
+def _scale_ratio(first: ColumnProfile, second: ColumnProfile) -> float | None:
+    """How far apart two measures' magnitudes are, or None when neither has one.
+
+    A ratio rather than the two peaks it came from: dimensionless, so it says
+    what the dual-axis rule needs without saying what either column contains.
+    """
+    peaks = sorted(abs(c.maximum or 0.0) for c in (first, second))
+    if peaks[1] == 0:
+        return None
+    if peaks[0] == 0:
+        return float("inf")
+    return peaks[1] / peaks[0]
+
+
 def profile_result(
     columns: Sequence[ResultColumn],
     rows: Sequence[Sequence[Any]],
@@ -273,6 +492,7 @@ def profile_result(
         non_null = [v for v in values if v is not None]
 
         numbers = [f for f in (_as_float(v) for v in non_null) if f is not None]
+        grain = _temporal_grain(non_null) if col.semantic_type == "temporal" else None
         profiles.append(
             ColumnProfile(
                 name=col.name,
@@ -281,6 +501,8 @@ def profile_result(
                 non_null=len(non_null),
                 minimum=min(numbers) if numbers else None,
                 maximum=max(numbers) if numbers else None,
+                grain=grain[0] if grain else None,
+                span_days=grain[1] if grain else None,
             )
         )
     return ResultProfile(
@@ -537,11 +759,13 @@ def _fit_combo(
 
 
 def _independent_scales(first: ColumnProfile, second: ColumnProfile) -> bool:
-    """Whether a combo's two measures are too far apart to share an axis."""
-    peaks = sorted(abs(c.maximum or 0.0) for c in (first, second))
-    if peaks[0] == 0:
-        return peaks[1] > 0
-    return peaks[1] / peaks[0] >= DUAL_AXIS_RATIO
+    """Whether a combo's two measures are too far apart to share an axis.
+
+    The same ratio the prompt states, so the model is judged against the rule
+    it was given rather than a second one spelled out here.
+    """
+    ratio = _scale_ratio(first, second)
+    return ratio is not None and ratio >= DUAL_AXIS_RATIO
 
 
 def _fit(
@@ -714,182 +938,18 @@ def _fit(
     return fitted, changed
 
 
-# ── which chart, and who decides ─────────────────────────────────────────
-# The shape of a result already rules out most of the type list, and it does so
-# *deterministically*. Working that out first and asking the model to choose
-# only among what survives is the whole strategy here, and it gets better as
-# the type list grows: a free choice from nine types has nine ways to be wrong,
-# a choice from three has three. The model still does the part it is uniquely
-# good at — reading which column the *question* was about — while the part that
-# is a fact about the data stays a fact about the data.
+def heuristic_intent(profile: ResultProfile) -> ChartIntent | None:
+    """Pick a chart from the result's shape, with no model call.
 
-
-@dataclass(frozen=True, slots=True)
-class Candidates:
-    """The chart types this result's shape allows, ranked, and the default.
-
-    `intent` is rank 1, fully specified: the chart drawn when the model
-    declines, errors, or picks something the shape does not offer. `types` is
-    what the model is shown. They are produced together, from one reading of
-    the profile, so the offered list and the fallback can never disagree.
-    """
-
-    signature: str
-    types: tuple[ChartType, ...] = ()
-    intent: ChartIntent | None = None
-
-    def offers(self, chart_type: str) -> bool:
-        return chart_type in self.types
-
-
-# One line each, for the prompt. Written as *what the reader gets*, not what
-# the mark is: "a trend over time" is a question a model can match a question
-# against; "a line mark" is not.
-_TYPE_HELP: dict[str, str] = {
-    "line": "a trend over an ordered or time axis",
-    "area": "the same trend, where the filled magnitude matters",
-    "bar": "a measure compared across categories",
-    "pie": "parts of a single whole",
-    "scatter": "how two quantitative fields relate",
-    "heatmap": "a measure across two dimensions at once",
-    "histogram": "how one measure is spread across its range",
-    "combo": "bars for one measure with a line over them for another",
-}
-
-
-def describe_candidates(candidates: Candidates) -> str:
-    """The list the chart prompt shows. Empty when nothing fits."""
-    return "\n".join(f'- "{t}": {_TYPE_HELP[t]}' for t in candidates.types)
-
-
-# What each type wants from the data, phrased as the thing that is missing.
-# `_TYPE_HELP` above answers "what would I see?" for a model choosing; this
-# answers "why can I not have it?" for a person whose cursor is on a disabled
-# button. Two dicts rather than one because they are read in opposite
-# directions and a single sentence doing both does neither well.
-_TYPE_NEEDS: dict[str, str] = {
-    "line": "an ordered or time axis to run along",
-    "area": "an ordered or time axis to run along",
-    "bar": "a category to compare a measure across",
-    "pie": f"one dimension of at most {MAX_PIE_SLICES} parts, all positive",
-    "scatter": "two measures to plot against each other",
-    "heatmap": "two dimensions crossed by one measure",
-    "histogram": "one measure, unaggregated, with enough distinct values",
-    "combo": "two measures on scales too far apart to share an axis",
-}
-
-
-class ChartOption(BaseModel):
-    """One entry in the picker: whether this result can carry it, and if not why.
-
-    The reason is written here rather than in the browser because it is made of
-    two things only this side knows — what the type requires, and what this
-    result actually *is*. A picker that offered every type and then apologised
-    afterwards was the old behaviour; the point of this list is that the
-    apology happens before the click, on hover, while it is still advice.
-    """
-
-    type: str
-    supported: bool
-    reason: str | None = None
-
-
-def chart_options(profile: ResultProfile) -> list[ChartOption]:
-    """Every type the picker shows, in `_TYPE_HELP` order, with its verdict.
-
-    Deliberately not `Candidates.types`: the picker needs the *whole* list, or
-    a type that quietly vanished between one result and the next would look
-    like a bug in the editor rather than a fact about the data.
-    """
-    blocked = unchartable_reason(profile)
-    if blocked is not None:
-        # One reason for all of them, because it is one reason: no chart type
-        # rescues a result the data itself has vetoed.
-        return [ChartOption(type=t, supported=False, reason=blocked) for t in _TYPE_HELP]
-
-    candidates = chart_candidates(profile)
-    return [
-        ChartOption(type=t, supported=True)
-        if candidates.offers(t)
-        else ChartOption(
-            type=t,
-            supported=False,
-            reason=f"Needs {_TYPE_NEEDS[t]}. This result is {candidates.signature}.",
-        )
-        for t in _TYPE_HELP
-    ]
-
-
-def intent_for(profile: ResultProfile, chart_type: str) -> ChartIntent | None:
-    """A fully specified intent of a *named* type — what the picker asks for.
-
-    The picker sends a type and nothing else, which is the whole point of it:
-    someone changing a chart in chat is saying "draw this differently", not
-    re-assigning columns. So the columns come from rank 1, the intent the shape
-    router already worked out, and only the ones that mean something different
-    under the new type are moved.
-
-    `None` for a type this shape does not offer. That is not defensiveness
-    about the UI — the same list disables the button — it is the guarantee that
-    the only way to reach `compile_vega_lite` is through a type the data can
-    carry, whatever calls it.
-    """
-    candidates = chart_candidates(profile)
-    base = candidates.intent
-    if base is None or not candidates.offers(chart_type):
-        return None
-
-    moved = base
-    if chart_type != base.chart_type:
-        if chart_type == "scatter":
-            # Only ever offered beside a combo, whose two measures are already
-            # separated onto y and y2. Against each other rather than against
-            # the dimension: a scatter of a category is a strip plot.
-            if base.y2_axis is None:
-                return None
-            moved = ChartIntent(chart_type="scatter", x_axis=base.y_axis, y_axis=base.y2_axis)
-        elif chart_type == "heatmap":
-            # Only ever offered beside a split bar, where the second dimension
-            # is the legend and the measure is the height. In a matrix the
-            # legend becomes the other side and the height becomes the colour.
-            if base.series is None:
-                return None
-            moved = ChartIntent(
-                chart_type="heatmap",
-                x_axis=base.x_axis,
-                y_axis=base.series,
-                color=base.y_axis,
-            )
-        elif chart_type == "pie":
-            # A pie has one dimension. Carrying the split over would ask for
-            # slices of slices, which is a sunburst and not on the list.
-            moved = ChartIntent(chart_type="pie", x_axis=base.x_axis, y_axis=base.y_axis)
-        else:
-            moved = base.model_copy(update={"chart_type": chart_type, "y2_axis": None})
-        moved = moved.model_copy(update={"title": base.title})
-
-    # Same last gate as every other path: the router says which types are
-    # *offered*, `_fit` says what is actually drawable, and deciding
-    # orientation or demoting a split is its job in both.
-    fitted, _ = _fit(moved, profile)
-    return fitted
-
-
-def chart_candidates(profile: ResultProfile) -> Candidates:
-    """Read the result's shape once: what it allows, ranked, and the default.
-
-    Columns are chosen by what they *contain* — a non-identifier measure that
-    actually varies, a dimension that actually splits the rows — rather than by
-    their position in the SELECT, which is how an id column ends up plotted as
-    a quantity.
-
-    One shape is deliberately absent: a single row. That is a KPI, not a chart,
-    and it is `unchartable_reason` plus `plan_kpi` that answer it — this
-    function is only reached for results that survived the veto.
+    Both the fallback for when the model declines or hallucinates, and the
+    reference for what "a sensible default" means. It chooses columns by what
+    they *contain* — a non-identifier measure that actually varies, a dimension
+    that actually splits the rows — rather than by their position in the
+    SELECT, which is how an id column ends up plotted as a quantity.
     """
     measures = _measure_candidates(profile)
     if not measures:
-        return Candidates("nothing to measure")
+        return None
     # Rightmost measure: SQL convention puts the thing being measured last.
     measure = measures[-1]
 
@@ -899,44 +959,14 @@ def chart_candidates(profile: ResultProfile) -> Candidates:
         if c.is_categorical and not c.is_constant and c.name != measure.name
     ]
 
-    # Exactly two measures on scales far enough apart that one would flatten
-    # the other. Drawing only one of them is what happened before combo
-    # existed, and it silently dropped a column the query asked for. Three or
-    # more stays on the old reading: a combo can carry two, and choosing which
-    # two is a question about the question, not about the shape.
-    dimension = temporal[0] if temporal else (categorical[0] if categorical else None)
-    if dimension is not None and len(measures) == 2 and _independent_scales(*measures):
-        return Candidates(
-            "two measures on different scales",
-            ("combo", "scatter", "line" if temporal else "bar"),
-            ChartIntent(
-                chart_type="combo",
-                x_axis=_axis_for(dimension),
-                y_axis=_axis_for(measures[0]),
-                y2_axis=_axis_for(measures[1]),
-            ),
-        )
-
     # A time axis reads as a trend, optionally split by a small dimension.
     if temporal:
         series = next((c for c in categorical if 1 < c.distinct <= MAX_SERIES), None)
-        return Candidates(
-            "a measure over time" + (", split" if series is not None else ""),
-            # Pie belongs here too when the periods are few. "Share of revenue
-            # by quarter" is an ordinary request, and a list that refused it
-            # would be overruling a user who picked Pie in the editor — the
-            # exact failure Phase 1 removed. Generosity is the rule for this
-            # list: `_fit` is still downstream to catch a pick the *data*
-            # cannot carry, so the cost of offering one type too many is far
-            # lower than the cost of withholding one.
-            ("line", "area", "bar")
-            + (("pie",) if temporal[0].distinct <= MAX_PIE_SLICES else ()),
-            ChartIntent(
-                chart_type="line",
-                x_axis=_axis_for(temporal[0]),
-                y_axis=_axis_for(measure),
-                series=_axis_for(series) if series is not None else None,
-            ),
+        return ChartIntent(
+            chart_type="line",
+            x_axis=_axis_for(temporal[0]),
+            y_axis=_axis_for(measure),
+            series=_axis_for(series) if series is not None else None,
         )
 
     # Two dimensions crossed by a measure. Before heatmaps existed this fell
@@ -945,48 +975,30 @@ def chart_candidates(profile: ResultProfile) -> Candidates:
     # other, with nothing on screen saying a column had been ignored.
     if len(categorical) >= 2:
         first, second = categorical[0], categorical[1]
-        fits_a_matrix = first.distinct * second.distinct <= MAX_HEATMAP_CELLS
         if second.distinct <= MAX_SERIES:
-            # Small enough to read as a legend, which is easier than a matrix —
-            # so a split bar leads, and the matrix is offered behind it.
-            return Candidates(
-                "a measure across two dimensions",
-                ("bar", "heatmap") if fits_a_matrix else ("bar",),
-                ChartIntent(
-                    chart_type="bar",
-                    x_axis=_axis_for(first),
-                    y_axis=_axis_for(measure),
-                    series=_axis_for(second),
-                ),
-            )
-        if fits_a_matrix:
-            return Candidates(
-                "a measure across two wide dimensions",
-                ("heatmap",),
-                ChartIntent(
-                    chart_type="heatmap",
-                    x_axis=_axis_for(first),
-                    y_axis=_axis_for(second),
-                    color=_axis_for(measure),
-                ),
-            )
-
-    # A measure across categories. A pie is only ever offered here, and only
-    # when the slices stay countable; past that the angles stop meaning
-    # anything and `_fit` would demote it back to bars anyway.
-    if categorical:
-        first = categorical[0]
-        return Candidates(
-            "a measure across categories",
-            ("bar", "pie") if first.distinct <= MAX_PIE_SLICES else ("bar",),
-            # The orientation is left to `_fit`, which every path through
-            # `plan_chart` runs afterwards — deciding it twice is how the two
-            # paths drift apart.
-            ChartIntent(
+            # Small enough to read as a legend, which is easier than a matrix.
+            return ChartIntent(
                 chart_type="bar",
                 x_axis=_axis_for(first),
                 y_axis=_axis_for(measure),
-            ),
+                series=_axis_for(second),
+            )
+        if first.distinct * second.distinct <= MAX_HEATMAP_CELLS:
+            return ChartIntent(
+                chart_type="heatmap",
+                x_axis=_axis_for(first),
+                y_axis=_axis_for(second),
+                color=_axis_for(measure),
+            )
+
+    # A measure across categories: bars. The orientation is left to `_fit`,
+    # which every path through `plan_chart` runs afterwards — deciding it twice
+    # is how the two paths drift apart.
+    if categorical:
+        return ChartIntent(
+            chart_type="bar",
+            x_axis=_axis_for(categorical[0]),
+            y_axis=_axis_for(measure),
         )
 
     # Two measures and nothing to group by: show their relationship. A third
@@ -996,15 +1008,11 @@ def chart_candidates(profile: ResultProfile) -> Candidates:
     # Ahead of the histogram below on purpose: with two measures in hand, how
     # they move together says more than how either is spread.
     if len(measures) >= 2:
-        return Candidates(
-            "two measures, nothing to group by",
-            ("scatter",),
-            ChartIntent(
-                chart_type="scatter",
-                x_axis=_axis_for(measures[0]),
-                y_axis=_axis_for(measures[1]),
-                size=_axis_for(measures[2]) if len(measures) >= 3 else None,
-            ),
+        return ChartIntent(
+            chart_type="scatter",
+            x_axis=_axis_for(measures[0]),
+            y_axis=_axis_for(measures[1]),
+            size=_axis_for(measures[2]) if len(measures) >= 3 else None,
         )
 
     # One column, nothing to compare it across, and enough of it to have a
@@ -1012,17 +1020,8 @@ def chart_candidates(profile: ResultProfile) -> Candidates:
     # case for the same reason.
     lone = _histogram_candidate(profile)
     if lone is not None:
-        return Candidates(
-            "one measure's distribution",
-            ("histogram",),
-            ChartIntent(chart_type="histogram", x_axis=_axis_for(lone)),
-        )
-    return Candidates("no shape a chart fits")
-
-
-def heuristic_intent(profile: ResultProfile) -> ChartIntent | None:
-    """The chart this result gets with no model call — rank 1 of the router."""
-    return chart_candidates(profile).intent
+        return ChartIntent(chart_type="histogram", x_axis=_axis_for(lone))
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1034,45 +1033,242 @@ class ChartPlan:
     reason: str | None = None
 
 
+def candidate_intent(profile: ResultProfile, chart_type: str) -> ChartIntent | None:
+    """The most plausible intent of *this* type for this result, or None.
+
+    `heuristic_intent` answers "what should this be drawn as"; this answers
+    "if it has to be a heatmap, which columns are the heatmap". Two different
+    questions, and the second one is what a picker needs: a reader choosing a
+    type from a grid has not chosen columns, and asking them to is how a
+    control that should take one click takes four.
+
+    Column choice follows the same rules the heuristic uses — a measure that is
+    not an identifier and actually varies, a dimension that actually splits the
+    rows — so a type picked by hand lands on the same columns it would have
+    landed on had the platform chosen that type itself.
+    """
+    measures = _measure_candidates(profile)
+    dimensions = _dimension_candidates(profile)
+    # Rightmost measure: SQL convention puts the thing being measured last.
+    measure = measures[-1] if measures else None
+    temporal = [c for c in dimensions if c.is_temporal]
+    categorical = [c for c in dimensions if c.is_categorical]
+
+    if chart_type == "histogram":
+        column = _histogram_candidate(profile)
+        return (
+            None if column is None
+            else ChartIntent(chart_type="histogram", x_axis=_axis_for(column))
+        )
+
+    if chart_type == "scatter":
+        if len(measures) < 2:
+            return None
+        return ChartIntent(
+            chart_type="scatter",
+            x_axis=_axis_for(measures[0]),
+            y_axis=_axis_for(measures[1]),
+        )
+
+    if measure is None:
+        return None
+
+    if chart_type == "heatmap":
+        if len(dimensions) < 2:
+            return None
+        return ChartIntent(
+            chart_type="heatmap",
+            x_axis=_axis_for(dimensions[0]),
+            y_axis=_axis_for(dimensions[1]),
+            color=_axis_for(measure),
+        )
+
+    if chart_type == "combo":
+        if len(measures) < 2 or not dimensions:
+            return None
+        return ChartIntent(
+            chart_type="combo",
+            x_axis=_axis_for(dimensions[0]),
+            y_axis=_axis_for(measures[0]),
+            y2_axis=_axis_for(measures[1]),
+        )
+
+    if not dimensions:
+        return None
+
+    # An ordered axis first for the trend types, since a line across unordered
+    # categories draws a continuity the data does not have and `_fit` demotes
+    # it. A pie wants the *narrowest* category column — it is the one with any
+    # chance of fitting inside the slice budget.
+    if chart_type in ("line", "area"):
+        ordered = temporal or [c for c in categorical if c.semantic_type == "ordinal"]
+        axis = ordered[0] if ordered else dimensions[0]
+    elif chart_type == "pie":
+        axis = min(categorical, key=lambda c: c.distinct) if categorical else dimensions[0]
+    else:
+        axis = dimensions[0]
+
+    series = next(
+        (c for c in dimensions if c.name != axis.name and 1 < c.distinct <= MAX_SERIES),
+        None,
+    )
+    return ChartIntent(
+        chart_type=chart_type,  # type: ignore[arg-type]  (validated by the caller's list)
+        x_axis=_axis_for(axis),
+        y_axis=_axis_for(measure),
+        series=_axis_for(series) if series is not None and chart_type != "pie" else None,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ChartOption:
+    """Whether this result can be drawn as one type, and if not, why not."""
+
+    chart_type: str
+    supported: bool
+    reason: str | None = None
+    #: Channel → column name, for the columns that made `supported` true.
+    #:
+    #: The verdict is computed by fitting *specific* columns, so a caller that
+    #: keeps its own column selection across a type change is not asking the
+    #: question this answered. A pie is "supported" for a monthly-by-warehouse
+    #: result because `warehouse_name` has six values — say so, rather than
+    #: leaving the caller to keep `month` on x and receive a bar.
+    columns: dict[str, str] | None = None
+
+
+def chart_options(profile: ResultProfile) -> list[ChartOption]:
+    """Every chart type, with a verdict for this result.
+
+    **`supported` is not a second opinion about the vetoes — it is the vetoes.**
+    Each type is answered by building its candidate and running the real
+    `plan_chart`: supported means asking for that type actually returns that
+    type. Anything else would be a parallel rulebook, and a parallel rulebook is
+    how a picker comes to offer a chart the compiler then quietly replaces with
+    another one.
+
+    `reason` is prose for the reader and nothing else. It never decides
+    anything, so it cannot disagree with the verdict beside it — the worst a
+    stale sentence can do is explain a refusal badly, not cause one.
+    """
+    blocked = unchartable_reason(profile)
+    options: list[ChartOption] = []
+    for chart_type in get_args(ChartType):
+        if chart_type == "none":
+            continue
+        if blocked is not None:
+            options.append(ChartOption(chart_type, False, blocked))
+            continue
+        candidate = candidate_intent(profile, chart_type)
+        fitted = plan_chart(profile, candidate).intent if candidate is not None else None
+        supported = fitted is not None and fitted.chart_type == chart_type
+        options.append(
+            ChartOption(
+                chart_type,
+                supported,
+                None if supported else _unsupported_reason(profile, chart_type),
+                _option_columns(fitted) if supported else None,
+            )
+        )
+    return options
+
+
+def _option_columns(intent: ChartIntent | None) -> dict[str, str] | None:
+    """The channel → column map a caller needs to reproduce this verdict.
+
+    Named by the editor's channels rather than `ChartIntent`'s field names, so
+    the browser is not re-deriving that `y2_axis` is the control labelled
+    "Line". Channels the type does not use are absent, not empty, so a caller
+    can tell "this type has no series" from "this type wants one and none was
+    found".
+    """
+    if intent is None:
+        return None
+    channels = {
+        "x": intent.x_axis,
+        "y": intent.y_axis,
+        "series": intent.series,
+        "color": intent.color,
+        "y2": intent.y2_axis,
+        "size": intent.size,
+    }
+    return {name: axis.field for name, axis in channels.items() if axis is not None}
+
+
+def _unsupported_reason(profile: ResultProfile, chart_type: str) -> str:
+    """Why a type does not fit, in the reader's terms rather than the code's.
+
+    Deliberately reads the same profile the vetoes read, so the sentence names
+    the actual obstacle — "45 categories" beats "does not fit this result",
+    which was the note this whole phase exists to stop showing.
+    """
+    measures = _measure_candidates(profile)
+    dimensions = _dimension_candidates(profile)
+    categorical = [c for c in dimensions if c.is_categorical]
+
+    if chart_type == "histogram":
+        return (
+            f"Needs {MIN_HISTOGRAM_ROWS}+ rows of one numeric column with at "
+            f"least {MIN_HISTOGRAM_LEVELS} distinct values — a spread to bin, "
+            "rather than one row per group."
+        )
+    if chart_type == "scatter":
+        return "Needs two numeric measures to relate to each other."
+    if chart_type == "combo":
+        if len(measures) < 2:
+            return "Needs two measures — one for the bars, one for the line."
+        return "Needs a category or date column to put them both over."
+    if chart_type == "heatmap":
+        if len(dimensions) < 2:
+            return "Needs two category or date columns to cross."
+        cells = dimensions[0].distinct * dimensions[1].distinct
+        return (
+            f"{dimensions[0].name} x {dimensions[1].name} is {cells:,} cells; "
+            f"a heatmap stays legible to about {MAX_HEATMAP_CELLS}."
+        )
+    if not measures:
+        return "No numeric measure in this result."
+    if not dimensions:
+        return "Needs a category or date column to compare the measure across."
+    if chart_type in ("line", "area"):
+        return (
+            "Needs an ordered axis — a date, or a ranked category. Joining "
+            "unordered categories invents a continuity the data does not have."
+        )
+    if chart_type == "pie":
+        if not categorical:
+            return "A pie divides a whole between categories; this has none."
+        if any((c.minimum or 0) < 0 for c in measures):
+            return "A pie cannot show a negative value — an angle has no sign."
+        narrowest = min(c.distinct for c in categorical)
+        return (
+            f"A pie reads about {MAX_PIE_SLICES} slices; the narrowest column "
+            f"here has {narrowest:,}."
+        )
+    return "This result cannot be drawn that way."
+
+
 def plan_chart(
     profile: ResultProfile, suggestion: ChartIntent | None = None
 ) -> ChartPlan:
     """Decide what to draw for this result. The one entry point.
 
-    Three gates, narrowing:
-
-    1. **The data's veto.** No model opinion can make a constant column
-       interesting, and no chart type rescues a single row.
-    2. **The shape's offer.** `chart_candidates` says which types this result
-       can carry. A suggestion outside that list is not repaired, it is
-       *declined* — a model that asked for a scatter of one categorical column
-       misread the shape, and its column assignment is no more trustworthy
-       than its type. Rank 1 answers instead.
-    3. **The fit.** An on-list suggestion still goes through `_fit`, which
-       repairs swapped axes, mislabelled types and unreadable splits. That is
-       unchanged and deliberately so: it is the chart guard, not the chooser.
-
-    The model's `title` survives all three. It is the one part of the
-    suggestion that comes from reading the *question* rather than the shape, so
-    a declined type does not cost the reader a title that named what they
-    asked.
+    Order matters: the data's own veto comes first (no model opinion can make a
+    constant column interesting), then the model's suggestion if it survives
+    fitting, then the deterministic heuristic — itself fitted, so one set of
+    rules governs both paths.
     """
     blocked = unchartable_reason(profile)
     if blocked is not None:
         return ChartPlan(None, "none", blocked)
 
-    candidates = chart_candidates(profile)
-
-    named = suggestion is not None and validate_intent(suggestion, profile)[0]
-    if named and candidates.offers(suggestion.chart_type):  # type: ignore[union-attr]
-        fitted, changed = _fit(suggestion, profile)  # type: ignore[arg-type]
+    if suggestion is not None and validate_intent(suggestion, profile)[0]:
+        fitted, changed = _fit(suggestion, profile)
         if fitted is not None:
             return ChartPlan(fitted, "model_adjusted" if changed else "model")
 
-    guess = candidates.intent
+    guess = heuristic_intent(profile)
     if guess is not None:
-        if named and suggestion is not None and suggestion.title:
-            guess = guess.model_copy(update={"title": suggestion.title})
         fitted, _ = _fit(guess, profile)
         if fitted is not None:
             return ChartPlan(fitted, "heuristic")
@@ -1270,9 +1466,10 @@ def _temporal_axis(values: Sequence[Any]) -> dict[str, Any] | None:
     handing back pre-formatted strings, say — because a time format applied to
     a string is how an axis goes blank.
     """
-    stamps = [v for v in values if isinstance(v, (date, datetime))]
-    if not stamps:
+    measured = _temporal_grain(values)
+    if measured is None:
         return None
+    grain, span_days = measured
 
     axis: dict[str, Any] = {
         # Explicit formats are wider than the bare month names Vega picked for
@@ -1281,10 +1478,7 @@ def _temporal_axis(values: Sequence[Any]) -> dict[str, Any] | None:
         "labelOverlap": "greedy",
     }
 
-    if any(
-        isinstance(v, datetime) and (v.hour or v.minute or v.second or v.microsecond)
-        for v in stamps
-    ):
+    if grain == "intraday":
         # Sub-day ticks are the one case left to Vega. `vega-time` has no
         # "hour", "minute" or "second" interval — `timeInterval("hour")` is
         # undefined, and Vega then throws inside its own tick generator, which
@@ -1294,18 +1488,22 @@ def _temporal_axis(values: Sequence[Any]) -> dict[str, Any] | None:
         axis["format"] = "%b %d, %H:%M"
         return axis
 
-    # Every value on a year boundary is a yearly series; on a month boundary, a
-    # monthly (or quarterly) one. Anything else is dated to the day.
-    if all(v.month == 1 and v.day == 1 for v in stamps):
-        axis["format"], floor = "%Y", "year"
-    elif all(v.day == 1 for v in stamps):
-        axis["format"], floor = "%b %Y", "month"
-    else:
-        axis["format"], floor = "%b %d, %Y", "date"
-
-    days = [v.date() if isinstance(v, datetime) else v for v in stamps]
-    axis["tickCount"] = {"interval": _tick_interval(floor, (max(days) - min(days)).days)}
+    # A yearly series is one whose values all sit on a year boundary, a monthly
+    # (or quarterly) one on a month boundary; anything else is dated to the day.
+    # The classification itself lives in `_temporal_grain`, which the prompt
+    # reads too — see the note there.
+    axis["format"], floor = _GRAIN_AXIS[grain]
+    axis["tickCount"] = {"interval": _tick_interval(floor, span_days)}
     return axis
+
+
+# What each grain looks like on an axis: a d3 time format, and the finest tick
+# interval that can be used without printing the same label twice.
+_GRAIN_AXIS: dict[TemporalGrain, tuple[str, str]] = {
+    "yearly": ("%Y", "year"),
+    "monthly": ("%b %Y", "month"),
+    "daily": ("%b %d, %Y", "date"),
+}
 
 
 # Approximate days per tick, finest first. `date` rather than `day`: in Vega's
@@ -1445,18 +1643,6 @@ def _layout(
     lead = "top" if order == "descending" else "lowest"
     total = f"{profile.row_count:,}{'+' if profile.truncated else ''}"
     return kept, order, f"{lead} {budget} of {total}"
-
-
-def _crosses_zero(column: ColumnProfile | None) -> bool:
-    """Whether a measure has values on both sides of zero.
-
-    The trigger for both of this module's sign-aware colour signals. It is a
-    fact about the data, which is why it is decided here; what colour to *paint*
-    a negative is a fact about the theme, which is why it is not.
-    """
-    if column is None or column.minimum is None or column.maximum is None:
-        return False
-    return column.minimum < 0 < column.maximum
 
 
 def _apply_stack(
@@ -1599,19 +1785,23 @@ def compile_vega_lite(
         encoding["color"] = encode(intent.x_axis, positional=False)
     elif intent.chart_type == "heatmap":
         # Two dimensions position the cell; the measure is its colour. The
-        # measure stays **quantitative** so Vega reaches for the `ramp` scale
-        # family and its sequential palette — made ordinal it would come back
+        # measure stays **quantitative** so Vega reaches for a continuous scale
+        # family and a sequential palette — made ordinal it would come back
         # with eight categorical hues standing for a magnitude.
         assert intent.color is not None
         encoding["x"] = encode(intent.x_axis)
         encoding["y"] = encode(intent.y_axis)
         encoding["color"] = encode(intent.color, positional=False)
-        # A measure that crosses zero needs its zero pinned to the ramp's
-        # neutral step, or the colour that means "no change" lands wherever the
-        # data's midpoint happens to fall. The *ramp* is the browser's to
-        # choose — it holds the theme — but where its middle belongs is a fact
-        # about the data, and only this side knows it.
-        if _crosses_zero(profile.get(intent.color.field)):
+        # A measure that crosses zero is not a magnitude, it is a polarity: the
+        # reader's first question about -40% beside +40% is which way each one
+        # went, and one hue getting darker cannot answer it. `domainMid` is
+        # what makes Vega-Lite select the `diverging` scale family — and so the
+        # diverging range the frontend defines — instead of the sequential one.
+        # It also pins the neutral colour to zero rather than to the midpoint of
+        # whatever range the data happened to have, without which a grid running
+        # +10 to +90 would paint +50 as "no change".
+        measure = profile.get(intent.color.field)
+        if measure is not None and _crosses_zero(measure):
             encoding["color"]["scale"] = {"domainMid": 0}
     elif intent.chart_type == "histogram":
         # Bins on x, a count of rows on y. The count channel carries no field:
@@ -1715,37 +1905,24 @@ def compile_vega_lite(
         "stack": intent.stack,
         "categories": _distinct(shown.get(intent.x_axis.field, ())),
     }
-    # Which *kind* of colour scale the measure wants. A magnitude that crosses
-    # zero is not the same story as one that only grows: a sequential ramp says
-    # a large negative and a large positive are equally "a lot", which is the
-    # opposite of what the reader needs.
-    if intent.chart_type == "heatmap" and intent.color is not None:
-        meta["color_scale"] = (
-            "diverging" if _crosses_zero(profile.get(intent.color.field)) else "sequential"
-        )
-    # A bar or area with values below the axis. The *test* is written here
-    # because only this side knows the field name and can escape it; the two
-    # colours it selects between belong to the theme, so the browser supplies
-    # them. Skipped when a series is present — the colour channel is already
-    # carrying identity, and sign would be fighting it for the same ink.
-    if (
-        intent.chart_type in ("bar", "area")
-        and intent.series is None
-        and _crosses_zero(profile.get(intent.y_axis.field))
-    ):
-        meta["negative_test"] = f"datum[{json.dumps(intent.y_axis.field)}] < 0"
     # A heatmap's height has to grow with its *other* dimension the way a
     # horizontal bar's grows with its categories — a 30-row matrix squeezed
     # into 300px is a smear whichever axis you read it along.
     if intent.chart_type == "heatmap" and intent.y_axis is not None:
         meta["bands"] = _distinct(shown.get(intent.y_axis.field, ()))
-    # What else this result could have been drawn as, so a reader who disagrees
-    # with the choice can see the alternatives without another round trip — and
-    # so the ones that were never possible are greyed out with a reason rather
-    # than offered and then refused. It rides in the spec because the spec is
-    # already the one thing every surface has: chat holds it as an artifact, a
-    # tile holds it in its result, and neither had anywhere else to put it.
-    meta["options"] = [o.model_dump() for o in chart_options(profile)]
+    # A single-series bar or area whose measure crosses zero. Named here rather
+    # than coloured here: the polarity pair is a *theme* value, and the backend
+    # does not know which theme the reader is in — the same spec is repainted
+    # when they flip it. So the compiler states the fact and the browser, which
+    # owns every colour in this product, decides what to paint.
+    #
+    # Only without a `series`: with one, colour already carries identity, and
+    # overwriting it to carry sign instead would drop the legend's meaning.
+    if intent.chart_type in ("bar", "area") and intent.series is None:
+        measure_name = intent.y_axis.field
+        measure = profile.get(measure_name)
+        if measure is not None and _crosses_zero(measure):
+            meta["signed_measure"] = measure_name
     spec["usermeta"] = {"datamind": meta}
 
     # The reduction is part of what the chart claims, so it is shown, never

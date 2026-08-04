@@ -2,23 +2,16 @@
  * Renders a backend-produced Vega-Lite spec with vega-embed.
  *
  * The spec's data and encodings are chosen by the agent (the `chart` pipeline
- * node); this component only paints it, and the colours it paints with live in
- * `theme/palette.ts` — moved there so `npm run test:palette` can re-measure
- * them without importing React. A MutationObserver re-renders the chart when
- * the theme is toggled.
+ * node); this component only paints it. A MutationObserver re-renders the
+ * chart when the theme is toggled.
  *
- * Two colour decisions are made *here* rather than in the spec, and both for
- * the same reason: the backend knows the data and the browser knows the theme.
- * A measure that crosses zero gets the diverging ramp instead of the
- * sequential one, and a bar chart with values below the axis paints those from
- * the semantic pair. In both cases the spec's `usermeta` states the *fact*
- * (this measure is signed; here is the test that finds a negative row) and
- * this file supplies the colours.
+ * The colours themselves, and the reasoning behind every one of them, live in
+ * `palette.ts` — apart from here so that `npm run test:palette` can measure
+ * them without loading React. Read that file before changing a value.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import embed, { type VisualizationSpec } from 'vega-embed'
-
-import { PALETTES, type ThemeName } from '../theme/palette'
+import { PALETTES, type ThemeName } from './palette.ts'
 
 function currentTheme(): ThemeName {
   return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'
@@ -83,8 +76,7 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
     const meta = (spec.usermeta as
       { datamind?: {
         chart_type?: string; orientation?: string; stack?: string
-        categories?: number; bands?: number
-        color_scale?: 'sequential' | 'diverging'; negative_test?: string
+        categories?: number; bands?: number; signed_measure?: string
       } } | undefined)?.datamind
     const isHorizontalBar = meta
       ? meta.chart_type === 'bar' && meta.orientation === 'horizontal'
@@ -128,14 +120,14 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
     const PER_COLUMN = 34
     const width: number | 'container' =
       xIsCategorical && columnCount > 12 ? columnCount * PER_COLUMN : 'container'
-    return { encoding, growsDown, height, width, xIsCategorical, meta }
+    return { encoding, growsDown, height, width, xIsCategorical, signedMeasure: meta?.signed_measure }
   }, [spec, fill])
 
   useEffect(() => {
     const el = ref.current
     if (!el) return
     const p = PALETTES[theme]
-    const { encoding, height, width, xIsCategorical, meta } = layout
+    const { encoding, height, width, xIsCategorical, signedMeasure } = layout
 
     const config = {
       background: 'transparent',
@@ -154,24 +146,21 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
         labelPadding: 4,
       },
       legend: { labelColor: p.dim, titleColor: p.text, labelFontSize: 11, titleFontSize: 11 },
-      // Vega picks the scale *family* from the encoding type AND the mark, and
-      // each family has its own default range: `category` for discrete colour,
-      // `ramp` for continuous, `ordinal` for ordered — and `heatmap` for a
-      // continuous colour on a `rect`. Overriding only `category` left the
-      // others on Vega's built-ins, so a chart split by a numeric field came
-      // out blue while every other chart was plum: one product, two palettes.
-      //
-      // `heatmap` is that same bug, caught a second time. The type arrived
-      // after this comment was written, and because a rect's colour scale asks
-      // for the `heatmap` range rather than `ramp`, every heatmap drew in
-      // Vega's viridis — green-to-yellow, from no palette in this file. The
-      // lesson generalises: a new mark can quietly introduce a new range name,
-      // so read the compiled scale rather than assuming `ramp` covers it.
+      // Vega picks the scale *family* from the encoding type, and each family
+      // has its own default range: `category` for discrete colour, `ramp` for
+      // continuous, `ordinal` for ordered, `heatmap` for a rect mark's
+      // quantitative colour, and `diverging` once a scale has a `domainMid`.
+      // Every family left unset falls back to a Vega built-in, which is how
+      // one product ends up with two palettes — `ramp` and `ordinal` were once
+      // on `blues` beside a plum chart, and `heatmap` was still on
+      // yellow-green-blue until this line named it. Setting all five is the
+      // only version of this that stays fixed.
       range: {
         category: p.category,
         ramp: p.ramp,
         ordinal: p.ramp,
         heatmap: p.ramp,
+        diverging: p.diverging,
       },
       // Rounded only at the data end, anchored to the baseline, so the mark
       // still reads as a measurement rather than a lozenge.
@@ -183,49 +172,39 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
       line: { strokeWidth: 2 },
     }
 
-    // Overrides applied to the spec's own encoding. Each is something the
-    // backend could not decide: it holds the data, this file holds the theme
-    // and the pixels.
-    let encodingOverride = spec.encoding as Record<string, unknown> | undefined
-    const override = (channel: string, value: unknown) => {
-      encodingOverride = { ...(encodingOverride ?? {}), [channel]: value }
-    }
-
     // Angle long category labels instead of standing them fully vertical, so
     // they stop eating half the chart. Set on the x-encoding directly (config
     // .axisX does not reliably carry labelAngle) and only when x is the
     // categorical axis — never for numeric axes (scatter, a horizontal bar's
     // measure axis).
+    let encodingOverride = spec.encoding
     if (xIsCategorical && encoding.x && typeof encoding.x === 'object') {
-      override('x', {
-        ...encoding.x,
-        axis: { labelAngle: -35, labelLimit: 110, labelPadding: 4 },
-      })
+      encodingOverride = {
+        ...encoding,
+        x: { ...encoding.x, axis: { labelAngle: -35, labelLimit: 110, labelPadding: 4 } },
+      }
     }
 
-    // A measure that crosses zero: the sequential ramp would say a large
-    // negative and a large positive are equally "a lot", which is the opposite
-    // of what the reader needs. The spec already pinned `domainMid: 0` — where
-    // the neutral step belongs is a fact about the data — so only the colours
-    // are added here.
-    if (meta?.color_scale === 'diverging' && encoding.color) {
-      const colour = encoding.color as Record<string, unknown>
-      override('color', {
-        ...colour,
-        scale: { ...(colour.scale as object ?? {}), range: p.diverging },
-      })
-    }
-
-    // Bars below the axis, painted from the semantic pair. `negative_test` is
-    // a Vega expression the backend wrote, because only it knows the field
-    // name and can escape it; which two colours the test selects between is a
-    // theme decision and belongs here. Sign, not judgement — nothing in this
-    // says a fall is bad news.
-    if (meta?.negative_test) {
-      override('color', {
-        condition: { test: meta.negative_test, value: p.negative },
-        value: p.positive,
-      })
+    // A measure that crosses zero: paint the bars below the line in the
+    // polarity colour. The compiler names the field rather than the colour,
+    // because the pair is a theme value and this same spec is repainted when
+    // the reader flips the theme — see `palette.ts`.
+    //
+    // The sign is already visible in which way the bar points, so this is
+    // reinforcement, not the encoding; it is applied only where colour is
+    // otherwise unused (no series), so nothing that carried identity is
+    // overwritten to carry sign instead.
+    if (signedMeasure) {
+      encodingOverride = {
+        ...(encodingOverride as Record<string, unknown>),
+        color: {
+          condition: {
+            test: `datum[${JSON.stringify(signedMeasure)}] < 0`,
+            value: p.polarity.negative,
+          },
+          value: p.category[0],
+        },
+      }
     }
 
     const full = {

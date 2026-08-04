@@ -20,7 +20,6 @@ from app.core.clock import utcnow
 from app.core.config import Settings
 from app.core.errors import NotFoundError, RunTimeoutError, ValidationError
 from app.core.logging import get_logger
-from app.domain.ports.database import ResultColumn
 from app.domain.ports.llm import ChatMessage
 from app.domain.value_objects import (
     ArtifactKind,
@@ -55,6 +54,12 @@ from app.services.query_service import (
 from app.services.semantic_service import load_document
 
 log = get_logger(__name__)
+
+# Per-part cap on a question composed from a clarification exchange. Three
+# parts, so the worst case is bounded at ~900 characters of user text plus the
+# frame — the same order as a turn in `_render_history`, and for the same
+# reason: a trimmed real sentence beats a paraphrase nothing verified.
+_QUESTION_CHARS = 300
 
 
 class RunService:
@@ -166,12 +171,15 @@ class RunService:
         # Loaded once per run, not per attempt: a repair regenerates against
         # the same schema block, and the layer is part of that block.
         semantic = await load_document(self._db, connection)
+        # One lookup, two consequences: this run may not ask again, and its
+        # question is the reply *plus* the question that reply answers.
+        pending = await self._pending_clarification(run)
         state = RunState(
             run_id=run.id,
             conversation_id=run.conversation_id,
             owner_id=run.owner_id,
             connection_id=connection.id,
-            question=await self._question_of(run),
+            question=await self._compose_question(run, pending),
             dialect=connection.database_type,
             max_rows=connection.max_rows,
             statement_timeout_ms=connection.statement_timeout_ms,
@@ -190,10 +198,7 @@ class RunService:
             policy=policy_from_snapshot(snapshot, connection),
             emit=lambda t, d: self._emit(run_id, t, d),
             semantic=(semantic.model_dump(mode="json") if semantic else None),
-            clarify_enabled=(
-                connection.clarify_enabled
-                and not await self._previous_run_asked(run)
-            ),
+            clarify_enabled=connection.clarify_enabled and pending is None,
         )
 
         pipeline = AnalyticsPipeline(
@@ -458,25 +463,82 @@ class RunService:
         )
         return (result.scalar_one_or_none() or 0) + 1
 
-    async def _previous_run_asked(self, run: Run) -> bool:
-        """Did the turn immediately before this one end in a question?
+    async def _pending_clarification(self, run: Run) -> Run | None:
+        """The run immediately before this one, if it ended in a question.
 
-        This is what stops a clarification loop. The model cannot be trusted to
-        notice from the transcript that it already asked, and a user who has
-        just answered must get an answer — so the second run in an exchange
-        never gets to ask again, whatever it thinks of the reply.
+        Two things hang off this, and they are the same fact:
+
+        * It stops a clarification loop. The model cannot be trusted to notice
+          from the transcript that it already asked, and a user who has just
+          answered must get an answer — so the second run in an exchange never
+          gets to ask again, whatever it thinks of the reply.
+        * It is what `_compose_question` needs to put the reply back together
+          with the question it answers.
+
+        The whole row, not just the status, because the second use needs the
+        messages behind it. One query either way.
         """
         result = await self._db.execute(
-            select(Run.status)
+            select(Run)
             .where(Run.conversation_id == run.conversation_id, Run.id != run.id)
             .order_by(Run.created_at.desc())
             .limit(1)
         )
-        return result.scalar_one_or_none() == RunStatus.NEEDS_CLARIFICATION
+        previous = result.scalar_one_or_none()
+        if previous is None or previous.status != RunStatus.NEEDS_CLARIFICATION:
+            return None
+        return previous
 
     async def _question_of(self, run: Run) -> str:
         message = await self._db.get(Message, run.user_message_id)
         return (message.content if message else "") or ""
+
+    async def _compose_question(self, run: Run, pending: Run | None) -> str:
+        """The question this run actually has to answer.
+
+        A clarification is not resumed — the reply arrives as an ordinary new
+        run — so without this the pipeline is handed the reply *alone*. "Total
+        sales (order amount)" is a complete, answerable question on its own,
+        and the generator answered it on its own: one figure, when the question
+        it replied to was "who are the best sellers?". The transcript did carry
+        both turns, but as passive context, against an `_SQL_RULES` line that
+        explicitly says to answer exactly what is asked at the granularity
+        asked — so the history lost to the rule every time.
+
+        Composing here rather than in a prompt is deliberate. `GENERATE_SYSTEM`
+        stays byte-identical (eval Round 2: additions to it cost accuracy), and
+        every node downstream benefits from the same fix — `retrieve` matches
+        tables against the subject again, and `present` narrates the question
+        the user actually asked.
+
+        The frame is English because the surrounding prompt is; the user's own
+        words are never translated or paraphrased, only quoted and trimmed.
+        """
+        reply = await self._question_of(run)
+        if pending is None:
+            return reply
+
+        original = await self._question_of(pending)
+        if not original or not reply:
+            return reply or original
+
+        asked = ""
+        if pending.assistant_message_id is not None:
+            message = await self._db.get(Message, pending.assistant_message_id)
+            asked = (message.content if message else "") or ""
+
+        parts = [original[:_QUESTION_CHARS]]
+        if asked:
+            parts.append(f"(Clarification asked: {asked[:_QUESTION_CHARS]}")
+        else:
+            parts.append("(A clarification was asked")
+        parts.append(
+            f"The user answered: {reply[:_QUESTION_CHARS]}\n"
+            "That answer resolves the ambiguity in the question above. It is "
+            "not itself the question — answer the original question, read "
+            "under that answer.)"
+        )
+        return "\n".join(parts)
 
     async def _recent_history(
         self,
@@ -717,79 +779,6 @@ def _bind_connection(
             conversation_id=str(conversation.id),
         )
     conversation.default_connection_id = connection_id
-
-
-async def redraw_chart(
-    db: AsyncSession, *, run_id: UUID, owner_id: UUID, chart_type: str
-) -> Artifact:
-    """Draw a finished run's result as a different chart type.
-
-    Nothing is re-run and nothing is re-queried: the rows are already in the
-    run's TABLE artifact, which is the same list the `chart` node profiled, so
-    the redraw sees exactly the data the original chart was drawn from. That is
-    the property worth protecting — a picker that re-executed the SQL could
-    quietly show a different answer than the table sitting underneath it.
-
-    The CHART artifact is *replaced* rather than appended. It is a presentation
-    of the TABLE, not a record of what happened; what the pipeline decided on
-    its own stays legible in the step trail and in the `ARTIFACT_CREATED`
-    event, both of which are untouched here. Appending instead would leave two
-    CHART artifacts and no statement of which one the reader is looking at.
-    """
-    from app.charts import compile_vega_lite, intent_for, profile_result
-
-    run = await db.get(Run, run_id)
-    if run is None or run.owner_id != owner_id:
-        raise NotFoundError("Run not found.")
-
-    rows = (
-        await db.execute(
-            select(Artifact).where(
-                Artifact.run_id == run_id, Artifact.kind == ArtifactKind.TABLE
-            )
-        )
-    ).scalars().all()
-    table = rows[0] if rows else None
-    if table is None:
-        raise NotFoundError("This run has no result to draw.")
-
-    columns = [
-        ResultColumn(
-            name=c["name"], db_type=c["db_type"], semantic_type=c["semantic_type"]
-        )
-        for c in table.spec.get("columns", [])
-    ]
-    data = table.spec.get("rows", [])
-    profile = profile_result(columns, data, truncated=bool(table.spec.get("truncated")))
-
-    intent = intent_for(profile, chart_type)
-    if intent is None:
-        # The same list that disabled the button server-side. Reaching here
-        # means the client asked for something it was told it could not have,
-        # so it is a 400 and not a silent substitution.
-        raise ValidationError(
-            "This result cannot be drawn as that chart type.",
-            chart_type=chart_type,
-        )
-
-    spec = compile_vega_lite(intent, profile, columns, data)
-
-    existing = (
-        await db.execute(
-            select(Artifact).where(
-                Artifact.run_id == run_id, Artifact.kind == ArtifactKind.CHART
-            )
-        )
-    ).scalars().all()
-    for old in existing[1:]:
-        await db.delete(old)
-    artifact = existing[0] if existing else None
-    if artifact is None:
-        artifact = Artifact(id=uuid.uuid4(), run_id=run_id, kind=ArtifactKind.CHART)
-        db.add(artifact)
-    artifact.spec = spec
-    await db.flush()
-    return artifact
 
 
 _LIST_MARKER = re.compile(r"^\s*(?:\d+[.)]|[-*•])\s*")

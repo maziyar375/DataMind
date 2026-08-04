@@ -536,23 +536,3 @@ async def test_a_rejected_draft_suggests_no_chart(
     )
 
     assert draft.chart_suggestion is None
-    # And no options either: with nothing previewed there is no shape to read,
-    # so the editor's picker enables everything rather than greying out eight
-    # types on the strength of a guess.
-    assert draft.chart_options == []
-
-
-async def test_the_draft_says_which_types_its_shape_can_carry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The editor greys out the rest *before* the save, rather than accepting
-    the pick and letting the tile demote it on the next refresh — a correction
-    the user would only see once the dashboard was already built."""
-    draft, _db = await _draft(monkeypatch, gateway=FakeGateway(VALID_SQL))
-
-    supported = {o["type"] for o in draft.chart_options if o["supported"]}
-    assert supported == {"bar", "pie"}          # three statuses, one measure
-    assert all(o["reason"] for o in draft.chart_options if not o["supported"])
-    # The default the pickers land on is never one its own picker refuses.
-    assert draft.chart_suggestion is not None
-    assert draft.chart_suggestion["chart_type"] in supported

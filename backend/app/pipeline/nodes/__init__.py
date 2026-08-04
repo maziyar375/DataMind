@@ -756,10 +756,16 @@ async def chart(state: RunState, deps: NodeDeps) -> NodeResult:
     """Let the model choose a chart for the result, then fit it and compile.
 
     Best-effort and fail-closed for the chart alone: the answer and the table
-    are already persisted, so any failure here just yields no chart. The model
-    only sees the result's *shape* (column names, types, cardinality, numeric
-    range), never a row value, so charting never widens what the disclosure
-    policy already allows — cardinality is a count, not data.
+    are already persisted, so any failure here just yields no chart.
+
+    The model sees the result's *shape* — column names and types, cardinality,
+    time grain, and the crossing and scale arithmetic the chart rules are
+    written in terms of. Counts and ratios are shared under every policy; the
+    one part of that block that is a row value, a numeric column's `min`/`max`,
+    is gated by the same `HintBudget` the schema block uses, which is why
+    `state.disclosure_policy` is passed to `describe` rather than the block
+    being assumed safe. Charting therefore widens nothing the connection had
+    not already agreed to.
 
     The model's answer is a suggestion, not a verdict: `plan_chart` measures the
     result first, refuses outright when the data cannot say anything, repairs a
@@ -767,9 +773,7 @@ async def chart(state: RunState, deps: NodeDeps) -> NodeResult:
     """
     from app.charts import (
         ChartIntent,
-        chart_candidates,
         compile_vega_lite,
-        describe_candidates,
         plan_chart,
         plan_kpi,
         profile_result,
@@ -810,14 +814,6 @@ async def chart(state: RunState, deps: NodeDeps) -> NodeResult:
         await deps.emit("ARTIFACT_CREATED", {"kind": "KPI"})
         return NodeResult(detail="big number")
 
-    # Which types this shape can carry, worked out before the model is asked.
-    # The model chooses among them rather than from the whole list — see the
-    # note under `CHART_SYSTEM` — and a result that offers nothing skips the
-    # call entirely, since there would be nothing to offer.
-    candidates = chart_candidates(profile)
-    if not candidates.types:
-        return NodeResult(status="SKIPPED", detail="No chart fits this result's shape")
-
     # A provider error, or a model that cannot emit a valid nested ChartIntent
     # (common with small models), falls through to a deterministic choice from
     # the data shape, so a chart still appears and still varies by question.
@@ -837,9 +833,7 @@ async def chart(state: RunState, deps: NodeDeps) -> NodeResult:
                             if execution.truncated
                             else ""
                         ),
-                        signature=candidates.signature,
-                        columns=profile.describe(),
-                        candidates=describe_candidates(candidates),
+                        columns=profile.describe(state.disclosure_policy),
                     ),
                 ),
             ],

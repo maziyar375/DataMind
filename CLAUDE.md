@@ -244,7 +244,14 @@ present → chart
   as an ordinary new run — no durable interrupt, no resume. It asks **at most
   once per exchange**, enforced in `run_service` by checking whether the
   previous run in the thread asked, not by trusting the model to remember.
-  Switched per connection with `connections.clarify_enabled`; off is
+  That same check (`_pending_clarification`) also makes the reply carry its
+  question: a reply is usually a complete question on its own ("total sales"),
+  so `_compose_question` rebuilds the exchange into one question before the
+  pipeline sees it — otherwise the generator answers the criterion and drops
+  the subject. Composed in the service, never in a prompt, so
+  `GENERATE_SYSTEM` stays byte-identical and every node downstream of
+  `state.question` is fixed at once. Switched per connection with
+  `connections.clarify_enabled`; off is
   byte-identical to the pre-feature pipeline. `GENERATE_SYSTEM` is untouched
   by it on purpose — see the note in `pipeline/prompts`.
 - `inspect` covers the third failure mode: the query ran and the answer is

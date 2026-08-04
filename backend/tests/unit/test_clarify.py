@@ -193,53 +193,154 @@ def test_options_are_deduplicated_trimmed_and_capped() -> None:
 
 
 # ── the loop guard ──────────────────────────────────────────────────────────
+class _FakeRun:
+    """Enough of a `Run` for the two helpers that read one."""
+
+    def __init__(self, status: str = "SUCCEEDED", *, asked: bool = False) -> None:
+        self.id = uuid4()
+        self.conversation_id = uuid4()
+        self.status = status
+        self.user_message_id = uuid4()
+        self.assistant_message_id = uuid4() if asked else None
+
+
+class _FakeMessage:
+    def __init__(self, content: str) -> None:
+        self.content = content
+
+
+def _service(previous: Any, messages: dict[Any, str] | None = None) -> Any:
+    """A `RunService` with just the session the helpers touch."""
+    from app.services.run_service import RunService
+
+    class FakeResult:
+        def scalar_one_or_none(self) -> Any:
+            return previous
+
+    class FakeSession:
+        async def execute(self, _query: Any) -> FakeResult:
+            return FakeResult()
+
+        async def get(self, _model: Any, key: Any) -> Any:
+            content = (messages or {}).get(key)
+            return _FakeMessage(content) if content is not None else None
+
+    service = RunService.__new__(RunService)
+    service._db = FakeSession()  # type: ignore[assignment]
+    return service
+
+
 @pytest.mark.asyncio
 async def test_a_run_answering_a_question_may_not_ask_again() -> None:
     """The structural half of the guarantee. The model cannot be trusted to
     notice from the transcript that it already asked, so the *second* run of an
     exchange never gets the chance, whatever it makes of the reply."""
     from app.domain.value_objects import RunStatus
-    from app.services.run_service import RunService
 
-    class FakeResult:
-        def scalar_one_or_none(self) -> str:
-            return RunStatus.NEEDS_CLARIFICATION
+    previous = _FakeRun(RunStatus.NEEDS_CLARIFICATION)
+    service = _service(previous)
 
-    class FakeSession:
-        async def execute(self, _query: Any) -> FakeResult:
-            return FakeResult()
-
-    service = RunService.__new__(RunService)
-    service._db = FakeSession()  # type: ignore[assignment]
-
-    class FakeRun:
-        id = uuid4()
-        conversation_id = uuid4()
-
-    assert await service._previous_run_asked(FakeRun()) is True  # type: ignore[arg-type]
+    assert await service._pending_clarification(_FakeRun()) is previous
 
 
 @pytest.mark.asyncio
 async def test_a_fresh_question_may_ask() -> None:
     from app.domain.value_objects import RunStatus
-    from app.services.run_service import RunService
 
-    class FakeResult:
-        def scalar_one_or_none(self) -> str:
-            return RunStatus.SUCCEEDED
+    service = _service(_FakeRun(RunStatus.SUCCEEDED))
 
-    class FakeSession:
-        async def execute(self, _query: Any) -> FakeResult:
-            return FakeResult()
+    assert await service._pending_clarification(_FakeRun()) is None
 
-    service = RunService.__new__(RunService)
-    service._db = FakeSession()  # type: ignore[assignment]
 
-    class FakeRun:
-        id = uuid4()
-        conversation_id = uuid4()
+@pytest.mark.asyncio
+async def test_the_first_run_of_a_thread_may_ask() -> None:
+    """No previous run at all — `scalar_one_or_none` returns None."""
+    service = _service(None)
 
-    assert await service._previous_run_asked(FakeRun()) is False  # type: ignore[arg-type]
+    assert await service._pending_clarification(_FakeRun()) is None
+
+
+# ── composing the reply back into the question ──────────────────────────────
+@pytest.mark.asyncio
+async def test_the_reply_to_a_clarification_carries_its_question() -> None:
+    """The regression this exists for.
+
+    Asked "who are our best sellers?", told "by total sales", the pipeline used
+    to receive "by total sales" *alone* — a complete, answerable question that
+    the generator duly answered with one figure across all orders. The subject
+    has to travel with the reply, or `_SQL_RULES` ("answer exactly what is
+    asked") reads the criterion as the whole question.
+    """
+    from app.domain.value_objects import RunStatus
+
+    previous = _FakeRun(RunStatus.NEEDS_CLARIFICATION, asked=True)
+    run = _FakeRun()
+    service = _service(
+        previous,
+        {
+            run.user_message_id: "Total sales (order amount)",
+            previous.user_message_id: "Who are our best sellers?",
+            previous.assistant_message_id: "By which measure?",
+        },
+    )
+
+    composed = await service._compose_question(run, previous)
+
+    assert composed.startswith("Who are our best sellers?")
+    assert "Total sales (order amount)" in composed
+    assert "By which measure?" in composed
+    # The instruction matters as much as the text: without it the model reads
+    # two questions and answers the nearer one.
+    assert "not itself the question" in composed
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_question_is_passed_through_verbatim() -> None:
+    """Off-by-absence, again: no pending clarification, no composition, and the
+    pipeline sees exactly the bytes the user typed."""
+    run = _FakeRun()
+    service = _service(None, {run.user_message_id: "Revenue by month last year"})
+
+    assert await service._compose_question(run, None) == "Revenue by month last year"
+
+
+@pytest.mark.asyncio
+async def test_composition_survives_a_missing_original() -> None:
+    """Fails open like the node it serves: a run whose user message is gone
+    yields the reply, never an empty question or a crash."""
+    from app.domain.value_objects import RunStatus
+
+    previous = _FakeRun(RunStatus.NEEDS_CLARIFICATION, asked=True)
+    run = _FakeRun()
+    service = _service(previous, {run.user_message_id: "By total sales"})
+
+    assert await service._compose_question(run, previous) == "By total sales"
+
+
+@pytest.mark.asyncio
+async def test_each_quoted_part_is_capped() -> None:
+    """A pasted essay in any of the three parts cannot crowd the schema out of
+    the prompt."""
+    from app.domain.value_objects import RunStatus
+    from app.services.run_service import _QUESTION_CHARS
+
+    previous = _FakeRun(RunStatus.NEEDS_CLARIFICATION, asked=True)
+    run = _FakeRun()
+    service = _service(
+        previous,
+        {
+            run.user_message_id: "r" * 5_000,
+            previous.user_message_id: "o" * 5_000,
+            previous.assistant_message_id: "a" * 5_000,
+        },
+    )
+
+    composed = await service._compose_question(run, previous)
+
+    assert "o" * _QUESTION_CHARS in composed
+    assert "o" * (_QUESTION_CHARS + 1) not in composed
+    assert "r" * (_QUESTION_CHARS + 1) not in composed
+    assert "a" * (_QUESTION_CHARS + 1) not in composed
 
 
 # ── wiring ──────────────────────────────────────────────────────────────────
@@ -293,3 +394,36 @@ def test_a_run_that_asked_is_not_terminal_but_is_not_in_flight_either() -> None:
     ):
         assert status.is_terminal is True
         assert status.is_in_flight is False
+
+
+# ── the schema the model actually sees ──────────────────────────────────────
+def test_every_field_is_required_so_the_model_cannot_drop_the_options() -> None:
+    """The bug this pins: `options` had a Python default, which kept it out of
+    `required` in `model_json_schema()` — and that schema is what goes to the
+    provider as a strict `json_schema` response format. Measured against the
+    configured model on one ambiguous question: options came back on 1 of 3
+    replies that asked something under the defaulted schema, and 4 of 4 with
+    every field required. The user got a question with no chips to click.
+
+    A default here is invisible to the model, so it is not a convenience — it
+    is a silently weaker contract.
+    """
+    schema = ClarificationProposal.model_json_schema()
+    assert set(schema["required"]) == {"answerable", "question", "options", "reasoning"}
+
+
+def test_a_model_that_ignores_that_schema_still_does_not_break_clarify() -> None:
+    """The other half. `clarify` fails open, so a `ValidationError` would reach
+    it as "clarification unavailable" — the node whose job is noticing ambiguity,
+    switched off by a missing key. Required in the schema, tolerated on the way
+    in."""
+    bare = ClarificationProposal.model_validate({"answerable": False, "question": "A or B?"})
+    assert bare.options == [] and bare.reasoning == ""
+    assert ClarificationProposal.model_validate({"answerable": True}).question == ""
+
+
+def test_the_prompt_asks_for_options_on_every_question() -> None:
+    """The schema makes the key present; only the prompt makes it non-empty."""
+    from app.pipeline.prompts import CLARIFY_SYSTEM
+
+    assert "Always give 2-4 options" in CLARIFY_SYSTEM

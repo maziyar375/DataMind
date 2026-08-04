@@ -12,16 +12,13 @@
  * objects — a result table, the SQL — keep a border of their own.
  */
 import { useState } from 'react'
-import { runs as runsApi } from '../api/client'
+import { runs } from '../api/client'
 import type {
-  Artifact, ClarificationSpec, GeneratedQuery, KpiSpec, RunDetail, RunStep,
-  TableArtifactSpec,
+  Artifact, ChartOption, ClarificationSpec, GeneratedQuery, KpiSpec, RunDetail,
+  RunStep, TableArtifactSpec,
 } from '../api/types'
-import type { ChartOption } from './ui'
-import {
-  ChartTypePicker, Chip, CopyButton, Dot, dirOf, ErrorNote, Icon, Kpi,
-  ResultTable, Spinner,
-} from './ui'
+import { ChartGlyph, ChartTypePicker } from './chart-picker'
+import { Chip, CopyButton, Dot, dirOf, Icon, Kpi, ResultTable, Spinner } from './ui'
 import { VegaChart } from './VegaChart'
 import { NODE_META } from '../theme/tokens'
 
@@ -549,85 +546,115 @@ function OptionChip({
   )
 }
 
-// ── the chart, and the way to disagree with it ────────────────────────────
+// ── the chart, and changing it ────────────────────────────────────────────
 /**
- * A run's chart with a "change chart" affordance under it.
+ * A turn's chart with a "change chart" control under it.
  *
- * The redraw is a round trip, not a re-render. Compiling a second spec in the
- * browser would put a chart on screen that the backend never approved — the
- * same objection as the fallback renderer this file refuses below — so the
- * server recompiles from the rows already stored with the run, which is also
- * how the picture stays a picture of the table underneath it.
+ * The pipeline picked this type from the question and the data, and it is
+ * usually right — so the control is closed by default and opens on request,
+ * rather than putting nine tiles under every answer. What it does not do is
+ * offer a type this result cannot carry: the backend returns a verdict per
+ * type alongside the redrawn spec, and the grid greys the rest with the reason.
  *
- * The picker is hidden, not disabled, when the spec carries no options: those
- * are charts compiled before the list existed, and enabling everything would
- * offer types this result may not support — the one thing the picker is for.
+ * **Nothing here is saved.** A transcript records what a run produced;
+ * rewriting yesterday's chart artifact because someone flipped a picker today
+ * would leave the step trail beside it ("bar chart (model)") describing a
+ * chart that is no longer there. The redraw lives as long as the reader is
+ * looking at it, and a reload brings back what the run actually produced.
  */
-function ChartBlock({ runId, spec }: { runId: string; spec: Record<string, unknown> }) {
-  const [drawn, setDrawn] = useState<Record<string, unknown> | null>(null)
+function ChatChart({ runId, spec }: { runId: string; spec: Record<string, unknown> }) {
   const [open, setOpen] = useState(false)
-  const [busy, setBusy] = useState<string | null>(null)
-  const [failed, setFailed] = useState<string | null>(null)
+  const [options, setOptions] = useState<ChartOption[]>([])
+  const [redrawn, setRedrawn] = useState<Record<string, unknown> | null>(null)
+  const [type, setType] = useState<string>(
+    () => (spec.usermeta as { datamind?: { chart_type?: string } } | undefined)
+      ?.datamind?.chart_type ?? '',
+  )
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const current = drawn ?? spec
-  const meta = (current.usermeta as {
-    datamind?: { chart_type?: string; options?: ChartOption[] }
-  } | undefined)?.datamind
-  const options = meta?.options ?? []
-
-  const pick = async (type: string) => {
-    if (type === meta?.chart_type) return
-    setBusy(type)
-    setFailed(null)
+  async function choose(next: string) {
+    if (next === type) return
+    setBusy(true)
+    setError(null)
     try {
-      setDrawn((await runsApi.chart(runId, type)).spec)
-    } catch (err) {
-      setFailed(err instanceof Error ? err.message : 'This chart could not be redrawn.')
+      const result = await runs.redrawChart(runId, next)
+      setOptions(result.options)
+      if (result.spec) {
+        setRedrawn(result.spec)
+        setType(result.chart_type)
+      } else {
+        // Only reachable if the verdicts on screen are older than the data —
+        // the grid disables what cannot work. Say so rather than doing nothing.
+        setError(result.reason)
+      }
+    } catch {
+      setError('The chart could not be redrawn.')
     } finally {
-      setBusy(null)
+      setBusy(false)
+    }
+  }
+
+  // Opening asks for the verdicts once, using the type already on screen: the
+  // response carries the options, so there is no separate "what fits" call.
+  async function toggle() {
+    const next = !open
+    setOpen(next)
+    if (next && options.length === 0 && type) {
+      setBusy(true)
+      try {
+        setOptions((await runs.redrawChart(runId, type)).options)
+      } catch {
+        /* the picker simply stays unfiltered */
+      } finally {
+        setBusy(false)
+      }
     }
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <VegaChart spec={current} />
-      {options.length > 0 && (
-        <>
-          <button
-            type="button"
-            onClick={() => setOpen((was) => !was)}
-            style={{
-              alignSelf: 'flex-start',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 5,
-              padding: '3px 6px',
-              marginLeft: -6,
-              border: 'none',
-              background: 'none',
-              borderRadius: 6,
-              cursor: 'pointer',
-              fontSize: 11.5,
-              color: 'var(--text-faint)',
-            }}
-          >
-            <Icon.Chevron size={11} open={open} />
-            Change chart
-          </button>
-          {open && (
-            <ChartTypePicker
-              value={meta?.chart_type ?? ''}
-              options={options}
-              onChange={pick}
-              busy={busy}
-            />
-          )}
-        </>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <VegaChart spec={redrawn ?? spec} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <button
+          type="button"
+          onClick={() => void toggle()}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 5,
+            padding: '3px 8px',
+            borderRadius: 6,
+            border: '1px solid var(--border)',
+            background: 'transparent',
+            color: 'var(--text-dim)',
+            fontSize: 11.5,
+            cursor: 'pointer',
+          }}
+        >
+          <ChartGlyph type={type} size={13} />
+          {open ? 'Done' : 'Change chart'}
+        </button>
+        {busy && <Spinner size={12} />}
+        {error && (
+          <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>{error}</span>
+        )}
+      </div>
+      {open && (
+        <div style={{ maxWidth: 560 }}>
+          <ChartTypePicker
+            value={type}
+            options={options}
+            includeAuto={false}
+            columns={8}
+            onChange={(next) => void choose(next)}
+          />
+        </div>
       )}
-      {failed && <ErrorNote>{failed}</ErrorNote>}
     </div>
   )
 }
+
 
 // ── assistant turn ────────────────────────────────────────────────────────
 export function AssistantTurn({
@@ -695,7 +722,7 @@ export function AssistantTurn({
         called unchartable ended up as a wall of equal-length bars sitting
         under an answer that said they were all tied.
       */}
-      {chartSpec && run && <ChartBlock runId={run.id} spec={chartSpec} />}
+      {chartSpec && run && <ChatChart runId={run.id} spec={chartSpec} />}
       {/* The other half of that decision. A single-row result is refused as a
           chart for a good reason and is the shape a KPI is made of, so the
           `chart` node answers it with a number instead of nothing. Never both:

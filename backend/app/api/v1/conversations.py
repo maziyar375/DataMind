@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from dataclasses import asdict
 from typing import Any
 from uuid import UUID
 
@@ -13,6 +14,8 @@ from sqlalchemy import func, select
 from app.api.deps import CtxDep, DbDep, SettingsDep
 from app.api.schemas import (
     ArtifactRead,
+    ChartOptionRead,
+    ChartRedrawRead,
     ChartRedrawRequest,
     ConversationCreate,
     ConversationRead,
@@ -37,7 +40,7 @@ from app.infra.db.models import (
     RunStep,
 )
 from app.infra.events.bus import event_bus
-from app.services.run_service import RunService, redraw_chart
+from app.services.run_service import RunService
 
 router = APIRouter(tags=["conversations"])
 
@@ -285,22 +288,6 @@ async def get_run_sql(run_id: UUID, ctx: CtxDep, db: DbDep) -> list[GeneratedQue
     return [GeneratedQueryRead.model_validate(q) for q in result.scalars()]
 
 
-@router.post("/runs/{run_id}/chart", response_model=ArtifactRead)
-async def redraw_run_chart(
-    run_id: UUID, body: ChartRedrawRequest, ctx: CtxDep, db: DbDep
-) -> ArtifactRead:
-    """Redraw a finished run's result as another type the shape allows.
-
-    A POST rather than a query parameter on the artifact GET because it does
-    change something: the run's CHART artifact is replaced, so the choice
-    survives a reload the way any other edit would.
-    """
-    artifact = await redraw_chart(
-        db, run_id=run_id, owner_id=ctx.user_id, chart_type=body.chart_type
-    )
-    return ArtifactRead.model_validate(artifact)
-
-
 @router.post("/runs/{run_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
 async def cancel_run(
     run_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep, request: Request
@@ -367,6 +354,70 @@ async def stream_events(
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+@router.post("/runs/{run_id}/chart", response_model=ChartRedrawRead)
+async def redraw_chart(
+    run_id: UUID, body: ChartRedrawRequest, ctx: CtxDep, db: DbDep
+) -> ChartRedrawRead:
+    """Draw this run's result as a different chart type.
+
+    Reads the run's own TABLE artifact rather than re-running the query: the
+    rows a chart is drawn from must be the rows the answer above it was written
+    from, and a database that has moved on since would quietly make the picture
+    disagree with the prose.
+
+    The type goes through `plan_chart` like any other suggestion, so a pick the
+    data cannot carry is refused here with its reason rather than compiled into
+    something misleading. The picker will not offer such a type in the first
+    place — this is the same rule stated twice, once where it is displayed and
+    once where it would matter if the display were stale.
+    """
+    from app.charts import (
+        candidate_intent,
+        chart_options,
+        compile_vega_lite,
+        plan_chart,
+        profile_result,
+    )
+    from app.domain.ports.database import ResultColumn
+
+    await _owned_run(db, run_id, ctx)
+    result = await db.execute(
+        select(Artifact).where(Artifact.run_id == run_id, Artifact.kind == "TABLE")
+    )
+    table = result.scalars().first()
+    if table is None:
+        raise NotFoundError("This run kept no result to redraw.")
+
+    columns = [
+        ResultColumn(
+            name=c["name"],
+            db_type=c.get("db_type", ""),
+            semantic_type=c.get("semantic_type", "nominal"),
+        )
+        for c in table.spec.get("columns", [])
+    ]
+    rows = table.spec.get("rows") or []
+    profile = profile_result(
+        columns, rows, truncated=bool(table.spec.get("truncated"))
+    )
+    options = [ChartOptionRead(**asdict(o)) for o in chart_options(profile)]
+
+    intent = candidate_intent(profile, body.chart_type)
+    plan = plan_chart(profile, intent) if intent is not None else None
+    if plan is None or plan.intent is None or plan.intent.chart_type != body.chart_type:
+        reason = next(
+            (o.reason for o in options if o.chart_type == body.chart_type),
+            "This result cannot be drawn that way.",
+        )
+        return ChartRedrawRead(chart_type="none", reason=reason, options=options)
+
+    return ChartRedrawRead(
+        spec=compile_vega_lite(plan.intent, profile, columns, rows),
+        chart_type=plan.intent.chart_type,
+        options=options,
     )
 
 

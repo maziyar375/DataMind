@@ -226,6 +226,27 @@ Before `generate` so an unanswerable question costs no SQL.
    still applies, and the stale-run reconciler leaves it alone. The user's
    reply arrives as an ordinary new run; no durable interrupt, no resume.
 
+**The reply carries its question with it.** Because there is no resume, the
+next run's message is the reply *alone* — and a reply is usually a complete
+question in its own right. Asked "who are our best sellers?", answered "total
+sales (order amount)", the generator answered the reply: one figure across all
+orders. The transcript held both turns, but as passive context, against an
+`_SQL_RULES` line that says to answer exactly what is asked at the granularity
+asked — history lost to the rule every time. `run_service._compose_question`
+therefore rebuilds the question from the exchange (original question, the
+clarifying question, the reply, and one line saying the reply is a criterion
+and not the question) whenever `_pending_clarification` finds one. It is the
+same single lookup that disables `clarify` for this run — one query, two
+consequences.
+
+Composed in the service rather than in a prompt for two reasons: it keeps
+`GENERATE_SYSTEM` byte-identical (see below), and every node downstream of
+`state.question` gets the fix at once — `retrieve` matches tables against the
+subject again, and `present` narrates the question the user actually asked.
+Each of the three quoted parts is capped at `_QUESTION_CHARS` (300), so a
+pasted essay cannot crowd the schema out of the prompt. With no pending
+clarification the question passes through verbatim.
+
 `GENERATE_SYSTEM` is untouched by this feature on purpose: eval Round 2 showed
 that prompt losing 10 points of execution accuracy to an unrelated addition, so
 when a question is answerable the generator sees exactly what it saw before
