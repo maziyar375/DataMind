@@ -278,3 +278,82 @@ async def test_value_meanings_are_limited_to_values_in_the_snapshot() -> None:
     orders = doc.entity("sales.orders")
     assert orders is not None
     assert orders.columns[0].value_meanings == {"PAID": "settled"}
+
+
+# ── a model that answers in the wrong shape ──────────────────────────────
+# Defaults cover a field the model *omitted*. They do nothing for one it
+# returned in the wrong shape, and pydantic fails the whole object on the
+# first of those — so a single `maps_to` written as prose used to throw away
+# an entire glossary, and one malformed `synonyms` a whole table.
+def test_a_list_written_as_prose_is_read_as_a_list() -> None:
+    from app.semantic.generator import _GlossaryDraft
+
+    draft = _GlossaryDraft.model_validate(
+        {
+            "terms": [
+                {
+                    "term": "active customer",
+                    "meaning": "Ordered in the last 365 days.",
+                    # The shape every provider tested returns it in.
+                    "maps_to": "sales.customers, sales.orders",
+                }
+            ]
+        }
+    )
+    assert [t.maps_to for t in draft.terms] == [["sales.customers", "sales.orders"]]
+
+
+def test_a_predicate_carrying_commas_is_not_split_on_them() -> None:
+    """The coercion must not turn a recoverable answer into a wrong one: a
+    name list is comma-separated and so is `IN ('a','b')`."""
+    from app.semantic.generator import _MetricDraft
+
+    draft = _MetricDraft.model_validate(
+        {"expression": "SUM(o.total)", "filters": "o.status IN ('paid','shipped')"}
+    )
+    assert draft.filters == ["o.status IN ('paid','shipped')"]
+
+
+def test_an_unusable_field_costs_that_field_and_nothing_else() -> None:
+    from app.semantic.generator import _TableDraft
+
+    draft = _TableDraft.model_validate(
+        {
+            "label": "Orders",
+            "grain": "one row per order",
+            "synonyms": {"not": "a list"},
+            "metrics": [
+                {"name": "revenue", "expression": "SUM(o.total)"},
+                {"name": "broken", "expression": ["not", "a", "string"]},
+            ],
+        }
+    )
+    assert draft.label == "Orders"
+    assert draft.grain == "one row per order"
+    assert draft.synonyms == []
+    # The unusable metric keeps its place with an empty expression, which
+    # `_to_entity` then drops and counts — one bad metric, not five lost ones.
+    assert [m.name for m in draft.metrics] == ["revenue", "broken"]
+    assert draft.metrics[0].expression == "SUM(o.total)"
+    assert draft.metrics[1].expression == ""
+
+
+@pytest.mark.asyncio
+async def test_a_glossary_returned_in_the_wrong_shape_still_lands() -> None:
+    """End to end: the failure that emptied the glossary in production."""
+
+    async def structured(llm: Any, messages: Sequence[ChatMessage], schema: type[T]) -> T:
+        if schema.__name__ == "_GlossaryDraft":
+            return schema.model_validate(
+                {"terms": [{"term": "AOV", "meaning": "Average order value.",
+                            "maps_to": "sales.orders"}]}
+            )
+        if schema.__name__ == "_Overview":
+            return schema.model_validate({"business_context": "A shop."})
+        return schema.model_validate({"grain": "one row"})
+
+    gateway = ScriptedGateway(lambda table: {"grain": "one row"})
+    gateway.structured = structured  # type: ignore[method-assign]
+
+    doc, _ = await _run(gateway)
+    assert [(t.term, t.maps_to) for t in doc.glossary] == [("aov", ["sales.orders"])]

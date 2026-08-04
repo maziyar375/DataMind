@@ -26,11 +26,21 @@ gateway drives the whole thing in tests.
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, get_args, get_origin
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    model_validator,
+)
+from pydantic import (
+    ValidationError as PydanticValidationError,
+)
 
 from app.core.errors import LLMError
 from app.core.logging import get_logger
@@ -71,11 +81,83 @@ MAX_NEIGHBOURS = 6
 
 
 # ── what the model is asked to return ────────────────────────────────────
-# Lenient by construction: every field has a default, so a model that omits
-# one loses that field rather than the whole table.
-class _Overview(BaseModel):
+def _coerce(annotation: Any, value: Any) -> Any:
+    """Bend a plausible answer into the shape the field declares.
+
+    Only the confusions models actually make. The common one by far is a list
+    written as prose — `"maps_to": "public.orders, public.customers"` where the
+    schema says `list[str]` — which is what silently emptied the glossary.
+
+    Commas are split on only when the string carries no bracket or quote: a
+    name list is comma-separated, and so is `SUM(a, b)` or `status IN ('a','b')`
+    — and cutting a SQL predicate in half would turn a recoverable answer into
+    a wrong one. Newlines are always safe to split on.
+    """
+    if get_origin(annotation) is list:
+        if isinstance(value, str):
+            separator = r"[\n,;]" if not re.search(r"[('\"\[]", value) else r"[\n]"
+            return [part.strip() for part in re.split(separator, value) if part.strip()]
+        if not isinstance(value, list):
+            return [value]
+    if annotation is str and isinstance(value, (int, float, bool)):
+        return str(value)
+    return value
+
+
+class _Draft(BaseModel):
+    """A model answer read field by field, so one bad field costs one field.
+
+    Defaults alone are not leniency. They cover a field the model *omitted*;
+    they do nothing for a field it returned in the wrong shape, and pydantic
+    fails the whole object on the first such field. That is how a single
+    `maps_to` written as a string threw away an entire glossary, and how one
+    malformed `synonyms` threw away a whole table's description — half of them,
+    on the schema this was first run against.
+
+    So each field is coerced, then validated on its own; anything that still
+    does not fit is dropped and its default stands. Lists of nested drafts are
+    salvaged element by element, because one unusable metric is not a reason to
+    lose the other five.
+    """
+
     model_config = ConfigDict(extra="ignore")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _salvage(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        kept: dict[str, Any] = {}
+        for name, field_info in cls.model_fields.items():
+            if name not in data:
+                continue
+            annotation = field_info.annotation
+            value = _coerce(annotation, data[name])
+            item_type = (get_args(annotation) or (None,))[0]
+            if (
+                get_origin(annotation) is list
+                and isinstance(value, list)
+                and isinstance(item_type, type)
+                and issubclass(item_type, BaseModel)
+            ):
+                value = [
+                    item for item in value
+                    if _fits(item_type, item)
+                ]
+            if _fits(annotation, value):
+                kept[name] = value
+        return kept
+
+
+def _fits(annotation: Any, value: Any) -> bool:
+    try:
+        TypeAdapter(annotation).validate_python(value)
+    except PydanticValidationError:
+        return False
+    return True
+
+
+class _Overview(_Draft):
     business_context: str = ""
     industry: str = ""
     fiscal_year_start_month: int = 1
@@ -85,9 +167,7 @@ class _Overview(BaseModel):
     notes: str = ""
 
 
-class _ColumnDraft(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
+class _ColumnDraft(_Draft):
     name: str = ""
     label: str = ""
     description: str = ""
@@ -97,9 +177,7 @@ class _ColumnDraft(BaseModel):
     value_meanings: dict[str, str] = Field(default_factory=dict)
 
 
-class _MetricDraft(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
+class _MetricDraft(_Draft):
     name: str = ""
     label: str = ""
     description: str = ""
@@ -111,9 +189,7 @@ class _MetricDraft(BaseModel):
     synonyms: list[str] = Field(default_factory=list)
 
 
-class _TableDraft(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
+class _TableDraft(_Draft):
     label: str = ""
     description: str = ""
     grain: str = ""
@@ -124,12 +200,8 @@ class _TableDraft(BaseModel):
     metrics: list[_MetricDraft] = Field(default_factory=list)
 
 
-class _GlossaryDraft(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    class Term(BaseModel):
-        model_config = ConfigDict(extra="ignore")
-
+class _GlossaryDraft(_Draft):
+    class Term(_Draft):
         term: str = ""
         meaning: str = ""
         maps_to: list[str] = Field(default_factory=list)
