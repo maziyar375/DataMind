@@ -136,6 +136,11 @@ deferred deliberately — see the architecture doc for the reasoning.
 The architecture doc argues that most of this system should be as boring as
 possible, and names three places where that does not apply.
 
+> For the full picture — every point where data reaches a model provider and
+> exactly what each one sends, the disclosure ladder, the SQL guard's rejection
+> codes, and a pre-production checklist — see
+> **[docs/security.md](docs/security.md)**.
+
 ### 1. SQL validation is AST-based and fails closed
 
 The model proposes SQL; it never executes anything. Every statement is parsed

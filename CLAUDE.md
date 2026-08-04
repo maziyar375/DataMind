@@ -6,7 +6,10 @@ can make a change without first reading all ~13k lines.
 
 For the "why", see [docs/architecture.md](docs/architecture.md) (the full
 proposal) and [docs/CODEBASE.md](docs/CODEBASE.md) (a code-grounded tour of the
-stack). For users, see [README.md](README.md).
+stack). For what reaches a model provider and what stops harmful SQL, see
+[docs/security.md](docs/security.md) — read it before changing `sqlguard/`,
+`disclosure.py`, `HintBudget`, or adding an LLM call site. For users, see
+[README.md](README.md).
 
 ---
 
