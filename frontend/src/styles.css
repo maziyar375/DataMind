@@ -374,6 +374,16 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .rm-dash-canvas {
   background: color-mix(in oklch, var(--sidebar-bg) 60%, transparent);
   padding: 16px;
+  transition: background .15s ease, box-shadow .15s ease;
+}
+
+/* Arranging is a mode, so the surface says so: the canvas takes an accent
+   wash and an inset accent rule. Without this the only feedback for "Edit
+   grid" was a toolbar swap and a faint guide, and the middle of the screen —
+   where the tiles are — looked identical before and after. */
+.rm-dash-canvas.is-editing {
+  background: color-mix(in oklch, var(--accent) 7%, var(--sidebar-bg));
+  box-shadow: inset 0 0 0 1px var(--accent-border);
 }
 
 /* ── responsive reflow ──────────────────────────────────────────────────

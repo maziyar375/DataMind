@@ -1041,7 +1041,16 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
           </div>
         )}
 
-        <div ref={gridRef} className="rm-dash-canvas" style={{ flex: 1, overflowY: 'auto' }}>
+        {/* Arranging changes what a click does, so it has to change what the
+            canvas looks like. Entering it used to alter only the toolbar and a
+            faint alignment guide — from the middle of the screen, where the
+            user is actually looking, pressing "Edit grid" appeared to do
+            nothing at all. */}
+        <div
+          ref={gridRef}
+          className={`rm-dash-canvas${editing ? ' is-editing' : ''}`}
+          style={{ flex: 1, overflowY: 'auto' }}
+        >
           {tiles.length === 0 ? (
             <EmptyState
               icon={<Icon.Grid size={20} />}
@@ -1131,9 +1140,26 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
       {/* Presentation mode is a fixed layer over the whole viewport rather
           than a class on the shell: it has to cover the sidebar too, and
           lifting it out means neither App nor the sidebar needs to know this
-          mode exists. */}
-      {presenting ? (
-        <div className="rm-present">
+          mode exists.
+
+          The wrapper is rendered in *both* modes, with only its class changing.
+          It used to be a conditional extra <div> wrapped around `content`,
+          which re-parented the entire dashboard one level deeper on every
+          toggle: React reconciles by position, so the canvas element was
+          unmounted and rebuilt. The ResizeObserver that measures the grid is
+          bound in a layout effect keyed on [dashboard, showSettings] — neither
+          of which changes here — so it never re-ran, and stayed attached to the
+          *detached* node. The grid therefore kept whatever width it last
+          measured and stopped responding to resizes entirely; with `width`
+          still 0 (nothing measured yet) the `width > 0` guard rendered no grid
+          at all, which is a dashboard that goes blank when you press Present.
+          Keeping the node identity stable is what makes the mode a repaint
+          instead of a rebuild. */}
+      <div
+        className={presenting ? 'rm-present' : undefined}
+        style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}
+      >
+        {presenting && (
           <div className="rm-present-bar">
             <span className="rm-present-title">{dashboard.name}</span>
             <LiveStatus
@@ -1145,11 +1171,9 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
               <Icon.Close size={13} /> Exit
             </GhostButton>
           </div>
-          {content}
-        </div>
-      ) : (
-        content
-      )}
+        )}
+        {content}
+      </div>
 
       {/* One tile, full screen. A tile sized to fit a grid cell cannot show a
           long table or a dense chart, and resizing the grid to read something
