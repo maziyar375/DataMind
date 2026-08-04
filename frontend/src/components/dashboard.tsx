@@ -1006,57 +1006,52 @@ function NumberSetting({
  * id gives each one a constant identity that survives renames and reorders.
  *
  * The six hues are the brand's own (the logo's violet/magenta/blue plus the
- * theme's green and amber), not an arbitrary wheel, and they are used only as
- * a low-alpha wash behind decoration — never as the colour of data, where a
+ * theme's green and amber), not an arbitrary wheel. The hue is an *identifier*,
+ * never a measurement: it tints the card's glyph so the eye can lock onto a
+ * shape it has seen before, and it is never used to colour a number, where a
  * meaningless hue would imply a meaning.
+ *
+ * It replaced a picture. The card used to open with an 86px cover drawing eight
+ * rounded blocks — a sketch of "a dashboard" rather than of *this* dashboard,
+ * since the list endpoint returns a tile count and no layout. Decoration that
+ * occupies the most valuable strip of a card and answers no question is worse
+ * than no decoration, so the space went back to the facts.
  */
-const COVER_HUES = [250, 300, 340, 25, 80, 160]
+const CARD_HUES = [250, 300, 340, 25, 80, 160]
 
-function coverHue(id: string): number {
+function cardHue(id: string): number {
   let hash = 0
   for (let index = 0; index < id.length; index += 1) {
     hash = (hash * 31 + id.charCodeAt(index)) >>> 0
   }
-  return COVER_HUES[hash % COVER_HUES.length]
+  return CARD_HUES[hash % CARD_HUES.length]
 }
 
 /**
- * A sketch of the dashboard, drawn from the one fact the index has: how many
- * tiles it holds.
+ * The dashboard's glyph, tinted with its identity hue.
  *
- * Deliberately not a fake screenshot. The list endpoint returns a count, not a
- * layout, and a thumbnail that *looked* like the real arrangement while being
- * invented would be a lie the user could only catch by opening it. Eight slots
- * in a fixed frame, filled to the true count and faint beyond it, says "six of
- * a possible several" honestly and reads as a dashboard at a glance.
+ * Shared by the card and the row so the same dashboard is the same colour in
+ * both layouts — the point of a stable hue is defeated if switching to the list
+ * reshuffles it.
  */
-function TileMosaic({ count, hue }: { count: number; hue: number }) {
-  const slots = [
-    { x: 5, y: 6, w: 20, h: 14 }, { x: 28, y: 6, w: 20, h: 14 },
-    { x: 51, y: 6, w: 20, h: 14 }, { x: 74, y: 6, w: 21, h: 14 },
-    { x: 5, y: 23, w: 20, h: 14 }, { x: 28, y: 23, w: 20, h: 14 },
-    { x: 51, y: 23, w: 20, h: 14 }, { x: 74, y: 23, w: 21, h: 14 },
-  ]
-  const filled = Math.min(count, slots.length)
+function DashboardGlyph({ hue, size = 34 }: { hue: number; size?: number }) {
   return (
-    <svg
-      viewBox="0 0 100 43"
-      preserveAspectRatio="none"
+    <span
       aria-hidden
-      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
+      style={{
+        display: 'grid',
+        placeItems: 'center',
+        width: size,
+        height: size,
+        flexShrink: 0,
+        borderRadius: Math.round(size * 0.28),
+        background: `oklch(0.7 0.16 ${hue} / 0.16)`,
+        border: `1px solid oklch(0.7 0.16 ${hue} / 0.3)`,
+        color: `oklch(0.65 0.17 ${hue})`,
+      }}
     >
-      {slots.map((slot, index) => (
-        <rect
-          key={index}
-          x={slot.x}
-          y={slot.y}
-          width={slot.w}
-          height={slot.h}
-          rx="3"
-          fill={`oklch(0.7 0.16 ${hue} / ${index < filled ? 0.5 : 0.12})`}
-        />
-      ))}
-    </svg>
+      <Icon.Grid size={Math.round(size * 0.47)} />
+    </span>
   )
 }
 
@@ -1201,7 +1196,7 @@ export function DashboardCard({
   onArchive: () => void
   onDelete: () => void
 }) {
-  const hue = coverHue(dashboard.id)
+  const hue = cardHue(dashboard.id)
   const archived = dashboard.status === 'ARCHIVED'
 
   return (
@@ -1211,49 +1206,22 @@ export function DashboardCard({
         position: 'relative',
         display: 'flex',
         flexDirection: 'column',
+        gap: 7,
+        padding: '14px 15px 13px',
         background: 'var(--panel)',
         borderRadius: 14,
-        overflow: 'hidden',
         opacity: archived ? 0.66 : 1,
       }}
     >
-      {/* The cover carries the identity: the dashboard's own hue, its content
-          sketch, and nothing clickable except the card-wide link beneath. */}
-      <div
-        className="rm-dash-cover"
-        style={{
-          position: 'relative',
-          height: 86,
-          flexShrink: 0,
-          borderBottom: '1px solid var(--border)',
-          background: `
-            radial-gradient(120% 140% at 12% -20%, oklch(0.72 0.17 ${hue} / 0.3), transparent 62%),
-            radial-gradient(110% 130% at 96% 120%, oklch(0.66 0.15 ${(hue + 40) % 360} / 0.22), transparent 60%),
-            var(--panel-alt)`,
-        }}
-      >
-        <TileMosaic count={dashboard.tile_count} hue={hue} />
-        {archived && (
-          <span style={{ position: 'absolute', top: 9, left: 10, zIndex: 2 }}>
-            <Chip tone="amber">Archived</Chip>
-          </span>
-        )}
-        <div style={{ position: 'absolute', top: 7, right: 7 }}>
-          <DashboardMenu
-            dashboard={dashboard}
-            onRename={onRename}
-            onDuplicate={onDuplicate}
-            onArchive={onArchive}
-            onDelete={onDelete}
-          />
-        </div>
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '13px 15px 14px', flex: 1 }}>
+      {/* Title row: the glyph carries identity, the kebab sits opposite it, and
+          the whole card is the link underneath both. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+        <DashboardGlyph hue={hue} />
         <button
           className="rm-dash-card-link"
           onClick={onOpen}
           style={{
+            flex: 1,
             minWidth: 0,
             textAlign: 'left',
             background: 'transparent',
@@ -1271,40 +1239,61 @@ export function DashboardCard({
         >
           {dashboard.name}
         </button>
+        <DashboardMenu
+          dashboard={dashboard}
+          onRename={onRename}
+          onDuplicate={onDuplicate}
+          onArchive={onArchive}
+          onDelete={onDelete}
+        />
+      </div>
 
-        {/* A fixed two-line well whether or not there is a description, so a
-            row of cards keeps one baseline instead of ragging. */}
-        <span
-          style={{
-            fontSize: 12.5,
-            color: dashboard.description ? 'var(--text-dim)' : 'var(--text-faint)',
-            fontStyle: dashboard.description ? undefined : 'italic',
-            lineHeight: 1.5,
-            minHeight: 37,
-            display: '-webkit-box',
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: 'vertical',
-            overflow: 'hidden',
-          }}
-        >
-          {dashboard.description || 'No description'}
-        </span>
-
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            flexWrap: 'wrap',
-            gap: 6,
-            marginTop: 'auto',
-            paddingTop: 10,
-            borderTop: '1px solid var(--border)',
-            fontSize: 11.5,
-            color: 'var(--text-faint)',
-          }}
-        >
-          <CardMeta dashboard={dashboard} />
+      {/* State worth acting on, and only when there is any: an empty dashboard
+          is unfinished and a live one that has never run is misconfigured.
+          Both were invisible on the old card, which showed a picture instead. */}
+      {(archived || dashboard.tile_count === 0
+        || (dashboard.default_refresh_interval_seconds > 0 && !dashboard.last_refreshed_at)) && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {archived && <Chip tone="amber">Archived</Chip>}
+          {dashboard.tile_count === 0 && <Chip tone="neutral">No tiles yet</Chip>}
+          {dashboard.tile_count > 0
+            && dashboard.default_refresh_interval_seconds > 0
+            && !dashboard.last_refreshed_at && <Chip tone="amber">Never run</Chip>}
         </div>
+      )}
+
+      {/* A fixed two-line well whether or not there is a description, so a
+          row of cards keeps one baseline instead of ragging. */}
+      <span
+        style={{
+          fontSize: 12.5,
+          color: dashboard.description ? 'var(--text-dim)' : 'var(--text-faint)',
+          fontStyle: dashboard.description ? undefined : 'italic',
+          lineHeight: 1.5,
+          minHeight: 37,
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
+        }}
+      >
+        {dashboard.description || 'No description'}
+      </span>
+
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 6,
+          marginTop: 'auto',
+          paddingTop: 10,
+          borderTop: '1px solid var(--border)',
+          fontSize: 11.5,
+          color: 'var(--text-faint)',
+        }}
+      >
+        <CardMeta dashboard={dashboard} />
       </div>
     </div>
   )
@@ -1313,8 +1302,8 @@ export function DashboardCard({
 /**
  * The same dashboard as one dense row.
  *
- * A grid of covers is the right default for a dozen; past that, scanning names
- * beats scanning pictures, and every comparable product offers the switch.
+ * Cards are the right default for a dozen; past that, a row puts four times as
+ * many names on screen, and every comparable product offers the switch.
  */
 export function DashboardRow({
   dashboard, onOpen, onRename, onDuplicate, onArchive, onDelete,
@@ -1326,7 +1315,7 @@ export function DashboardRow({
   onArchive: () => void
   onDelete: () => void
 }) {
-  const hue = coverHue(dashboard.id)
+  const hue = cardHue(dashboard.id)
   const archived = dashboard.status === 'ARCHIVED'
 
   return (
@@ -1343,21 +1332,7 @@ export function DashboardRow({
         opacity: archived ? 0.66 : 1,
       }}
     >
-      <span
-        aria-hidden
-        style={{
-          display: 'grid',
-          placeItems: 'center',
-          width: 34,
-          height: 34,
-          flexShrink: 0,
-          borderRadius: 9,
-          background: `oklch(0.7 0.16 ${hue} / 0.16)`,
-          color: `oklch(0.65 0.17 ${hue})`,
-        }}
-      >
-        <Icon.Grid size={16} />
-      </span>
+      <DashboardGlyph hue={hue} />
 
       <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>

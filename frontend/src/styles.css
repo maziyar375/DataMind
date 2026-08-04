@@ -351,11 +351,6 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .rm-dash-card-link::after { content: ''; position: absolute; inset: 0; }
 .rm-dash-card:hover .rm-tile-actions { opacity: 1; }
 
-/* The cover carries the card's identity hue. It warms on approach rather than
-   moving, so a grid of them does not shimmer while the eye crosses it. */
-.rm-dash-cover { transition: filter .2s ease; }
-.rm-dash-card:hover .rm-dash-cover { filter: saturate(1.3) brightness(1.04); }
-
 /* The same dashboard as a dense row. A row is a smaller target than a card,
    so it fills rather than lifts. */
 .rm-dash-row {
@@ -527,42 +522,35 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   background: radial-gradient(72% 100% at 12% 0%, var(--accent-bg), transparent 72%);
 }
 
-/* The collection's own numbers, above the list of its parts. Hairline
-   dividers come from the 1px grid gap showing the container through. */
-.rm-stat-strip {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
-  gap: 1px;
-  margin-bottom: 18px;
-  background: var(--border);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  overflow: hidden;
-}
-.rm-stat {
+/* Shown only when something needs doing, which is what makes it worth
+   reading. A permanent strip of counters trains the eye to skip the space
+   above the list; one that is usually absent gets read when it appears. */
+.rm-attention {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 12px 16px;
-  background: var(--panel);
-}
-.rm-stat-value {
-  display: inline-flex;
   align-items: center;
-  gap: 7px;
-  font-size: 19px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--text-strong);
-  font-variant-numeric: tabular-nums;
+  gap: 9px;
+  margin-bottom: 16px;
+  padding: 9px 13px;
+  font-size: 12.5px;
+  color: var(--text2);
+  background: var(--amber-bg);
+  border: 1px solid var(--amber-border);
+  border-radius: 10px;
 }
-.rm-stat-label {
-  font-size: 10.5px;
+.rm-attention > button {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 4px 9px;
+  font-family: inherit;
+  font-size: 12px;
   font-weight: 500;
-  color: var(--text-faint);
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
+  color: var(--text-strong);
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  cursor: pointer;
 }
+.rm-attention > button:hover { border-color: var(--accent); }
 
 /* A heartbeat, not a decoration: it marks the one status that changes on its
    own. Paired with a text label everywhere it appears, so it never carries

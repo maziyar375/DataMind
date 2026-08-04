@@ -206,9 +206,13 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
           >
             Dashboards
           </h1>
-          <span style={{ fontSize: 13.5, color: 'var(--text-dim)' }}>
-            Tiles you keep. Each one has its own connection and its own refresh rate.
-          </span>
+          {cards === null || cards.length === 0 ? (
+            <span style={{ fontSize: 13.5, color: 'var(--text-dim)' }}>
+              Tiles you keep. Each one has its own connection and its own refresh rate.
+            </span>
+          ) : (
+            <IndexSummary cards={cards} />
+          )}
         </div>
         <PrimaryButton
           style={{ marginLeft: 'auto', padding: '10px 17px' }}
@@ -219,7 +223,9 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
         </PrimaryButton>
       </header>
 
-      {cards !== null && cards.length > 0 && <StatStrip cards={cards} />}
+      {cards !== null && cards.length > 0 && (
+        <IndexAttention cards={cards} onShowAll={() => { setQuery(''); setStatus('ALL') }} />
+      )}
 
       {error && <div style={{ marginBottom: 14 }}><ErrorNote>{error}</ErrorNote></div>}
 
@@ -353,48 +359,114 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
   )
 }
 
-/**
- * The four facts about the whole collection, above the list of its parts.
- *
- * Every BI product opens on a number, because "38 tiles across 12 dashboards,
- * 7 of them live" is the state of the thing — and the index had no page-level
- * signal at all. All four are derived from the list that is already loaded, so
- * this costs no request.
- */
-function StatStrip({ cards }: { cards: DashboardSummary[] }) {
-  const stats = useMemo(() => {
-    const active = cards.filter((card) => card.status === 'ACTIVE')
-    const lastRun = cards
-      .map((card) => card.last_refreshed_at)
-      .filter((value): value is string => Boolean(value))
-      .sort()
-      .at(-1)
-    return {
-      dashboards: active.length,
-      tiles: active.reduce((total, card) => total + card.tile_count, 0),
-      live: active.filter((card) => card.default_refresh_interval_seconds > 0).length,
-      lastRun,
-    }
-  }, [cards])
+/** What the index knows about the whole collection, derived once. */
+function summarise(cards: DashboardSummary[]) {
+  const active = cards.filter((card) => card.status === 'ACTIVE')
+  const lastRun = cards
+    .map((card) => card.last_refreshed_at)
+    .filter((value): value is string => Boolean(value))
+    .sort()
+    .at(-1)
+  return {
+    active: active.length,
+    archived: cards.length - active.length,
+    lastRun,
+    // Unfinished: created, never given a tile. Nothing will ever appear on it.
+    empty: active.filter((card) => card.tile_count === 0).length,
+    // Misconfigured: it has tiles and a refresh rate, and has still never run.
+    stale: active.filter(
+      (card) =>
+        card.tile_count > 0
+        && card.default_refresh_interval_seconds > 0
+        && !card.last_refreshed_at,
+    ).length,
+  }
+}
 
-  const items: { label: string; value: string; tone?: 'live' }[] = [
-    { label: 'Dashboards', value: String(stats.dashboards) },
-    { label: 'Tiles', value: String(stats.tiles) },
-    { label: 'Auto-refreshing', value: String(stats.live), tone: 'live' },
-    { label: 'Last run', value: stats.lastRun ? relativeTime(stats.lastRun) : '—' },
-  ]
+/**
+ * One line of facts under the page title.
+ *
+ * This replaced a four-box counter strip reading Dashboards / Tiles /
+ * Auto-refreshing / Last run. Three of those four were vanity: the total tile
+ * count across every dashboard is a number nobody acts on, and "Auto-refreshing
+ * 0" is a zero that prompts no decision — it took a quarter of the strip to say
+ * nothing. The count of dashboards is worth keeping, so it stays, at the size a
+ * subtitle deserves rather than as a hero number.
+ */
+function IndexSummary({ cards }: { cards: DashboardSummary[] }) {
+  const stats = useMemo(() => summarise(cards), [cards])
 
   return (
-    <div className="rm-stat-strip">
-      {items.map((item) => (
-        <div key={item.label} className="rm-stat">
-          <span className="rm-stat-value">
-            {item.tone === 'live' && stats.live > 0 && <span className="rm-live-dot" aria-hidden />}
-            {item.value}
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: 7,
+        fontSize: 13.5,
+        color: 'var(--text-dim)',
+      }}
+    >
+      <strong style={{ color: 'var(--text-strong)', fontWeight: 600 }}>
+        {stats.active}
+      </strong>
+      {stats.active === 1 ? 'dashboard' : 'dashboards'}
+      {stats.archived > 0 && (
+        <>
+          <span aria-hidden style={{ opacity: 0.4 }}>·</span>
+          {stats.archived} archived
+        </>
+      )}
+      {/* Liveness, not a count: whether anything on this account has run
+          recently is the one aggregate that tells you the system is working. */}
+      {stats.lastRun && (
+        <>
+          <span aria-hidden style={{ opacity: 0.4 }}>·</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <Dot color="var(--green)" />
+            last run {relativeTime(stats.lastRun)}
           </span>
-          <span className="rm-stat-label">{item.label}</span>
-        </div>
-      ))}
+        </>
+      )}
+    </span>
+  )
+}
+
+/**
+ * A note above the list, and only when there is something to say.
+ *
+ * The two states worth interrupting for are both invisible from a card's face:
+ * a dashboard with no tiles will never show anything, and one with a refresh
+ * rate that has never run is not doing what its owner thinks. A strip that is
+ * absent when all is well is worth more than four counters that are always
+ * there — it means its presence carries information.
+ */
+function IndexAttention({
+  cards, onShowAll,
+}: {
+  cards: DashboardSummary[]
+  onShowAll: () => void
+}) {
+  const stats = useMemo(() => summarise(cards), [cards])
+  if (stats.empty === 0 && stats.stale === 0) return null
+
+  const parts: string[] = []
+  if (stats.empty > 0) {
+    parts.push(`${stats.empty} ${stats.empty === 1 ? 'has' : 'have'} no tiles yet`)
+  }
+  if (stats.stale > 0) {
+    parts.push(`${stats.stale} set to refresh ${stats.stale === 1 ? 'has' : 'have'} never run`)
+  }
+
+  return (
+    <div className="rm-attention">
+      <span aria-hidden style={{ display: 'flex', color: 'var(--amber)' }}>
+        <Icon.Alert size={14} />
+      </span>
+      <span>{parts.join(' · ')}</span>
+      <button type="button" onClick={onShowAll}>
+        Show all
+      </button>
     </div>
   )
 }
