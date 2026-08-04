@@ -859,7 +859,10 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   background: var(--bg);
   animation: rm-fade-up .18s ease-out;
 }
-.rm-present .rm-dash-header { display: none; }
+/* !important because the header declares `display: flex` inline, and an
+   inline style beats any selector that is not marked — the same reason the
+   responsive block above uses it. */
+.rm-present .rm-dash-header { display: none !important; }
 .rm-present-bar {
   display: flex;
   align-items: center;

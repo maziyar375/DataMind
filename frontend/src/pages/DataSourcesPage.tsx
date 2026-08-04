@@ -494,7 +494,7 @@ export default function DataSourcesPage() {
                       hint={`Optional, comma separated. ${engine.schemaHint}`}
                     >
                       <TextInput
-                        placeholder="public, analytics"
+                        placeholder="e.g. public, analytics"
                         value={(draft.schema_allowlist ?? []).join(', ')}
                         onChange={(e) =>
                           setDraft({

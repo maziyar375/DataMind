@@ -1012,7 +1012,7 @@ function Overview({
       <Field label="What this database is for">
         <TextArea
           value={doc.business_context}
-          placeholder="An online retailer's order book: customers place orders made of line items, fulfilled from warehouses…"
+          placeholder="e.g. An online retailer's order book: customers place orders made of line items, fulfilled from warehouses…"
           onChange={(e) => onChange({ ...doc, business_context: e.target.value })}
         />
       </Field>
@@ -1066,7 +1066,7 @@ function Overview({
       <Field label="Other time conventions" hint="Optional. One sentence.">
         <TextInput
           value={time.notes}
-          placeholder="Orders are timestamped when paid, not when placed."
+          placeholder="e.g. Orders are timestamped when paid, not when placed."
           onChange={(e) => setTime({ notes: e.target.value })}
         />
       </Field>
@@ -1317,14 +1317,14 @@ function EntityCard({
               <Field label="Business name">
                 <TextInput
                   value={entity.label}
-                  placeholder="Orders"
+                  placeholder="e.g. Orders"
                   onChange={(e) => onChange({ label: e.target.value })}
                 />
               </Field>
               <Field label="Also called" hint="Comma separated.">
                 <TextInput
                   value={entity.synonyms.join(', ')}
-                  placeholder="purchases, sales orders"
+                  placeholder="e.g. purchases, sales orders"
                   onChange={(e) => onChange({ synonyms: splitList(e.target.value) })}
                 />
               </Field>
@@ -1336,7 +1336,7 @@ function EntityCard({
             >
               <TextInput
                 value={entity.grain}
-                placeholder="one row per line item on an order"
+                placeholder="e.g. one row per line item on an order"
                 onChange={(e) => onChange({ grain: e.target.value })}
               />
             </Field>
@@ -1371,7 +1371,7 @@ function EntityCard({
                 <TextInput
                   className="mono"
                   value={entity.default_time_column}
-                  placeholder="ordered_at"
+                  placeholder="e.g. ordered_at"
                   onChange={(e) => onChange({ default_time_column: e.target.value })}
                 />
               </Field>
@@ -1608,7 +1608,7 @@ function Columns({
       <div style={{ display: 'flex', gap: 8 }}>
         <TextInput
           className="mono"
-          placeholder="column_name"
+          placeholder="e.g. ordered_at"
           value={adding}
           onChange={(e) => setAdding(e.target.value)}
           onKeyDown={(e) => {
@@ -1782,14 +1782,14 @@ function MetricCard({
           <TextInput
             className="mono"
             value={metric.name}
-            placeholder="net_revenue"
+            placeholder="e.g. net_revenue"
             onChange={(e) => onChange({ name: slug(e.target.value) })}
           />
         </Field>
         <Field label="What a person calls it">
           <TextInput
             value={metric.label}
-            placeholder="Net revenue"
+            placeholder="e.g. Net revenue"
             onChange={(e) => onChange({ label: e.target.value })}
           />
         </Field>
@@ -1802,7 +1802,7 @@ function MetricCard({
         <TextArea
           className="mono"
           value={metric.expression}
-          placeholder={`SUM(${table}.amount)`}
+          placeholder={`e.g. SUM(${table}.amount)`}
           onChange={(e) => onChange({ expression: e.target.value })}
           style={{ minHeight: 56, fontSize: 12.5 }}
         />
@@ -1817,7 +1817,7 @@ function MetricCard({
         <TextArea
           className="mono"
           value={metric.filters.join('\n')}
-          placeholder={`${table}.status <> 'CANCELLED'`}
+          placeholder={`e.g. ${table}.status <> 'CANCELLED'`}
           onChange={(e) =>
             onChange({
               filters: e.target.value.split('\n').map((l) => l.trim()).filter(Boolean),
@@ -1843,7 +1843,7 @@ function MetricCard({
         <Field label="Unit">
           <TextInput
             value={metric.unit}
-            placeholder="USD"
+            placeholder="e.g. USD"
             onChange={(e) => onChange({ unit: e.target.value })}
           />
         </Field>
@@ -1860,7 +1860,7 @@ function MetricCard({
         <Field label="Asked for as" hint="Comma separated synonyms.">
           <TextInput
             value={metric.synonyms.join(', ')}
-            placeholder="revenue, GMV, net sales"
+            placeholder="e.g. revenue, GMV, net sales"
             onChange={(e) => onChange({ synonyms: splitList(e.target.value) })}
           />
         </Field>
@@ -2012,21 +2012,21 @@ function Glossary({
           <Field label="Term">
             <TextInput
               value={term.term}
-              placeholder="churn"
+              placeholder="e.g. churn"
               onChange={(e) => update(index, { term: e.target.value })}
             />
           </Field>
           <Field label="Means">
             <TextInput
               value={term.meaning}
-              placeholder="a customer with no order in the last 90 days"
+              placeholder="e.g. a customer with no order in the last 90 days"
               onChange={(e) => update(index, { meaning: e.target.value })}
             />
           </Field>
           <Field label="Maps to">
             <TextInput
               className="mono"
-              placeholder="public.customers"
+              placeholder="e.g. public.customers"
               value={term.maps_to.join(', ')}
               onChange={(e) => update(index, { maps_to: splitList(e.target.value) })}
             />

@@ -617,7 +617,7 @@ function NameDialog({
         <TextInput
           autoFocus
           value={name}
-          placeholder="Revenue overview"
+          placeholder="e.g. Revenue overview"
           onChange={(event) => setName(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter') void submit()
@@ -625,7 +625,7 @@ function NameDialog({
         />
         <TextInput
           value={description}
-          placeholder="Optional description"
+          placeholder="Optional — what this dashboard is for"
           onChange={(event) => setDescription(event.target.value)}
         />
         {error && <ErrorNote>{error}</ErrorNote>}

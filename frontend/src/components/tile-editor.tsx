@@ -519,7 +519,7 @@ export function TileEditor({
               <TextInput
                 autoFocus
                 value={title}
-                placeholder="Revenue by month"
+                placeholder="e.g. Revenue by month"
                 onChange={(event) => setTitle(event.target.value)}
               />
             </Field>
@@ -614,7 +614,7 @@ export function TileEditor({
                   value={sql}
                   rows={9}
                   spellCheck={false}
-                  placeholder="SELECT status, SUM(total_amount) FROM orders GROUP BY status"
+                  placeholder="e.g. SELECT status, SUM(total_amount) FROM orders GROUP BY status"
                   onChange={(event) => editSql(event.target.value)}
                   style={{ fontSize: 12.5, minHeight: 150 }}
                 />
@@ -668,7 +668,7 @@ export function TileEditor({
                   type="number"
                   min={1}
                   value={maxRows}
-                  placeholder={connection ? String(connection.max_rows) : ''}
+                  placeholder={connection ? `Inherit (${connection.max_rows.toLocaleString()})` : 'Inherit'}
                   onChange={(event) => setMaxRows(event.target.value)}
                 />
               </Field>
@@ -720,7 +720,7 @@ function AskPanel({
       <Field label="Question">
         <TextInput
           value={question}
-          placeholder="revenue by month for the last year"
+          placeholder="e.g. revenue by month for the last year"
           onChange={(event) => onQuestion(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && ready && !busy) onGenerate()
@@ -970,7 +970,7 @@ function TablePicker({
               <TextInput
                 aria-label={`Heading for ${entry.name}`}
                 value={entry.label ?? ''}
-                placeholder={entry.name}
+                placeholder="Same as source"
                 onChange={(event) => patch(entry.name, { label: event.target.value || null })}
                 style={{ fontSize: 12, padding: '5px 8px' }}
               />

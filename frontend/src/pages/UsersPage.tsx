@@ -422,7 +422,7 @@ function AddUserModal({
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && submit()}
-          placeholder="Ada Lovelace"
+          placeholder="e.g. Ada Lovelace"
         />
       </Field>
       <Field label="Email">
@@ -431,7 +431,7 @@ function AddUserModal({
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && submit()}
-          placeholder="ada@company.com"
+          placeholder="e.g. ada@company.com"
         />
       </Field>
       <Field label="Role" hint="Admins manage users, connections, and models.">
@@ -556,14 +556,14 @@ function EditUserModal({
       {err && <ErrorNote>{err}</ErrorNote>}
 
       <Field label="Full name">
-        <TextInput value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name" />
+        <TextInput value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Ada Lovelace" />
       </Field>
       <Field label="Email">
         <TextInput
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          placeholder="email@company.com"
+          placeholder="e.g. ada@company.com"
         />
       </Field>
 

@@ -330,7 +330,7 @@ export default function LlmProvidersPage() {
                   <TextInput
                     type="password"
                     autoComplete="new-password"
-                    placeholder={selected?.has_api_key ? '••••••••' : 'sk-…'}
+                    placeholder={selected?.has_api_key ? '••••••••' : 'e.g. sk-…'}
                     value={apiKey}
                     onChange={(e) => setApiKey(e.target.value)}
                   />
