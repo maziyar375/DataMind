@@ -427,7 +427,7 @@ class Dashboard(Base, TimestampMixin):
 
     Owner-only in v1 and deliberately so: a shared dashboard would let user B
     read data pulled with user A's stored credentials, through a connection B
-    does not own. That is an authorization model, not a UI feature — see §11 of
+    does not own. That is an authorization model, not a UI feature — see §9 of
     `docs/dashboards.md`.
     """
 

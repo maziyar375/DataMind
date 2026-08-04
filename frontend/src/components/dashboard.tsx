@@ -839,7 +839,7 @@ export function TileSkeleton({ height }: { height: number }) {
  * The palette control offers exactly one option on purpose. The palette in
  * `VegaChart.tsx` is *measured* — OKLab ΔE, Machado-2009 CVD simulation,
  * contrast against the chart's own surface, per-mode accent anchoring — and
- * §7 of docs/dashboards.md is explicit that any additional set has to be run
+ * §8 of docs/charts.md is explicit that any additional set has to be run
  * through that validator in **both** themes before it ships. Offering four
  * more here, chosen by eye, is exactly the failure that rule exists to
  * prevent, so the picker is honest about having one validated set.
