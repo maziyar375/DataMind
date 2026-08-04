@@ -27,8 +27,8 @@ import 'react-resizable/css/styles.css'
 
 import { dashboards as api } from '../api/client'
 import { dueTileIds } from './dashboard-schedule'
-import type { Dashboard, DashboardTile, TileResult } from '../api/types'
-import { Chip, ErrorNote, Icon, Kpi, ResultTable, Spinner, relativeTime } from './ui'
+import type { Dashboard, DashboardSummary, DashboardTile, TileResult } from '../api/types'
+import { Chip, Dot, ErrorNote, Icon, Kpi, ResultTable, Spinner, relativeTime } from './ui'
 import { VegaChart } from './VegaChart'
 
 // ── refresh rates ─────────────────────────────────────────────────────────
@@ -292,10 +292,11 @@ function SizedGrid({
 }
 
 // ── the tile ──────────────────────────────────────────────────────────────
-export type TileAction = 'refresh' | 'edit' | 'duplicate' | 'delete'
+/** `expand` opens the tile full-screen; the dashboard owns that overlay. */
+export type TileAction = 'expand' | 'refresh' | 'edit' | 'duplicate' | 'delete'
 
 export function TileShell({
-  tile, result, loading, editing, draggable = editing, onAction,
+  tile, result, loading, editing, draggable = editing, focused = false, onAction,
 }: {
   tile: DashboardTile
   result?: TileResult
@@ -304,20 +305,22 @@ export function TileShell({
   /** Whether the header is a drag handle. Off in the stacked (narrow) layout,
       where there is no grid to drag on even in edit mode. */
   draggable?: boolean
+  /** Drawn inside the focus overlay: no expand button, no drag, no lift. */
+  focused?: boolean
   onAction: (action: TileAction) => void
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const rate = tile.effective_refresh_interval_seconds
+  const failed = result?.status === 'ERROR' || Boolean(result?.error)
 
   return (
     <div
-      className="rm-tile"
+      className={`rm-tile${failed ? ' rm-tile-failed' : ''}${focused ? ' rm-tile-focused' : ''}`}
       style={{
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
         background: 'var(--panel)',
-        border: '1px solid var(--border)',
         borderRadius: 12,
         overflow: 'hidden',
       }}
@@ -345,8 +348,9 @@ export function TileShell({
         <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
           <span
             style={{
-              fontSize: 13,
+              fontSize: 13.5,
               fontWeight: 600,
+              letterSpacing: '-0.005em',
               color: 'var(--text-strong)',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -356,11 +360,29 @@ export function TileShell({
             {tile.title || 'Untitled tile'}
           </span>
           {/* The freshness stamp is not decoration: it is the only way a
-              reader tells a 30-second tile from the hourly one beside it. */}
+              reader tells a 30-second tile from the hourly one beside it.
+              While a refresh is in flight the stamp says so *in place* rather
+              than the body blanking — the number on screen is still the last
+              true one, and it keeps its timestamp until the new one lands. */}
           {result && (
-            <span style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>
-              as of {clockTime(result.computed_at)}
-              {loading ? ' · refreshing' : ''}
+            <span
+              style={{
+                fontSize: 11,
+                color: 'var(--text-faint)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              {loading ? (
+                <>
+                  <Spinner size={9} />
+                  refreshing
+                </>
+              ) : (
+                <>as of {clockTime(result.computed_at)}</>
+              )}
             </span>
           )}
         </div>
@@ -379,7 +401,36 @@ export function TileShell({
             {rate > 0 ? rateLabel(rate) : 'Manual'}
           </Chip>
 
-          <div className="rm-tile-actions" style={{ position: 'relative' }}>
+          <div className="rm-tile-actions" style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            {/* A tile two rows tall cannot show a twelve-row table, and the
+                grid is the wrong place to fix that — resizing to read one
+                number then resizing back is not a reading gesture. Every
+                comparable product answers this the same way, with a
+                full-screen view of one tile. */}
+            {!focused && (
+              <button
+                className="rm-icon-btn"
+                aria-label={`Expand ${tile.title || 'tile'}`}
+                title="Expand"
+                onClick={() => onAction('expand')}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 26,
+                  height: 26,
+                  borderRadius: 7,
+                  border: 'none',
+                  background: 'transparent',
+                  color: 'var(--text-dim)',
+                  cursor: 'pointer',
+                  ['--rm-hover-bg' as string]: 'var(--panel-alt)',
+                }}
+              >
+                <Icon.Expand size={14} />
+              </button>
+            )}
+            <div style={{ position: 'relative' }}>
             <button
               className="rm-icon-btn"
               aria-label="Tile actions"
@@ -402,6 +453,7 @@ export function TileShell({
             </button>
             {menuOpen && (
               <TileMenu
+                focused={focused}
                 onClose={() => setMenuOpen(false)}
                 onAction={(action) => {
                   setMenuOpen(false)
@@ -409,6 +461,7 @@ export function TileShell({
                 }}
               />
             )}
+            </div>
           </div>
         </div>
       </div>
@@ -433,10 +486,12 @@ export function TileShell({
 }
 
 function TileMenu({
-  onAction, onClose,
+  onAction, onClose, focused = false,
 }: {
   onAction: (action: TileAction) => void
   onClose: () => void
+  /** Inside the focus overlay there is nothing left to expand into. */
+  focused?: boolean
 }) {
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -449,7 +504,10 @@ function TileMenu({
   // The full set in every mode: the header's toggle governs the *grid* —
   // dragging, resizing, adding — while a single tile's own life cycle (edit,
   // duplicate, delete) belongs to the tile, reachable without a mode switch.
+  // Expand is in the menu as well as on the header, because the header button
+  // is revealed by hover and a touch device never produces one.
   const items: { action: TileAction; label: string; danger?: boolean }[] = [
+    ...(focused ? [] : [{ action: 'expand' as const, label: 'Expand' }]),
     { action: 'refresh', label: 'Refresh now' },
     { action: 'edit', label: 'Edit' },
     { action: 'duplicate', label: 'Duplicate' },
@@ -522,13 +580,18 @@ function TileBody({
     )
   }
 
-  // A tile that has never loaded shows a spinner; one that is *re*-loading
-  // keeps its numbers on screen, with "refreshing" in the header, because
-  // blanking a good result for half a second reads as a fault.
+  // A tile that has never loaded draws a skeleton in the shape of what is
+  // coming; one that is *re*-loading keeps its numbers on screen, with
+  // "refreshing" in the header, because blanking a good result for half a
+  // second reads as a fault. A spinner used to stand in for both, which told
+  // the reader nothing about what the tile was about to become and made a
+  // dashboard's first paint a field of unrelated spinners.
   if (!result) {
-    return (
+    return loading ? (
+      <TileBodySkeleton kind={tile.tile_type} />
+    ) : (
       <div style={{ display: 'grid', placeItems: 'center', height: '100%' }}>
-        {loading ? <Spinner /> : <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>No data yet</span>}
+        <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>No data yet</span>
       </div>
     )
   }
@@ -548,7 +611,18 @@ function TileBody({
 
   if (result.row_count === 0) {
     return (
-      <div style={{ display: 'grid', placeItems: 'center', height: '100%' }}>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 6,
+          height: '100%',
+          color: 'var(--text-faint)',
+        }}
+      >
+        <Icon.Inbox size={20} />
         <span style={{ fontSize: 12.5, color: 'var(--text-dim)' }}>No rows</span>
       </div>
     )
@@ -610,6 +684,104 @@ function TileBody({
 function MetricBody({ result }: { result: TileResult }) {
   if (!result.kpi) return <ResultTable spec={result} previewRows={5} maxHeight="none" />
   return <Kpi spec={result.kpi} compact />
+}
+
+// ── skeletons ─────────────────────────────────────────────────────────────
+/** A shimmering block. Inline width/height so callers compose a shape. */
+function Bone({ w, h, r = 6, style }: {
+  w: number | string
+  h: number
+  r?: number
+  style?: React.CSSProperties
+}) {
+  return (
+    <div
+      className="rm-bone"
+      aria-hidden
+      style={{ width: w, height: h, borderRadius: r, flexShrink: 0, ...style }}
+    />
+  )
+}
+
+/**
+ * The shape of the answer, before the answer.
+ *
+ * Drawn per tile type so first paint already says "a number is coming here, a
+ * chart there" — the layout stops jumping when results land, and a slow
+ * connection reads as loading rather than broken.
+ */
+function TileBodySkeleton({ kind }: { kind: DashboardTile['tile_type'] }) {
+  if (kind === 'METRIC') {
+    return (
+      <div
+        style={{
+          height: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 10,
+        }}
+      >
+        <Bone w={124} h={30} r={8} />
+        <Bone w={72} h={9} />
+      </div>
+    )
+  }
+
+  if (kind === 'CHART') {
+    // Bars of settled, varied heights — a flat row of equal blocks reads as a
+    // table, which is the one thing this must not be mistaken for.
+    const bars = [46, 72, 58, 88, 64, 96, 52]
+    return (
+      <div style={{ height: '100%', display: 'flex', alignItems: 'flex-end', gap: 7, padding: '10px 2px 2px' }}>
+        {bars.map((height, index) => (
+          <Bone key={index} w="100%" h={0} r={5} style={{ height: `${height}%`, flex: 1 }} />
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 9, paddingTop: 6 }}>
+      {[92, 78, 85, 64, 72].map((width, index) => (
+        <Bone key={index} w={`${width}%`} h={9} />
+      ))}
+    </div>
+  )
+}
+
+/**
+ * A whole tile, before the dashboard document has arrived.
+ *
+ * The index and the open dashboard both used a single centred spinner, which
+ * paints nothing until everything is ready and then drops the finished layout
+ * in at once. Reserving the boxes first is what makes an open feel instant.
+ */
+export function TileSkeleton({ height }: { height: number }) {
+  return (
+    <div
+      className="rm-tile"
+      aria-hidden
+      style={{
+        height,
+        display: 'flex',
+        flexDirection: 'column',
+        background: 'var(--panel)',
+        borderRadius: 12,
+        overflow: 'hidden',
+        padding: '10px 12px 12px',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        <Bone w={124} h={11} />
+        <Bone w={44} h={14} r={999} style={{ marginLeft: 'auto' }} />
+      </div>
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <TileBodySkeleton kind="CHART" />
+      </div>
+    </div>
+  )
 }
 
 // ── settings drawer ───────────────────────────────────────────────────────
@@ -825,24 +997,212 @@ function NumberSetting({
 }
 
 // ── index cards ───────────────────────────────────────────────────────────
+/**
+ * A stable hue per dashboard, so a wall of cards is scannable.
+ *
+ * Every card used to carry the same accent-blue square and the same grid
+ * glyph, which made twelve dashboards twelve identical rectangles — the eye
+ * had nothing to lock onto and had to read every title. A hue derived from the
+ * id gives each one a constant identity that survives renames and reorders.
+ *
+ * The six hues are the brand's own (the logo's violet/magenta/blue plus the
+ * theme's green and amber), not an arbitrary wheel, and they are used only as
+ * a low-alpha wash behind decoration — never as the colour of data, where a
+ * meaningless hue would imply a meaning.
+ */
+const COVER_HUES = [250, 300, 340, 25, 80, 160]
+
+function coverHue(id: string): number {
+  let hash = 0
+  for (let index = 0; index < id.length; index += 1) {
+    hash = (hash * 31 + id.charCodeAt(index)) >>> 0
+  }
+  return COVER_HUES[hash % COVER_HUES.length]
+}
+
+/**
+ * A sketch of the dashboard, drawn from the one fact the index has: how many
+ * tiles it holds.
+ *
+ * Deliberately not a fake screenshot. The list endpoint returns a count, not a
+ * layout, and a thumbnail that *looked* like the real arrangement while being
+ * invented would be a lie the user could only catch by opening it. Eight slots
+ * in a fixed frame, filled to the true count and faint beyond it, says "six of
+ * a possible several" honestly and reads as a dashboard at a glance.
+ */
+function TileMosaic({ count, hue }: { count: number; hue: number }) {
+  const slots = [
+    { x: 5, y: 6, w: 20, h: 14 }, { x: 28, y: 6, w: 20, h: 14 },
+    { x: 51, y: 6, w: 20, h: 14 }, { x: 74, y: 6, w: 21, h: 14 },
+    { x: 5, y: 23, w: 20, h: 14 }, { x: 28, y: 23, w: 20, h: 14 },
+    { x: 51, y: 23, w: 20, h: 14 }, { x: 74, y: 23, w: 21, h: 14 },
+  ]
+  const filled = Math.min(count, slots.length)
+  return (
+    <svg
+      viewBox="0 0 100 43"
+      preserveAspectRatio="none"
+      aria-hidden
+      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }}
+    >
+      {slots.map((slot, index) => (
+        <rect
+          key={index}
+          x={slot.x}
+          y={slot.y}
+          width={slot.w}
+          height={slot.h}
+          rx="3"
+          fill={`oklch(0.7 0.16 ${hue} / ${index < filled ? 0.5 : 0.12})`}
+        />
+      ))}
+    </svg>
+  )
+}
+
+/** Rename / duplicate / archive / delete — shared by the card and the row. */
+function DashboardMenu({
+  dashboard, onRename, onDuplicate, onArchive, onDelete,
+}: {
+  dashboard: DashboardSummary
+  onRename: () => void
+  onDuplicate: () => void
+  onArchive: () => void
+  onDelete: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const items = [
+    { label: 'Rename', run: onRename },
+    { label: 'Duplicate', run: onDuplicate },
+    { label: dashboard.status === 'ARCHIVED' ? 'Unarchive' : 'Archive', run: onArchive },
+    { label: 'Delete', run: onDelete, danger: true },
+  ]
+
+  return (
+    // Above the card-wide link overlay, so the kebab stays clickable.
+    <div className="rm-tile-actions" style={{ position: 'relative', zIndex: 2 }}>
+      <button
+        className="rm-icon-btn"
+        aria-label={`Actions for ${dashboard.name}`}
+        onClick={() => setOpen((current) => !current)}
+        style={{
+          display: 'flex',
+          width: 27,
+          height: 27,
+          alignItems: 'center',
+          justifyContent: 'center',
+          borderRadius: 8,
+          border: 'none',
+          background: open ? 'var(--panel-alt)' : 'transparent',
+          color: 'var(--text-dim)',
+          cursor: 'pointer',
+          ['--rm-hover-bg' as string]: 'var(--panel-alt)',
+        }}
+      >
+        <Icon.More size={14} />
+      </button>
+      {open && (
+        <>
+          <div
+            onClick={() => setOpen(false)}
+            style={{ position: 'fixed', inset: 0, zIndex: 40 }}
+            aria-hidden
+          />
+          <div
+            role="menu"
+            className="rm-enter"
+            style={{
+              position: 'absolute',
+              top: 31,
+              right: 0,
+              zIndex: 41,
+              minWidth: 152,
+              padding: 5,
+              background: 'var(--panel)',
+              border: '1px solid var(--border-strong)',
+              borderRadius: 10,
+              boxShadow: '0 16px 40px -14px rgba(0,0,0,.5)',
+            }}
+          >
+            {items.map((item) => (
+              <button
+                key={item.label}
+                className="rm-menu-item"
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false)
+                  item.run()
+                }}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: '7px 9px',
+                  borderRadius: 6,
+                  border: 'none',
+                  background: 'transparent',
+                  cursor: 'pointer',
+                  fontSize: 12.5,
+                  color: item.danger ? 'var(--red)' : 'var(--text)',
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+/** The shared footer facts, so the card and the row cannot drift apart. */
+function CardMeta({ dashboard }: { dashboard: DashboardSummary }) {
+  const rate = dashboard.default_refresh_interval_seconds
+  return (
+    <>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+        <Icon.Grid size={12} />
+        {dashboard.tile_count} {dashboard.tile_count === 1 ? 'tile' : 'tiles'}
+      </span>
+      {/* Whether a dashboard is live or manual is the first thing anyone wants
+          from an index of them, and it was the one fact the card omitted. */}
+      <span aria-hidden style={{ opacity: 0.45 }}>·</span>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+        {rate > 0 ? (
+          <>
+            <Dot color="var(--green)" />
+            every {rateLabel(rate)}
+          </>
+        ) : (
+          <>
+            <Dot color="var(--text-faint)" />
+            manual
+          </>
+        )}
+      </span>
+      <span aria-hidden style={{ opacity: 0.45 }}>·</span>
+      <span>
+        {dashboard.last_refreshed_at
+          ? `ran ${relativeTime(dashboard.last_refreshed_at)}`
+          : 'never run'}
+      </span>
+    </>
+  )
+}
+
 export function DashboardCard({
   dashboard, onOpen, onRename, onDuplicate, onArchive, onDelete,
 }: {
-  dashboard: {
-    id: string
-    name: string
-    description: string | null
-    status: string
-    tile_count: number
-    last_refreshed_at: string | null
-  }
+  dashboard: DashboardSummary
   onOpen: () => void
   onRename: () => void
   onDuplicate: () => void
   onArchive: () => void
   onDelete: () => void
 }) {
-  const [menuOpen, setMenuOpen] = useState(false)
+  const hue = coverHue(dashboard.id)
+  const archived = dashboard.status === 'ARCHIVED'
 
   return (
     <div
@@ -851,37 +1211,50 @@ export function DashboardCard({
         position: 'relative',
         display: 'flex',
         flexDirection: 'column',
-        gap: 10,
-        padding: 16,
         background: 'var(--panel)',
-        border: '1px solid var(--border)',
-        borderRadius: 12,
-        opacity: dashboard.status === 'ARCHIVED' ? 0.72 : 1,
+        borderRadius: 14,
+        overflow: 'hidden',
+        opacity: archived ? 0.66 : 1,
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-        <span
-          aria-hidden
-          style={{
-            display: 'grid',
-            placeItems: 'center',
-            width: 32,
-            height: 32,
-            flexShrink: 0,
-            borderRadius: 9,
-            background: 'var(--accent-bg)',
-            color: 'var(--accent)',
-          }}
-        >
-          <Icon.Grid size={16} />
-        </span>
+      {/* The cover carries the identity: the dashboard's own hue, its content
+          sketch, and nothing clickable except the card-wide link beneath. */}
+      <div
+        className="rm-dash-cover"
+        style={{
+          position: 'relative',
+          height: 86,
+          flexShrink: 0,
+          borderBottom: '1px solid var(--border)',
+          background: `
+            radial-gradient(120% 140% at 12% -20%, oklch(0.72 0.17 ${hue} / 0.3), transparent 62%),
+            radial-gradient(110% 130% at 96% 120%, oklch(0.66 0.15 ${(hue + 40) % 360} / 0.22), transparent 60%),
+            var(--panel-alt)`,
+        }}
+      >
+        <TileMosaic count={dashboard.tile_count} hue={hue} />
+        {archived && (
+          <span style={{ position: 'absolute', top: 9, left: 10, zIndex: 2 }}>
+            <Chip tone="amber">Archived</Chip>
+          </span>
+        )}
+        <div style={{ position: 'absolute', top: 7, right: 7 }}>
+          <DashboardMenu
+            dashboard={dashboard}
+            onRename={onRename}
+            onDuplicate={onDuplicate}
+            onArchive={onArchive}
+            onDelete={onDelete}
+          />
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '13px 15px 14px', flex: 1 }}>
         <button
           className="rm-dash-card-link"
           onClick={onOpen}
           style={{
-            flex: 1,
             minWidth: 0,
-            marginTop: 5,
             textAlign: 'left',
             background: 'transparent',
             border: 'none',
@@ -889,7 +1262,8 @@ export function DashboardCard({
             cursor: 'pointer',
             color: 'var(--text-strong)',
             fontSize: 14.5,
-            fontWeight: 600,
+            fontWeight: 650,
+            letterSpacing: '-0.01em',
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
@@ -897,128 +1271,154 @@ export function DashboardCard({
         >
           {dashboard.name}
         </button>
-        {dashboard.status === 'ARCHIVED' && <Chip tone="amber">Archived</Chip>}
-        {/* Above the card-wide link overlay, so the kebab stays clickable. */}
-        <div className="rm-tile-actions" style={{ position: 'relative', zIndex: 1 }}>
-          <button
-            className="rm-icon-btn"
-            aria-label="Dashboard actions"
-            onClick={() => setMenuOpen((open) => !open)}
-            style={{
-              display: 'flex',
-              width: 26,
-              height: 26,
-              alignItems: 'center',
-              justifyContent: 'center',
-              borderRadius: 7,
-              border: 'none',
-              background: menuOpen ? 'var(--panel-alt)' : 'transparent',
-              color: 'var(--text-dim)',
-              cursor: 'pointer',
-              ['--rm-hover-bg' as string]: 'var(--panel-alt)',
-            }}
-          >
-            <Icon.More size={14} />
-          </button>
-          {menuOpen && (
-            <>
-              <div
-                onClick={() => setMenuOpen(false)}
-                style={{ position: 'fixed', inset: 0, zIndex: 40 }}
-                aria-hidden
-              />
-              <div
-                role="menu"
-                className="rm-enter"
-                style={{
-                  position: 'absolute',
-                  top: 30,
-                  right: 0,
-                  zIndex: 41,
-                  minWidth: 150,
-                  padding: 5,
-                  background: 'var(--panel)',
-                  border: '1px solid var(--border-strong)',
-                  borderRadius: 10,
-                  boxShadow: '0 16px 40px -14px rgba(0,0,0,.5)',
-                }}
-              >
-                {[
-                  { label: 'Rename', run: onRename },
-                  { label: 'Duplicate', run: onDuplicate },
-                  {
-                    label: dashboard.status === 'ARCHIVED' ? 'Unarchive' : 'Archive',
-                    run: onArchive,
-                  },
-                  { label: 'Delete', run: onDelete, danger: true },
-                ].map((item) => (
-                  <button
-                    key={item.label}
-                    className="rm-menu-item"
-                    role="menuitem"
-                    onClick={() => {
-                      setMenuOpen(false)
-                      item.run()
-                    }}
-                    style={{
-                      display: 'block',
-                      width: '100%',
-                      textAlign: 'left',
-                      padding: '7px 9px',
-                      borderRadius: 6,
-                      border: 'none',
-                      background: 'transparent',
-                      cursor: 'pointer',
-                      fontSize: 12.5,
-                      color: item.danger ? 'var(--red)' : 'var(--text)',
-                    }}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      </div>
 
-      {dashboard.description && (
+        {/* A fixed two-line well whether or not there is a description, so a
+            row of cards keeps one baseline instead of ragging. */}
         <span
           style={{
             fontSize: 12.5,
-            color: 'var(--text-dim)',
+            color: dashboard.description ? 'var(--text-dim)' : 'var(--text-faint)',
+            fontStyle: dashboard.description ? undefined : 'italic',
             lineHeight: 1.5,
+            minHeight: 37,
             display: '-webkit-box',
             WebkitLineClamp: 2,
             WebkitBoxOrient: 'vertical',
             overflow: 'hidden',
           }}
         >
-          {dashboard.description}
+          {dashboard.description || 'No description'}
         </span>
-      )}
+
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: 6,
+            marginTop: 'auto',
+            paddingTop: 10,
+            borderTop: '1px solid var(--border)',
+            fontSize: 11.5,
+            color: 'var(--text-faint)',
+          }}
+        >
+          <CardMeta dashboard={dashboard} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The same dashboard as one dense row.
+ *
+ * A grid of covers is the right default for a dozen; past that, scanning names
+ * beats scanning pictures, and every comparable product offers the switch.
+ */
+export function DashboardRow({
+  dashboard, onOpen, onRename, onDuplicate, onArchive, onDelete,
+}: {
+  dashboard: DashboardSummary
+  onOpen: () => void
+  onRename: () => void
+  onDuplicate: () => void
+  onArchive: () => void
+  onDelete: () => void
+}) {
+  const hue = coverHue(dashboard.id)
+  const archived = dashboard.status === 'ARCHIVED'
+
+  return (
+    <div
+      className="rm-dash-row"
+      style={{
+        position: 'relative',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 13,
+        padding: '11px 14px',
+        background: 'var(--panel)',
+        borderRadius: 11,
+        opacity: archived ? 0.66 : 1,
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          display: 'grid',
+          placeItems: 'center',
+          width: 34,
+          height: 34,
+          flexShrink: 0,
+          borderRadius: 9,
+          background: `oklch(0.7 0.16 ${hue} / 0.16)`,
+          color: `oklch(0.65 0.17 ${hue})`,
+        }}
+      >
+        <Icon.Grid size={16} />
+      </span>
+
+      <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+          <button
+            className="rm-dash-card-link"
+            onClick={onOpen}
+            style={{
+              minWidth: 0,
+              textAlign: 'left',
+              background: 'transparent',
+              border: 'none',
+              padding: 0,
+              cursor: 'pointer',
+              color: 'var(--text-strong)',
+              fontSize: 13.5,
+              fontWeight: 600,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {dashboard.name}
+          </button>
+          {archived && <Chip tone="amber">Archived</Chip>}
+        </div>
+        {dashboard.description && (
+          <span
+            style={{
+              fontSize: 12,
+              color: 'var(--text-dim)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {dashboard.description}
+          </span>
+        )}
+      </div>
 
       <div
+        className="rm-dash-row-meta"
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 6,
-          marginTop: 'auto',
-          paddingTop: 4,
+          gap: 7,
+          flexShrink: 0,
           fontSize: 11.5,
           color: 'var(--text-faint)',
         }}
       >
-        <span>
-          {dashboard.tile_count} {dashboard.tile_count === 1 ? 'tile' : 'tiles'}
-        </span>
-        <span aria-hidden>·</span>
-        <span>
-          {dashboard.last_refreshed_at
-            ? `refreshed ${relativeTime(dashboard.last_refreshed_at)}`
-            : 'never refreshed'}
-        </span>
+        <CardMeta dashboard={dashboard} />
       </div>
+
+      <DashboardMenu
+        dashboard={dashboard}
+        onRename={onRename}
+        onDuplicate={onDuplicate}
+        onArchive={onArchive}
+        onDelete={onDelete}
+      />
     </div>
   )
 }

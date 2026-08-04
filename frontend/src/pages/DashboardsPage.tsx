@@ -16,12 +16,13 @@ import { ApiError, dashboards as api } from '../api/client'
 import { applyTheme, type ThemeName } from '../theme/tokens'
 import type { Dashboard, DashboardSummary, DashboardTile } from '../api/types'
 import {
-  DashboardCard, DashboardGrid, DashboardSettings, STACK_BELOW_PX,
-  type TileAction, useTileScheduler,
+  DashboardCard, DashboardGrid, DashboardRow, DashboardSettings, STACK_BELOW_PX,
+  TileShell, TileSkeleton, rateLabel, type TileAction, useTileScheduler,
 } from '../components/dashboard'
 import { TileEditor } from '../components/tile-editor'
 import {
-  EmptyState, ErrorNote, GhostButton, Icon, Modal, PrimaryButton, Spinner, TextInput,
+  Dot, EmptyState, ErrorNote, GhostButton, Icon, Modal, PrimaryButton, Spinner, TextInput,
+  relativeTime,
 } from '../components/ui'
 
 export default function DashboardsPage() {
@@ -35,12 +36,54 @@ export default function DashboardsPage() {
 }
 
 // ── the index ─────────────────────────────────────────────────────────────
+/**
+ * How the list is ordered.
+ *
+ * The index used to render whatever order the API returned, which is fine for
+ * three dashboards and useless for thirty. "Recently updated" leads because
+ * the thing you want is nearly always the thing you touched last.
+ */
+type SortKey = 'updated' | 'refreshed' | 'name' | 'tiles'
+type StatusFilter = 'ACTIVE' | 'ARCHIVED' | 'ALL'
+type ViewMode = 'grid' | 'list'
+
+const SORTS: { value: SortKey; label: string }[] = [
+  { value: 'updated', label: 'Recently updated' },
+  { value: 'refreshed', label: 'Recently run' },
+  { value: 'name', label: 'Name (A–Z)' },
+  { value: 'tiles', label: 'Most tiles' },
+]
+
+const VIEW_KEY = 'raymand.dashboards.view'
+
+function sortCards(cards: DashboardSummary[], key: SortKey): DashboardSummary[] {
+  const byTime = (value: string | null) => (value ? new Date(value).getTime() : 0)
+  return [...cards].sort((a, b) => {
+    if (key === 'name') return a.name.localeCompare(b.name)
+    if (key === 'tiles') return b.tile_count - a.tile_count || a.name.localeCompare(b.name)
+    if (key === 'refreshed') return byTime(b.last_refreshed_at) - byTime(a.last_refreshed_at)
+    return byTime(b.updated_at) - byTime(a.updated_at)
+  })
+}
+
 function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
   const [cards, setCards] = useState<DashboardSummary[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [renaming, setRenaming] = useState<DashboardSummary | null>(null)
   const [busy, setBusy] = useState(false)
+
+  const [query, setQuery] = useState('')
+  const [sort, setSort] = useState<SortKey>('updated')
+  // Archiving existed as an action with nowhere for the result to go: an
+  // archived dashboard stayed in the list at 72% opacity forever. Defaulting
+  // to ACTIVE is what makes the verb mean anything.
+  const [status, setStatus] = useState<StatusFilter>('ACTIVE')
+  const [view, setView] = useState<ViewMode>(
+    () => (localStorage.getItem(VIEW_KEY) as ViewMode) ?? 'grid',
+  )
+
+  useEffect(() => localStorage.setItem(VIEW_KEY, view), [view])
 
   const load = useCallback(async () => {
     try {
@@ -108,29 +151,67 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
     [],
   )
 
+  const visible = useMemo(() => {
+    if (!cards) return []
+    const needle = query.trim().toLowerCase()
+    const matched = cards.filter((card) => {
+      if (status !== 'ALL' && card.status !== status) return false
+      if (!needle) return true
+      return (
+        card.name.toLowerCase().includes(needle)
+        || (card.description ?? '').toLowerCase().includes(needle)
+      )
+    })
+    return sortCards(matched, sort)
+  }, [cards, query, sort, status])
+
+  const archivedCount = useMemo(
+    () => (cards ?? []).filter((card) => card.status === 'ARCHIVED').length,
+    [cards],
+  )
+
+  const rowProps = useCallback(
+    (card: DashboardSummary) => ({
+      dashboard: card,
+      onOpen: () => onOpen(card.id),
+      onRename: () => setRenaming(card),
+      onDuplicate: () => void guard(() => duplicate(card)),
+      onArchive: () =>
+        void guard(() =>
+          api.update(card.id, {
+            status: card.status === 'ARCHIVED' ? 'ACTIVE' : 'ARCHIVED',
+          }),
+        ),
+      onDelete: () => void guard(() => api.remove(card.id)),
+    }),
+    [duplicate, guard, onOpen],
+  )
+
+  const filtering = query.trim().length > 0 || status !== 'ACTIVE'
+
   return (
-    <div className="rm-page-pad" style={{ flex: 1, overflowY: 'auto' }}>
+    <div className="rm-dash-index rm-page-pad" style={{ flex: 1, overflowY: 'auto' }}>
       <header
-        style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, marginBottom: 22 }}
+        style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 12, marginBottom: 18 }}
       >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 }}>
           <h1
             style={{
               margin: 0,
-              fontSize: 20,
+              fontSize: 25,
               fontWeight: 700,
-              letterSpacing: '-0.01em',
+              letterSpacing: '-0.022em',
               color: 'var(--text-strong)',
             }}
           >
             Dashboards
           </h1>
-          <span style={{ fontSize: 13, color: 'var(--text-dim)' }}>
+          <span style={{ fontSize: 13.5, color: 'var(--text-dim)' }}>
             Tiles you keep. Each one has its own connection and its own refresh rate.
           </span>
         </div>
         <PrimaryButton
-          style={{ marginLeft: 'auto' }}
+          style={{ marginLeft: 'auto', padding: '10px 17px' }}
           onClick={() => setCreating(true)}
           disabled={busy}
         >
@@ -138,12 +219,59 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
         </PrimaryButton>
       </header>
 
+      {cards !== null && cards.length > 0 && <StatStrip cards={cards} />}
+
       {error && <div style={{ marginBottom: 14 }}><ErrorNote>{error}</ErrorNote></div>}
 
-      {cards === null ? (
-        <div style={{ display: 'grid', placeItems: 'center', padding: 60 }}>
-          <Spinner size={18} />
+      {cards !== null && cards.length > 0 && (
+        <div className="rm-dash-toolbar">
+          <SearchField
+            value={query}
+            onChange={setQuery}
+            placeholder={`Search ${cards.length} dashboard${cards.length === 1 ? '' : 's'}…`}
+          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
+            {/* Only offered once there is something archived to look at — a
+                permanently empty filter is furniture, not a control. */}
+            {archivedCount > 0 && (
+              <Segmented
+                ariaLabel="Filter by status"
+                value={status}
+                onChange={setStatus}
+                options={[
+                  { value: 'ACTIVE', label: 'Active' },
+                  { value: 'ARCHIVED', label: `Archived (${archivedCount})` },
+                  { value: 'ALL', label: 'All' },
+                ]}
+              />
+            )}
+            <select
+              aria-label="Sort dashboards"
+              value={sort}
+              onChange={(event) => setSort(event.target.value as SortKey)}
+              className="rm-toolbar-select"
+            >
+              {SORTS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <Segmented
+              ariaLabel="Layout"
+              value={view}
+              onChange={setView}
+              options={[
+                { value: 'grid', label: <Icon.Grid size={14} />, title: 'Cards' },
+                { value: 'list', label: <Icon.List size={14} />, title: 'List' },
+              ]}
+            />
+          </div>
         </div>
+      )}
+
+      {cards === null ? (
+        <IndexSkeleton />
       ) : cards.length === 0 ? (
         <EmptyState
           icon={<Icon.Grid size={20} />}
@@ -151,30 +279,45 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
           body="A dashboard is a grid of saved queries. Create one, then add a tile by asking a question in plain language or writing the SQL yourself."
           action={<PrimaryButton onClick={() => setCreating(true)}>New dashboard</PrimaryButton>}
         />
-      ) : (
+      ) : visible.length === 0 ? (
+        // A filter that hides everything must say so, and offer the way back.
+        <EmptyState
+          icon={<Icon.Search size={20} />}
+          title="Nothing matches"
+          body={
+            query.trim()
+              ? `No dashboard is called “${query.trim()}”, and none mentions it in a description.`
+              : 'No dashboard has that status.'
+          }
+          action={
+            filtering && (
+              <GhostButton
+                onClick={() => {
+                  setQuery('')
+                  setStatus('ACTIVE')
+                }}
+              >
+                Clear filters
+              </GhostButton>
+            )
+          }
+        />
+      ) : view === 'grid' ? (
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(270px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(284px, 1fr))',
             gap: 16,
           }}
         >
-          {cards.map((card) => (
-            <DashboardCard
-              key={card.id}
-              dashboard={card}
-              onOpen={() => onOpen(card.id)}
-              onRename={() => setRenaming(card)}
-              onDuplicate={() => void guard(() => duplicate(card))}
-              onArchive={() =>
-                void guard(() =>
-                  api.update(card.id, {
-                    status: card.status === 'ARCHIVED' ? 'ACTIVE' : 'ARCHIVED',
-                  }),
-                )
-              }
-              onDelete={() => void guard(() => api.remove(card.id))}
-            />
+          {visible.map((card) => (
+            <DashboardCard key={card.id} {...rowProps(card)} />
+          ))}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {visible.map((card) => (
+            <DashboardRow key={card.id} {...rowProps(card)} />
           ))}
         </div>
       )}
@@ -206,6 +349,154 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
           }}
         />
       )}
+    </div>
+  )
+}
+
+/**
+ * The four facts about the whole collection, above the list of its parts.
+ *
+ * Every BI product opens on a number, because "38 tiles across 12 dashboards,
+ * 7 of them live" is the state of the thing — and the index had no page-level
+ * signal at all. All four are derived from the list that is already loaded, so
+ * this costs no request.
+ */
+function StatStrip({ cards }: { cards: DashboardSummary[] }) {
+  const stats = useMemo(() => {
+    const active = cards.filter((card) => card.status === 'ACTIVE')
+    const lastRun = cards
+      .map((card) => card.last_refreshed_at)
+      .filter((value): value is string => Boolean(value))
+      .sort()
+      .at(-1)
+    return {
+      dashboards: active.length,
+      tiles: active.reduce((total, card) => total + card.tile_count, 0),
+      live: active.filter((card) => card.default_refresh_interval_seconds > 0).length,
+      lastRun,
+    }
+  }, [cards])
+
+  const items: { label: string; value: string; tone?: 'live' }[] = [
+    { label: 'Dashboards', value: String(stats.dashboards) },
+    { label: 'Tiles', value: String(stats.tiles) },
+    { label: 'Auto-refreshing', value: String(stats.live), tone: 'live' },
+    { label: 'Last run', value: stats.lastRun ? relativeTime(stats.lastRun) : '—' },
+  ]
+
+  return (
+    <div className="rm-stat-strip">
+      {items.map((item) => (
+        <div key={item.label} className="rm-stat">
+          <span className="rm-stat-value">
+            {item.tone === 'live' && stats.live > 0 && <span className="rm-live-dot" aria-hidden />}
+            {item.value}
+          </span>
+          <span className="rm-stat-label">{item.label}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** Search with the glyph inside the field, and a clear button once typed in. */
+function SearchField({
+  value, onChange, placeholder,
+}: {
+  value: string
+  onChange: (next: string) => void
+  placeholder: string
+}) {
+  return (
+    <div className="rm-search">
+      <span aria-hidden className="rm-search-icon"><Icon.Search size={14} /></span>
+      <input
+        type="search"
+        aria-label="Search dashboards"
+        value={value}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') onChange('')
+        }}
+      />
+      {value && (
+        <button
+          type="button"
+          aria-label="Clear search"
+          className="rm-search-clear rm-icon-btn"
+          onClick={() => onChange('')}
+          style={{ ['--rm-hover-bg' as string]: 'var(--panel-alt)' }}
+        >
+          <Icon.Close size={12} />
+        </button>
+      )}
+    </div>
+  )
+}
+
+/**
+ * One control, several mutually exclusive states.
+ *
+ * Three ghost buttons in a row look like three unrelated actions; a segmented
+ * control looks like one choice, which is what a filter and a layout switch
+ * both are.
+ */
+function Segmented<T extends string>({
+  value, onChange, options, ariaLabel,
+}: {
+  value: T
+  onChange: (next: T) => void
+  options: { value: T; label: React.ReactNode; title?: string }[]
+  ariaLabel: string
+}) {
+  return (
+    <div className="rm-seg" role="group" aria-label={ariaLabel}>
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          title={option.title}
+          aria-pressed={value === option.value}
+          className={value === option.value ? 'is-on' : undefined}
+          onClick={() => onChange(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/** Cards in outline while the list loads, so the page does not jump. */
+function IndexSkeleton() {
+  return (
+    <div
+      aria-hidden
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(284px, 1fr))',
+        gap: 16,
+      }}
+    >
+      {[0, 1, 2, 3, 4, 5].map((index) => (
+        <div
+          key={index}
+          style={{
+            background: 'var(--panel)',
+            border: '1px solid var(--border)',
+            borderRadius: 14,
+            overflow: 'hidden',
+          }}
+        >
+          <div className="rm-bone" style={{ height: 86, borderRadius: 0 }} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 9, padding: '14px 15px 15px' }}>
+            <div className="rm-bone" style={{ width: '58%', height: 12, borderRadius: 6 }} />
+            <div className="rm-bone" style={{ width: '92%', height: 9, borderRadius: 6 }} />
+            <div className="rm-bone" style={{ width: '44%', height: 9, borderRadius: 6, marginTop: 10 }} />
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
@@ -350,6 +641,10 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
   const [showSettings, setShowSettings] = useState(false)
   // `undefined` = closed; `null` = adding; a tile = editing that one.
   const [editorTile, setEditorTile] = useState<DashboardTile | null | undefined>(undefined)
+  /** The tile drawn full-screen, if any. */
+  const [focusId, setFocusId] = useState<string | null>(null)
+  /** Chrome-free, full-viewport, for a wall display or a meeting. */
+  const [presenting, setPresenting] = useState(false)
 
   const gridRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(0)
@@ -455,12 +750,19 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
   const onTileAction = useCallback(
     async (action: TileAction, tile: DashboardTile) => {
       try {
+        if (action === 'expand') return setFocusId(tile.id)
         if (action === 'refresh') return data.refreshNow([tile.id])
-        if (action === 'edit') return setEditorTile(tile)
+        // Editing is a form over the whole screen; leaving the tile expanded
+        // behind it means the editor closes back onto a modal, not the grid.
+        if (action === 'edit') {
+          setFocusId(null)
+          return setEditorTile(tile)
+        }
         // Both of these apply the change locally rather than re-reading, for
         // the same reason the editor does — see `onSaved` below.
         if (action === 'delete') {
           await api.removeTile(id, tile.id)
+          setFocusId((current) => (current === tile.id ? null : current))
           return setDashboard((current) =>
             current
               ? { ...current, tiles: current.tiles.filter((t) => t.id !== tile.id) }
@@ -480,6 +782,36 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
     [data, id],
   )
 
+  const focusTile = focusId ? tiles.find((tile) => tile.id === focusId) ?? null : null
+
+  // Escape unwinds one layer at a time — expanded tile, then presentation,
+  // then back to the index — which is the order they were entered in. The
+  // editor and the settings drawer close themselves.
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null
+      const typing = target
+        && (target.isContentEditable
+          || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+      if (typing) return
+
+      if (event.key === 'Escape') {
+        if (focusId) return setFocusId(null)
+        if (presenting) return setPresenting(false)
+        return
+      }
+      // Shortcuts, not chords: this is a reading surface, and the two things
+      // people do on one repeatedly are refresh it and put it on a screen.
+      if (event.key === 'r' || event.key === 'R') {
+        event.preventDefault()
+        data.refreshNow(focusId ? [focusId] : tiles.map((tile) => tile.id))
+      }
+      if (event.key === 'p' || event.key === 'P') setPresenting((current) => !current)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [data, focusId, presenting, tiles])
+
   if (error && !dashboard) {
     return (
       <div style={{ flex: 1, padding: 30 }}>
@@ -491,15 +823,9 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
     )
   }
 
-  if (!dashboard) {
-    return (
-      <div style={{ flex: 1, display: 'grid', placeItems: 'center' }}>
-        <Spinner size={18} />
-      </div>
-    )
-  }
+  if (!dashboard) return <DashboardViewSkeleton onBack={onBack} />
 
-  return (
+  const content = (
     <div style={{ flex: 1, display: 'flex', minWidth: 0 }}>
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <header
@@ -594,32 +920,41 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
               </>
             ) : (
               <>
-                <GhostButton
-                  style={toolbarBtn}
-                  onClick={() => data.refreshNow(tiles.map((t) => t.id))}
-                >
-                  {data.pending.size > 0 ? <Spinner size={13} /> : <Icon.Refresh size={13} />}
-                  Refresh all
-                </GhostButton>
-                <GhostButton
-                  onClick={() => setShowSettings((open) => !open)}
-                  style={{
-                    ...toolbarBtn,
-                    ...(showSettings
-                      ? { background: 'var(--panel-alt)', borderColor: 'var(--border-strong)' }
-                      : undefined),
-                  }}
-                >
-                  <Icon.Gear size={13} /> Settings
-                </GhostButton>
-                <GhostButton style={toolbarBtn} onClick={() => setEditing(true)}>
-                  <Icon.Grid size={13} /> Edit grid
-                </GhostButton>
-                {/* A quiet rule between "act on what is here" and "add more". */}
-                <span
-                  aria-hidden
-                  style={{ width: 1, height: 22, background: 'var(--border)', margin: '0 2px' }}
+                <LiveStatus
+                  tiles={tiles}
+                  refreshing={data.pending.size > 0}
+                  onRefresh={() => data.refreshNow(tiles.map((t) => t.id))}
                 />
+                {/* One control per verb was four ghost buttons of identical
+                    weight — a row of equals with no shape. Presentation and
+                    arrangement are both *modes*, so they read as one grouped
+                    switch; adding a tile is the page's one primary action. */}
+                <div className="rm-toolgroup">
+                  <button
+                    type="button"
+                    title="Presentation mode (P)"
+                    aria-pressed={presenting}
+                    className={presenting ? 'is-on' : undefined}
+                    onClick={() => setPresenting((open) => !open)}
+                  >
+                    <Icon.Play size={12} /> Present
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={editing}
+                    onClick={() => setEditing(true)}
+                  >
+                    <Icon.Grid size={13} /> Edit grid
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={showSettings}
+                    className={showSettings ? 'is-on' : undefined}
+                    onClick={() => setShowSettings((open) => !open)}
+                  >
+                    <Icon.Gear size={13} /> Settings
+                  </button>
+                </div>
                 <PrimaryButton style={{ padding: '8px 14px' }} onClick={() => setEditorTile(null)}>
                   <Icon.Plus /> Add tile
                 </PrimaryButton>
@@ -716,6 +1051,175 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
           }}
         />
       )}
+    </div>
+  )
+
+  return (
+    <>
+      {/* Presentation mode is a fixed layer over the whole viewport rather
+          than a class on the shell: it has to cover the sidebar too, and
+          lifting it out means neither App nor the sidebar needs to know this
+          mode exists. */}
+      {presenting ? (
+        <div className="rm-present">
+          <div className="rm-present-bar">
+            <span className="rm-present-title">{dashboard.name}</span>
+            <LiveStatus
+              tiles={tiles}
+              refreshing={data.pending.size > 0}
+              onRefresh={() => data.refreshNow(tiles.map((t) => t.id))}
+            />
+            <GhostButton style={toolbarBtn} onClick={() => setPresenting(false)}>
+              <Icon.Close size={13} /> Exit
+            </GhostButton>
+          </div>
+          {content}
+        </div>
+      ) : (
+        content
+      )}
+
+      {/* One tile, full screen. A tile sized to fit a grid cell cannot show a
+          long table or a dense chart, and resizing the grid to read something
+          then resizing it back is not a reading gesture — it is a layout edit
+          with a layout write behind it. */}
+      {focusTile && (
+        <div
+          className="rm-focus"
+          role="dialog"
+          aria-modal="true"
+          aria-label={focusTile.title || 'Expanded tile'}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setFocusId(null)
+          }}
+        >
+          <div className="rm-focus-frame">
+            <div className="rm-focus-bar">
+              <span className="rm-focus-hint">
+                <span className="rm-kbd">Esc</span> to close
+                <span aria-hidden style={{ opacity: 0.4 }}>·</span>
+                <span className="rm-kbd">R</span> to refresh
+              </span>
+              <GhostButton style={toolbarBtn} onClick={() => setFocusId(null)}>
+                <Icon.Collapse size={13} /> Close
+              </GhostButton>
+            </div>
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <TileShell
+                tile={focusTile}
+                result={data.results[focusTile.id]}
+                loading={data.pending.has(focusTile.id)}
+                editing={false}
+                draggable={false}
+                focused
+                onAction={(action) => void onTileAction(action, focusTile)}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+/**
+ * Whether the numbers on screen are current, and the way to make them so.
+ *
+ * "Refresh all" alone said nothing about *whether it needed pressing*. The
+ * dashboard's real state is the oldest tile on it — a wall of 30-second tiles
+ * next to one hourly one is only as fresh as the hour — so that is what this
+ * reports, next to the button that fixes it.
+ */
+function LiveStatus({
+  tiles, refreshing, onRefresh,
+}: {
+  tiles: DashboardTile[]
+  refreshing: boolean
+  onRefresh: () => void
+}) {
+  const live = tiles.filter((tile) => tile.effective_refresh_interval_seconds > 0)
+  const slowest = live.reduce(
+    (worst, tile) => Math.max(worst, tile.effective_refresh_interval_seconds),
+    0,
+  )
+
+  return (
+    <div className="rm-live">
+      <span className="rm-live-label">
+        {live.length > 0 ? (
+          <>
+            <span className="rm-live-dot" aria-hidden />
+            Live · every {rateLabel(slowest)}
+          </>
+        ) : (
+          <>
+            <Dot color="var(--text-faint)" />
+            Manual
+          </>
+        )}
+      </span>
+      <button
+        type="button"
+        title="Refresh every tile (R)"
+        aria-label="Refresh every tile"
+        onClick={onRefresh}
+        disabled={tiles.length === 0}
+        className="rm-live-refresh rm-icon-btn"
+        style={{ ['--rm-hover-bg' as string]: 'var(--panel-alt)' }}
+      >
+        {refreshing ? <Spinner size={13} /> : <Icon.Refresh size={13} />}
+      </button>
+    </div>
+  )
+}
+
+/** The open dashboard, in outline, while its document is on the wire. */
+function DashboardViewSkeleton({ onBack }: { onBack: () => void }) {
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      <header
+        className="rm-dash-header"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          borderBottom: '1px solid var(--border)',
+          flexShrink: 0,
+        }}
+      >
+        <button
+          onClick={onBack}
+          aria-label="Back to dashboards"
+          className="rm-icon-btn"
+          style={{
+            display: 'flex',
+            width: 30,
+            height: 30,
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: 8,
+            border: 'none',
+            background: 'transparent',
+            color: 'var(--text-dim)',
+            cursor: 'pointer',
+            ['--rm-hover-bg' as string]: 'var(--panel-alt)',
+          }}
+        >
+          <Icon.ArrowLeft size={15} />
+        </button>
+        <div className="rm-bone" style={{ width: 190, height: 13, borderRadius: 6 }} />
+      </header>
+      <div className="rm-dash-canvas" style={{ flex: 1, overflow: 'hidden' }}>
+        <div
+          aria-hidden
+          style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}
+        >
+          <TileSkeleton height={218} />
+          <TileSkeleton height={218} />
+          <TileSkeleton height={218} />
+          <TileSkeleton height={218} />
+        </div>
+      </div>
     </div>
   )
 }
