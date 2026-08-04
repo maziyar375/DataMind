@@ -160,6 +160,7 @@ def _fits(annotation: Any, value: Any) -> bool:
 class _Overview(_Draft):
     business_context: str = ""
     industry: str = ""
+    default_exclusions: str = ""
     fiscal_year_start_month: int = 1
     week_starts_on: str = "monday"
     timezone: str = "UTC"
@@ -285,6 +286,7 @@ async def generate_document(
     await report("Reading the shape of the schema", 0)
     overview = await _overview(gateway, llm, tables, relationships, dialect, stats)
     doc.business_context = overview.business_context.strip()
+    doc.default_exclusions = overview.default_exclusions.strip()
     doc.time = TimeSemantics(
         fiscal_year_start_month=(
             overview.fiscal_year_start_month

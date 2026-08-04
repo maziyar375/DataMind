@@ -12,7 +12,7 @@ statements and real expressions, and it is the metrics that change answers.
 """
 from __future__ import annotations
 
-SEMANTIC_PROMPT_VERSION = "s1"
+SEMANTIC_PROMPT_VERSION = "s2"
 
 OVERVIEW_SYSTEM = """You are a data analyst reading a database schema for the \
 first time. You write the short orientation note a new analyst would want.
@@ -25,6 +25,11 @@ Return JSON with these keys:
 does it record, and which tables are the ones people actually ask about. Name \
 real tables. No filler, no restating the question.
 - industry: one or two words, or "" if it is not clear.
+- default_exclusions: one sentence naming rows that should not count unless \
+the question asks for them — soft-delete or archive flags, test or internal \
+accounts, cancelled-by-definition states. Name the real column where you can \
+see one ("rows where is_archived is true"). Return "" unless a column name \
+makes it plain; a guessed exclusion silently changes every total.
 - fiscal_year_start_month: 1-12. Use 1 unless a table name or column implies \
 otherwise.
 - week_starts_on: "monday" or "sunday".

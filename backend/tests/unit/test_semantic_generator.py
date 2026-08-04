@@ -386,3 +386,17 @@ async def test_a_glossary_the_model_left_empty_is_not_a_failure() -> None:
     doc, stats = await _run(ScriptedGateway(lambda table: {"grain": "one row"}))
     assert doc.glossary == []
     assert stats.glossary_failed is False
+
+
+@pytest.mark.asyncio
+async def test_the_overview_pass_can_set_the_exclusion_rule() -> None:
+    doc, _ = await _run(
+        ScriptedGateway(
+            lambda table: {"grain": "one row"},
+            overview={
+                "business_context": "A shop.",
+                "default_exclusions": "Rows where is_archived is true.",
+            },
+        )
+    )
+    assert doc.default_exclusions == "Rows where is_archived is true."

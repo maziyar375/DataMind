@@ -308,7 +308,9 @@ The schema snapshot says what *exists*. The semantic layer says what it
 item"), the columns worth explaining, **metrics** bound to exact SQL including
 the filters that belong to the definition rather than the question, **time
 conventions** (fiscal year, week start, whether "last month" is calendar or
-rolling), a glossary, and per-join **fan-out cautions**. One editable document
+rolling), the rows that **should not count** unless asked for (soft deletes,
+test accounts — free text, because the rule spans tables that do not share a
+column), a glossary, and per-join **fan-out cautions**. One editable document
 per connection, in `semantic_layers`.
 
 It exists because the eval said so: FK-neighbour retrieval lifted recall 70→86%

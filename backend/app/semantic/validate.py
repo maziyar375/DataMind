@@ -317,6 +317,11 @@ def merge_documents(
         merged.time = existing.time.model_copy(deep=True)
     if existing.business_context and _edited(existing):
         merged.business_context = existing.business_context
+    # Kept on the same terms as the context above, and for a sharper reason: a
+    # regeneration that replaced a hand-written exclusion rule with the model's
+    # guess would change every total on the dashboard without touching a query.
+    if existing.default_exclusions and _edited(existing):
+        merged.default_exclusions = existing.default_exclusions
 
     kept = {e.table.lower(): e for e in existing.entities if e.edited}
     merged.entities = [

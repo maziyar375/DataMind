@@ -179,6 +179,8 @@ export interface TimeSemantics {
 export interface SemanticDocument {
   document_version: number
   business_context: string
+  /** Rows that should not count unless the question asks for them. */
+  default_exclusions: string
   time: TimeSemantics
   entities: SemanticEntity[]
   joins: SemanticJoin[]

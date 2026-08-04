@@ -156,3 +156,28 @@ def _time_line() -> str:
         "Time conventions: the fiscal year starts in April; weeks start on "
         'Monday; phrases like "last month" mean whole calendar periods.'
     )
+
+
+# ── rows that should not count ───────────────────────────────────────────
+def test_default_exclusions_reach_the_prompt_as_an_instruction() -> None:
+    doc = _doc()
+    doc.default_exclusions = "Rows where is_archived is true."
+    block = render_semantic(doc, tables=["sales.orders"], budget=SAMPLE)
+
+    assert "Rows to leave out unless the question asks for them:" in block
+    assert "is_archived" in block
+
+
+def test_default_exclusions_sit_ahead_of_the_table_descriptions() -> None:
+    """The block is trimmed from the back when it is over budget, so a rule
+    that silently doubles a total may not be the first thing dropped."""
+    doc = _doc()
+    doc.default_exclusions = "Rows where is_archived is true."
+    block = render_semantic(doc, tables=["sales.orders"], budget=SAMPLE)
+
+    assert block.index("Rows to leave out") < block.index("What these tables mean")
+
+
+def test_no_exclusions_means_no_line() -> None:
+    """Absent is silent — an empty layer must still render byte-nothing."""
+    assert "leave out" not in render_semantic(_doc(), tables=["sales.orders"], budget=SAMPLE)

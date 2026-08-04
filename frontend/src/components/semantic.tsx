@@ -1066,10 +1066,13 @@ function Overview({
   const context = doc.business_context.trim()
   const summary = [
     context ? (context.length > 90 ? `${context.slice(0, 90)}…` : context) : 'No context written',
+    // Worth a word even closed: a reader comparing a total against another
+    // tool needs to know whether rows are being held back.
+    doc.default_exclusions.trim() ? 'Exclusions set' : null,
     `${time.relative_windows === 'calendar' ? 'Calendar' : 'Rolling'} windows`,
     `FY from ${MONTHS[time.fiscal_year_start_month - 1] ?? '—'}`,
     `weeks from ${time.week_starts_on === 'monday' ? 'Mon' : 'Sun'}`,
-  ].join(' · ')
+  ].filter(Boolean).join(' · ')
 
   return (
     <Panel
@@ -1080,11 +1083,35 @@ function Overview({
       // one opens itself; a filled one gets out of the way of the tables.
       defaultOpen={!context}
     >
-      <Field label="What this database is for">
+      <Field
+        label="What this database is for"
+        hint="Two or three sentences. This is the one field that reaches the model on every single question."
+      >
         <TextArea
           value={doc.business_context}
+          // Sized for what it is asking for. At the default three lines, the
+          // field looked like it wanted a phrase, and a phrase is not what
+          // makes `dim_cust_x` readable as customers.
+          rows={6}
           placeholder="e.g. An online retailer's order book: customers place orders made of line items, fulfilled from warehouses…"
           onChange={(e) => onChange({ ...doc, business_context: e.target.value })}
+          style={{ minHeight: 132 }}
+        />
+      </Field>
+
+      {/* Sits directly under the context because it is read with it, and
+          because it is the one field on this panel that changes the SQL
+          rather than the reading of it. */}
+      <Field
+        label="Rows that should not count"
+        hint="Soft deletes, test accounts, internal orders. A metric can carry its own filters — this is for the questions that have no metric, where a plain COUNT(*) quietly includes everything."
+      >
+        <TextArea
+          value={doc.default_exclusions}
+          rows={2}
+          placeholder="e.g. Rows where is_archived is true. Customers whose email ends in @internal.example — these are test accounts."
+          onChange={(e) => onChange({ ...doc, default_exclusions: e.target.value })}
+          style={{ minHeight: 58 }}
         />
       </Field>
 
@@ -1134,11 +1161,18 @@ function Overview({
         </Field>
       </FieldRow>
 
-      <Field label="Other time conventions" hint="Optional. One sentence.">
-        <TextInput
+      {/* A one-line input for a catch-all: most schemas have more than one
+          convention worth stating, and the box said otherwise. */}
+      <Field
+        label="Other time conventions"
+        hint="Optional. Anything else that changes what a date means."
+      >
+        <TextArea
           value={time.notes}
-          placeholder="e.g. Orders are timestamped when paid, not when placed."
+          rows={2}
+          placeholder="e.g. Orders are timestamped when paid, not when placed. Data loads nightly at 02:00, so today is partial."
           onChange={(e) => setTime({ notes: e.target.value })}
+          style={{ minHeight: 58 }}
         />
       </Field>
     </Panel>

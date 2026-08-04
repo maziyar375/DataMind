@@ -61,6 +61,16 @@ def render_semantic(
     if doc.business_context.strip():
         parts.append(f"About this database: {doc.business_context.strip()}")
 
+    # Second, and phrased as an instruction rather than a fact. It is the one
+    # line here that changes the SQL rather than the reading of it, and the
+    # tail of this function drops sections from the back when the block is over
+    # budget — so a rule that silently doubles a total has to sit near the front.
+    if doc.default_exclusions.strip():
+        parts.append(
+            "Rows to leave out unless the question asks for them: "
+            + doc.default_exclusions.strip()
+        )
+
     time_line = _render_time(doc)
     if time_line:
         parts.append(time_line)

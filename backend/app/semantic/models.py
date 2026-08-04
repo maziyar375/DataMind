@@ -186,6 +186,20 @@ class SemanticDocument(BaseModel):
     # Two or three sentences on what this database is for. Cheap, and it is
     # what lets the model read `dim_cust_x` as customers rather than a guess.
     business_context: str = ""
+    # Rows that should not count unless the question asks for them: soft
+    # deletes, test accounts, internal orders, staging duplicates.
+    #
+    # Free text, and deliberately not a list of predicates. A predicate needs a
+    # table to bind to, and this is the one statement that applies across all
+    # of them — `is_archived = false` is meaningless on the tables that lack
+    # the column. `SemanticMetric.filters` already covers the bound case; this
+    # covers the question that has no metric, which is where the damage is:
+    # "how many customers do we have" is a COUNT(*) over every test account
+    # ever created, and nothing in the layer could say otherwise.
+    #
+    # Advisory, like every other line of this document. The SQL guard enforces
+    # what may run; the layer only says what the numbers mean.
+    default_exclusions: str = ""
     time: TimeSemantics = Field(default_factory=TimeSemantics)
     entities: list[SemanticEntity] = Field(default_factory=list)
     joins: list[SemanticJoin] = Field(default_factory=list)

@@ -253,3 +253,32 @@ def test_an_edited_entity_survives_a_generation_that_skipped_its_table() -> None
         SemanticDocument(entities=[SemanticEntity(table="sales.customers")]),
     )
     assert {e.table for e in merged.entities} == {"sales.orders", "sales.customers"}
+
+
+def test_a_hand_written_exclusion_rule_survives_regeneration() -> None:
+    """Sharper than the business context this rides beside: replacing an
+    exclusion rule with the model's guess changes every total on the
+    dashboard without touching a single query."""
+    existing = _doc()
+    existing.default_exclusions = "Rows where is_archived is true."
+    existing.entities[0].provenance = Provenance(source="human", edited=True)
+
+    merged = merge_documents(
+        existing,
+        SemanticDocument(
+            default_exclusions="",
+            entities=[SemanticEntity(table="sales.orders", grain="regenerated")],
+        ),
+    )
+    assert merged.default_exclusions == "Rows where is_archived is true."
+
+
+def test_an_untouched_exclusion_rule_is_replaced_by_the_generation() -> None:
+    merged = merge_documents(
+        _doc(),
+        SemanticDocument(
+            default_exclusions="Rows where deleted_at is not null.",
+            entities=[SemanticEntity(table="sales.orders")],
+        ),
+    )
+    assert merged.default_exclusions == "Rows where deleted_at is not null."
