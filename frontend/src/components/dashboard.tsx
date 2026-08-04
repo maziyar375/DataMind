@@ -381,6 +381,11 @@ export function TileShell({
         )}
         <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
           <span
+            // Written right-to-left, so read right-to-left — and the ellipsis
+            // then truncates the end of the title rather than its beginning.
+            // `auto` and not a fixed `rtl`: the direction is a property of the
+            // title, and two tiles on one dashboard may not agree.
+            dir="auto"
             style={{
               fontSize: 13.5,
               fontWeight: 600,
@@ -622,7 +627,10 @@ function TileBody({
 }) {
   if (tile.tile_type === 'TEXT') {
     return (
-      <div style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+      <div
+        dir="auto"
+        style={{ fontSize: 13, color: 'var(--text2)', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}
+      >
         {tile.question || tile.title}
       </div>
     )
@@ -1268,6 +1276,7 @@ export function DashboardCard({
         <button
           className="rm-dash-card-link"
           onClick={onOpen}
+          dir="auto"
           style={{
             flex: 1,
             minWidth: 0,
@@ -1313,6 +1322,7 @@ export function DashboardCard({
       {/* A fixed two-line well whether or not there is a description, so a
           row of cards keeps one baseline instead of ragging. */}
       <span
+        dir="auto"
         style={{
           fontSize: 12.5,
           color: dashboard.description ? 'var(--text-dim)' : 'var(--text-faint)',
@@ -1387,6 +1397,7 @@ export function DashboardRow({
           <button
             className="rm-dash-card-link"
             onClick={onOpen}
+            dir="auto"
             style={{
               minWidth: 0,
               textAlign: 'left',
@@ -1408,6 +1419,7 @@ export function DashboardRow({
         </div>
         {dashboard.description && (
           <span
+            dir="auto"
             style={{
               fontSize: 12,
               color: 'var(--text-dim)',

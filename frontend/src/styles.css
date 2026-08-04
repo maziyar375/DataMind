@@ -555,6 +555,11 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   width: 100%;
   outline: none;
   font: inherit;
+  /* After `font: inherit`, which carries the parent's line-height in with it.
+     An input clips its line box, and a Persian or Arabic descender is drawn by
+     a fallback font whose glyphs hang below where a Latin stack expects — so
+     an inherited-tight line box cuts the tails off. */
+  line-height: 1.5;
   color: inherit;
   transition: background .12s ease, border-color .12s ease;
 }
@@ -899,4 +904,98 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   /* No pointer means no hover to reveal them, and a resize handle nobody can
      see is a resize handle nobody uses. */
   .react-grid-item > .react-resizable-handle { opacity: 1; }
+}
+
+/* ── the SQL box ────────────────────────────────────────────────────────
+   A textarea with a footer, rather than a textarea with a button loose
+   somewhere underneath it. Checking is a deliberate act now — it guards the
+   statement *and runs it* for the preview — so the control that starts one
+   needs a fixed home the eye can find, attached to the thing it acts on.
+
+   Its old home was the end of the verdict row, after a wrapping list of
+   chips: the button moved every time the number of chips changed, and on a
+   narrow modal it wrapped onto a line of its own. */
+.rm-sqlbox {
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--input-bg);
+  overflow: hidden;
+  transition: border-color .12s ease, box-shadow .12s ease;
+}
+/* The shell takes the focus ring the textarea gives up, so the box still
+   answers the caret even though its own border is gone. */
+.rm-sqlbox:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-bg);
+}
+.rm-sqlbox > textarea {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  display: block;
+}
+
+.rm-sqlbox-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 7px 6px 11px;
+  border-top: 1px solid var(--border);
+  background: var(--panel-alt);
+  min-height: 34px;
+}
+.rm-sqlbox-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  min-width: 0;
+}
+.rm-sqlbox-hint.is-stale { color: var(--amber); }
+
+/* A shortcut rendered as a key, not as prose. Two characters of chrome that
+   teach the faster path without spending a sentence on it. */
+.rm-kbd {
+  font-family: inherit;
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  background: var(--panel);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.rm-check {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background .12s ease, border-color .12s ease, color .12s ease;
+}
+.rm-check:hover:not(:disabled) {
+  background: var(--panel-hover);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.rm-check:disabled { opacity: .45; cursor: not-allowed; }
+/* Unchecked edits make this the next thing to do, so it stops being quiet
+   chrome and starts looking like the action it is. */
+.rm-check.is-wanted:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent);
 }

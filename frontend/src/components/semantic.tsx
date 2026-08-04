@@ -1801,6 +1801,9 @@ function MetricCard({
       >
         <TextArea
           className="mono"
+          // Code, not prose: pinned LTR so a Persian comment or string literal
+          // cannot flip the whole expression right-to-left.
+          dir="ltr"
           value={metric.expression}
           placeholder={`e.g. SUM(${table}.amount)`}
           onChange={(e) => onChange({ expression: e.target.value })}

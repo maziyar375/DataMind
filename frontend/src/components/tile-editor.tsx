@@ -10,9 +10,12 @@
  *
  * Three things here are less obvious than they look:
  *
- * * **The guard check is not per tab.** One debounced `POST
- *   /sql/drafts/validate` watches the textarea whatever put text in it, so
+ * * **The guard check is not per tab, and not per keystroke.** One `POST
+ *   /sql/drafts/validate` serves the textarea whatever put text in it, so
  *   editing what the model wrote is checked exactly like typing it yourself.
+ *   It is asked for, not automatic: that endpoint *executes* the statement to
+ *   build the preview, so firing it as the reader types would run a query per
+ *   pause. Blur, Ctrl/Cmd+Enter, or the Check button.
  * * **"Table only" is a tile type, not a chart intent.** Storing
  *   `chart_type: "none"` would not suppress the chart: `validate_intent`
  *   refuses that intent and `plan_chart` falls through to the heuristic, which
@@ -45,8 +48,16 @@ import {
   Select, Spinner, TextArea, TextInput,
 } from './ui'
 
-/** How long the textarea sits still before the guard is asked about it. */
-const CHECK_DEBOUNCE_MS = 600
+/**
+ * The shortcut, spelled the way this keyboard spells it. `⌘⏎` on a Mac is a
+ * key nobody else has, and `Ctrl` printed on a Mac points at the wrong one —
+ * a shortcut hint that names the wrong key is worse than none.
+ */
+const CHECK_KEYS = /mac|iphone|ipad/i.test(
+  typeof navigator === 'undefined' ? '' : navigator.userAgent,
+)
+  ? '⌘ ⏎'
+  : 'Ctrl ⏎'
 
 const TILE_TYPES: { value: TileType; label: string; hint: string }[] = [
   { value: 'CHART', label: 'Chart', hint: 'A picture, with the table as the fallback.' },
@@ -214,8 +225,11 @@ export function TileEditor({
   )
 
   const [draft, setDraft] = useState<SqlDraft | null>(null)
-  /** The exact text the current `draft` describes — so a keystroke re-checks. */
+  /** The exact text the current `draft` describes, so the editor can say when
+   *  what is on screen is a verdict about something the user has since edited. */
   const [checkedSql, setCheckedSql] = useState<string | null>(null)
+  /** Non-null while a check has been *asked for*: the statement to send. */
+  const [checkTarget, setCheckTarget] = useState<string | null>(null)
   const [checking, setChecking] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -248,39 +262,66 @@ export function TileEditor({
     }
   }, [tile])
 
-  // ── the guard, on a debounce ────────────────────────────────────────────
-  // One check for both tabs. What matters is that the text changed, not which
-  // tab is showing: editing the model's SQL is exactly as unchecked as typing
-  // your own.
+  // One check when the editor opens on a tile that already has SQL.
+  //
+  // Not a walk-back of "checking is asked for": that rule is about the *typing*
+  // loop, and this is one request per open. It has to happen, because the whole
+  // lower half of this modal is drawn from the check. The chart-type grid is
+  // disabled per type from `draft.chart_options`, and an empty verdict list
+  // deliberately means "no opinion, leave everything enabled" — so with no
+  // draft, Edit tile opened offering every chart type on a result that can
+  // carry three of them. The column pickers come from the same preview.
   useEffect(() => {
-    if (!needsSql || !connectionId || !sql.trim() || sql === checkedSql) return
+    const existing = tile?.sql ?? ''
+    if (existing.trim()) setCheckTarget(existing)
+  }, [tile])
+
+  // ── the guard, when you ask for it ──────────────────────────────────────
+  // Keyed on `checkTarget`, not on `sql`. A check is not a static parse: the
+  // backend guards the statement *and then runs it* for the preview, so a
+  // keystroke-debounced check meant a real query against the user's database
+  // every time they paused mid-word — dozens of executions to type one WHERE
+  // clause, each one a table scan the user never asked for.
+  //
+  // Nothing about that was needed. The verdict only matters once the statement
+  // is a statement, so the trigger is now the three moments the reader has
+  // finished one: leaving the box, Ctrl/Cmd+Enter, or the Check button. The
+  // model's own draft still arrives checked (`generate` sets `checkedSql`),
+  // and the save path re-guards regardless — a preview authorises nothing.
+  //
+  // Still one check for both tabs: editing the model's SQL is exactly as
+  // unchecked as typing your own.
+  useEffect(() => {
+    if (checkTarget === null) return
+    if (!needsSql || !connectionId || !checkTarget.trim() || checkTarget === checkedSql) {
+      setCheckTarget(null)
+      return
+    }
     let cancelled = false
-    const wanted = sql
     setChecking(true)
-    const timer = window.setTimeout(() => {
-      sqlDrafts
-        .validate({ connection_id: connectionId, sql: wanted })
-        .then((result) => {
-          if (cancelled) return
-          setDraft(result)
-          setCheckedSql(wanted)
-          setError(null)
-        })
-        .catch((err) => {
-          if (!cancelled) {
-            setError(err instanceof Error ? err.message : 'The SQL could not be checked.')
-          }
-        })
-        .finally(() => {
-          if (!cancelled) setChecking(false)
-        })
-    }, CHECK_DEBOUNCE_MS)
+    sqlDrafts
+      .validate({ connection_id: connectionId, sql: checkTarget })
+      .then((result) => {
+        if (cancelled) return
+        setDraft(result)
+        setCheckedSql(checkTarget)
+        setError(null)
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'The SQL could not be checked.')
+        }
+      })
+      .finally(() => {
+        if (cancelled) return
+        setChecking(false)
+        setCheckTarget(null)
+      })
     return () => {
       cancelled = true
-      window.clearTimeout(timer)
       setChecking(false)
     }
-  }, [sql, checkedSql, connectionId, needsSql])
+  }, [checkTarget, checkedSql, connectionId, needsSql])
 
   // Pre-fill the axis pickers from the shape that just came back, without
   // moving the type off Auto: the suggestion is a sensible default for *if*
@@ -485,6 +526,8 @@ export function TileEditor({
   ])
 
   const canSave = needsSql ? Boolean(connectionId && sql.trim()) : true
+  /** The box holds text no verdict on screen describes. */
+  const stale = Boolean(sql.trim()) && sql !== checkedSql
   const inheritLabel = `Inherit dashboard default (${rateLabel(
     dashboard.default_refresh_interval_seconds,
   )})`
@@ -605,22 +648,22 @@ export function TileEditor({
                 label="SQL"
                 hint={
                   connectionId
-                    ? 'Checked against this connection every time you stop typing — and again on save, and again on every refresh.'
+                    ? 'Checking runs the query once to build the preview. The guard runs again on save, and again on every refresh.'
                     : "Choose a connection first: the guard resolves every name against that database's schema."
                 }
               >
-                <TextArea
-                  className="mono"
+                <SqlBox
                   value={sql}
-                  rows={9}
-                  spellCheck={false}
-                  placeholder="e.g. SELECT status, SUM(total_amount) FROM orders GROUP BY status"
-                  onChange={(event) => editSql(event.target.value)}
-                  style={{ fontSize: 12.5, minHeight: 150 }}
+                  onChange={editSql}
+                  onCheck={() => setCheckTarget(sql)}
+                  checking={checking}
+                  canCheck={Boolean(connectionId && sql.trim())}
+                  stale={stale}
+                  everChecked={checkedSql !== null}
                 />
               </Field>
 
-              <GuardReport draft={draft} checking={checking} origin={origin} />
+              <GuardReport draft={draft} checking={checking} origin={origin} stale={stale} />
 
               {tileType === 'TABLE' && (
                 <Field
@@ -784,21 +827,97 @@ function EditorTabs({
 
 // ── the guard's verdict, inline ───────────────────────────────────────────
 /**
+ * The SQL field: a textarea and the control that checks it, in one shell.
+ *
+ * Checking is deliberate — `POST /sql/drafts/validate` guards the statement and
+ * then *runs* it to build the preview — so the thing that starts one has to be
+ * findable, and has to sit on the box it acts on. A footer bar gives it a fixed
+ * position that no amount of chips, issues or preview text can move.
+ *
+ * The bar also carries the shortcut, as a key rather than as a sentence, and
+ * the one piece of state the reader needs while typing: whether what is in the
+ * box has been checked. The verdict itself belongs below, in `GuardReport` —
+ * saying it in both places would be two things to keep in agreement.
+ */
+function SqlBox({
+  value, onChange, onCheck, checking, canCheck, stale, everChecked,
+}: {
+  value: string
+  onChange: (value: string) => void
+  onCheck: () => void
+  checking: boolean
+  canCheck: boolean
+  stale: boolean
+  everChecked: boolean
+}) {
+  const status = checking
+    ? 'Checking…'
+    : stale
+      ? everChecked ? 'Edited since the last check' : 'Not checked yet'
+      : everChecked ? 'Checked' : 'Write a statement, then check it'
+
+  return (
+    <div className="rm-sqlbox">
+      <TextArea
+        className="mono"
+        // Code, not prose — see `TextInput` in ui.tsx for why the default is
+        // `auto` and why this one opts out.
+        dir="ltr"
+        value={value}
+        rows={9}
+        spellCheck={false}
+        placeholder="e.g. SELECT status, SUM(total_amount) FROM orders GROUP BY status"
+        onChange={(event) => onChange(event.target.value)}
+        // Leaving the box is the reader saying "that is the statement".
+        // Nothing fires while the caret is still in it.
+        onBlur={onCheck}
+        onKeyDown={(event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+            event.preventDefault()
+            onCheck()
+          }
+        }}
+        style={{ fontSize: 12.5, minHeight: 150 }}
+      />
+      <div className="rm-sqlbox-bar">
+        <span className={`rm-sqlbox-hint${stale && !checking ? ' is-stale' : ''}`}>
+          {checking && <Spinner size={11} />}
+          {status}
+        </span>
+        <button
+          type="button"
+          className={`rm-check${stale && !checking ? ' is-wanted' : ''}`}
+          onClick={onCheck}
+          disabled={!canCheck || checking}
+          title="Guard this statement and run it once for the preview"
+        >
+          <Icon.Play size={12} />
+          Check
+          <span className="rm-kbd">{CHECK_KEYS}</span>
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/**
  * The same inline report the semantic-layer editor shows, for the same reason:
  * the browser cannot know the dialect or the schema, so the only opinion worth
  * rendering is the one the save path will use.
  */
 function GuardReport({
-  draft, checking, origin,
+  draft, checking, origin, stale,
 }: {
   draft: SqlDraft | null
   checking: boolean
   origin: SqlOrigin
+  /** The text has moved on since this verdict was issued. */
+  stale: boolean
 }) {
   if (!draft) {
     return (
       <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
-        {checking ? 'Checking…' : "The guard's verdict and a preview appear here."}
+        The guard&apos;s verdict and a preview appear here.
       </span>
     )
   }
@@ -808,17 +927,19 @@ function GuardReport({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <Chip tone={rejected ? 'red' : 'green'}>{rejected ? 'Rejected' : 'Valid'}</Chip>
-        {checking && <Spinner size={12} />}
         {origin !== 'HANDWRITTEN' && <Chip tone="accent">{originLabel(origin)}</Chip>}
+        {/* Says the verdict beside it is about text that is no longer in the
+            box. Without this, an unchecked edit reads as approved. */}
+        {stale && !checking && <Chip tone="amber">Edited since</Chip>}
         {draft.referenced_tables.length > 0 && (
           <span className="mono" style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>
             {draft.referenced_tables.join(', ')}
           </span>
         )}
         {draft.preview && !rejected && (
-          <span style={{ fontSize: 10.5, color: 'var(--text-faint)', marginLeft: 'auto' }}>
+          <span style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>
             preview: {draft.preview.row_count.toLocaleString()}
             {draft.preview.truncated ? '+' : ''} rows in {draft.preview.duration_ms} ms
           </span>

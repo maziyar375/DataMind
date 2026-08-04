@@ -659,6 +659,9 @@ function InlineEdit({
     <input
       className="rm-inline-edit"
       aria-label={ariaLabel}
+      // A dashboard name and its description are prose; they follow whatever
+      // script they were written in, same rule as a tile title.
+      dir="auto"
       value={draft}
       placeholder={placeholder}
       onChange={(event) => setDraft(event.target.value)}

@@ -372,9 +372,17 @@ export const inputStyle: React.CSSProperties = {
   background: 'var(--input-bg)',
   border: '1px solid var(--border-strong)',
   borderRadius: 7,
-  padding: '9px 11px',
+  padding: '7px 11px',
   color: 'var(--text)',
   fontSize: 13.5,
+  // An explicit line box, not the browser's `normal`. `normal` is derived from
+  // the *primary* font's metrics — a Latin stack, about 1.2 — and an input
+  // clips whatever overflows it. Scripts whose glyphs hang below the Latin
+  // baseline are drawn by a fallback font with taller metrics, so Persian and
+  // Arabic descenders (ی ج چ ح خ ر ز و) lost their tails, and so did the
+  // occasional Latin one. 1.6 is the same ratio `TextArea` already used, and
+  // the padding drops 2px to keep the control the height it was.
+  lineHeight: 1.6,
   outline: 'none',
   width: '100%',
 }
@@ -397,8 +405,21 @@ export function Field({
   )
 }
 
+/**
+ * `dir="auto"` by default, on every free-text control.
+ *
+ * The browser reads the first strong directional character and lays the field
+ * out from it: type Persian and the caret, the alignment and the punctuation
+ * go right-to-left; type English and nothing changes. An English word inside a
+ * Persian sentence then falls out of the Unicode bidi algorithm correctly,
+ * which a fixed `dir="ltr"` cannot do — under LTR the *sentence* is what gets
+ * reordered, so a mixed title reads with its clauses in the wrong order.
+ *
+ * It is a default, not a rule: `{...props}` spreads after it, so a field whose
+ * content is never prose — SQL, a number — passes `dir="ltr"` and wins.
+ */
 export function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
-  return <input {...props} style={{ ...inputStyle, ...props.style }} />
+  return <input dir="auto" {...props} style={{ ...inputStyle, ...props.style }} />
 }
 
 export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
@@ -408,11 +429,11 @@ export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
 export function TextArea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
     <textarea
+      dir="auto"
       {...props}
       style={{
         ...inputStyle,
         minHeight: 68,
-        lineHeight: 1.5,
         resize: 'vertical',
         fontFamily: 'inherit',
         ...props.style,
