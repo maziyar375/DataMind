@@ -468,7 +468,16 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 
 /* What edit mode is for, said once, next to the way out. Dropped on small
    screens — the gesture teaches itself there. */
-.rm-dash-edithint { font-size: 11.5px; color: var(--text-faint); white-space: nowrap; }
+/* inline-flex so the two key caps in "Ctrl Z" do not butt against each other,
+   and so the whole hint stays on one baseline with them. */
+.rm-dash-edithint {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
 @media (max-width: 760px) { .rm-dash-edithint { display: none; } }
 
 @media (max-width: 860px) {

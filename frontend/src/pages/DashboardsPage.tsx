@@ -705,6 +705,47 @@ function GridGuide({
 /** The header's ghost buttons, one notch tighter than the default. */
 const toolbarBtn: React.CSSProperties = { fontSize: 12.5, padding: '7px 12px' }
 
+// ── layout history ────────────────────────────────────────────────────────
+/** Where one tile sits. The unit both the undo stack and the API deal in. */
+interface TileGeometry {
+  tile_id: string
+  grid_x: number
+  grid_y: number
+  grid_w: number
+  grid_h: number
+  position: number
+}
+
+/** Deep enough to cover a session of arranging without growing unbounded. */
+const UNDO_LIMIT = 50
+
+function geometryOf(tiles: DashboardTile[]): TileGeometry[] {
+  return tiles.map((tile) => ({
+    tile_id: tile.id,
+    grid_x: tile.grid_x,
+    grid_y: tile.grid_y,
+    grid_w: tile.grid_w,
+    grid_h: tile.grid_h,
+    position: tile.position,
+  }))
+}
+
+/** Compared by tile, not by array order, which the sort above may have changed. */
+function sameGeometry(a: TileGeometry[], b: TileGeometry[]): boolean {
+  if (a.length !== b.length) return false
+  const byId = new Map(b.map((box) => [box.tile_id, box]))
+  return a.every((box) => {
+    const other = byId.get(box.tile_id)
+    return (
+      other !== undefined
+      && other.grid_x === box.grid_x
+      && other.grid_y === box.grid_y
+      && other.grid_w === box.grid_w
+      && other.grid_h === box.grid_h
+    )
+  })
+}
+
 // ── one dashboard ─────────────────────────────────────────────────────────
 function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null)
@@ -723,6 +764,20 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
 
   const tiles: DashboardTile[] = useMemo(() => dashboard?.tiles ?? [], [dashboard])
   const data = useTileScheduler(id, tiles)
+
+  // Undo/redo of tile placement. Refs, not state: the stacks are read inside
+  // callbacks and a key handler, and nothing on screen renders from them, so
+  // holding them in state would only cost renders.
+  const tilesRef = useRef(tiles)
+  tilesRef.current = tiles
+  const undoStack = useRef<TileGeometry[][]>([])
+  const redoStack = useRef<TileGeometry[][]>([])
+
+  // A different dashboard is a different history.
+  useEffect(() => {
+    undoStack.current = []
+    redoStack.current = []
+  }, [id])
 
   useEffect(() => {
     let cancelled = false
@@ -766,46 +821,108 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
   // One PATCH per drag-end, debounced so a fast series of drags does not
   // become a series of writes.
   const pendingLayout = useRef<number | null>(null)
-  const saveLayout = useCallback(
-    (layout: Layout[]) => {
-      setDashboard((current) =>
-        current
-          ? {
-              ...current,
-              tiles: current.tiles.map((tile) => {
-                const box = layout.find((item) => item.i === tile.id)
-                return box
-                  ? { ...tile, grid_x: box.x, grid_y: box.y, grid_w: box.w, grid_h: box.h }
-                  : tile
-              }),
-            }
-          : current,
-      )
+
+  /** Send a geometry to the server, replacing any write still on the clock. */
+  const writeLayout = useCallback(
+    (geometry: TileGeometry[], { immediate = false } = {}) => {
       if (pendingLayout.current) window.clearTimeout(pendingLayout.current)
-      pendingLayout.current = window.setTimeout(() => {
-        // `position` is reading order — top-to-bottom, left-to-right — not the
-        // order react-grid-layout happens to hand back, which follows whatever
-        // was dragged last.
-        const ordered = [...layout].sort((a, b) => a.y - b.y || a.x - b.x)
+      const send = () =>
         void api
-          .setLayout(
-            id,
-            ordered.map((item, index) => ({
-              tile_id: item.i,
-              grid_x: item.x,
-              grid_y: item.y,
-              grid_w: item.w,
-              grid_h: item.h,
-              position: index,
-            })),
-          )
+          .setLayout(id, geometry)
           .catch((err) =>
             setError(err instanceof Error ? err.message : 'The layout could not be saved.'),
           )
-      }, 400)
+      if (immediate) return send()
+      pendingLayout.current = window.setTimeout(send, 400)
     },
     [id],
   )
+
+  /** Put a geometry on screen. Tiles deleted since it was taken are skipped. */
+  const applyGeometry = useCallback((geometry: TileGeometry[]) => {
+    setDashboard((current) =>
+      current
+        ? {
+            ...current,
+            tiles: current.tiles.map((tile) => {
+              const box = geometry.find((item) => item.tile_id === tile.id)
+              return box
+                ? {
+                    ...tile,
+                    grid_x: box.grid_x,
+                    grid_y: box.grid_y,
+                    grid_w: box.grid_w,
+                    grid_h: box.grid_h,
+                    position: box.position,
+                  }
+                : tile
+            }),
+          }
+        : current,
+    )
+  }, [])
+
+  const saveLayout = useCallback(
+    (layout: Layout[]) => {
+      // `position` is reading order — top-to-bottom, left-to-right — not the
+      // order react-grid-layout happens to hand back, which follows whatever
+      // was dragged last.
+      const geometry = [...layout]
+        .sort((a, b) => a.y - b.y || a.x - b.x)
+        .map((item, index) => ({
+          tile_id: item.i,
+          grid_x: item.x,
+          grid_y: item.y,
+          grid_w: item.w,
+          grid_h: item.h,
+          position: index,
+        }))
+
+      // The arrangement *before* this drag becomes the step Ctrl+Z returns to.
+      // Read from a ref rather than inside a state updater: React may invoke
+      // an updater twice in development, which would push the same step twice
+      // and make one Ctrl+Z look like it did nothing. A drag that changed
+      // nothing (picked up and put back) is not a step worth remembering.
+      const before = geometryOf(tilesRef.current)
+      if (!sameGeometry(before, geometry)) {
+        undoStack.current = [...undoStack.current.slice(-(UNDO_LIMIT - 1)), before]
+        redoStack.current = []
+      }
+
+      applyGeometry(geometry)
+      writeLayout(geometry)
+    },
+    [applyGeometry, writeLayout],
+  )
+
+  /**
+   * Step back through arrangements, and forward again.
+   *
+   * Only tile *placement* is on this stack — the thing a stray drag ruins and
+   * the only edit here with no other way back. Renames, settings and tile
+   * edits each have their own visible control, and folding them into one
+   * history would make Ctrl+Z unpredictable rather than useful.
+   */
+  const step = useCallback(
+    (from: React.MutableRefObject<TileGeometry[][]>, to: React.MutableRefObject<TileGeometry[][]>) => {
+      const target = from.current.at(-1)
+      if (!target) return false
+      from.current = from.current.slice(0, -1)
+      to.current = [...to.current, geometryOf(tilesRef.current)]
+      applyGeometry(target)
+      // Immediate, not debounced: undo is a deliberate act and the pending
+      // write from the drag being undone must not land after it.
+      writeLayout(
+        target.filter((box) => tilesRef.current.some((tile) => tile.id === box.tile_id)),
+        { immediate: true },
+      )
+      return true
+    },
+    [applyGeometry, writeLayout],
+  )
+
+  const undo = useCallback(() => step(undoStack, redoStack), [step])
+  const redo = useCallback(() => step(redoStack, undoStack), [step])
 
   const patchDashboard = useCallback(
     async (patch: Record<string, unknown>) => {
@@ -872,8 +989,26 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
         if (presenting) return setPresenting(false)
         return
       }
+
+      // Ctrl+Z / Cmd+Z, with Shift or Ctrl+Y to come forward again. Claimed
+      // from the browser only when there is a step to take, so an unusable
+      // undo does not silently swallow the key.
+      const accel = event.ctrlKey || event.metaKey
+      if (accel && (event.key === 'z' || event.key === 'Z')) {
+        if (event.shiftKey ? redo() : undo()) event.preventDefault()
+        return
+      }
+      if (accel && (event.key === 'y' || event.key === 'Y')) {
+        if (redo()) event.preventDefault()
+        return
+      }
+
       // Shortcuts, not chords: this is a reading surface, and the two things
       // people do on one repeatedly are refresh it and put it on a screen.
+      // Modified keystrokes are left alone — these used to fire on Ctrl+R and
+      // Ctrl+P too, so reloading the page also queued a refresh of every tile
+      // and printing toggled presentation mode on the way to the dialog.
+      if (accel || event.altKey) return
       if (event.key === 'r' || event.key === 'R') {
         event.preventDefault()
         data.refreshNow(focusId ? [focusId] : tiles.map((tile) => tile.id))
@@ -882,7 +1017,7 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [data, focusId, presenting, tiles])
+  }, [data, focusId, presenting, redo, tiles, undo])
 
   if (error && !dashboard) {
     return (
@@ -982,8 +1117,14 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
                 tile's own kebab in either mode. */}
             {editing ? (
               <>
+                {/* Undo is worth naming here: it is the way back from a drag
+                    that went wrong, and a shortcut nobody is told about is a
+                    shortcut nobody uses. */}
                 <span className="rm-dash-edithint">
-                  Drag a header to move · pull a corner to resize
+                  Drag a header to move · pull any edge to resize ·
+                  {' '}
+                  <span className="rm-kbd">Ctrl</span>
+                  <span className="rm-kbd">Z</span> to undo
                 </span>
                 <GhostButton
                   onClick={() => setEditing(false)}

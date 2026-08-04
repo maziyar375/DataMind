@@ -294,6 +294,18 @@ function SizedGrid({
         // selecting a cell in a table impossible.
         draggableHandle=".rm-tile-drag"
         compactType={dashboard.compact_mode === 'NONE' ? null : 'vertical'}
+        // "Leave tiles where they are put" turned off compaction but left
+        // collision *pushing* on, which is the setting's own worst enemy:
+        // nudging a tile one cell shoved whatever it touched, and with no
+        // compaction to settle the displaced tiles they stayed shoved and
+        // shoved their own neighbours in turn. One small drag rearranged the
+        // whole dashboard. Refusing the move instead is what the setting
+        // promises — the tile simply does not go where something already is,
+        // and nothing else on the board moves.
+        //
+        // Under "pull tiles upward" the push is wanted: displaced tiles fall
+        // back up into place, which is the whole point of that mode.
+        preventCollision={dashboard.compact_mode === 'NONE'}
         onDragStop={onLayout}
         onResizeStop={onLayout}
       >
