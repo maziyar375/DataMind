@@ -897,9 +897,16 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
 
   if (!dashboard) return <DashboardViewSkeleton onBack={onBack} />
 
+  // `minHeight: 0` on every link of this chain is load-bearing, not tidying.
+  // A flex item's `min-height: auto` resolves to its *content* height, so
+  // without it the column below grows to fit all its tiles instead of
+  // shrinking, the canvas never becomes shorter than its content, and its
+  // `overflow-y: auto` therefore has nothing to scroll — the tiles past the
+  // fold are simply clipped by the viewport with no way to reach them. Every
+  // item here already carried `minWidth: 0` for the horizontal equivalent.
   const content = (
-    <div style={{ flex: 1, display: 'flex', minWidth: 0 }}>
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+    <div style={{ flex: 1, display: 'flex', minWidth: 0, minHeight: 0 }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
         <header
           className="rm-dash-header"
           style={{
@@ -1049,7 +1056,7 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
         <div
           ref={gridRef}
           className={`rm-dash-canvas${editing ? ' is-editing' : ''}`}
-          style={{ flex: 1, overflowY: 'auto' }}
+          style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
         >
           {tiles.length === 0 ? (
             <EmptyState
@@ -1157,7 +1164,7 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
           instead of a rebuild. */}
       <div
         className={presenting ? 'rm-present' : undefined}
-        style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}
+        style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}
       >
         {presenting && (
           <div className="rm-present-bar">

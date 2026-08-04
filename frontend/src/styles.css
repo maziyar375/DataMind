@@ -302,6 +302,69 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 /* View mode hides the handle entirely — nothing to grab means nothing to
    wonder about. */
 .rm-grid-locked .react-grid-item > .react-resizable-handle { display: none; }
+
+/* ── resize handles ─────────────────────────────────────────────────────
+   All eight are enabled in `SizedGrid`. react-resizable draws each as a 20px
+   box carrying a rotated chevron, which on a tile means eight marks competing
+   with the data. Corners keep the mark; edges become thin invisible strips
+   whose cursor does the explaining. They stay grabbable while transparent —
+   opacity is not pointer-events — so the zone works before it is revealed. */
+.react-grid-item > .react-resizable-handle {
+  background-image: none;
+  opacity: 0;
+  transition: opacity .12s ease;
+}
+.react-grid-item:hover > .react-resizable-handle,
+.react-grid-item.resizing > .react-resizable-handle { opacity: 1; }
+
+/* Edges: a strip along the whole side, no chevron. 7px keeps the north strip
+   clear of the tile header's own controls — the expand and kebab buttons
+   start 10px down, and a handle that swallowed them would trade one broken
+   gesture for another. The library centres and rotates these, so the offset,
+   the span and the rotation all have to be undone. */
+.react-grid-item > .react-resizable-handle-n,
+.react-grid-item > .react-resizable-handle-s {
+  left: 0;
+  width: 100%;
+  height: 7px;
+  margin-left: 0;
+  transform: none;
+}
+.react-grid-item > .react-resizable-handle-e,
+.react-grid-item > .react-resizable-handle-w {
+  top: 0;
+  width: 7px;
+  height: 100%;
+  margin-top: 0;
+  transform: none;
+}
+.react-grid-item > .react-resizable-handle-n { top: 0; }
+.react-grid-item > .react-resizable-handle-s { bottom: 0; }
+.react-grid-item > .react-resizable-handle-w { left: 0; }
+.react-grid-item > .react-resizable-handle-e { right: 0; }
+.react-grid-item > .react-resizable-handle-n::after,
+.react-grid-item > .react-resizable-handle-s::after,
+.react-grid-item > .react-resizable-handle-e::after,
+.react-grid-item > .react-resizable-handle-w::after { display: none; }
+/* The side lights up under the pointer, so it is clear which edge will move. */
+.react-grid-item > .react-resizable-handle-n:hover,
+.react-grid-item > .react-resizable-handle-s:hover,
+.react-grid-item > .react-resizable-handle-e:hover,
+.react-grid-item > .react-resizable-handle-w:hover { background: var(--accent-bg); }
+
+/* Corners sit above the edge strips (they are rendered last) and keep the
+   chevron, tightened from 20px so the north pair clears the header. */
+.react-grid-item > .react-resizable-handle-ne,
+.react-grid-item > .react-resizable-handle-nw,
+.react-grid-item > .react-resizable-handle-se,
+.react-grid-item > .react-resizable-handle-sw {
+  width: 15px;
+  height: 15px;
+}
+.react-grid-item > .react-resizable-handle:hover::after {
+  border-right-color: var(--accent);
+  border-bottom-color: var(--accent);
+}
 .rm-tile-actions { opacity: 0; transition: opacity .12s ease; }
 .rm-tile:hover .rm-tile-actions,
 .rm-tile-actions:focus-within { opacity: 1; }
@@ -792,6 +855,9 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   z-index: 80;
   display: flex;
   flex-direction: column;
+  /* The layer is exactly the viewport and scrolling belongs to the canvas
+     inside it, so nothing may spill past this box. */
+  overflow: hidden;
   background: var(--bg);
   animation: rm-fade-up .18s ease-out;
 }
@@ -821,4 +887,7 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   .rm-tile-actions,
   .rm-tile-meta,
   .rm-turn-actions { opacity: 1; }
+  /* No pointer means no hover to reveal them, and a resize handle nobody can
+     see is a resize handle nobody uses. */
+  .react-grid-item > .react-resizable-handle { opacity: 1; }
 }

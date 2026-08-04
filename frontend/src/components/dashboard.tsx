@@ -169,6 +169,21 @@ export function useTileScheduler(
 /** Below this measured grid width, side-by-side tiles stop making sense. */
 export const STACK_BELOW_PX = 620
 
+/**
+ * Every edge and every corner.
+ *
+ * The corners resize two axes at once; the edges resize one and leave the
+ * opposite side pinned, which is the move you want nine times out of ten
+ * ("this is too tall" / "this needs one more column"). `react-resizable` ships
+ * the positioning and cursor for all eight — only the default set is narrow.
+ */
+// Corners are listed last so they render last and therefore sit above the edge
+// strips — otherwise a corner would be unreachable, covered by both edges that
+// meet there. (The union is spelled out because react-grid-layout's types keep
+// `ResizeHandle` module-local.)
+const RESIZE_HANDLES: ('n' | 'e' | 's' | 'w' | 'ne' | 'nw' | 'se' | 'sw')[] =
+  ['n', 'e', 's', 'w', 'ne', 'nw', 'se', 'sw']
+
 export function DashboardGrid({
   dashboard, tiles, data, editing, width, onLayout, onTileAction,
 }: {
@@ -268,6 +283,13 @@ function SizedGrid({
         width={width}
         isDraggable={editing}
         isResizable={editing}
+        // All eight, not just the south-east corner react-grid-layout gives
+        // you by default. With one corner, "make this shorter" means dragging
+        // the bottom-right up and then dragging the whole tile back to where
+        // it was — two moves and a layout write for one intent. Grabbing the
+        // edge that is actually in the wrong place is how every other grid
+        // editor works.
+        resizeHandles={RESIZE_HANDLES}
         // The header is the handle: dragging from anywhere would make
         // selecting a cell in a table impossible.
         draggableHandle=".rm-tile-drag"
