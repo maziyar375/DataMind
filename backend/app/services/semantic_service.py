@@ -54,6 +54,11 @@ log = get_logger(__name__)
 
 ACTIVE_STATUSES = ("QUEUED", "RUNNING")
 
+#: Output-token floor for generation, whatever the provider row says. Sized for
+#: the widest table in the demo schema described in full, with room for a
+#: reasoning model's scratchpad. A configured budget larger than this is kept.
+SEMANTIC_MIN_MAX_TOKENS = 8192
+
 
 class SemanticService:
     def __init__(self, db: AsyncSession, settings: Settings) -> None:
@@ -241,8 +246,13 @@ class SemanticService:
             else SemanticDocument()
         )
         # A description is prose, not SQL, so the output budget gets a floor
-        # the run path does not need.
-        llm = resolve_llm(config, self._box, min_max_tokens=2048)
+        # the run path does not need. 2048 was that floor and it was too low by
+        # a factor of three: one `_TableDraft` for a forty-column table carries
+        # a label, description and synonym list per column plus several metrics
+        # with their SQL, and a reasoning model spends this same budget on its
+        # scratchpad before emitting a token of it. Every overrun truncated the
+        # JSON mid-object and cost the whole table.
+        llm = resolve_llm(config, self._box, min_max_tokens=SEMANTIC_MIN_MAX_TOKENS)
         # Generation reads the same schema block a run does, under the same
         # policy: a layer can never be built from data the model would not
         # have been shown anyway.

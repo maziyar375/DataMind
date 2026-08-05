@@ -19,6 +19,8 @@ from typing import Any, TypeVar
 import litellm
 from litellm.exceptions import (
     APIConnectionError,
+    BadRequestError,
+    ContextWindowExceededError,
     InternalServerError,
     RateLimitError,
     ServiceUnavailableError,
@@ -43,6 +45,21 @@ litellm.drop_params = True
 litellm.suppress_debug_info = True
 
 _JSON_FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
+
+# A reasoning model that inlines its scratchpad rather than returning it in a
+# separate field puts prose — with braces in it — ahead of the answer.
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+# One re-ask when a reply will not parse. A malformed answer is not a transient
+# error (so `_acompletion`'s backoff never sees it) and it is not a model
+# verdict either — it is usually a fence, a preamble, or a truncation, and all
+# three survive being pointed out. Without this, one bad reply costs the caller
+# a whole table.
+STRUCTURED_REPAIRS = 1
+
+# Schema-shaped output is not a place for sampling. The caller's temperature is
+# tuned for prose; above this a model starts inventing keys and trailing commas.
+MAX_STRUCTURED_TEMPERATURE = 0.2
 
 # Transient failures worth retrying: a 429 or a 5xx is a "try again shortly",
 # not a bad request. Auth / bad-request / context-length errors are permanent
@@ -178,49 +195,128 @@ class LiteLLMGateway:
             raise LLMError(_clean(err)) from err
 
     # ── structured output ────────────────────────────────────────────────
-    async def structured(
-        self, llm: ResolvedLLM, messages: Sequence[ChatMessage], schema: type[T]
-    ) -> T:
-        """Native structured output where available; instructed JSON otherwise.
+    def _response_format(self, llm: ResolvedLLM, schema: type[T]) -> dict[str, Any] | None:
+        """The strongest JSON mode this model actually accepts, or None.
 
-        Either way the result is parsed and validated on our side. A provider
-        claiming schema support is not a reason to trust its output.
+        Three tiers, because "supports structured output" is not a boolean and
+        treating it as one is what broke DeepSeek: the capability probe proves
+        `json_object` works, and the caller then sent `json_schema` — a
+        *different* feature, which DeepSeek's API rejects outright. Every table
+        failed on a 400 that the generator recorded as "the model could not
+        describe this table".
+
+        `strict` is deliberately not set. Strict mode demands a closed-world
+        schema — `additionalProperties: false` everywhere and every property
+        required — which pydantic does not emit and which a `dict[str, str]`
+        field (`value_meanings`) cannot satisfy at all.
+
+        The tier chosen here is still only a best guess (see `_structured_call`
+        for what happens when the map is wrong).
         """
-        payload = self._kwargs(llm, messages)
-
-        if llm.capabilities.supports_structured_output:
-            payload["response_format"] = {
+        if not llm.capabilities.supports_structured_output:
+            return None
+        if _supports_response_schema(llm.model):
+            return {
                 "type": "json_schema",
                 "json_schema": {
-                    "name": schema.__name__,
-                    "schema": schema.model_json_schema(),
-                    "strict": True,
+                    "name": schema.__name__.lstrip("_") or "Answer",
+                    "schema": _wire_schema(schema),
                 },
             }
-        else:
-            instruction = ChatMessage(
-                role="system",
-                content=(
-                    "Reply with a single JSON object only. No prose, no markdown "
-                    "fences. It must match this JSON Schema:\n"
-                    f"{json.dumps(schema.model_json_schema())}"
-                ),
-            )
-            payload["messages"] = [
-                {"role": instruction.role, "content": instruction.content},
-                *payload["messages"],
-            ]
+        return {"type": "json_object"}
 
+    async def _structured_call(self, payload: dict[str, Any]) -> Any:
+        """One completion, surviving a `response_format` the provider rejects.
+
+        litellm's model map is a claim about a provider, not a contract with
+        it — it reports `json_schema` support for DeepSeek, whose API accepts
+        only `json_object`. A wrong map must therefore be recoverable rather
+        than fatal: on a 400 we drop the response format and re-ask, because
+        the written schema instruction is already in the messages and is on its
+        own sufficient. A context-length 400 is exempt — retrying it changes
+        nothing and only spends the caller's deadline.
+        """
         try:
-            response = await self._acompletion(**payload)
+            return await self._acompletion(**payload)
+        except ContextWindowExceededError as err:
+            raise LLMError(_clean(err)) from err
+        except BadRequestError as err:
+            if "response_format" not in payload:
+                raise LLMError(_clean(err)) from err
+            log.warning("llm_response_format_rejected", error=_clean(err))
+            plain = {k: v for k, v in payload.items() if k != "response_format"}
+            try:
+                return await self._acompletion(**plain)
+            except Exception as retry_err:
+                raise LLMError(_clean(retry_err)) from retry_err
         except Exception as err:
             raise LLMError(_clean(err)) from err
 
-        raw = (response.choices[0].message.content or "").strip()
-        return _parse_into(schema, raw)
+    async def structured(
+        self, llm: ResolvedLLM, messages: Sequence[ChatMessage], schema: type[T]
+    ) -> T:
+        """A validated `schema` instance, however the provider gets us there.
+
+        The schema instruction is sent **always**, native mode or not. It is
+        cheap, it is the only thing that works on the instructed-only tier, and
+        `json_object` mode on several providers requires the word "json" in the
+        prompt or returns an empty string. A provider claiming schema support is
+        not a reason to trust its output, so the reply is parsed and validated
+        here either way.
+        """
+        base = self._kwargs(llm, messages)
+        base["messages"] = [
+            {"role": "system", "content": _json_instruction(schema)},
+            *base["messages"],
+        ]
+        base["temperature"] = min(llm.temperature, MAX_STRUCTURED_TEMPERATURE)
+        response_format = self._response_format(llm, schema)
+        if response_format is not None:
+            base["response_format"] = response_format
+
+        payload = base
+        for attempt in range(STRUCTURED_REPAIRS + 1):
+            response = await self._structured_call(payload)
+            raw = (response.choices[0].message.content or "").strip()
+            truncated = _finish_reason(response) == "length"
+            try:
+                return _parse_into(schema, raw)
+            except LLMError:
+                if attempt >= STRUCTURED_REPAIRS:
+                    log.warning(
+                        "llm_structured_unparseable",
+                        schema=schema.__name__,
+                        truncated=truncated,
+                        reply_head=raw[:200],
+                    )
+                    raise LLMError(_unparseable(schema, truncated)) from None
+                log.info(
+                    "llm_structured_repair",
+                    schema=schema.__name__,
+                    truncated=truncated,
+                    reply_head=raw[:200],
+                )
+                payload = {
+                    **base,
+                    "messages": [
+                        *base["messages"],
+                        {"role": "assistant", "content": raw[:2000]},
+                        {"role": "user", "content": _repair_prompt(truncated)},
+                    ],
+                }
+        raise AssertionError("unreachable")  # pragma: no cover
 
     # ── capability probe ─────────────────────────────────────────────────
     async def probe(self, llm: ResolvedLLM) -> ProviderCapabilities:
+        """What this endpoint can do, established by asking it.
+
+        `supports_structured_output` means "a JSON response mode works here",
+        which is the weakest tier — `_response_format` decides between
+        `json_schema` and `json_object` per request from litellm's model map.
+        The probe must not test a stronger feature than the caller uses, or a
+        model gets a capability it cannot honour (which is how DeepSeek ended
+        up being sent `json_schema`).
+        """
         messages = [ChatMessage(role="user", content="Reply with the word: ok")]
         await self.complete(llm, messages)
 
@@ -228,8 +324,10 @@ class LiteLLMGateway:
         try:
             payload = self._kwargs(llm, messages)
             payload["response_format"] = {"type": "json_object"}
+            # The word "json" must appear in the prompt or several providers
+            # (DeepSeek among them) reject the request or return an empty body.
             payload["messages"] = [
-                {"role": "user", "content": 'Reply with {"ok": true}'}
+                {"role": "user", "content": 'Reply with the JSON object {"ok": true}'}
             ]
             await litellm.acompletion(**payload)
             supports_structured = True
@@ -264,22 +362,146 @@ def estimate_cost_usd(
     return total or None
 
 
-def _parse_into(schema: type[T], raw: str) -> T:  # noqa: UP047  (matches TypeVar used above)
-    candidate = raw
-    fenced = _JSON_FENCE.search(raw)
-    if fenced:
-        candidate = fenced.group(1).strip()
-    else:
-        start, end = candidate.find("{"), candidate.rfind("}")
-        if start != -1 and end > start:
-            candidate = candidate[start : end + 1]
+def _supports_response_schema(model: str) -> bool:
+    """Whether litellm's model map says this model accepts a `json_schema`.
 
+    Wrapped because the answer is data, not code: an unknown model raises or
+    returns nothing, and the honest reading of "I don't know" is the weaker
+    tier, which every OpenAI-compatible endpoint accepts.
+    """
     try:
-        return schema.model_validate_json(candidate)
-    except (PydanticValidationError, ValueError) as err:
-        raise LLMError(
-            f"The model did not return valid {schema.__name__} JSON."
-        ) from err
+        return bool(litellm.supports_response_schema(model=model))
+    except Exception:
+        return False
+
+
+def _wire_schema(schema: type[BaseModel]) -> dict[str, Any]:
+    """`model_json_schema()` with `$ref`/`$defs` resolved away.
+
+    Gemini's schema validator rejects `$ref` outright, and it is exactly the
+    nested drafts — a table's columns and metrics — that pydantic factors into
+    `$defs`. Inlining costs a few hundred prompt tokens and makes the schema
+    portable across every provider.
+    """
+    raw = schema.model_json_schema()
+    defs = raw.pop("$defs", {})
+
+    def inline(node: Any, depth: int) -> Any:
+        # Self-referential models would recurse forever; none of ours are, but
+        # a depth stop is cheaper than trusting that to stay true.
+        if depth > 12:
+            return {}
+        if isinstance(node, dict):
+            ref = node.get("$ref")
+            if isinstance(ref, str) and ref.startswith("#/$defs/"):
+                target = defs.get(ref.rsplit("/", 1)[-1], {})
+                merged = {**target, **{k: v for k, v in node.items() if k != "$ref"}}
+                return inline(merged, depth + 1)
+            return {k: inline(v, depth + 1) for k, v in node.items()}
+        if isinstance(node, list):
+            return [inline(item, depth + 1) for item in node]
+        return node
+
+    inlined = inline(raw, 0)
+    return inlined if isinstance(inlined, dict) else raw
+
+
+def _json_instruction(schema: type[BaseModel]) -> str:
+    return (
+        "Reply with a single JSON object and nothing else. No prose before or "
+        "after it, no markdown fences, no explanation. Every key below must be "
+        "present; use an empty string, an empty list, or an empty object where "
+        "you have nothing to say. The JSON must match this schema:\n"
+        f"{json.dumps(_wire_schema(schema))}"
+    )
+
+
+def _repair_prompt(truncated: bool) -> str:
+    if truncated:
+        return (
+            "That reply was cut off before the JSON was complete. Send it again, "
+            "shorter: keep every required key, but drop optional entries and "
+            "keep each description to one short sentence. Output only the JSON "
+            "object."
+        )
+    return (
+        "That was not a single valid JSON object. Send the same answer again as "
+        "raw JSON only — no prose, no markdown fences, no trailing commas."
+    )
+
+
+def _unparseable(schema: type[BaseModel], truncated: bool) -> str:
+    """Say which failure it was. 'Invalid JSON' for a truncation sends whoever
+    reads the job stats hunting the prompt instead of the token budget.
+
+    The reply itself is logged, never returned: this string reaches the user.
+    """
+    name = schema.__name__.lstrip("_")
+    if truncated:
+        return (
+            f"The model's {name} answer was cut off at the output token limit. "
+            "Raise max_tokens for this provider."
+        )
+    return f"The model did not return valid {name} JSON."
+
+
+def _finish_reason(response: Any) -> str:
+    try:
+        return str(getattr(response.choices[0], "finish_reason", "") or "")
+    except (AttributeError, IndexError):  # pragma: no cover - defensive
+        return ""
+
+
+def _candidates(raw: str) -> list[str]:
+    """Every substring of a reply that might be the JSON object, best first.
+
+    The old approach — first `{` to last `}` — is one guess, and it is wrong
+    whenever a model writes a brace in its preamble or emits two fenced blocks.
+    Each candidate is tried in turn instead.
+    """
+    text = _THINK_BLOCK.sub("", raw).strip()
+    out: list[str] = [text]
+    out.extend(match.group(1).strip() for match in _JSON_FENCE.finditer(text))
+
+    # Balanced-brace scan from each opening brace, ignoring braces inside
+    # strings — a description containing "{" must not close the object early.
+    for start, char in enumerate(text):
+        if char != "{":
+            continue
+        depth, in_string, escaped = 0, False, False
+        for end in range(start, len(text)):
+            current = text[end]
+            if escaped:
+                escaped = False
+                continue
+            if current == "\\":
+                escaped = True
+            elif current == '"':
+                in_string = not in_string
+            elif not in_string:
+                if current == "{":
+                    depth += 1
+                elif current == "}":
+                    depth -= 1
+                    if depth == 0:
+                        out.append(text[start : end + 1])
+                        break
+    seen: set[str] = set()
+    unique: list[str] = []
+    for candidate in out:
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            unique.append(candidate)
+    return unique
+
+
+def _parse_into(schema: type[T], raw: str) -> T:  # noqa: UP047  (matches TypeVar used above)
+    for candidate in _candidates(raw):
+        try:
+            return schema.model_validate_json(candidate)
+        except (PydanticValidationError, ValueError):
+            continue
+    raise LLMError(f"The model did not return valid {schema.__name__} JSON.")
 
 
 def _clean(err: Exception) -> str:
