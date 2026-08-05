@@ -25,11 +25,24 @@ from app.core.clock import utcnow
 from app.core.errors import (
     ConflictError,
     DisclosureTooNarrowError,
+    LLMError,
     NotFoundError,
     ValidationError,
 )
-from app.domain.value_objects import DisclosurePolicy, ReportFeasibility
-from app.infra.db.models import DatabaseConnection, Report, ReportBlock, ReportSection
+from app.domain.value_objects import (
+    DisclosurePolicy,
+    ReportFeasibility,
+    ReportSectionKind,
+)
+from app.infra.db.models import (
+    DatabaseConnection,
+    LlmConfig,
+    Report,
+    ReportBlock,
+    ReportSection,
+)
+from app.reports.outline import OutlineProposal, ProposedBlock, ProposedSection
+from app.services import report_service
 from app.services.report_service import ReportService, assert_wide_enough, is_wide_enough
 
 OWNER = uuid4()
@@ -124,6 +137,14 @@ class FakeResult:
         return iter(self._rows)
 
 
+class FakeSnapshotRow:
+    def __init__(self, tables: list[dict]) -> None:
+        self.tables = tables
+        self.relationships: list[dict] = []
+        self.dialect = "postgres"
+        self.version = 1
+
+
 class FakeDb:
     """Answers by table name, the way `test_dashboard_service.FakeDb` does."""
 
@@ -135,12 +156,16 @@ class FakeDb:
         blocks: list[ReportBlock] | None = None,
         connection: Any = None,
         duplicate_name: bool = False,
+        snapshot_tables: list[dict] | None = None,
+        llm_config: Any = None,
     ) -> None:
         self.report = report
         self.sections = sections or []
         self.blocks = blocks or []
         self.connection = connection
         self.duplicate_name = duplicate_name
+        self.snapshot_tables = snapshot_tables or []
+        self.llm_config = llm_config
         self.added: list[Any] = []
         self.deleted: list[Any] = []
         self.refreshed: list[Any] = []
@@ -149,6 +174,10 @@ class FakeDb:
 
     async def execute(self, statement: Any) -> FakeResult:
         sql = str(statement).lower()
+        if "schema_snapshots" in sql:
+            return FakeResult(
+                [FakeSnapshotRow(self.snapshot_tables)] if self.snapshot_tables else []
+            )
         if "max(" in sql:
             rows = self.blocks if "report_blocks" in sql else self.sections
             return FakeResult([max((r.position for r in rows), default=0)])
@@ -168,7 +197,7 @@ class FakeDb:
         if "database_connections" in sql:
             return FakeResult([self.connection] if self.connection else [])
         if "llm_configs" in sql:
-            return FakeResult([])
+            return FakeResult([self.llm_config] if self.llm_config else [])
         return FakeResult([])
 
     async def get(self, _model: Any, _pk: Any) -> Any:
@@ -187,8 +216,23 @@ class FakeDb:
         self.refreshed.append(obj)
 
 
+class FakeSettings:
+    """Enough of `Settings` for the one path that decrypts a key.
+
+    The box itself is faked in the `proposal` fixture; this only has to keep
+    the lazy property from tripping over a bare `object()`.
+    """
+
+    class _Key:
+        def get_secret_value(self) -> str:
+            return "not-a-real-key"
+
+    secret_box_key = _Key()
+    secret_box_key_version = 1
+
+
 def _service(db: FakeDb) -> ReportService:
-    return ReportService(db, object())  # type: ignore[arg-type]
+    return ReportService(db, FakeSettings())  # type: ignore[arg-type]
 
 
 # ── the disclosure gate ──────────────────────────────────────────────────
@@ -391,6 +435,214 @@ async def test_a_new_section_is_appended_past_the_last_one() -> None:
     section = await _service(db).add_section(REPORT_ID, OWNER, heading="Returns")
 
     assert section.position == 8
+
+
+# ── proposing an outline ─────────────────────────────────────────────────
+class _Proposal:
+    """A stand-in for `app.reports.outline.propose`, which the service calls."""
+
+    def __init__(self, proposal: OutlineProposal) -> None:
+        self.proposal = proposal
+        self.kwargs: dict[str, Any] = {}
+        self.calls = 0
+
+    async def __call__(self, _gateway: Any, _llm: Any, **kwargs: Any) -> OutlineProposal:
+        self.calls += 1
+        self.kwargs = kwargs
+        return self.proposal
+
+
+PROPOSED = OutlineProposal(
+    sections=[
+        ProposedSection(
+            heading="روند درآمد",
+            intent="how revenue moved",
+            blocks=[
+                ProposedBlock(question="revenue by month", time_window="last_3_months"),
+                ProposedBlock(question="revenue by region", block_type="TABLE"),
+            ],
+        ),
+        ProposedSection(
+            heading="Returns",
+            intent="what came back",
+            blocks=[ProposedBlock(question="returns by reason", block_type="METRIC")],
+        ),
+    ]
+)
+
+
+def _outline_db(**overrides: Any) -> FakeDb:
+    report = _report()
+    report.llm_config_id = uuid4()
+    config = LlmConfig(
+        id=report.llm_config_id,
+        owner_id=OWNER,
+        name="deepseek",
+        provider="openai",
+        model="deepseek/deepseek-v4-flash",
+    )
+    return FakeDb(
+        report=report,
+        connection=_connection(),
+        llm_config=config,
+        snapshot_tables=[
+            {
+                "schema": "public",
+                "name": "orders",
+                "columns": [{"name": "id", "data_type": "integer"}],
+            }
+        ],
+        **overrides,
+    )
+
+
+@pytest.fixture
+def proposal(monkeypatch: pytest.MonkeyPatch) -> _Proposal:
+    """Everything past the model call, with the model call itself faked.
+
+    The parser has its own test against literals; what is under test here is
+    what the service *does* with a proposal.
+    """
+    fake = _Proposal(PROPOSED)
+    monkeypatch.setattr(report_service, "propose", fake)
+    monkeypatch.setattr(report_service, "resolve_llm", lambda *a, **k: object())
+    # The key is decrypted only on this path, so the box is built lazily — and
+    # faked here rather than handing the service a real settings object.
+    monkeypatch.setattr(report_service, "AesGcmSecretBox", lambda *a, **k: object())
+    monkeypatch.setattr(
+        report_service.LiteLLMGateway, "from_settings", staticmethod(lambda _s: object())
+    )
+    monkeypatch.setattr(report_service, "load_document", _none)
+    return fake
+
+
+async def _none(*_args: Any, **_kwargs: Any) -> None:
+    return None
+
+
+async def test_a_proposal_becomes_sections_and_blocks(proposal: _Proposal) -> None:
+    db = _outline_db()
+
+    await _service(db).propose_outline(REPORT_ID, OWNER)
+
+    sections = [o for o in db.added if isinstance(o, ReportSection)]
+    blocks = [o for o in db.added if isinstance(o, ReportBlock)]
+    assert [s.heading for s in sections][1:] == ["روند درآمد", "Returns"]
+    assert [b.question for b in blocks] == [
+        "revenue by month",
+        "revenue by region",
+        "returns by reason",
+    ]
+    assert [b.time_window for b in blocks][0] == "last_3_months"
+
+
+async def test_the_executive_summary_leads_and_carries_no_blocks(
+    proposal: _Proposal,
+) -> None:
+    """Written last, read first. It is an ordinary section otherwise — the UI
+    can remove it like any other."""
+    db = _outline_db()
+
+    await _service(db).propose_outline(REPORT_ID, OWNER)
+
+    first = [o for o in db.added if isinstance(o, ReportSection)][0]
+    assert first.position == 0
+    assert first.kind == ReportSectionKind.EXECUTIVE_SUMMARY
+    # The report is Persian, so its summary is too.
+    assert "خلاصه" in first.heading
+    assert not [b for b in db.added if getattr(b, "section_id", None) == first.id]
+
+
+async def test_a_proposed_block_has_no_sql_and_is_unchecked(
+    proposal: _Proposal,
+) -> None:
+    """A proposed question has never been near the guard. Phase 4 is what turns
+    it into a statement."""
+    db = _outline_db()
+
+    await _service(db).propose_outline(REPORT_ID, OWNER)
+
+    for block in [o for o in db.added if isinstance(o, ReportBlock)]:
+        # Falsy rather than `== ""`: the column default lands at flush, and
+        # this fake never reaches a database.
+        assert not block.sql and not block.sql_hash
+        assert block.feasibility_status == ReportFeasibility.UNCHECKED
+
+
+async def test_proposing_again_replaces_the_outline(proposal: _Proposal) -> None:
+    """Propose is the "start again" button; the section and block routes are
+    how an outline is edited."""
+    existing = _section()
+    db = _outline_db(sections=[existing])
+
+    await _service(db).propose_outline(REPORT_ID, OWNER)
+
+    assert db.deleted == [existing]
+
+
+async def test_the_model_gets_the_request_the_language_and_the_schema(
+    proposal: _Proposal,
+) -> None:
+    db = _outline_db()
+
+    await _service(db).propose_outline(REPORT_ID, OWNER)
+
+    assert proposal.kwargs["request"] == "a report on the last three months"
+    assert proposal.kwargs["language"] == "fa"
+    assert proposal.kwargs["dialect"] == "postgres"
+    # The same block the generator sees: schema, keys, and the semantic layer.
+    assert "public.orders" in proposal.kwargs["schema_block"]
+
+
+async def test_an_unreadable_reply_is_a_502_and_writes_nothing(
+    proposal: _Proposal,
+) -> None:
+    proposal.proposal = OutlineProposal()
+    db = _outline_db()
+
+    with pytest.raises(LLMError):
+        await _service(db).propose_outline(REPORT_ID, OWNER)
+
+    assert not [o for o in db.added if isinstance(o, ReportSection)]
+
+
+async def test_an_unsynced_connection_is_refused_before_a_token_is_spent(
+    proposal: _Proposal,
+) -> None:
+    """An outline proposed against a schema nobody has read is invention."""
+    db = _outline_db()
+    db.snapshot_tables = []
+
+    with pytest.raises(ValidationError):
+        await _service(db).propose_outline(REPORT_ID, OWNER)
+
+    assert proposal.calls == 0
+
+
+async def test_a_report_with_no_request_has_nothing_to_propose_from(
+    proposal: _Proposal,
+) -> None:
+    db = _outline_db()
+    db.report.prompt = "   "  # type: ignore[union-attr]
+
+    with pytest.raises(ValidationError):
+        await _service(db).propose_outline(REPORT_ID, OWNER)
+
+    assert proposal.calls == 0
+
+
+async def test_a_report_with_no_model_is_refused_rather_than_defaulted(
+    proposal: _Proposal,
+) -> None:
+    """Chat refuses the same way. A silent default spends someone's tokens on
+    a provider they did not choose."""
+    db = _outline_db()
+    db.report.llm_config_id = None  # type: ignore[union-attr]
+
+    with pytest.raises(ValidationError):
+        await _service(db).propose_outline(REPORT_ID, OWNER)
+
+    assert proposal.calls == 0
 
 
 async def test_a_heading_and_a_question_may_not_be_blank() -> None:

@@ -147,6 +147,21 @@ async def delete_report(
     await ReportService(db, settings).delete(report_id, ctx.user_id)
 
 
+# ── the outline ──────────────────────────────────────────────────────────
+@router.post("/{report_id}/outline", response_model=ReportRead)
+async def propose_outline(
+    report_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+) -> ReportRead:
+    """Propose a structure from the request. One model call, synchronous.
+
+    **This replaces the outline.** Returns the whole report so the editor
+    renders the proposal from the response rather than re-reading it.
+    """
+    service = ReportService(db, settings)
+    report = await service.propose_outline(report_id, ctx.user_id)
+    return await _report_read(service, report)
+
+
 # ── blocks ───────────────────────────────────────────────────────────────
 # Declared above `/{report_id}/sections/...` so `/blocks/{block_id}` is never a
 # candidate for a section path, and above nothing else that could shadow it.

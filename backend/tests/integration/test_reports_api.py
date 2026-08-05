@@ -33,6 +33,7 @@ from app.core.context import RequestContext
 from app.core.errors import (
     ConflictError,
     DisclosureTooNarrowError,
+    LLMError,
     NotFoundError,
     ValidationError,
 )
@@ -162,6 +163,10 @@ class FakeService:
 
     async def delete(self, report_id: UUID, owner_id: UUID) -> None:
         self._record("delete", report_id=report_id, owner_id=owner_id)
+
+    async def propose_outline(self, report_id: UUID, owner_id: UUID) -> Any:
+        self._record("propose_outline", report_id=report_id, owner_id=owner_id)
+        return NoLazyLoads(_report())
 
     async def add_section(
         self, report_id: UUID, owner_id: UUID, **fields: Any
@@ -434,6 +439,42 @@ def test_editing_a_block_returns_the_written_row(client: Any) -> None:
     assert response.json()["id"] == str(BLOCK_ID)
 
 
+def test_proposing_an_outline_returns_the_whole_report(client: Any) -> None:
+    """The proposal *is* the document's structure, so the editor renders it
+    from this response rather than re-reading the report."""
+    response = client.post(f"/api/v1/reports/{REPORT_ID}/outline")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sections"][0]["heading"] == "روند درآمد"
+    assert [c[0] for c in FakeService.calls] == ["propose_outline"]
+
+
+def test_a_report_with_no_model_cannot_propose_an_outline(client: Any) -> None:
+    """No silent default: chat refuses the same way rather than picking one."""
+    FakeService.raises = ValidationError(
+        "Choose a model for this report before proposing an outline."
+    )
+
+    response = client.post(f"/api/v1/reports/{REPORT_ID}/outline")
+
+    assert response.status_code == 422
+    assert "model" in response.json()["detail"]
+
+
+def test_a_model_that_returns_nothing_usable_is_reported_as_such(
+    client: Any,
+) -> None:
+    FakeService.raises = LLMError(
+        "The model did not return an outline that could be read."
+    )
+
+    response = client.post(f"/api/v1/reports/{REPORT_ID}/outline")
+
+    assert response.status_code == 502
+    assert response.json()["code"] == "E_LLM"
+
+
 def test_deleting_returns_204(client: Any) -> None:
     assert client.delete(f"/api/v1/reports/{REPORT_ID}").status_code == 204
     assert (
@@ -464,6 +505,7 @@ ROUTES: list[tuple[str, str, dict | None]] = [
     ("get", f"/{REPORT_ID}", None),
     ("patch", f"/{REPORT_ID}", {"name": "Renamed"}),
     ("delete", f"/{REPORT_ID}", None),
+    ("post", f"/{REPORT_ID}/outline", None),
     ("post", f"/{REPORT_ID}/sections", {"heading": "New section"}),
     ("patch", f"/{REPORT_ID}/sections/{SECTION_ID}", {"heading": "Renamed"}),
     ("delete", f"/{REPORT_ID}/sections/{SECTION_ID}", None),

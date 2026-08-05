@@ -37,10 +37,17 @@ from app.core.config import Settings
 from app.core.errors import (
     ConflictError,
     DisclosureTooNarrowError,
+    LLMError,
     NotFoundError,
     ValidationError,
 )
-from app.domain.value_objects import DisclosurePolicy, ReportFeasibility
+from app.core.logging import get_logger
+from app.domain.value_objects import (
+    DisclosurePolicy,
+    ReportFeasibility,
+    ReportSectionKind,
+)
+from app.infra.crypto.aesgcm_box import AesGcmSecretBox
 from app.infra.db.models import (
     DatabaseConnection,
     LlmConfig,
@@ -48,7 +55,18 @@ from app.infra.db.models import (
     ReportBlock,
     ReportSection,
 )
-from app.services.query_service import effective_max_rows
+from app.infra.llm.litellm_gateway import LiteLLMGateway
+from app.pipeline.state import RetrievedContext
+from app.reports.outline import (
+    OUTLINE_MIN_MAX_TOKENS,
+    OutlineProposal,
+    executive_summary,
+    propose,
+)
+from app.services.query_service import effective_max_rows, latest_snapshot, resolve_llm
+from app.services.semantic_service import load_document
+
+log = get_logger(__name__)
 
 # The policies a report can be written from. `NONE` and `AGGREGATE` hand the
 # model no values at all — only "1,240 rows across columns: month, revenue" —
@@ -88,6 +106,22 @@ class ReportService:
     def __init__(self, db: AsyncSession, settings: Settings) -> None:
         self._db = db
         self._settings = settings
+        self._box: AesGcmSecretBox | None = None
+
+    @property
+    def _secret_box(self) -> AesGcmSecretBox:
+        """Built on first use, not in `__init__`.
+
+        Only the outline call needs a decrypted key, and every other method on
+        this service is CRUD that must not require a key to be configured to
+        rename a report.
+        """
+        if self._box is None:
+            self._box = AesGcmSecretBox(
+                self._settings.secret_box_key.get_secret_value(),
+                self._settings.secret_box_key_version,
+            )
+        return self._box
 
     # ── reports ──────────────────────────────────────────────────────────
     async def list(self, owner_id: UUID) -> list[Report]:
@@ -261,6 +295,126 @@ class ReportService:
         self, report_id: UUID, section_id: UUID, owner_id: UUID
     ) -> None:
         await self._db.delete(await self.section(report_id, section_id, owner_id))
+
+    # ── the proposed outline ─────────────────────────────────────────────
+    async def propose_outline(self, report_id: UUID, owner_id: UUID) -> Report:
+        """One model call: the user's request becomes a structure to approve.
+
+        **It replaces whatever outline exists.** Proposing is the "start again"
+        button; the granular section and block routes are how an outline is
+        edited. Anything the user had written is gone, which is why the UI asks
+        before calling this a second time.
+
+        The call is synchronous — one completion, not the minutes a generation
+        takes — so the request holds its session for the length of it. That is
+        the trade `POST .../blocks/{id}/check` makes too, and the reason
+        generation does not.
+        """
+        report = await self.get(report_id, owner_id)
+        request = (report.prompt or "").strip()
+        if not request:
+            raise ValidationError(
+                "Describe what this report should cover before proposing an "
+                "outline."
+            )
+        if report.connection_id is None:
+            raise ValidationError(
+                "This report's connection was removed, so its outline cannot be "
+                "proposed. Past runs stay readable."
+            )
+        connection = await self._owned_connection(report.connection_id, owner_id)
+        if report.llm_config_id is None:
+            raise ValidationError("Choose a model for this report before proposing an outline.")
+        config = await self._owned_llm_config(report.llm_config_id, owner_id)
+
+        snapshot = await latest_snapshot(self._db, connection.id)
+        if not snapshot.get("tables"):
+            # Before a token is spent: an unsynced connection can answer
+            # nothing, so an outline proposed against it would be invention.
+            raise ValidationError(
+                "Sync this connection's schema before proposing an outline."
+            )
+
+        # The same block the generator sees, under the same disclosure budget:
+        # the schema, the foreign keys, and the semantic layer scoped to them.
+        semantic = await load_document(self._db, connection)
+        context = RetrievedContext(
+            dialect=snapshot["dialect"],
+            tables=snapshot["tables"],
+            relationships=snapshot.get("relationships") or [],
+            semantic=(semantic.model_dump(mode="json") if semantic else None),
+        )
+
+        proposal = await propose(
+            LiteLLMGateway.from_settings(self._settings),
+            resolve_llm(config, self._secret_box, min_max_tokens=OUTLINE_MIN_MAX_TOKENS),
+            request=request,
+            language=report.language,
+            dialect=connection.database_type,
+            schema_block=context.render(connection.disclosure_policy),
+        )
+        if proposal.dropped_sections or proposal.dropped_blocks:
+            log.info(
+                "report_outline_salvaged",
+                report_id=str(report.id),
+                kept=len(proposal.sections),
+                dropped_sections=proposal.dropped_sections,
+                dropped_blocks=proposal.dropped_blocks,
+            )
+        if proposal.is_empty:
+            raise LLMError(
+                "The model did not return an outline that could be read. Try "
+                "again, or say more about what the report should cover."
+            )
+
+        await self._replace_outline(report, proposal)
+        return report
+
+    async def _replace_outline(
+        self, report: Report, proposal: OutlineProposal
+    ) -> None:
+        """Write the proposal over whatever was there.
+
+        The executive summary goes in at position 0 and carries no blocks: it
+        is written last, from the finished sections' prose, and it is an
+        ordinary section otherwise — removable, editable, and reorderable.
+        """
+        for existing in await self.sections_of(report.id):
+            await self._db.delete(existing)
+        await self._db.flush()
+
+        for position, proposed in enumerate(
+            [executive_summary(report.language), *proposal.sections]
+        ):
+            section = ReportSection(
+                id=uuid.uuid4(),
+                report_id=report.id,
+                position=position,
+                heading=proposed.heading,
+                intent=proposed.intent,
+                kind=(
+                    ReportSectionKind.EXECUTIVE_SUMMARY
+                    if position == 0
+                    else ReportSectionKind.NORMAL
+                ),
+            )
+            self._db.add(section)
+            for index, block in enumerate(proposed.blocks):
+                self._db.add(
+                    ReportBlock(
+                        id=uuid.uuid4(),
+                        section_id=section.id,
+                        position=index,
+                        question=block.question,
+                        block_type=block.block_type,
+                        time_window=block.time_window,
+                        # No SQL and no feasibility: a proposed question has
+                        # never been near the guard, and `UNCHECKED` is what
+                        # the check in Phase 4 is for.
+                        feasibility_status=ReportFeasibility.UNCHECKED,
+                    )
+                )
+        await self._db.flush()
 
     # ── blocks ───────────────────────────────────────────────────────────
     async def block(

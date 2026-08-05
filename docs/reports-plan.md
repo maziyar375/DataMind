@@ -867,14 +867,14 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Phase 3 — Outline proposal
 
-- [ ] `app/reports/prompts.py` — `REPORT_PROMPT_VERSION` + `REPORT_OUTLINE_*`
-- [ ] `app/reports/outline.py` — Pydantic doc, `extra="forbid"`, malformed
+- [x] `app/reports/prompts.py` — `REPORT_PROMPT_VERSION` + `REPORT_OUTLINE_*`
+- [x] `app/reports/outline.py` — Pydantic doc, `extra="forbid"`, malformed
       sections dropped rather than failing the proposal
-- [ ] `POST /reports/{id}/outline` — schema block + semantic layer, one call
-- [ ] Executive-summary section auto-added at position 0, removable
-- [ ] `tests/unit/test_report_outline.py` — good / truncated / unknown-field /
+- [x] `POST /reports/{id}/outline` — schema block + semantic layer, one call
+- [x] Executive-summary section auto-added at position 0, removable
+- [x] `tests/unit/test_report_outline.py` — good / truncated / unknown-field /
       empty replies against a fake gateway
-- [ ] **Gate:** `make test` · `make lint` (proves the module stayed pure)
+- [x] **Gate:** `make test` · `make lint` (proves the module stayed pure)
 
 ## Phase 4 — Feasibility and relative time windows
 
