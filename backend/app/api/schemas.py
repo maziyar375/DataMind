@@ -693,6 +693,25 @@ class ReportBlockRead(BaseModel):
     updated_at: datetime
 
 
+class ReportBlockCheckRead(BaseModel):
+    """What a feasibility check answers.
+
+    The block as stored, plus the three things that are *about* this check and
+    not about the block: the preview the verdict was reached from, and the
+    chart types the result can actually support. None of the three is
+    persisted — `chart_config` stays NULL, which means Auto, because a report
+    re-run on differently-shaped data must be free to re-decide.
+    """
+
+    block: ReportBlockRead
+    preview: TileResultRead | None = None
+    # The heuristic's read of the preview's shape, for defaulting the picker.
+    chart_suggestion: dict[str, Any] | None = None
+    # Per-type verdicts, so the picker disables what cannot work rather than
+    # offering it and apologising later.
+    chart_options: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class ReportSectionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID

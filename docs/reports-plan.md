@@ -878,19 +878,19 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Phase 4 — Feasibility and relative time windows
 
-- [ ] `NodeDeps.extra_rules: str = ""`, appended to `GENERATE_SYSTEM`
-- [ ] Test asserting the chat prompt is **byte-identical** with it empty
-- [ ] `PROMPT_VERSION` deliberately **not** moved
-- [ ] `REPORT_TIME_RULES`, dialect-aware, + `time_conventions` from the
+- [x] `NodeDeps.extra_rules: str = ""`, appended to `GENERATE_SYSTEM`
+- [x] Test asserting the chat prompt is **byte-identical** with it empty
+- [x] `PROMPT_VERSION` deliberately **not** moved
+- [x] `REPORT_TIME_RULES`, dialect-aware, + `time_conventions` from the
       semantic layer
-- [ ] `POST /reports/{id}/blocks/{bid}/check` via `draft_sql`
-- [ ] `FEASIBLE` — valid SQL, preview has rows
-- [ ] `EMPTY` — valid SQL, no rows in the window, with a sentence saying so
-- [ ] `INFEASIBLE` — reason from `ValidationReport.errors[0]` **verbatim**
-- [ ] Persists `sql`, `sql_hash`, `sql_origin`; leaves `chart_config` NULL
-- [ ] Unsynced connection refused **before** a model call is spent
-- [ ] `tests/integration/test_report_feasibility.py`
-- [ ] **Gate:** `make test` · `make lint`
+- [x] `POST /reports/{id}/blocks/{bid}/check` via `draft_sql`
+- [x] `FEASIBLE` — valid SQL, preview has rows
+- [x] `EMPTY` — valid SQL, no rows in the window, with a sentence saying so
+- [x] `INFEASIBLE` — reason from `ValidationReport.errors[0]` **verbatim**
+- [x] Persists `sql`, `sql_hash`, `sql_origin`; leaves `chart_config` NULL
+- [x] Unsynced connection refused **before** a model call is spent
+- [x] `tests/integration/test_report_feasibility.py`
+- [x] **Gate:** `make test` · `make lint`
 
 ## Phase 5 — Generation worker: data only
 

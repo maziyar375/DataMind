@@ -92,8 +92,15 @@ async def draft_sql(
     llm_config_id: UUID,
     question: str,
     owner_id: UUID,
+    extra_rules: str = "",
 ) -> SqlDraft:
-    """Ask a model for SQL that answers `question`, then guard it and run it."""
+    """Ask a model for SQL that answers `question`, then guard it and run it.
+
+    `extra_rules` are constraints appended to every SQL-producing prompt for
+    this draft only — a report block's statement is saved and re-run months
+    later, so it may not carry a literal date. Empty by default, and empty
+    means the prompt is byte-identical to what a tile draft has always sent.
+    """
     connection = await _owned(db, DatabaseConnection, connection_id, owner_id)
     llm_config = await _owned(db, LlmConfig, llm_config_id, owner_id)
     snapshot = await _snapshot_or_refuse(db, connection)
@@ -116,6 +123,7 @@ async def draft_sql(
             policy=policy_from_snapshot(snapshot, connection),
             emit=_no_emit,
             semantic=await _semantic(db, connection),
+            extra_rules=extra_rules,
         )
 
         await retrieve(state, deps)

@@ -80,3 +80,76 @@ The request, in the user's own words:
 {request}
 
 {schema}"""
+
+
+# ── the time rules ───────────────────────────────────────────────────────
+# Appended to `GENERATE_SYSTEM` for report blocks only, through
+# `NodeDeps.extra_rules`. With no report in play the SQL prompts are
+# byte-identical to what chat has always sent, which is why `PROMPT_VERSION`
+# does not move for this.
+#
+# The whole feature turns on this paragraph. A report generated in Farvardin
+# and re-run in Mehr must describe Mehr, and the only mechanism that achieves
+# it without regenerating the SQL — which would break `sql_hash` comparison and
+# the promise that the structure is preserved — is relative date arithmetic the
+# *database* resolves at execution time.
+
+#: How each engine writes "three months ago", verified against the guard rather
+#: than assumed. Note Oracle: `ADD_MONTHS` parses to a node the AST allowlist
+#: does not carry (`E_NODE_NOT_ALLOWED`), so the interval form is the one that
+#: survives. If Oracle ever needs `ADD_MONTHS`, that is a guard change with its
+#: own justification, not a prompt change.
+DIALECT_DATE_ARITHMETIC = {
+    "postgres": "order_date >= CURRENT_DATE - INTERVAL '3 months'",
+    "mysql": "order_date >= DATE_SUB(CURRENT_DATE, INTERVAL 3 MONTH)",
+    "mssql": "order_date >= DATEADD(month, -3, CAST(GETDATE() AS date))",
+    "oracle": "order_date >= TRUNC(SYSDATE) - INTERVAL '3' MONTH",
+}
+
+#: The stored label, as a phrase a model can act on.
+TIME_WINDOW_PHRASES = {
+    "none": "not specified — the question stands on its own",
+    "last_7_days": "the last 7 days",
+    "last_30_days": "the last 30 days",
+    "last_month": "last month",
+    "last_3_months": "the last 3 months",
+    "last_12_months": "the last 12 months",
+    "previous_quarter": "the previous quarter",
+    "ytd": "this year, to date",
+    "custom": "described in the question itself",
+}
+
+REPORT_TIME_RULES = """\
+This query is one block of a saved report. The same statement will be run \
+again months from now, against this database with newer data, and it must \
+describe the period *then* — not the period today.
+
+- The window for this block is: {window}.
+- Write the window as date arithmetic the database evaluates when the query \
+runs. In {dialect} that looks like: {example}
+- Never write a literal date, a year, a month name or a quarter as a constant. \
+`WHERE order_date >= '2026-01-01'` is wrong here even though it is correct \
+today, because next quarter it silently reports the wrong period.
+- If the window is not specified, add a date filter only when the question \
+itself names a period — and write that one the same relative way.{conventions}"""
+
+
+def report_time_rules(
+    *, database_type: str, time_window: str, conventions: str = ""
+) -> str:
+    """The rules a report block's SQL is generated under.
+
+    `conventions` is the semantic layer's own time block — fiscal year start,
+    week start, whether "last month" means a calendar month or a rolling one.
+    It belongs per *connection*, not per report, which is why it arrives from
+    there rather than being asked for again here: for a deployment whose fiscal
+    year starts in Farvardin, that field is the only correct place for it.
+    """
+    return REPORT_TIME_RULES.format(
+        window=TIME_WINDOW_PHRASES.get(time_window, time_window),
+        dialect=database_type,
+        example=DIALECT_DATE_ARITHMETIC.get(
+            database_type, DIALECT_DATE_ARITHMETIC["postgres"]
+        ),
+        conventions=(f"\n- {conventions.strip()}" if conventions.strip() else ""),
+    )

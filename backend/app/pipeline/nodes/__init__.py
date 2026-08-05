@@ -63,6 +63,18 @@ class NodeDeps:
     # connection has the switch off and when this run *is* the answer to a
     # question we already asked — see `run_service.execute_run`.
     clarify_enabled: bool = False
+    # Extra constraints appended to every SQL-producing prompt, for callers
+    # whose SQL has to satisfy something a chat question does not. Today that
+    # is exactly one caller: a report block, whose statement is saved and
+    # re-run months later and therefore may not contain a literal date
+    # (`app/reports/prompts.py`, §6 of `docs/reports-plan.md`).
+    #
+    # **Empty by default, and empty means byte-identical.** With no report in
+    # play every SQL prompt is exactly what it was before this field existed,
+    # which is why `PROMPT_VERSION` does not move — the same discipline
+    # `semantic_layer_enabled` and `clarify_enabled` follow, and there is a
+    # test asserting it.
+    extra_rules: str = ""
 
 
 # ── route ────────────────────────────────────────────────────────────────
@@ -415,6 +427,19 @@ async def clarify(state: RunState, deps: NodeDeps) -> NodeResult:
 
 
 # ── generate ─────────────────────────────────────────────────────────────
+def _with_extra_rules(system: str, extra_rules: str) -> str:
+    """A caller's own constraints, after the prompt's.
+
+    Returns `system` unchanged when there are none — identity, not a rebuild —
+    so a chat run's prompt is byte-for-byte what it was before `extra_rules`
+    existed. Appended last so the prompt's own mandatory rules are read first
+    and a caller can only add to them, never restate them differently.
+    """
+    if not extra_rules.strip():
+        return system
+    return f"{system}\n\n{extra_rules.strip()}"
+
+
 async def generate(state: RunState, deps: NodeDeps) -> NodeResult:
     assert state.context is not None
     attempt_no = len(state.attempts) + 1
@@ -435,8 +460,11 @@ async def generate(state: RunState, deps: NodeDeps) -> NodeResult:
         messages = [
             ChatMessage(
                 role="system",
-                content=GENERATE_SYSTEM.format(
-                    dialect=state.dialect, schema=schema_text, history=history_text
+                content=_with_extra_rules(
+                    GENERATE_SYSTEM.format(
+                        dialect=state.dialect, schema=schema_text, history=history_text
+                    ),
+                    deps.extra_rules,
                 ),
             ),
             ChatMessage(
@@ -477,7 +505,14 @@ async def generate(state: RunState, deps: NodeDeps) -> NodeResult:
             )
             preamble = "Your rejected SQL was:"
         messages = [
-            ChatMessage(role="system", content=system),
+            # A repair is a fresh conversation, so anything the first attempt
+            # was told and the repair is not is simply lost. That is exactly
+            # how the mandatory rules once went missing from this path — and a
+            # report block repaired without its time rules would come back
+            # with the literal date the rules exist to forbid.
+            ChatMessage(
+                role="system", content=_with_extra_rules(system, deps.extra_rules)
+            ),
             ChatMessage(
                 role="user",
                 content=(

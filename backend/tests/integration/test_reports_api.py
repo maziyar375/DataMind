@@ -37,8 +37,11 @@ from app.core.errors import (
     NotFoundError,
     ValidationError,
 )
+from app.domain.ports.database import ResultColumn
 from app.infra.db.models import Report, ReportBlock, ReportSection
 from app.main import create_app
+from app.services.query_service import TileResult
+from app.services.sql_draft_service import SqlDraft
 
 USER = uuid4()
 REPORT_ID = uuid4()
@@ -127,6 +130,7 @@ class FakeService:
     raises: Exception | None = None
     sections: list[ReportSection] = []
     blocks: list[ReportBlock] = []
+    draft: Any = None
 
     def __init__(self, _db: Any, _settings: Any) -> None:
         pass
@@ -227,6 +231,14 @@ class FakeService:
             "delete_block", report_id=report_id, block_id=block_id, owner_id=owner_id
         )
 
+    async def check_block(
+        self, report_id: UUID, block_id: UUID, owner_id: UUID
+    ) -> tuple[ReportBlock, Any]:
+        self._record(
+            "check_block", report_id=report_id, block_id=block_id, owner_id=owner_id
+        )
+        return _block(), FakeService.draft
+
 
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> Any:
@@ -234,6 +246,20 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Any:
     FakeService.raises = None
     FakeService.sections = [_section()]
     FakeService.blocks = [_block()]
+    FakeService.draft = SqlDraft(
+        sql="SELECT 1",
+        validation_status="VALID",
+        validation_report={"status": "VALID"},
+        referenced_tables=["public.orders"],
+        chart_suggestion={"chart_type": "line"},
+        chart_options=[{"chart_type": "line", "allowed": True}],
+        preview=TileResult(
+            status="OK",
+            columns=[ResultColumn(name="month", db_type="date")],
+            rows=[["2026-05-01"]],
+            row_count=1,
+        ),
+    )
     monkeypatch.setattr(reports, "ReportService", FakeService)
 
     app = create_app()
@@ -475,6 +501,36 @@ def test_a_model_that_returns_nothing_usable_is_reported_as_such(
     assert response.json()["code"] == "E_LLM"
 
 
+def test_checking_a_block_answers_with_a_verdict_and_a_preview(
+    client: Any,
+) -> None:
+    """The block as stored, plus what the verdict was reached from — so the
+    editor can show the chip, the reason and the shape in one round trip."""
+    response = client.post(f"/api/v1/reports/{REPORT_ID}/blocks/{BLOCK_ID}/check")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["block"]["feasibility_status"] == "FEASIBLE"
+    assert body["preview"]["row_count"] == 1
+    assert body["chart_suggestion"] == {"chart_type": "line"}
+    assert body["chart_options"][0]["chart_type"] == "line"
+    # NULL means Auto, and the check does not take that decision away.
+    assert body["block"]["chart_config"] is None
+
+
+def test_a_check_that_produced_no_draft_still_answers(client: Any) -> None:
+    """The model failing to write anything is a verdict, not a 502: the block
+    says INFEASIBLE and the reason travels with it."""
+    FakeService.draft = None
+
+    response = client.post(f"/api/v1/reports/{REPORT_ID}/blocks/{BLOCK_ID}/check")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["preview"] is None
+    assert body["chart_options"] == []
+
+
 def test_deleting_returns_204(client: Any) -> None:
     assert client.delete(f"/api/v1/reports/{REPORT_ID}").status_code == 204
     assert (
@@ -514,6 +570,7 @@ ROUTES: list[tuple[str, str, dict | None]] = [
         f"/{REPORT_ID}/sections/{SECTION_ID}/blocks",
         {"question": "revenue by month"},
     ),
+    ("post", f"/{REPORT_ID}/blocks/{BLOCK_ID}/check", None),
     ("patch", f"/{REPORT_ID}/blocks/{BLOCK_ID}", {"question": "revenue by week"}),
     ("delete", f"/{REPORT_ID}/blocks/{BLOCK_ID}", None),
 ]

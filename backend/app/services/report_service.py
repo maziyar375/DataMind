@@ -26,6 +26,7 @@ rests on:
 """
 from __future__ import annotations
 
+import hashlib
 import uuid
 from typing import Any
 from uuid import UUID
@@ -33,6 +34,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.clock import utcnow
 from app.core.config import Settings
 from app.core.errors import (
     ConflictError,
@@ -46,6 +48,7 @@ from app.domain.value_objects import (
     DisclosurePolicy,
     ReportFeasibility,
     ReportSectionKind,
+    SqlOrigin,
 )
 from app.infra.crypto.aesgcm_box import AesGcmSecretBox
 from app.infra.db.models import (
@@ -63,8 +66,11 @@ from app.reports.outline import (
     executive_summary,
     propose,
 )
+from app.reports.prompts import report_time_rules
+from app.semantic.render import _render_time
 from app.services.query_service import effective_max_rows, latest_snapshot, resolve_llm
 from app.services.semantic_service import load_document
+from app.services.sql_draft_service import SqlDraft, draft_sql
 
 log = get_logger(__name__)
 
@@ -76,6 +82,61 @@ WIDE_ENOUGH = frozenset({DisclosurePolicy.SAMPLE, DisclosurePolicy.FULL})
 
 # Fields whose new value invalidates the SQL that was generated for the old one.
 _SQL_INVALIDATING = ("question", "time_window")
+
+
+def sql_fingerprint(sql: str) -> str:
+    """A hash of the statement, and only the statement.
+
+    On the block it says which SQL was last checked; copied onto every result
+    it says which SQL produced those numbers. Two runs whose block hashes match
+    can be compared honestly, and two whose hashes differ cannot — which is the
+    whole reason the column exists.
+    """
+    return hashlib.sha256(" ".join(sql.split()).encode()).hexdigest()
+
+
+def _verdict(draft: SqlDraft) -> tuple[str, str | None]:
+    """A draft's outcome as a feasibility status and the reason for it.
+
+    The guard's own words, verbatim: a rewritten explanation is a second
+    vocabulary for the user to learn, and it drifts from the rule that produced
+    it. Same posture as `semantic.tsx` rendering metric-expression errors.
+    """
+    if draft.validation_status != "VALID":
+        errors = draft.validation_report.get("errors") or []
+        first = errors[0] if errors else {}
+        reason = " ".join(
+            part for part in (first.get("message"), first.get("hint")) if part
+        )
+        return ReportFeasibility.INFEASIBLE, (
+            reason or "This question could not be turned into a query this "
+            "connection allows."
+        )
+
+    preview = draft.preview
+    if preview is None or preview.status != "OK":
+        # Valid SQL the database refused: a timeout, a permission, a view that
+        # no longer resolves. Not the guard's doing, and not something the user
+        # can fix by rewording — but it is still "this cannot be produced".
+        return ReportFeasibility.INFEASIBLE, (
+            (preview.error_message if preview else None)
+            or "The query is valid but the database did not return a result."
+        )
+
+    if preview.row_count == 0:
+        # Not a failure. The query works and the answer is "nothing happened",
+        # which a report may legitimately want to say.
+        return ReportFeasibility.EMPTY, (
+            "The query is valid, but no rows fall in this window. The section "
+            "will say so rather than showing an empty chart."
+        )
+    return ReportFeasibility.FEASIBLE, None
+
+
+def _record_check(block: ReportBlock, status: str, reason: str | None) -> None:
+    block.feasibility_status = status
+    block.feasibility_reason = reason
+    block.feasibility_checked_at = utcnow()
 
 
 def is_wide_enough(policy: str | None) -> bool:
@@ -415,6 +476,76 @@ class ReportService:
                     )
                 )
         await self._db.flush()
+
+    # ── feasibility ──────────────────────────────────────────────────────
+    async def check_block(
+        self, report_id: UUID, block_id: UUID, owner_id: UUID
+    ) -> tuple[ReportBlock, SqlDraft | None]:
+        """*Can this be produced, and if not, why* — answered by the guard.
+
+        Synchronous and per block: one `draft_sql` call is five to ten seconds
+        and the user is watching one heading, which is the same shape as the
+        tile editor's guard check. Checking a whole outline is the frontend
+        looping with visible per-block progress, which reads better than a job
+        with a progress bar and needs no extra table.
+
+        Every outcome is a *stored answer*, never an exception — including the
+        model failing to produce anything. The question this route asks has a
+        negative answer, and a 502 would leave the block saying `UNCHECKED`
+        with the reason only in a toast.
+        """
+        report = await self.get(report_id, owner_id)
+        block = await self.block(report_id, block_id, owner_id)
+        if report.connection_id is None:
+            raise ValidationError(
+                "This report's connection was removed, so its blocks cannot be "
+                "checked. Past runs stay readable."
+            )
+        connection = await self._owned_connection(report.connection_id, owner_id)
+        if report.llm_config_id is None:
+            raise ValidationError("Choose a model for this report before checking a block.")
+
+        draft: SqlDraft | None = None
+        try:
+            draft = await draft_sql(
+                self._db,
+                self._settings,
+                connection_id=connection.id,
+                llm_config_id=report.llm_config_id,
+                question=block.question,
+                owner_id=owner_id,
+                extra_rules=report_time_rules(
+                    database_type=connection.database_type,
+                    time_window=block.time_window,
+                    conventions=await self._time_conventions(connection),
+                ),
+            )
+        except LLMError as err:
+            # "The model could not produce a query" *is* the answer to this
+            # question, and the user's next move is to reword the block.
+            _record_check(block, ReportFeasibility.INFEASIBLE, err.message)
+        else:
+            _record_check(block, *_verdict(draft))
+            if draft.validation_status == "VALID":
+                block.sql = draft.sql
+                block.sql_hash = sql_fingerprint(draft.sql)
+                # Provenance only, and the only value this path can set: the
+                # SQL editor that produces the other two is Phase 11.
+                block.sql_origin = SqlOrigin.GENERATED
+
+        await self._db.flush()
+        await self._db.refresh(block)
+        return block, draft
+
+    async def _time_conventions(self, connection: DatabaseConnection) -> str:
+        """The connection's own time conventions, or nothing.
+
+        Per connection, never per report: fiscal-year start and whether "last
+        month" is calendar or rolling are facts about the database, and the
+        semantic layer is where this codebase already records them.
+        """
+        document = await load_document(self._db, connection)
+        return _render_time(document) if document else ""
 
     # ── blocks ───────────────────────────────────────────────────────────
     async def block(

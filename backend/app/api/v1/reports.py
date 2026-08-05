@@ -22,6 +22,7 @@ from fastapi import APIRouter, status
 
 from app.api.deps import CtxDep, DbDep, SettingsDep
 from app.api.schemas import (
+    ReportBlockCheckRead,
     ReportBlockCreate,
     ReportBlockRead,
     ReportBlockUpdate,
@@ -32,6 +33,7 @@ from app.api.schemas import (
     ReportSectionUpdate,
     ReportSummaryRead,
     ReportUpdate,
+    TileResultRead,
 )
 from app.infra.db.models import Report
 from app.services.report_service import ReportService
@@ -164,7 +166,37 @@ async def propose_outline(
 
 # ── blocks ───────────────────────────────────────────────────────────────
 # Declared above `/{report_id}/sections/...` so `/blocks/{block_id}` is never a
-# candidate for a section path, and above nothing else that could shadow it.
+# candidate for a section path, and `/check` above the bare `/{block_id}` for
+# the same reason one level down.
+@router.post("/{report_id}/blocks/{block_id}/check", response_model=ReportBlockCheckRead)
+async def check_block(
+    report_id: UUID,
+    block_id: UUID,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+) -> ReportBlockCheckRead:
+    """*Can this be produced, and if not, why.* Synchronous, one block.
+
+    Answers with a stored verdict rather than an error: `INFEASIBLE` is a
+    result, and the guard's own reason travels with it verbatim. "Check all" is
+    the frontend looping this with per-block progress.
+    """
+    block, draft = await ReportService(db, settings).check_block(
+        report_id, block_id, ctx.user_id
+    )
+    return ReportBlockCheckRead(
+        block=ReportBlockRead.model_validate(block),
+        preview=(
+            TileResultRead.model_validate(draft.preview.to_payload())
+            if draft and draft.preview
+            else None
+        ),
+        chart_suggestion=draft.chart_suggestion if draft else None,
+        chart_options=list(draft.chart_options) if draft else [],
+    )
+
+
 @router.patch("/{report_id}/blocks/{block_id}", response_model=ReportBlockRead)
 async def update_block(
     report_id: UUID,
