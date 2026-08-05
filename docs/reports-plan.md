@@ -843,14 +843,14 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Phase 1 — Data model and migration
 
-- [ ] Six models in `infra/db/models.py` under a `# ── reports ──` block
-- [ ] `reports` · `report_sections` · `report_blocks`
-- [ ] `report_runs` · `report_block_results` · `report_section_results`
-- [ ] FK `ondelete` correct per column (owner CASCADE, connection SET NULL,
+- [x] Six models in `infra/db/models.py` under a `# ── reports ──` block
+- [x] `reports` · `report_sections` · `report_blocks`
+- [x] `report_runs` · `report_block_results` · `report_section_results`
+- [x] FK `ondelete` correct per column (owner CASCADE, connection SET NULL,
       result-table back-refs SET NULL with snapshot columns beside them)
-- [ ] Migration `0008_reports.py`
-- [ ] `tests/unit/test_report_models.py` — migration vs ORM, column by column
-- [ ] **Gate:** `make migrate` · `make test` · `make lint`
+- [x] Migration `0008_reports.py`
+- [x] `tests/unit/test_report_models.py` — migration vs ORM, column by column
+- [x] **Gate:** `make migrate` · `make test` · `make lint`
 
 ## Phase 2 — CRUD, disclosure gate, connection pinning
 

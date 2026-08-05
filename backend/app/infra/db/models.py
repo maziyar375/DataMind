@@ -574,6 +574,305 @@ class DashboardTileCache(Base):
     error_message: Mapped[str | None] = mapped_column(Text)
 
 
+# ── reports ──────────────────────────────────────────────────────────────
+class Report(Base, TimestampMixin):
+    """A document the user described, approved the structure of, and keeps.
+
+    The `reports` / `report_runs` split is the one `SemanticLayerRow` vs
+    `SemanticJobRow` and `Dashboard` vs `DashboardTileCache` already reached,
+    and `SemanticLayerRow`'s reason applies verbatim to a heading: *"this
+    document is edited by hand, and a user who fixes a grain statement expects
+    to have fixed it, not to have forked it"*. So this row is the template,
+    edited in place, and a run is a moment kept beside it.
+
+    Owner-only in v1, for the reason `Dashboard` gives: a shared report means
+    user B reads data pulled with user A's stored credentials through a
+    connection B does not own. That is an authorization model, not a UI feature.
+
+    **Reports share no table and no code path with dashboards.** Deleting the
+    dashboards feature would leave this working.
+    """
+
+    __tablename__ = "reports"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "name", name="uq_report_owner_name"),
+        Index("ix_reports_owner_updated", "owner_id", "updated_at"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    # The user's original request, kept verbatim: it is what the outline was
+    # proposed from, and what the prose prompt narrates towards months later.
+    prompt: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    # SET NULL, emphatically **not** CASCADE: a deleted connection must leave a
+    # readable report that cannot regenerate, never delete the user's work.
+    # **Immutable after creation** (422) — byte-for-byte the conversation rule
+    # in `_bind_connection`, because a report keyed to one connection cannot
+    # cross disclosure policies.
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("database_connections.id", ondelete="SET NULL")
+    )
+    # Changeable at any time. The model decides who writes the prose, not what
+    # is in it.
+    llm_config_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("llm_configs.id", ondelete="SET NULL")
+    )
+    # `fa` | `en`. Pinned at creation and sent explicitly in every prose prompt.
+    language: Mapped[str] = mapped_column(String(5), nullable=False, default="en")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
+
+    sections: Mapped[list[ReportSection]] = relationship(
+        back_populates="report",
+        cascade="all, delete-orphan",
+        order_by="ReportSection.position",
+    )
+
+
+class ReportSection(Base, TimestampMixin):
+    """One heading, and the N blocks under it.
+
+    N, not one: *«روند درآمد و محصولات پرفروش»* is two queries under one
+    heading. Prose is per-**section** and data is per-**block**, and one
+    paragraph narrating several results together is the entire payoff.
+    """
+
+    __tablename__ = "report_sections"
+    __table_args__ = (
+        Index("ix_report_sections_report_position", "report_id", "position"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    report_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("reports.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    heading: Mapped[str] = mapped_column(String(300), nullable=False, default="")
+    # One line on what this section's paragraph should cover, written by the
+    # outline model and editable by the user. It is prompt input, not display
+    # text — the heading is what the document shows.
+    intent: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    kind: Mapped[str] = mapped_column(String(30), nullable=False, default="NORMAL")
+
+    report: Mapped[Report] = relationship(back_populates="sections")
+    blocks: Mapped[list[ReportBlock]] = relationship(
+        back_populates="section",
+        cascade="all, delete-orphan",
+        order_by="ReportBlock.position",
+    )
+
+
+class ReportBlock(Base, TimestampMixin):
+    """One question, one query, one chart.
+
+    `sql` is hostile input by definition and is re-validated against the
+    connection's *current* snapshot on every execution, through the same
+    `execute_saved_sql` dashboards use. `sql_origin` records where the text
+    came from and grants nothing — same rule as `dashboard_tiles.sql_origin`.
+    """
+
+    __tablename__ = "report_blocks"
+    __table_args__ = (
+        Index("ix_report_blocks_section_position", "section_id", "position"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    section_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("report_sections.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # The plain-language question. **This is what the user edits in v1**, not
+    # the SQL — the outline is the primary interaction, and the SQL editor is
+    # deferred.
+    question: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    sql: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # What makes run-to-run comparison honest: comparing two runs whose SQL
+    # differs is a lie, so the hash is recorded on the block and copied onto
+    # every result it produces.
+    sql_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    sql_origin: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="GENERATED"
+    )
+    block_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="CHART"
+    )
+    # A serialised `ChartIntent`. **NULL means Auto** — right for a report
+    # re-run months later against differently-shaped data.
+    chart_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # A label only. The window lives in the SQL as relative date arithmetic the
+    # database resolves on every run; this is never substituted into a
+    # statement. See §6 of `docs/reports-plan.md`.
+    time_window: Mapped[str] = mapped_column(String(30), nullable=False, default="none")
+
+    feasibility_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="UNCHECKED"
+    )
+    # The guard's own message, shown to the user verbatim.
+    feasibility_reason: Mapped[str | None] = mapped_column(Text)
+    feasibility_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    # May only *lower* the connection's cap; `query_service.effective_max_rows`
+    # is where that is enforced. NULL = the connection's own cap applies.
+    max_rows: Mapped[int | None] = mapped_column(Integer)
+
+    section: Mapped[ReportSection] = relationship(back_populates="blocks")
+
+
+class ReportRun(Base):
+    """One generation: minutes of model calls, polled rather than streamed.
+
+    Its status is **derived** from its section results, never set — that is what
+    makes progressive rendering and per-section retry fall out for free instead
+    of needing resume machinery, and it is why `PARTIAL` can exist at all.
+
+    `model_snapshot` is copied from `SemanticLayerRow`'s reasoning: *"a layer
+    generated by a weak model is a different artefact from one generated by a
+    strong one, and six months later nobody remembers which."*
+    """
+
+    __tablename__ = "report_runs"
+    __table_args__ = (
+        Index("ix_report_runs_report_created", "report_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    report_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("reports.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="QUEUED")
+    phase: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    progress_current: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    progress_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    llm_config_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("llm_configs.id", ondelete="SET NULL")
+    )
+    model_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    prompt_version: Mapped[str] = mapped_column(String(20), default="r1")
+    # Snapshotted from the report: the language a run was written in stays
+    # readable even if the template is somehow migrated later.
+    language: Mapped[str] = mapped_column(String(5), nullable=False, default="en")
+    error_message: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class ReportBlockResult(Base):
+    """One block's numbers, snapshotted at the moment they were computed.
+
+    Written **as it lands**, not at the end of the run: the poll response is
+    then a snapshot of what exists so far, which is the whole progressive
+    rendering design — no special protocol, and a browser that reloads mid-run
+    resumes exactly where it was.
+
+    `block_id` is SET NULL and the heading, question and SQL are copied beside
+    it, because a run must stay readable after the block it came from is
+    deleted. A historical document that silently loses a section is not a
+    historical document. `section_id` and `position` are here for the same
+    reason from the other side: once the block is gone, they are what still
+    groups the result under its heading and orders it within the run.
+    """
+
+    __tablename__ = "report_block_results"
+    __table_args__ = (
+        Index("ix_report_block_results_run_position", "run_id", "position"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("report_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    block_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("report_blocks.id", ondelete="SET NULL")
+    )
+    section_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("report_sections.id", ondelete="SET NULL")
+    )
+    # The block's ordinal within the run, assigned in execution order.
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    heading_snapshot: Mapped[str] = mapped_column(
+        String(300), nullable=False, default=""
+    )
+    question_snapshot: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    sql_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    sql_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+
+    columns: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    rows: Mapped[list[list[Any]]] = mapped_column(JSONB, default=list)
+    row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # NULL means no chart, which is an ordinary outcome: `plan_chart` vetoes
+    # what the data cannot support, and the table and numbers stand alone.
+    vega_spec: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    chart_source: Mapped[str | None] = mapped_column(String(20))
+    chart_note: Mapped[str | None] = mapped_column(Text)
+    # Computed by `plan_kpi` from the result rows, never written by a model —
+    # the headline figure is the one number a report must not get wrong.
+    kpi: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="OK")
+    error_code: Mapped[str | None] = mapped_column(String(60))
+    error_message: Mapped[str | None] = mapped_column(Text)
+
+
+class ReportSectionResult(Base):
+    """One section's prose, for one run.
+
+    **Two prose columns, not one.** A regeneration writes `prose` and leaves
+    `edited_prose` NULL on the *new* run; the previous run keeps both. Editing
+    never destroys, regenerating never overwrites, and the user's writing is
+    always recoverable from the run it belongs to.
+    """
+
+    __tablename__ = "report_section_results"
+    __table_args__ = (
+        Index("ix_report_section_results_run_position", "run_id", "position"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("report_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    section_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("report_sections.id", ondelete="SET NULL")
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    heading_snapshot: Mapped[str] = mapped_column(
+        String(300), nullable=False, default=""
+    )
+    # What the model wrote.
+    prose: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # What the user wrote over it. **NULL = not edited**, which is a different
+    # answer from "edited to empty" and must stay distinguishable.
+    edited_prose: Mapped[str | None] = mapped_column(Text)
+    # Findings from the Tier 2 numeric check: figures in the prose that no
+    # result row supports. NULL = the check did not run. It **flags, never
+    # blocks** — a finding is a suspicion, never a verdict.
+    numeric_check: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="OK")
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     __table_args__ = (

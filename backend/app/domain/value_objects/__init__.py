@@ -147,6 +147,113 @@ class SqlOrigin(StrEnum):
     HANDWRITTEN = "HANDWRITTEN"
 
 
+# ── reports ──────────────────────────────────────────────────────────────
+class ReportStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    ARCHIVED = "ARCHIVED"
+
+
+class ReportLanguage(StrEnum):
+    """The language a report's prose is written in.
+
+    Pinned at creation and stated explicitly in every prose prompt, never
+    inferred per section — otherwise a section whose heading happens to be a
+    metric name comes back in the other language.
+    """
+
+    FA = "fa"
+    EN = "en"
+
+
+class ReportSectionKind(StrEnum):
+    NORMAL = "NORMAL"
+    # Written last, from the finished sections' prose rather than from a query
+    # of its own. Removable, which is why it is a kind and not a flag column.
+    EXECUTIVE_SUMMARY = "EXECUTIVE_SUMMARY"
+
+
+class ReportBlockType(StrEnum):
+    """One question, one query, one rendering.
+
+    No TEXT member, unlike `TileType`: prose in a report belongs to the
+    section, and a block that ran no query would have nothing to narrate.
+    """
+
+    CHART = "CHART"
+    TABLE = "TABLE"
+    METRIC = "METRIC"
+
+
+class ReportTimeWindow(StrEnum):
+    """A *label*, and only a label.
+
+    It drives the prompt when a block is checked and gives the UI something to
+    show; it is never substituted into a statement at runtime. The window lives
+    in the SQL itself as relative date arithmetic the database resolves on
+    every run — see §6 of `docs/reports-plan.md`.
+    """
+
+    NONE = "none"
+    LAST_7_DAYS = "last_7_days"
+    LAST_30_DAYS = "last_30_days"
+    LAST_MONTH = "last_month"
+    LAST_3_MONTHS = "last_3_months"
+    LAST_12_MONTHS = "last_12_months"
+    PREVIOUS_QUARTER = "previous_quarter"
+    YTD = "ytd"
+    CUSTOM = "custom"
+
+
+class ReportFeasibility(StrEnum):
+    """Whether a block can be produced, answered mechanically by the guard."""
+
+    UNCHECKED = "UNCHECKED"
+    FEASIBLE = "FEASIBLE"
+    # Valid SQL, no rows in the window. Not a failure, and not infeasible: the
+    # query works and the answer is "nothing happened".
+    EMPTY = "EMPTY"
+    INFEASIBLE = "INFEASIBLE"
+
+
+class ReportRunStatus(StrEnum):
+    """A run is a set of independently-failable parts, so it has a state
+    nothing else in this codebase has: `PARTIAL`.
+
+    The status is *derived* from the run's section results rather than set, and
+    that is what makes progressive rendering and per-section retry fall out
+    without any resume machinery — a successful retry turns a PARTIAL run into
+    a SUCCEEDED one with no state transition to write.
+    """
+
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    PARTIAL = "PARTIAL"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+    @property
+    def is_terminal(self) -> bool:
+        return self in {
+            ReportRunStatus.SUCCEEDED, ReportRunStatus.PARTIAL,
+            ReportRunStatus.FAILED, ReportRunStatus.CANCELLED,
+        }
+
+
+class ReportBlockResultStatus(StrEnum):
+    OK = "OK"
+    FAILED = "FAILED"
+
+
+class ReportSectionResultStatus(StrEnum):
+    OK = "OK"
+    FAILED = "FAILED"
+    # Every block under the heading came back empty. A report that says "no
+    # returns were recorded in this period" is correct; one that invents
+    # returns is not, so this is its own outcome rather than a failure.
+    SKIPPED_NO_DATA = "SKIPPED_NO_DATA"
+
+
 class DisclosurePolicy(StrEnum):
     """What may leave the customer database and reach an external model."""
 
