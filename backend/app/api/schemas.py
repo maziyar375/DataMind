@@ -667,6 +667,159 @@ class DashboardDataRead(BaseModel):
     results: dict[UUID, TileResultRead] = Field(default_factory=dict)
 
 
+# ── reports ──────────────────────────────────────────────────────────────
+# Every read here carries ids and display *names* only. A report is a document
+# about someone's data; nothing from inside a connection belongs in one.
+class ReportBlockRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    section_id: UUID
+    position: int = 0
+    question: str = ""
+    sql: str = ""
+    sql_hash: str = ""
+    sql_origin: str = "GENERATED"
+    block_type: str = "CHART"
+    # null means Auto: the chart is re-planned from each result, which is what a
+    # report re-run months later on differently-shaped data needs.
+    chart_config: dict[str, Any] | None = None
+    time_window: str = "none"
+    feasibility_status: str = "UNCHECKED"
+    # The guard's own message, shown verbatim — never re-worded here.
+    feasibility_reason: str | None = None
+    feasibility_checked_at: datetime | None = None
+    max_rows: int | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReportSectionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    report_id: UUID
+    position: int = 0
+    heading: str = ""
+    intent: str = ""
+    kind: str = "NORMAL"
+    created_at: datetime
+    updated_at: datetime
+    blocks: list[ReportBlockRead] = Field(default_factory=list)
+
+
+class ReportRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    name: str
+    description: str | None = None
+    prompt: str = ""
+    connection_id: UUID | None = None
+    connection_name: str | None = None
+    llm_config_id: UUID | None = None
+    llm_config_name: str | None = None
+    language: str = "en"
+    status: str = "ACTIVE"
+    created_at: datetime
+    updated_at: datetime
+    sections: list[ReportSectionRead] = Field(default_factory=list)
+
+
+class ReportSummaryRead(BaseModel):
+    """One card on the index: what it is, how big, and when it last ran."""
+
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    name: str
+    description: str | None = None
+    connection_id: UUID | None = None
+    connection_name: str | None = None
+    llm_config_id: UUID | None = None
+    llm_config_name: str | None = None
+    language: str = "en"
+    status: str = "ACTIVE"
+    section_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReportCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    description: str | None = None
+    # The user's request, kept verbatim: it is what the outline is proposed
+    # from, and what the prose is narrated towards months later.
+    prompt: str = Field(default="", max_length=8000)
+    # Required and pinned forever — a report keyed to one connection cannot
+    # cross disclosure policies.
+    connection_id: UUID
+    llm_config_id: UUID | None = None
+    # Pinned at creation and stated explicitly in every prose prompt, never
+    # inferred per section.
+    language: Literal["fa", "en"] = "en"
+
+
+class ReportUpdate(BaseModel):
+    """Everything a report may change after creation.
+
+    `connection_id` is here **so it can be refused**, not so it can be set:
+    accepting the field and 422-ing on a different value tells the client what
+    the rule is, where silently ignoring it would look like a save that worked.
+    """
+
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    description: str | None = None
+    prompt: str | None = Field(default=None, max_length=8000)
+    llm_config_id: UUID | None = None
+    status: Literal["ACTIVE", "ARCHIVED"] | None = None
+    connection_id: UUID | None = None
+
+
+class ReportSectionCreate(BaseModel):
+    heading: str = Field(min_length=1, max_length=300)
+    # One line on what this section's paragraph should cover. Prompt input, not
+    # display text.
+    intent: str = Field(default="", max_length=2000)
+    kind: Literal["NORMAL", "EXECUTIVE_SUMMARY"] = "NORMAL"
+    position: int = Field(default=0, ge=0)
+
+
+class ReportSectionUpdate(BaseModel):
+    heading: str | None = Field(default=None, min_length=1, max_length=300)
+    intent: str | None = Field(default=None, max_length=2000)
+    position: int | None = Field(default=None, ge=0)
+
+
+class ReportBlockCreate(BaseModel):
+    """One question, one query, one chart.
+
+    No `sql` field: v1 edits the question, and the statement is produced by the
+    feasibility check (Phase 4). The SQL editor is Phase 11, and it will set
+    `sql_origin` — which is why nothing here can.
+    """
+
+    question: str = Field(min_length=1, max_length=2000)
+    block_type: Literal["CHART", "TABLE", "METRIC"] = "CHART"
+    chart_config: dict[str, Any] | None = None
+    time_window: Literal[
+        "none", "last_7_days", "last_30_days", "last_month", "last_3_months",
+        "last_12_months", "previous_quarter", "ytd", "custom",
+    ] = "none"
+    max_rows: int | None = Field(default=None, ge=1)
+    position: int = Field(default=0, ge=0)
+
+
+class ReportBlockUpdate(BaseModel):
+    question: str | None = Field(default=None, min_length=1, max_length=2000)
+    block_type: Literal["CHART", "TABLE", "METRIC"] | None = None
+    # Explicit null is how a client goes back to Auto; omitting the field leaves
+    # whatever is stored alone.
+    chart_config: dict[str, Any] | None = None
+    time_window: Literal[
+        "none", "last_7_days", "last_30_days", "last_month", "last_3_months",
+        "last_12_months", "previous_quarter", "ytd", "custom",
+    ] | None = None
+    max_rows: int | None = Field(default=None, ge=1)
+    position: int | None = Field(default=None, ge=0)
+
+
 # ── conversations & messages ─────────────────────────────────────────────
 class ConversationCreate(BaseModel):
     title: str | None = None

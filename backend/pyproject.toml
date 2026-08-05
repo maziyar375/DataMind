@@ -82,7 +82,7 @@ include_external_packages = true
 [[tool.importlinter.contracts]]
 name = "Layered architecture: api -> services -> domain <- infra"
 type = "layers"
-layers = ["app.api", "app.services", "app.pipeline", "app.semantic", "app.domain"]
+layers = ["app.api", "app.services", "app.pipeline", "app.reports", "app.semantic", "app.domain"]
 # Services may reach into infra (adapters). infra is not a layer here, so this
 # is unconstrained anyway; keep the note but do not error if it matches nothing.
 ignore_imports = ["app.services.* -> app.infra.*"]
@@ -107,6 +107,16 @@ forbidden_modules = ["fastapi", "sqlalchemy", "litellm", "app.infra", "app.api"]
 name = "semantic is self-contained"
 type = "forbidden"
 source_modules = ["app.semantic"]
+forbidden_modules = ["fastapi", "sqlalchemy", "litellm", "app.infra", "app.api", "app.services"]
+
+[[tool.importlinter.contracts]]
+# Copied from the semantic one, for the reason it gives: the outline validator,
+# the narration prompt builder and the numeric check are pure functions of a
+# string, a dict and an LLM *port*, so each runs in a test with no database and
+# no HTTP client anywhere near it.
+name = "reports is self-contained"
+type = "forbidden"
+source_modules = ["app.reports"]
 forbidden_modules = ["fastapi", "sqlalchemy", "litellm", "app.infra", "app.api", "app.services"]
 
 [[tool.importlinter.contracts]]

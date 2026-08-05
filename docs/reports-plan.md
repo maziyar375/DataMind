@@ -854,16 +854,16 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Phase 2 — CRUD, disclosure gate, connection pinning
 
-- [ ] `services/report_service.py` — reports / sections / blocks CRUD
-- [ ] Disclosure gate at creation → `E_DISCLOSURE_TOO_NARROW`
-- [ ] `connection_id` in PATCH → 422
-- [ ] DTOs in `api/schemas.py`, router `api/v1/reports.py`, registered
-- [ ] Literal routes declared above `/{id}` routes
-- [ ] `pyproject.toml` — `app.reports` in the layers contract
-- [ ] `pyproject.toml` — `reports is self-contained` forbidden contract
-- [ ] `tests/integration/test_reports_api.py` — CRUD, ownership isolation,
+- [x] `services/report_service.py` — reports / sections / blocks CRUD
+- [x] Disclosure gate at creation → `E_DISCLOSURE_TOO_NARROW`
+- [x] `connection_id` in PATCH → 422
+- [x] DTOs in `api/schemas.py`, router `api/v1/reports.py`, registered
+- [x] Literal routes declared above `/{id}` routes
+- [x] `pyproject.toml` — `app.reports` in the layers contract
+- [x] `pyproject.toml` — `reports is self-contained` forbidden contract
+- [x] `tests/integration/test_reports_api.py` — CRUD, ownership isolation,
       disclosure refusal, the 422, cascades
-- [ ] **Gate:** `make test` · `make lint` · `test_openapi_has_no_secrets` passes
+- [x] **Gate:** `make test` · `make lint` · `test_openapi_has_no_secrets` passes
 
 ## Phase 3 — Outline proposal
 

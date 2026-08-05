@@ -1,0 +1,425 @@
+"""Reports: CRUD over the template and its outline.
+
+Ordinary CRUD with the same rule threaded through every method dashboards use —
+**everything is scoped to the owner, and a resource belonging to someone else is
+404, not 403**, so another user's report is indistinguishable from one that does
+not exist. Sections and blocks are reached *through* their report, never by id
+alone, so ownership is checked once at the top of every path.
+
+Three rules here are not CRUD, and each is a decision the rest of the feature
+rests on:
+
+* **The disclosure gate.** A report's analysis is written from result values, so
+  a connection that shares none cannot carry one. Refused at creation, and
+  re-checked at the start of every generation (Phase 5) — `assert_wide_enough`
+  is a module-level function precisely so the worker can call the same one.
+* **The connection is pinned.** Byte-for-byte the conversation rule in
+  `run_service._bind_connection`, for the same reason: a report keyed to one
+  connection cannot cross disclosure policies. Re-sending the connection it
+  already has is a no-op; sending a different one is 422.
+* **Editing a question throws its SQL away.** `report_blocks.sql` answers the
+  question that was checked, not the one now stored beside it. Keeping the old
+  statement would mean a run silently answering the previous question with a
+  heading describing the new one — so the question and the time window reset
+  feasibility to `UNCHECKED` and clear the statement. v1 edits the question;
+  the SQL editor is Phase 11.
+"""
+from __future__ import annotations
+
+import uuid
+from typing import Any
+from uuid import UUID
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import Settings
+from app.core.errors import (
+    ConflictError,
+    DisclosureTooNarrowError,
+    NotFoundError,
+    ValidationError,
+)
+from app.domain.value_objects import DisclosurePolicy, ReportFeasibility
+from app.infra.db.models import (
+    DatabaseConnection,
+    LlmConfig,
+    Report,
+    ReportBlock,
+    ReportSection,
+)
+from app.services.query_service import effective_max_rows
+
+# The policies a report can be written from. `NONE` and `AGGREGATE` hand the
+# model no values at all — only "1,240 rows across columns: month, revenue" —
+# while the charts on the same page render the real numbers in the browser,
+# because that is the owner's own data reaching the owner's own screen.
+WIDE_ENOUGH = frozenset({DisclosurePolicy.SAMPLE, DisclosurePolicy.FULL})
+
+# Fields whose new value invalidates the SQL that was generated for the old one.
+_SQL_INVALIDATING = ("question", "time_window")
+
+
+def is_wide_enough(policy: str | None) -> bool:
+    """Whether a connection's disclosure policy can carry a report at all."""
+    return policy in WIDE_ENOUGH
+
+
+def assert_wide_enough(connection: DatabaseConnection) -> None:
+    """The gate, in the two places §7 requires it: creation and generation.
+
+    The message names the policy in force and both ways out of it, because the
+    user reading it can act on either — and neither is discoverable from
+    "disclosure policy too narrow" alone.
+    """
+    if is_wide_enough(connection.disclosure_policy):
+        return
+    raise DisclosureTooNarrowError(
+        f"This connection's disclosure policy is {connection.disclosure_policy}. "
+        "A report's analysis is written from result values, so it needs SAMPLE "
+        "or FULL. Change the policy on the data source, or generate this report "
+        "against a different connection.",
+        connection_id=str(connection.id),
+        disclosure_policy=str(connection.disclosure_policy),
+    )
+
+
+class ReportService:
+    def __init__(self, db: AsyncSession, settings: Settings) -> None:
+        self._db = db
+        self._settings = settings
+
+    # ── reports ──────────────────────────────────────────────────────────
+    async def list(self, owner_id: UUID) -> list[Report]:
+        result = await self._db.execute(
+            select(Report)
+            .where(Report.owner_id == owner_id)
+            .order_by(Report.updated_at.desc())
+        )
+        return list(result.scalars())
+
+    async def get(self, report_id: UUID, owner_id: UUID) -> Report:
+        result = await self._db.execute(
+            select(Report).where(Report.id == report_id, Report.owner_id == owner_id)
+        )
+        report = result.scalar_one_or_none()
+        if report is None:
+            # 404 rather than 403: see the module docstring.
+            raise NotFoundError("Report not found.")
+        return report
+
+    async def create(self, owner_id: UUID, **fields: Any) -> Report:
+        name = (fields.get("name") or "").strip()
+        if not name:
+            raise ValidationError("A report needs a name.")
+        await self._refuse_duplicate_name(owner_id, name)
+
+        connection_id = fields.get("connection_id")
+        if connection_id is None:
+            raise ValidationError(
+                "A report needs a database connection, and it cannot be changed "
+                "afterwards."
+            )
+        connection = await self._owned_connection(connection_id, owner_id)
+        # Before anything is written: a report that cannot be generated should
+        # never reach the list in the first place.
+        assert_wide_enough(connection)
+
+        if fields.get("llm_config_id") is not None:
+            await self._owned_llm_config(fields["llm_config_id"], owner_id)
+
+        report = Report(
+            id=uuid.uuid4(),
+            owner_id=owner_id,
+            **{**fields, "name": name, "prompt": (fields.get("prompt") or "").strip()},
+        )
+        self._db.add(report)
+        await self._db.flush()
+        return report
+
+    async def update(self, report_id: UUID, owner_id: UUID, **changes: Any) -> Report:
+        report = await self.get(report_id, owner_id)
+
+        # Mirrors `_bind_connection`: re-sending what it already has is a no-op,
+        # so a client that PATCHes a whole object is not punished for it; naming
+        # a different connection is refused.
+        if changes.pop("connection_id", report.connection_id) != report.connection_id:
+            raise ValidationError(
+                "A report is pinned to the connection it was created against. "
+                "Create a new report to run this analysis against another "
+                "database.",
+                report_id=str(report.id),
+            )
+
+        if (name := changes.get("name")) is not None:
+            name = name.strip()
+            if not name:
+                raise ValidationError("A report needs a name.")
+            if name != report.name:
+                await self._refuse_duplicate_name(owner_id, name)
+            changes["name"] = name
+
+        # The model is swappable at any time — it decides who writes the prose,
+        # not what is in it — but it still has to be the caller's own.
+        if changes.get("llm_config_id") is not None:
+            await self._owned_llm_config(changes["llm_config_id"], owner_id)
+
+        for field, value in changes.items():
+            setattr(report, field, value)
+        await self._db.flush()
+        # `updated_at` has an onupdate, so the attribute is expired after the
+        # flush; without the refresh, serialising it lazily loads mid-response
+        # and trips MissingGreenlet.
+        await self._db.refresh(report)
+        return report
+
+    async def delete(self, report_id: UUID, owner_id: UUID) -> None:
+        await self._db.delete(await self.get(report_id, owner_id))
+
+    async def _refuse_duplicate_name(self, owner_id: UUID, name: str) -> None:
+        existing = await self._db.execute(
+            select(Report).where(Report.owner_id == owner_id, Report.name == name)
+        )
+        if existing.scalar_one_or_none() is not None:
+            raise ConflictError("You already have a report with that name.")
+
+    # ── the outline ──────────────────────────────────────────────────────
+    async def sections_of(self, report_id: UUID) -> list[ReportSection]:
+        result = await self._db.execute(
+            select(ReportSection)
+            .where(ReportSection.report_id == report_id)
+            .order_by(ReportSection.position, ReportSection.created_at)
+        )
+        return list(result.scalars())
+
+    async def blocks_of(self, section_ids: list[UUID]) -> list[ReportBlock]:
+        """Every block under the given sections, in one query.
+
+        One query for the whole outline rather than one per section: a report
+        with ten sections is one page, and ten round trips to draw it is how a
+        page gets slow before anyone notices.
+        """
+        if not section_ids:
+            return []
+        result = await self._db.execute(
+            select(ReportBlock)
+            .where(ReportBlock.section_id.in_(section_ids))
+            .order_by(ReportBlock.position, ReportBlock.created_at)
+        )
+        return list(result.scalars())
+
+    async def section(
+        self, report_id: UUID, section_id: UUID, owner_id: UUID
+    ) -> ReportSection:
+        await self.get(report_id, owner_id)
+        result = await self._db.execute(
+            select(ReportSection).where(
+                ReportSection.id == section_id, ReportSection.report_id == report_id
+            )
+        )
+        section = result.scalar_one_or_none()
+        if section is None:
+            raise NotFoundError("Report section not found.")
+        return section
+
+    async def add_section(
+        self, report_id: UUID, owner_id: UUID, **fields: Any
+    ) -> ReportSection:
+        await self.get(report_id, owner_id)
+        heading = (fields.get("heading") or "").strip()
+        if not heading:
+            raise ValidationError("A section needs a heading.")
+
+        section = ReportSection(
+            id=uuid.uuid4(), report_id=report_id, **{**fields, "heading": heading}
+        )
+        if not section.position:
+            section.position = await self._next_position(
+                ReportSection, ReportSection.report_id, report_id
+            )
+        self._db.add(section)
+        await self._db.flush()
+        return section
+
+    async def update_section(
+        self, report_id: UUID, section_id: UUID, owner_id: UUID, **changes: Any
+    ) -> ReportSection:
+        section = await self.section(report_id, section_id, owner_id)
+        if (heading := changes.get("heading")) is not None:
+            heading = heading.strip()
+            if not heading:
+                raise ValidationError("A section needs a heading.")
+            changes["heading"] = heading
+
+        for field, value in changes.items():
+            setattr(section, field, value)
+        await self._db.flush()
+        await self._db.refresh(section)
+        return section
+
+    async def delete_section(
+        self, report_id: UUID, section_id: UUID, owner_id: UUID
+    ) -> None:
+        await self._db.delete(await self.section(report_id, section_id, owner_id))
+
+    # ── blocks ───────────────────────────────────────────────────────────
+    async def block(
+        self, report_id: UUID, block_id: UUID, owner_id: UUID
+    ) -> ReportBlock:
+        """A block, reached through its report so ownership is checked.
+
+        The join is what makes `/reports/{id}/blocks/{bid}` safe as a flat path:
+        a block id from someone else's report matches no row here, so it is a
+        404 like everything else.
+        """
+        await self.get(report_id, owner_id)
+        result = await self._db.execute(
+            select(ReportBlock)
+            .join(ReportSection, ReportSection.id == ReportBlock.section_id)
+            .where(ReportBlock.id == block_id, ReportSection.report_id == report_id)
+        )
+        block = result.scalar_one_or_none()
+        if block is None:
+            raise NotFoundError("Report block not found.")
+        return block
+
+    async def add_block(
+        self, report_id: UUID, section_id: UUID, owner_id: UUID, **fields: Any
+    ) -> ReportBlock:
+        report = await self.get(report_id, owner_id)
+        await self.section(report_id, section_id, owner_id)
+
+        question = (fields.get("question") or "").strip()
+        if not question:
+            raise ValidationError("A block needs a question.")
+        fields = await self._clamped(report, {**fields, "question": question})
+
+        block = ReportBlock(id=uuid.uuid4(), section_id=section_id, **fields)
+        if not block.position:
+            block.position = await self._next_position(
+                ReportBlock, ReportBlock.section_id, section_id
+            )
+        self._db.add(block)
+        await self._db.flush()
+        return block
+
+    async def update_block(
+        self, report_id: UUID, block_id: UUID, owner_id: UUID, **changes: Any
+    ) -> ReportBlock:
+        report = await self.get(report_id, owner_id)
+        block = await self.block(report_id, block_id, owner_id)
+
+        if (question := changes.get("question")) is not None:
+            question = question.strip()
+            if not question:
+                raise ValidationError("A block needs a question.")
+            changes["question"] = question
+        changes = await self._clamped(report, changes)
+
+        stale = any(
+            field in changes and changes[field] != getattr(block, field)
+            for field in _SQL_INVALIDATING
+        )
+        for field, value in changes.items():
+            setattr(block, field, value)
+        if stale:
+            # See the module docstring: the stored statement answers the old
+            # question. Dropping it is what stops a run from producing the right
+            # numbers under the wrong heading.
+            block.sql = ""
+            block.sql_hash = ""
+            block.feasibility_status = ReportFeasibility.UNCHECKED
+            block.feasibility_reason = None
+            block.feasibility_checked_at = None
+
+        await self._db.flush()
+        await self._db.refresh(block)
+        return block
+
+    async def delete_block(
+        self, report_id: UUID, block_id: UUID, owner_id: UUID
+    ) -> None:
+        await self._db.delete(await self.block(report_id, block_id, owner_id))
+
+    async def _clamped(self, report: Report, fields: dict[str, Any]) -> dict[str, Any]:
+        """A block's row cap, stored already lowered to what will be honoured.
+
+        `max_rows` may only *tighten* the connection's cap. Clamping on the way
+        in rather than at execution means the editor never shows a number the
+        connection would silently ignore.
+        """
+        fields = dict(fields)
+        if fields.get("max_rows") is None or report.connection_id is None:
+            return fields
+        connection = await self._db.get(DatabaseConnection, report.connection_id)
+        if connection is not None:
+            fields["max_rows"] = effective_max_rows(connection, fields["max_rows"])
+        return fields
+
+    async def _next_position(self, model: Any, column: Any, parent_id: UUID) -> int:
+        """Append at the end.
+
+        `max(position) + 1`, not `count()`: a list that has had a middle entry
+        deleted would otherwise hand the new one a position it already uses, and
+        two rows sharing a position sort by insertion time — which reads as
+        random to the person who arranged them.
+        """
+        result = await self._db.execute(
+            select(func.max(model.position)).where(column == parent_id)
+        )
+        return int(result.scalar() or 0) + 1
+
+    # ── display names ────────────────────────────────────────────────────
+    async def display_names(
+        self, reports: list[Report]
+    ) -> tuple[dict[UUID, str], dict[UUID, str]]:
+        """Labels for the chips: what the connection and the model are *called*.
+
+        Names only — a report carries ids and display names, never a host, a
+        username, or anything else from inside a connection.
+        """
+        connection_ids = {r.connection_id for r in reports if r.connection_id}
+        model_ids = {r.llm_config_id for r in reports if r.llm_config_id}
+
+        connections: dict[UUID, str] = {}
+        if connection_ids:
+            rows = await self._db.execute(
+                select(DatabaseConnection.id, DatabaseConnection.name).where(
+                    DatabaseConnection.id.in_(connection_ids)
+                )
+            )
+            connections = {row[0]: row[1] for row in rows}
+
+        models: dict[UUID, str] = {}
+        if model_ids:
+            rows = await self._db.execute(
+                select(LlmConfig.id, LlmConfig.name).where(LlmConfig.id.in_(model_ids))
+            )
+            models = {row[0]: row[1] for row in rows}
+        return connections, models
+
+    # ── ownership ────────────────────────────────────────────────────────
+    async def _owned_connection(
+        self, connection_id: UUID, owner_id: UUID
+    ) -> DatabaseConnection:
+        result = await self._db.execute(
+            select(DatabaseConnection).where(
+                DatabaseConnection.id == connection_id,
+                DatabaseConnection.owner_id == owner_id,
+            )
+        )
+        connection = result.scalar_one_or_none()
+        if connection is None:
+            raise NotFoundError("Connection not found.")
+        return connection
+
+    async def _owned_llm_config(self, llm_config_id: UUID, owner_id: UUID) -> LlmConfig:
+        result = await self._db.execute(
+            select(LlmConfig).where(
+                LlmConfig.id == llm_config_id, LlmConfig.owner_id == owner_id
+            )
+        )
+        config = result.scalar_one_or_none()
+        if config is None:
+            raise NotFoundError("Model configuration not found.")
+        return config

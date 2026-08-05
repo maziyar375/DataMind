@@ -7,6 +7,7 @@ from app.api.v1 import (
     dashboards,
     drafts,
     llm_configs,
+    reports,
     semantic,
     users,
 )
@@ -24,3 +25,6 @@ api_router.include_router(conversations.router)
 # the connection is an input to a draft, not its owner.
 api_router.include_router(drafts.router)
 api_router.include_router(dashboards.router)
+# A peer of dashboards, sharing no table and no code path with it: deleting
+# either feature would leave the other working.
+api_router.include_router(reports.router)
