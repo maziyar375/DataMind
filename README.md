@@ -1,5 +1,6 @@
 # DataMind
 
+
 Conversational BI. Ask a question in plain language, get a written answer, a
 table, and a chart — with the generated SQL visible and auditable. Point it at
 **PostgreSQL, MySQL, SQL Server, or Oracle**; the question is the same, the
@@ -8,6 +9,7 @@ dialect is the connector's problem.
 A single modular-monolith FastAPI application backed by one PostgreSQL
 database, plus a React SPA. No microservices, no message broker, no vector
 database in this release.
+
 
 ---
 
