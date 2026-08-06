@@ -331,6 +331,16 @@ export const Icon = {
       <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />
     </svg>
   ),
+  // A page with a heading and two lines of prose under it — a *document*,
+  // which is what separates a report from the grid of tiles next to it in the
+  // sidebar. `List` is already the list-layout toggle and would read as one.
+  Doc: ({ size = 17, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <path d="M14 3v5h5" />
+      <path d="M9 13h6M9 17h4" />
+    </svg>
+  ),
   Play: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
     <svg {...iconBase(size, stroke, strokeWidth)}>
       <path d="M6 4.5v15l12-7.5-12-7.5z" />
@@ -1266,6 +1276,141 @@ export function ResultTable({ spec, previewRows = 5, maxHeight = 420, config }: 
             : `Show all ${spec.rows.length.toLocaleString()} rows`}
         </button>
       )}
+    </div>
+  )
+}
+
+
+// ── index chrome ──────────────────────────────────────────────────────────
+/**
+ * The three controls every index page needs, kept here rather than in either
+ * page that uses them.
+ *
+ * All three began life inside `DashboardsPage`; Reports needs the same search
+ * field, the same segmented filter, and — in its create dialog — the same
+ * disclosure badge the chat header shows. Copying them is how the two indexes
+ * quietly stop agreeing about what a filter looks like, which is the reason
+ * `ResultTable` was moved here rather than duplicated (docs/dashboards.md §6).
+ */
+export function DisclosureBadge({ policy }: { policy?: string }) {
+  if (!policy) return null
+
+  // `tone` names a token trio (--green / --green-bg / --green-border, likewise
+  // amber) redefined per theme. The label uses the neutral --text2 (not the
+  // tone) so it flips near-white in dark / near-black in light and reads as
+  // native to the active palette; a saturated tone label looked like a stray
+  // light-mode accent on the dark UI. The dot alone carries the policy colour.
+  const copy: Record<string, { short: string; full: string; tone: 'green' | 'amber' }> = {
+    NONE: { short: 'Private', full: 'No rows shared with the model provider', tone: 'green' },
+    AGGREGATE: { short: 'Totals', full: 'Only aggregate totals shared with the model provider', tone: 'green' },
+    SAMPLE: { short: 'Sample', full: 'Sample rows shared with the model provider', tone: 'amber' },
+    FULL: { short: 'All rows', full: 'All rows shared with the model provider', tone: 'amber' },
+  }
+  const entry = copy[policy]
+  if (!entry) return null
+
+  return (
+    <span
+      title={`${entry.full} — controls how much of a query result is sent to the model provider.`}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        flexShrink: 0,
+        fontSize: 10,
+        fontWeight: 600,
+        letterSpacing: '0.01em',
+        // Neutral, theme-aware label on a native surface — near-white in dark,
+        // near-black in light — so the chip belongs to whichever palette is
+        // active. The dot alone carries the amber/green policy signal.
+        color: 'var(--text2)',
+        background: `var(--${entry.tone}-bg)`,
+        border: `1px solid var(--${entry.tone}-border)`,
+        padding: '2px 7px 2px 6px',
+        borderRadius: 999,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <span
+        style={{
+          width: 5,
+          height: 5,
+          borderRadius: '50%',
+          background: `var(--${entry.tone})`,
+        }}
+      />
+      {entry.short}
+    </span>
+  )
+}
+
+
+/** Search with the glyph inside the field, and a clear button once typed in. */
+export function SearchField({
+  value, onChange, placeholder, ariaLabel = 'Search',
+}: {
+  value: string
+  onChange: (next: string) => void
+  placeholder: string
+  ariaLabel?: string
+}) {
+  return (
+    <div className="rm-search">
+      <span aria-hidden className="rm-search-icon"><Icon.Search size={14} /></span>
+      <input
+        type="search"
+        aria-label={ariaLabel}
+        value={value}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') onChange('')
+        }}
+      />
+      {value && (
+        <button
+          type="button"
+          aria-label="Clear search"
+          className="rm-search-clear rm-icon-btn"
+          onClick={() => onChange('')}
+          style={{ ['--rm-hover-bg' as string]: 'var(--panel-alt)' }}
+        >
+          <Icon.Close size={12} />
+        </button>
+      )}
+    </div>
+  )
+}
+
+/**
+ * One control, several mutually exclusive states.
+ *
+ * Three ghost buttons in a row look like three unrelated actions; a segmented
+ * control looks like one choice, which is what a filter and a layout switch
+ * both are.
+ */
+export function Segmented<T extends string>({
+  value, onChange, options, ariaLabel,
+}: {
+  value: T
+  onChange: (next: T) => void
+  options: { value: T; label: React.ReactNode; title?: string }[]
+  ariaLabel: string
+}) {
+  return (
+    <div className="rm-seg" role="group" aria-label={ariaLabel}>
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          title={option.title}
+          aria-pressed={value === option.value}
+          className={value === option.value ? 'is-on' : undefined}
+          onClick={() => onChange(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
     </div>
   )
 }

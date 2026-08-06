@@ -968,14 +968,31 @@ Four things this phase settled that the plan did not say:
 
 ## Phase 7 — Frontend: the section shell
 
-- [ ] `App.tsx` — `'reports'` in `View`, sidebar item, route line
-- [ ] `api/types.ts` and `api/client.ts` — report types and calls
-- [ ] `pages/ReportsPage.tsx` — list, create, rename, delete, archive
-- [ ] Create dialog: connection picker with ineligible connections **disabled
+- [x] `App.tsx` — `'reports'` in `View`, sidebar item, route line
+- [x] `api/types.ts` and `api/client.ts` — report types and calls
+- [x] `pages/ReportsPage.tsx` — list, create, rename, delete, archive
+- [x] Create dialog: connection picker with ineligible connections **disabled
       and the reason shown**
-- [ ] Model picker, language picker, request textarea with `dir="auto"`
-- [ ] Returned rows spliced into state, never re-read (the read-after-write race)
-- [ ] **Gate:** `npm run typecheck` · `npm run build`
+- [x] Model picker, language picker, request textarea with `dir="auto"`
+- [x] Returned rows spliced into state, never re-read (the read-after-write race)
+- [x] **Gate:** `npm run typecheck` · `npm run build`
+
+Three notes for Phase 8:
+
+- **The card has no open action on purpose.** There is nothing to open until
+  the outline editor exists, and a link to a page that is not there is worse
+  than no link. The card deliberately does *not* wear `.rm-dash-card` for the
+  same reason — that class carries the pointer and the hover lift of something
+  you can open. Phase 8 adopts both together.
+- **The connection picker is a list, not a `<select>`.** A native `<option>`
+  can be `disabled` but cannot say *why*, and "greyed out for reasons unknown"
+  is how a user concludes the product is broken. Each row carries the
+  disclosure badge, and an ineligible one carries §7's reason underneath.
+- **`SearchField`, `Segmented` and `DisclosureBadge` moved into `ui.tsx`.**
+  Each now has two callers (the two indexes, and the chat header plus the
+  create dialog). Moved rather than copied, for the reason `ResultTable` was:
+  two copies are how the two pages quietly stop agreeing.
+  `Icon.Doc` is new — `Icon.List` is already the list-layout toggle.
 
 ## Phase 8 — Frontend: the outline editor
 

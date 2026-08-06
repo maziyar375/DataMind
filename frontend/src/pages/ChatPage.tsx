@@ -10,7 +10,7 @@ import {
   AssistantTurn, RunErrorCard, ThinkingCard, UserBubble,
 } from '../components/chat'
 import {
-  ErrorNote, Icon, PrimaryButton, Spinner, dirOf, initialOf,
+  DisclosureBadge, ErrorNote, Icon, PrimaryButton, Spinner, dirOf, initialOf,
 } from '../components/ui'
 
 export default function ChatPage() {
@@ -1458,58 +1458,6 @@ function HeaderSelect({
  * than floating beside the model. Dot + one word carries the state at a glance;
  * the full sentence lives in the tooltip.
  */
-function DisclosureBadge({ policy }: { policy?: string }) {
-  if (!policy) return null
-
-  // `tone` names a token trio (--green / --green-bg / --green-border, likewise
-  // amber) redefined per theme. The label uses the neutral --text2 (not the
-  // tone) so it flips near-white in dark / near-black in light and reads as
-  // native to the active palette; a saturated tone label looked like a stray
-  // light-mode accent on the dark UI. The dot alone carries the policy colour.
-  const copy: Record<string, { short: string; full: string; tone: 'green' | 'amber' }> = {
-    NONE: { short: 'Private', full: 'No rows shared with the model provider', tone: 'green' },
-    AGGREGATE: { short: 'Totals', full: 'Only aggregate totals shared with the model provider', tone: 'green' },
-    SAMPLE: { short: 'Sample', full: 'Sample rows shared with the model provider', tone: 'amber' },
-    FULL: { short: 'All rows', full: 'All rows shared with the model provider', tone: 'amber' },
-  }
-  const entry = copy[policy]
-  if (!entry) return null
-
-  return (
-    <span
-      title={`${entry.full} — controls how much of a query result is sent to the model provider.`}
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 5,
-        flexShrink: 0,
-        fontSize: 10,
-        fontWeight: 600,
-        letterSpacing: '0.01em',
-        // Neutral, theme-aware label on a native surface — near-white in dark,
-        // near-black in light — so the chip belongs to whichever palette is
-        // active. The dot alone carries the amber/green policy signal.
-        color: 'var(--text2)',
-        background: `var(--${entry.tone}-bg)`,
-        border: `1px solid var(--${entry.tone}-border)`,
-        padding: '2px 7px 2px 6px',
-        borderRadius: 999,
-        whiteSpace: 'nowrap',
-      }}
-    >
-      <span
-        style={{
-          width: 5,
-          height: 5,
-          borderRadius: '50%',
-          background: `var(--${entry.tone})`,
-        }}
-      />
-      {entry.short}
-    </span>
-  )
-}
-
 /** Terminal states that owe the reader an explanation. */
 function isFailure(status: string): boolean {
   return ['FAILED', 'CANCELLED', 'TIMED_OUT'].includes(status)

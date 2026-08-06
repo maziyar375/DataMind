@@ -21,8 +21,8 @@ import {
 } from '../components/dashboard'
 import { TileEditor } from '../components/tile-editor'
 import {
-  Dot, EmptyState, ErrorNote, GhostButton, Icon, Modal, PrimaryButton, Spinner, TextInput,
-  relativeTime,
+  Dot, EmptyState, ErrorNote, GhostButton, Icon, Modal, PrimaryButton, SearchField,
+  Segmented, Spinner, TextInput, relativeTime,
 } from '../components/ui'
 
 export default function DashboardsPage() {
@@ -234,6 +234,7 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
           <SearchField
             value={query}
             onChange={setQuery}
+            ariaLabel="Search dashboards"
             placeholder={`Search ${cards.length} dashboard${cards.length === 1 ? '' : 's'}…`}
           />
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
@@ -467,75 +468,6 @@ function IndexAttention({
       <button type="button" onClick={onShowAll}>
         Show all
       </button>
-    </div>
-  )
-}
-
-/** Search with the glyph inside the field, and a clear button once typed in. */
-function SearchField({
-  value, onChange, placeholder,
-}: {
-  value: string
-  onChange: (next: string) => void
-  placeholder: string
-}) {
-  return (
-    <div className="rm-search">
-      <span aria-hidden className="rm-search-icon"><Icon.Search size={14} /></span>
-      <input
-        type="search"
-        aria-label="Search dashboards"
-        value={value}
-        placeholder={placeholder}
-        onChange={(event) => onChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') onChange('')
-        }}
-      />
-      {value && (
-        <button
-          type="button"
-          aria-label="Clear search"
-          className="rm-search-clear rm-icon-btn"
-          onClick={() => onChange('')}
-          style={{ ['--rm-hover-bg' as string]: 'var(--panel-alt)' }}
-        >
-          <Icon.Close size={12} />
-        </button>
-      )}
-    </div>
-  )
-}
-
-/**
- * One control, several mutually exclusive states.
- *
- * Three ghost buttons in a row look like three unrelated actions; a segmented
- * control looks like one choice, which is what a filter and a layout switch
- * both are.
- */
-function Segmented<T extends string>({
-  value, onChange, options, ariaLabel,
-}: {
-  value: T
-  onChange: (next: T) => void
-  options: { value: T; label: React.ReactNode; title?: string }[]
-  ariaLabel: string
-}) {
-  return (
-    <div className="rm-seg" role="group" aria-label={ariaLabel}>
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          title={option.title}
-          aria-pressed={value === option.value}
-          className={value === option.value ? 'is-on' : undefined}
-          onClick={() => onChange(option.value)}
-        >
-          {option.label}
-        </button>
-      ))}
     </div>
   )
 }

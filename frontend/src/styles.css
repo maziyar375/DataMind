@@ -400,7 +400,12 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 
 /* Index cards: the whole card is the link (the title button stretches over
    it), so the card itself carries the affordance — pointer, lift, and a
-   border that warms on approach. */
+   border that warms on approach.
+
+   The index chrome below and around it — .rm-dash-index, .rm-dash-toolbar,
+   .rm-search, .rm-seg, .rm-toolbar-select, .rm-bone — is shared with the
+   Reports index, which is the same kind of page. The `dash` in those names is
+   where they were written, not who may use them. */
 .rm-dash-card {
   cursor: pointer;
   border: 1px solid var(--border);

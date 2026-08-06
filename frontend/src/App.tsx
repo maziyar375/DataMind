@@ -7,10 +7,11 @@ import DashboardsPage from './pages/DashboardsPage'
 import DataSourcesPage from './pages/DataSourcesPage'
 import LlmProvidersPage from './pages/LlmProvidersPage'
 import LoginPage from './pages/LoginPage'
+import ReportsPage from './pages/ReportsPage'
 import UsersPage from './pages/UsersPage'
 import { applyTheme, type ThemeName } from './theme/tokens'
 
-export type View = 'chat' | 'dashboards' | 'connections' | 'settings' | 'users'
+export type View = 'chat' | 'dashboards' | 'reports' | 'connections' | 'settings' | 'users'
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null)
@@ -108,6 +109,7 @@ export default function App() {
         <div style={{ flex: 1, display: 'flex', minWidth: 0 }}>
           {view === 'chat' && <ChatPage />}
           {view === 'dashboards' && <DashboardsPage />}
+          {view === 'reports' && <ReportsPage />}
           {view === 'connections' && <DataSourcesPage />}
           {view === 'settings' && <LlmProvidersPage />}
           {view === 'users' && <UsersPage currentUser={user} />}
@@ -132,6 +134,7 @@ function Sidebar({
       [
         { key: 'chat' as const, label: 'Chat', icon: <Icon.Chat /> },
         { key: 'dashboards' as const, label: 'Dashboards', icon: <Icon.Grid /> },
+        { key: 'reports' as const, label: 'Reports', icon: <Icon.Doc /> },
         { key: 'connections' as const, label: 'Data sources', icon: <Icon.Database /> },
         { key: 'settings' as const, label: 'LLM providers', icon: <Icon.Sparkle /> },
         ...(user.role === 'ADMIN'
