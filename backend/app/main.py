@@ -16,6 +16,8 @@ from app.infra.db.session import dispose_engine, get_sessionmaker
 from app.services.bootstrap import ensure_admin
 from app.workers.inprocess import InProcessRunExecutor
 from app.workers.reconciler import reconcile_once, reconciler_loop
+from app.workers.report import ReportRunExecutor
+from app.workers.report import sweep_orphans as sweep_report_runs
 from app.workers.semantic import SemanticJobExecutor, sweep_orphans
 
 log = get_logger(__name__)
@@ -28,6 +30,7 @@ async def lifespan(app: FastAPI):
 
     app.state.run_executor = InProcessRunExecutor(settings)
     app.state.semantic_executor = SemanticJobExecutor(settings)
+    app.state.report_executor = ReportRunExecutor(settings)
 
     async with get_sessionmaker()() as session:
         await ensure_admin(session, settings)
@@ -42,6 +45,12 @@ async def lifespan(app: FastAPI):
     stranded = await sweep_orphans()
     if stranded:
         log.warning("startup_failed_stranded_semantic_jobs", count=stranded)
+
+    # And for a report run — except that one may have written real results
+    # before the process died, and those stay: the run is failed, not erased.
+    interrupted = await sweep_report_runs()
+    if interrupted:
+        log.warning("startup_failed_stranded_report_runs", count=interrupted)
 
     reconciler = asyncio.create_task(reconciler_loop(settings))
     log.info("raymand_started", environment=settings.environment)

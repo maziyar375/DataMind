@@ -839,6 +839,102 @@ class ReportBlockUpdate(BaseModel):
     position: int | None = Field(default=None, ge=0)
 
 
+# ── report runs ──────────────────────────────────────────────────────────
+class ReportRunRead(BaseModel):
+    """One generation, as the history list and the progress header see it.
+
+    `status` is **derived** from the run's parts rather than set, which is why
+    `PARTIAL` is in it: some sections succeeded and some did not, and calling
+    that either a success or a failure is a lie the reader has to open the
+    document to catch.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    report_id: UUID
+    status: str = "QUEUED"
+    # Free text the header renders as «در حال تولید بخش ۳ از ۷», together with
+    # the two counters below.
+    phase: str = ""
+    progress_current: int = 0
+    progress_total: int = 0
+    llm_config_id: UUID | None = None
+    # Provider and model only — which model wrote this document, kept beside it.
+    model_snapshot: dict[str, Any] = Field(default_factory=dict)
+    prompt_version: str = ""
+    language: str = "en"
+    error_message: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_at: datetime
+
+
+class ReportBlockResultRead(BaseModel):
+    """One block's numbers, as they were at the moment they were computed.
+
+    The heading, the question and the statement are snapshots, not lookups: a
+    run stays readable after its block is edited or deleted.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    block_id: UUID | None = None
+    section_id: UUID | None = None
+    position: int = 0
+    heading_snapshot: str = ""
+    question_snapshot: str = ""
+    # Shown and auditable, exactly as a chat run's SQL is.
+    sql_text: str = ""
+    sql_hash: str = ""
+    columns: list[dict[str, Any]] = Field(default_factory=list)
+    rows: list[list[Any]] = Field(default_factory=list)
+    row_count: int = 0
+    truncated: bool = False
+    vega_spec: dict[str, Any] | None = None
+    chart_source: str | None = None
+    chart_note: str | None = None
+    kpi: dict[str, Any] | None = None
+    computed_at: datetime
+    duration_ms: int = 0
+    status: str = "OK"
+    error_code: str | None = None
+    error_message: str | None = None
+
+
+class ReportSectionResultRead(BaseModel):
+    """One section's prose, for one run.
+
+    Two prose fields, not one: `edited_prose` is NULL until the user writes
+    over it, and a regeneration starts a *new* run rather than overwriting
+    this one — so editing never destroys and regenerating never overwrites.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    section_id: UUID | None = None
+    position: int = 0
+    heading_snapshot: str = ""
+    prose: str = ""
+    edited_prose: str | None = None
+    # Figures in the prose that no result row supports. A finding is a
+    # suspicion, never a verdict — it flags, it never blocks.
+    numeric_check: dict[str, Any] | None = None
+    status: str = "OK"
+    error_message: str | None = None
+    created_at: datetime
+
+
+class ReportRunDetailRead(ReportRunRead):
+    """The poll target: the run, and everything written so far.
+
+    Not "the finished document" — a run half-way through returns the half it
+    has, which is what makes the progressive render need no protocol of its own.
+    """
+
+    blocks: list[ReportBlockResultRead] = Field(default_factory=list)
+    sections: list[ReportSectionResultRead] = Field(default_factory=list)
+
+
 # ── conversations & messages ─────────────────────────────────────────────
 class ConversationCreate(BaseModel):
     title: str | None = None

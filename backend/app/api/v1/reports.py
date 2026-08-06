@@ -18,18 +18,22 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Request, status
 
 from app.api.deps import CtxDep, DbDep, SettingsDep
 from app.api.schemas import (
     ReportBlockCheckRead,
     ReportBlockCreate,
     ReportBlockRead,
+    ReportBlockResultRead,
     ReportBlockUpdate,
     ReportCreate,
     ReportRead,
+    ReportRunDetailRead,
+    ReportRunRead,
     ReportSectionCreate,
     ReportSectionRead,
+    ReportSectionResultRead,
     ReportSectionUpdate,
     ReportSummaryRead,
     ReportUpdate,
@@ -293,3 +297,88 @@ async def create_block(
         report_id, section_id, ctx.user_id, **payload.model_dump()
     )
     return ReportBlockRead.model_validate(block)
+
+
+# ── runs ─────────────────────────────────────────────────────────────────
+# `/runs/{run_id}/cancel` is declared above `/runs/{run_id}` for the reason the
+# module docstring gives one level up: the literal must not be read as an id.
+@router.post(
+    "/{report_id}/runs",
+    response_model=ReportRunRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def create_run(
+    report_id: UUID,
+    request: Request,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+) -> ReportRunRead:
+    """Start a generation and return immediately.
+
+    202, not 200: a report is minutes of queries and model calls, so the answer
+    to "did it work" lives on the run row the client then polls — the same
+    trade `semantic_jobs` makes.
+    """
+    service = ReportService(db, settings)
+    run = await service.create_run(report_id, ctx.user_id)
+    read = ReportRunRead.model_validate(run)
+    # Committed before the worker starts, or the worker races the transaction
+    # that created the row it is about to load.
+    await db.commit()
+    await request.app.state.report_executor.submit(run.id)
+    return read
+
+
+@router.get("/{report_id}/runs", response_model=list[ReportRunRead])
+async def list_runs(
+    report_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+) -> list[ReportRunRead]:
+    """The report's history, newest first. Rows only — a past run's results are
+    read one run at a time."""
+    runs = await ReportService(db, settings).runs_of(report_id, ctx.user_id)
+    return [ReportRunRead.model_validate(run) for run in runs]
+
+
+@router.post("/{report_id}/runs/{run_id}/cancel", response_model=ReportRunRead)
+async def cancel_run(
+    report_id: UUID,
+    run_id: UUID,
+    request: Request,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+) -> ReportRunRead:
+    """Ask the run to stop. Results already computed are kept.
+
+    The row is marked cancelled here rather than by the worker, so the next
+    poll says so even while an in-flight query is still finishing.
+    """
+    service = ReportService(db, settings)
+    await service.cancel_run(report_id, run_id, ctx.user_id)
+    await db.commit()
+    await request.app.state.report_executor.cancel(run_id)
+    return ReportRunRead.model_validate(await service.run(report_id, run_id, ctx.user_id))
+
+
+@router.get("/{report_id}/runs/{run_id}", response_model=ReportRunDetailRead)
+async def get_run(
+    report_id: UUID, run_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+) -> ReportRunDetailRead:
+    """**The poll target.** The run, and every result written so far.
+
+    Not "the finished document": a run half-way through returns the half it
+    has, which is what makes the progressive render need no protocol of its own
+    and lets a browser that reloads mid-run resume exactly where it was.
+    """
+    service = ReportService(db, settings)
+    run = await service.run(report_id, run_id, ctx.user_id)
+    blocks, sections = await service.run_results(run.id)
+    return ReportRunDetailRead(
+        **{
+            name: getattr(run, name)
+            for name in ReportRunRead.model_fields
+        },
+        blocks=[ReportBlockResultRead.model_validate(b) for b in blocks],
+        sections=[ReportSectionResultRead.model_validate(s) for s in sections],
+    )

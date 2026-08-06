@@ -894,22 +894,34 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Phase 5 — Generation worker: data only
 
-- [ ] `workers/report.py` — concurrency cap, no heartbeat,
+- [x] `workers/report.py` — concurrency cap, no heartbeat,
       cooperative-then-hard cancel, `sweep_orphans`
-- [ ] Both registered in `main.py` lifespan
-- [ ] `POST /reports/{id}/runs` → 202
-- [ ] `GET /reports/{id}/runs/{rid}` — run + everything written so far
-- [ ] Disclosure **re-checked at run start**, run fails with a clear message
-- [ ] Blocks executed via `execute_many`, grouped by connection
-- [ ] `want_kpi=True` for `METRIC` blocks
-- [ ] Each block result written **as it lands**; `phase` / `progress_*` updated
-- [ ] Run status **derived**: `SUCCEEDED` / `PARTIAL` / `FAILED`
-- [ ] `POST .../cancel`
-- [ ] `tests/integration/test_report_runs.py` — end to end, one failing block
+- [x] Both registered in `main.py` lifespan
+- [x] `POST /reports/{id}/runs` → 202
+- [x] `GET /reports/{id}/runs/{rid}` — run + everything written so far
+- [x] `GET /reports/{id}/runs` — the history rows (the §12 route; the history
+      *UI* is still Phase 11)
+- [x] Disclosure **re-checked at run start**, run fails with a clear message
+- [x] Blocks executed via `execute_many`, grouped by connection
+- [x] `want_kpi=True` for `METRIC` blocks
+- [x] Each block result written **as it lands**; `phase` / `progress_*` updated
+- [x] Run status **derived**: `SUCCEEDED` / `PARTIAL` / `FAILED`
+- [x] `POST .../cancel`
+- [x] `tests/integration/test_report_runs.py` — end to end, one failing block
       does not fail its neighbours, cancellation, tightened disclosure
-- [ ] `tests/unit/test_report_guard.py` — **the guard-bypass test**: the
+- [x] `tests/unit/test_report_guard.py` — **the guard-bypass test**: the
       hostile corpus written into `report_blocks.sql` is rejected at execution
-- [ ] **Gate:** `make test` · `make guard` · `make lint`
+- [x] **Gate:** `make test` · `make guard` · `make lint`
+
+Two notes for Phase 6, both learned by running it against the real fixture:
+
+- **Progress is written per result row, but every block is executed by one
+  `execute_many` call** — the plan's own §8 ordering. So `progress_current`
+  ticks quickly at the end of the query phase; the progressive render the user
+  actually watches arrives with the per-section prose Phase 6 writes.
+- `query_service`'s user-facing failure messages said "tile". A report reader
+  now sees them, so they were made feature-neutral ("this query", "check it
+  again"). The log event names and the `TileResult` type keep their names.
 
 ## Phase 6 — Prose, executive summary, numeric check
 

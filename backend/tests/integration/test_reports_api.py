@@ -38,7 +38,14 @@ from app.core.errors import (
     ValidationError,
 )
 from app.domain.ports.database import ResultColumn
-from app.infra.db.models import Report, ReportBlock, ReportSection
+from app.infra.db.models import (
+    Report,
+    ReportBlock,
+    ReportBlockResult,
+    ReportRun,
+    ReportSection,
+    ReportSectionResult,
+)
 from app.main import create_app
 from app.services.query_service import TileResult
 from app.services.sql_draft_service import SqlDraft
@@ -49,6 +56,7 @@ SECTION_ID = uuid4()
 BLOCK_ID = uuid4()
 CONNECTION_ID = uuid4()
 LLM_ID = uuid4()
+RUN_ID = uuid4()
 
 
 def _report(owner_id: UUID = USER) -> Report:
@@ -101,6 +109,103 @@ def _block() -> ReportBlock:
     )
 
 
+def _run(status: str = "RUNNING") -> ReportRun:
+    return ReportRun(
+        id=RUN_ID,
+        report_id=REPORT_ID,
+        owner_id=USER,
+        status=status,
+        phase="Running 2 queries",
+        progress_current=1,
+        progress_total=2,
+        llm_config_id=LLM_ID,
+        model_snapshot={"provider": "openai", "model": "deepseek-chat"},
+        prompt_version="r1",
+        language="fa",
+        error_message=None,
+        started_at=utcnow(),
+        finished_at=None,
+        created_at=utcnow(),
+    )
+
+
+def _block_result() -> ReportBlockResult:
+    return ReportBlockResult(
+        id=uuid4(),
+        run_id=RUN_ID,
+        block_id=BLOCK_ID,
+        section_id=SECTION_ID,
+        position=0,
+        heading_snapshot="روند درآمد",
+        question_snapshot="revenue by month",
+        sql_text="SELECT month, revenue FROM public.sales",
+        sql_hash="abc123",
+        columns=[{"name": "month", "db_type": "date"}],
+        rows=[["2026-05-01", 120]],
+        row_count=1,
+        truncated=False,
+        vega_spec={"mark": "line"},
+        chart_source="heuristic",
+        chart_note=None,
+        kpi=None,
+        computed_at=utcnow(),
+        duration_ms=12,
+        status="OK",
+        error_code=None,
+        error_message=None,
+    )
+
+
+def _section_result() -> ReportSectionResult:
+    return ReportSectionResult(
+        id=uuid4(),
+        run_id=RUN_ID,
+        section_id=SECTION_ID,
+        position=0,
+        heading_snapshot="روند درآمد",
+        prose="",
+        edited_prose=None,
+        numeric_check=None,
+        status="OK",
+        error_message=None,
+        created_at=utcnow(),
+    )
+
+
+# One ordered log for the two things whose *order* matters on the run routes:
+# the transaction has to be committed before the worker is handed the id.
+EVENTS: list[str] = []
+
+
+class FakeExecutor:
+    """Stands in for `ReportRunExecutor`. Records, never schedules."""
+
+    def __init__(self) -> None:
+        self.submitted: list[UUID] = []
+        self.cancelled: list[UUID] = []
+
+    async def submit(self, run_id: UUID) -> None:
+        EVENTS.append("submit")
+        self.submitted.append(run_id)
+
+    async def cancel(self, run_id: UUID) -> bool:
+        EVENTS.append("cancel")
+        self.cancelled.append(run_id)
+        return True
+
+
+class FakeSession:
+    """Only `commit`, which the two run routes call before handing off.
+
+    The commit is not incidental: the worker loads the row it was handed in a
+    session of its own, and an uncommitted transaction would have it looking
+    for a run that does not exist yet.
+    """
+
+    async def commit(self) -> None:
+        EVENTS.append("commit")
+
+
 class NoLazyLoads:
     """A report row whose relationship raises if a response reads it.
 
@@ -131,6 +236,8 @@ class FakeService:
     sections: list[ReportSection] = []
     blocks: list[ReportBlock] = []
     draft: Any = None
+    block_results: list[ReportBlockResult] = []
+    section_results: list[ReportSectionResult] = []
 
     def __init__(self, _db: Any, _settings: Any) -> None:
         pass
@@ -239,6 +346,31 @@ class FakeService:
         )
         return _block(), FakeService.draft
 
+    async def create_run(self, report_id: UUID, owner_id: UUID) -> ReportRun:
+        self._record("create_run", report_id=report_id, owner_id=owner_id)
+        return _run("QUEUED")
+
+    async def runs_of(self, report_id: UUID, owner_id: UUID) -> list[ReportRun]:
+        self._record("runs_of", report_id=report_id, owner_id=owner_id)
+        return [_run("SUCCEEDED")]
+
+    async def run(self, report_id: UUID, run_id: UUID, owner_id: UUID) -> ReportRun:
+        self._record("run", report_id=report_id, run_id=run_id, owner_id=owner_id)
+        return _run()
+
+    async def run_results(
+        self, run_id: UUID
+    ) -> tuple[list[ReportBlockResult], list[ReportSectionResult]]:
+        return list(FakeService.block_results), list(FakeService.section_results)
+
+    async def cancel_run(
+        self, report_id: UUID, run_id: UUID, owner_id: UUID
+    ) -> bool:
+        self._record(
+            "cancel_run", report_id=report_id, run_id=run_id, owner_id=owner_id
+        )
+        return True
+
 
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> Any:
@@ -260,10 +392,16 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Any:
             row_count=1,
         ),
     )
+    FakeService.block_results = [_block_result()]
+    FakeService.section_results = [_section_result()]
+    EVENTS.clear()
     monkeypatch.setattr(reports, "ReportService", FakeService)
 
     app = create_app()
-    app.dependency_overrides[deps.get_db] = lambda: None
+    # The lifespan does not run under a bare `TestClient`, so the executor the
+    # run routes hand off to is installed here.
+    app.state.report_executor = FakeExecutor()
+    app.dependency_overrides[deps.get_db] = FakeSession
     app.dependency_overrides[deps.get_ctx] = lambda: RequestContext(
         user_id=USER, email="user@test.local", role="MEMBER", correlation_id="test"
     )
@@ -531,6 +669,119 @@ def test_a_check_that_produced_no_draft_still_answers(client: Any) -> None:
     assert body["chart_options"] == []
 
 
+# ── runs ─────────────────────────────────────────────────────────────────
+def test_starting_a_run_is_a_202_and_reaches_the_executor(client: Any) -> None:
+    """202, not 200: the answer to "did it work" lives on the row the client
+    then polls, exactly as it does for a semantic job."""
+    response = client.post(f"/api/v1/reports/{REPORT_ID}/runs")
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["id"] == str(RUN_ID)
+    assert body["status"] == "QUEUED"
+    assert client.app.state.report_executor.submitted == [RUN_ID]
+
+
+def test_a_run_is_committed_before_the_worker_is_handed_it(client: Any) -> None:
+    """The worker loads the row by id in a session of its own. Handing it off
+    inside an open transaction is a worker looking for a run that is not there
+    yet."""
+    client.post(f"/api/v1/reports/{REPORT_ID}/runs")
+
+    assert EVENTS == ["commit", "submit"]
+
+
+def test_a_second_concurrent_run_is_a_409(client: Any) -> None:
+    FakeService.raises = ConflictError("This report is already being generated.")
+
+    response = client.post(f"/api/v1/reports/{REPORT_ID}/runs")
+
+    assert response.status_code == 409
+
+
+def test_a_report_with_no_checked_block_cannot_be_generated(client: Any) -> None:
+    """An unchecked block carries no statement, and a run of nothing but those
+    produces a document of error messages."""
+    FakeService.raises = ValidationError(
+        "None of this report's blocks has a query yet."
+    )
+
+    response = client.post(f"/api/v1/reports/{REPORT_ID}/runs")
+
+    assert response.status_code == 422
+
+
+def test_polling_a_run_returns_everything_written_so_far(client: Any) -> None:
+    """The whole progressive-rendering design: the response is a snapshot of
+    what exists at this instant, not "the finished document"."""
+    response = client.get(f"/api/v1/reports/{REPORT_ID}/runs/{RUN_ID}")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "RUNNING"
+    # The header renders «بخش ۱ از ۲» from these three, and they arrive with
+    # the partial results rather than after them.
+    assert (body["phase"], body["progress_current"], body["progress_total"]) == (
+        "Running 2 queries",
+        1,
+        2,
+    )
+    block = body["blocks"][0]
+    assert block["heading_snapshot"] == "روند درآمد"
+    assert block["row_count"] == 1
+    assert block["vega_spec"] == {"mark": "line"}
+    # Snapshotted beside the numbers, so the run stays readable after the block
+    # is edited or deleted.
+    assert block["sql_text"].startswith("SELECT")
+    assert body["sections"][0]["edited_prose"] is None
+
+
+def test_a_run_carries_which_model_wrote_it(client: Any) -> None:
+    """Six months later nobody remembers which model produced a document."""
+    body = client.get(f"/api/v1/reports/{REPORT_ID}/runs/{RUN_ID}").json()
+
+    assert body["model_snapshot"] == {"provider": "openai", "model": "deepseek-chat"}
+    assert body["prompt_version"] == "r1"
+    assert body["language"] == "fa"
+
+
+def test_a_run_never_carries_connection_internals(client: Any) -> None:
+    body = client.get(f"/api/v1/reports/{REPORT_ID}/runs/{RUN_ID}").text
+
+    for forbidden in ("encrypted_password", "api_key", "username"):
+        assert forbidden not in body
+
+
+def test_the_history_is_rows_not_documents(client: Any) -> None:
+    """A history list shows when and how each run went; the results of one are
+    read one run at a time."""
+    response = client.get(f"/api/v1/reports/{REPORT_ID}/runs")
+
+    assert response.status_code == 200
+    row = response.json()[0]
+    assert row["status"] == "SUCCEEDED"
+    assert "blocks" not in row
+
+
+def test_cancelling_marks_the_row_then_asks_the_worker(client: Any) -> None:
+    """The row is written first so the next poll says CANCELLED even while an
+    in-flight query is still finishing."""
+    response = client.post(f"/api/v1/reports/{REPORT_ID}/runs/{RUN_ID}/cancel")
+
+    assert response.status_code == 200
+    called = [name for name, _ in FakeService.calls]
+    assert called.index("cancel_run") < called.index("run")
+    assert client.app.state.report_executor.cancelled == [RUN_ID]
+
+
+def test_another_users_run_is_a_404(client: Any) -> None:
+    FakeService.raises = NotFoundError("Report run not found.")
+
+    assert (
+        client.get(f"/api/v1/reports/{REPORT_ID}/runs/{RUN_ID}").status_code == 404
+    )
+
+
 def test_deleting_returns_204(client: Any) -> None:
     assert client.delete(f"/api/v1/reports/{REPORT_ID}").status_code == 204
     assert (
@@ -573,6 +824,10 @@ ROUTES: list[tuple[str, str, dict | None]] = [
     ("post", f"/{REPORT_ID}/blocks/{BLOCK_ID}/check", None),
     ("patch", f"/{REPORT_ID}/blocks/{BLOCK_ID}", {"question": "revenue by week"}),
     ("delete", f"/{REPORT_ID}/blocks/{BLOCK_ID}", None),
+    ("post", f"/{REPORT_ID}/runs", None),
+    ("get", f"/{REPORT_ID}/runs", None),
+    ("get", f"/{REPORT_ID}/runs/{RUN_ID}", None),
+    ("post", f"/{REPORT_ID}/runs/{RUN_ID}/cancel", None),
 ]
 
 
@@ -611,6 +866,7 @@ def test_the_sweep_covers_every_route_the_app_publishes() -> None:
             path.replace(str(REPORT_ID), "{report_id}")
             .replace(str(SECTION_ID), "{section_id}")
             .replace(str(BLOCK_ID), "{block_id}")
+            .replace(str(RUN_ID), "{run_id}")
         )
 
     assert {(m, _template(p)) for m, p in covered} == published
