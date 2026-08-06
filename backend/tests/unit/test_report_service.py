@@ -437,6 +437,35 @@ async def test_a_new_section_is_appended_past_the_last_one() -> None:
     assert section.position == 8
 
 
+async def test_a_section_can_be_created_first_and_not_only_appended() -> None:
+    """Position 0 is a real position — it is where the executive summary goes.
+
+    Found by generating a report through the API rather than by reading the
+    code: `if not section.position` treated an explicit 0 as "not given" and
+    silently appended the summary to the end of the document, where a summary
+    is worth nothing.
+    """
+    existing = _section()
+    existing.position = 7
+    db = FakeDb(report=_report(), sections=[existing], connection=_connection())
+
+    section = await _service(db).add_section(
+        REPORT_ID, OWNER, heading="خلاصه مدیریتی", position=0
+    )
+
+    assert section.position == 0
+
+
+async def test_a_block_can_be_created_first_too() -> None:
+    db = FakeDb(report=_report(), sections=[_section()], connection=_connection())
+
+    block = await _service(db).add_block(
+        REPORT_ID, SECTION_ID, OWNER, question="revenue", position=0
+    )
+
+    assert block.position == 0
+
+
 # ── proposing an outline ─────────────────────────────────────────────────
 class _Proposal:
     """A stand-in for `app.reports.outline.propose`, which the service calls."""

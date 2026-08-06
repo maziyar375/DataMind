@@ -134,6 +134,92 @@ today, because next quarter it silently reports the wrong period.
 itself names a period — and write that one the same relative way.{conventions}"""
 
 
+# ── the prose ────────────────────────────────────────────────────────────
+# `ANSWER_SYSTEM` is deliberately **not** reused. It is tuned for a two-sentence
+# chat bubble that leads with the number answering one question, and reusing it
+# is exactly how a report ends up reading like a chat transcript: a heading,
+# then "Revenue was $1.24M." — repeated seven times.
+#
+# Every rule below is a failure someone would otherwise report as a bug.
+REPORT_SECTION_SYSTEM = """You write one section of a written analytical \
+report over a company's own data.
+
+You are given a heading, what the section should cover, and the results of \
+the queries that were run for it. You return the paragraph that goes under \
+that heading — prose a business reader reads straight through.
+
+Rules:
+- Write in the language named at the top of the message. Write in it whatever \
+language the heading, the questions or the column names happen to be in.
+- Two to four sentences. Prose only: no heading, no bullet list, no markdown, \
+no SQL, no column names as jargon.
+- Use ONLY the values given. Never invent a figure, a name or a period. If \
+you want to say something the results do not show, do not say it.
+- When several results are given, relate them to each other. They are under \
+one heading because one thought covers them — say what the second tells you \
+about the first.
+- Do not repeat the heading as a sentence, and do not announce what you are \
+about to do. Start with what the data says.
+- When a caveat is given with a result (a capped list, a partial period), \
+work it into a clause rather than ignoring it or quoting it verbatim.
+- When a headline figure is given, it is already computed and shown to the \
+reader: refer to it, do not restate it to more digits than it carries.
+- If every result is empty, say plainly that there is nothing to report for \
+this section, in one sentence, and stop."""
+
+REPORT_SECTION_USER = """Write this section in: {language}
+
+The report this section belongs to, in the reader's own words:
+{request}
+
+Heading: {heading}
+What this section should cover: {intent}
+
+{results}"""
+
+
+REPORT_SUMMARY_SYSTEM = """You write the executive summary of an analytical \
+report that is already written.
+
+You are given the report's sections, each with the paragraph that was written \
+for it. You return the summary a reader gets instead of reading the rest.
+
+Rules:
+- Write in the language named at the top of the message.
+- Three to five sentences. Prose only: no heading, no bullet list, no markdown.
+- Say only what the sections say. **Every figure you use must already appear \
+in a section below** — you are given no data of your own, so a number that is \
+not there is invented.
+- Lead with the finding that matters most to a decision, not with the first \
+section.
+- Do not list the sections and do not describe the report's structure. \
+"This report examines..." is not a finding.
+- If the sections found nothing worth reporting, say that in one sentence."""
+
+REPORT_SUMMARY_USER = """Write this summary in: {language}
+
+The report, in the reader's own words:
+{request}
+
+The sections, as written:
+{sections}"""
+
+
+#: What a section says when every one of its queries came back empty. Written
+#: here rather than by a model: it costs no call, it cannot hallucinate the
+#: returns that were not there, and it is the one sentence in a report whose
+#: wording must never vary. A report that says "no returns were recorded in
+#: this period" is correct; one that invents returns is not.
+NO_DATA_SENTENCE = {
+    "fa": "در این بازه داده‌ای برای این بخش ثبت نشده است.",
+    "en": "No data was recorded for this section in this period.",
+}
+
+
+def no_data_sentence(language: str) -> str:
+    return NO_DATA_SENTENCE.get(language, NO_DATA_SENTENCE["en"])
+
+
 def report_time_rules(
     *, database_type: str, time_window: str, conventions: str = ""
 ) -> str:

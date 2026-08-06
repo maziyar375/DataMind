@@ -333,13 +333,15 @@ class ReportService:
         if not heading:
             raise ValidationError("A section needs a heading.")
 
-        section = ReportSection(
-            id=uuid.uuid4(), report_id=report_id, **{**fields, "heading": heading}
-        )
-        if not section.position:
-            section.position = await self._next_position(
+        fields = {**fields, "heading": heading}
+        # `None`, not `0`: **position 0 is a real position** — it is where the
+        # executive summary lives — so "append to the end" has to be a distinct
+        # value from "put it first", not a falsy one.
+        if fields.get("position") is None:
+            fields["position"] = await self._next_position(
                 ReportSection, ReportSection.report_id, report_id
             )
+        section = ReportSection(id=uuid.uuid4(), report_id=report_id, **fields)
         self._db.add(section)
         await self._db.flush()
         return section
@@ -618,7 +620,10 @@ class ReportService:
             # Snapshotted, not read through the report: a past run stays
             # readable in the language it was written in.
             language=report.language,
-            progress_total=len(blocks),
+            # Every query, plus every paragraph — the two kinds of work the
+            # header counts through. The executive summary is a section like
+            # any other here, because writing it is a step too.
+            progress_total=len(blocks) + len(sections),
         )
         self._db.add(run)
         await self._db.flush()
@@ -668,6 +673,81 @@ class ReportService:
         )
         return list(blocks.scalars()), list(sections.scalars())
 
+    async def request_section_retry(
+        self, report_id: UUID, run_id: UUID, section_id: UUID, owner_id: UUID
+    ) -> ReportRun:
+        """Put a finished run back to work on one of its sections.
+
+        Everything a retry cannot recover from is refused here rather than
+        discovered by the worker: a run still in flight, a section that is not
+        part of this report, a connection that has since been removed or
+        narrowed. What the worker inherits is a run it can actually retry.
+
+        The run goes back to `RUNNING` and the viewer's existing poll shows the
+        section rebuild itself. Nothing else about the run is touched — the
+        other sections stay on screen, and the status is *re-derived* when the
+        retry lands rather than transitioned.
+        """
+        run = await self.run(report_id, run_id, owner_id)
+        if run.status in ACTIVE_RUN_STATUSES:
+            raise ConflictError(
+                "This report is already being generated. Wait for it to finish, "
+                "then retry the section."
+            )
+        section = await self.section(report_id, section_id, owner_id)
+
+        report = await self.get(report_id, owner_id)
+        if report.connection_id is None:
+            raise ValidationError(
+                "This report's connection was removed, so its sections cannot "
+                "be retried. Past runs stay readable."
+            )
+        assert_wide_enough(await self._owned_connection(report.connection_id, owner_id))
+
+        run.status = ReportRunStatus.RUNNING
+        run.phase = f"Retrying {section.heading}"[:200]
+        run.error_message = None
+        run.finished_at = None
+        await self._db.flush()
+        return run
+
+    async def section_result(
+        self, report_id: UUID, run_id: UUID, section_id: UUID, owner_id: UUID
+    ) -> ReportSectionResult:
+        await self.run(report_id, run_id, owner_id)
+        result = await self._db.execute(
+            select(ReportSectionResult).where(
+                ReportSectionResult.run_id == run_id,
+                ReportSectionResult.section_id == section_id,
+            )
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            raise NotFoundError("This run has no such section.")
+        return row
+
+    async def edit_prose(
+        self,
+        report_id: UUID,
+        run_id: UUID,
+        section_id: UUID,
+        owner_id: UUID,
+        *,
+        edited_prose: str | None,
+    ) -> ReportSectionResult:
+        """Write over a paragraph — on the run, never on the template.
+
+        `edited_prose` is a second column rather than an overwrite: the model's
+        own words stay beside the user's, so a regeneration cannot destroy
+        writing and reverting is free. Sending `null` is that revert, which is
+        why the column is nullable and why NULL has to keep meaning *not
+        edited* rather than *edited to nothing*.
+        """
+        row = await self.section_result(report_id, run_id, section_id, owner_id)
+        row.edited_prose = edited_prose
+        await self._db.flush()
+        return row
+
     async def cancel_run(self, report_id: UUID, run_id: UUID, owner_id: UUID) -> bool:
         """Mark it cancelled. The worker stops between blocks and sees this.
 
@@ -715,11 +795,11 @@ class ReportService:
             raise ValidationError("A block needs a question.")
         fields = await self._clamped(report, {**fields, "question": question})
 
-        block = ReportBlock(id=uuid.uuid4(), section_id=section_id, **fields)
-        if not block.position:
-            block.position = await self._next_position(
+        if fields.get("position") is None:
+            fields["position"] = await self._next_position(
                 ReportBlock, ReportBlock.section_id, section_id
             )
+        block = ReportBlock(id=uuid.uuid4(), section_id=section_id, **fields)
         self._db.add(block)
         await self._db.flush()
         return block

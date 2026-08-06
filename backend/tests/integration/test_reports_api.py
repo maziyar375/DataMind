@@ -183,6 +183,7 @@ class FakeExecutor:
     def __init__(self) -> None:
         self.submitted: list[UUID] = []
         self.cancelled: list[UUID] = []
+        self.retried: list[tuple[UUID, UUID]] = []
 
     async def submit(self, run_id: UUID) -> None:
         EVENTS.append("submit")
@@ -192,6 +193,10 @@ class FakeExecutor:
         EVENTS.append("cancel")
         self.cancelled.append(run_id)
         return True
+
+    async def submit_retry(self, run_id: UUID, section_id: UUID) -> None:
+        EVENTS.append("submit_retry")
+        self.retried.append((run_id, section_id))
 
 
 class FakeSession:
@@ -370,6 +375,39 @@ class FakeService:
             "cancel_run", report_id=report_id, run_id=run_id, owner_id=owner_id
         )
         return True
+
+    async def request_section_retry(
+        self, report_id: UUID, run_id: UUID, section_id: UUID, owner_id: UUID
+    ) -> ReportRun:
+        self._record(
+            "request_section_retry",
+            report_id=report_id,
+            run_id=run_id,
+            section_id=section_id,
+            owner_id=owner_id,
+        )
+        return _run("RUNNING")
+
+    async def edit_prose(
+        self,
+        report_id: UUID,
+        run_id: UUID,
+        section_id: UUID,
+        owner_id: UUID,
+        *,
+        edited_prose: str | None,
+    ) -> ReportSectionResult:
+        self._record(
+            "edit_prose",
+            report_id=report_id,
+            run_id=run_id,
+            section_id=section_id,
+            owner_id=owner_id,
+            edited_prose=edited_prose,
+        )
+        row = _section_result()
+        row.edited_prose = edited_prose
+        return row
 
 
 @pytest.fixture
@@ -774,6 +812,74 @@ def test_cancelling_marks_the_row_then_asks_the_worker(client: Any) -> None:
     assert client.app.state.report_executor.cancelled == [RUN_ID]
 
 
+def test_retrying_a_section_is_a_202_onto_the_poll_the_page_is_already_running(
+    client: Any,
+) -> None:
+    """Not a request held open for half a minute: the viewer polls this run
+    already, so the retry lands through the loop it is running."""
+    response = client.post(
+        f"/api/v1/reports/{REPORT_ID}/runs/{RUN_ID}/sections/{SECTION_ID}/retry"
+    )
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "RUNNING"
+    assert client.app.state.report_executor.retried == [(RUN_ID, SECTION_ID)]
+    # Committed before the worker is handed it, exactly as a new run is.
+    assert EVENTS == ["commit", "submit_retry"]
+
+
+def test_a_retry_while_the_run_is_still_going_is_a_409(client: Any) -> None:
+    FakeService.raises = ConflictError("This report is already being generated.")
+
+    response = client.post(
+        f"/api/v1/reports/{REPORT_ID}/runs/{RUN_ID}/sections/{SECTION_ID}/retry"
+    )
+
+    assert response.status_code == 409
+
+
+def test_editing_a_paragraph_writes_the_edit_beside_the_model_s_own(
+    client: Any,
+) -> None:
+    """Two columns, not one: regenerating writes a new run and leaves this
+    one's writing exactly where it is."""
+    response = client.patch(
+        f"/api/v1/reports/{REPORT_ID}/runs/{RUN_ID}/sections/{SECTION_ID}",
+        json={"edited_prose": "درآمد را خودم نوشتم."},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["edited_prose"] == "درآمد را خودم نوشتم."
+    # The model's own words are still there to revert to.
+    assert "prose" in body
+
+
+def test_sending_null_prose_is_the_revert(client: Any) -> None:
+    """NULL has to keep meaning *not edited* rather than *edited to nothing*,
+    which is the whole reason the column is nullable."""
+    response = client.patch(
+        f"/api/v1/reports/{REPORT_ID}/runs/{RUN_ID}/sections/{SECTION_ID}",
+        json={"edited_prose": None},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["edited_prose"] is None
+    _method, kwargs = next(c for c in FakeService.calls if c[0] == "edit_prose")
+    assert kwargs["edited_prose"] is None
+
+
+def test_a_paragraph_of_a_run_that_has_none_is_a_404(client: Any) -> None:
+    FakeService.raises = NotFoundError("This run has no such section.")
+
+    response = client.patch(
+        f"/api/v1/reports/{REPORT_ID}/runs/{RUN_ID}/sections/{SECTION_ID}",
+        json={"edited_prose": "x"},
+    )
+
+    assert response.status_code == 404
+
+
 def test_another_users_run_is_a_404(client: Any) -> None:
     FakeService.raises = NotFoundError("Report run not found.")
 
@@ -828,6 +934,12 @@ ROUTES: list[tuple[str, str, dict | None]] = [
     ("get", f"/{REPORT_ID}/runs", None),
     ("get", f"/{REPORT_ID}/runs/{RUN_ID}", None),
     ("post", f"/{REPORT_ID}/runs/{RUN_ID}/cancel", None),
+    ("post", f"/{REPORT_ID}/runs/{RUN_ID}/sections/{SECTION_ID}/retry", None),
+    (
+        "patch",
+        f"/{REPORT_ID}/runs/{RUN_ID}/sections/{SECTION_ID}",
+        {"edited_prose": "درآمد را خودم نوشتم."},
+    ),
 ]
 
 

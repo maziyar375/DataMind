@@ -797,7 +797,9 @@ class ReportSectionCreate(BaseModel):
     # display text.
     intent: str = Field(default="", max_length=2000)
     kind: Literal["NORMAL", "EXECUTIVE_SUMMARY"] = "NORMAL"
-    position: int = Field(default=0, ge=0)
+    # Omitted means "append". Explicit `0` means *first* — which is where the
+    # executive summary goes, so the two cannot share a value.
+    position: int | None = Field(default=None, ge=0)
 
 
 class ReportSectionUpdate(BaseModel):
@@ -822,7 +824,8 @@ class ReportBlockCreate(BaseModel):
         "last_12_months", "previous_quarter", "ytd", "custom",
     ] = "none"
     max_rows: int | None = Field(default=None, ge=1)
-    position: int = Field(default=0, ge=0)
+    # Omitted means "append"; `0` means first. See `ReportSectionCreate`.
+    position: int | None = Field(default=None, ge=0)
 
 
 class ReportBlockUpdate(BaseModel):
@@ -922,6 +925,16 @@ class ReportSectionResultRead(BaseModel):
     status: str = "OK"
     error_message: str | None = None
     created_at: datetime
+
+
+class ReportSectionResultUpdate(BaseModel):
+    """Edit a paragraph of a saved run.
+
+    Explicit `null` reverts to what the model wrote — which is the whole reason
+    the edit lives in a column of its own rather than overwriting `prose`.
+    """
+
+    edited_prose: str | None = Field(default=None, max_length=20_000)
 
 
 class ReportRunDetailRead(ReportRunRead):

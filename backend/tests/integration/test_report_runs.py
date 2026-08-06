@@ -29,6 +29,7 @@ import pytest
 
 from app.core.clock import utcnow
 from app.core.errors import ConflictError, ValidationError
+from app.domain.ports.llm import ChatMessage, Completion
 from app.domain.value_objects import DisclosurePolicy, ReportRunStatus
 from app.infra.db.models import (
     DatabaseConnection,
@@ -38,20 +39,43 @@ from app.infra.db.models import (
     ReportBlockResult,
     ReportRun,
     ReportSection,
+    ReportSectionResult,
 )
 from app.services import query_service
 from app.services.report_service import ReportService
 from app.workers import report as worker
-from app.workers.report import derive_status, generate_run
+from app.workers.report import derive_status, generate_run, retry_section
 from tests.unit.test_query_service import SNAPSHOT, FakeConnector, FakeSettings
 
 OWNER = uuid4()
 REPORT_ID = uuid4()
 SECTION_ID = uuid4()
 OTHER_SECTION_ID = uuid4()
+SUMMARY_SECTION_ID = uuid4()
 CONNECTION_ID = uuid4()
 LLM_ID = uuid4()
 RUN_ID = uuid4()
+
+PROSE = "درآمد وضعیت پرداخت‌شده ۱۲۰ بود و در مجموع ۳ وضعیت ثبت شد."
+
+
+def _llm_config() -> LlmConfig:
+    """A provider row as the database holds one — every column set.
+
+    `max_tokens` matters: `resolve_llm` raises the floor on it for prose, and a
+    transient object that never saw a column default would carry None.
+    """
+    return LlmConfig(
+        id=LLM_ID,
+        owner_id=OWNER,
+        name="deepseek",
+        provider="openai",
+        model="m",
+        temperature=0.0,
+        max_tokens=1024,
+        encrypted_api_key=None,
+        capabilities={},
+    )
 
 # Two tables the snapshot allows, and one it does not.
 GOOD_SQL = "SELECT status, total_amount FROM public.orders"
@@ -93,7 +117,10 @@ def _report() -> Report:
 
 
 def _section(
-    section_id: UUID = SECTION_ID, position: int = 1, heading: str = "روند درآمد"
+    section_id: UUID = SECTION_ID,
+    position: int = 1,
+    heading: str = "روند درآمد",
+    kind: str = "NORMAL",
 ) -> ReportSection:
     return ReportSection(
         id=section_id,
@@ -101,9 +128,18 @@ def _section(
         position=position,
         heading=heading,
         intent="how revenue moved",
-        kind="NORMAL",
+        kind=kind,
         created_at=utcnow(),
         updated_at=utcnow(),
+    )
+
+
+def _summary_section(position: int = 0) -> ReportSection:
+    return _section(
+        SUMMARY_SECTION_ID,
+        position=position,
+        heading="خلاصه مدیریتی",
+        kind="EXECUTIVE_SUMMARY",
     )
 
 
@@ -175,6 +211,30 @@ class FakeSnapshotRow:
         self.version = 1
 
 
+class FakeGateway:
+    """Stands in for the provider. Records every prompt it was sent.
+
+    `replies` is consumed in order so a test can make the third section fail
+    while the two before it succeed — which is the case the whole
+    section-by-section design exists for.
+    """
+
+    def __init__(self, *replies: Any) -> None:
+        self.replies = list(replies) or [PROSE]
+        self.calls: list[list[ChatMessage]] = []
+
+    async def complete(self, _llm: Any, messages: Any) -> Completion:
+        self.calls.append(list(messages))
+        reply = self.replies[min(len(self.calls) - 1, len(self.replies) - 1)]
+        if isinstance(reply, Exception):
+            raise reply
+        return Completion(text=reply)
+
+    @property
+    def prompts(self) -> list[str]:
+        return [m.content for call in self.calls for m in call if m.role == "user"]
+
+
 class FakeDb:
     """Answers by table name, as the other report fakes do.
 
@@ -201,7 +261,7 @@ class FakeDb:
         self.sections = sections or []
         self.blocks = blocks or []
         self.active_runs = active_runs or []
-        self.llm_config = llm_config
+        self.llm_config = llm_config or _llm_config()
         self.snapshot = snapshot
         self.added: list[Any] = []
         self.journal: list[str] = []
@@ -212,6 +272,13 @@ class FakeDb:
         sql = str(statement).lower()
         if "schema_snapshots" in sql:
             return FakeResult([FakeSnapshotRow()] if self.snapshot else [])
+        # Declared above `report_blocks`/`report_sections`: the result tables
+        # are what a retry reads back, and "report_block_results" contains
+        # neither of the other two as a substring only by luck.
+        if "report_block_results" in sql:
+            return FakeResult(list(self.results))
+        if "report_section_results" in sql:
+            return FakeResult(list(self.prose))
         if "report_runs" in sql:
             return FakeResult(
                 list(self.active_runs)
@@ -235,13 +302,17 @@ class FakeDb:
             ReportRun: self.run,
             Report: self.report,
             DatabaseConnection: self.connection,
+            LlmConfig: self.llm_config,
         }.get(model)
 
     def add(self, obj: Any) -> None:
         self.added.append(obj)
         self.journal.append(f"add:{type(obj).__name__}")
 
-    async def delete(self, _obj: Any) -> None: ...
+    async def delete(self, obj: Any) -> None:
+        if obj in self.added:
+            self.added.remove(obj)
+        self.journal.append(f"delete:{type(obj).__name__}")
 
     async def flush(self) -> None:
         self.flushes += 1
@@ -256,6 +327,10 @@ class FakeDb:
     def results(self) -> list[ReportBlockResult]:
         return [o for o in self.added if isinstance(o, ReportBlockResult)]
 
+    @property
+    def prose(self) -> list[ReportSectionResult]:
+        return [o for o in self.added if isinstance(o, ReportSectionResult)]
+
 
 @pytest.fixture
 def connector(monkeypatch: pytest.MonkeyPatch) -> FakeConnector:
@@ -265,12 +340,35 @@ def connector(monkeypatch: pytest.MonkeyPatch) -> FakeConnector:
     return fake
 
 
+@pytest.fixture(autouse=True)
+def gateway(monkeypatch: pytest.MonkeyPatch) -> FakeGateway:
+    """No test in this file reaches a provider.
+
+    Autouse because narration is now part of *every* run: a test about block
+    execution that quietly spent a real model call would be a test that only
+    passes with an API key.
+    """
+    fake = FakeGateway()
+    monkeypatch.setattr(
+        worker.LiteLLMGateway, "from_settings", classmethod(lambda _cls, _s: fake)
+    )
+    return fake
+
+
 def _settings() -> Any:
     return FakeSettings()
 
 
 async def _generate(db: FakeDb, cancelled: asyncio.Event | None = None) -> None:
     await generate_run(db, _settings(), RUN_ID, cancelled or asyncio.Event())
+
+
+async def _retry(
+    db: FakeDb, section_id: UUID, cancelled: asyncio.Event | None = None
+) -> None:
+    await retry_section(
+        db, _settings(), RUN_ID, section_id, cancelled or asyncio.Event()
+    )
 
 
 # ── the happy path ───────────────────────────────────────────────────────
@@ -503,11 +601,17 @@ async def test_every_result_is_committed_as_it_lands(
     await _generate(db)
 
     writes = [e for e in db.journal if e != "commit"]
-    assert writes == ["add:ReportBlockResult", "add:ReportBlockResult"]
-    # Each row is followed by its own commit, never batched behind the last one.
-    first = db.journal.index("add:ReportBlockResult")
-    assert db.journal[first + 1] == "commit"
-    assert db.journal[first + 3] == "commit"
+    assert writes == [
+        "add:ReportBlockResult",
+        "add:ReportBlockResult",
+        # The paragraph lands after the numbers it is written from, and it is
+        # its own poll's worth of document.
+        "add:ReportSectionResult",
+    ]
+    # Every row is followed by its own commit, never batched behind the last.
+    for index, entry in enumerate(db.journal):
+        if entry.startswith("add:"):
+            assert db.journal[index + 1] == "commit", entry
 
 
 async def test_the_header_has_something_to_render_while_it_runs(
@@ -526,8 +630,9 @@ async def test_the_header_has_something_to_render_while_it_runs(
     await _generate(db)
 
     assert db.run is not None
-    assert db.run.progress_total == 2
-    assert db.run.progress_current == 2
+    # Two queries and one paragraph: the header counts both kinds of work.
+    assert db.run.progress_total == 3
+    assert db.run.progress_current == 3
     assert db.run.started_at is not None and db.run.finished_at is not None
 
 
@@ -606,6 +711,336 @@ async def test_a_crash_mid_run_is_a_failed_run_not_an_exception(
     assert "driver went away" in (db.run.error_message or "")
 
 
+# ── the document ─────────────────────────────────────────────────────────
+def _readable(**overrides: Any) -> FakeDb:
+    """A report that generates into a document: two sections and a summary."""
+    fields: dict[str, Any] = {
+        "run": _run(),
+        "report": _report(),
+        "connection": _connection(),
+        "sections": [
+            _summary_section(position=0),
+            _section(position=1),
+            _section(OTHER_SECTION_ID, position=2, heading="محصولات"),
+        ],
+        "blocks": [
+            _block(position=1),
+            _block(
+                sql=OTHER_SQL,
+                section_id=OTHER_SECTION_ID,
+                position=1,
+                question="top products",
+            ),
+        ],
+    }
+    return FakeDb(**{**fields, **overrides})
+
+
+async def test_each_section_gets_a_paragraph_written_over_its_own_results(
+    connector: FakeConnector, gateway: FakeGateway
+) -> None:
+    db = _readable()
+
+    await _generate(db)
+
+    assert db.run is not None and db.run.status == ReportRunStatus.SUCCEEDED
+    assert [row.heading_snapshot for row in db.prose] == [
+        "روند درآمد", "محصولات", "خلاصه مدیریتی",
+    ]
+    assert all(row.prose == PROSE for row in db.prose)
+    # Written last, but positioned where the user put it — first.
+    assert [row.position for row in db.prose] == [1, 2, 0]
+
+
+async def test_a_section_is_shown_only_its_own_blocks(
+    connector: FakeConnector, gateway: FakeGateway
+) -> None:
+    """Prose is per-section and data is per-block. A paragraph handed the whole
+    report's results would narrate the section above it."""
+    db = _readable()
+
+    await _generate(db)
+
+    revenue, products, _summary = gateway.prompts
+    assert "revenue by status" in revenue and "top products" not in revenue
+    assert "revenue by status" not in products
+
+
+async def test_the_summary_is_written_last_and_from_the_prose(
+    connector: FakeConnector, gateway: FakeGateway
+) -> None:
+    """It is given no data of its own: a summary that could reach the rows
+    would be a second place for a figure to be invented."""
+    db = _readable()
+
+    await _generate(db)
+
+    summary = gateway.prompts[-1]
+    assert PROSE in summary
+    assert "SELECT" not in summary and "total_amount" not in summary
+    # And it is the last row written, whatever position it renders at.
+    assert [r for r in db.prose if r.section_id == SUMMARY_SECTION_ID] == db.prose[-1:]
+
+
+async def test_the_prose_is_written_from_what_disclosure_permitted(
+    monkeypatch: pytest.MonkeyPatch, connector: FakeConnector, gateway: FakeGateway
+) -> None:
+    """The policy is applied at *narration* time, so the one in force now is
+    the one that governs what the model reads — never the one that happened to
+    be in force when the query ran."""
+    monkeypatch.setattr(worker, "disclose", worker.disclose)
+    db = _readable()
+
+    await _generate(db)
+
+    prompt = gateway.prompts[0]
+    # SAMPLE shares values, and these are the fixture's own rows.
+    assert "paid | 120.0" in prompt
+
+
+async def test_the_language_is_named_in_every_prose_call(
+    connector: FakeConnector, gateway: FakeGateway
+) -> None:
+    """Pinned per report, stated per call. A section whose heading is a metric
+    name must not come back in the other language."""
+    db = _readable()
+
+    await _generate(db)
+
+    assert all("Persian (فارسی)" in prompt for prompt in gateway.prompts)
+
+
+async def test_the_figures_in_a_paragraph_are_checked_against_the_results(
+    connector: FakeConnector, gateway: FakeGateway
+) -> None:
+    """Tier 2 of §9, and it costs nothing: the check runs on every section."""
+    db = _readable()
+
+    await _generate(db)
+
+    check = db.prose[0].numeric_check
+    assert check is not None
+    # Both figures are accounted for, and from different places: ۱۲۰ is a
+    # cell, ۳ is the row count — which no cell holds and every paragraph
+    # reaches for.
+    assert check["checked"] == 2
+    assert check["findings"] == []
+
+
+async def test_a_hallucinated_figure_is_flagged_and_the_section_is_still_saved(
+    connector: FakeConnector, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """It flags; it never blocks. A check that refused to save a section over
+    one figure would be worse than the hallucination it was guarding against."""
+    invented = FakeGateway("درآمد به ۹٬۹۰۰٬۰۰۰ تومان رسید.")
+    monkeypatch.setattr(
+        worker.LiteLLMGateway, "from_settings", classmethod(lambda _c, _s: invented)
+    )
+    db = _readable()
+
+    await _generate(db)
+
+    assert db.run is not None and db.run.status == ReportRunStatus.SUCCEEDED
+    row = db.prose[0]
+    assert row.status == "OK"
+    assert row.prose  # saved, in full
+    assert row.numeric_check is not None
+    assert [f["value"] for f in row.numeric_check["findings"]] == [9_900_000]
+
+
+async def test_a_section_with_no_data_is_not_a_failure(
+    connector: FakeConnector, gateway: FakeGateway
+) -> None:
+    """A report that says "nothing was recorded in this period" is correct; one
+    that hallucinates the rows is not — so the sentence is canned and no model
+    call is spent on it."""
+    empty = FakeConnector(rows=[])
+    db = _readable(sections=[_section(position=1)], blocks=[_block(position=1)])
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(query_service, "bind_connector", lambda *a, **k: empty)
+        await _generate(db)
+
+    row = db.prose[0]
+    assert row.status == "SKIPPED_NO_DATA"
+    assert row.prose == "در این بازه داده‌ای برای این بخش ثبت نشده است."
+    assert gateway.calls == [], "an empty section must cost no tokens"
+    # Not a failure: the run succeeded, and the document says so plainly.
+    assert db.run is not None and db.run.status == ReportRunStatus.SUCCEEDED
+
+
+async def test_a_section_whose_every_query_broke_is_a_failure(
+    connector: FakeConnector, gateway: FakeGateway
+) -> None:
+    """Different from emptiness, and it must stay different: a paragraph
+    written over three rejections would be fiction."""
+    db = _readable(
+        sections=[_section(position=1)], blocks=[_block(sql=REFUSED_SQL, position=1)]
+    )
+
+    await _generate(db)
+
+    row = db.prose[0]
+    assert row.status == "FAILED"
+    assert row.error_message
+    assert gateway.calls == []
+    assert db.run is not None and db.run.status == ReportRunStatus.FAILED
+
+
+async def test_a_provider_failure_costs_its_section_and_not_the_run(
+    connector: FakeConnector, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rule the semantic generator follows per table, per section here: the
+    six paragraphs that worked are worth keeping."""
+    flaky = FakeGateway(PROSE, RuntimeError("provider exploded"), PROSE)
+    monkeypatch.setattr(
+        worker.LiteLLMGateway, "from_settings", classmethod(lambda _c, _s: flaky)
+    )
+    db = _readable()
+
+    await _generate(db)
+
+    assert [row.status for row in db.prose] == ["OK", "FAILED", "OK"]
+    assert "provider exploded" in (db.prose[1].error_message or "")
+    assert db.run is not None and db.run.status == ReportRunStatus.PARTIAL
+
+
+async def test_a_run_whose_model_was_deleted_still_produces_its_numbers(
+    connector: FakeConnector,
+) -> None:
+    """`llm_config_id` is SET NULL. The queries already ran; losing the prose
+    must not lose them."""
+    db = _readable(llm_config=None)
+    db.llm_config = None
+
+    await _generate(db)
+
+    assert len(db.results) == 2
+    assert all(row.status == "OK" for row in db.results)
+    # Every paragraph says why it is missing — including the summary, which
+    # must not report "no data" when the data is there and the writer is not.
+    assert all(row.status == "FAILED" for row in db.prose)
+    assert all("model configuration" in (r.error_message or "") for r in db.prose)
+
+
+async def test_cancelling_between_sections_stops_before_the_next_call(
+    connector: FakeConnector, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cooperative: the flag is read between sections so an in-flight provider
+    call finishes rather than being abandoned mid-request."""
+    cancelled = asyncio.Event()
+    stopping = FakeGateway(PROSE, PROSE)
+
+    async def complete(_llm: Any, messages: Any) -> Completion:
+        cancelled.set()
+        return await FakeGateway.complete(stopping, _llm, messages)
+
+    monkeypatch.setattr(
+        worker.LiteLLMGateway, "from_settings", classmethod(lambda _c, _s: stopping)
+    )
+    monkeypatch.setattr(stopping, "complete", complete)
+    db = _readable()
+
+    await _generate(db, cancelled)
+
+    assert db.run is not None and db.run.status == ReportRunStatus.CANCELLED
+    # The first section was written and kept; the second was never asked for.
+    assert len(db.prose) == 1
+    assert len(stopping.calls) == 1
+
+
+# ── retrying one section ─────────────────────────────────────────────────
+async def test_a_retry_rewrites_only_its_own_rows(
+    connector: FakeConnector, gateway: FakeGateway
+) -> None:
+    db = _readable()
+    await _generate(db)
+    before = {row.id for row in db.results}
+
+    await _retry(db, SECTION_ID)
+
+    survivors = {row.id for row in db.results} & before
+    # One block result replaced, one left exactly as it was.
+    assert len(survivors) == 1
+    assert [row.heading_snapshot for row in db.prose].count("محصولات") == 1
+    assert [row.heading_snapshot for row in db.prose].count("روند درآمد") == 1
+
+
+async def test_a_retry_puts_the_section_back_where_it_was(
+    connector: FakeConnector, gateway: FakeGateway
+) -> None:
+    """A retried section must not jump to the end of the document."""
+    db = _readable()
+    await _generate(db)
+    original = next(r.position for r in db.results if r.section_id == SECTION_ID)
+
+    await _retry(db, SECTION_ID)
+
+    assert [r.position for r in db.results if r.section_id == SECTION_ID] == [original]
+
+
+async def test_a_successful_retry_turns_a_partial_run_into_a_succeeded_one(
+    monkeypatch: pytest.MonkeyPatch, connector: FakeConnector
+) -> None:
+    """No state machine anywhere: the status is read off the rows the run now
+    holds, so this falls out of replacing them."""
+    flaky = FakeGateway(RuntimeError("provider exploded"), PROSE, PROSE)
+    monkeypatch.setattr(
+        worker.LiteLLMGateway, "from_settings", classmethod(lambda _c, _s: flaky)
+    )
+    db = _readable()
+    await _generate(db)
+    assert db.run is not None and db.run.status == ReportRunStatus.PARTIAL
+
+    await _retry(db, SECTION_ID)
+
+    assert db.run.status == ReportRunStatus.SUCCEEDED
+    assert db.run.finished_at is not None
+
+
+async def test_retrying_the_summary_rewrites_it_from_the_sections_as_they_stand(
+    connector: FakeConnector, gateway: FakeGateway
+) -> None:
+    """Including a paragraph the user has since rewritten: a summary of a draft
+    nobody is looking at is not a summary."""
+    db = _readable()
+    await _generate(db)
+    db.prose[0].edited_prose = "درآمد را خودم نوشتم."
+
+    await _retry(db, SUMMARY_SECTION_ID)
+
+    summary = gateway.prompts[-1]
+    assert "درآمد را خودم نوشتم." in summary
+    assert summary.count(PROSE) == 1  # the other section's, unedited
+
+
+async def test_a_retry_of_a_deleted_section_re_derives_rather_than_hanging(
+    connector: FakeConnector, gateway: FakeGateway
+) -> None:
+    """Deleted between the request and the worker picking it up. The run must
+    not be left RUNNING."""
+    db = _readable()
+    await _generate(db)
+    db.run.status = ReportRunStatus.RUNNING  # type: ignore[union-attr]
+
+    await _retry(db, uuid4())
+
+    assert db.run is not None and db.run.status == ReportRunStatus.SUCCEEDED
+
+
+async def test_a_retry_re_checks_disclosure_like_every_other_entry(
+    connector: FakeConnector, gateway: FakeGateway
+) -> None:
+    db = _readable()
+    await _generate(db)
+    db.connection = _connection(DisclosurePolicy.NONE)
+
+    await _retry(db, SECTION_ID)
+
+    assert db.run is not None and db.run.status == ReportRunStatus.FAILED
+    assert "NONE" in (db.run.error_message or "")
+
+
 # ── starting one ─────────────────────────────────────────────────────────
 def _service(db: FakeDb) -> ReportService:
     return ReportService(db, _settings())  # type: ignore[arg-type]
@@ -617,9 +1052,7 @@ def _creatable(**overrides: Any) -> FakeDb:
         "connection": _connection(),
         "sections": [_section()],
         "blocks": [_block()],
-        "llm_config": LlmConfig(
-            id=LLM_ID, owner_id=OWNER, name="deepseek", provider="openai", model="m"
-        ),
+        "llm_config": _llm_config(),
     }
     return FakeDb(**{**fields, **overrides})
 
@@ -634,7 +1067,7 @@ async def test_a_queued_run_snapshots_the_model_and_the_language() -> None:
     assert run.status == ReportRunStatus.QUEUED
     assert run.model_snapshot == {"provider": "openai", "model": "m"}
     assert run.language == "fa"
-    assert run.progress_total == 1
+    assert run.progress_total == 2  # one block, one section
     assert run.prompt_version
 
 

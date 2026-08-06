@@ -925,21 +925,46 @@ Two notes for Phase 6, both learned by running it against the real fixture:
 
 ## Phase 6 — Prose, executive summary, numeric check
 
-- [ ] `REPORT_SECTION_*` and `REPORT_SUMMARY_*` prompts
-- [ ] Language pinned per report and stated explicitly in the prompt
-- [ ] `ANSWER_SYSTEM` deliberately **not** reused
-- [ ] `app/reports/narrate.py` — pure; results pass through `disclose()`,
+- [x] `REPORT_SECTION_*` and `REPORT_SUMMARY_*` prompts
+- [x] Language pinned per report and stated explicitly in the prompt
+- [x] `ANSWER_SYSTEM` deliberately **not** reused
+- [x] `app/reports/narrate.py` — pure; results pass through `disclose()`,
       never raw
-- [ ] `app/reports/checks.py` — Tier 2 numeric check, token-free, Persian and
+- [x] `app/reports/checks.py` — Tier 2 numeric check, token-free, Persian and
       Latin numerals, rounding and scale tolerance
-- [ ] Check **flags, never blocks**
-- [ ] Worker narrates section by section, writing each row immediately
-- [ ] Executive summary generated **last**, from finished sections
-- [ ] `SKIPPED_NO_DATA` when every block in a section is empty
-- [ ] `POST .../sections/{sid}/retry`
-- [ ] `PATCH .../sections/{sid}` → `edited_prose`
-- [ ] `tests/unit/test_report_narrate.py` · `tests/unit/test_report_checks.py`
-- [ ] **Gate:** `make test` · `make lint`
+- [x] Check **flags, never blocks**
+- [x] Worker narrates section by section, writing each row immediately
+- [x] Executive summary generated **last**, from finished sections
+- [x] `SKIPPED_NO_DATA` when every block in a section is empty
+- [x] `POST .../sections/{sid}/retry`
+- [x] `PATCH .../sections/{sid}` → `edited_prose`
+- [x] `tests/unit/test_report_narrate.py` · `tests/unit/test_report_checks.py`
+- [x] **Gate:** `make test` · `make lint`
+
+Four things this phase settled that the plan did not say:
+
+- **`narrate.py` is handed disclosed results; it does not disclose them.** It
+  could not: `disclose()` lives in `app.pipeline`, which sits *above*
+  `app.reports` in the layer order. The worker discloses under the policy in
+  force **at narration time**, which is the stricter reading of invariant #4
+  and the one the contract enforces for free.
+- **Retry is asynchronous, through the same executor and the same run row.**
+  The viewer already polls the run, so a retry that lands on that row renders
+  through the loop the page is running — no second progress protocol, and no
+  request held open for half a minute. Retrying a section does **not** rewrite
+  the executive summary: that is a paragraph the user may have edited, and the
+  summary can be retried on its own.
+- **The numeric check needed calibrating against real output, not imagined
+  output.** Three fixes came from reading the first generated Persian
+  document — a range's scale word governs both its ends («۹۰ تا ۹۴ هزار»), a
+  figure may be truncated to its written precision as easily as rounded, and
+  the summary must be checked with the *same reader* that wrote it (§9's pool
+  for a summary is the sections' prose, not their rows). Each is pinned by a
+  test carrying the real sentence.
+- **Position 0 was unreachable through the API** — `if not section.position`
+  read an explicit 0 as "not given", so the executive summary could never be
+  placed first. Fixed in `add_section`/`add_block` with `None` as the "append"
+  signal, and covered by tests.
 
 ## Phase 7 — Frontend: the section shell
 

@@ -34,6 +34,7 @@ from app.api.schemas import (
     ReportSectionCreate,
     ReportSectionRead,
     ReportSectionResultRead,
+    ReportSectionResultUpdate,
     ReportSectionUpdate,
     ReportSummaryRead,
     ReportUpdate,
@@ -359,6 +360,60 @@ async def cancel_run(
     await db.commit()
     await request.app.state.report_executor.cancel(run_id)
     return ReportRunRead.model_validate(await service.run(report_id, run_id, ctx.user_id))
+
+
+@router.post(
+    "/{report_id}/runs/{run_id}/sections/{section_id}/retry",
+    response_model=ReportRunRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def retry_section(
+    report_id: UUID,
+    run_id: UUID,
+    section_id: UUID,
+    request: Request,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+) -> ReportRunRead:
+    """Rebuild one section of a finished run: its queries, then its paragraph.
+
+    202 and back to the poll the viewer is already running, rather than a
+    request held open for half a minute. The rest of the document stays on
+    screen, and the run's status is **re-derived** when this lands — which is
+    how a successful retry turns `PARTIAL` into `SUCCEEDED` with no state
+    machine anywhere.
+    """
+    service = ReportService(db, settings)
+    run = await service.request_section_retry(report_id, run_id, section_id, ctx.user_id)
+    read = ReportRunRead.model_validate(run)
+    await db.commit()
+    await request.app.state.report_executor.submit_retry(run_id, section_id)
+    return read
+
+
+@router.patch(
+    "/{report_id}/runs/{run_id}/sections/{section_id}",
+    response_model=ReportSectionResultRead,
+)
+async def edit_section_prose(
+    report_id: UUID,
+    run_id: UUID,
+    section_id: UUID,
+    payload: ReportSectionResultUpdate,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+) -> ReportSectionResultRead:
+    """Write over a paragraph. The model's own words are kept beside it.
+
+    The edit belongs to the **run**, not the template: regenerating writes a
+    new run and leaves this one's writing exactly where it is.
+    """
+    row = await ReportService(db, settings).edit_prose(
+        report_id, run_id, section_id, ctx.user_id, edited_prose=payload.edited_prose
+    )
+    return ReportSectionResultRead.model_validate(row)
 
 
 @router.get("/{report_id}/runs/{run_id}", response_model=ReportRunDetailRead)
