@@ -10,7 +10,8 @@
 import type {
   ArtifactSpec, ChartRedraw, Connection, ConversationSummary, Dashboard, DashboardSummary,
   DashboardTile, LlmConfig, MessageWithRun, ProblemDetail, Report, ReportBlock,
-  ReportBlockCheck, ReportRun, ReportRunDetail, ReportSection, ReportSectionResult,
+  ReportBlockCheck, ReportChart, ReportRun, ReportRunDetail, ReportSection,
+  ReportSectionResult,
   ReportSummary, RunDetail, RunEvent, SchemaSnapshot, SemanticDocument, SemanticJob,
   SemanticLayer, SqlDraft, TilePosition, TileResult, TestResult, User,
 } from './types'
@@ -361,6 +362,18 @@ export const reports = {
     patch<ReportSectionResult>(
       `/reports/${id}/runs/${runId}/sections/${sectionId}`,
       { edited_prose: editedProse },
+    ),
+  /**
+   * Draw one saved block a different way, from the rows the run kept.
+   *
+   * Unlike the chat redraw this one **persists**, onto the run: a report is
+   * printed from its saved run, so a chart living only in the browser would not
+   * survive the export. `auto` hands the planner no suggestion at all.
+   */
+  redrawBlockChart: (id: string, runId: string, resultId: string, chartType: string) =>
+    post<ReportChart>(
+      `/reports/${id}/runs/${runId}/blocks/${resultId}/chart`,
+      { chart_type: chartType },
     ),
 }
 

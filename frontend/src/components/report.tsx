@@ -32,14 +32,24 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { llmConfigs as modelsApi, reports as api } from '../api/client'
+import {
+  isReportRunInFlight, llmConfigs as modelsApi, reports as api,
+} from '../api/client'
 import type {
-  LlmConfig, Report, ReportBlock, ReportBlockType, ReportFeasibility,
-  ReportSection, ReportTimeWindow,
+  ChartOption, LlmConfig, NumericFinding, Report, ReportBlock, ReportBlockResult,
+  ReportBlockType, ReportFeasibility, ReportRun, ReportRunDetail, ReportRunStatus,
+  ReportSection, ReportSectionResult, ReportTimeWindow,
 } from '../api/types'
+import { ChartGlyph, ChartTypePicker } from './chart-picker'
+import {
+  assembleDocument, chartTypeOf, isEdited, proseOf, renderKindOf,
+  type DocumentSection,
+} from './report-document'
+import { VegaChart } from './VegaChart'
 import {
   Chip, CopyButton, DangerButton, EmptyState, ErrorNote, GhostButton, Icon, InlineEdit,
-  Modal, PrimaryButton, ProgressBar, Spinner, TextArea,
+  Kpi, Modal, PrimaryButton, ProgressBar, ResultTable, Spinner, TextArea, dirOf,
+  relativeTime,
 } from './ui'
 import type { ChipTone } from './ui'
 
@@ -89,21 +99,21 @@ const FEASIBILITY: Record<ReportFeasibility, { label: string; tone: ChipTone }> 
 
 // ── the editor ────────────────────────────────────────────────────────────
 export function ReportOutlineEditor({
-  reportId, onBack, onChanged, onGenerate,
+  reportId, onBack, onChanged, onOpenRun,
 }: {
   reportId: string
   onBack: () => void
   /** Hand the written row back so the index card never shows a stale name. */
   onChanged?: (report: Report) => void
   /**
-   * Start a generation.
+   * Open a run in the viewer — the one this editor just started, or the last
+   * one it produced.
    *
-   * Optional because the viewer is its own phase: the readiness of an outline
-   * is a property of the outline and is shown either way, but an action that
-   * starts minutes of model calls with nowhere to watch them is worse than no
-   * action — the rule the index card followed before this editor existed.
+   * The editor owns the `startRun` call rather than the caller, so a refusal
+   * (a second concurrent generation, a policy tightened since, a block with no
+   * query) lands in the same place every other error on this page does.
    */
-  onGenerate?: (report: Report) => void
+  onOpenRun: (runId: string) => void
 }) {
   const [report, setReport] = useState<Report | null>(null)
   const [models, setModels] = useState<LlmConfig[]>([])
@@ -113,16 +123,26 @@ export function ReportOutlineEditor({
   const [checking, setChecking] = useState<string[]>([])
   const [sweep, setSweep] = useState<{ done: number; total: number; label: string } | null>(null)
   const [previews, setPreviews] = useState<Record<string, string>>({})
+  const [latestRun, setLatestRun] = useState<ReportRun | null>(null)
+  const [starting, setStarting] = useState(false)
   const stopSweep = useRef(false)
 
   useEffect(() => {
     let cancelled = false
     void (async () => {
       try {
-        const [loaded, configs] = await Promise.all([api.get(reportId), modelsApi.list()])
+        // The run list is rows only — no result of any run is read here. It is
+        // what lets a report that has already been generated offer its document
+        // instead of stranding the reader in the editor.
+        const [loaded, configs, history] = await Promise.all([
+          api.get(reportId), modelsApi.list(), api.runs(reportId),
+        ])
         if (cancelled) return
         setReport(loaded)
         setModels(configs)
+        setLatestRun(history[0] ?? null)
+        // A generation still in flight is what the reader came for.
+        if (history[0] && isReportRunInFlight(history[0].status)) onOpenRun(history[0].id)
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Could not open this report.')
       }
@@ -130,6 +150,9 @@ export function ReportOutlineEditor({
     return () => {
       cancelled = true
     }
+    // `onOpenRun` is deliberately not a dependency: the caller passes an inline
+    // arrow, and re-running this on every render would re-fetch the document.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reportId])
 
   /** One place errors surface, and they surface as the API worded them. */
@@ -190,6 +213,14 @@ export function ReportOutlineEditor({
     const next = await guard(() => api.update(reportId, payload))
     // Spliced in; never re-read the document to see an edit.
     if (next) setReport(next)
+  }
+
+  /** 202, then straight to the viewer — the run is minutes, not a request. */
+  async function generate() {
+    setStarting(true)
+    const run = await guard(() => api.startRun(reportId))
+    setStarting(false)
+    if (run) onOpenRun(run.id)
   }
 
   async function propose() {
@@ -361,20 +392,7 @@ export function ReportOutlineEditor({
           onClick={onBack}
           aria-label="Back to reports"
           className="rm-icon-btn"
-          style={{
-            display: 'flex',
-            width: 30,
-            height: 30,
-            flexShrink: 0,
-            alignItems: 'center',
-            justifyContent: 'center',
-            borderRadius: 8,
-            border: 'none',
-            background: 'transparent',
-            color: 'var(--text-dim)',
-            cursor: 'pointer',
-            ['--rm-hover-bg' as string]: 'var(--panel-alt)',
-          }}
+          style={backButton}
         >
           <Icon.ArrowLeft size={15} />
         </button>
@@ -417,19 +435,29 @@ export function ReportOutlineEditor({
               {`Check ${unchecked.length} question${unchecked.length === 1 ? '' : 's'}`}
             </GhostButton>
           )}
+          {/* A report already generated has a document to go back to, and the
+              editor is not where you read one. Rows only — opening it is what
+              reads its results. */}
+          {latestRun && (
+            <GhostButton
+              onClick={() => onOpenRun(latestRun.id)}
+              style={toolbarBtn}
+              title={`The last generation ${relativeTime(latestRun.created_at)}.`}
+            >
+              <Icon.Doc size={13} /> Last run
+            </GhostButton>
+          )}
           {/* Enabled only when the outline can actually produce a document, and
               the reason it cannot travels on the tooltip — a disabled control
               that will not say why is how a user concludes it is broken. */}
-          {onGenerate && (
-            <PrimaryButton
-              onClick={() => onGenerate(report)}
-              disabled={busy || !state.runnable}
-              title={state.blocked ?? 'Generate this report from the outline below.'}
-              style={{ padding: '8px 14px' }}
-            >
-              <Icon.Play size={12} /> Generate
-            </PrimaryButton>
-          )}
+          <PrimaryButton
+            onClick={() => void generate()}
+            disabled={busy || starting || !state.runnable}
+            title={state.blocked ?? 'Generate this report from the outline below.'}
+            style={{ padding: '8px 14px' }}
+          >
+            <Icon.Play size={12} /> {starting ? 'Starting…' : 'Generate'}
+          </PrimaryButton>
         </div>
       </header>
 
@@ -1257,19 +1285,7 @@ function EditorSkeleton({ onBack, error }: { onBack: () => void; error: string |
           onClick={onBack}
           aria-label="Back to reports"
           className="rm-icon-btn"
-          style={{
-            display: 'flex',
-            width: 30,
-            height: 30,
-            alignItems: 'center',
-            justifyContent: 'center',
-            borderRadius: 8,
-            border: 'none',
-            background: 'transparent',
-            color: 'var(--text-dim)',
-            cursor: 'pointer',
-            ['--rm-hover-bg' as string]: 'var(--panel-alt)',
-          }}
+          style={backButton}
         >
           <Icon.ArrowLeft size={15} />
         </button>
@@ -1304,4 +1320,794 @@ function EditorSkeleton({ onBack, error }: { onBack: () => void; error: string |
       </div>
     </div>
   )
+}
+
+// ── the viewer ────────────────────────────────────────────────────────────
+/**
+ * Watching a report build itself, and refining it afterwards.
+ *
+ * The whole progressive render is the poll response: `GET /runs/{rid}` returns
+ * the run and **everything written so far**, so a half-finished generation is a
+ * half-finished document and needs no protocol of its own. A browser reloaded
+ * mid-run resumes exactly where it was, because the server was never holding
+ * the state — the rows were.
+ *
+ * What the reader watches, in the order it happens: the queries land (every
+ * block at once, from one `execute_many`), then the paragraphs arrive one
+ * section at a time, then the executive summary last, written from the
+ * sections it summarises. The sections with numbers and no prose yet are not a
+ * loading state to hide — they are the document being written.
+ *
+ * Two refinements are saved onto the **run**, never the template, for the
+ * reason `edited_prose` is a second column: a regeneration must not destroy
+ * writing, and a template must not carry one run's wording. Editing a
+ * paragraph is one; picking a different chart type is the other.
+ */
+const POLL_MS = 1500
+
+const RUN_TONE: Record<ReportRunStatus, { label: string; tone: ChipTone }> = {
+  QUEUED: { label: 'Queued', tone: 'neutral' },
+  RUNNING: { label: 'Generating', tone: 'accent' },
+  SUCCEEDED: { label: 'Complete', tone: 'green' },
+  // Its own state, and the honest one: some sections succeeded and some did
+  // not, and calling that either is a lie the reader must open the document to
+  // catch.
+  PARTIAL: { label: 'Partly complete', tone: 'amber' },
+  FAILED: { label: 'Failed', tone: 'red' },
+  CANCELLED: { label: 'Cancelled', tone: 'neutral' },
+}
+
+export function ReportRunViewer({
+  reportId, runId, reportName, onBack,
+}: {
+  reportId: string
+  runId: string
+  /** The index already knows it; the viewer fetches the run, not the document. */
+  reportName: string
+  onBack: () => void
+}) {
+  const [run, setRun] = useState<ReportRunDetail | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  // Bumped when a retry puts a finished run back to work, which is what
+  // restarts a poll that had correctly stopped.
+  const [pollKey, setPollKey] = useState(0)
+
+  useEffect(() => {
+    let stopped = false
+    let timer: number | undefined
+
+    async function tick(): Promise<void> {
+      if (stopped) return
+      // **Paused, not throttled.** A hidden tab asks the customer's database
+      // for nothing; the timer stays so returning to the tab costs one interval
+      // rather than a mount.
+      if (document.hidden) {
+        timer = window.setTimeout(() => void tick(), POLL_MS)
+        return
+      }
+      try {
+        const next = await api.run(reportId, runId)
+        if (stopped) return
+        setRun(next)
+        setError(null)
+        if (!isReportRunInFlight(next.status)) return
+      } catch (err) {
+        if (!stopped) setError(err instanceof Error ? err.message : 'Could not read this run.')
+        return
+      }
+      timer = window.setTimeout(() => void tick(), POLL_MS)
+    }
+
+    void tick()
+    return () => {
+      stopped = true
+      window.clearTimeout(timer)
+    }
+  }, [reportId, runId, pollKey])
+
+  const document_ = useMemo(() => (run ? assembleDocument(run) : []), [run])
+
+  async function cancel() {
+    setBusy(true)
+    try {
+      const stopped = await api.cancelRun(reportId, runId)
+      // The row is marked cancelled by the route rather than by the worker, so
+      // this lands even while an in-flight query is still finishing.
+      setRun((current) => (current ? { ...current, ...stopped } : current))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'That did not work.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function retry(sectionId: string) {
+    setBusy(true)
+    setError(null)
+    try {
+      const next = await api.retrySection(reportId, runId, sectionId)
+      // Straight back onto the poll the page is already running: the rest of
+      // the document stays on screen and this section rebuilds inside it.
+      setRun((current) => (current ? { ...current, ...next } : current))
+      setPollKey((key) => key + 1)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'That section could not be retried.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function saveProse(sectionId: string, text: string | null) {
+    const row = await api.editProse(reportId, runId, sectionId, text)
+    setRun((current) =>
+      current
+        ? { ...current, sections: current.sections.map((s) => (s.id === row.id ? row : s)) }
+        : current,
+    )
+  }
+
+  function replaceBlock(next: ReportBlockResult) {
+    setRun((current) =>
+      current
+        ? { ...current, blocks: current.blocks.map((b) => (b.id === next.id ? next : b)) }
+        : current,
+    )
+  }
+
+  const status = run ? RUN_TONE[run.status] : null
+  const running = run !== null && isReportRunInFlight(run.status)
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      <header className="rm-dash-header" style={headerStyle}>
+        <button
+          onClick={onBack}
+          aria-label="Back to the outline"
+          className="rm-icon-btn"
+          style={backButton}
+        >
+          <Icon.ArrowLeft size={15} />
+        </button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+          <span
+            dir="auto"
+            style={{
+              fontSize: 16.5,
+              fontWeight: 700,
+              letterSpacing: '-0.01em',
+              color: 'var(--text-strong)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {reportName}
+          </span>
+          <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
+            {run
+              ? run.finished_at
+                ? `generated ${relativeTime(run.finished_at)}`
+                : run.started_at
+                  ? `started ${relativeTime(run.started_at)}`
+                  : 'queued'
+              : 'loading…'}
+            {run && run.model_snapshot.model && (
+              <>
+                <span aria-hidden style={{ opacity: 0.4 }}> · </span>
+                {run.model_snapshot.model}
+              </>
+            )}
+          </span>
+        </div>
+
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+          {running && <Spinner size={13} />}
+          {status && <Chip tone={status.tone}>{status.label}</Chip>}
+          {running && (
+            <GhostButton onClick={() => void cancel()} disabled={busy} style={toolbarBtn}>
+              Stop
+            </GhostButton>
+          )}
+        </div>
+      </header>
+
+      {/* The progress bar belongs under the header rather than in it: the two
+          counters and the phase are a sentence, and a sentence squeezed into a
+          toolbar is a truncated sentence. */}
+      {running && run && run.progress_total > 0 && (
+        <div style={{ padding: '10px 20px 0' }}>
+          <ProgressBar
+            current={run.progress_current}
+            total={run.progress_total}
+            label={<span dir="auto">{run.phase || 'Working…'}</span>}
+          />
+        </div>
+      )}
+
+      <div className="rm-page-pad" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+        <div
+          style={{
+            maxWidth: 820,
+            margin: '0 auto',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 22,
+          }}
+        >
+          {error && <ErrorNote>{error}</ErrorNote>}
+
+          {/* A run that failed as a whole — a tightened disclosure policy, a
+              removed connection — says so once, at the top, in the API's own
+              words. §7's second gate is the one that is easy to forget, and
+              this is where a user finds out it fired. */}
+          {run?.status === 'FAILED' && run.error_message && (
+            <Note tone="red">{run.error_message}</Note>
+          )}
+          {run?.status === 'CANCELLED' && (
+            <Note tone="amber">
+              This generation was stopped. What had already been computed is kept below —
+              it was paid for.
+            </Note>
+          )}
+
+          {run === null ? (
+            <ViewerSkeleton />
+          ) : document_.length === 0 ? (
+            <EmptyState
+              icon={<Icon.Doc size={20} />}
+              title={running ? 'Running the queries…' : 'This run wrote nothing'}
+              body={
+                running
+                  ? 'Every question is executed first, then each section is written over its own results. The document appears section by section as it is written.'
+                  : 'No result and no paragraph was written. The message above says why.'
+              }
+              action={running ? <Spinner /> : undefined}
+            />
+          ) : (
+            document_.map((section) => (
+              <SectionView
+                key={section.key}
+                reportId={reportId}
+                runId={runId}
+                section={section}
+                busy={busy || running}
+                onRetry={() => {
+                  if (section.sectionId) void retry(section.sectionId)
+                }}
+                onProse={async (text) => {
+                  if (section.sectionId) await saveProse(section.sectionId, text)
+                }}
+                onBlock={replaceBlock}
+              />
+            ))
+          )}
+
+          {run !== null && !running && document_.length > 0 && (
+            <p
+              style={{
+                margin: 0,
+                paddingTop: 6,
+                fontSize: 11.5,
+                color: 'var(--text-faint)',
+                borderTop: '1px solid var(--border)',
+              }}
+            >
+              Generated from the data as it was at{' '}
+              {new Date(run.finished_at ?? run.created_at).toLocaleString()}. Generating again
+              writes a new run and leaves this one exactly as it is.
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── one section of the document ───────────────────────────────────────────
+function SectionView({
+  reportId, runId, section, busy, onRetry, onProse, onBlock,
+}: {
+  reportId: string
+  runId: string
+  section: DocumentSection
+  busy: boolean
+  onRetry: () => void
+  onProse: (text: string | null) => Promise<void>
+  onBlock: (block: ReportBlockResult) => void
+}) {
+  const failed = section.prose?.status === 'FAILED'
+
+  return (
+    <section style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+        <h2
+          dir={dirOf(section.heading)}
+          style={{
+            margin: 0,
+            flex: 1,
+            minWidth: 0,
+            fontSize: 19,
+            fontWeight: 700,
+            letterSpacing: '-0.015em',
+            color: 'var(--text-strong)',
+          }}
+        >
+          {section.heading}
+        </h2>
+        {/* Retry is per section, and the rest of the document stays on screen
+            while it runs — the run's status is *derived* from its parts, so a
+            successful retry turns PARTIAL into SUCCEEDED with no state
+            machine anywhere. */}
+        {section.sectionId && (failed || section.prose === null) && (
+          <GhostButton
+            onClick={onRetry}
+            disabled={busy}
+            style={{ padding: '5px 10px', fontSize: 12, flexShrink: 0 }}
+            title="Run this section's queries again and rewrite its paragraph."
+          >
+            <Icon.Refresh size={12} /> Retry
+          </GhostButton>
+        )}
+      </div>
+
+      {section.prose === null ? (
+        <ProseSkeleton />
+      ) : (
+        <ProseView
+          result={section.prose}
+          editable={section.sectionId !== null}
+          onSave={onProse}
+        />
+      )}
+
+      {section.blocks.map((block) => (
+        <BlockView
+          key={block.id}
+          reportId={reportId}
+          runId={runId}
+          block={block}
+          onBlock={onBlock}
+        />
+      ))}
+    </section>
+  )
+}
+
+// ── the paragraph ─────────────────────────────────────────────────────────
+/**
+ * Prose, edited where it is read.
+ *
+ * The edit goes to `edited_prose`, a second column beside what the model wrote
+ * — so reverting is free, and a regeneration writes a new run rather than
+ * destroying this one's writing.
+ */
+function ProseView({
+  result, editable, onSave,
+}: {
+  result: ReportSectionResult
+  editable: boolean
+  onSave: (text: string | null) => Promise<void>
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [dismissed, setDismissed] = useState(false)
+
+  const text = proseOf(result)
+  const findings = result.numeric_check?.findings ?? []
+
+  async function commit(next: string | null) {
+    setSaving(true)
+    try {
+      await onSave(next)
+      setEditing(false)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (result.status === 'FAILED') {
+    return (
+      <Note tone="red">
+        {result.error_message || 'This section could not be written.'}
+      </Note>
+    )
+  }
+
+  if (editing) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <TextArea
+          autoFocus
+          rows={5}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          style={{ fontSize: 14.5, lineHeight: 1.7 }}
+        />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <PrimaryButton
+            onClick={() => void commit(draft.trim())}
+            disabled={saving}
+            style={{ padding: '6px 12px', fontSize: 12.5 }}
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </PrimaryButton>
+          <GhostButton
+            onClick={() => setEditing(false)}
+            style={{ padding: '6px 12px', fontSize: 12.5 }}
+          >
+            Cancel
+          </GhostButton>
+          {/* Reverting is a column going back to NULL, not a second edit. */}
+          {isEdited(result) && (
+            <GhostButton
+              onClick={() => void commit(null)}
+              disabled={saving}
+              style={{ padding: '6px 12px', fontSize: 12.5, marginLeft: 'auto' }}
+              title="Go back to what the model wrote."
+            >
+              Revert
+            </GhostButton>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="rm-turn" style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+      <p
+        dir={dirOf(text)}
+        style={{
+          margin: 0,
+          fontSize: 14.5,
+          lineHeight: 1.75,
+          color: result.status === 'SKIPPED_NO_DATA' ? 'var(--text-dim)' : 'var(--text)',
+          fontStyle: result.status === 'SKIPPED_NO_DATA' ? 'italic' : undefined,
+          whiteSpace: 'pre-wrap',
+        }}
+      >
+        {text}
+      </p>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        {editable && (
+          <button
+            className="rm-turn-actions"
+            onClick={() => {
+              setDraft(text)
+              setEditing(true)
+            }}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              padding: '3px 8px',
+              borderRadius: 6,
+              border: '1px solid var(--border)',
+              background: 'transparent',
+              color: 'var(--text-dim)',
+              fontSize: 11.5,
+              cursor: 'pointer',
+            }}
+          >
+            <Icon.Pencil size={11} /> Edit
+          </button>
+        )}
+        {isEdited(result) && (
+          <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>edited by you</span>
+        )}
+        {findings.length > 0 && !dismissed && (
+          <NumericMarker findings={findings} onDismiss={() => setDismissed(true)} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Figures in the paragraph that no result row supports.
+ *
+ * **A finding is a suspicion, never a verdict** — the posture `pipeline/checks.py`
+ * argues for at length. A percentage the model derived correctly from two
+ * result values is an expected false positive, so this flags, never blocks, and
+ * it can be waved away. What it must not be is a red banner over a paragraph
+ * that is probably fine.
+ */
+function NumericMarker({
+  findings, onDismiss,
+}: {
+  findings: NumericFinding[]
+  onDismiss: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+      <button
+        onClick={() => setOpen((current) => !current)}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 5,
+          padding: '3px 8px',
+          borderRadius: 6,
+          border: '1px solid var(--amber-border)',
+          background: 'var(--amber-bg)',
+          color: 'var(--amber)',
+          fontSize: 11.5,
+          cursor: 'pointer',
+        }}
+      >
+        <Icon.Alert size={11} />
+        {findings.length === 1
+          ? '1 figure to check'
+          : `${findings.length} figures to check`}
+      </button>
+      <button
+        onClick={onDismiss}
+        aria-label="Dismiss"
+        title="Dismiss"
+        style={{
+          display: 'inline-flex',
+          padding: 3,
+          borderRadius: 5,
+          border: 'none',
+          background: 'transparent',
+          color: 'var(--text-faint)',
+          cursor: 'pointer',
+        }}
+      >
+        <Icon.Close size={11} />
+      </button>
+      {open && (
+        <span style={{ fontSize: 11.5, color: 'var(--text-dim)', lineHeight: 1.5 }}>
+          {findings.map((finding) => finding.text).join(' · ')} — not found in this section’s
+          results. A percentage or a difference worked out from two of them is expected here.
+        </span>
+      )}
+    </span>
+  )
+}
+
+// ── one block of the document ─────────────────────────────────────────────
+function BlockView({
+  reportId, runId, block, onBlock,
+}: {
+  reportId: string
+  runId: string
+  block: ReportBlockResult
+  onBlock: (block: ReportBlockResult) => void
+}) {
+  const [showSql, setShowSql] = useState(false)
+  const kind = renderKindOf(block)
+
+  return (
+    <figure
+      style={{
+        margin: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        padding: 13,
+        background: 'var(--panel)',
+        border: '1px solid var(--border)',
+        borderRadius: 12,
+      }}
+    >
+      <figcaption
+        dir={dirOf(block.question_snapshot)}
+        style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-dim)' }}
+      >
+        {block.question_snapshot}
+      </figcaption>
+
+      {kind === 'error' ? (
+        <Note tone="red">
+          {block.error_message || 'This question produced no result.'}
+        </Note>
+      ) : kind === 'kpi' && block.kpi ? (
+        <Kpi spec={block.kpi} />
+      ) : kind === 'chart' && block.vega_spec ? (
+        <BlockChart reportId={reportId} runId={runId} block={block} onBlock={onBlock} />
+      ) : (
+        <>
+          {block.chart_note && (
+            <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>{block.chart_note}</span>
+          )}
+          <ResultTable spec={block} previewRows={12} maxHeight={420} />
+        </>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+          {block.row_count.toLocaleString()} {block.row_count === 1 ? 'row' : 'rows'}
+          {block.truncated && ' (capped)'}
+        </span>
+        {/* The SQL is shown and auditable here for the same reason it is in
+            chat: a number nobody can trace back to a statement is a number
+            nobody should act on. */}
+        <button
+          onClick={() => setShowSql((open) => !open)}
+          style={{
+            padding: '2px 7px',
+            borderRadius: 5,
+            border: '1px solid var(--border)',
+            background: 'transparent',
+            color: 'var(--text-faint)',
+            fontSize: 11,
+            cursor: 'pointer',
+          }}
+        >
+          {showSql ? 'Hide SQL' : 'SQL'}
+        </button>
+        {showSql && <CopyButton text={block.sql_text} label="Copy" />}
+      </div>
+
+      {showSql && (
+        <pre
+          dir="ltr"
+          style={{
+            margin: 0,
+            padding: '9px 11px',
+            background: 'var(--input-bg)',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+            fontSize: 11.5,
+            lineHeight: 1.6,
+            color: 'var(--text2)',
+            overflowX: 'auto',
+            whiteSpace: 'pre',
+          }}
+        >
+          {block.sql_text}
+        </pre>
+      )}
+    </figure>
+  )
+}
+
+/**
+ * A block's chart, and changing it.
+ *
+ * Closed by default: the planner picked this type from the data and is usually
+ * right, so nine tiles under every figure would be chrome. What it does not do
+ * is offer a type this result cannot carry — the backend answers "can this be a
+ * heatmap, and if not why" for every type at once and the grid greys the rest
+ * with the reason on hover. Offer-then-demote becomes cannot-offer.
+ *
+ * Unlike chat's picker, **this one saves**: a report is printed from its saved
+ * run, so a chart that lived only in the browser would be lost on the way to
+ * the PDF. It saves onto the run and not the template, which is the same rule
+ * `edited_prose` follows.
+ */
+function BlockChart({
+  reportId, runId, block, onBlock,
+}: {
+  reportId: string
+  runId: string
+  block: ReportBlockResult
+  onBlock: (block: ReportBlockResult) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [options, setOptions] = useState<ChartOption[]>([])
+  const [busy, setBusy] = useState(false)
+  const [refused, setRefused] = useState<string | null>(null)
+
+  const type = chartTypeOf(block.vega_spec)
+
+  async function choose(next: string) {
+    setBusy(true)
+    setRefused(null)
+    try {
+      const answer = await api.redrawBlockChart(reportId, runId, block.id, next)
+      setOptions(answer.options)
+      if (answer.spec) {
+        onBlock({
+          ...block,
+          vega_spec: answer.spec,
+          chart_source: answer.chart_source,
+          chart_note: answer.chart_note,
+        })
+      } else {
+        // Only reachable if the verdicts on screen are older than the data.
+        setRefused(answer.reason)
+      }
+    } catch (err) {
+      setRefused(err instanceof Error ? err.message : 'The chart could not be redrawn.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {block.vega_spec && <VegaChart spec={block.vega_spec} />}
+      {block.chart_note && (
+        <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>{block.chart_note}</span>
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <button
+          type="button"
+          onClick={() => {
+            const next = !open
+            setOpen(next)
+            // Opening asks for the verdicts once, redrawing what is already on
+            // screen — so there is no separate "what fits this result" call.
+            if (next && options.length === 0 && type) void choose(type)
+          }}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 5,
+            padding: '3px 8px',
+            borderRadius: 6,
+            border: '1px solid var(--border)',
+            background: 'transparent',
+            color: 'var(--text-dim)',
+            fontSize: 11.5,
+            cursor: 'pointer',
+          }}
+        >
+          <ChartGlyph type={type} size={13} />
+          {open ? 'Done' : 'Change chart'}
+        </button>
+        {busy && <Spinner size={12} />}
+        {refused && (
+          <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>{refused}</span>
+        )}
+      </div>
+      {open && (
+        <div style={{ maxWidth: 560 }}>
+          <ChartTypePicker
+            value={type}
+            options={options}
+            columns={9}
+            onChange={(next) => void choose(next)}
+          />
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── the shapes of what is coming ──────────────────────────────────────────
+function ProseSkeleton() {
+  return (
+    <div aria-hidden style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+      <div className="rm-bone" style={{ width: '96%', height: 10, borderRadius: 6 }} />
+      <div className="rm-bone" style={{ width: '88%', height: 10, borderRadius: 6 }} />
+      <div className="rm-bone" style={{ width: '54%', height: 10, borderRadius: 6 }} />
+    </div>
+  )
+}
+
+function ViewerSkeleton() {
+  return (
+    <div aria-hidden style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
+      {[0, 1].map((index) => (
+        <div key={index} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div className="rm-bone" style={{ width: '38%', height: 17, borderRadius: 6 }} />
+          <ProseSkeleton />
+          <div className="rm-bone" style={{ width: '100%', height: 180, borderRadius: 12 }} />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** The back arrow, identical in both halves of the feature. */
+const backButton: React.CSSProperties = {
+  display: 'flex',
+  width: 30,
+  height: 30,
+  flexShrink: 0,
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderRadius: 8,
+  border: 'none',
+  background: 'transparent',
+  color: 'var(--text-dim)',
+  cursor: 'pointer',
+  ['--rm-hover-bg' as string]: 'var(--panel-alt)',
 }

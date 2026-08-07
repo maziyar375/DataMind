@@ -677,3 +677,19 @@ export interface ReportRunDetail extends ReportRun {
   blocks: ReportBlockResult[]
   sections: ReportSectionResult[]
 }
+
+/**
+ * What a redraw changed, and the verdicts the picker needs to stay honest.
+ *
+ * Not the whole block result: the row's bulk is its `rows`, a redraw does not
+ * touch them, and the caller already has them. `spec` is null when the pick was
+ * refused, and `reason` then says why.
+ */
+export interface ReportChart {
+  spec: Record<string, unknown> | null
+  /** model | model_adjusted | heuristic | user | none — who chose this picture. */
+  chart_source: string
+  chart_note: string | null
+  reason: string | null
+  options: ChartOption[]
+}

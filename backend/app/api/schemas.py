@@ -937,6 +937,33 @@ class ReportSectionResultUpdate(BaseModel):
     edited_prose: str | None = Field(default=None, max_length=20_000)
 
 
+class ReportChartRequest(BaseModel):
+    """Draw a saved block a different way. `auto` means "let the planner decide"."""
+
+    chart_type: str
+
+
+class ReportChartRead(BaseModel):
+    """What a redraw changed, and the verdicts the picker needs to stay honest.
+
+    Not the whole `ReportBlockResultRead`, which is the house rule everywhere
+    else: the row's bulk is its `rows`, the redraw does not touch them, and
+    shipping a capped result back to a client that already has it — to change a
+    picture drawn from it — is the one place "return the written row" costs more
+    than it settles. These are exactly the fields that were written.
+
+    `spec` is null when the pick was refused, and `reason` then says why. The
+    picker greys such a type out before it can be clicked; this is the same rule
+    where it would matter if the display were stale.
+    """
+
+    spec: dict[str, Any] | None = None
+    chart_source: str = "none"
+    chart_note: str | None = None
+    reason: str | None = None
+    options: list[ChartOptionRead] = Field(default_factory=list)
+
+
 class ReportRunDetailRead(ReportRunRead):
     """The poll target: the run, and everything written so far.
 

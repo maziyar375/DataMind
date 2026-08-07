@@ -748,6 +748,104 @@ class ReportService:
         await self._db.flush()
         return row
 
+    async def redraw_block_chart(
+        self,
+        report_id: UUID,
+        run_id: UUID,
+        result_id: UUID,
+        owner_id: UUID,
+        *,
+        chart_type: str,
+    ) -> tuple[ReportBlockResult, list[dict[str, Any]], str | None]:
+        """Draw one block of a saved run as a different chart type.
+
+        **Redrawn from the rows the run kept, never by re-running the query.**
+        The picture under a paragraph has to be the picture that paragraph was
+        written from, and a database that has moved on since would quietly make
+        the two disagree.
+
+        Unlike the chat redraw, this one is **persisted** — onto the run, and
+        only onto the run. Two reasons, and they are the same two that put
+        `edited_prose` on `report_section_results`: a report is a document that
+        is kept and printed (Phase 10 prints the *saved* run, so a chart that
+        lives only in the browser would not survive being exported), and a
+        refinement made while reading one run must not rewrite the template
+        every later run is generated from.
+
+        The type goes through `plan_chart` like any other suggestion, so a pick
+        the data cannot carry is refused with its reason rather than compiled
+        into something misleading. The picker will not offer such a type in the
+        first place; this is the same rule stated where it would matter if the
+        display were stale.
+        """
+        from dataclasses import asdict
+
+        from app.charts import (
+            candidate_intent,
+            chart_options,
+            compile_vega_lite,
+            plan_chart,
+            profile_result,
+        )
+        from app.domain.ports.database import ResultColumn
+
+        await self.run(report_id, run_id, owner_id)
+        found = await self._db.execute(
+            select(ReportBlockResult).where(
+                ReportBlockResult.id == result_id, ReportBlockResult.run_id == run_id
+            )
+        )
+        row = found.scalar_one_or_none()
+        if row is None:
+            raise NotFoundError("This run has no such result.")
+        if row.status != "OK" or not row.rows:
+            raise ValidationError("This block kept no result to draw.")
+
+        columns = [
+            ResultColumn(
+                name=column["name"],
+                db_type=column.get("db_type", ""),
+                semantic_type=column.get("semantic_type", "nominal"),
+            )
+            for column in row.columns
+        ]
+        profile = profile_result(columns, row.rows, truncated=bool(row.truncated))
+        options = [asdict(option) for option in chart_options(profile)]
+
+        # "auto" is not a type, it is the absence of one: hand `plan_chart` no
+        # suggestion and let the planner decide from the data, which is what a
+        # re-run months from now on differently-shaped data would do anyway.
+        if chart_type == "auto":
+            plan = plan_chart(profile)
+        else:
+            intent = candidate_intent(profile, chart_type)
+            plan = plan_chart(profile, intent) if intent is not None else None  # type: ignore[assignment]
+
+        if plan is None or plan.intent is None or (
+            chart_type != "auto" and plan.intent.chart_type != chart_type
+        ):
+            reason = next(
+                (
+                    option["reason"]
+                    for option in options
+                    if option["chart_type"] == chart_type and option["reason"]
+                ),
+                None,
+            ) or (plan.reason if plan is not None else None)
+            return row, options, reason or "This result cannot be drawn that way."
+
+        row.vega_spec = compile_vega_lite(plan.intent, profile, columns, row.rows)
+        # `user` is a fifth source beside model / model_adjusted / heuristic /
+        # none, and it is worth recording: six months on, "who chose this
+        # picture" is the same question `model_snapshot` exists to answer.
+        row.chart_source = "heuristic" if chart_type == "auto" else "user"
+        # The note explains a *demotion* from what was asked for. Nothing was
+        # demoted here — the planner agreed with the pick — so it goes.
+        row.chart_note = None
+        await self._db.flush()
+        await self._db.refresh(row)
+        return row, options, None
+
     async def cancel_run(self, report_id: UUID, run_id: UUID, owner_id: UUID) -> bool:
         """Mark it cancelled. The worker stops between blocks and sees this.
 

@@ -22,11 +22,14 @@ from fastapi import APIRouter, Request, status
 
 from app.api.deps import CtxDep, DbDep, SettingsDep
 from app.api.schemas import (
+    ChartOptionRead,
     ReportBlockCheckRead,
     ReportBlockCreate,
     ReportBlockRead,
     ReportBlockResultRead,
     ReportBlockUpdate,
+    ReportChartRead,
+    ReportChartRequest,
     ReportCreate,
     ReportRead,
     ReportRunDetailRead,
@@ -390,6 +393,39 @@ async def retry_section(
     await db.commit()
     await request.app.state.report_executor.submit_retry(run_id, section_id)
     return read
+
+
+@router.post(
+    "/{report_id}/runs/{run_id}/blocks/{result_id}/chart",
+    response_model=ReportChartRead,
+)
+async def redraw_block_chart(
+    report_id: UUID,
+    run_id: UUID,
+    result_id: UUID,
+    payload: ReportChartRequest,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+) -> ReportChartRead:
+    """Draw one saved block a different way, from the rows the run kept.
+
+    Persisted onto the run — a report is printed from its saved run, so a
+    chart that lived only in the browser would not survive the export — and
+    onto the run *only*, for the reason `edited_prose` is on the run too: a
+    refinement made while reading one generation must not rewrite the template
+    the next one is produced from.
+    """
+    row, options, reason = await ReportService(db, settings).redraw_block_chart(
+        report_id, run_id, result_id, ctx.user_id, chart_type=payload.chart_type
+    )
+    return ReportChartRead(
+        spec=row.vega_spec if reason is None else None,
+        chart_source=row.chart_source or "none",
+        chart_note=row.chart_note,
+        reason=reason,
+        options=[ChartOptionRead(**option) for option in options],
+    )
 
 
 @router.patch(

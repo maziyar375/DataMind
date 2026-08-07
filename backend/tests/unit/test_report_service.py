@@ -39,6 +39,8 @@ from app.infra.db.models import (
     LlmConfig,
     Report,
     ReportBlock,
+    ReportBlockResult,
+    ReportRun,
     ReportSection,
 )
 from app.reports.outline import OutlineProposal, ProposedBlock, ProposedSection
@@ -51,6 +53,8 @@ REPORT_ID = uuid4()
 SECTION_ID = uuid4()
 BLOCK_ID = uuid4()
 CONNECTION_ID = uuid4()
+RUN_ID = uuid4()
+RESULT_ID = uuid4()
 
 
 def _connection(policy: str = DisclosurePolicy.SAMPLE, max_rows: int = 1000) -> Any:
@@ -158,6 +162,8 @@ class FakeDb:
         duplicate_name: bool = False,
         snapshot_tables: list[dict] | None = None,
         llm_config: Any = None,
+        run: Any = None,
+        block_results: list[Any] | None = None,
     ) -> None:
         self.report = report
         self.sections = sections or []
@@ -166,6 +172,8 @@ class FakeDb:
         self.duplicate_name = duplicate_name
         self.snapshot_tables = snapshot_tables or []
         self.llm_config = llm_config
+        self.run = run
+        self.block_results = block_results or []
         self.added: list[Any] = []
         self.deleted: list[Any] = []
         self.refreshed: list[Any] = []
@@ -181,6 +189,10 @@ class FakeDb:
         if "max(" in sql:
             rows = self.blocks if "report_blocks" in sql else self.sections
             return FakeResult([max((r.position for r in rows), default=0)])
+        if "report_block_results" in sql:
+            return FakeResult(list(self.block_results))
+        if "report_runs" in sql:
+            return FakeResult([self.run] if self.run else [])
         if "report_blocks" in sql:
             return FakeResult(list(self.blocks))
         if "report_sections" in sql:
@@ -681,3 +693,121 @@ async def test_a_heading_and_a_question_may_not_be_blank() -> None:
         await _service(db).add_section(REPORT_ID, OWNER, heading="   ")
     with pytest.raises(ValidationError):
         await _service(db).add_block(REPORT_ID, SECTION_ID, OWNER, question=" ")
+
+
+# ── redrawing a saved chart ──────────────────────────────────────────────
+# The one place a report deliberately parts company with the chat redraw, which
+# persists nothing: a report is a document that is kept and printed from its
+# *saved* run, so a chart living only in the browser would not survive the
+# export. It is written onto the run and onto the run alone — the same argument
+# that put `edited_prose` there rather than on the template.
+def _saved_run() -> ReportRun:
+    return ReportRun(id=RUN_ID, report_id=REPORT_ID, owner_id=OWNER, status="SUCCEEDED")
+
+
+def _saved_result() -> ReportBlockResult:
+    return ReportBlockResult(
+        id=RESULT_ID,
+        run_id=RUN_ID,
+        block_id=BLOCK_ID,
+        section_id=SECTION_ID,
+        position=0,
+        heading_snapshot="روند درآمد",
+        question_snapshot="revenue by month",
+        sql_text="SELECT 1",
+        sql_hash="abc",
+        columns=[
+            {"name": "month", "db_type": "date", "semantic_type": "temporal"},
+            {"name": "revenue", "db_type": "numeric", "semantic_type": "quantitative"},
+        ],
+        rows=[["2026-01-01", 120], ["2026-02-01", 180], ["2026-03-01", 150]],
+        row_count=3,
+        truncated=False,
+        vega_spec={"mark": "line"},
+        chart_source="heuristic",
+        chart_note="A pie chart does not fit this result; showing a line chart.",
+        kpi=None,
+        computed_at=utcnow(),
+        duration_ms=9,
+        status="OK",
+    )
+
+
+def _chart_db() -> FakeDb:
+    return FakeDb(
+        report=_report(),
+        run=_saved_run(),
+        block_results=[_saved_result()],
+        connection=_connection(),
+    )
+
+
+async def test_a_redrawn_chart_is_written_onto_the_run() -> None:
+    """Phase 10 prints the saved run, so a redraw that lived only in the
+    browser would be lost on the way to the PDF."""
+    db = _chart_db()
+
+    row, options, reason = await _service(db).redraw_block_chart(
+        REPORT_ID, RUN_ID, RESULT_ID, OWNER, chart_type="bar"
+    )
+
+    assert reason is None
+    assert row.vega_spec is not None
+    assert row.vega_spec != {"mark": "line"}
+    # Who chose the picture, kept beside it.
+    assert row.chart_source == "user"
+    # The note explained a demotion from what was asked for. Nothing was
+    # demoted here, so it goes rather than sitting under the new chart.
+    assert row.chart_note is None
+    assert db.flushes > 0
+    assert any(option["chart_type"] == "bar" for option in options)
+
+
+async def test_auto_gives_the_planner_no_suggestion() -> None:
+    """`auto` is the absence of a type — which is what a re-run months from now
+    on differently-shaped data does anyway."""
+    db = _chart_db()
+
+    row, _options, reason = await _service(db).redraw_block_chart(
+        REPORT_ID, RUN_ID, RESULT_ID, OWNER, chart_type="auto"
+    )
+
+    assert reason is None
+    assert row.chart_source == "heuristic"
+
+
+async def test_a_type_this_result_cannot_carry_is_refused_with_its_reason() -> None:
+    """An answer, never a 500 — and the stored chart is left exactly as it was
+    rather than replaced by nothing."""
+    db = _chart_db()
+
+    row, options, reason = await _service(db).redraw_block_chart(
+        REPORT_ID, RUN_ID, RESULT_ID, OWNER, chart_type="heatmap"
+    )
+
+    assert reason
+    assert row.vega_spec == {"mark": "line"}
+    assert row.chart_source == "heuristic"
+    refused = next(o for o in options if o["chart_type"] == "heatmap")
+    assert refused["supported"] is False
+
+
+async def test_a_result_the_run_does_not_have_is_a_404() -> None:
+    db = FakeDb(report=_report(), run=_saved_run(), block_results=[])
+
+    with pytest.raises(NotFoundError):
+        await _service(db).redraw_block_chart(
+            REPORT_ID, RUN_ID, uuid4(), OWNER, chart_type="bar"
+        )
+
+
+async def test_a_block_that_kept_no_rows_has_nothing_to_draw() -> None:
+    """A failed block is a paragraph's caveat, not a chart with no data."""
+    empty = _saved_result()
+    empty.rows = []
+    db = FakeDb(report=_report(), run=_saved_run(), block_results=[empty])
+
+    with pytest.raises(ValidationError):
+        await _service(db).redraw_block_chart(
+            REPORT_ID, RUN_ID, RESULT_ID, OWNER, chart_type="bar"
+        )

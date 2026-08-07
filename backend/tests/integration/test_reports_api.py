@@ -57,6 +57,7 @@ BLOCK_ID = uuid4()
 CONNECTION_ID = uuid4()
 LLM_ID = uuid4()
 RUN_ID = uuid4()
+RESULT_ID = uuid4()
 
 
 def _report(owner_id: UUID = USER) -> Report:
@@ -131,7 +132,7 @@ def _run(status: str = "RUNNING") -> ReportRun:
 
 def _block_result() -> ReportBlockResult:
     return ReportBlockResult(
-        id=uuid4(),
+        id=RESULT_ID,
         run_id=RUN_ID,
         block_id=BLOCK_ID,
         section_id=SECTION_ID,
@@ -243,6 +244,8 @@ class FakeService:
     draft: Any = None
     block_results: list[ReportBlockResult] = []
     section_results: list[ReportSectionResult] = []
+    chart_options: list[dict[str, Any]] = []
+    chart_refusal: str | None = None
 
     def __init__(self, _db: Any, _settings: Any) -> None:
         pass
@@ -388,6 +391,31 @@ class FakeService:
         )
         return _run("RUNNING")
 
+    async def redraw_block_chart(
+        self,
+        report_id: UUID,
+        run_id: UUID,
+        result_id: UUID,
+        owner_id: UUID,
+        *,
+        chart_type: str,
+    ) -> tuple[ReportBlockResult, list[dict[str, Any]], str | None]:
+        self._record(
+            "redraw_block_chart",
+            report_id=report_id,
+            run_id=run_id,
+            result_id=result_id,
+            owner_id=owner_id,
+            chart_type=chart_type,
+        )
+        row = _block_result()
+        if FakeService.chart_refusal is not None:
+            return row, FakeService.chart_options, FakeService.chart_refusal
+        row.vega_spec = {"mark": chart_type}
+        row.chart_source = "heuristic" if chart_type == "auto" else "user"
+        row.chart_note = None
+        return row, FakeService.chart_options, None
+
     async def edit_prose(
         self,
         report_id: UUID,
@@ -432,6 +460,16 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Any:
     )
     FakeService.block_results = [_block_result()]
     FakeService.section_results = [_section_result()]
+    FakeService.chart_options = [
+        {"chart_type": "bar", "supported": True, "reason": None, "columns": None},
+        {
+            "chart_type": "pie",
+            "supported": False,
+            "reason": "45 categories; a pie reads 6.",
+            "columns": None,
+        },
+    ]
+    FakeService.chart_refusal = None
     EVENTS.clear()
     monkeypatch.setattr(reports, "ReportService", FakeService)
 
@@ -869,6 +907,68 @@ def test_sending_null_prose_is_the_revert(client: Any) -> None:
     assert kwargs["edited_prose"] is None
 
 
+def test_redrawing_a_chart_returns_the_spec_and_the_verdicts(client: Any) -> None:
+    """One call answers both questions the picker asks: draw it this way, and
+    tell me which other ways are possible."""
+    response = client.post(
+        f"/api/v1/reports/{REPORT_ID}/runs/{RUN_ID}/blocks/{RESULT_ID}/chart",
+        json={"chart_type": "bar"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["spec"] == {"mark": "bar"}
+    # Who chose the picture, kept beside it — the same question `model_snapshot`
+    # exists to answer one level up.
+    assert body["chart_source"] == "user"
+    assert body["reason"] is None
+    refused = next(o for o in body["options"] if o["chart_type"] == "pie")
+    assert refused["supported"] is False
+    assert refused["reason"] == "45 categories; a pie reads 6."
+
+
+def test_auto_hands_the_planner_no_suggestion(client: Any) -> None:
+    """`auto` is not a type, it is the absence of one — which is what a re-run
+    on differently-shaped data would do anyway."""
+    response = client.post(
+        f"/api/v1/reports/{REPORT_ID}/runs/{RUN_ID}/blocks/{RESULT_ID}/chart",
+        json={"chart_type": "auto"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["chart_source"] == "heuristic"
+    _method, kwargs = next(c for c in FakeService.calls if c[0] == "redraw_block_chart")
+    assert kwargs["chart_type"] == "auto"
+
+
+def test_a_refused_type_comes_back_as_a_reason_not_a_spec(client: Any) -> None:
+    """The picker greys such a type out before it can be clicked. This is the
+    same rule where it would matter if the display were stale — and it is an
+    answer, never a 500."""
+    FakeService.chart_refusal = "45 categories; a pie reads 6."
+
+    response = client.post(
+        f"/api/v1/reports/{REPORT_ID}/runs/{RUN_ID}/blocks/{RESULT_ID}/chart",
+        json={"chart_type": "pie"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["spec"] is None
+    assert body["reason"] == "45 categories; a pie reads 6."
+
+
+def test_redrawing_a_result_the_run_does_not_have_is_a_404(client: Any) -> None:
+    FakeService.raises = NotFoundError("This run has no such result.")
+
+    response = client.post(
+        f"/api/v1/reports/{REPORT_ID}/runs/{RUN_ID}/blocks/{RESULT_ID}/chart",
+        json={"chart_type": "bar"},
+    )
+
+    assert response.status_code == 404
+
+
 def test_a_paragraph_of_a_run_that_has_none_is_a_404(client: Any) -> None:
     FakeService.raises = NotFoundError("This run has no such section.")
 
@@ -940,6 +1040,11 @@ ROUTES: list[tuple[str, str, dict | None]] = [
         f"/{REPORT_ID}/runs/{RUN_ID}/sections/{SECTION_ID}",
         {"edited_prose": "درآمد را خودم نوشتم."},
     ),
+    (
+        "post",
+        f"/{REPORT_ID}/runs/{RUN_ID}/blocks/{RESULT_ID}/chart",
+        {"chart_type": "bar"},
+    ),
 ]
 
 
@@ -979,6 +1084,7 @@ def test_the_sweep_covers_every_route_the_app_publishes() -> None:
             .replace(str(SECTION_ID), "{section_id}")
             .replace(str(BLOCK_ID), "{block_id}")
             .replace(str(RUN_ID), "{run_id}")
+            .replace(str(RESULT_ID), "{result_id}")
         )
 
     assert {(m, _template(p)) for m, p in covered} == published

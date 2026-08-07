@@ -1035,18 +1035,58 @@ Four notes for Phase 9:
 
 ## Phase 9 — Frontend: the viewer
 
-- [ ] Start a run, poll `GET /runs/{rid}`
-- [ ] Sections render **as they arrive**; progress header from `phase` /
+- [x] Start a run, poll `GET /runs/{rid}`
+- [x] Sections render **as they arrive**; progress header from `phase` /
       `progress_current` / `progress_total`
-- [ ] Blocks render as chart / table / KPI, reusing `VegaChart`,
+- [x] Blocks render as chart / table / KPI, reusing `VegaChart`,
       `ResultTable` and the KPI component unchanged
-- [ ] Per-section retry; the rest of the document stays on screen
-- [ ] Chart type picker from `chart_options` — impossible types **disabled,
+- [x] Per-section retry; the rest of the document stays on screen
+- [x] Chart type picker from `chart_options` — impossible types **disabled,
       not offered**
-- [ ] Prose editing in place → `edited_prose`
-- [ ] Numeric-check findings as a subtle, dismissible marker
-- [ ] Poll **pauses on `document.hidden`**
-- [ ] **Gate:** `npm run typecheck` · `npm run build`
+- [x] Prose editing in place → `edited_prose`
+- [x] Numeric-check findings as a subtle, dismissible marker
+- [x] Poll **pauses on `document.hidden`**
+- [x] **Gate:** `npm run typecheck` · `npm run build` · `make test` · `make lint`
+
+Four notes, three of them things the plan did not say:
+
+- **The chart picker needed a route, so this phase is not purely frontend.**
+  `chart_options` are computed by asking the real planner about a *result*, and
+  no report route returned any for a saved one — `ReportBlockCheckRead` carries
+  them for a preview, which is a different result on a different day. So
+  `POST /reports/{id}/runs/{rid}/blocks/{result_id}/chart` was added, mirroring
+  chat's `/runs/{id}/chart`: it redraws from the rows the run kept, never by
+  re-running the query, because the picture under a paragraph has to be the
+  picture that paragraph was written from.
+- **That redraw is persisted, where chat's deliberately is not.** Chat argues a
+  transcript must keep what the run produced. A report argues the other way, and
+  Phase 10 is the reason: it prints the **saved run**, so a chart living only in
+  the browser would be lost on the way to the PDF. It is written onto the run
+  and onto the run *only* — the same rule that put `edited_prose` there rather
+  than on the template, and for the same reason: a refinement made while reading
+  one generation must not rewrite the template the next one comes from.
+  `chart_source` gains a fifth value, `user`.
+- **The merge that makes a run a document is its own module and its own test.**
+  `components/report-document.ts` + `npm run test:report`, the arrangement
+  `dashboard-schedule.ts` already uses. It is fiddly for three reasons that only
+  show up mid-generation: the numbers arrive before the prose (so a section
+  renders half-drawn, which is the point), a block result's `position` counts
+  across the whole run while a section result's counts the outline (so sorting
+  one by the other's numbers scrambles the document), and the executive summary
+  has no blocks at all — it arrives last and belongs first. Twenty checks, and
+  the assembled order was verified against a real four-section generation.
+- **A block result carries no `block_type`, and that is the honest thing to
+  render from.** It carries what was *produced*: a METRIC block whose query
+  stopped returning one number has no KPI, and a CHART block the planner vetoed
+  has no spec. Each falls back to the table, because the numbers are correct
+  whatever happened to the picture.
+
+Phase 8's `onGenerate` became `onOpenRun(runId)`: the editor owns the `startRun`
+call so a refusal — a second concurrent generation, a policy tightened since,
+an unchecked block — lands in the same place every other error on that page
+does. The editor also reads the run *rows* on open, so a report already
+generated offers "Last run" instead of stranding the reader in its outline, and
+a generation still in flight opens straight into the viewer.
 
 ## Phase 10 — PDF
 

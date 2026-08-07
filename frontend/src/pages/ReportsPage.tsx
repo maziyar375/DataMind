@@ -21,7 +21,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { ApiError, connections as connectionsApi, llmConfigs as modelsApi, reports as api } from '../api/client'
 import type { Connection, LlmConfig, Report, ReportLanguage, ReportSummary } from '../api/types'
-import { ReportOutlineEditor } from '../components/report'
+import { ReportOutlineEditor, ReportRunViewer } from '../components/report'
 import {
   Chip, DisclosureBadge, EmptyState, ErrorNote, Field, GhostButton, Icon, Modal,
   PrimaryButton, SearchField, Segmented, Spinner, TextArea, TextInput, relativeTime,
@@ -55,15 +55,31 @@ function sortCards(cards: ReportSummary[], key: SortKey): ReportSummary[] {
 
 export default function ReportsPage() {
   const [openId, setOpenId] = useState<string | null>(null)
+  // Which of the report's runs is being read, if any. The outline and the
+  // document are two views of one open report, not two pages: Generate goes
+  // from the first to the second, and Back comes home.
+  const [runId, setRunId] = useState<string | null>(null)
   // The index's own copy of the list, held here so an edit made inside the
   // editor is spliced into the card the user comes back to rather than costing
   // a re-read of every report.
   const [cards, setCards] = useState<ReportSummary[] | null>(null)
 
+  if (openId && runId) {
+    return (
+      <ReportRunViewer
+        reportId={openId}
+        runId={runId}
+        reportName={cards?.find((card) => card.id === openId)?.name ?? 'Report'}
+        onBack={() => setRunId(null)}
+      />
+    )
+  }
+
   return openId ? (
     <ReportOutlineEditor
       reportId={openId}
       onBack={() => setOpenId(null)}
+      onOpenRun={setRunId}
       onChanged={(report) =>
         setCards((current) =>
           (current ?? []).map((card) => (card.id === report.id ? toCard(report) : card)),
