@@ -52,9 +52,14 @@ MAX_INTENT_CHARS = 2_000
 MAX_QUESTION_CHARS = 2_000
 
 #: Output-token floor for the outline call, whatever the provider row says. An
-#: outline of six sections is long, and a truncated one is the failure this
+#: outline of seven sections is long, and a truncated one is the failure this
 #: module spends most of its lines recovering from.
-OUTLINE_MIN_MAX_TOKENS = 4_096
+#:
+#: Raised with the r2 prompt, which asks for 4-7 sections rather than 3-6 and
+#: for an `intent` that states a comparison rather than a topic — so the reply
+#: is roughly half as long again, and the recovery path that used to be the
+#: exception would have become the norm.
+OUTLINE_MIN_MAX_TOKENS = 6_144
 
 # The summary the user did not ask for and always wants. Added by the service
 # at position 0 with `kind = EXECUTIVE_SUMMARY`, and removable like any other

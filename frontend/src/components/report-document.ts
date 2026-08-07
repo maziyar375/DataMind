@@ -45,6 +45,23 @@ export interface DocumentSection {
   /** The paragraph, once it has been written. Null while the run is on its way. */
   prose: ReportSectionResult | null
   blocks: ReportBlockResult[]
+  /**
+   * The executive summary, which a document leads with rather than numbers.
+   *
+   * Read off the blocks rather than a field, because there is no field: a
+   * `report_section_results` row carries no `kind`. It needs none — the summary
+   * is the one section written from other sections' prose instead of from
+   * queries, so it is the one section with no blocks, and `outline.py` refuses
+   * to keep a proposed section that has none. What the viewer needs from this
+   * is real: the summary is numbered differently, styled differently, and its
+   * "- " lines are findings rather than prose.
+   */
+  isSummary: boolean
+  /**
+   * Its place in the reader's numbering — 1, 2, 3 — or 0 for the summary, which
+   * sits outside the sequence the way an abstract does.
+   */
+  number: number
 }
 
 /** What the reader sees in a paragraph: their own words if they wrote any. */
@@ -81,6 +98,8 @@ export function assembleDocument(run: ReportRunDetail): DocumentSection[] {
         heading: block.heading_snapshot,
         prose: null,
         blocks: [],
+        isSummary: false,
+        number: 0,
       }
       byKey.set(key, entry)
       sections.push(entry)
@@ -109,12 +128,109 @@ export function assembleDocument(run: ReportRunDetail): DocumentSection[] {
       heading: paragraph.heading_snapshot,
       prose: paragraph,
       blocks: [],
+      isSummary: true,
+      number: 0,
     }
     byKey.set(key, created)
     sections.splice(Math.min(paragraph.position, sections.length), 0, created)
   }
 
+  // Numbered last, over the assembled order, so the reader's "3" is the third
+  // heading they can see and not the third row the worker happened to write.
+  // The summary is skipped rather than numbered 1: it is the page you read
+  // instead of the report, not its first chapter.
+  let counter = 0
+  for (const section of sections) {
+    section.number = section.isSummary ? 0 : ++counter
+  }
+
   return sections
+}
+
+/**
+ * The findings a summary states, split from the paragraph that opens it.
+ *
+ * `REPORT_SUMMARY_SYSTEM` asks for a lead paragraph, a blank line, then 3 to 5
+ * lines beginning with "- ". That is the shape of every executive summary a
+ * business reader has ever been handed, and rendering it as one undifferentiated
+ * block would throw away the only structure in the document the model is asked
+ * to produce.
+ *
+ * Tolerant on purpose, because a model that ignores the format must not cost the
+ * reader the text: a summary with no bullets comes back as a lead and no
+ * findings, and bullets with no lead come back as findings and an empty lead.
+ * Both render.
+ */
+export function summaryParts(prose: string): { lead: string; findings: string[] } {
+  const lead: string[] = []
+  const findings: string[] = []
+
+  for (const raw of prose.split('\n')) {
+    const line = raw.trim()
+    if (!line) continue
+    // A model asked for "- " will sometimes give "•", "–" or "*" instead, and
+    // the reader should not pay for that.
+    const bullet = /^[-–—*•]\s+(.*)$/.exec(line)
+    if (bullet) {
+      findings.push(bullet[1].trim())
+    } else if (findings.length === 0) {
+      lead.push(line)
+    } else {
+      // Prose after the findings began: a wrapped bullet, so it belongs to the
+      // one above rather than to a lead that is already closed.
+      findings[findings.length - 1] += ` ${line}`
+    }
+  }
+
+  return { lead: lead.join(' '), findings }
+}
+
+/**
+ * The figures of the document, numbered in reading order.
+ *
+ * A professional report cites "Figure 4", and it can only do that if the number
+ * is a property of the document rather than of the section — so this is computed
+ * once over the assembled sections and read by both the body and the appendix.
+ * A block that is still being written has no number yet and simply is not in the
+ * map, which is what makes it safe to call mid-run.
+ */
+export function figureNumbers(sections: DocumentSection[]): Map<string, number> {
+  const numbers = new Map<string, number>()
+  let counter = 0
+  for (const section of sections) {
+    for (const block of section.blocks) {
+      numbers.set(block.id, ++counter)
+    }
+  }
+  return numbers
+}
+
+/** One headline figure, with the section it was computed under. */
+export interface KeyFigure {
+  block: ReportBlockResult
+  heading: string
+}
+
+/**
+ * The figures the document opens on, gathered from wherever they were computed.
+ *
+ * Every one of these is a `plan_kpi` result — computed from result rows by the
+ * same planner chat and dashboard tiles use, never written by a model. That is
+ * what makes a band of them safe to put above the prose: it is the one part of
+ * the document that cannot be wrong about a number.
+ *
+ * Capped, because a strip of nine stops being a summary and becomes a wall.
+ */
+export function keyFigures(sections: DocumentSection[], limit = 4): KeyFigure[] {
+  const figures: KeyFigure[] = []
+  for (const section of sections) {
+    for (const block of section.blocks) {
+      if (block.status === 'OK' && block.kpi) {
+        figures.push({ block, heading: section.heading })
+      }
+    }
+  }
+  return figures.slice(0, limit)
 }
 
 /** How far along a run is, as the header renders it. */

@@ -1004,3 +1004,139 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   background: var(--accent-bg);
   color: var(--accent);
 }
+
+/* ── printing a report ─────────────────────────────────────────────────────
+   A report is a document, and a document leaves the tool. Everything below
+   turns the viewer into a page: the app chrome goes, the theme is forced to
+   the light token set whatever the user is running, and a figure is kept whole
+   across a page break.
+
+   The tokens are re-declared with `!important` because `applyTheme` writes
+   them as *inline styles* on `<html>`, and an inline style beats a stylesheet
+   rule at every specificity. This is the one place in the app that has to
+   override the user's chosen theme, and printing dark-mode panels wastes toner
+   on a background nobody wants — so it is worth the shout.
+
+   Vazirmatn is still loaded from Google Fonts in index.html. On a machine that
+   cannot reach it, a Persian report prints in a fallback face with the wrong
+   metrics. Self-hosting the woff2 is the remaining piece (reports-plan §11.1). */
+@media print {
+  :root {
+    --bg: #ffffff !important;
+    --sidebar-bg: #ffffff !important;
+    --panel: #ffffff !important;
+    --panel-hover: #ffffff !important;
+    --panel-alt: #f7f7f5 !important;
+    --border: #d8d5d0 !important;
+    --border-strong: #b4b0aa !important;
+    --input-bg: #fafaf8 !important;
+    --code-bg: #f4f3f0 !important;
+    --code-text: #1c5c46 !important;
+    --text: #1e1c19 !important;
+    --text-strong: #000000 !important;
+    --text2: #33302c !important;
+    --text-dim: #55514c !important;
+    --text-faint: #6d6862 !important;
+    --accent: #6b2f8f !important;
+    --accent-bg: #f3ecf7 !important;
+    --accent-border: #c4a5d6 !important;
+    color-scheme: light !important;
+  }
+
+  @page { margin: 16mm 14mm; }
+
+  html, body {
+    background: #ffffff !important;
+    /* Print colour is opt-in in every browser; without this the panels, the
+       accent and the chart fills all come out grey. */
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* The application, minus the application. */
+  .rm-sidebar,
+  .rm-dash-header,
+  .rm-report-hide-in-print {
+    display: none !important;
+  }
+
+  .rm-app { background: #ffffff !important; display: block !important; }
+
+  /* The scroller becomes the page: a fixed-height overflow container prints
+     one screenful and drops the rest. */
+  .rm-report-scroll {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+    padding: 0 !important;
+  }
+
+  .rm-report {
+    max-width: none !important;
+    gap: 20px !important;
+  }
+
+  /* A chart split across a page break is a chart nobody can read, and a
+     heading stranded at the foot of a page is the classic printing tell. */
+  .rm-report-figure,
+  .rm-report-section > figure {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .rm-report-section > h2,
+  .rm-report-section > div:first-child {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+  .rm-report-section {
+    break-inside: auto;
+    border-radius: 0 !important;
+  }
+
+  /* The appendix is the part a printed report most needs and the part a
+     collapsed disclosure would silently drop. */
+  .rm-report-method-body[hidden] { display: block !important; }
+  .rm-report-method-toggle > svg { display: none !important; }
+  .rm-report-method { break-before: page; page-break-before: always; }
+
+  /* A table that scrolls on screen has to print whole. */
+  .rm-report-figure table { width: 100% !important; }
+  .rm-report-figure [style*='overflow'] {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+}
+
+/* The headline band is a row on a page and a column on a phone. */
+@media (max-width: 720px) {
+  .rm-report-figures { grid-template-columns: minmax(0, 1fr) !important; }
+}
+
+/* ── the outline editor, and the run history ───────────────────────────────
+   Structural rules only. Everything with a colour in it stays inline beside
+   the component, which is the split the rest of this file already follows. */
+
+/* Reordering and deleting are secondary to writing the question, so they
+   recede until the row is under the cursor. Kept at a legible opacity rather
+   than hidden outright: on a touch screen there is no hover, and a control
+   that only exists on hover does not exist. */
+.rm-outline-actions { opacity: .45; transition: opacity .14s ease; }
+.rm-outline-card:hover .rm-outline-actions,
+.rm-outline-block:hover .rm-outline-actions,
+.rm-outline-actions:focus-within { opacity: 1; }
+
+@media (hover: none) {
+  .rm-outline-actions { opacity: 1; }
+}
+
+/* The four steps wrap onto their own rows on a narrow screen, where the
+   connecting lines would otherwise squeeze the captions to nothing. */
+@media (max-width: 860px) {
+  .rm-outline-steps { flex-wrap: wrap; gap: 10px 16px !important; }
+  .rm-outline-step-line { display: none !important; }
+}
+
+/* A generation in the history list is a document you open. */
+.rm-history-row { transition: background .12s ease, border-color .12s ease; }
+.rm-history-row:hover { background: var(--panel-hover) !important; }
+.rm-history-row:hover { border-color: var(--border-strong) !important; }

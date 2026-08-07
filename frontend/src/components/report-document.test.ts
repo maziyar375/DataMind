@@ -10,7 +10,10 @@
  * no paragraph yet, an executive summary that arrives last but belongs first, a
  * section deleted from the outline since the run — not invented ones.
  */
-import { assembleDocument, chartTypeOf, isEdited, proseOf, renderKindOf } from './report-document.ts'
+import {
+  assembleDocument, chartTypeOf, figureNumbers, isEdited, keyFigures, proseOf,
+  renderKindOf, summaryParts,
+} from './report-document.ts'
 import type { ReportBlockResult, ReportRunDetail, ReportSectionResult } from '../api/types.ts'
 
 const AT = '2026-08-01T12:00:00Z'
@@ -193,6 +196,115 @@ check('everything else falls back to the table', renderKindOf(block('1', 's', 0,
 check('the chart type is read off the compiled spec', chartTypeOf({ usermeta: { datamind: { chart_type: 'line' } } }), 'line')
 check('a spec without one says nothing rather than guessing', chartTypeOf({ mark: 'bar' }), '')
 check('no spec at all is no type', chartTypeOf(null), '')
+
+// ── the summary, and the numbering that flows from it ────────────────────
+// A section with no blocks *is* the executive summary — there is no `kind` on a
+// result row and none is needed, because it is the one section written from
+// other sections' prose rather than from queries, and `outline.py` refuses to
+// keep a proposed section with no blocks.
+{
+  const doc = assembleDocument(
+    run(
+      [block('1', 's1', 0, 'Revenue'), block('2', 's2', 1, 'Products')],
+      [prose('p0', 's0', 0, 'Executive summary')],
+    ),
+  )
+  check('the block-less section is read as the summary', doc.map((s) => s.isSummary), [
+    true, false, false,
+  ])
+  check('and it is numbered outside the sequence', doc.map((s) => s.number), [0, 1, 2])
+}
+
+check(
+  'a section still being written is numbered anyway',
+  assembleDocument(run([block('1', 's1', 0, 'Revenue')], [])).map((s) => s.number),
+  [1],
+)
+
+// ── the findings a summary states ────────────────────────────────────────
+check(
+  'a lead paragraph and its findings come apart',
+  summaryParts('Revenue grew.\n\n- Up 12% to 1.4M.\n- North leads at 31%.'),
+  { lead: 'Revenue grew.', findings: ['Up 12% to 1.4M.', 'North leads at 31%.'] },
+)
+check(
+  'a model that reached for a different bullet is not punished for it',
+  summaryParts('Lead.\n• One.\n– Two.\n* Three.').findings,
+  ['One.', 'Two.', 'Three.'],
+)
+check(
+  'a summary with no findings is all lead',
+  summaryParts('Just a paragraph.\nAnd another line.'),
+  { lead: 'Just a paragraph. And another line.', findings: [] },
+)
+check(
+  'findings with no lead still render',
+  summaryParts('- Only this.'),
+  { lead: '', findings: ['Only this.'] },
+)
+check(
+  'a wrapped finding stays with the finding above it',
+  summaryParts('- Up 12%,\ncontinued here.').findings,
+  ['Up 12%, continued here.'],
+)
+check('an empty summary comes apart into nothing', summaryParts(''), { lead: '', findings: [] })
+
+// ── figures, numbered across the whole document ──────────────────────────
+{
+  const doc = assembleDocument(
+    run(
+      [
+        block('a', 's1', 0, 'Revenue'),
+        block('b', 's1', 1, 'Revenue'),
+        block('c', 's2', 2, 'Products'),
+      ],
+      [prose('p0', 's0', 0, 'Executive summary')],
+    ),
+  )
+  check(
+    'figures are numbered in reading order, across sections',
+    [...figureNumbers(doc).entries()],
+    [['a', 1], ['b', 2], ['c', 3]],
+  )
+}
+
+// ── the headline band ────────────────────────────────────────────────────
+{
+  const kpi = { value: '1.4M', raw: 1.4, label: 'Revenue', caption: null, delta: null, sparkline: [] }
+  const doc = assembleDocument(
+    run(
+      [
+        block('a', 's1', 0, 'Revenue', { kpi }),
+        block('b', 's1', 1, 'Revenue'),
+        block('c', 's2', 2, 'Products', { kpi, status: 'FAILED' }),
+      ],
+      [],
+    ),
+  )
+  check(
+    'only computed figures that actually landed reach the band',
+    keyFigures(doc).map((f) => f.block.id),
+    ['a'],
+  )
+  check('and each carries the heading it was computed under', keyFigures(doc)[0].heading, 'Revenue')
+}
+
+check(
+  'the band is capped rather than becoming a wall',
+  keyFigures(
+    assembleDocument(
+      run(
+        [0, 1, 2, 3, 4, 5].map((i) =>
+          block(`k${i}`, `s${i}`, i, `H${i}`, {
+            kpi: { value: '1', raw: 1, label: 'x', caption: null, delta: null, sparkline: [] },
+          }),
+        ),
+        [],
+      ),
+    ),
+  ).length,
+  4,
+)
 
 if (failures > 0) {
   // A thrown error is the non-zero exit; `process` would need Node's types.

@@ -30,25 +30,28 @@
  * Every free-text field is `dir="auto"`: a report is written in Persian as
  * often as English, and the two mix inside one heading.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   isReportRunInFlight, llmConfigs as modelsApi, reports as api,
 } from '../api/client'
 import type {
   ChartOption, LlmConfig, NumericFinding, Report, ReportBlock, ReportBlockResult,
-  ReportBlockType, ReportFeasibility, ReportRun, ReportRunDetail, ReportRunStatus,
-  ReportSection, ReportSectionResult, ReportTimeWindow,
+  ReportBlockType, ReportFeasibility, ReportLanguage, ReportRun, ReportRunDetail,
+  ReportSection, ReportSectionResult, ReportSummary, ReportTimeWindow,
 } from '../api/types'
 import { ChartGlyph, ChartTypePicker } from './chart-picker'
 import {
-  assembleDocument, chartTypeOf, isEdited, proseOf, renderKindOf,
+  assembleDocument, chartTypeOf, figureNumbers, isEdited, keyFigures, proseOf,
+  renderKindOf, summaryParts,
   type DocumentSection,
 } from './report-document'
+// One vocabulary for a run's status across the two screens that show one.
+import { RUN_TONE } from './report-history'
 import { VegaChart } from './VegaChart'
 import {
   Chip, CopyButton, DangerButton, EmptyState, ErrorNote, GhostButton, Icon, InlineEdit,
-  Kpi, Modal, PrimaryButton, ProgressBar, ResultTable, Spinner, TextArea, dirOf,
+  Kpi, Modal, PrimaryButton, ProgressBar, ResultTable, Spinner, TextArea,
   relativeTime,
 } from './ui'
 import type { ChipTone } from './ui'
@@ -90,19 +93,110 @@ const BLOCK_TYPES: { value: ReportBlockType; label: string }[] = [
  * in the window, which is a fact about the data and often the finding itself.
  * A report that says "no returns were recorded in this period" is correct.
  */
-const FEASIBILITY: Record<ReportFeasibility, { label: string; tone: ChipTone }> = {
-  UNCHECKED: { label: 'Not checked', tone: 'neutral' },
-  FEASIBLE: { label: 'Ready', tone: 'green' },
-  EMPTY: { label: 'No rows yet', tone: 'amber' },
-  INFEASIBLE: { label: 'Cannot be produced', tone: 'red' },
+const FEASIBILITY: Record<
+  ReportFeasibility,
+  { label: string; tone: ChipTone; rail: string }
+> = {
+  UNCHECKED: { label: 'Not checked', tone: 'neutral', rail: 'var(--border-strong)' },
+  FEASIBLE: { label: 'Ready', tone: 'green', rail: 'var(--green)' },
+  EMPTY: { label: 'No rows yet', tone: 'amber', rail: 'var(--amber)' },
+  INFEASIBLE: { label: 'Cannot be produced', tone: 'red', rail: 'var(--red)' },
+}
+
+/**
+ * The document's own furniture, in the language the document is written in.
+ *
+ * A report whose paragraphs are Persian and whose figure captions say "Figure 3"
+ * is not a Persian report — it is an English product with Persian text pasted
+ * into it, and that is exactly the seam a reader notices first. The prose is
+ * pinned per report (`reports.language`); so is everything the page writes
+ * around it.
+ *
+ * Deliberately small. Only what appears *inside the document* is here — the app
+ * chrome above it (Back, Stop, the status chip) stays in the interface language,
+ * because it is the application talking, not the report.
+ */
+const LABELS: Record<ReportLanguage, Record<string, string>> = {
+  en: {
+    eyebrow: 'Analytical report',
+    dataSource: 'Data source',
+    generated: 'Generated',
+    model: 'Model',
+    keyFigures: 'Key figures',
+    figure: 'Figure',
+    method: 'Method and data notes',
+    methodBody:
+      'Every figure in this document was produced by one query, run read-only '
+      + 'against the data source above and validated before execution. The '
+      + 'queries are listed here with the row counts they returned.',
+    question: 'Question',
+    rows: 'rows',
+    row: 'row',
+    capped: 'result capped',
+    computed: 'computed',
+    query: 'Query',
+    hideQuery: 'Hide query',
+    print: 'Print',
+    edited: 'edited by you',
+    retry: 'Retry',
+    changeChart: 'Change chart',
+    done: 'Done',
+    edit: 'Edit',
+    save: 'Save',
+    saving: 'Saving…',
+    cancel: 'Cancel',
+    revert: 'Revert',
+    asOf: 'This document reflects the data as it stood on',
+    asOfTail:
+      'Generating again writes a new run and leaves this one exactly as it is.',
+  },
+  fa: {
+    eyebrow: 'گزارش تحلیلی',
+    dataSource: 'منبع داده',
+    generated: 'تاریخ تولید',
+    model: 'مدل',
+    keyFigures: 'شاخص‌های کلیدی',
+    figure: 'شکل',
+    method: 'روش و ملاحظات داده',
+    methodBody:
+      'هر شکل این سند نتیجهٔ یک کوئری است که فقط‌خواندنی روی منبع دادهٔ بالا '
+      + 'اجرا و پیش از اجرا اعتبارسنجی شده است. کوئری‌ها همراه با تعداد سطرهای '
+      + 'بازگشتی در این بخش فهرست شده‌اند.',
+    question: 'پرسش',
+    rows: 'سطر',
+    row: 'سطر',
+    capped: 'نتیجه محدود شده',
+    computed: 'محاسبه در',
+    query: 'کوئری',
+    hideQuery: 'بستن کوئری',
+    print: 'چاپ',
+    edited: 'ویرایش‌شده توسط شما',
+    retry: 'اجرای دوباره',
+    changeChart: 'تغییر نمودار',
+    done: 'پایان',
+    edit: 'ویرایش',
+    save: 'ذخیره',
+    saving: 'در حال ذخیره…',
+    cancel: 'انصراف',
+    revert: 'بازگردانی',
+    asOf: 'این سند وضعیت داده‌ها را در تاریخ زیر نشان می‌دهد:',
+    asOfTail: 'تولید دوبارهٔ گزارش، اجرای تازه‌ای می‌سازد و این اجرا دست‌نخورده می‌ماند.',
+  },
+}
+
+/** The document's own labels, falling back to English for an unknown code. */
+function labelsFor(language: string): Record<string, string> {
+  return LABELS[language as ReportLanguage] ?? LABELS.en
 }
 
 // ── the editor ────────────────────────────────────────────────────────────
 export function ReportOutlineEditor({
-  reportId, onBack, onChanged, onOpenRun,
+  reportId, onBack, onChanged, onOpenRun, onHistory,
 }: {
   reportId: string
   onBack: () => void
+  /** Every generation this report has produced. */
+  onHistory: () => void
   /** Hand the written row back so the index card never shows a stale name. */
   onChanged?: (report: Report) => void
   /**
@@ -124,6 +218,9 @@ export function ReportOutlineEditor({
   const [sweep, setSweep] = useState<{ done: number; total: number; label: string } | null>(null)
   const [previews, setPreviews] = useState<Record<string, string>>({})
   const [latestRun, setLatestRun] = useState<ReportRun | null>(null)
+  // How many documents this report has produced. The header shows it because
+  // "History 7" is an invitation and "History" is a menu item.
+  const [runCount, setRunCount] = useState(0)
   const [starting, setStarting] = useState(false)
   const stopSweep = useRef(false)
 
@@ -141,6 +238,7 @@ export function ReportOutlineEditor({
         setReport(loaded)
         setModels(configs)
         setLatestRun(history[0] ?? null)
+        setRunCount(history.length)
         // A generation still in flight is what the reader came for.
         if (history[0] && isReportRunInFlight(history[0].status)) onOpenRun(history[0].id)
       } catch (err) {
@@ -435,9 +533,11 @@ export function ReportOutlineEditor({
               {`Check ${unchecked.length} question${unchecked.length === 1 ? '' : 's'}`}
             </GhostButton>
           )}
-          {/* A report already generated has a document to go back to, and the
-              editor is not where you read one. Rows only — opening it is what
-              reads its results. */}
+          {/* A report already generated has documents to go back to, and the
+              editor is not where you read one. Two doors rather than one: the
+              latest is what "the report" usually means, and the history is the
+              use case reports exist for — this quarter against last quarter.
+              Rows only; opening one is what reads its results. */}
           {latestRun && (
             <GhostButton
               onClick={() => onOpenRun(latestRun.id)}
@@ -445,6 +545,16 @@ export function ReportOutlineEditor({
               title={`The last generation ${relativeTime(latestRun.created_at)}.`}
             >
               <Icon.Doc size={13} /> Last run
+            </GhostButton>
+          )}
+          {runCount > 0 && (
+            <GhostButton
+              onClick={onHistory}
+              style={toolbarBtn}
+              title={`All ${runCount} generation${runCount === 1 ? '' : 's'} of this report.`}
+            >
+              <Icon.List size={13} /> History
+              <span style={{ opacity: 0.6 }}>{runCount}</span>
             </GhostButton>
           )}
           {/* Enabled only when the outline can actually produce a document, and
@@ -478,6 +588,13 @@ export function ReportOutlineEditor({
               This report’s database connection has been removed, so its outline cannot be
               checked and it cannot be generated. Past runs stay readable.
             </Note>
+          )}
+
+          {/* The status panel leads, because it is the answer to the question a
+              user opens this page with — how far along is this, and what is the
+              next thing to do. */}
+          {!sweep && !proposing && (
+            <OutlineStatus report={report} state={state} sections={sections} />
           )}
 
           <RequestCard
@@ -542,8 +659,6 @@ export function ReportOutlineEditor({
               <Spinner /> Reading your schema and proposing a structure…
             </div>
           )}
-
-          {sections.length > 0 && !sweep && !proposing && <Readiness state={state} />}
 
           {sections.length === 0 ? (
             <EmptyState
@@ -770,34 +885,245 @@ function readinessOf(sections: ReportSection[]): ReadinessState {
   }
 }
 
-function Readiness({ state }: { state: ReadinessState }) {
-  if (state.blocks === 0) {
-    return (
-      <Note tone="amber">
-        This outline has headings but no questions. A section with nothing under it has no
-        results to be written from.
-      </Note>
-    )
-  }
-  if (state.infeasible > 0) {
-    return <Note tone="red">{state.blocked}</Note>
-  }
-  if (state.unchecked > 0) {
-    return (
-      <Note tone="amber">
-        {`${state.unchecked} of ${state.blocks} question${state.blocks === 1 ? '' : 's'} `}
-        {state.unchecked === 1 ? 'has' : 'have'} not been checked. A question that has never
-        been near the guard carries no query, so it would be an error message in the finished
-        document.
-      </Note>
-    )
-  }
+/**
+ * Where the report is in the four things building one actually involves.
+ *
+ * The page used to be a stack of identical cards with one coloured sentence
+ * somewhere in it, and a user could not tell from looking whether they were
+ * three clicks from a document or thirty. Describe → Structure → Check →
+ * Generate is not invented ceremony: it is exactly the sequence the API
+ * enforces, and naming it is the difference between a form and a product.
+ *
+ * Every step's caption is a count read off the outline, so the panel is also
+ * the answer to "how much is left".
+ */
+type StepState = 'done' | 'current' | 'todo'
+
+function OutlineStatus({
+  report, state, sections,
+}: {
+  report: Report
+  state: ReadinessState
+  sections: ReportSection[]
+}) {
+  const checked = state.ready + state.empty
+  const described = report.prompt.trim().length > 0
+  const structured = sections.length > 0 && state.blocks > 0
+  const verified = structured && state.unchecked === 0 && state.infeasible === 0
+
+  const steps: { label: string; caption: string; done: boolean }[] = [
+    {
+      label: 'Describe',
+      caption: described ? 'request written' : 'say what it covers',
+      done: described,
+    },
+    {
+      label: 'Structure',
+      caption: structured
+        ? `${sections.length} section${sections.length === 1 ? '' : 's'}, `
+          + `${state.blocks} question${state.blocks === 1 ? '' : 's'}`
+        : 'no outline yet',
+      done: structured,
+    },
+    {
+      label: 'Check',
+      caption: state.blocks === 0
+        ? 'nothing to check'
+        : verified
+          ? 'all questions checked'
+          : `${checked} of ${state.blocks} checked`,
+      done: verified,
+    },
+    {
+      label: 'Generate',
+      caption: state.runnable ? 'ready to run' : 'not ready yet',
+      done: false,
+    },
+  ]
+  // The first unfinished step is the one you are on. Generate is never "done"
+  // here — it is an action, and a report is never finished with being run.
+  const current = steps.findIndex((step) => !step.done)
+
+  const counts = (
+    [
+      { label: 'ready', value: state.ready, tone: 'green' },
+      { label: 'no rows', value: state.empty, tone: 'amber' },
+      { label: 'cannot be produced', value: state.infeasible, tone: 'red' },
+      { label: 'not checked', value: state.unchecked, tone: 'neutral' },
+    ] as { label: string; value: number; tone: ChipTone }[]
+  ).filter((count) => count.value > 0)
+
   return (
-    <Note tone="green">
-      {`Ready — ${state.ready + state.empty} question${state.ready + state.empty === 1 ? '' : 's'} checked`}
-      {state.empty > 0
-        && `, ${state.empty} of which return no rows for now. A section whose results are all empty says so plainly instead of inventing numbers.`}
-    </Note>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 13,
+        padding: '14px 16px',
+        background: 'var(--panel)',
+        border: '1px solid var(--border)',
+        borderRadius: 12,
+      }}
+    >
+      {/* Fragments rather than list items with `display: contents`: that
+          declaration lays the steps out correctly and removes them from the
+          accessibility tree in more than one browser. */}
+      <div
+        className="rm-outline-steps"
+        aria-label="Progress towards a generated report"
+        style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+      >
+        {steps.map((step, index) => (
+          <Fragment key={step.label}>
+            <Step
+              index={index}
+              label={step.label}
+              caption={step.caption}
+              state={step.done ? 'done' : index === current ? 'current' : 'todo'}
+            />
+            {index < steps.length - 1 && (
+              <span
+                aria-hidden
+                className="rm-outline-step-line"
+                style={{
+                  flex: 1,
+                  minWidth: 10,
+                  height: 1,
+                  background: step.done ? 'var(--accent-border)' : 'var(--border)',
+                }}
+              />
+            )}
+          </Fragment>
+        ))}
+      </div>
+
+      {state.blocks > 0 && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            flexWrap: 'wrap',
+            paddingTop: 11,
+            borderTop: '1px solid var(--border)',
+          }}
+        >
+          {counts.map((count) => (
+            <Chip key={count.label} tone={count.tone}>
+              {count.value} {count.label}
+            </Chip>
+          ))}
+          <span
+            style={{
+              flex: 1,
+              minWidth: 220,
+              fontSize: 11.5,
+              lineHeight: 1.6,
+              color: 'var(--text-dim)',
+            }}
+          >
+            {advice(state)}
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The one sentence that says what to do next, and why it matters.
+ *
+ * Each of these is a real failure someone would otherwise meet inside a
+ * finished document: an unchecked question becomes an error message in the
+ * report, and an empty result becomes a section that says so plainly — which is
+ * correct, and worth knowing before you spend the generation on it.
+ */
+function advice(state: ReadinessState): string {
+  if (state.blocks === 0) {
+    return 'This outline has headings but no questions. A section with nothing under it '
+      + 'has no results to be written from.'
+  }
+  if (state.infeasible > 0) return state.blocked ?? ''
+  if (state.unchecked > 0) {
+    return 'A question that has never been near the guard carries no query, so it would '
+      + 'arrive in the finished document as an error message. Check it first.'
+  }
+  if (state.empty > 0) {
+    return 'Some questions return no rows for now. A section whose results are all empty '
+      + 'says so plainly instead of inventing numbers.'
+  }
+  return 'Every question has a validated query. Generating writes a new document and '
+    + 'leaves earlier ones untouched.'
+}
+
+function Step({
+  index, label, caption, state,
+}: {
+  index: number
+  label: string
+  caption: string
+  state: StepState
+}) {
+  const accent = state !== 'todo'
+  return (
+    <span
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        // Allowed to shrink, so the caption's ellipsis has something to
+        // ellipsis *against*. Fixed-width steps with `nowrap` captions push the
+        // panel wider than the page at the awkward viewport sizes.
+        minWidth: 0,
+        overflow: 'hidden',
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          display: 'grid',
+          placeItems: 'center',
+          width: 22,
+          height: 22,
+          flexShrink: 0,
+          borderRadius: 999,
+          fontSize: 11,
+          fontWeight: 700,
+          background: state === 'done' ? 'var(--accent)' : 'transparent',
+          border: `1.5px solid ${accent ? 'var(--accent)' : 'var(--border-strong)'}`,
+          color:
+            state === 'done'
+              ? 'var(--on-accent)'
+              : accent
+                ? 'var(--accent)'
+                : 'var(--text-faint)',
+        }}
+      >
+        {state === 'done' ? <Icon.Check size={11} /> : index + 1}
+      </span>
+      <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.3 }}>
+        <span
+          style={{
+            fontSize: 12.5,
+            fontWeight: 650,
+            color: accent ? 'var(--text-strong)' : 'var(--text-faint)',
+          }}
+        >
+          {label}
+        </span>
+        <span
+          style={{
+            fontSize: 10.5,
+            color: state === 'current' ? 'var(--accent)' : 'var(--text-faint)',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          {caption}
+        </span>
+      </span>
+    </span>
   )
 }
 
@@ -825,50 +1151,102 @@ function SectionCard({
 }) {
   const [confirmRemove, setConfirmRemove] = useState(false)
   const summary = section.kind === 'EXECUTIVE_SUMMARY'
+  // The section's own readiness, so a long outline can be read at a glance
+  // instead of by opening every row in it.
+  const pending = section.blocks.filter((b) => b.feasibility_status === 'UNCHECKED').length
+  const broken = section.blocks.filter((b) => b.feasibility_status === 'INFEASIBLE').length
 
   return (
     <section
+      className="rm-outline-card"
       style={{
         display: 'flex',
         flexDirection: 'column',
-        gap: 11,
-        padding: 15,
+        gap: 12,
+        padding: '15px 16px',
         background: 'var(--panel)',
-        border: `1px solid ${summary ? 'var(--accent-border)' : 'var(--border)'}`,
+        border: `1px solid ${
+          broken > 0
+            ? 'var(--red-border)'
+            : summary
+              ? 'var(--accent-border)'
+              : 'var(--border)'
+        }`,
         borderRadius: 12,
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
-        <Reorder
-          label={`section ${index + 1}`}
-          index={index}
-          count={count}
-          disabled={busy}
-          onMove={onMove}
-        />
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 11 }}>
+        {/* The number a reader will see in the finished document, shown while
+            the structure is still being arranged — so reordering has a visible
+            consequence rather than only moving a card. */}
+        <span
+          aria-hidden
+          className="mono"
+          style={{
+            display: 'grid',
+            placeItems: 'center',
+            width: 26,
+            height: 26,
+            flexShrink: 0,
+            marginTop: 1,
+            borderRadius: 8,
+            fontSize: 11.5,
+            fontWeight: 700,
+            fontVariantNumeric: 'tabular-nums',
+            background: summary ? 'var(--accent-bg)' : 'var(--panel-alt)',
+            border: `1px solid ${summary ? 'var(--accent-border)' : 'var(--border)'}`,
+            color: summary ? 'var(--accent)' : 'var(--text-dim)',
+          }}
+        >
+          {summary ? <Icon.Sparkle size={12} /> : index + 1}
+        </span>
+
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexWrap: 'wrap' }}>
             <InlineEdit
               ariaLabel={`Heading of section ${index + 1}`}
               value={section.heading}
               required
-              style={{ fontSize: 15, fontWeight: 650, color: 'var(--text-strong)' }}
+              style={{ fontSize: 15.5, fontWeight: 650, color: 'var(--text-strong)' }}
               onCommit={onHeading}
             />
-            {summary && <Chip tone="accent">Executive summary</Chip>}
+            {summary && <Chip tone="accent">Written last</Chip>}
+            {!summary && section.blocks.length > 0 && (
+              <span style={{ fontSize: 11, color: 'var(--text-faint)', flexShrink: 0 }}>
+                {section.blocks.length}
+                {section.blocks.length === 1 ? ' question' : ' questions'}
+                {broken > 0
+                  ? ` · ${broken} blocked`
+                  : pending > 0
+                    ? ` · ${pending} to check`
+                    : ' · checked'}
+              </span>
+            )}
           </div>
           {/* Prompt input, not display text: the one line that tells the model
-              what this section's paragraph is *for*. */}
+              what this section's paragraph is *for*. Labelled, because an
+              unlabelled second line reads as a subtitle the reader will see. */}
           <InlineEdit
             ariaLabel={`What section ${index + 1} should cover`}
             value={section.intent}
-            placeholder="What this section’s paragraph should cover"
+            placeholder="Brief for the writer — what this section must establish, and against what"
             style={{ fontSize: 12.5, color: 'var(--text-dim)', lineHeight: 1.55 }}
             multiline
             onCommit={onIntent}
           />
         </div>
-        <span style={{ flexShrink: 0 }}>
+
+        <span
+          className="rm-outline-actions"
+          style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 2 }}
+        >
+          <Reorder
+            label={`section ${index + 1}`}
+            index={index}
+            count={count}
+            disabled={busy}
+            onMove={onMove}
+          />
           <QuietDanger label={`Remove section ${index + 1}`} onClick={() => setConfirmRemove(true)}>
             <Icon.Trash />
           </QuietDanger>
@@ -880,9 +1258,9 @@ function SectionCard({
           style={{
             margin: 0,
             fontSize: 12,
-            lineHeight: 1.55,
+            lineHeight: 1.6,
             color: 'var(--text-faint)',
-            paddingLeft: 33,
+            paddingInlineStart: 37,
           }}
         >
           Written last, from the sections it summarises — so it needs no questions of its own.
@@ -890,7 +1268,14 @@ function SectionCard({
       )}
 
       {section.blocks.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 9, paddingLeft: 33 }}>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 8,
+            paddingInlineStart: 37,
+          }}
+        >
           {section.blocks.map((block, blockIndex) => (
             <BlockRow
               key={block.id}
@@ -909,7 +1294,7 @@ function SectionCard({
         </div>
       )}
 
-      <div style={{ paddingLeft: 33 }}>
+      <div style={{ paddingInlineStart: 37 }}>
         <GhostButton
           onClick={onAddBlock}
           disabled={busy}
@@ -974,30 +1359,42 @@ function BlockRow({
 }) {
   const [showSql, setShowSql] = useState(false)
   const verdict = FEASIBILITY[block.feasibility_status]
+  const unchecked = block.feasibility_status === 'UNCHECKED'
 
   return (
     <div
+      className="rm-outline-block"
       style={{
         display: 'flex',
         flexDirection: 'column',
         gap: 9,
-        padding: '10px 12px',
+        padding: '11px 13px',
         background: 'var(--panel-alt)',
         border: `1px solid ${
           block.feasibility_status === 'INFEASIBLE' ? 'var(--red-border)' : 'var(--border)'
         }`,
+        // The rail carries the verdict. It is the one cue that survives
+        // skim-reading a twelve-question outline, and it costs no space.
+        borderInlineStartWidth: 3,
+        borderInlineStartColor: verdict.rail,
         borderRadius: 9,
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
-        <Reorder
-          label={`question ${index + 1}`}
-          index={index}
-          count={count}
-          disabled={busy}
-          onMove={onMove}
-          size={22}
-        />
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+        <span
+          aria-hidden
+          className="mono"
+          style={{
+            fontSize: 11,
+            fontWeight: 700,
+            color: 'var(--text-faint)',
+            fontVariantNumeric: 'tabular-nums',
+            paddingTop: 3,
+            flexShrink: 0,
+          }}
+        >
+          {index + 1}
+        </span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <InlineEdit
             ariaLabel={`Question ${index + 1}`}
@@ -1008,7 +1405,18 @@ function BlockRow({
             onCommit={(question) => onChange({ question })}
           />
         </div>
-        <span style={{ flexShrink: 0 }}>
+        <span
+          className="rm-outline-actions"
+          style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 2 }}
+        >
+          <Reorder
+            label={`question ${index + 1}`}
+            index={index}
+            count={count}
+            disabled={busy}
+            onMove={onMove}
+            size={22}
+          />
           <QuietDanger label={`Remove question ${index + 1}`} onClick={onRemove} size={24}>
             <Icon.Trash size={12} />
           </QuietDanger>
@@ -1021,7 +1429,7 @@ function BlockRow({
           alignItems: 'center',
           gap: 7,
           flexWrap: 'wrap',
-          paddingLeft: 31,
+          paddingInlineStart: 22,
         }}
       >
         <select
@@ -1074,7 +1482,7 @@ function BlockRow({
           </span>
         )}
 
-        <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ marginInlineStart: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
           {block.sql && (
             <GhostButton
               onClick={() => setShowSql((open) => !open)}
@@ -1083,13 +1491,19 @@ function BlockRow({
               {showSql ? 'Hide SQL' : 'SQL'}
             </GhostButton>
           )}
-          <GhostButton
+          {/* `is-wanted` is the tile editor's affordance for "this is the next
+              thing to do", and an unchecked question is exactly that: it is the
+              one state that stops the report being generated at all. */}
+          <button
+            type="button"
             onClick={onCheck}
             disabled={busy || checking}
-            style={{ padding: '4px 9px', fontSize: 11.5 }}
+            className={`rm-check${unchecked && !checking ? ' is-wanted' : ''}`}
+            style={{ marginInlineStart: 0, padding: '4px 10px', fontSize: 11.5 }}
           >
-            {block.feasibility_status === 'UNCHECKED' ? 'Check' : 'Check again'}
-          </GhostButton>
+            {checking ? <Spinner size={11} /> : <Icon.Check size={11} />}
+            {unchecked ? 'Check' : 'Check again'}
+          </button>
         </span>
       </div>
 
@@ -1100,7 +1514,7 @@ function BlockRow({
           style={{
             display: 'flex',
             gap: 7,
-            marginLeft: 31,
+            marginInlineStart: 22,
             fontSize: 11.5,
             lineHeight: 1.5,
             color: block.feasibility_status === 'INFEASIBLE' ? 'var(--red)' : 'var(--amber)',
@@ -1114,7 +1528,7 @@ function BlockRow({
       )}
 
       {showSql && block.sql && (
-        <div style={{ marginLeft: 31 }}>
+        <div style={{ marginInlineStart: 22 }}>
           <pre
             dir="ltr"
             style={{
@@ -1345,26 +1759,26 @@ function EditorSkeleton({ onBack, error }: { onBack: () => void; error: string |
  */
 const POLL_MS = 1500
 
-const RUN_TONE: Record<ReportRunStatus, { label: string; tone: ChipTone }> = {
-  QUEUED: { label: 'Queued', tone: 'neutral' },
-  RUNNING: { label: 'Generating', tone: 'accent' },
-  SUCCEEDED: { label: 'Complete', tone: 'green' },
-  // Its own state, and the honest one: some sections succeeded and some did
-  // not, and calling that either is a lie the reader must open the document to
-  // catch.
-  PARTIAL: { label: 'Partly complete', tone: 'amber' },
-  FAILED: { label: 'Failed', tone: 'red' },
-  CANCELLED: { label: 'Cancelled', tone: 'neutral' },
-}
-
 export function ReportRunViewer({
-  reportId, runId, reportName, onBack,
+  reportId, runId, report, reportName, onBack, onHistory,
 }: {
   reportId: string
   runId: string
-  /** The index already knows it; the viewer fetches the run, not the document. */
+  /**
+   * The card the index already holds, for the cover block.
+   *
+   * The viewer fetches the *run*, and a run carries no connection name and no
+   * description — it carries the model it used and the language it was written
+   * in. Passing the card down is cheaper than a second request and, more to the
+   * point, it is what lets the document say which database it describes, which
+   * is the first thing a reader of a printed report needs to know.
+   */
+  report: ReportSummary | null
+  /** Kept for the header while the index is still loading its cards. */
   reportName: string
   onBack: () => void
+  /** Every other generation of this report — the reader's way between them. */
+  onHistory: () => void
 }) {
   const [run, setRun] = useState<ReportRunDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -1407,6 +1821,17 @@ export function ReportRunViewer({
   }, [reportId, runId, pollKey])
 
   const document_ = useMemo(() => (run ? assembleDocument(run) : []), [run])
+  // Numbered once over the assembled document, so "Figure 4" means the same
+  // thing in the body, in the appendix and on paper.
+  const figures = useMemo(() => figureNumbers(document_), [document_])
+  const headline = useMemo(() => keyFigures(document_), [document_])
+
+  const language = run?.language ?? report?.language ?? 'en'
+  const t = labelsFor(language)
+  // The document lays out in its own direction rather than per element. A
+  // Persian report whose figure numbers and captions run left-to-right around
+  // right-to-left prose is the seam a reader sees before they read a word.
+  const dir = language === 'fa' ? 'rtl' : 'ltr'
 
   async function cancel() {
     setBusy(true)
@@ -1504,6 +1929,22 @@ export function ReportRunViewer({
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
           {running && <Spinner size={13} />}
           {status && <Chip tone={status.tone}>{status.label}</Chip>}
+          {/* The way between generations, from inside one. A reader comparing
+              this quarter with last quarter should not have to go back through
+              the outline to do it. */}
+          <GhostButton onClick={onHistory} style={toolbarBtn}>
+            <Icon.List size={12} /> History
+          </GhostButton>
+          {/* Printing is the deliverable, not an extra: a report is a document
+              and a document leaves the tool. The stylesheet hides the app
+              chrome, forces the light tokens and keeps a figure whole across a
+              page break, so this is one call rather than a renderer.
+              Offered only once there is a document to print. */}
+          {!running && document_.length > 0 && (
+            <GhostButton onClick={() => window.print()} style={toolbarBtn}>
+              <Icon.Doc size={12} /> {t.print}
+            </GhostButton>
+          )}
           {running && (
             <GhostButton onClick={() => void cancel()} disabled={busy} style={toolbarBtn}>
               Stop
@@ -1525,14 +1966,19 @@ export function ReportRunViewer({
         </div>
       )}
 
-      <div className="rm-page-pad" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-        <div
+      <div
+        className="rm-page-pad rm-report-scroll"
+        style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
+      >
+        <article
+          className="rm-report"
+          dir={dir}
           style={{
-            maxWidth: 820,
+            maxWidth: 860,
             margin: '0 auto',
             display: 'flex',
             flexDirection: 'column',
-            gap: 22,
+            gap: 30,
           }}
         >
           {error && <ErrorNote>{error}</ErrorNote>}
@@ -1549,6 +1995,24 @@ export function ReportRunViewer({
               This generation was stopped. What had already been computed is kept below —
               it was paid for.
             </Note>
+          )}
+
+          {run !== null && document_.length > 0 && (
+            <DocumentCover
+              title={report?.name ?? reportName}
+              subtitle={report?.description ?? null}
+              connection={report?.connection_name ?? null}
+              run={run}
+              t={t}
+            />
+          )}
+
+          {/* The band normally rides under the executive summary, which is
+              where a reader looks for it. A summary is an ordinary section and
+              can be deleted from the outline — so when there is none, the
+              figures go straight under the cover rather than disappearing. */}
+          {!document_.some((section) => section.isSummary) && (
+            <HeadlineFigures figures={headline} t={t} />
           )}
 
           {run === null ? (
@@ -1571,6 +2035,12 @@ export function ReportRunViewer({
                 reportId={reportId}
                 runId={runId}
                 section={section}
+                figures={figures}
+                /* The headline band rides under the executive summary: it is the
+                   "at a glance" a reader looks for first, and every number in it
+                   was computed by `plan_kpi` rather than written by a model. */
+                headline={section.isSummary ? headline : []}
+                t={t}
                 busy={busy || running}
                 onRetry={() => {
                   if (section.sectionId) void retry(section.sectionId)
@@ -1584,53 +2054,410 @@ export function ReportRunViewer({
           )}
 
           {run !== null && !running && document_.length > 0 && (
-            <p
-              style={{
-                margin: 0,
-                paddingTop: 6,
-                fontSize: 11.5,
-                color: 'var(--text-faint)',
-                borderTop: '1px solid var(--border)',
-              }}
-            >
-              Generated from the data as it was at{' '}
-              {new Date(run.finished_at ?? run.created_at).toLocaleString()}. Generating again
-              writes a new run and leaves this one exactly as it is.
-            </p>
+            <MethodNotes sections={document_} figures={figures} run={run} t={t} />
           )}
-        </div>
+        </article>
       </div>
     </div>
   )
 }
 
+// ── the cover ─────────────────────────────────────────────────────────────
+/**
+ * What a document says about itself before it says anything else.
+ *
+ * A page of charts under a name is a screenshot; a report opens by stating what
+ * it is, what it was built from and when — because a reader who finds it three
+ * months later has no other way to know whether it is still true. Every field
+ * here is a fact the run already carried and the page was throwing away: the
+ * connection it read, the model that wrote the prose, the moment the numbers
+ * were computed.
+ *
+ * Nothing here is model-written, which is the point: the one part of the
+ * document that establishes its provenance cannot be the part that was
+ * generated.
+ */
+function DocumentCover({
+  title, subtitle, connection, run, t,
+}: {
+  title: string
+  subtitle: string | null
+  connection: string | null
+  run: ReportRunDetail
+  t: Record<string, string>
+}) {
+  const when = run.finished_at ?? run.started_at ?? run.created_at
+  const meta: { label: string; value: string }[] = [
+    ...(connection ? [{ label: t.dataSource, value: connection }] : []),
+    { label: t.generated, value: new Date(when).toLocaleString() },
+    ...(run.model_snapshot.model
+      ? [{ label: t.model, value: run.model_snapshot.model }]
+      : []),
+  ]
+
+  return (
+    <header style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <span
+        style={{
+          fontSize: 10.5,
+          fontWeight: 600,
+          letterSpacing: '0.14em',
+          textTransform: 'uppercase',
+          color: 'var(--accent)',
+        }}
+      >
+        {t.eyebrow}
+      </span>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <h1
+          dir="auto"
+          style={{
+            margin: 0,
+            fontSize: 31,
+            fontWeight: 700,
+            lineHeight: 1.22,
+            letterSpacing: '-0.02em',
+            color: 'var(--text-strong)',
+          }}
+        >
+          {title}
+        </h1>
+        {subtitle && (
+          <p
+            dir="auto"
+            style={{
+              margin: 0,
+              fontSize: 15,
+              lineHeight: 1.6,
+              color: 'var(--text-dim)',
+            }}
+          >
+            {subtitle}
+          </p>
+        )}
+      </div>
+
+      {/* A definition list rather than a sentence: these are fields, a reader
+          scans them, and on paper they are what a cover page carries. */}
+      <dl
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '10px 34px',
+          margin: 0,
+          paddingTop: 14,
+          borderTop: '2px solid var(--text-strong)',
+        }}
+      >
+        {meta.map((field) => (
+          <div
+            key={field.label}
+            style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}
+          >
+            <dt
+              style={{
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: '0.08em',
+                textTransform: 'uppercase',
+                color: 'var(--text-faint)',
+              }}
+            >
+              {field.label}
+            </dt>
+            <dd
+              dir="auto"
+              style={{ margin: 0, fontSize: 12.5, color: 'var(--text2)' }}
+            >
+              {field.value}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </header>
+  )
+}
+
+// ── the headline band ─────────────────────────────────────────────────────
+/**
+ * The figures the document opens on.
+ *
+ * Every one is a `plan_kpi` result — computed deterministically from result
+ * rows by the same planner chat and dashboard tiles use, never written by a
+ * model. That is what makes it safe to draw them largest: the numbers a reader
+ * takes away without reading the prose are the numbers that cannot be wrong.
+ *
+ * A row of stat tiles rather than one hero figure. A hero is for a dashboard
+ * with a single subject; a report has several, and promoting one of them to
+ * hero would be an editorial claim the data did not make.
+ */
+function HeadlineFigures({
+  figures, t,
+}: {
+  figures: { block: ReportBlockResult; heading: string }[]
+  t: Record<string, string>
+}) {
+  if (figures.length === 0) return null
+
+  return (
+    <section
+      aria-label={t.keyFigures}
+      style={{ display: 'flex', flexDirection: 'column', gap: 9 }}
+    >
+      <span
+        style={{
+          fontSize: 10,
+          fontWeight: 600,
+          letterSpacing: '0.1em',
+          textTransform: 'uppercase',
+          color: 'var(--text-faint)',
+        }}
+      >
+        {t.keyFigures}
+      </span>
+      <div
+        className="rm-report-figures"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: `repeat(${Math.min(figures.length, 4)}, minmax(0, 1fr))`,
+          gap: 10,
+        }}
+      >
+        {figures.map(({ block, heading }) => (
+          <div
+            key={block.id}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+              padding: '15px 12px',
+              background: 'var(--panel)',
+              border: '1px solid var(--border)',
+              borderRadius: 12,
+            }}
+          >
+            {block.kpi && <Kpi spec={block.kpi} compact />}
+            <span
+              dir="auto"
+              style={{
+                fontSize: 10.5,
+                color: 'var(--text-faint)',
+                textAlign: 'center',
+                lineHeight: 1.4,
+              }}
+            >
+              {heading}
+            </span>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+// ── the appendix ──────────────────────────────────────────────────────────
+/**
+ * Where every figure in the document came from.
+ *
+ * The thing a generated report is most often *disbelieved* over is not a wrong
+ * number — it is an unattributable one, and "which query produced this?" has no
+ * answer anywhere else in a printed document. So the appendix lists every
+ * figure with its question, its row count, the moment it was computed and the
+ * statement itself.
+ *
+ * Assembled entirely from rows the run already holds. Nothing here is generated,
+ * nothing here can drift from the body, and it costs no tokens — which is what
+ * lets it be exhaustive rather than a sample.
+ */
+function MethodNotes({
+  sections, figures, run, t,
+}: {
+  sections: DocumentSection[]
+  figures: Map<string, number>
+  run: ReportRunDetail
+  t: Record<string, string>
+}) {
+  const [open, setOpen] = useState(false)
+  const blocks = sections.flatMap((section) => section.blocks)
+  if (blocks.length === 0) return null
+
+  return (
+    <section
+      className="rm-report-method"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+        paddingTop: 20,
+        borderTop: '1px solid var(--border)',
+      }}
+    >
+      <button
+        onClick={() => setOpen((current) => !current)}
+        className="rm-report-method-toggle"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: 0,
+          border: 'none',
+          background: 'transparent',
+          color: 'var(--text-strong)',
+          fontSize: 14,
+          fontWeight: 650,
+          cursor: 'pointer',
+          textAlign: 'start',
+        }}
+      >
+        <Icon.Chevron size={13} open={open} />
+        {t.method}
+      </button>
+
+      {/* Open on paper whatever it is on screen: a printed appendix nobody can
+          click open is a blank heading. The class does that in `@media print`. */}
+      <div className="rm-report-method-body" hidden={!open}>
+        <p
+          dir="auto"
+          style={{
+            margin: '0 0 14px',
+            fontSize: 12.5,
+            lineHeight: 1.7,
+            color: 'var(--text-dim)',
+          }}
+        >
+          {t.methodBody}
+        </p>
+        <ol style={{ margin: 0, padding: 0, listStyle: 'none', display: 'grid', gap: 12 }}>
+          {blocks.map((block) => (
+            <li
+              key={block.id}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 5,
+                paddingTop: 10,
+                borderTop: '1px solid var(--border)',
+              }}
+            >
+              <span style={{ fontSize: 11, fontWeight: 650, color: 'var(--text2)' }}>
+                {t.figure} {figures.get(block.id) ?? '—'}
+              </span>
+              <span dir="auto" style={{ fontSize: 12.5, color: 'var(--text)' }}>
+                {block.question_snapshot}
+              </span>
+              <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+                {block.row_count.toLocaleString()}{' '}
+                {block.row_count === 1 ? t.row : t.rows}
+                {block.truncated && ` · ${t.capped}`}
+                {' · '}
+                {t.computed} {new Date(block.computed_at).toLocaleString()}
+              </span>
+              <pre
+                dir="ltr"
+                style={{
+                  margin: '3px 0 0',
+                  padding: '8px 10px',
+                  background: 'var(--input-bg)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 8,
+                  fontSize: 11,
+                  lineHeight: 1.55,
+                  color: 'var(--text2)',
+                  overflowX: 'auto',
+                  whiteSpace: 'pre-wrap',
+                }}
+              >
+                {block.sql_text}
+              </pre>
+            </li>
+          ))}
+        </ol>
+      </div>
+
+      <p style={{ margin: 0, fontSize: 11.5, lineHeight: 1.7, color: 'var(--text-faint)' }}>
+        {t.asOf} {new Date(run.finished_at ?? run.created_at).toLocaleString()}.{' '}
+        {t.asOfTail}
+      </p>
+    </section>
+  )
+}
+
 // ── one section of the document ───────────────────────────────────────────
+/**
+ * A heading, its argument, and the evidence under it.
+ *
+ * The executive summary is the same component in a different key, and the
+ * difference is editorial rather than cosmetic: it is the page a reader gets
+ * *instead of* the rest, so it is set apart, numbered outside the sequence, and
+ * its "- " lines are rendered as the findings they are rather than run together
+ * as prose. Everything else is a numbered section — and the number is what turns
+ * a scroll of charts into something a reader can cite and a colleague can be
+ * pointed at.
+ */
 function SectionView({
-  reportId, runId, section, busy, onRetry, onProse, onBlock,
+  reportId, runId, section, figures, headline, t, busy, onRetry, onProse, onBlock,
 }: {
   reportId: string
   runId: string
   section: DocumentSection
+  figures: Map<string, number>
+  headline: { block: ReportBlockResult; heading: string }[]
+  t: Record<string, string>
   busy: boolean
   onRetry: () => void
   onProse: (text: string | null) => Promise<void>
   onBlock: (block: ReportBlockResult) => void
 }) {
   const failed = section.prose?.status === 'FAILED'
+  const summary = section.isSummary
 
   return (
-    <section style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+    <section
+      className="rm-report-section"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: summary ? 14 : 13,
+        ...(summary
+          ? {
+              padding: '20px 22px',
+              background: 'var(--panel)',
+              border: '1px solid var(--border)',
+              borderRadius: 14,
+            }
+          : {}),
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+        {/* The number sits beside the heading rather than inside it, so a long
+            Persian heading wraps under itself instead of around the digit. */}
+        {!summary && section.number > 0 && (
+          <span
+            aria-hidden
+            className="mono"
+            style={{
+              fontSize: 13,
+              fontWeight: 700,
+              color: 'var(--accent)',
+              fontVariantNumeric: 'tabular-nums',
+              flexShrink: 0,
+            }}
+          >
+            {String(section.number).padStart(2, '0')}
+          </span>
+        )}
         <h2
-          dir={dirOf(section.heading)}
+          dir="auto"
           style={{
             margin: 0,
             flex: 1,
             minWidth: 0,
-            fontSize: 19,
+            fontSize: summary ? 16 : 20,
             fontWeight: 700,
-            letterSpacing: '-0.015em',
-            color: 'var(--text-strong)',
+            letterSpacing: summary ? '0.02em' : '-0.015em',
+            textTransform: summary ? 'uppercase' : undefined,
+            color: summary ? 'var(--text-dim)' : 'var(--text-strong)',
           }}
         >
           {section.heading}
@@ -1643,23 +2470,35 @@ function SectionView({
           <GhostButton
             onClick={onRetry}
             disabled={busy}
+            className="rm-report-hide-in-print"
             style={{ padding: '5px 10px', fontSize: 12, flexShrink: 0 }}
             title="Run this section's queries again and rewrite its paragraph."
           >
-            <Icon.Refresh size={12} /> Retry
+            <Icon.Refresh size={12} /> {t.retry}
           </GhostButton>
         )}
       </div>
+
+      {!summary && (
+        <div
+          aria-hidden
+          style={{ height: 2, background: 'var(--text-strong)', opacity: 0.85 }}
+        />
+      )}
 
       {section.prose === null ? (
         <ProseSkeleton />
       ) : (
         <ProseView
           result={section.prose}
+          summary={summary}
+          t={t}
           editable={section.sectionId !== null}
           onSave={onProse}
         />
       )}
+
+      <HeadlineFigures figures={headline} t={t} />
 
       {section.blocks.map((block) => (
         <BlockView
@@ -1667,6 +2506,8 @@ function SectionView({
           reportId={reportId}
           runId={runId}
           block={block}
+          figure={figures.get(block.id)}
+          t={t}
           onBlock={onBlock}
         />
       ))}
@@ -1683,9 +2524,18 @@ function SectionView({
  * destroying this one's writing.
  */
 function ProseView({
-  result, editable, onSave,
+  result, summary, t, editable, onSave,
 }: {
   result: ReportSectionResult
+  /**
+   * Whether to read the "- " lines as findings.
+   *
+   * Only the summary prompt asks for them, and only the summary gets them
+   * rendered — a section that happened to open a sentence with a dash is prose
+   * and stays prose.
+   */
+  summary: boolean
+  t: Record<string, string>
   editable: boolean
   onSave: (text: string | null) => Promise<void>
 }) {
@@ -1731,23 +2581,23 @@ function ProseView({
             disabled={saving}
             style={{ padding: '6px 12px', fontSize: 12.5 }}
           >
-            {saving ? 'Saving…' : 'Save'}
+            {saving ? t.saving : t.save}
           </PrimaryButton>
           <GhostButton
             onClick={() => setEditing(false)}
             style={{ padding: '6px 12px', fontSize: 12.5 }}
           >
-            Cancel
+            {t.cancel}
           </GhostButton>
           {/* Reverting is a column going back to NULL, not a second edit. */}
           {isEdited(result) && (
             <GhostButton
               onClick={() => void commit(null)}
               disabled={saving}
-              style={{ padding: '6px 12px', fontSize: 12.5, marginLeft: 'auto' }}
+              style={{ padding: '6px 12px', fontSize: 12.5, marginInlineStart: 'auto' }}
               title="Go back to what the model wrote."
             >
-              Revert
+              {t.revert}
             </GhostButton>
           )}
         </div>
@@ -1755,23 +2605,68 @@ function ProseView({
     )
   }
 
-  return (
-    <div className="rm-turn" style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-      <p
-        dir={dirOf(text)}
-        style={{
-          margin: 0,
-          fontSize: 14.5,
-          lineHeight: 1.75,
-          color: result.status === 'SKIPPED_NO_DATA' ? 'var(--text-dim)' : 'var(--text)',
-          fontStyle: result.status === 'SKIPPED_NO_DATA' ? 'italic' : undefined,
-          whiteSpace: 'pre-wrap',
-        }}
-      >
-        {text}
-      </p>
+  const quiet = result.status === 'SKIPPED_NO_DATA'
+  const parts = summary ? summaryParts(text) : { lead: text, findings: [] }
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+  return (
+    <div className="rm-turn" style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+      {parts.lead && (
+        <p
+          dir="auto"
+          style={{
+            margin: 0,
+            // The summary is the paragraph a reader is most likely to read and
+            // least likely to finish, so it gets the larger setting.
+            fontSize: summary ? 15.5 : 14.5,
+            lineHeight: 1.8,
+            color: quiet ? 'var(--text-dim)' : 'var(--text)',
+            fontStyle: quiet ? 'italic' : undefined,
+            whiteSpace: 'pre-wrap',
+          }}
+        >
+          {parts.lead}
+        </p>
+      )}
+
+      {/* The one piece of structure the model is asked to produce, rendered as
+          structure. Run together as a paragraph it reads as a list someone
+          forgot to format; set out, it is the part of an executive summary
+          people actually take away. */}
+      {parts.findings.length > 0 && (
+        <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'grid', gap: 8 }}>
+          {parts.findings.map((finding, index) => (
+            <li
+              key={index}
+              dir="auto"
+              style={{
+                display: 'flex',
+                gap: 10,
+                fontSize: 14,
+                lineHeight: 1.7,
+                color: 'var(--text)',
+              }}
+            >
+              <span
+                aria-hidden
+                style={{
+                  flexShrink: 0,
+                  width: 5,
+                  height: 5,
+                  marginTop: 9,
+                  borderRadius: 999,
+                  background: 'var(--accent)',
+                }}
+              />
+              <span style={{ minWidth: 0 }}>{finding}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div
+        className="rm-report-hide-in-print"
+        style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
+      >
         {editable && (
           <button
             className="rm-turn-actions"
@@ -1792,11 +2687,11 @@ function ProseView({
               cursor: 'pointer',
             }}
           >
-            <Icon.Pencil size={11} /> Edit
+            <Icon.Pencil size={11} /> {t.edit}
           </button>
         )}
         {isEdited(result) && (
-          <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>edited by you</span>
+          <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>{t.edited}</span>
         )}
         {findings.length > 0 && !dismissed && (
           <NumericMarker findings={findings} onDismiss={() => setDismissed(true)} />
@@ -1871,12 +2766,27 @@ function NumericMarker({
 }
 
 // ── one block of the document ─────────────────────────────────────────────
+/**
+ * One figure: its number, its caption, the picture, and where it came from.
+ *
+ * The number is what makes it a figure rather than a chart on a page. A reader
+ * can cite it, the appendix can list it, and a paragraph can be checked against
+ * it — none of which is possible for an unlabelled picture, and all of which is
+ * ordinary in a document produced by people.
+ *
+ * The source line under it says how many rows the statement returned and when,
+ * for the same reason the SQL is one click away: a number nobody can trace back
+ * to a statement is a number nobody should act on.
+ */
 function BlockView({
-  reportId, runId, block, onBlock,
+  reportId, runId, block, figure, t, onBlock,
 }: {
   reportId: string
   runId: string
   block: ReportBlockResult
+  /** Its place in the document's numbering; absent only if it arrived mid-merge. */
+  figure: number | undefined
+  t: Record<string, string>
   onBlock: (block: ReportBlockResult) => void
 }) {
   const [showSql, setShowSql] = useState(false)
@@ -1884,22 +2794,39 @@ function BlockView({
 
   return (
     <figure
+      className="rm-report-figure"
       style={{
         margin: 0,
         display: 'flex',
         flexDirection: 'column',
-        gap: 8,
-        padding: 13,
+        gap: 9,
+        padding: 14,
         background: 'var(--panel)',
         border: '1px solid var(--border)',
         borderRadius: 12,
       }}
     >
-      <figcaption
-        dir={dirOf(block.question_snapshot)}
-        style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-dim)' }}
-      >
-        {block.question_snapshot}
+      <figcaption style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {figure !== undefined && (
+          <span
+            className="mono"
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: '0.09em',
+              textTransform: 'uppercase',
+              color: 'var(--accent)',
+            }}
+          >
+            {t.figure} {figure}
+          </span>
+        )}
+        <span
+          dir="auto"
+          style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)', lineHeight: 1.5 }}
+        >
+          {block.question_snapshot}
+        </span>
       </figcaption>
 
       {kind === 'error' ? (
@@ -1909,7 +2836,13 @@ function BlockView({
       ) : kind === 'kpi' && block.kpi ? (
         <Kpi spec={block.kpi} />
       ) : kind === 'chart' && block.vega_spec ? (
-        <BlockChart reportId={reportId} runId={runId} block={block} onBlock={onBlock} />
+        <BlockChart
+          reportId={reportId}
+          runId={runId}
+          block={block}
+          t={t}
+          onBlock={onBlock}
+        />
       ) : (
         <>
           {block.chart_note && (
@@ -1919,17 +2852,31 @@ function BlockView({
         </>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
-          {block.row_count.toLocaleString()} {block.row_count === 1 ? 'row' : 'rows'}
-          {block.truncated && ' (capped)'}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          flexWrap: 'wrap',
+          paddingTop: 3,
+          borderTop: '1px solid var(--border)',
+        }}
+      >
+        <span style={{ fontSize: 10.5, color: 'var(--text-faint)', paddingTop: 5 }}>
+          {block.row_count.toLocaleString()} {block.row_count === 1 ? t.row : t.rows}
+          {block.truncated && ` · ${t.capped}`}
+          {' · '}
+          {t.computed} {new Date(block.computed_at).toLocaleString()}
         </span>
         {/* The SQL is shown and auditable here for the same reason it is in
             chat: a number nobody can trace back to a statement is a number
-            nobody should act on. */}
+            nobody should act on. Hidden on paper — the appendix carries every
+            statement in full, so printing them twice is noise. */}
         <button
           onClick={() => setShowSql((open) => !open)}
+          className="rm-report-hide-in-print"
           style={{
+            marginTop: 4,
             padding: '2px 7px',
             borderRadius: 5,
             border: '1px solid var(--border)',
@@ -1939,7 +2886,7 @@ function BlockView({
             cursor: 'pointer',
           }}
         >
-          {showSql ? 'Hide SQL' : 'SQL'}
+          {showSql ? t.hideQuery : t.query}
         </button>
         {showSql && <CopyButton text={block.sql_text} label="Copy" />}
       </div>
@@ -1947,6 +2894,7 @@ function BlockView({
       {showSql && (
         <pre
           dir="ltr"
+          className="rm-report-hide-in-print"
           style={{
             margin: 0,
             padding: '9px 11px',
@@ -1982,11 +2930,12 @@ function BlockView({
  * `edited_prose` follows.
  */
 function BlockChart({
-  reportId, runId, block, onBlock,
+  reportId, runId, block, t, onBlock,
 }: {
   reportId: string
   runId: string
   block: ReportBlockResult
+  t: Record<string, string>
   onBlock: (block: ReportBlockResult) => void
 }) {
   const [open, setOpen] = useState(false)
@@ -2026,7 +2975,10 @@ function BlockChart({
       {block.chart_note && (
         <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>{block.chart_note}</span>
       )}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div
+        className="rm-report-hide-in-print"
+        style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+      >
         <button
           type="button"
           onClick={() => {
@@ -2050,7 +3002,7 @@ function BlockChart({
           }}
         >
           <ChartGlyph type={type} size={13} />
-          {open ? 'Done' : 'Change chart'}
+          {open ? t.done : t.changeChart}
         </button>
         {busy && <Spinner size={12} />}
         {refused && (
@@ -2058,7 +3010,7 @@ function BlockChart({
         )}
       </div>
       {open && (
-        <div style={{ maxWidth: 560 }}>
+        <div className="rm-report-hide-in-print" style={{ maxWidth: 560 }}>
           <ChartTypePicker
             value={type}
             options={options}

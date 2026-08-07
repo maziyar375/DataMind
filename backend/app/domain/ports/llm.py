@@ -59,6 +59,13 @@ class Completion:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     latency_ms: int = 0
+    #: The provider stopped because it hit `max_tokens`, not because the model
+    #: had finished. Defaults false, so every caller that does not care is
+    #: unchanged — but a caller writing prose *does* care, because the symptom
+    #: is a paragraph that ends mid-word and nothing else in the response says
+    #: so. `structured` already reads the same signal for its repair path; this
+    #: exposes it to `complete` callers rather than leaving them to guess.
+    truncated: bool = False
 
 
 class LLMGateway(Protocol):

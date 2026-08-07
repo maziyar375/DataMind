@@ -1088,25 +1088,134 @@ does. The editor also reads the run *rows* on open, so a report already
 generated offers "Last run" instead of stranding the reader in its outline, and
 a generation still in flight opens straight into the viewer.
 
+## Phase 9b — The document upgrade (r2)
+
+Not in the original eleven. It came from the only review that matters — reading
+a generated report and finding it was *"some text and some charts"* rather than
+a document. Phases 1–9 built the machine correctly and the output still did not
+read as professional work, because nothing in them was about the writing.
+
+Six changes, three of content and three of presentation:
+
+- [x] `app/reports/facts.py` — the arithmetic a paragraph needs, computed
+      exactly from the same rows rather than estimated by the model: series
+      ends and the change between them, peak and trough, direction over halves,
+      totals, concentration (top-1/3/5 share, the Pareto count), means. **A
+      partial result yields no facts at all** — under `SAMPLE`, or a truncated
+      query, a total over a prefix is a wrong total and there is no honest way
+      to caption it. That rule is also what keeps the module from widening
+      disclosure: every value it states comes from rows the model already holds
+      in full.
+- [x] Its values join the numeric check's pool, which removes the check's
+      residual false-positive class. `_derived` already excused a ratio of two
+      pool values; it could not excuse a total or a mean over many rows, so a
+      paragraph that summed correctly used to wear a marker.
+- [x] `REPORT_PROMPT_VERSION` → **r2**. The section prompt asks for the four
+      moves an analyst makes (finding quantified, size and shape, what drives
+      it, the consequence) instead of "two to four sentences"; a house style
+      block makes seven sections read as one document; the outline prompt asks
+      for an argument — level, movement, composition, concentration, risk —
+      rather than one chart per table; the summary prompt returns a lead
+      paragraph plus 3–5 findings.
+- [x] Each section is told the other sections' headings and what the earlier
+      ones established (bounded: `MAX_ESTABLISHED` × `MAX_ESTABLISHED_CHARS`).
+      This is what fixes the "it repeats itself" failure — three paragraphs
+      each opening on total revenue because it was the largest number each was
+      handed. A retried section reads the document around it too, minus the
+      executive summary, which would be circular.
+- [x] `Completion.truncated`, read off `finish_reason`. A prose call that hit
+      `max_tokens` used to be saved as a paragraph ending mid-word; it is now
+      cut back to its last complete sentence, and when there is no sentence at
+      all the section fails with the one message that names the setting to
+      change. `NARRATE_MIN_MAX_TOKENS` 2,048 → 4,096, `OUTLINE_MIN_MAX_TOKENS`
+      4,096 → 6,144.
+- [x] The viewer renders a **document**: a cover stating the data source, the
+      moment and the model; numbered sections with rules; the executive summary
+      set apart with its findings as findings; a band of `plan_kpi` figures;
+      numbered figure captions with a source line under each; and a *Method and
+      data notes* appendix listing every question, row count, timestamp and
+      statement — assembled from rows the run already holds, so it costs no
+      tokens and cannot drift from the body.
+- [x] The document's own furniture is localised (`LABELS`), and the article
+      carries `dir` from the report's language. "Figure 3" under Persian prose
+      is the seam a reader sees before they read a word.
+- [x] **Gate:** `make test` (1,070) · `make guard` · `make lint` (6/6
+      contracts, `app.reports` still self-contained) · `npm run typecheck` ·
+      `npm run build` · `npm run test:report`
+
 ## Phase 10 — PDF
 
 - [ ] Vazirmatn woff2 self-hosted in `public/` with `@font-face`
 - [ ] Dropped from the Google Fonts link in `index.html`
-- [ ] `@media print` — forced light tokens, chrome hidden
-- [ ] `break-inside: avoid` on sections
+- [x] `@media print` — forced light tokens, chrome hidden
+- [x] `break-inside: avoid` on sections
 - [ ] Fixed print width in mm
 - [ ] `components/report-print.ts` — `await document.fonts.ready`, re-embed
       charts at print width, then `window.print()`
-- [ ] Prints the **saved run**, never live state
+- [x] Prints the **saved run**, never live state
 - [ ] Manual check: Persian report, correct shaping and direction
 - [ ] Manual check: English report
 - [ ] Manual check: both themes, charts unbroken across pages
 - [ ] **Gate:** `npm run typecheck` · `npm run build` + the manual checks
 
+Phase 9b took the half of this that is a stylesheet: the print rules force the
+light token set over `applyTheme`'s inline styles, hide the chrome, keep a
+figure whole across a break, open the appendix that a collapsed disclosure
+would otherwise drop, and put it on its own page. What is left is the half that
+is a mechanism, and both remaining items are real:
+
+- **The font.** `index.html` still loads Vazirmatn from `fonts.googleapis.com`.
+  A BI tool pointed at a production database is routinely deployed behind a
+  firewall, and there a Persian report prints in a fallback face with the wrong
+  metrics — the *deliverable* renders wrong while the app looks fine.
+- **The chart width.** `VegaChart` sizes on `width: 'container'` through a
+  `ResizeObserver` that does not run meaningfully in print context, so a chart
+  prints at whatever width it last had on screen. `report-print.ts` re-embedding
+  at a fixed mm width is still the fix, and `await document.fonts.ready` before
+  `window.print()` belongs with it.
+
+## Phase 9c — The outline editor, as a workflow
+
+Also not in the original eleven, and from the same review. The editor was
+correct and read as a form: a stack of identical cards with one coloured
+sentence somewhere in it, from which a user could not tell whether they were
+three clicks from a document or thirty.
+
+- [x] `OutlineStatus` — **Describe → Structure → Check → Generate**, with a
+      count under each. Not invented ceremony: it is the sequence the API
+      already enforces, and naming it is most of the difference between a form
+      and a product. The step captions are read off the outline, so the panel
+      is also the answer to "how much is left".
+- [x] The readiness sentence became a row of counts (ready / no rows / cannot
+      be produced / not checked) plus the one line saying what to do next and
+      why it matters in the *finished document* — an unchecked question arrives
+      there as an error message.
+- [x] A section card now carries the number the reader will see, its own
+      readiness (`3 questions · 2 to check`), and its reorder and delete
+      controls receded to `.rm-outline-actions` — visible, quiet, full strength
+      on hover, and never hover-only, because a touch screen has no hover.
+- [x] A question row wears a **status rail** in the verdict's colour. It is the
+      one cue that survives skim-reading a twelve-question outline and it costs
+      no space.
+- [x] Its Check button reuses `.rm-check.is-wanted`, the tile editor's "this is
+      the next thing to do" affordance — which is exactly what an unchecked
+      question is, since it is the one state that stops generation entirely.
+- [x] Logical properties (`paddingInlineStart`, `marginInlineStart`) throughout,
+      so the editor mirrors for a Persian report the way the document already
+      does.
+
 ## Phase 11 — Run history, regeneration, SQL editor
 
-- [ ] Run history per report; a past run reads back unchanged
-- [ ] Regenerate: same outline, new run, previous runs untouched
+- [x] Run history per report; a past run reads back unchanged —
+      `components/report-history.tsx`, its own file rather than a fourth act in
+      `report.tsx`. Reached from the editor header (`History 7`) **and** from
+      inside the viewer, because comparing this quarter with last quarter
+      should not mean going back through the outline. Rows only: `GET
+      /reports/{id}/runs` returns no results, so the page costs one small
+      request however many documents it lists.
+- [x] Regenerate: same outline, new run, previous runs untouched — this was
+      already true of the worker; what was missing was anywhere to *see* that it
+      was true. The history list is that.
 - [ ] Show which blocks' `sql_hash` changed since the last run
 - [ ] SQL editor per block via `sql_draft_service.validate_sql`
 - [ ] `sql_origin` → `GENERATED_EDITED` / `HANDWRITTEN`

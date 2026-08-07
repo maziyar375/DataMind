@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ApiError, connections as connectionsApi, llmConfigs as modelsApi, reports as api } from '../api/client'
 import type { Connection, LlmConfig, Report, ReportLanguage, ReportSummary } from '../api/types'
 import { ReportOutlineEditor, ReportRunViewer } from '../components/report'
+import { ReportRunHistory } from '../components/report-history'
 import {
   Chip, DisclosureBadge, EmptyState, ErrorNote, Field, GhostButton, Icon, Modal,
   PrimaryButton, SearchField, Segmented, Spinner, TextArea, TextInput, relativeTime,
@@ -59,18 +60,52 @@ export default function ReportsPage() {
   // document are two views of one open report, not two pages: Generate goes
   // from the first to the second, and Back comes home.
   const [runId, setRunId] = useState<string | null>(null)
+  // …and the third view: every generation this report has produced. It is a
+  // view of the open report rather than a page of its own, so it clears with
+  // the report the way the run does.
+  const [history, setHistory] = useState(false)
   // The index's own copy of the list, held here so an edit made inside the
   // editor is spliced into the card the user comes back to rather than costing
   // a re-read of every report.
   const [cards, setCards] = useState<ReportSummary[] | null>(null)
+
+  const card = openId ? (cards?.find((entry) => entry.id === openId) ?? null) : null
+
+  /** Home is the outline: it is the report, and the other two are views of it. */
+  function toOutline() {
+    setRunId(null)
+    setHistory(false)
+  }
 
   if (openId && runId) {
     return (
       <ReportRunViewer
         reportId={openId}
         runId={runId}
-        reportName={cards?.find((card) => card.id === openId)?.name ?? 'Report'}
-        onBack={() => setRunId(null)}
+        // The card, not just the name: a document's cover states which database
+        // it describes, and only the index holds that.
+        report={card}
+        reportName={card?.name ?? 'Report'}
+        onBack={toOutline}
+        onHistory={() => {
+          setRunId(null)
+          setHistory(true)
+        }}
+      />
+    )
+  }
+
+  if (openId && history) {
+    return (
+      <ReportRunHistory
+        reportId={openId}
+        reportName={card?.name ?? 'Report'}
+        currentRunId={runId}
+        onOpenRun={(id) => {
+          setHistory(false)
+          setRunId(id)
+        }}
+        onBack={toOutline}
       />
     )
   }
@@ -80,6 +115,7 @@ export default function ReportsPage() {
       reportId={openId}
       onBack={() => setOpenId(null)}
       onOpenRun={setRunId}
+      onHistory={() => setHistory(true)}
       onChanged={(report) =>
         setCards((current) =>
           (current ?? []).map((card) => (card.id === report.id ? toCard(report) : card)),
@@ -87,7 +123,16 @@ export default function ReportsPage() {
       }
     />
   ) : (
-    <ReportsIndex cards={cards} setCards={setCards} onOpen={setOpenId} />
+    <ReportsIndex
+      cards={cards}
+      setCards={setCards}
+      onOpen={(id) => {
+        // A report opens on its outline, whatever view the last one was left in.
+        setRunId(null)
+        setHistory(false)
+        setOpenId(id)
+      }}
+    />
   )
 }
 

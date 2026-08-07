@@ -177,6 +177,7 @@ class LiteLLMGateway:
             prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
             completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
             latency_ms=latency_ms,
+            truncated=_finish_reason(response) == "length",
         )
 
     async def stream(

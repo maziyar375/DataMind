@@ -26,12 +26,17 @@ model sees:
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 from app.domain.ports.llm import ChatMessage
+from app.reports.facts import FactSheet
 from app.reports.prompts import (
+    FACTS_HEADER,
     LANGUAGE_NAMES,
+    REPORT_SECTION_ESTABLISHED,
+    REPORT_SECTION_NEIGHBOURS,
     REPORT_SECTION_SYSTEM,
     REPORT_SECTION_USER,
     REPORT_SUMMARY_SYSTEM,
@@ -50,6 +55,16 @@ MAX_CELL_CHARS = 120
 #: Sections whose prose reaches the summary call. A report is capped at eight
 #: sections by `outline.MAX_SECTIONS`, so this is a ceiling, not a filter.
 MAX_SUMMARY_SECTIONS = 12
+
+#: Earlier sections whose findings are carried into the next section's prompt.
+#: The point is that section five does not restate section two; the point is not
+#: to hand section five the whole document, which would grow every prompt in the
+#: run and, past a few hundred words, stop being read at all.
+MAX_ESTABLISHED = 5
+
+#: Characters of an earlier section kept as "what it established". One or two
+#: sentences: the finding, not the paragraph.
+MAX_ESTABLISHED_CHARS = 240
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +85,11 @@ class BlockNarration:
     kpi: str | None = None
     error: str | None = None
     row_count: int = 0
+    #: What `facts.py` computed from these rows — the totals, changes, shares
+    #: and extremes the paragraph would otherwise have to derive by eye. Empty
+    #: when the model does not hold the complete result (see that module), and
+    #: an empty sheet renders nothing at all rather than an empty heading.
+    facts: FactSheet = field(default_factory=FactSheet)
 
     @property
     def failed(self) -> bool:
@@ -105,6 +125,13 @@ class BlockNarration:
             )
         if self.note:
             lines.append(self.note)
+        # Last, and deliberately: the table is what the figures were computed
+        # from, so the model reads the source before the summary of it, and the
+        # instruction to prefer these sits closest to the sentence it writes.
+        if self.facts:
+            lines.append("")
+            lines.append(FACTS_HEADER)
+            lines.append(self.facts.render())
         return "\n".join(lines)
 
 
@@ -139,12 +166,28 @@ def section_messages(
     blocks: list[BlockNarration],
     language: str,
     request: str,
+    other_headings: Sequence[str] = (),
+    established: Sequence[WrittenSection] = (),
 ) -> list[ChatMessage]:
     """The one call that writes a section's paragraph.
 
     The language is named as a *name* rather than a code, and it is named per
     report rather than inferred per section — otherwise section three comes
     back in English because its heading happened to be a metric name.
+
+    `other_headings` and `established` are what make seven independently
+    written paragraphs read as one document. Without them every section is
+    written by a writer who has never seen the rest of the report, and the
+    result is the failure users describe as "it repeats itself": three
+    paragraphs each opening on total revenue because total revenue is the
+    largest number each of them was given. The headings say what is covered
+    elsewhere; the established findings say what has already been claimed, so a
+    later section can contrast with it instead of restating it.
+
+    Both are bounded — `MAX_ESTABLISHED` sections at `MAX_ESTABLISHED_CHARS`
+    each — because this text grows with every section written and an unbounded
+    running context turns the last section of a long report into the most
+    expensive call in the run.
     """
     results = "\n\n".join(block.render() for block in blocks) or "No results."
     return [
@@ -156,10 +199,60 @@ def section_messages(
                 request=request.strip() or "(not given)",
                 heading=heading.strip(),
                 intent=intent.strip() or "(not given)",
+                neighbours=_neighbours(other_headings, established),
                 results=results,
             ),
         ),
     ]
+
+
+def _neighbours(
+    other_headings: Sequence[str], established: Sequence[WrittenSection]
+) -> str:
+    """The two context blocks, rendered only when they have something in them.
+
+    A one-section report sends neither, so its prompt carries no empty
+    scaffolding for the model to wonder about.
+    """
+    parts: list[str] = []
+
+    headings = [h.strip() for h in other_headings if h and h.strip()]
+    if headings:
+        parts.append(
+            REPORT_SECTION_NEIGHBOURS.format(
+                headings="\n".join(f"- {heading}" for heading in headings)
+            )
+        )
+
+    recent = [s for s in established if s.prose.strip()][-MAX_ESTABLISHED:]
+    if recent:
+        parts.append(
+            REPORT_SECTION_ESTABLISHED.format(
+                established="\n".join(
+                    f"- {section.heading.strip()}: "
+                    f"{_gist(section.prose, MAX_ESTABLISHED_CHARS)}"
+                    for section in recent
+                )
+            )
+        )
+    return "".join(parts)
+
+
+def _gist(prose: str, limit: int) -> str:
+    """An earlier section's finding: its opening sentences, up to a limit.
+
+    The lead is where the finding is, because that is what the section prompt
+    asks for — so the first sentences are the part a later section must not
+    repeat, and the rest is detail it was never going to duplicate anyway.
+    """
+    text = " ".join(prose.split())
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    # Prefer a sentence boundary, in either script's punctuation, so the gist
+    # ends as a statement rather than mid-clause.
+    stop = max(cut.rfind(mark) for mark in (". ", "۔ ", "! ", "? ", "؟ ", "।"))
+    return (cut[: stop + 1] if stop > limit // 2 else cut).strip() + "…"
 
 
 def summary_messages(

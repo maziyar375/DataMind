@@ -68,7 +68,7 @@ from app.infra.db.models import (
 from app.infra.llm.litellm_gateway import LiteLLMGateway
 from app.pipeline.disclosure import disclose
 from app.pipeline.state import ExecutionResult
-from app.reports import checks, narrate
+from app.reports import checks, facts, narrate
 from app.reports.narrate import BlockNarration, WrittenSection
 from app.reports.prompts import no_data_sentence
 from app.services.query_service import (
@@ -86,11 +86,15 @@ log = get_logger(__name__)
 # database; two whole reports at once is a load test of it, not a speed-up.
 MAX_CONCURRENT_JOBS = 2
 
-#: Output-token floor for a prose call, whatever the provider row says. Four
-#: sentences is nothing; the budget is for the scratchpad a reasoning model
-#: spends before emitting them, and an overrun truncates the paragraph
-#: mid-word.
-NARRATE_MIN_MAX_TOKENS = 2_048
+#: Output-token floor for a prose call, whatever the provider row says.
+#:
+#: Raised from 2,048 with the r2 prompts. The paragraph itself is nothing — 4 to
+#: 7 sentences is a few hundred tokens — but the budget also has to cover the
+#: scratchpad a reasoning model spends before emitting them, and the default on
+#: `llm_configs.max_tokens` is 2,048 for the whole product. An overrun does not
+#: fail: it returns a paragraph that stops mid-word, which is why `_prose`
+#: below now reads `Completion.truncated` instead of trusting the text.
+NARRATE_MIN_MAX_TOKENS = 4_096
 
 _NO_SQL = (
     "This block has not been checked, so it has no query to run. Check it in "
@@ -100,6 +104,15 @@ _NO_SQL = (
 _NO_MODEL = (
     "This report's model configuration has been removed, so its prose could "
     "not be written. Choose a model for the report and generate again."
+)
+
+#: What the reader is told when the output budget ran out before one sentence
+#: was finished. Actionable rather than apologetic: this is a setting on a row
+#: the user owns, and nothing else in the run will fix it.
+_TRUNCATED = (
+    "The model stopped at its output-token limit before finishing a sentence. "
+    "Raise max_tokens on this report's model configuration — 4096 or more is a "
+    "sound floor for report prose — and generate again."
 )
 
 #: What the executor runs: a whole generation, or one section of one.
@@ -343,6 +356,16 @@ async def _generate(
     prose: list[WrittenSection] = []
     summary: tuple[int, ReportSection] | None = None
 
+    # What every section is told about the rest of the report. Computed once:
+    # the outline does not change mid-run, and this is what stops three
+    # paragraphs each opening on the same total because it was the largest
+    # number each of them was handed.
+    headings = [
+        s.heading
+        for s in sections
+        if s.kind != ReportSectionKind.EXECUTIVE_SUMMARY
+    ]
+
     for position, section in enumerate(sections):
         if section.kind == ReportSectionKind.EXECUTIVE_SUMMARY:
             # Written last, from the sections it summarises. Its *position* is
@@ -366,6 +389,11 @@ async def _generate(
             results=written.get(section.id, []),
             policy=connection.disclosure_policy,
             narrator=narrator,
+            other_headings=[h for h in headings if h != section.heading],
+            # The sections written so far, in order — so section five contrasts
+            # with section two rather than restating it. `prose` grows as the
+            # run goes; `narrate` keeps only the most recent few.
+            established=list(prose),
         )
         db.add(row)
         await db.commit()
@@ -517,6 +545,26 @@ async def _retry(
             results=rewritten,
             policy=connection.disclosure_policy,
             narrator=narrator,
+            other_headings=[
+                s.heading
+                for s in sections
+                if s.id != section_id
+                and s.kind != ReportSectionKind.EXECUTIVE_SUMMARY
+            ],
+            # A retried section is rewritten *into* a document that already
+            # exists, so it reads the paragraphs around it — including the ones
+            # written after it, which the first pass could not see. The summary
+            # is left out: see `_written_sections`.
+            established=await _written_sections(
+                db,
+                run.id,
+                section_id,
+                *(
+                    s.id
+                    for s in sections
+                    if s.kind == ReportSectionKind.EXECUTIVE_SUMMARY
+                ),
+            ),
         )
     db.add(row)
     await db.commit()
@@ -552,21 +600,28 @@ async def _clear_section(db: AsyncSession, run_id: UUID, section_id: UUID) -> in
 
 
 async def _written_sections(
-    db: AsyncSession, run_id: UUID, exclude: UUID
+    db: AsyncSession, run_id: UUID, *exclude: UUID | None
 ) -> list[WrittenSection]:
     """The run's finished paragraphs, as the summary reads them.
 
     `edited_prose` wins where the user wrote one: a summary written over the
     model's draft of a paragraph the user has since rewritten would summarise a
     document nobody is looking at.
+
+    More than one id may be excluded, and the retry path uses that: a section
+    being rewritten is told what the *other* sections established, and handing
+    it the executive summary among them would be circular — the summary already
+    contains this section's own finding, so the section would dutifully avoid
+    restating it and write around the thing it exists to say.
     """
+    unwanted = {id_ for id_ in exclude if id_ is not None}
     return [
         WrittenSection(
             heading=row.heading_snapshot,
             prose=(row.edited_prose if row.edited_prose is not None else row.prose),
         )
         for row in sorted(await _section_rows(db, run_id), key=lambda r: r.position)
-        if row.section_id != exclude
+        if row.section_id not in unwanted
         and row.status != ReportSectionResultStatus.FAILED
         and (row.edited_prose or row.prose)
     ]
@@ -773,6 +828,8 @@ async def _narrate(
     results: list[ReportBlockResult],
     policy: str,
     narrator: tuple[LLMGateway, ResolvedLLM] | None,
+    other_headings: list[str] | None = None,
+    established: list[WrittenSection] | None = None,
 ) -> ReportSectionResult:
     """One section's paragraph, written over its blocks' results.
 
@@ -824,6 +881,8 @@ async def _narrate(
                 blocks=blocks,
                 language=run.language,
                 request=report.prompt,
+                other_headings=other_headings or [],
+                established=established or [],
             ),
         )
     except Exception as err:  # noqa: BLE001 — one section, not the run
@@ -840,10 +899,12 @@ async def _narrate(
         row.error_message = str(err)[:500]
         return row
 
-    row.prose = (completion.text or "").strip()
+    row.prose = _prose(completion, run_id=run.id, what=section.heading)
     if not row.prose:
         row.status = ReportSectionResultStatus.FAILED
-        row.error_message = "The model returned an empty paragraph."
+        row.error_message = (
+            _TRUNCATED if completion.truncated else "The model returned an empty paragraph."
+        )
         return row
 
     row.numeric_check = _numeric_check(row.prose, section, blocks).model_dump(
@@ -907,10 +968,12 @@ async def _summarise(
         row.error_message = str(err)[:500]
         return row
 
-    row.prose = (completion.text or "").strip()
+    row.prose = _prose(completion, run_id=run.id, what="the executive summary")
     if not row.prose:
         row.status = ReportSectionResultStatus.FAILED
-        row.error_message = "The model returned an empty summary."
+        row.error_message = (
+            _TRUNCATED if completion.truncated else "The model returned an empty summary."
+        )
         return row
 
     # The summary's figures must already be in the sections, so the sections'
@@ -920,6 +983,44 @@ async def _summarise(
         row.prose, checks.figures_in(body), context=section.intent
     ).model_dump(mode="json")
     return row
+
+
+#: Sentence terminators, in both scripts a report is written in. Persian ends a
+#: sentence with the Latin full stop in ordinary business writing, but a model
+#: writing Persian may reach for the Arabic question mark or the Urdu full stop,
+#: and a trim that did not know them would throw away a whole good paragraph.
+_SENTENCE_ENDS = (".", "!", "?", "؟", "۔", "।", "…")
+
+
+def _prose(completion: Any, *, run_id: UUID, what: str) -> str:
+    """The paragraph, ending where a sentence ends.
+
+    A provider that hits `max_tokens` returns what it had written so far, and
+    nothing in the text says so — the symptom is a report whose third section
+    ends "revenue rose sharply in the nort". That is the single most visible way
+    a generated document stops looking like a document, and it costs a setting
+    on a row the user owns rather than anything this code can fix.
+
+    So a truncated reply is cut back to its last complete sentence, which is
+    almost always four of the five sentences the section asked for and reads as
+    finished. When there is no sentence boundary at all the budget is not merely
+    tight but far too small, and the empty string returned here becomes
+    `_TRUNCATED` — the one message that tells the user which knob to turn.
+    """
+    text = (completion.text or "").strip()
+    if not completion.truncated or not text:
+        return text
+
+    end = max(text.rfind(mark) for mark in _SENTENCE_ENDS)
+    trimmed = text[: end + 1].strip() if end != -1 else ""
+    log.warning(
+        "report_prose_truncated",
+        run_id=str(run_id),
+        section=what[:120],
+        kept_chars=len(trimmed),
+        dropped_chars=len(text) - len(trimmed),
+    )
+    return trimmed
 
 
 def _narration(result: ReportBlockResult, policy: str) -> BlockNarration:
@@ -936,22 +1037,36 @@ def _narration(result: ReportBlockResult, policy: str) -> BlockNarration:
             error=result.error_message or "The query did not produce a result.",
         )
 
+    columns = [_column(c) for c in result.columns or []]
     disclosed = disclose(
         ExecutionResult(
-            columns=[_column(c) for c in result.columns or []],
+            columns=columns,
             rows=[list(row) for row in result.rows or []],
             row_count=result.row_count,
             truncated=result.truncated,
         ),
         policy,
     )
+    rows = [list(row) for row in disclosed.rows]
     return BlockNarration(
         question=result.question_snapshot,
         columns=list(disclosed.columns),
-        rows=[list(row) for row in disclosed.rows],
+        rows=rows,
         note=disclosed.note,
         kpi=_kpi_line(result.kpi),
         row_count=result.row_count,
+        # Computed from the *disclosed* rows, and only when they are the whole
+        # result — so a fact can never carry a value out of a row the policy
+        # withheld, and a total is never a total of a prefix. `facts.compute`
+        # returns nothing rather than something approximate; see its docstring.
+        facts=facts.compute(
+            columns=[
+                facts.FactColumn(name=c.name, semantic_type=c.semantic_type)
+                for c in columns
+            ],
+            rows=rows,
+            complete=(not result.truncated and len(rows) == result.row_count),
+        ),
     )
 
 
@@ -1000,6 +1115,13 @@ def _numeric_check(
     # A row count is a fact about the result that no cell holds, and "across 13
     # months" is the most natural sentence in the world to write from it.
     pool.extend(float(block.row_count) for block in blocks)
+    # And the computed figures, which are the check's known false-positive
+    # class: a growth rate or a share appears in no cell, so before `facts.py`
+    # every correctly-derived number in the report wore a marker. These were
+    # calculated from the same rows the model was handed, so a paragraph
+    # quoting one is quoting the result — which is exactly what the check is
+    # asking about.
+    pool.extend(value for block in blocks for value in block.facts.values())
     context = " ".join(
         [section.heading, section.intent, *(block.question for block in blocks)]
     )

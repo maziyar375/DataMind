@@ -66,8 +66,13 @@ def test_the_section_prompt_is_its_own_and_not_the_chat_one() -> None:
     assert system.role == "system"
     assert system.content == REPORT_SECTION_SYSTEM
     assert ANSWER_SYSTEM not in system.content
-    # The rule that separates a document from a transcript.
-    assert "Two to four sentences" in system.content
+    # The rule that separates a document from a transcript. r1 asked for "two
+    # to four sentences" and got a chat bubble under a heading; r2 asks for a
+    # paragraph with the four moves an analyst makes, and the length is the
+    # visible half of that.
+    assert "4 to 7 sentences" in system.content
+    assert "Open with the finding, quantified" in system.content
+    assert "Close on the consequence" in system.content
     assert user.role == "user"
 
 
@@ -136,7 +141,7 @@ def test_several_blocks_arrive_in_one_message_so_they_can_be_related() -> None:
 
     assert "revenue by month" in user.content
     assert "top products" in user.content
-    assert "relate them to each other" in _messages()[0].content
+    assert "say what the second tells you about the first" in _messages()[0].content
 
 
 def test_the_headline_figure_is_handed_over_already_computed() -> None:
@@ -273,3 +278,119 @@ def test_both_languages_are_named(language: str, named: str) -> None:
 def vars_of(block: BlockNarration) -> dict:
     """`BlockNarration` is a slots dataclass, so it has no `__dict__`."""
     return {field: getattr(block, field) for field in block.__slots__}
+
+
+# ── the document around this section ─────────────────────────────────────
+# What turns seven independently-written paragraphs into one report. Without
+# it every section is written by someone who has never read the rest, and the
+# result is the failure users describe as "it repeats itself": three paragraphs
+# each opening on total revenue, because total revenue is the largest number
+# each of them was handed.
+def test_the_other_headings_reach_the_prompt() -> None:
+    _system, user = _messages(
+        other_headings=["Revenue trend", "Top products"],
+    )
+
+    assert "must not duplicate" in user.content
+    assert "- Revenue trend" in user.content
+    assert "- Top products" in user.content
+
+
+def test_what_earlier_sections_established_reaches_the_prompt() -> None:
+    _system, user = _messages(
+        established=[
+            WrittenSection(heading="Revenue trend", prose="Revenue grew 12% to 1.4M."),
+        ],
+    )
+
+    assert "already stated in earlier sections" in user.content
+    assert "Revenue trend: Revenue grew 12% to 1.4M." in user.content
+
+
+def test_a_section_with_no_neighbours_sends_no_empty_scaffolding() -> None:
+    """A one-section report must not carry a heading with nothing under it for
+    the model to wonder about."""
+    _system, user = _messages()
+
+    assert "must not duplicate" not in user.content
+    assert "already stated in earlier sections" not in user.content
+
+
+def test_the_running_context_is_bounded() -> None:
+    """It grows with every section written, so the last section of a long
+    report would otherwise be the most expensive call in the run."""
+    from app.reports.narrate import MAX_ESTABLISHED, MAX_ESTABLISHED_CHARS
+
+    _system, user = _messages(
+        established=[
+            WrittenSection(heading=f"Section {i}", prose=f"Finding number {i}. " * 40)
+            for i in range(12)
+        ],
+    )
+
+    assert user.content.count("Section ") == MAX_ESTABLISHED
+    # The most recent are the ones kept: a later section contrasts with what
+    # was just said, not with the opening.
+    assert "Section 11" in user.content
+    assert "Section 0:" not in user.content
+    assert len(user.content) < 12 * MAX_ESTABLISHED_CHARS
+
+
+def test_an_established_finding_is_cut_at_a_sentence() -> None:
+    """The gist is the finding, and the finding is the lead — so the cut lands
+    on a full stop rather than mid-clause."""
+    _system, user = _messages(
+        established=[
+            WrittenSection(
+                heading="Revenue",
+                prose=(
+                    "Revenue grew 12% to 1.4M. " + "A further detail follows. " * 20
+                ),
+            )
+        ],
+    )
+
+    assert "Revenue grew 12% to 1.4M." in user.content
+    assert "…" in user.content
+
+
+def test_a_blank_earlier_section_is_not_carried() -> None:
+    _system, user = _messages(
+        established=[WrittenSection(heading="Empty", prose="   ")],
+    )
+
+    assert "already stated in earlier sections" not in user.content
+
+
+# ── the computed figures ─────────────────────────────────────────────────
+def test_the_computed_figures_reach_the_prompt_after_the_table() -> None:
+    """The model reads the rows the figures came from before the summary of
+    them, and the instruction to prefer these sits closest to the sentence it
+    is about to write."""
+    from app.reports.facts import FactColumn, compute
+
+    block = BlockNarration(
+        question="revenue by month",
+        columns=["month", "revenue"],
+        rows=[["2026-01", 100], ["2026-02", 150]],
+        row_count=2,
+        facts=compute(
+            columns=[
+                FactColumn(name="month", semantic_type="temporal"),
+                FactColumn(name="revenue", semantic_type="quantitative"),
+            ],
+            rows=[["2026-01", 100], ["2026-02", 150]],
+            complete=True,
+        ),
+    )
+    _system, user = _messages(blocks=[block])
+
+    assert "these are exact" in user.content
+    assert user.content.index("2026-01 | 100") < user.content.index("these are exact")
+    assert "+50.0%" in user.content
+
+
+def test_a_block_with_no_computed_figures_renders_no_heading_for_them() -> None:
+    _system, user = _messages(blocks=[REVENUE])
+
+    assert "these are exact" not in user.content

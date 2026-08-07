@@ -123,7 +123,10 @@ async def test_propose_sends_the_language_the_schema_and_the_request() -> None:
 def test_the_prompt_forbids_the_summary_the_service_adds() -> None:
     """Otherwise every report opens with two summaries, one of them empty."""
     assert "executive summary" in REPORT_OUTLINE_SYSTEM.lower()
-    assert REPORT_PROMPT_VERSION == "r1"
+    # r2 is the analyst rewrite. The version moves with the wording because a
+    # document generated under r1 is a different artefact, and the run row is
+    # the only thing that says which one a reader is holding.
+    assert REPORT_PROMPT_VERSION == "r2"
 
 
 # ── a truncated reply ────────────────────────────────────────────────────
