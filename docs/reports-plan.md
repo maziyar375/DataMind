@@ -996,14 +996,42 @@ Three notes for Phase 8:
 
 ## Phase 8 — Frontend: the outline editor
 
-- [ ] `components/report.tsx` — propose, add / edit / remove / reorder sections
-- [ ] Blocks add / edit / remove / reorder within a section
-- [ ] Per-block feasibility chip with the guard's reason shown verbatim
-- [ ] "Check all" loops blocks with visible per-block progress
-- [ ] Generate disabled while any block is `INFEASIBLE`, with count + first reason
-- [ ] `time_window` picker per block
-- [ ] `dir="auto"` on every free-text field
-- [ ] **Gate:** `npm run typecheck` · `npm run build`
+- [x] `components/report.tsx` — propose, add / edit / remove / reorder sections
+- [x] Blocks add / edit / remove / reorder within a section
+- [x] Per-block feasibility chip with the guard's reason shown verbatim
+- [x] "Check all" loops blocks with visible per-block progress
+- [x] Generate disabled while any block is `INFEASIBLE`, with count + first reason
+- [x] `time_window` picker per block
+- [x] `dir="auto"` on every free-text field
+- [x] **Gate:** `npm run typecheck` · `npm run build`
+
+Four notes for Phase 9:
+
+- **The Generate button is written and wired, and the page does not pass its
+  handler yet.** `ReportOutlineEditor` takes an optional `onGenerate`; the
+  readiness of an outline — the counts, the blocking reason, the `INFEASIBLE`
+  tooltip — is computed and shown either way, because that is a property of the
+  outline and the user needs it while editing. The *button* appears only when a
+  caller supplies the handler, which Phase 9 does in one line. An action that
+  starts minutes of model calls with nowhere to watch them is worse than no
+  action, and it is the same rule the Phase 7 card followed before this editor
+  existed.
+- **Reordering renumbers in the client, because the API renumbers nothing.**
+  `PATCH .../sections/{id}` sets one position and shifts no sibling — the honest
+  shape for a route that knows about one row. So the new order is applied
+  locally first (the list moves under the cursor) and only the rows whose index
+  actually changed are written; an adjacent swap is two calls. Verified against
+  the running API, sections and blocks both.
+- **Editing a question or its window is a *reset*, and the response is what
+  says so.** The PATCH drops the SQL and returns the row already back at
+  `UNCHECKED`, so the chip changes because the written row was spliced in — the
+  page never has to model the invalidation rule itself. Confirmed end to end:
+  `time_window` → `ytd` came back `UNCHECKED` with an empty `sql`.
+- **`InlineEdit` moved from `DashboardsPage` into `ui.tsx`** and grew a
+  `multiline` variant. It has two callers now (a dashboard's name, and a
+  report's headings, intents and questions), and a block's question is a
+  sentence — an `<input>` scrolls it sideways out of sight. Moved rather than
+  copied, for the reason `ResultTable` and `SearchField` were.
 
 ## Phase 9 — Frontend: the viewer
 

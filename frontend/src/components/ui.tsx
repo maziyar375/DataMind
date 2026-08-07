@@ -4,7 +4,7 @@
  * Every dimension, radius, and font size here is lifted from the design
  * concept rather than invented. The mock is the specification.
  */
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   formatCell, resolveColumns, sortRows,
@@ -448,6 +448,88 @@ export function TextArea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement
         fontFamily: 'inherit',
         ...props.style,
       }}
+    />
+  )
+}
+
+/**
+ * A field that is invisible until approached: edited where it is read.
+ *
+ * A heading, a name, a question — text the user is *looking at* — is a longer
+ * road through a dialog than it is worth. This reads as the text it holds until
+ * hovered, commits on blur or Enter, and reverts on Escape.
+ *
+ * `multiline` is not cosmetic: a report block's question is a sentence, and an
+ * `<input>` scrolls it sideways out of sight while a growing textarea keeps the
+ * whole of it readable. Enter still commits there — Shift+Enter is the newline.
+ */
+export function InlineEdit({
+  value, onCommit, ariaLabel, placeholder, required = false, multiline = false, style,
+}: {
+  value: string
+  onCommit: (value: string) => void
+  ariaLabel: string
+  placeholder?: string
+  /** An empty commit reverts instead — for fields that must not be blank. */
+  required?: boolean
+  multiline?: boolean
+  style?: React.CSSProperties
+}) {
+  const [draft, setDraft] = useState(value)
+  const box = useRef<HTMLTextAreaElement | null>(null)
+  useEffect(() => setDraft(value), [value])
+
+  // Height follows content, so the field is exactly as tall as what is in it.
+  // Reset to `auto` first or `scrollHeight` only ever reports the height it
+  // already has, and the box grows but never shrinks.
+  useEffect(() => {
+    const el = box.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [draft])
+
+  function commit() {
+    const next = draft.trim()
+    if (required && !next) return setDraft(value)
+    if (next !== value) onCommit(next)
+  }
+
+  function onKeyDown(event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      event.currentTarget.blur()
+    }
+    if (event.key === 'Escape') {
+      setDraft(value)
+      event.currentTarget.blur()
+    }
+  }
+
+  const shared = {
+    className: 'rm-inline-edit',
+    'aria-label': ariaLabel,
+    // Prose follows whatever script it was written in — see `TextInput`.
+    dir: 'auto' as const,
+    value: draft,
+    placeholder,
+    onBlur: commit,
+    onKeyDown,
+  }
+
+  return multiline ? (
+    <textarea
+      {...shared}
+      ref={box}
+      rows={1}
+      onChange={(event) => setDraft(event.target.value)}
+      style={{ resize: 'none', overflow: 'hidden', ...style }}
+    />
+  ) : (
+    <input
+      {...shared}
+      onChange={(event) => setDraft(event.target.value)}
+      style={style}
     />
   )
 }

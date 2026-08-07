@@ -6,10 +6,10 @@
  * a document** — a structure the user approved, prose written over real
  * results, and a run kept as a snapshot of a moment (docs/reports-plan.md §1).
  *
- * This file is the shell: list, create, rename, archive, delete. The outline
- * editor and the viewer are their own phases and their own file
- * (`components/report.tsx`), which is why a card here has no open action yet —
- * a link to a page that does not exist is worse than no link.
+ * This file is the shell: list, create, rename, archive, delete, and the switch
+ * between the index and one open report. The outline editor itself lives in
+ * `components/report.tsx`, on the same split `DashboardsPage` uses — an index
+ * of cards, then one document filling the page.
  *
  * The create dialog carries the one rule that is not CRUD: **a report cannot be
  * created against a connection that shares no result values.** A document whose
@@ -20,7 +20,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { ApiError, connections as connectionsApi, llmConfigs as modelsApi, reports as api } from '../api/client'
-import type { Connection, LlmConfig, ReportLanguage, ReportSummary } from '../api/types'
+import type { Connection, LlmConfig, Report, ReportLanguage, ReportSummary } from '../api/types'
+import { ReportOutlineEditor } from '../components/report'
 import {
   Chip, DisclosureBadge, EmptyState, ErrorNote, Field, GhostButton, Icon, Modal,
   PrimaryButton, SearchField, Segmented, Spinner, TextArea, TextInput, relativeTime,
@@ -53,7 +54,34 @@ function sortCards(cards: ReportSummary[], key: SortKey): ReportSummary[] {
 }
 
 export default function ReportsPage() {
+  const [openId, setOpenId] = useState<string | null>(null)
+  // The index's own copy of the list, held here so an edit made inside the
+  // editor is spliced into the card the user comes back to rather than costing
+  // a re-read of every report.
   const [cards, setCards] = useState<ReportSummary[] | null>(null)
+
+  return openId ? (
+    <ReportOutlineEditor
+      reportId={openId}
+      onBack={() => setOpenId(null)}
+      onChanged={(report) =>
+        setCards((current) =>
+          (current ?? []).map((card) => (card.id === report.id ? toCard(report) : card)),
+        )
+      }
+    />
+  ) : (
+    <ReportsIndex cards={cards} setCards={setCards} onOpen={setOpenId} />
+  )
+}
+
+function ReportsIndex({
+  cards, setCards, onOpen,
+}: {
+  cards: ReportSummary[] | null
+  setCards: React.Dispatch<React.SetStateAction<ReportSummary[] | null>>
+  onOpen: (id: string) => void
+}) {
   const [error, setError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [renaming, setRenaming] = useState<ReportSummary | null>(null)
@@ -71,7 +99,7 @@ export default function ReportsPage() {
       setError(err instanceof Error ? err.message : 'Could not load reports.')
       setCards([])
     }
-  }, [])
+  }, [setCards])
 
   useEffect(() => {
     void load()
@@ -240,6 +268,7 @@ export default function ReportsPage() {
             <ReportCard
               key={card.id}
               report={card}
+              onOpen={() => onOpen(card.id)}
               onRename={() => setRenaming(card)}
               onArchive={() =>
                 void guard(() =>
@@ -263,6 +292,11 @@ export default function ReportsPage() {
             setCards((current) => [toCard(report), ...(current ?? [])])
             setStatus('ACTIVE')
             setCreating(false)
+            // Straight into the outline. A report with no structure can do
+            // nothing at all, and the create dialog just asked for the request
+            // the structure is proposed from — sending the user back to a card
+            // to find their way in would be one step for no reason.
+            onOpen(report.id)
           }}
         />
       )}
@@ -283,21 +317,8 @@ export default function ReportsPage() {
   )
 }
 
-/** The created report as the index holds it — the same fields, one shape. */
-function toCard(report: {
-  id: string
-  name: string
-  description: string | null
-  connection_id: string | null
-  connection_name: string | null
-  llm_config_id: string | null
-  llm_config_name: string | null
-  language: ReportLanguage
-  status: 'ACTIVE' | 'ARCHIVED'
-  sections: unknown[]
-  created_at: string
-  updated_at: string
-}): ReportSummary {
+/** A full report as the index holds it — the same fields, one shape. */
+function toCard(report: Report): ReportSummary {
   return {
     id: report.id,
     name: report.name,
@@ -326,9 +347,10 @@ function cardHue(id: string): number {
 }
 
 function ReportCard({
-  report, onRename, onArchive, onDelete,
+  report, onOpen, onRename, onArchive, onDelete,
 }: {
   report: ReportSummary
+  onOpen: () => void
   onRename: () => void
   onArchive: () => void
   onDelete: () => void
@@ -338,7 +360,10 @@ function ReportCard({
   const language = LANGUAGES.find((entry) => entry.value === report.language)
 
   return (
+    // `rm-dash-card` carries the pointer and the hover lift of a card you can
+    // open — withheld until there *was* something to open, which is now.
     <div
+      className="rm-dash-card"
       style={{
         position: 'relative',
         display: 'flex',
@@ -346,13 +371,9 @@ function ReportCard({
         gap: 7,
         padding: '14px 15px 13px',
         background: 'var(--panel)',
-        border: '1px solid var(--border)',
         borderRadius: 14,
         opacity: archived ? 0.66 : 1,
       }}
-      // Deliberately *not* `rm-dash-card`: that class carries the pointer and
-      // the hover lift of a card you can open, and there is nothing to open
-      // until the outline editor exists. Phase 8 adopts it along with the link.
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
         <span
@@ -371,12 +392,22 @@ function ReportCard({
         >
           <Icon.Doc size={16} />
         </span>
-        <span
+        {/* The name is the link, and `rm-dash-card-link` stretches its hit area
+            over the whole card — so the kebab beside it still gets its own
+            clicks instead of opening the report. */}
+        <button
+          className="rm-dash-card-link"
+          onClick={onOpen}
           dir="auto"
           title={report.name}
           style={{
             flex: 1,
             minWidth: 0,
+            textAlign: 'left',
+            background: 'transparent',
+            border: 'none',
+            padding: 0,
+            cursor: 'pointer',
             color: 'var(--text-strong)',
             fontSize: 14.5,
             fontWeight: 650,
@@ -387,7 +418,7 @@ function ReportCard({
           }}
         >
           {report.name}
-        </span>
+        </button>
         <ReportMenu
           report={report}
           onRename={onRename}

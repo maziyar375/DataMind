@@ -21,8 +21,8 @@ import {
 } from '../components/dashboard'
 import { TileEditor } from '../components/tile-editor'
 import {
-  Dot, EmptyState, ErrorNote, GhostButton, Icon, Modal, PrimaryButton, SearchField,
-  Segmented, Spinner, TextInput, relativeTime,
+  Dot, EmptyState, ErrorNote, GhostButton, Icon, InlineEdit, Modal, PrimaryButton,
+  SearchField, Segmented, Spinner, TextInput, relativeTime,
 } from '../components/ui'
 
 export default function DashboardsPage() {
@@ -573,47 +573,6 @@ function NameDialog({
  * per letter. Escape puts back what was there — the usual contract for editing
  * in place, and the reason this is not just an `<input>` with an `onChange`.
  */
-function InlineEdit({
-  value, onCommit, ariaLabel, placeholder, required = false, style,
-}: {
-  value: string
-  onCommit: (value: string) => void
-  ariaLabel: string
-  placeholder?: string
-  /** A dashboard must have a name, so an empty commit reverts instead. */
-  required?: boolean
-  style?: React.CSSProperties
-}) {
-  const [draft, setDraft] = useState(value)
-  useEffect(() => setDraft(value), [value])
-
-  return (
-    <input
-      className="rm-inline-edit"
-      aria-label={ariaLabel}
-      // A dashboard name and its description are prose; they follow whatever
-      // script they were written in, same rule as a tile title.
-      dir="auto"
-      value={draft}
-      placeholder={placeholder}
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={() => {
-        const next = draft.trim()
-        if (required && !next) return setDraft(value)
-        if (next !== value) onCommit(next)
-      }}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter') event.currentTarget.blur()
-        if (event.key === 'Escape') {
-          setDraft(value)
-          event.currentTarget.blur()
-        }
-      }}
-      style={style}
-    />
-  )
-}
-
 /** The edit-mode alignment guide: thin lines through the middle of each gap. */
 function GridGuide({
   width, columns, rowHeight, gap,
