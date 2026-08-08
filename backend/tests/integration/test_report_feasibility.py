@@ -17,7 +17,12 @@ from uuid import uuid4
 import pytest
 
 from app.core.clock import utcnow
-from app.core.errors import LLMError, NotFoundError, ValidationError
+from app.core.errors import (
+    LLMError,
+    NotFoundError,
+    QuestionOutOfScopeError,
+    ValidationError,
+)
 from app.domain.ports.database import ResultColumn
 from app.domain.value_objects import ReportFeasibility, SqlOrigin
 from app.infra.db.models import (
@@ -273,6 +278,55 @@ async def test_a_model_that_produces_no_sql_is_a_verdict_not_a_502(
     assert block.feasibility_status == ReportFeasibility.INFEASIBLE
     assert "could not produce" in (block.feasibility_reason or "")
     assert draft is None
+
+
+async def test_a_question_with_no_data_answer_is_infeasible_not_green(
+    drafting: Any,
+) -> None:
+    """"How is the weather" used to pass.
+
+    Every gate this route had read the *statement*: is it a SELECT, do its
+    names resolve, does it run. A model handed a question with no data answer
+    still writes SQL, and that SQL is valid — so the block went FEASIBLE and
+    reached a run as a figure nobody could read. The verdict now comes from
+    the classifier, and it lands in the same INFEASIBLE row a rejected
+    statement does.
+    """
+    fake = drafting(
+        QuestionOutOfScopeError(
+            "This is not a question about your data, so there is nothing for a "
+            "figure to show.",
+            intent="CHITCHAT",
+        )
+    )
+    db = _db()
+
+    block, draft = await _service(db).check_block(REPORT_ID, BLOCK_ID, OWNER)
+
+    assert fake.calls == 1
+    assert block.feasibility_status == ReportFeasibility.INFEASIBLE
+    assert "not a question about your data" in (block.feasibility_reason or "")
+    assert block.feasibility_checked_at is not None
+    # Nothing stored, on the same rule a rejected statement follows: a block
+    # with no answer must not carry SQL a run would happily execute.
+    assert block.sql == ""
+    assert block.sql_hash == ""
+    assert draft is None
+
+
+async def test_the_check_asks_for_the_question_to_be_classified(
+    drafting: Any,
+) -> None:
+    """The gate is opt-in and this is the caller that opted in. Asserted on the
+    call rather than the outcome, because a default flipped back to False
+    elsewhere would silently restore the bug above with every test still
+    green."""
+    fake = drafting(_draft(preview=_rows(3)))
+    db = _db()
+
+    await _service(db).check_block(REPORT_ID, BLOCK_ID, OWNER)
+
+    assert fake.kwargs["classify"] is True
 
 
 async def test_valid_sql_the_database_refuses_is_infeasible(drafting: Any) -> None:

@@ -29,12 +29,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clock import utcnow
 from app.core.config import Settings
-from app.core.errors import LLMError, NotFoundError, ValidationError
+from app.core.errors import (
+    LLMError,
+    NotFoundError,
+    QuestionOutOfScopeError,
+    ValidationError,
+)
 from app.core.logging import get_logger
 from app.domain.ports.database import DatabaseConnector
 from app.infra.db.models import DatabaseConnection, LlmConfig
 from app.infra.llm.litellm_gateway import LiteLLMGateway
-from app.pipeline.nodes import NodeDeps, generate, retrieve, validate
+from app.pipeline.nodes import NodeDeps, generate, retrieve, route, validate
 from app.pipeline.state import RunState
 from app.services.query_service import (
     TileResult,
@@ -61,6 +66,29 @@ PREVIEW_MAX_ROWS = 50
 # `run_deadline_seconds` — nothing about a draft is a run.
 DRAFT_MAX_REPAIRS = 1
 DRAFT_DEADLINE_SECONDS = 120
+
+# Why a classified question was refused, in the words the user reads on the
+# block. `route`'s own answers are written for a chat reply — one of them is a
+# whole table listing — and a stored verdict wants a reason, not a reply. Keyed
+# by every label `route` can return except ANALYTICAL, which is the one that
+# proceeds.
+_OUT_OF_SCOPE = {
+    "CHITCHAT": (
+        "This is not a question about your data, so there is nothing for a "
+        "figure to show. Ask something the tables can answer — “revenue by "
+        "month for the last quarter”."
+    ),
+    "UNSUPPORTED": (
+        "This is outside what the database can answer, or asks to change "
+        "data. A report only ever reads, and only from the tables this "
+        "connection has."
+    ),
+    "METADATA": (
+        "This asks what the schema contains rather than what the data says. "
+        "A block has to produce rows, and a list of table names is not a "
+        "figure — describe the schema in the section's text instead."
+    ),
+}
 
 
 @dataclass(slots=True)
@@ -93,6 +121,7 @@ async def draft_sql(
     question: str,
     owner_id: UUID,
     extra_rules: str = "",
+    classify: bool = False,
 ) -> SqlDraft:
     """Ask a model for SQL that answers `question`, then guard it and run it.
 
@@ -100,6 +129,17 @@ async def draft_sql(
     this draft only — a report block's statement is saved and re-run months
     later, so it may not carry a literal date. Empty by default, and empty
     means the prompt is byte-identical to what a tile draft has always sent.
+
+    `classify` runs `route` first and refuses anything that is not ANALYTICAL,
+    raising `QuestionOutOfScopeError`. **Off by default**, so a tile draft
+    sends exactly the calls it always sent. It exists because the guard cannot
+    answer the question a report block actually asks. The guard reads a
+    *statement* — is it a SELECT, do its names resolve, is it safe — and "how
+    is the weather" produces a statement that passes all three. Nothing
+    downstream of `generate` ever asks whether the question had a data answer
+    to begin with, and chat only escapes this because `route` halts the run
+    before any SQL is written. This is that same halt, for the one other
+    caller whose answer is stored rather than shown.
     """
     connection = await _owned(db, DatabaseConnection, connection_id, owner_id)
     llm_config = await _owned(db, LlmConfig, llm_config_id, owner_id)
@@ -125,6 +165,17 @@ async def draft_sql(
             semantic=await _semantic(db, connection),
             extra_rules=extra_rules,
         )
+
+        if classify:
+            # Before `retrieve`, exactly where chat runs it: the point of the
+            # classifier is to spend nothing on a question that has no data
+            # answer. `route` fails open to ANALYTICAL on a provider error, so
+            # a flaky model widens nothing and refuses nothing.
+            await route(state, deps)
+            if state.intent is not None and state.intent != "ANALYTICAL":
+                raise QuestionOutOfScopeError(
+                    _OUT_OF_SCOPE[state.intent], intent=state.intent
+                )
 
         await retrieve(state, deps)
         for _ in range(DRAFT_MAX_REPAIRS + 1):

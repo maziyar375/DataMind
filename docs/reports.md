@@ -125,7 +125,7 @@ Exactly the dashboards posture, and for the same reason: **neither path is
 privileged and neither is trusted.**
 
 1. **`POST /reports/{id}/blocks/{bid}/check`** — one `draft_sql` call:
-   `retrieve` → `generate` → `validate`, plus a preview through
+   `route` → `retrieve` → `generate` → `validate`, plus a preview through
    `execute_saved_sql`. Synchronous and per block, because the user is watching
    one heading. Sets `sql_origin = GENERATED`.
 2. **`PUT /reports/{id}/blocks/{bid}/sql`** — `validate_sql`: guard, preview,
@@ -137,6 +137,27 @@ Every outcome is a **stored verdict**, never an exception — including the mode
 failing to produce anything. A question the guard refuses is not a failed
 request; it is a block that says `INFEASIBLE`, in the guard's own words, with a
 Generate button that stays disabled until it is fixed.
+
+### The guard reads the statement; `route` reads the question
+
+`draft_sql(classify=True)` is the reason `route` appears in road 1, and reports
+are the only caller that passes it — a tile draft sends what it always sent.
+
+The guard cannot answer the question this route actually asks. It reads a
+*statement*: is it a SELECT, do its names resolve against the snapshot, is it
+safe, does it run. Ask a model "how is the weather" and it writes SQL that
+satisfies every one of those, so the block went **`FEASIBLE`** and reached a
+run as a figure nobody could read. Nothing downstream of `generate` has ever
+asked whether the question had a data answer at all — chat escapes this only
+because `route` halts the run before a line of SQL is written, and a report
+block was the one place that verdict was stored rather than shown.
+
+So anything `route` does not call `ANALYTICAL` is `INFEASIBLE` before the
+schema-sized prompt is spent, with a reason per label (`sql_draft_service.
+_OUT_OF_SCOPE`). `route` fails open to `ANALYTICAL` on a provider error, so a
+flaky model refuses nothing. And a misclassified question is not a dead end:
+road 2 asks no model, so a user who knows the SQL can write it and be checked
+by the guard alone.
 
 | verdict | means |
 | --- | --- |

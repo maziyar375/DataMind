@@ -332,15 +332,51 @@ export function ReportOutlineEditor({
     if (run) onOpenRun(run.id)
   }
 
+  /**
+   * Propose a structure, then check it where the user can watch.
+   *
+   * Two model calls of very different shapes: one for the whole outline, then
+   * one per question. Running them as two separate button presses meant the
+   * second one started against a page of `UNCHECKED` rows the user had already
+   * read and had no reason to expect anything more from — so the sweep looked
+   * like a thing the tool made you do rather than a thing it was doing.
+   *
+   * Chained, the order carries the meaning: the questions land first and stay
+   * on screen, and the verdicts arrive under them one at a time. Nothing here
+   * is hidden behind a spinner that could be showing the questions instead.
+   *
+   * The sweep is interruptible (`Stop`), which is what makes it acceptable to
+   * start it without asking: it is one model call per question, and a user who
+   * wants to rewrite the outline before spending that can say so mid-way.
+   */
   async function propose() {
     setConfirmPropose(false)
     setProposing(true)
     const next = await guard(() => api.proposeOutline(reportId))
-    if (next) {
-      setReport(next)
-      setPreviews({})
-    }
+    // Cleared *before* the sweep starts, so the outline is on screen for the
+    // render that shows the first question being checked rather than one
+    // render later.
     setProposing(false)
+    if (!next) return
+    setReport(next)
+    setPreviews({})
+
+    // Read off the response rather than the `unchecked` memo: that memo is
+    // derived from state this function has only just set, and would still be
+    // describing the outline this one replaced.
+    const pending = next.sections
+      .flatMap((section) => section.blocks)
+      .filter((block) => block.feasibility_status === 'UNCHECKED')
+    if (pending.length === 0) return
+
+    // A beat before the sweep, for two reasons that happen to want the same
+    // pause. React has not committed these rows yet, so the sweep's first
+    // `scrollIntoView` would search a DOM that has no questions in it. And an
+    // outline that appears already mid-check reads as one event; a moment of
+    // just-the-questions is what makes the checking legible as the second
+    // thing that happens to them.
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 400))
+    await checkAll(pending)
   }
 
   // ── sections ────────────────────────────────────────────────────────────
@@ -492,6 +528,14 @@ export function ReportOutlineEditor({
     for (const [index, block] of pending.entries()) {
       if (stopSweep.current) break
       setSweep({ done: index, total: pending.length, label: block.question })
+      // Follow the sweep down the page. `nearest` scrolls the least it can and
+      // does nothing at all when the row is already visible, so a user reading
+      // question three is not dragged to question four — a walk you cannot
+      // watch is the thing this whole chain exists to fix, but so is a page
+      // that moves under you.
+      window.document
+        .querySelector(`[data-block-id="${block.id}"]`)
+        ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
       const answer = await check(block.id)
       // A failed *request* — not a refusal, which arrives as a verdict — means
       // the next nine will fail the same way. Stop and say so once.
@@ -753,7 +797,7 @@ export function ReportOutlineEditor({
       {confirmPropose && (
         <Modal
           title="Propose a new outline?"
-          subtitle="One model call, from the request above."
+          subtitle="One model call for the structure, then one per question to check it — stoppable at any point."
           onClose={() => setConfirmPropose(false)}
           footer={
             <>
@@ -1403,6 +1447,10 @@ function BlockRow({
   return (
     <div
       className="rm-outline-block"
+      /* How the sweep finds the row it is about to check, to bring it into
+         view. An id rather than a ref because the walk is driven from the
+         editor, which holds no handle on any individual row. */
+      data-block-id={block.id}
       style={{
         display: 'flex',
         flexDirection: 'column',

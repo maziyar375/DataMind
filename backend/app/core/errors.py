@@ -86,6 +86,21 @@ class LLMError(AppError):
     title = "Model provider error"
 
 
+class QuestionOutOfScopeError(AppError):
+    """The question has no answer in this database's data.
+
+    Distinct from `LLMError` on purpose: the model did not fail, it was never
+    the right thing to ask. Raised only by callers that opted into classifying
+    the question first — chat has always halted on this, a saved block never
+    did, and "how is the weather" is answerable in perfectly valid SQL, so the
+    guard alone will pass it.
+    """
+
+    code = "E_OUT_OF_SCOPE"
+    http_status = 422
+    title = "Question is outside this database"
+
+
 class RunTimeoutError(AppError):
     code = "E_TIMEOUT"
     http_status = 504

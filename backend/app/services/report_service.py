@@ -42,6 +42,7 @@ from app.core.errors import (
     DisclosureTooNarrowError,
     LLMError,
     NotFoundError,
+    QuestionOutOfScopeError,
     ValidationError,
 )
 from app.core.logging import get_logger
@@ -558,7 +559,20 @@ class ReportService:
                     time_window=block.time_window,
                     conventions=await self._time_conventions(connection),
                 ),
+                # The guard reads a statement; this reads the question. Valid
+                # SQL can be written for "how is the weather" — it resolves,
+                # it is a SELECT, it is safe — so without this the block goes
+                # green and reaches a run as a figure nobody asked for. Chat
+                # has always halted here; a block is the one place the answer
+                # is stored instead of shown, which is why it was missed.
+                classify=True,
             )
+        except QuestionOutOfScopeError as err:
+            # A verdict, not a failure: the question is answerable by nothing,
+            # and the user's next move is to rewrite it. Deliberately lands in
+            # the same INFEASIBLE row a rejected statement does, so the block
+            # reads the same way whichever gate stopped it.
+            _record_check(block, ReportFeasibility.INFEASIBLE, err.message)
         except LLMError as err:
             # "The model could not produce a query" *is* the answer to this
             # question, and the user's next move is to reword the block.

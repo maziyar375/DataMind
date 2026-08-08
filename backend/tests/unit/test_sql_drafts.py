@@ -19,8 +19,14 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.core.errors import LLMError, NotFoundError, ValidationError
+from app.core.errors import (
+    LLMError,
+    NotFoundError,
+    QuestionOutOfScopeError,
+    ValidationError,
+)
 from app.domain.ports.database import QueryResult, ResultColumn
+from app.domain.ports.llm import Completion
 from app.pipeline.contracts import SqlProposal
 from app.services import query_service, sql_draft_service
 from app.services.sql_draft_service import PREVIEW_MAX_ROWS, draft_sql, validate_sql
@@ -117,6 +123,25 @@ class FakeGateway:
 class FailingGateway:
     async def structured(self, _llm: Any, _messages: Any, _schema: Any) -> SqlProposal:
         raise LLMError("The provider is unavailable.")
+
+
+class RoutingGateway(FakeGateway):
+    """A `FakeGateway` that also answers the classifier.
+
+    `route` is the only thing in this path that calls `complete`; everything
+    else goes through `structured`. So `completions` counting zero is a
+    positive assertion that no question was classified.
+    """
+
+    def __init__(self, *sql: str, label: str = "ANALYTICAL") -> None:
+        super().__init__(*sql)
+        self.label = label
+        self.completions = 0
+
+    async def complete(self, _llm: Any, messages: Any) -> Completion:
+        self.completions += 1
+        self.routed = list(messages)
+        return Completion(text=self.label)
 
 
 class FakeConnector:
@@ -378,6 +403,78 @@ async def test_a_provider_failure_is_an_error_not_an_empty_draft(
     """502 through problem+json. A draft with no SQL in it is not a draft."""
     with pytest.raises(LLMError):
         await _draft(monkeypatch, gateway=FailingGateway())
+
+
+# ── classify: the question the guard cannot ask ──────────────────────────
+# The guard reads a *statement* — is it a SELECT, do its names resolve, is it
+# safe. "How is the weather" gets answered with SQL that satisfies all three,
+# so a caller who stores the verdict rather than showing it needs something
+# upstream that reads the question instead. Chat has always had it; `classify`
+# is that same gate, opt-in.
+async def _classified(
+    monkeypatch: pytest.MonkeyPatch, *, gateway: Any, classify: bool
+) -> Any:
+    db, connection, llm_config, _connector = _world(monkeypatch, gateway=gateway)
+    return await draft_sql(
+        db,  # type: ignore[arg-type]
+        FakeSettings(),  # type: ignore[arg-type]
+        connection_id=connection.id,
+        llm_config_id=llm_config.id,
+        question="how is the weather",
+        owner_id=OWNER,
+        classify=classify,
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "phrase"),
+    [
+        ("CHITCHAT", "not a question about your data"),
+        ("UNSUPPORTED", "outside what the database can answer"),
+        ("METADATA", "what the schema contains"),
+    ],
+)
+async def test_a_question_with_no_data_answer_is_refused_before_any_sql(
+    monkeypatch: pytest.MonkeyPatch, label: str, phrase: str
+) -> None:
+    """The reported bug: this used to come back as valid SQL and a green
+    verdict, because every gate downstream of `generate` reads the statement
+    and never the question."""
+    gateway = RoutingGateway(VALID_SQL, label=label)
+
+    with pytest.raises(QuestionOutOfScopeError) as raised:
+        await _classified(monkeypatch, gateway=gateway, classify=True)
+
+    assert phrase in raised.value.message
+    assert raised.value.detail["intent"] == label
+    # Refused *before* the expensive call, not after: the schema-sized prompt
+    # is the thing classifying exists to avoid spending.
+    assert gateway.calls == []
+
+
+async def test_an_analytical_question_passes_the_classifier_untouched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = RoutingGateway(VALID_SQL, label="ANALYTICAL")
+
+    draft = await _classified(monkeypatch, gateway=gateway, classify=True)
+
+    assert draft.validation_status == "VALID"
+    assert gateway.completions == 1
+
+
+async def test_classifying_is_off_by_default_so_a_tile_draft_is_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The tile editor shares this function and did not ask for a second model
+    call per draft. Off by default means it pays for nothing — and a gateway
+    that would have refused this question proves the classifier never ran."""
+    gateway = RoutingGateway(VALID_SQL, label="CHITCHAT")
+
+    draft = await _classified(monkeypatch, gateway=gateway, classify=False)
+
+    assert draft.validation_status == "VALID"
+    assert gateway.completions == 0
 
 
 # ── the schema block is the run path's, disclosure and all ───────────────
