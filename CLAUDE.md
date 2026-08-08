@@ -86,14 +86,16 @@ backend/app/
   main.py         ASGI factory: lifespan (bootstrap admin, reconcile orphans,
                   start reconciler), CORS, correlation-id middleware, health.
   api/            HTTP shape ONLY — no business logic.
-    v1/           auth, users, connections, llm_configs, semantic, conversations
+    v1/           auth, users, connections, llm_configs, semantic, conversations,
+                  dashboards, drafts (SQL), reports
     schemas.py    Pydantic request/response DTOs (no secrets ever in reads)
     errors.py     RFC 7807 problem+json mapping
   core/           config, logging (with redaction), errors, correlation context, clock
   domain/         entities, value_objects (enums/kinds), ports — ZERO I/O, no frameworks
     ports/        Protocols: database, llm, secrets, identity, events, run_executor
   services/       use cases + transaction boundaries: run_service,
-                  semantic_service, bootstrap, disclosure_service, policy
+                  semantic_service, report_service, dashboard_service,
+                  sql_draft_service, bootstrap, disclosure_service, policy
   pipeline/       the AI run: state.py (typed RunState), pipeline.py (state machine),
                   nodes/ (route→retrieve→clarify→generate→validate→execute→
                   inspect→present→chart),
@@ -103,6 +105,12 @@ backend/app/
                   (bind it to a snapshot, parse metric SQL), generator.py (build
                   one with a model, one call per table), render.py (the prompt
                   block), prompts.py — self-contained like sqlguard
+  reports/        the written document: outline.py (the proposed structure),
+                  facts.py (the arithmetic a paragraph needs, computed exactly
+                  from the rows), narrate.py (the per-section prose prompt, from
+                  *disclosed* results), checks.py (the numeric consistency check
+                  — pure, token-free, Persian and Latin numerals), prompts.py
+                  (REPORT_PROMPT_VERSION) — self-contained, below the pipeline
   charts/         ChartIntent → result profile → shape fit → Vega-Lite
   infra/          adapters implementing the ports:
     db/           SQLAlchemy models.py + Alembic migrations + session
@@ -113,7 +121,8 @@ backend/app/
     identity/     local Argon2id + JWT provider
     events/       SSE event publisher
   workers/        inprocess run executor + stale-run reconciler + semantic.py
-                  (generation jobs; minutes long, so they are polled not streamed)
+                  and report.py (generation jobs; minutes long, so they are
+                  polled not streamed, with cooperative-then-hard cancel)
   tests/          unit (incl. test_sqlguard_hostile.py) + integration
   fixtures/       sales_seed.sql (Postgres demo/eval DB) + sales_seed_mysql.sql
                   and sales_seed_mssql.sql dialect mirrors + rebuild_fixtures.sh
@@ -133,9 +142,15 @@ frontend/src/
                             `npm run test:schedule`), table-format.ts (how a
                             configured table resolves/sorts/formats, also
                             DOM-free — `npm run test:format`), tile-editor.tsx
-                            (ask or write the SQL; one guard check for both)
+                            (ask or write the SQL; one guard check for both),
+                            report.tsx (the outline editor + the document
+                            viewer), report-history.tsx, report-document.ts
+                            (merging a run into a document — `npm run
+                            test:report`), report-print.ts (the print handoff:
+                            fonts, and redrawing charts at page width —
+                            `npm run test:print`)
   pages/                    Login, Chat, DataSources, LlmProviders, Users,
-                            Dashboards
+                            Dashboards, Reports
 ```
 
 ---
@@ -143,7 +158,7 @@ frontend/src/
 ## The dependency rule (enforced, not documented)
 
 ```
-api → services → pipeline → semantic → domain ← infra
+api → services → pipeline → reports → semantic → domain ← infra
 ```
 
 `import-linter` fails CI on violation (`make lint`). Concretely:
@@ -154,6 +169,11 @@ api → services → pipeline → semantic → domain ← infra
 - **`app.semantic` is self-contained** for the same reason — it is a pure
   function of a snapshot, a document and the `LLMGateway` *port*, so the whole
   generator runs in a test against a dict and a fake gateway.
+- **`app.reports` is self-contained** on the same terms, and the contract buys
+  something concrete: `narrate.py` *cannot* call `disclose()`, because that
+  lives in `app.pipeline` above it. So the worker has to disclose results
+  under the policy in force at narration time and hand them down — which is
+  the stricter reading of invariant #4, enforced for free.
 - Services may reach into infra (that carve-out is explicit in the config).
 
 Ports & adapters exist at **exactly four** seams — the four things most likely
@@ -348,6 +368,56 @@ shapes. That is the class this addresses.
 
 ---
 
+## Reports
+
+> Full reference — the data model, the two roads to a block's SQL, the
+> generation order, where the numbers come from, and the print handoff:
+> **[docs/reports.md](docs/reports.md)**. `docs/reports-plan.md` is the record
+> of what was intended, phase by phase.
+
+Chat answers one question. A dashboard watches numbers that are always current.
+**A report is a document**: a structure a human approved, prose written over
+real results, and a snapshot of a moment that stays readable after the data has
+moved on. Six tables (`0008_reports.py`), no table and no code path shared with
+Dashboards.
+
+The things worth knowing before you touch it:
+
+- **A run's status is derived, not set.** `SUCCEEDED | PARTIAL | FAILED` comes
+  from its sections, which is why progressive rendering and per-section retry
+  need no resume machinery: a successful retry turns `PARTIAL` into `SUCCEEDED`
+  with no state machine. Every result row is written the moment it lands, so
+  the poll response *is* the progressive render.
+- **Two prose columns.** `prose` is the model's, `edited_prose` is the user's,
+  and **NULL means not edited** (so `null` is the revert). Both live on the
+  *run*, never on the template — editing never destroys, regenerating never
+  overwrites. The same rule sends a chart redraw to the run.
+- **`report_blocks.sql` is a third entry point to the guard and gets no
+  exemption.** It is re-validated against the connection's current snapshot on
+  every execution through `execute_saved_sql`, and `sql_origin` is provenance
+  only — `tests/unit/test_report_guard.py` replays the hostile corpus through
+  it. Two routes write that column: `/check` asks a model, `PUT .../sql` asks
+  nobody. Neither is privileged.
+- **Editing a question resets the verdict, and only sometimes the SQL.** A
+  generated draft is dropped (one click to reproduce); a hand-written or
+  hand-edited one is kept — the semantic layer's rule about not deleting a
+  person's work, applied to the same question.
+- **Reports refuse `NONE`/`AGGREGATE`.** Prose written from no values beside
+  charts drawn from real ones is a document that disagrees with itself. Gated
+  at creation *and* re-checked at the start of every generation, because a
+  policy tightened in between has to stop the run.
+- **Time windows resolve in the SQL** (`CURRENT_DATE - INTERVAL '3 months'`),
+  not in stored parameters and not by regenerating. `NodeDeps.extra_rules`
+  carries the dialect rules and is empty for everything else — a chat run's SQL
+  prompt is byte-identical to pre-feature, and a test says so.
+- **No model is asked to do arithmetic.** `plan_kpi` computes the headline,
+  `reports/facts.py` computes what a paragraph needs (and yields *nothing* for
+  a partial or capped result, because a total over a prefix is a wrong total),
+  and `reports/checks.py` flags figures the rows do not support — it flags,
+  it never blocks.
+
+---
+
 ## Gotchas learned the hard way
 
 - **FK insert order:** `runs` references `messages`. Add the user message and
@@ -389,11 +459,12 @@ shapes. That is the class this addresses.
 - **A new API route:** router in `api/v1/`, DTO in `schemas.py`, business logic
   in a `services/*` function that owns the transaction. Literal paths (e.g.
   `/test`) must be declared **above** `/{id}` routes.
-- **Prompt changes:** versioned prompts live in `pipeline/prompts/`. The
-  semantic-layer generation prompts are the exception — they live in
-  `app/semantic/prompts.py` (versioned as `SEMANTIC_PROMPT_VERSION`, recorded
-  on every layer) because `app.semantic` sits *below* the pipeline: the
-  pipeline reads a layer, a layer knows nothing about a run.
+- **Prompt changes:** versioned prompts live in `pipeline/prompts/`. Two sets
+  are the exception, for the same reason and both recorded on the row they
+  produce: `app/semantic/prompts.py` (`SEMANTIC_PROMPT_VERSION`) and
+  `app/reports/prompts.py` (`REPORT_PROMPT_VERSION`). Both modules sit *below*
+  the pipeline — the pipeline reads a layer, a report reads a node, and
+  neither a layer nor a node knows anything about the thing above it.
 
 ---
 

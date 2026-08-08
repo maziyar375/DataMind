@@ -113,6 +113,15 @@ npm install && npm run dev
   no chart
 - SSE streaming with replay from `Last-Event-ID`, plus a polling fallback
 - In-process run executor with heartbeats and a stale-run reconciler
+- **Reports** — a written analytical document, not a conversation: describe
+  what you need, approve the outline a model proposes, and get prose, tables
+  and charts generated section by section from your own data. Each question
+  becomes one guarded query, written by the model or by hand; time windows
+  resolve in the SQL itself (`CURRENT_DATE - INTERVAL '3 months'`), so the same
+  report re-run in six months describes then rather than now. Runs are kept, so
+  a document stays readable after the data has moved on, and a regeneration
+  never overwrites one. Persian and English, and it prints to PDF from the
+  browser. See [docs/reports.md](docs/reports.md)
 
 **Frontend**
 
@@ -125,9 +134,15 @@ sources with an engine picker, a table list, and an FK graph view; LLM
 providers; a user-management panel with per-user editing. Dark and light
 themes.
 
-**Not built yet:** the semantic layer, clarification turns, retrieval beyond
-exact matching, rolling conversation summaries, and the eval harness. Each is
-deferred deliberately — see the architecture doc for the reasoning.
+**Reports** get three screens of their own: an outline editor that walks
+Describe → Structure → Check → Generate with the guard's verdict on every
+question, a viewer that watches the document write itself and lets any
+paragraph or chart be refined afterwards, and the run history a regeneration
+adds to.
+
+**Not built yet:** rolling conversation summaries, sharing a dashboard or a
+report with another user, and scheduled generation. Each is deferred
+deliberately — see the architecture doc for the reasoning.
 
 ---
 
@@ -231,20 +246,25 @@ backend/
     services/   use cases, disclosure policy, bootstrap
     pipeline/   typed RunState, nodes, executor, versioned prompts
     sqlguard/   parser, policy, validator, rewriter
+    semantic/   what the schema means: the document, its generator, its render
+    reports/    outline, facts, narration prompts, the numeric check — pure
     charts/     ChartIntent → validation → Vega-Lite
     infra/      SQLAlchemy, crypto, connectors (postgres/mysql/mssql/oracle),
                 LiteLLM, events, identity
-    workers/    in-process executor, reconciler
+    workers/    in-process executor, reconciler, semantic and report jobs
   tests/
   fixtures/     seeded sales database with a read-only role
 frontend/
   src/
     theme/      design tokens taken verbatim from the design concept
     api/        typed client, SSE streaming with polling fallback
-    components/ UI primitives and chat rendering
-    pages/      login, chat, data sources, LLM providers, users
+    components/ UI primitives, chat, dashboards, the semantic layer, reports
+    pages/      login, chat, data sources, LLM providers, users, dashboards,
+                reports
 docs/
   architecture.md          the full architecture proposal
+  dashboards.md            the grid, and the second entry point to the guard
+  reports.md               the document: outline, generation, prose, PDF
   ui-design-concept.html   the original design
 ```
 

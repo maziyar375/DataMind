@@ -47,6 +47,7 @@ function block(
     status: 'OK',
     error_code: null,
     error_message: null,
+    sql_changed: null,
     ...extra,
   }
 }

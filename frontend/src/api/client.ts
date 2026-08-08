@@ -121,6 +121,11 @@ const post = <T>(path: string, body?: unknown) =>
   request<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined })
 const patch = <T>(path: string, body: unknown) =>
   request<T>(path, { method: 'PATCH', body: JSON.stringify(body) })
+// PUT for the routes that replace a thing whole rather than amend it — a
+// password, a semantic layer, a block's statement. Sending one twice is
+// sending it once.
+const put = <T>(path: string, body: unknown) =>
+  request<T>(path, { method: 'PUT', body: JSON.stringify(body) })
 const del = (path: string) => request<void>(path, { method: 'DELETE' })
 
 // ── auth ──────────────────────────────────────────────────────────────────
@@ -346,6 +351,15 @@ export const reports = {
   /** *Can this be produced, and if not, why.* Answers with a verdict, never a 502. */
   checkBlock: (id: string, blockId: string) =>
     post<ReportBlockCheck>(`/reports/${id}/blocks/${blockId}/check`),
+  /**
+   * Write the block's statement by hand. The same answer as `checkBlock`, by
+   * the other road: guarded and previewed, with no model involved at all.
+   *
+   * `sql_origin` comes back derived from what the block already held — a
+   * client neither sends it nor could gain anything by sending it.
+   */
+  editBlockSql: (id: string, blockId: string, sql: string) =>
+    put<ReportBlockCheck>(`/reports/${id}/blocks/${blockId}/sql`, { sql }),
 
   startRun: (id: string) => post<ReportRun>(`/reports/${id}/runs`),
   runs: (id: string) => get<ReportRun[]>(`/reports/${id}/runs`),

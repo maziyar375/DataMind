@@ -36,7 +36,8 @@ import {
   isReportRunInFlight, llmConfigs as modelsApi, reports as api,
 } from '../api/client'
 import type {
-  ChartOption, LlmConfig, NumericFinding, Report, ReportBlock, ReportBlockResult,
+  ChartOption, LlmConfig, NumericFinding, Report, ReportBlock, ReportBlockCheck,
+  ReportBlockResult,
   ReportBlockType, ReportFeasibility, ReportLanguage, ReportRun, ReportRunDetail,
   ReportSection, ReportSectionResult, ReportSummary, ReportTimeWindow,
 } from '../api/types'
@@ -147,6 +148,11 @@ const LABELS: Record<ReportLanguage, Record<string, string>> = {
     saving: 'Saving…',
     cancel: 'Cancel',
     revert: 'Revert',
+    queryChanged: 'query changed since the previous generation',
+    queryChangedNote:
+      'The statement behind this figure is not the one the previous '
+      + 'generation ran, so the two numbers are not a like-for-like '
+      + 'comparison.',
     asOf: 'This document reflects the data as it stood on',
     asOfTail:
       'Generating again writes a new run and leaves this one exactly as it is.',
@@ -180,6 +186,10 @@ const LABELS: Record<ReportLanguage, Record<string, string>> = {
     saving: 'در حال ذخیره…',
     cancel: 'انصراف',
     revert: 'بازگردانی',
+    queryChanged: 'کوئری نسبت به تولید قبلی تغییر کرده است',
+    queryChangedNote:
+      'عبارتی که این شکل از آن به دست آمده، همان عبارت تولید قبلی نیست؛ '
+      + 'بنابراین این دو عدد قابل مقایسهٔ مستقیم نیستند.',
     asOf: 'این سند وضعیت داده‌ها را در تاریخ زیر نشان می‌دهد:',
     asOfTail: 'تولید دوبارهٔ گزارش، اجرای تازه‌ای می‌سازد و این اجرا دست‌نخورده می‌ماند.',
   },
@@ -433,11 +443,11 @@ export function ReportOutlineEditor({
    * arrived. The preview is kept beside the verdict rather than in it: it is
    * about *this check*, not about the block, and it is gone when the page is.
    */
-  const check = useCallback(
-    async (blockId: string) => {
+  const record = useCallback(
+    async (blockId: string, ask: () => Promise<ReportBlockCheck>) => {
       setChecking((current) => [...current, blockId])
       try {
-        const answer = await guard(() => api.checkBlock(reportId, blockId))
+        const answer = await guard(ask)
         if (answer) {
           putBlock(answer.block)
           setPreviews((current) => ({
@@ -454,7 +464,26 @@ export function ReportOutlineEditor({
         setChecking((current) => current.filter((id) => id !== blockId))
       }
     },
-    [guard, putBlock, reportId],
+    [guard, putBlock],
+  )
+
+  const check = useCallback(
+    (blockId: string) => record(blockId, () => api.checkBlock(reportId, blockId)),
+    [record, reportId],
+  )
+
+  /**
+   * The other road to the same verdict: the statement is the user's, and the
+   * guard reads it instead of a model writing it.
+   *
+   * Deliberately the *same* landing as `check` — one row spliced in, one
+   * preview line replaced — because the two answer the same question and a
+   * second way of showing an answer is a second way of showing it wrong.
+   */
+  const saveSql = useCallback(
+    (blockId: string, sql: string) =>
+      record(blockId, () => api.editBlockSql(reportId, blockId, sql)),
+    [record, reportId],
   )
 
   /** Every block that has never been near the guard, one at a time. */
@@ -704,6 +733,7 @@ export function ReportOutlineEditor({
                 onRemoveBlock={(blockId) => void removeBlock(section.id, blockId)}
                 onMoveBlock={(from, to) => void moveBlock(section.id, from, to)}
                 onCheck={(blockId) => void check(blockId)}
+                onSaveSql={(blockId, sql) => saveSql(blockId, sql)}
               />
             ))
           )}
@@ -1132,7 +1162,7 @@ function Step({
 function SectionCard({
   section, index, count, busy, checking, previews,
   onHeading, onIntent, onRemove, onMove,
-  onAddBlock, onBlock, onRemoveBlock, onMoveBlock, onCheck,
+  onAddBlock, onBlock, onRemoveBlock, onMoveBlock, onCheck, onSaveSql,
 }: {
   section: ReportSection
   index: number
@@ -1149,6 +1179,7 @@ function SectionCard({
   onRemoveBlock: (blockId: string) => void
   onMoveBlock: (from: number, to: number) => void
   onCheck: (blockId: string) => void
+  onSaveSql: (blockId: string, sql: string) => Promise<ReportBlockCheck | null>
 }) {
   const [confirmRemove, setConfirmRemove] = useState(false)
   const summary = section.kind === 'EXECUTIVE_SUMMARY'
@@ -1290,6 +1321,7 @@ function SectionCard({
               onRemove={() => onRemoveBlock(block.id)}
               onMove={(to) => onMoveBlock(blockIndex, to)}
               onCheck={() => onCheck(block.id)}
+              onSaveSql={(sql) => onSaveSql(block.id, sql)}
             />
           ))}
         </div>
@@ -1346,6 +1378,7 @@ function SectionCard({
  */
 function BlockRow({
   block, index, count, busy, checking, preview, onChange, onRemove, onMove, onCheck,
+  onSaveSql,
 }: {
   block: ReportBlock
   index: number
@@ -1357,10 +1390,15 @@ function BlockRow({
   onRemove: () => void
   onMove: (to: number) => void
   onCheck: () => void
+  onSaveSql: (sql: string) => Promise<ReportBlockCheck | null>
 }) {
   const [showSql, setShowSql] = useState(false)
   const verdict = FEASIBILITY[block.feasibility_status]
   const unchecked = block.feasibility_status === 'UNCHECKED'
+  // A statement somebody typed. It survives a reworded question — the API
+  // keeps it and only drops the verdict — so the check button here would
+  // *replace* it rather than fill a gap, and has to say so.
+  const ownSql = block.sql !== '' && block.sql_origin !== 'GENERATED'
 
   return (
     <div
@@ -1484,26 +1522,33 @@ function BlockRow({
         )}
 
         <span style={{ marginInlineStart: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
-          {block.sql && (
-            <GhostButton
-              onClick={() => setShowSql((open) => !open)}
-              style={{ padding: '4px 9px', fontSize: 11.5 }}
-            >
-              {showSql ? 'Hide SQL' : 'SQL'}
-            </GhostButton>
-          )}
+          {/* Always offered now, not only when there is a statement: with none,
+              this is where one gets written by hand. */}
+          <GhostButton
+            onClick={() => setShowSql((open) => !open)}
+            style={{ padding: '4px 9px', fontSize: 11.5 }}
+          >
+            {showSql ? 'Hide SQL' : 'SQL'}
+          </GhostButton>
           {/* `is-wanted` is the tile editor's affordance for "this is the next
               thing to do", and an unchecked question is exactly that: it is the
-              one state that stops the report being generated at all. */}
+              one state that stops the report being generated at all. It is not
+              claimed for a block whose SQL somebody wrote, because there the
+              next thing to do is in the box, not here. */}
           <button
             type="button"
             onClick={onCheck}
             disabled={busy || checking}
-            className={`rm-check${unchecked && !checking ? ' is-wanted' : ''}`}
+            className={`rm-check${unchecked && !checking && !ownSql ? ' is-wanted' : ''}`}
             style={{ marginInlineStart: 0, padding: '4px 10px', fontSize: 11.5 }}
+            title={
+              ownSql
+                ? 'Asks the model for a new statement from the question, replacing the one you wrote.'
+                : 'Turns the question into a query and checks it against your schema.'
+            }
           >
             {checking ? <Spinner size={11} /> : <Icon.Check size={11} />}
-            {unchecked ? 'Check' : 'Check again'}
+            {ownSql ? 'Rewrite' : unchecked ? 'Check' : 'Check again'}
           </button>
         </span>
       </div>
@@ -1528,34 +1573,137 @@ function BlockRow({
         </div>
       )}
 
-      {showSql && block.sql && (
-        <div style={{ marginInlineStart: 22 }}>
-          <pre
-            dir="ltr"
-            style={{
-              margin: 0,
-              padding: '9px 11px',
-              background: 'var(--input-bg)',
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              fontSize: 11.5,
-              lineHeight: 1.6,
-              color: 'var(--text2)',
-              overflowX: 'auto',
-              whiteSpace: 'pre',
-            }}
-          >
-            {block.sql}
-          </pre>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-            <CopyButton text={block.sql} label="Copy SQL" />
-            <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
-              Re-validated against the connection’s current schema on every run — being stored
-              grants it nothing.
-            </span>
-          </div>
+      {showSql && (
+        <div
+          style={{
+            marginInlineStart: 22,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+          }}
+        >
+          <BlockSql block={block} busy={busy || checking} onSave={onSaveSql} />
+          {/* Said outside the box, because the box is where someone writes and
+              this is a fact about what happens afterwards. Invariant #1, in the
+              one place a user could mistake "it saved" for "it is trusted". */}
+          <span style={{ fontSize: 11, lineHeight: 1.5, color: 'var(--text-faint)' }}>
+            Re-validated against the connection’s current schema on every run — being
+            stored grants it nothing.
+          </span>
         </div>
       )}
+    </div>
+  )
+}
+
+/** Who wrote the statement now on a block. Provenance, never a trust signal. */
+const SQL_ORIGIN: Record<string, string> = {
+  GENERATED: 'Written by the model from the question above',
+  GENERATED_EDITED: 'Written by the model, then edited by you',
+  HANDWRITTEN: 'Written by you',
+}
+
+/**
+ * A block's statement, editable.
+ *
+ * The same shape as the tile editor's `SqlBox` and reusing its stylesheet,
+ * because it is the same act: type a statement, hand it to the guard, read the
+ * verdict. What is different is where the verdict lands — on the block, as its
+ * feasibility, beside the one the model's own draft would have produced. The
+ * two roads to that verdict are `POST .../check` and this, and they answer in
+ * the same shape so the row above renders either without knowing which.
+ *
+ * Saving is not authorisation to run. `execute_saved_sql` guards this again on
+ * every execution against the connection's *current* snapshot, and
+ * `sql_origin` grants it nothing — which is the sentence under the box, said
+ * once rather than implied.
+ */
+function BlockSql({
+  block, busy, onSave,
+}: {
+  block: ReportBlock
+  busy: boolean
+  onSave: (sql: string) => Promise<ReportBlockCheck | null>
+}) {
+  const [draft, setDraft] = useState(block.sql)
+  const [saving, setSaving] = useState(false)
+
+  // The row is spliced in from the response, so the box follows the stored
+  // statement whenever that changes underneath it — a check that rewrote it,
+  // a save that came back normalised.
+  useEffect(() => setDraft(block.sql), [block.sql])
+
+  const dirty = draft.trim() !== block.sql.trim()
+  const empty = draft.trim() === ''
+
+  async function save() {
+    if (empty || saving) return
+    setSaving(true)
+    try {
+      await onSave(draft.trim())
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="rm-sqlbox">
+      <TextArea
+        className="mono"
+        aria-label={`SQL for “${block.question}”`}
+        // Code, not prose: `TextArea` defaults to `dir="auto"`, which would
+        // right-align a statement under a Persian question.
+        dir="ltr"
+        value={draft}
+        rows={7}
+        spellCheck={false}
+        placeholder="No statement yet. Check the question to have one written, or write one here."
+        disabled={busy}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+            event.preventDefault()
+            void save()
+          }
+        }}
+        style={{ fontSize: 12, minHeight: 120 }}
+      />
+      <div className="rm-sqlbox-bar">
+        {/* `flex: 1` rather than leaning on `.rm-check`'s `margin-left: auto`:
+            the auto margin is physical, and this bar carries three controls
+            where the tile editor's carries one. */}
+        <span
+          className={`rm-sqlbox-hint${dirty && !saving ? ' is-stale' : ''}`}
+          style={{ flex: 1 }}
+        >
+          {saving && <Spinner size={11} />}
+          {saving
+            ? 'Checking…'
+            : dirty
+              ? 'Edited — not checked yet'
+              : SQL_ORIGIN[block.sql_origin] ?? ''}
+        </span>
+        {block.sql && !dirty && <CopyButton text={block.sql} label="Copy" />}
+        {dirty && (
+          <GhostButton
+            onClick={() => setDraft(block.sql)}
+            disabled={saving}
+            style={{ padding: '4px 9px', fontSize: 11.5 }}
+          >
+            Revert
+          </GhostButton>
+        )}
+        <button
+          type="button"
+          className={`rm-check${dirty && !saving ? ' is-wanted' : ''}`}
+          onClick={() => void save()}
+          disabled={busy || saving || empty || !dirty}
+          title="Guard this statement and run it once for the preview. No model is asked."
+        >
+          <Icon.Play size={12} />
+          Check
+        </button>
+      </div>
     </div>
   )
 }
@@ -2371,6 +2519,13 @@ function MethodNotes({
                 {' · '}
                 {t.computed} {new Date(block.computed_at).toLocaleString()}
               </span>
+              {/* Said again here, in the one part of the document a reader
+                  comparing two generations actually opens. */}
+              {block.sql_changed === true && (
+                <span style={{ fontSize: 11, color: 'var(--amber)' }}>
+                  {t.queryChangedNote}
+                </span>
+              )}
               <pre
                 dir="ltr"
                 style={{
@@ -2886,6 +3041,32 @@ function BlockView({
           {' · '}
           {t.computed} {new Date(block.computed_at).toLocaleString()}
         </span>
+        {/* The statement moved since the last generation, so this figure and
+            the one under the same heading last quarter are not the same
+            measurement. Said on the figure rather than in a banner, because it
+            is true of *this* figure and rarely of all of them — and it prints,
+            because a printed document is where the comparison actually gets
+            made. */}
+        {block.sql_changed === true && (
+          <span
+            title={t.queryChangedNote}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              marginTop: 4,
+              padding: '2px 7px',
+              borderRadius: 5,
+              border: '1px solid var(--amber-border)',
+              background: 'var(--amber-bg)',
+              color: 'var(--amber)',
+              fontSize: 10.5,
+            }}
+          >
+            <Icon.Alert size={10} />
+            {t.queryChanged}
+          </span>
+        )}
         {/* The SQL is shown and auditable here for the same reason it is in
             chat: a number nobody can trace back to a statement is a number
             nobody should act on. Hidden on paper — the appendix carries every

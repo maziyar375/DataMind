@@ -244,6 +244,7 @@ class FakeService:
     draft: Any = None
     block_results: list[ReportBlockResult] = []
     section_results: list[ReportSectionResult] = []
+    previous_hashes: dict[UUID, str] = {}
     chart_options: list[dict[str, Any]] = []
     chart_refusal: str | None = None
 
@@ -354,6 +355,21 @@ class FakeService:
         )
         return _block(), FakeService.draft
 
+    async def edit_block_sql(
+        self, report_id: UUID, block_id: UUID, owner_id: UUID, *, sql: str
+    ) -> tuple[ReportBlock, Any]:
+        self._record(
+            "edit_block_sql",
+            report_id=report_id,
+            block_id=block_id,
+            owner_id=owner_id,
+            sql=sql,
+        )
+        block = _block()
+        block.sql = sql
+        block.sql_origin = "GENERATED_EDITED"
+        return block, FakeService.draft
+
     async def create_run(self, report_id: UUID, owner_id: UUID) -> ReportRun:
         self._record("create_run", report_id=report_id, owner_id=owner_id)
         return _run("QUEUED")
@@ -370,6 +386,9 @@ class FakeService:
         self, run_id: UUID
     ) -> tuple[list[ReportBlockResult], list[ReportSectionResult]]:
         return list(FakeService.block_results), list(FakeService.section_results)
+
+    async def previous_block_hashes(self, run: ReportRun) -> dict[UUID, str]:
+        return dict(FakeService.previous_hashes)
 
     async def cancel_run(
         self, report_id: UUID, run_id: UUID, owner_id: UUID
@@ -460,6 +479,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Any:
     )
     FakeService.block_results = [_block_result()]
     FakeService.section_results = [_section_result()]
+    FakeService.previous_hashes = {}
     FakeService.chart_options = [
         {"chart_type": "bar", "supported": True, "reason": None, "columns": None},
         {
@@ -745,6 +765,45 @@ def test_a_check_that_produced_no_draft_still_answers(client: Any) -> None:
     assert body["chart_options"] == []
 
 
+def test_writing_a_blocks_sql_answers_in_the_same_shape_as_a_check(
+    client: Any,
+) -> None:
+    """Two roads to one question — *can this be produced, and if not why* — so
+    the editor renders either answer with the same code."""
+    response = client.put(
+        f"/api/v1/reports/{REPORT_ID}/blocks/{BLOCK_ID}/sql",
+        json={"sql": "SELECT 1 AS n"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["block"]["sql"] == "SELECT 1 AS n"
+    assert body["block"]["sql_origin"] == "GENERATED_EDITED"
+    assert body["preview"]["row_count"] == 1
+    assert body["chart_options"][0]["chart_type"] == "line"
+
+
+def test_a_client_cannot_declare_its_own_sql_provenance(client: Any) -> None:
+    """`sql_origin` is derived from what the block already held. A caller that
+    could label hand-written SQL as model-generated would be writing history."""
+    response = client.put(
+        f"/api/v1/reports/{REPORT_ID}/blocks/{BLOCK_ID}/sql",
+        json={"sql": "SELECT 1", "sql_origin": "GENERATED"},
+    )
+
+    assert response.status_code == 200
+    sent = [kwargs for method, kwargs in FakeService.calls if method == "edit_block_sql"]
+    assert sent and "sql_origin" not in sent[0]
+
+
+def test_an_empty_statement_is_refused_by_the_schema(client: Any) -> None:
+    response = client.put(
+        f"/api/v1/reports/{REPORT_ID}/blocks/{BLOCK_ID}/sql", json={"sql": ""}
+    )
+
+    assert response.status_code == 422
+
+
 # ── runs ─────────────────────────────────────────────────────────────────
 def test_starting_a_run_is_a_202_and_reaches_the_executor(client: Any) -> None:
     """202, not 200: the answer to "did it work" lives on the row the client
@@ -810,6 +869,37 @@ def test_polling_a_run_returns_everything_written_so_far(client: Any) -> None:
     # is edited or deleted.
     assert block["sql_text"].startswith("SELECT")
     assert body["sections"][0]["edited_prose"] is None
+
+
+def test_a_first_run_says_nothing_about_whether_its_queries_changed(
+    client: Any,
+) -> None:
+    """`null`, not `false`. There is no previous generation to compare with,
+    and "unchanged" would be an answer nobody checked."""
+    body = client.get(f"/api/v1/reports/{REPORT_ID}/runs/{RUN_ID}").json()
+
+    assert body["blocks"][0]["sql_changed"] is None
+
+
+def test_a_figure_whose_query_moved_since_the_last_run_says_so(
+    client: Any,
+) -> None:
+    """This is what `sql_hash` on a *result* is for: the block carries what its
+    statement is now, and a document has to be comparable with the one before
+    it."""
+    FakeService.previous_hashes = {BLOCK_ID: "a-different-hash"}
+
+    body = client.get(f"/api/v1/reports/{REPORT_ID}/runs/{RUN_ID}").json()
+
+    assert body["blocks"][0]["sql_changed"] is True
+
+
+def test_a_figure_on_the_same_query_as_last_time_is_comparable(client: Any) -> None:
+    FakeService.previous_hashes = {BLOCK_ID: "abc123"}
+
+    body = client.get(f"/api/v1/reports/{REPORT_ID}/runs/{RUN_ID}").json()
+
+    assert body["blocks"][0]["sql_changed"] is False
 
 
 def test_a_run_carries_which_model_wrote_it(client: Any) -> None:
@@ -1028,6 +1118,7 @@ ROUTES: list[tuple[str, str, dict | None]] = [
         {"question": "revenue by month"},
     ),
     ("post", f"/{REPORT_ID}/blocks/{BLOCK_ID}/check", None),
+    ("put", f"/{REPORT_ID}/blocks/{BLOCK_ID}/sql", {"sql": "SELECT 1"}),
     ("patch", f"/{REPORT_ID}/blocks/{BLOCK_ID}", {"question": "revenue by week"}),
     ("delete", f"/{REPORT_ID}/blocks/{BLOCK_ID}", None),
     ("post", f"/{REPORT_ID}/runs", None),

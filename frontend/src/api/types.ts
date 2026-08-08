@@ -646,6 +646,13 @@ export interface ReportBlockResult {
   status: 'OK' | 'FAILED'
   error_code: string | null
   error_message: string | null
+  /**
+   * Whether the query behind this figure differs from the one the *previous*
+   * generation ran. **null means there was nothing to compare with** — a first
+   * run, or a block that did not exist last time — which is a different answer
+   * from `false` and stays distinguishable.
+   */
+  sql_changed: boolean | null
 }
 
 /** One figure in a paragraph that no result supports. A suspicion, not a verdict. */

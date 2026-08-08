@@ -27,6 +27,7 @@ from app.api.schemas import (
     ReportBlockCreate,
     ReportBlockRead,
     ReportBlockResultRead,
+    ReportBlockSqlUpdate,
     ReportBlockUpdate,
     ReportChartRead,
     ReportChartRequest,
@@ -43,7 +44,7 @@ from app.api.schemas import (
     ReportUpdate,
     TileResultRead,
 )
-from app.infra.db.models import Report
+from app.infra.db.models import Report, ReportBlockResult
 from app.services.report_service import ReportService
 
 router = APIRouter(prefix="/reports", tags=["reports"])
@@ -202,6 +203,37 @@ async def check_block(
         ),
         chart_suggestion=draft.chart_suggestion if draft else None,
         chart_options=list(draft.chart_options) if draft else [],
+    )
+
+
+@router.put("/{report_id}/blocks/{block_id}/sql", response_model=ReportBlockCheckRead)
+async def edit_block_sql(
+    report_id: UUID,
+    block_id: UUID,
+    payload: ReportBlockSqlUpdate,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+) -> ReportBlockCheckRead:
+    """Write the block's statement by hand. Guarded and previewed, no model.
+
+    The same response as `/check`, because it answers the same question — *can
+    this be produced, and if not why* — by the other road. PUT rather than
+    PATCH: the statement is replaced whole, and sending it twice is sending it
+    once.
+    """
+    block, draft = await ReportService(db, settings).edit_block_sql(
+        report_id, block_id, ctx.user_id, sql=payload.sql
+    )
+    return ReportBlockCheckRead(
+        block=ReportBlockRead.model_validate(block),
+        preview=(
+            TileResultRead.model_validate(draft.preview.to_payload())
+            if draft.preview
+            else None
+        ),
+        chart_suggestion=draft.chart_suggestion,
+        chart_options=list(draft.chart_options),
     )
 
 
@@ -465,11 +497,32 @@ async def get_run(
     service = ReportService(db, settings)
     run = await service.run(report_id, run_id, ctx.user_id)
     blocks, sections = await service.run_results(run.id)
+    # Which figures rest on a different query than they did last time. One
+    # extra pair of small queries per poll, and it is what makes two
+    # generations of the same report comparable rather than merely adjacent.
+    previous = await service.previous_block_hashes(run)
     return ReportRunDetailRead(
         **{
             name: getattr(run, name)
             for name in ReportRunRead.model_fields
         },
-        blocks=[ReportBlockResultRead.model_validate(b) for b in blocks],
+        blocks=[_block_result_read(b, previous) for b in blocks],
         sections=[ReportSectionResultRead.model_validate(s) for s in sections],
     )
+
+
+def _block_result_read(
+    row: ReportBlockResult, previous: dict[UUID, str]
+) -> ReportBlockResultRead:
+    """A result, plus whether its statement moved since the last generation.
+
+    Left null when there is nothing to compare against — a first run, or a
+    block that did not exist last time. Saying "unchanged" there would be an
+    answer, and it would be one nobody checked.
+    """
+    read = ReportBlockResultRead.model_validate(row)
+    if row.block_id is not None:
+        was = previous.get(row.block_id)
+        if was is not None:
+            read.sql_changed = was != row.sql_hash
+    return read

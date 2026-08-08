@@ -10,9 +10,11 @@ a route test because the service is faked there:
   worker can call the same one at the start of every generation (Phase 5).
 * **The connection is pinned.** Byte-for-byte the conversation rule; re-sending
   the same one is a no-op, a different one is 422.
-* **Editing a question throws its SQL away.** The stored statement answers the
-  question that was checked. Keeping it means a run producing the right numbers
-  under the wrong heading — the failure this whole reset exists to prevent.
+* **Editing a question un-checks its SQL.** The stored statement answers the
+  question that was checked. Keeping the *verdict* means a run producing the
+  right numbers under the wrong heading — the failure this whole reset exists
+  to prevent. Whether the statement itself survives depends on who wrote it:
+  a model draft is dropped, a hand-written one is kept.
 """
 from __future__ import annotations
 
@@ -389,6 +391,34 @@ async def test_changing_the_time_window_invalidates_the_sql_too() -> None:
 
     assert updated.sql == ""
     assert updated.feasibility_status == ReportFeasibility.UNCHECKED
+
+
+@pytest.mark.parametrize("origin", ["HANDWRITTEN", "GENERATED_EDITED"])
+async def test_editing_the_question_keeps_a_statement_someone_typed(
+    origin: str,
+) -> None:
+    """The verdict goes; the SQL stays.
+
+    A generated draft costs one click to reproduce. An hour of hand-written
+    SQL does not, and losing it to a typo fix in the heading above it is the
+    kind of thing a person never forgives a tool for. It is `UNCHECKED` either
+    way, so nothing runs on it until the user says the two still belong
+    together.
+    """
+    block = _block(sql_origin=origin)
+    db = FakeDb(report=_report(), sections=[_section()], blocks=[block], connection=_connection())
+
+    updated = await _service(db).update_block(
+        REPORT_ID, BLOCK_ID, OWNER, question="revenue by week"
+    )
+
+    assert updated.sql == "SELECT month, revenue FROM public.sales"
+    assert updated.sql_hash == "abc123"
+    assert updated.sql_origin == origin
+    # But it is not trusted: the pairing of question and statement is exactly
+    # what has to be looked at again.
+    assert updated.feasibility_status == ReportFeasibility.UNCHECKED
+    assert updated.feasibility_checked_at is None
 
 
 async def test_changing_the_chart_type_keeps_the_sql() -> None:

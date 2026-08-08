@@ -17,12 +17,13 @@ rests on:
   `run_service._bind_connection`, for the same reason: a report keyed to one
   connection cannot cross disclosure policies. Re-sending the connection it
   already has is a no-op; sending a different one is 422.
-* **Editing a question throws its SQL away.** `report_blocks.sql` answers the
+* **Editing a question un-checks its SQL.** `report_blocks.sql` answers the
   question that was checked, not the one now stored beside it. Keeping the old
-  statement would mean a run silently answering the previous question with a
+  verdict would mean a run silently answering the previous question under a
   heading describing the new one — so the question and the time window reset
-  feasibility to `UNCHECKED` and clear the statement. v1 edits the question;
-  the SQL editor is Phase 11.
+  feasibility to `UNCHECKED`. Whether the *statement* survives depends on who
+  wrote it: a generated draft is dropped, because reproducing it costs one
+  click, while a hand-written or hand-edited one is kept, because it does not.
 """
 from __future__ import annotations
 
@@ -74,7 +75,7 @@ from app.reports.prompts import REPORT_PROMPT_VERSION, report_time_rules
 from app.semantic.render import _render_time
 from app.services.query_service import effective_max_rows, latest_snapshot, resolve_llm
 from app.services.semantic_service import load_document
-from app.services.sql_draft_service import SqlDraft, draft_sql
+from app.services.sql_draft_service import SqlDraft, draft_sql, validate_sql
 
 log = get_logger(__name__)
 
@@ -111,14 +112,27 @@ def _verdict(draft: SqlDraft) -> tuple[str, str | None]:
     it. Same posture as `semantic.tsx` rendering metric-expression errors.
     """
     if draft.validation_status != "VALID":
-        errors = draft.validation_report.get("errors") or []
+        # `ValidationReport.errors` is a *property* — a filtered view of
+        # `issues` — and `model_dump()` emits declared fields only. Reading
+        # "errors" off the serialised report therefore always found nothing,
+        # and every rejection wore the fallback sentence below instead of the
+        # guard's own. The filter has to be applied here, on the key that is
+        # actually in the payload.
+        errors = [
+            issue
+            for issue in (draft.validation_report.get("issues") or [])
+            if issue.get("severity", "ERROR") == "ERROR"
+        ]
         first = errors[0] if errors else {}
         reason = " ".join(
             part for part in (first.get("message"), first.get("hint")) if part
         )
         return ReportFeasibility.INFEASIBLE, (
-            reason or "This question could not be turned into a query this "
-            "connection allows."
+            reason
+            # Reached only when the guard refused without saying why, which it
+            # is not supposed to do. Worded for both roads to this verdict: the
+            # question the model was given, and the statement someone typed.
+            or "This could not be turned into a query this connection allows."
         )
 
     preview = draft.preview
@@ -139,6 +153,21 @@ def _verdict(draft: SqlDraft) -> tuple[str, str | None]:
             "will say so rather than showing an empty chart."
         )
     return ReportFeasibility.FEASIBLE, None
+
+
+def _hand_origin(block: ReportBlock) -> str:
+    """Where the statement now on a hand-edited block came from.
+
+    Provenance only, and **never a trust signal** — the same rule
+    `dashboard_tiles.sql_origin` carries. A block that has never held a
+    generated statement is the user's own work from the start; one that has is
+    that work edited, and it stays `GENERATED_EDITED` however little of the
+    original survives, because "I started from what the model wrote" is the
+    fact this column records.
+    """
+    if block.sql_origin == SqlOrigin.HANDWRITTEN or not block.sql:
+        return SqlOrigin.HANDWRITTEN
+    return SqlOrigin.GENERATED_EDITED
 
 
 def _record_check(block: ReportBlock, status: str, reason: str | None) -> None:
@@ -539,9 +568,63 @@ class ReportService:
             if draft.validation_status == "VALID":
                 block.sql = draft.sql
                 block.sql_hash = sql_fingerprint(draft.sql)
-                # Provenance only, and the only value this path can set: the
-                # SQL editor that produces the other two is Phase 11.
+                # Provenance only, and the one value *this* path can set:
+                # whatever was there before, what is stored now came from the
+                # model. `edit_block_sql` is where the other two come from.
                 block.sql_origin = SqlOrigin.GENERATED
+
+        await self._db.flush()
+        await self._db.refresh(block)
+        return block, draft
+
+    async def edit_block_sql(
+        self, report_id: UUID, block_id: UUID, owner_id: UUID, *, sql: str
+    ) -> tuple[ReportBlock, SqlDraft]:
+        """Store a statement the user wrote, after the guard has read it.
+
+        The same shape as `check_block` and deliberately so — guard, preview,
+        verdict, stored row — with the one difference that no model is asked.
+        `validate_sql` is the tile editor's hand-written path, and it is the
+        same function here, which is what makes a report buildable by someone
+        who knows SQL better than they know their own question.
+
+        **A rejected statement is kept**, where `check_block` throws a rejected
+        *draft* away. That is not an inconsistency: the semantic layer already
+        settled this distinction — an invalid generated metric is dropped and
+        an invalid human-written one is flagged and kept, because *"deleting a
+        person's work to hide drift is worse than showing it"*. A model draft
+        costs one click to reproduce; what somebody typed does not. The verdict
+        on the row carries the truth, and the guard reads the statement again
+        at execution whatever is stored beside it.
+        """
+        report = await self.get(report_id, owner_id)
+        block = await self.block(report_id, block_id, owner_id)
+        if report.connection_id is None:
+            raise ValidationError(
+                "This report's connection was removed, so its queries cannot "
+                "be validated. Past runs stay readable."
+            )
+        connection = await self._owned_connection(report.connection_id, owner_id)
+
+        statement = sql.strip()
+        if not statement:
+            raise ValidationError(
+                "A query cannot be empty. Check the question to have one "
+                "written, or delete the block."
+            )
+
+        draft = await validate_sql(
+            self._db,
+            self._settings,
+            connection_id=connection.id,
+            sql=statement,
+            owner_id=owner_id,
+        )
+
+        _record_check(block, *_verdict(draft))
+        block.sql_origin = _hand_origin(block)
+        block.sql = statement
+        block.sql_hash = sql_fingerprint(statement)
 
         await self._db.flush()
         await self._db.refresh(block)
@@ -672,6 +755,44 @@ class ReportService:
             .order_by(ReportSectionResult.position)
         )
         return list(blocks.scalars()), list(sections.scalars())
+
+    async def previous_block_hashes(self, run: ReportRun) -> dict[UUID, str]:
+        """`block_id → sql_hash`, as of the generation before this one.
+
+        This is what makes "the query behind this figure changed" answerable,
+        and it is the reason `sql_hash` is copied onto every result rather than
+        only onto the block: the block carries what its statement is *now*,
+        while a document has to be comparable with the document before it.
+
+        "Before" means the most recent earlier run that actually computed
+        something. A cancelled run that wrote no rows is not a previous version
+        of this report, and comparing against it would report every figure as
+        unchanged — which is worse than saying nothing, because it is an answer.
+        """
+        previous = await self._db.execute(
+            select(ReportBlockResult.run_id)
+            .join(ReportRun, ReportRun.id == ReportBlockResult.run_id)
+            .where(
+                ReportRun.report_id == run.report_id,
+                ReportRun.created_at < run.created_at,
+            )
+            .order_by(ReportRun.created_at.desc())
+            .limit(1)
+        )
+        previous_run_id = previous.scalar_one_or_none()
+        if previous_run_id is None:
+            return {}
+
+        rows = await self._db.execute(
+            select(ReportBlockResult.block_id, ReportBlockResult.sql_hash).where(
+                ReportBlockResult.run_id == previous_run_id
+            )
+        )
+        # A result whose block has since been deleted keeps its snapshots but
+        # loses its `block_id`, and there is nothing left to match it by.
+        return {
+            block_id: sql_hash for block_id, sql_hash in rows if block_id is not None
+        }
 
     async def request_section_retry(
         self, report_id: UUID, run_id: UUID, section_id: UUID, owner_id: UUID
@@ -919,17 +1040,28 @@ class ReportService:
             field in changes and changes[field] != getattr(block, field)
             for field in _SQL_INVALIDATING
         )
+        # Whose statement this is decides what happens to it, and the decision
+        # has to be read *before* the change lands.
+        generated = block.sql_origin == SqlOrigin.GENERATED
+
         for field, value in changes.items():
             setattr(block, field, value)
         if stale:
             # See the module docstring: the stored statement answers the old
-            # question. Dropping it is what stops a run from producing the right
-            # numbers under the wrong heading.
-            block.sql = ""
-            block.sql_hash = ""
+            # question. The verdict always goes — a run must not produce the
+            # right numbers under the wrong heading.
             block.feasibility_status = ReportFeasibility.UNCHECKED
             block.feasibility_reason = None
             block.feasibility_checked_at = None
+            if generated:
+                # A model draft costs one click to reproduce, so drop it.
+                block.sql = ""
+                block.sql_hash = ""
+            # A hand-written or hand-edited statement is kept. Rewording a
+            # question is how someone fixes a heading, and losing an hour of
+            # SQL to a typo fix is the kind of thing a person never forgives a
+            # tool for. It is back to `UNCHECKED` either way, so nothing runs
+            # on it until the user says the two still belong together.
 
         await self._db.flush()
         await self._db.refresh(block)

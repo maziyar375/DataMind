@@ -33,6 +33,7 @@ from app.services.query_service import TileResult
 from app.services.report_service import ReportService, sql_fingerprint
 from app.services.sql_draft_service import SqlDraft
 from app.sqlguard import GuardPolicy, guard
+from app.sqlguard.validator import ValidationIssue, ValidationReport
 from tests.unit.test_report_service import FakeDb, FakeSettings
 
 OWNER = uuid4()
@@ -71,7 +72,17 @@ def _draft(
     return SqlDraft(
         sql=VALID_SQL,
         validation_status=status,
-        validation_report={"status": status, "errors": errors or []},
+        # Built from a real `ValidationReport` rather than hand-shaped, and
+        # that is not fussiness. A hand-written `{"errors": [...]}` passed for
+        # a long time while the service read a key the serialised report has
+        # never had — `errors` is a *property* filtering `issues`, and
+        # `model_dump` emits declared fields only — so every rejection reached
+        # the user as the generic fallback while this file asserted the guard's
+        # own words. A fake that cannot drift from the payload is the fix.
+        validation_report=ValidationReport(
+            status=status,  # type: ignore[arg-type]
+            issues=[ValidationIssue(**issue) for issue in (errors or [])],
+        ).model_dump(mode="json"),
         referenced_tables=["public.orders"],
         chart_suggestion={"chart_type": "line"},
         chart_options=[{"chart_type": "line", "allowed": True}],

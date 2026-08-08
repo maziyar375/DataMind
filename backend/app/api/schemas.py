@@ -811,9 +811,10 @@ class ReportSectionUpdate(BaseModel):
 class ReportBlockCreate(BaseModel):
     """One question, one query, one chart.
 
-    No `sql` field: v1 edits the question, and the statement is produced by the
-    feasibility check (Phase 4). The SQL editor is Phase 11, and it will set
-    `sql_origin` — which is why nothing here can.
+    No `sql` field: a block is created from its question and the statement is
+    produced by the feasibility check. Writing one by hand is a separate route
+    (`PUT .../blocks/{id}/sql`), which is also the only thing that can move
+    `sql_origin` off `GENERATED` — nothing a client sends at creation can.
     """
 
     question: str = Field(min_length=1, max_length=2000)
@@ -826,6 +827,18 @@ class ReportBlockCreate(BaseModel):
     max_rows: int | None = Field(default=None, ge=1)
     # Omitted means "append"; `0` means first. See `ReportSectionCreate`.
     position: int | None = Field(default=None, ge=0)
+
+
+class ReportBlockSqlUpdate(BaseModel):
+    """A statement the user wrote or edited, on its way to the guard.
+
+    No `sql_origin`: provenance is derived from what the block already held,
+    not asserted by the client. A caller cannot label its own SQL as
+    model-generated, and would gain nothing by it if it could — the column is
+    provenance, never trust.
+    """
+
+    sql: str = Field(min_length=1, max_length=20_000)
 
 
 class ReportBlockUpdate(BaseModel):
@@ -902,6 +915,11 @@ class ReportBlockResultRead(BaseModel):
     status: str = "OK"
     error_code: str | None = None
     error_message: str | None = None
+    # Whether the statement behind this figure differs from the one the
+    # *previous* generation ran. **null means there is nothing to compare
+    # with** — a first run, or a block that did not exist last time — which is
+    # a different answer from "unchanged" and has to stay distinguishable.
+    sql_changed: bool | None = None
 
 
 class ReportSectionResultRead(BaseModel):

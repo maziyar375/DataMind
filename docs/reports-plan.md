@@ -1247,14 +1247,62 @@ three clicks from a document or thirty.
 - [x] Regenerate: same outline, new run, previous runs untouched — this was
       already true of the worker; what was missing was anywhere to *see* that it
       was true. The history list is that.
-- [ ] Show which blocks' `sql_hash` changed since the last run
-- [ ] SQL editor per block via `sql_draft_service.validate_sql`
-- [ ] `sql_origin` → `GENERATED_EDITED` / `HANDWRITTEN`
-- [ ] `docs/reports.md` written — the shipped reference doc
-- [ ] `README.md` — a Reports paragraph
-- [ ] `CLAUDE.md` — Reports in the code map
-- [ ] **Gate:** `make test` · `make guard` · `make lint` ·
-      `npm run typecheck` · `npm run build`
+- [x] Show which blocks' `sql_hash` changed since the last run — `sql_changed`
+      on every block result of `GET /runs/{id}`, computed against the previous
+      generation, with **null meaning "nothing to compare with"**
+- [x] SQL editor per block via `sql_draft_service.validate_sql` —
+      `PUT /reports/{id}/blocks/{bid}/sql`
+- [x] `sql_origin` → `GENERATED_EDITED` / `HANDWRITTEN`, derived from what the
+      block already held rather than asserted by the client
+- [x] `docs/reports.md` written — the shipped reference doc
+- [x] `README.md` — a Reports paragraph
+- [x] `CLAUDE.md` — Reports in the code map, and a section of its own
+- [x] **Gate:** `make test` (1,078) · `make guard` · `make lint` (6/6
+      contracts) · `npm run typecheck` · `npm run build` · the five `test:*`
+
+Five things this phase settled that the plan did not say:
+
+- **The SQL editor is one route, not "validate then PATCH".** Letting a client
+  send `sql` through `PATCH .../blocks/{id}` after calling `/sql/drafts/validate`
+  itself would be two round trips and, worse, a client asserting its own
+  `feasibility_status`. `PUT .../blocks/{bid}/sql` guards, previews, records the
+  verdict through the *same* `_verdict`/`_record_check` pair `/check` uses, and
+  answers in the same shape — so the editor renders either road's answer with
+  one piece of code and the two cannot drift.
+- **Provenance is derived, never asserted.** The payload carries `sql` and
+  nothing else. A block that never held a generated statement becomes
+  `HANDWRITTEN`; one that did becomes `GENERATED_EDITED` and stays there however
+  little of the original survives. A client that could label its own SQL as
+  model-written would be writing history, and would gain nothing by it — the
+  column is provenance, never trust.
+- **A rejected statement is kept when a person typed it, and dropped when a
+  model did.** `check_block` throws a refused draft away; the editor keeps a
+  refused statement with the guard's reason on it. The distinction is not new —
+  the semantic layer already settled it, dropping invalid *generated* metrics
+  and flagging-but-keeping invalid *human* ones. The same reasoning changed
+  `update_block`: rewording a question no longer deletes hand-written SQL, only
+  the verdict on it, because losing an hour of SQL to a typo fix in the heading
+  above it is not something a person forgives a tool for. The check button on
+  such a block therefore reads **Rewrite**, since there it would replace work
+  rather than fill a gap.
+- **The guard's own words were never actually reaching the user.** `_verdict`
+  read `validation_report["errors"]`, but `errors` is a *property* filtering
+  `issues` and `model_dump()` emits declared fields only — so the key has been
+  absent since Phase 4 and every `INFEASIBLE` block wore the generic fallback
+  while the plan, the route docstring and the tests all promised verbatim. The
+  Phase 4 tests passed because their fake `SqlDraft` was hand-shaped with an
+  `errors` key that no real payload has. Fixed in `_verdict`, and both fakes now
+  build a **real `ValidationReport`** so the shape cannot drift again. Verified
+  against the running API: a `DELETE` now comes back *"Only SELECT is permitted;
+  got DELETE. This connection is read-only. Read data, never modify it."*
+- **"Which queries changed" is answered per figure, on the run.** Not a banner:
+  it is true of one figure and rarely of all of them, and the reader who needs
+  it is comparing this quarter's document with last quarter's. So the marker
+  sits in the figure's footer and again in the *Method and data notes*
+  appendix, and it **prints** — a printed document is where the comparison
+  actually gets made. `previous_block_hashes` deliberately skips runs that
+  computed nothing: a cancelled run is not a previous version of the document,
+  and comparing against it would report every figure as unchanged.
 
 ---
 
