@@ -843,156 +843,466 @@ Legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ## Phase 1 — Data model and migration
 
-- [ ] Six models in `infra/db/models.py` under a `# ── reports ──` block
-- [ ] `reports` · `report_sections` · `report_blocks`
-- [ ] `report_runs` · `report_block_results` · `report_section_results`
-- [ ] FK `ondelete` correct per column (owner CASCADE, connection SET NULL,
+- [x] Six models in `infra/db/models.py` under a `# ── reports ──` block
+- [x] `reports` · `report_sections` · `report_blocks`
+- [x] `report_runs` · `report_block_results` · `report_section_results`
+- [x] FK `ondelete` correct per column (owner CASCADE, connection SET NULL,
       result-table back-refs SET NULL with snapshot columns beside them)
-- [ ] Migration `0008_reports.py`
-- [ ] `tests/unit/test_report_models.py` — migration vs ORM, column by column
-- [ ] **Gate:** `make migrate` · `make test` · `make lint`
+- [x] Migration `0008_reports.py`
+- [x] `tests/unit/test_report_models.py` — migration vs ORM, column by column
+- [x] **Gate:** `make migrate` · `make test` · `make lint`
 
 ## Phase 2 — CRUD, disclosure gate, connection pinning
 
-- [ ] `services/report_service.py` — reports / sections / blocks CRUD
-- [ ] Disclosure gate at creation → `E_DISCLOSURE_TOO_NARROW`
-- [ ] `connection_id` in PATCH → 422
-- [ ] DTOs in `api/schemas.py`, router `api/v1/reports.py`, registered
-- [ ] Literal routes declared above `/{id}` routes
-- [ ] `pyproject.toml` — `app.reports` in the layers contract
-- [ ] `pyproject.toml` — `reports is self-contained` forbidden contract
-- [ ] `tests/integration/test_reports_api.py` — CRUD, ownership isolation,
+- [x] `services/report_service.py` — reports / sections / blocks CRUD
+- [x] Disclosure gate at creation → `E_DISCLOSURE_TOO_NARROW`
+- [x] `connection_id` in PATCH → 422
+- [x] DTOs in `api/schemas.py`, router `api/v1/reports.py`, registered
+- [x] Literal routes declared above `/{id}` routes
+- [x] `pyproject.toml` — `app.reports` in the layers contract
+- [x] `pyproject.toml` — `reports is self-contained` forbidden contract
+- [x] `tests/integration/test_reports_api.py` — CRUD, ownership isolation,
       disclosure refusal, the 422, cascades
-- [ ] **Gate:** `make test` · `make lint` · `test_openapi_has_no_secrets` passes
+- [x] **Gate:** `make test` · `make lint` · `test_openapi_has_no_secrets` passes
 
 ## Phase 3 — Outline proposal
 
-- [ ] `app/reports/prompts.py` — `REPORT_PROMPT_VERSION` + `REPORT_OUTLINE_*`
-- [ ] `app/reports/outline.py` — Pydantic doc, `extra="forbid"`, malformed
+- [x] `app/reports/prompts.py` — `REPORT_PROMPT_VERSION` + `REPORT_OUTLINE_*`
+- [x] `app/reports/outline.py` — Pydantic doc, `extra="forbid"`, malformed
       sections dropped rather than failing the proposal
-- [ ] `POST /reports/{id}/outline` — schema block + semantic layer, one call
-- [ ] Executive-summary section auto-added at position 0, removable
-- [ ] `tests/unit/test_report_outline.py` — good / truncated / unknown-field /
+- [x] `POST /reports/{id}/outline` — schema block + semantic layer, one call
+- [x] Executive-summary section auto-added at position 0, removable
+- [x] `tests/unit/test_report_outline.py` — good / truncated / unknown-field /
       empty replies against a fake gateway
-- [ ] **Gate:** `make test` · `make lint` (proves the module stayed pure)
+- [x] **Gate:** `make test` · `make lint` (proves the module stayed pure)
 
 ## Phase 4 — Feasibility and relative time windows
 
-- [ ] `NodeDeps.extra_rules: str = ""`, appended to `GENERATE_SYSTEM`
-- [ ] Test asserting the chat prompt is **byte-identical** with it empty
-- [ ] `PROMPT_VERSION` deliberately **not** moved
-- [ ] `REPORT_TIME_RULES`, dialect-aware, + `time_conventions` from the
+- [x] `NodeDeps.extra_rules: str = ""`, appended to `GENERATE_SYSTEM`
+- [x] Test asserting the chat prompt is **byte-identical** with it empty
+- [x] `PROMPT_VERSION` deliberately **not** moved
+- [x] `REPORT_TIME_RULES`, dialect-aware, + `time_conventions` from the
       semantic layer
-- [ ] `POST /reports/{id}/blocks/{bid}/check` via `draft_sql`
-- [ ] `FEASIBLE` — valid SQL, preview has rows
-- [ ] `EMPTY` — valid SQL, no rows in the window, with a sentence saying so
-- [ ] `INFEASIBLE` — reason from `ValidationReport.errors[0]` **verbatim**
-- [ ] Persists `sql`, `sql_hash`, `sql_origin`; leaves `chart_config` NULL
-- [ ] Unsynced connection refused **before** a model call is spent
-- [ ] `tests/integration/test_report_feasibility.py`
-- [ ] **Gate:** `make test` · `make lint`
+- [x] `POST /reports/{id}/blocks/{bid}/check` via `draft_sql`
+- [x] `FEASIBLE` — valid SQL, preview has rows
+- [x] `EMPTY` — valid SQL, no rows in the window, with a sentence saying so
+- [x] `INFEASIBLE` — reason from `ValidationReport.errors[0]` **verbatim**
+- [x] Persists `sql`, `sql_hash`, `sql_origin`; leaves `chart_config` NULL
+- [x] Unsynced connection refused **before** a model call is spent
+- [x] `tests/integration/test_report_feasibility.py`
+- [x] **Gate:** `make test` · `make lint`
 
 ## Phase 5 — Generation worker: data only
 
-- [ ] `workers/report.py` — concurrency cap, no heartbeat,
+- [x] `workers/report.py` — concurrency cap, no heartbeat,
       cooperative-then-hard cancel, `sweep_orphans`
-- [ ] Both registered in `main.py` lifespan
-- [ ] `POST /reports/{id}/runs` → 202
-- [ ] `GET /reports/{id}/runs/{rid}` — run + everything written so far
-- [ ] Disclosure **re-checked at run start**, run fails with a clear message
-- [ ] Blocks executed via `execute_many`, grouped by connection
-- [ ] `want_kpi=True` for `METRIC` blocks
-- [ ] Each block result written **as it lands**; `phase` / `progress_*` updated
-- [ ] Run status **derived**: `SUCCEEDED` / `PARTIAL` / `FAILED`
-- [ ] `POST .../cancel`
-- [ ] `tests/integration/test_report_runs.py` — end to end, one failing block
+- [x] Both registered in `main.py` lifespan
+- [x] `POST /reports/{id}/runs` → 202
+- [x] `GET /reports/{id}/runs/{rid}` — run + everything written so far
+- [x] `GET /reports/{id}/runs` — the history rows (the §12 route; the history
+      *UI* is still Phase 11)
+- [x] Disclosure **re-checked at run start**, run fails with a clear message
+- [x] Blocks executed via `execute_many`, grouped by connection
+- [x] `want_kpi=True` for `METRIC` blocks
+- [x] Each block result written **as it lands**; `phase` / `progress_*` updated
+- [x] Run status **derived**: `SUCCEEDED` / `PARTIAL` / `FAILED`
+- [x] `POST .../cancel`
+- [x] `tests/integration/test_report_runs.py` — end to end, one failing block
       does not fail its neighbours, cancellation, tightened disclosure
-- [ ] `tests/unit/test_report_guard.py` — **the guard-bypass test**: the
+- [x] `tests/unit/test_report_guard.py` — **the guard-bypass test**: the
       hostile corpus written into `report_blocks.sql` is rejected at execution
-- [ ] **Gate:** `make test` · `make guard` · `make lint`
+- [x] **Gate:** `make test` · `make guard` · `make lint`
+
+Two notes for Phase 6, both learned by running it against the real fixture:
+
+- **Progress is written per result row, but every block is executed by one
+  `execute_many` call** — the plan's own §8 ordering. So `progress_current`
+  ticks quickly at the end of the query phase; the progressive render the user
+  actually watches arrives with the per-section prose Phase 6 writes.
+- `query_service`'s user-facing failure messages said "tile". A report reader
+  now sees them, so they were made feature-neutral ("this query", "check it
+  again"). The log event names and the `TileResult` type keep their names.
 
 ## Phase 6 — Prose, executive summary, numeric check
 
-- [ ] `REPORT_SECTION_*` and `REPORT_SUMMARY_*` prompts
-- [ ] Language pinned per report and stated explicitly in the prompt
-- [ ] `ANSWER_SYSTEM` deliberately **not** reused
-- [ ] `app/reports/narrate.py` — pure; results pass through `disclose()`,
+- [x] `REPORT_SECTION_*` and `REPORT_SUMMARY_*` prompts
+- [x] Language pinned per report and stated explicitly in the prompt
+- [x] `ANSWER_SYSTEM` deliberately **not** reused
+- [x] `app/reports/narrate.py` — pure; results pass through `disclose()`,
       never raw
-- [ ] `app/reports/checks.py` — Tier 2 numeric check, token-free, Persian and
+- [x] `app/reports/checks.py` — Tier 2 numeric check, token-free, Persian and
       Latin numerals, rounding and scale tolerance
-- [ ] Check **flags, never blocks**
-- [ ] Worker narrates section by section, writing each row immediately
-- [ ] Executive summary generated **last**, from finished sections
-- [ ] `SKIPPED_NO_DATA` when every block in a section is empty
-- [ ] `POST .../sections/{sid}/retry`
-- [ ] `PATCH .../sections/{sid}` → `edited_prose`
-- [ ] `tests/unit/test_report_narrate.py` · `tests/unit/test_report_checks.py`
-- [ ] **Gate:** `make test` · `make lint`
+- [x] Check **flags, never blocks**
+- [x] Worker narrates section by section, writing each row immediately
+- [x] Executive summary generated **last**, from finished sections
+- [x] `SKIPPED_NO_DATA` when every block in a section is empty
+- [x] `POST .../sections/{sid}/retry`
+- [x] `PATCH .../sections/{sid}` → `edited_prose`
+- [x] `tests/unit/test_report_narrate.py` · `tests/unit/test_report_checks.py`
+- [x] **Gate:** `make test` · `make lint`
+
+Four things this phase settled that the plan did not say:
+
+- **`narrate.py` is handed disclosed results; it does not disclose them.** It
+  could not: `disclose()` lives in `app.pipeline`, which sits *above*
+  `app.reports` in the layer order. The worker discloses under the policy in
+  force **at narration time**, which is the stricter reading of invariant #4
+  and the one the contract enforces for free.
+- **Retry is asynchronous, through the same executor and the same run row.**
+  The viewer already polls the run, so a retry that lands on that row renders
+  through the loop the page is running — no second progress protocol, and no
+  request held open for half a minute. Retrying a section does **not** rewrite
+  the executive summary: that is a paragraph the user may have edited, and the
+  summary can be retried on its own.
+- **The numeric check needed calibrating against real output, not imagined
+  output.** Three fixes came from reading the first generated Persian
+  document — a range's scale word governs both its ends («۹۰ تا ۹۴ هزار»), a
+  figure may be truncated to its written precision as easily as rounded, and
+  the summary must be checked with the *same reader* that wrote it (§9's pool
+  for a summary is the sections' prose, not their rows). Each is pinned by a
+  test carrying the real sentence.
+- **Position 0 was unreachable through the API** — `if not section.position`
+  read an explicit 0 as "not given", so the executive summary could never be
+  placed first. Fixed in `add_section`/`add_block` with `None` as the "append"
+  signal, and covered by tests.
 
 ## Phase 7 — Frontend: the section shell
 
-- [ ] `App.tsx` — `'reports'` in `View`, sidebar item, route line
-- [ ] `api/types.ts` and `api/client.ts` — report types and calls
-- [ ] `pages/ReportsPage.tsx` — list, create, rename, delete, archive
-- [ ] Create dialog: connection picker with ineligible connections **disabled
+- [x] `App.tsx` — `'reports'` in `View`, sidebar item, route line
+- [x] `api/types.ts` and `api/client.ts` — report types and calls
+- [x] `pages/ReportsPage.tsx` — list, create, rename, delete, archive
+- [x] Create dialog: connection picker with ineligible connections **disabled
       and the reason shown**
-- [ ] Model picker, language picker, request textarea with `dir="auto"`
-- [ ] Returned rows spliced into state, never re-read (the read-after-write race)
-- [ ] **Gate:** `npm run typecheck` · `npm run build`
+- [x] Model picker, language picker, request textarea with `dir="auto"`
+- [x] Returned rows spliced into state, never re-read (the read-after-write race)
+- [x] **Gate:** `npm run typecheck` · `npm run build`
+
+Three notes for Phase 8:
+
+- **The card has no open action on purpose.** There is nothing to open until
+  the outline editor exists, and a link to a page that is not there is worse
+  than no link. The card deliberately does *not* wear `.rm-dash-card` for the
+  same reason — that class carries the pointer and the hover lift of something
+  you can open. Phase 8 adopts both together.
+- **The connection picker is a list, not a `<select>`.** A native `<option>`
+  can be `disabled` but cannot say *why*, and "greyed out for reasons unknown"
+  is how a user concludes the product is broken. Each row carries the
+  disclosure badge, and an ineligible one carries §7's reason underneath.
+- **`SearchField`, `Segmented` and `DisclosureBadge` moved into `ui.tsx`.**
+  Each now has two callers (the two indexes, and the chat header plus the
+  create dialog). Moved rather than copied, for the reason `ResultTable` was:
+  two copies are how the two pages quietly stop agreeing.
+  `Icon.Doc` is new — `Icon.List` is already the list-layout toggle.
 
 ## Phase 8 — Frontend: the outline editor
 
-- [ ] `components/report.tsx` — propose, add / edit / remove / reorder sections
-- [ ] Blocks add / edit / remove / reorder within a section
-- [ ] Per-block feasibility chip with the guard's reason shown verbatim
-- [ ] "Check all" loops blocks with visible per-block progress
-- [ ] Generate disabled while any block is `INFEASIBLE`, with count + first reason
-- [ ] `time_window` picker per block
-- [ ] `dir="auto"` on every free-text field
-- [ ] **Gate:** `npm run typecheck` · `npm run build`
+- [x] `components/report.tsx` — propose, add / edit / remove / reorder sections
+- [x] Blocks add / edit / remove / reorder within a section
+- [x] Per-block feasibility chip with the guard's reason shown verbatim
+- [x] "Check all" loops blocks with visible per-block progress
+- [x] Generate disabled while any block is `INFEASIBLE`, with count + first reason
+- [x] `time_window` picker per block
+- [x] `dir="auto"` on every free-text field
+- [x] **Gate:** `npm run typecheck` · `npm run build`
+
+Four notes for Phase 9:
+
+- **The Generate button is written and wired, and the page does not pass its
+  handler yet.** `ReportOutlineEditor` takes an optional `onGenerate`; the
+  readiness of an outline — the counts, the blocking reason, the `INFEASIBLE`
+  tooltip — is computed and shown either way, because that is a property of the
+  outline and the user needs it while editing. The *button* appears only when a
+  caller supplies the handler, which Phase 9 does in one line. An action that
+  starts minutes of model calls with nowhere to watch them is worse than no
+  action, and it is the same rule the Phase 7 card followed before this editor
+  existed.
+- **Reordering renumbers in the client, because the API renumbers nothing.**
+  `PATCH .../sections/{id}` sets one position and shifts no sibling — the honest
+  shape for a route that knows about one row. So the new order is applied
+  locally first (the list moves under the cursor) and only the rows whose index
+  actually changed are written; an adjacent swap is two calls. Verified against
+  the running API, sections and blocks both.
+- **Editing a question or its window is a *reset*, and the response is what
+  says so.** The PATCH drops the SQL and returns the row already back at
+  `UNCHECKED`, so the chip changes because the written row was spliced in — the
+  page never has to model the invalidation rule itself. Confirmed end to end:
+  `time_window` → `ytd` came back `UNCHECKED` with an empty `sql`.
+- **`InlineEdit` moved from `DashboardsPage` into `ui.tsx`** and grew a
+  `multiline` variant. It has two callers now (a dashboard's name, and a
+  report's headings, intents and questions), and a block's question is a
+  sentence — an `<input>` scrolls it sideways out of sight. Moved rather than
+  copied, for the reason `ResultTable` and `SearchField` were.
 
 ## Phase 9 — Frontend: the viewer
 
-- [ ] Start a run, poll `GET /runs/{rid}`
-- [ ] Sections render **as they arrive**; progress header from `phase` /
+- [x] Start a run, poll `GET /runs/{rid}`
+- [x] Sections render **as they arrive**; progress header from `phase` /
       `progress_current` / `progress_total`
-- [ ] Blocks render as chart / table / KPI, reusing `VegaChart`,
+- [x] Blocks render as chart / table / KPI, reusing `VegaChart`,
       `ResultTable` and the KPI component unchanged
-- [ ] Per-section retry; the rest of the document stays on screen
-- [ ] Chart type picker from `chart_options` — impossible types **disabled,
+- [x] Per-section retry; the rest of the document stays on screen
+- [x] Chart type picker from `chart_options` — impossible types **disabled,
       not offered**
-- [ ] Prose editing in place → `edited_prose`
-- [ ] Numeric-check findings as a subtle, dismissible marker
-- [ ] Poll **pauses on `document.hidden`**
-- [ ] **Gate:** `npm run typecheck` · `npm run build`
+- [x] Prose editing in place → `edited_prose`
+- [x] Numeric-check findings as a subtle, dismissible marker
+- [x] Poll **pauses on `document.hidden`**
+- [x] **Gate:** `npm run typecheck` · `npm run build` · `make test` · `make lint`
+
+Four notes, three of them things the plan did not say:
+
+- **The chart picker needed a route, so this phase is not purely frontend.**
+  `chart_options` are computed by asking the real planner about a *result*, and
+  no report route returned any for a saved one — `ReportBlockCheckRead` carries
+  them for a preview, which is a different result on a different day. So
+  `POST /reports/{id}/runs/{rid}/blocks/{result_id}/chart` was added, mirroring
+  chat's `/runs/{id}/chart`: it redraws from the rows the run kept, never by
+  re-running the query, because the picture under a paragraph has to be the
+  picture that paragraph was written from.
+- **That redraw is persisted, where chat's deliberately is not.** Chat argues a
+  transcript must keep what the run produced. A report argues the other way, and
+  Phase 10 is the reason: it prints the **saved run**, so a chart living only in
+  the browser would be lost on the way to the PDF. It is written onto the run
+  and onto the run *only* — the same rule that put `edited_prose` there rather
+  than on the template, and for the same reason: a refinement made while reading
+  one generation must not rewrite the template the next one comes from.
+  `chart_source` gains a fifth value, `user`.
+- **The merge that makes a run a document is its own module and its own test.**
+  `components/report-document.ts` + `npm run test:report`, the arrangement
+  `dashboard-schedule.ts` already uses. It is fiddly for three reasons that only
+  show up mid-generation: the numbers arrive before the prose (so a section
+  renders half-drawn, which is the point), a block result's `position` counts
+  across the whole run while a section result's counts the outline (so sorting
+  one by the other's numbers scrambles the document), and the executive summary
+  has no blocks at all — it arrives last and belongs first. Twenty checks, and
+  the assembled order was verified against a real four-section generation.
+- **A block result carries no `block_type`, and that is the honest thing to
+  render from.** It carries what was *produced*: a METRIC block whose query
+  stopped returning one number has no KPI, and a CHART block the planner vetoed
+  has no spec. Each falls back to the table, because the numbers are correct
+  whatever happened to the picture.
+
+Phase 8's `onGenerate` became `onOpenRun(runId)`: the editor owns the `startRun`
+call so a refusal — a second concurrent generation, a policy tightened since,
+an unchecked block — lands in the same place every other error on that page
+does. The editor also reads the run *rows* on open, so a report already
+generated offers "Last run" instead of stranding the reader in its outline, and
+a generation still in flight opens straight into the viewer.
+
+## Phase 9b — The document upgrade (r2)
+
+Not in the original eleven. It came from the only review that matters — reading
+a generated report and finding it was *"some text and some charts"* rather than
+a document. Phases 1–9 built the machine correctly and the output still did not
+read as professional work, because nothing in them was about the writing.
+
+Six changes, three of content and three of presentation:
+
+- [x] `app/reports/facts.py` — the arithmetic a paragraph needs, computed
+      exactly from the same rows rather than estimated by the model: series
+      ends and the change between them, peak and trough, direction over halves,
+      totals, concentration (top-1/3/5 share, the Pareto count), means. **A
+      partial result yields no facts at all** — under `SAMPLE`, or a truncated
+      query, a total over a prefix is a wrong total and there is no honest way
+      to caption it. That rule is also what keeps the module from widening
+      disclosure: every value it states comes from rows the model already holds
+      in full.
+- [x] Its values join the numeric check's pool, which removes the check's
+      residual false-positive class. `_derived` already excused a ratio of two
+      pool values; it could not excuse a total or a mean over many rows, so a
+      paragraph that summed correctly used to wear a marker.
+- [x] `REPORT_PROMPT_VERSION` → **r2**. The section prompt asks for the four
+      moves an analyst makes (finding quantified, size and shape, what drives
+      it, the consequence) instead of "two to four sentences"; a house style
+      block makes seven sections read as one document; the outline prompt asks
+      for an argument — level, movement, composition, concentration, risk —
+      rather than one chart per table; the summary prompt returns a lead
+      paragraph plus 3–5 findings.
+- [x] Each section is told the other sections' headings and what the earlier
+      ones established (bounded: `MAX_ESTABLISHED` × `MAX_ESTABLISHED_CHARS`).
+      This is what fixes the "it repeats itself" failure — three paragraphs
+      each opening on total revenue because it was the largest number each was
+      handed. A retried section reads the document around it too, minus the
+      executive summary, which would be circular.
+- [x] `Completion.truncated`, read off `finish_reason`. A prose call that hit
+      `max_tokens` used to be saved as a paragraph ending mid-word; it is now
+      cut back to its last complete sentence, and when there is no sentence at
+      all the section fails with the one message that names the setting to
+      change. `NARRATE_MIN_MAX_TOKENS` 2,048 → 4,096, `OUTLINE_MIN_MAX_TOKENS`
+      4,096 → 6,144.
+- [x] The viewer renders a **document**: a cover stating the data source, the
+      moment and the model; numbered sections with rules; the executive summary
+      set apart with its findings as findings; a band of `plan_kpi` figures;
+      numbered figure captions with a source line under each; and a *Method and
+      data notes* appendix listing every question, row count, timestamp and
+      statement — assembled from rows the run already holds, so it costs no
+      tokens and cannot drift from the body.
+- [x] The document's own furniture is localised (`LABELS`), and the article
+      carries `dir` from the report's language. "Figure 3" under Persian prose
+      is the seam a reader sees before they read a word.
+- [x] **Gate:** `make test` (1,070) · `make guard` · `make lint` (6/6
+      contracts, `app.reports` still self-contained) · `npm run typecheck` ·
+      `npm run build` · `npm run test:report`
 
 ## Phase 10 — PDF
 
-- [ ] Vazirmatn woff2 self-hosted in `public/` with `@font-face`
-- [ ] Dropped from the Google Fonts link in `index.html`
-- [ ] `@media print` — forced light tokens, chrome hidden
-- [ ] `break-inside: avoid` on sections
-- [ ] Fixed print width in mm
-- [ ] `components/report-print.ts` — `await document.fonts.ready`, re-embed
+- [x] Vazirmatn woff2 self-hosted in `public/` with `@font-face`
+- [x] Dropped from the Google Fonts link in `index.html`
+- [x] `@media print` — forced light tokens, chrome hidden
+- [x] `break-inside: avoid` on sections
+- [x] Fixed print width in mm
+- [x] `components/report-print.ts` — `await document.fonts.ready`, re-embed
       charts at print width, then `window.print()`
-- [ ] Prints the **saved run**, never live state
+- [x] Prints the **saved run**, never live state
 - [ ] Manual check: Persian report, correct shaping and direction
 - [ ] Manual check: English report
 - [ ] Manual check: both themes, charts unbroken across pages
-- [ ] **Gate:** `npm run typecheck` · `npm run build` + the manual checks
+- [x] **Gate:** `npm run typecheck` · `npm run build` · `npm run test:print`
+- [ ] **Gate:** the three manual checks
+
+Phase 9b took the half of this that is a stylesheet: the print rules force the
+light token set over `applyTheme`'s inline styles, hide the chrome, keep a
+figure whole across a break, open the appendix that a collapsed disclosure
+would otherwise drop, and put it on its own page. This phase is the half that
+is a mechanism.
+
+Four things it settled that the plan did not say:
+
+- **Three font files, not four weights.** Google serves Vazirmatn as the
+  *variable* font (`fvar`, wght 100–900), one file per unicode subset, and
+  declares a `@font-face` per requested weight all pointing at the same URL.
+  So the self-hosted version is three files — arabic, latin-ext, latin, 103 KB
+  together — each declared once at `font-weight: 100 900`. Keeping the subsets
+  separate keeps their `unicode-range`, which is what makes an English report
+  never fetch the Arabic file. Verified with fontTools that the Arabic subset
+  still carries `init`/`medi`/`fina`/`rlig`/`ccmp`/`locl` under the `arab`
+  script and the Persian letters and digits: a subset that had dropped its
+  shaping tables is the one real risk of self-hosting, and it has not.
+- **The chart problem was two problems, and the second is worse.** Width was
+  the known one — `width: 'container'` through a `ResizeObserver` that print
+  never fires. The other is colour: a chart's palette comes from `data-theme`,
+  not from the CSS variables, so the token override that turns the *page* light
+  left a dark-theme reader's charts with near-white axis labels on white paper.
+  Neither is reachable from a stylesheet, so `report-print.ts` does a real
+  re-embed — `VegaChart` now builds its spec through a `buildSpec(theme, width)`
+  it exposes as a redraw callback, and registers it. `printReport` redraws only
+  the charts inside the article it was handed, then puts them back.
+- **The inset is measured, not calculated.** Everything between the article's
+  edge and a chart's box is a fixed number of pixels at any article width, so
+  it is read off the screen — where the layout exists — and subtracted from the
+  page, where it does not yet. That beats hardcoding the figure's padding plus
+  its border plus the chart frame's, which is three numbers that go stale
+  silently.
+- **The page width lives in two languages, so a test holds them together.**
+  `styles.css` gives `.rm-report` its width in millimetres and
+  `report-print.ts` redraws against the same measure in pixels; nothing at
+  build time makes them agree. `npm run test:print` reads the stylesheet and
+  asserts it does, and asserts `index.html` has stopped asking Google for
+  Vazirmatn. It needs a filesystem, which is why `src/node-test-env.d.ts`
+  exists: `@types/node` stays out of the SPA, and the two functions this one
+  test uses are declared by hand.
+
+**The three manual checks are still open** — they need a person looking at a
+print preview, and a Persian report to look at, which this repository does not
+yet have generated.
+
+## Phase 9c — The outline editor, as a workflow
+
+Also not in the original eleven, and from the same review. The editor was
+correct and read as a form: a stack of identical cards with one coloured
+sentence somewhere in it, from which a user could not tell whether they were
+three clicks from a document or thirty.
+
+- [x] `OutlineStatus` — **Describe → Structure → Check → Generate**, with a
+      count under each. Not invented ceremony: it is the sequence the API
+      already enforces, and naming it is most of the difference between a form
+      and a product. The step captions are read off the outline, so the panel
+      is also the answer to "how much is left".
+- [x] The readiness sentence became a row of counts (ready / no rows / cannot
+      be produced / not checked) plus the one line saying what to do next and
+      why it matters in the *finished document* — an unchecked question arrives
+      there as an error message.
+- [x] A section card now carries the number the reader will see, its own
+      readiness (`3 questions · 2 to check`), and its reorder and delete
+      controls receded to `.rm-outline-actions` — visible, quiet, full strength
+      on hover, and never hover-only, because a touch screen has no hover.
+- [x] A question row wears a **status rail** in the verdict's colour. It is the
+      one cue that survives skim-reading a twelve-question outline and it costs
+      no space.
+- [x] Its Check button reuses `.rm-check.is-wanted`, the tile editor's "this is
+      the next thing to do" affordance — which is exactly what an unchecked
+      question is, since it is the one state that stops generation entirely.
+- [x] Logical properties (`paddingInlineStart`, `marginInlineStart`) throughout,
+      so the editor mirrors for a Persian report the way the document already
+      does.
 
 ## Phase 11 — Run history, regeneration, SQL editor
 
-- [ ] Run history per report; a past run reads back unchanged
-- [ ] Regenerate: same outline, new run, previous runs untouched
-- [ ] Show which blocks' `sql_hash` changed since the last run
-- [ ] SQL editor per block via `sql_draft_service.validate_sql`
-- [ ] `sql_origin` → `GENERATED_EDITED` / `HANDWRITTEN`
-- [ ] `docs/reports.md` written — the shipped reference doc
-- [ ] `README.md` — a Reports paragraph
-- [ ] `CLAUDE.md` — Reports in the code map
-- [ ] **Gate:** `make test` · `make guard` · `make lint` ·
-      `npm run typecheck` · `npm run build`
+- [x] Run history per report; a past run reads back unchanged —
+      `components/report-history.tsx`, its own file rather than a fourth act in
+      `report.tsx`. Reached from the editor header (`History 7`) **and** from
+      inside the viewer, because comparing this quarter with last quarter
+      should not mean going back through the outline. Rows only: `GET
+      /reports/{id}/runs` returns no results, so the page costs one small
+      request however many documents it lists.
+- [x] Regenerate: same outline, new run, previous runs untouched — this was
+      already true of the worker; what was missing was anywhere to *see* that it
+      was true. The history list is that.
+- [x] Show which blocks' `sql_hash` changed since the last run — `sql_changed`
+      on every block result of `GET /runs/{id}`, computed against the previous
+      generation, with **null meaning "nothing to compare with"**
+- [x] SQL editor per block via `sql_draft_service.validate_sql` —
+      `PUT /reports/{id}/blocks/{bid}/sql`
+- [x] `sql_origin` → `GENERATED_EDITED` / `HANDWRITTEN`, derived from what the
+      block already held rather than asserted by the client
+- [x] `docs/reports.md` written — the shipped reference doc
+- [x] `README.md` — a Reports paragraph
+- [x] `CLAUDE.md` — Reports in the code map, and a section of its own
+- [x] **Gate:** `make test` (1,078) · `make guard` · `make lint` (6/6
+      contracts) · `npm run typecheck` · `npm run build` · the five `test:*`
+
+Five things this phase settled that the plan did not say:
+
+- **The SQL editor is one route, not "validate then PATCH".** Letting a client
+  send `sql` through `PATCH .../blocks/{id}` after calling `/sql/drafts/validate`
+  itself would be two round trips and, worse, a client asserting its own
+  `feasibility_status`. `PUT .../blocks/{bid}/sql` guards, previews, records the
+  verdict through the *same* `_verdict`/`_record_check` pair `/check` uses, and
+  answers in the same shape — so the editor renders either road's answer with
+  one piece of code and the two cannot drift.
+- **Provenance is derived, never asserted.** The payload carries `sql` and
+  nothing else. A block that never held a generated statement becomes
+  `HANDWRITTEN`; one that did becomes `GENERATED_EDITED` and stays there however
+  little of the original survives. A client that could label its own SQL as
+  model-written would be writing history, and would gain nothing by it — the
+  column is provenance, never trust.
+- **A rejected statement is kept when a person typed it, and dropped when a
+  model did.** `check_block` throws a refused draft away; the editor keeps a
+  refused statement with the guard's reason on it. The distinction is not new —
+  the semantic layer already settled it, dropping invalid *generated* metrics
+  and flagging-but-keeping invalid *human* ones. The same reasoning changed
+  `update_block`: rewording a question no longer deletes hand-written SQL, only
+  the verdict on it, because losing an hour of SQL to a typo fix in the heading
+  above it is not something a person forgives a tool for. The check button on
+  such a block therefore reads **Rewrite**, since there it would replace work
+  rather than fill a gap.
+- **The guard's own words were never actually reaching the user.** `_verdict`
+  read `validation_report["errors"]`, but `errors` is a *property* filtering
+  `issues` and `model_dump()` emits declared fields only — so the key has been
+  absent since Phase 4 and every `INFEASIBLE` block wore the generic fallback
+  while the plan, the route docstring and the tests all promised verbatim. The
+  Phase 4 tests passed because their fake `SqlDraft` was hand-shaped with an
+  `errors` key that no real payload has. Fixed in `_verdict`, and both fakes now
+  build a **real `ValidationReport`** so the shape cannot drift again. Verified
+  against the running API: a `DELETE` now comes back *"Only SELECT is permitted;
+  got DELETE. This connection is read-only. Read data, never modify it."*
+- **"Which queries changed" is answered per figure, on the run.** Not a banner:
+  it is true of one figure and rarely of all of them, and the reader who needs
+  it is comparing this quarter's document with last quarter's. So the marker
+  sits in the figure's footer and again in the *Method and data notes*
+  appendix, and it **prints** — a printed document is where the comparison
+  actually gets made. `previous_block_hashes` deliberately skips runs that
+  computed nothing: a cancelled run is not a previous version of the document,
+  and comparing against it would report every figure as unchanged.
 
 ---
 

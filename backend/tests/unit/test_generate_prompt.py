@@ -174,13 +174,13 @@ def _state_with_history() -> RunState:
     return state
 
 
-def _deps(gateway: Any) -> NodeDeps:
+def _deps(gateway: Any, extra_rules: str = "") -> NodeDeps:
     async def emit(_t: str, _d: dict[str, Any]) -> None:
         return None
 
     return NodeDeps(
         llm_gateway=gateway, llm=None, connector=None, snapshot={},
-        history=[], policy=None, emit=emit,
+        history=[], policy=None, emit=emit, extra_rules=extra_rules,
     )
 
 
@@ -225,6 +225,55 @@ async def test_a_repair_attempt_is_sent_the_rules_and_the_history(seed: Any) -> 
     assert [f for f in RULE_FRAGMENTS if f not in system] == []
     assert "SQL: SELECT SUM(total) FROM public.orders" in system
     assert "Dialect: postgres" in system
+
+
+# ── extra rules: added for one caller, invisible to every other ──────────
+@pytest.mark.asyncio
+@pytest.mark.parametrize("seed", [None, _rejected, _reviewed])
+async def test_a_chat_prompt_is_byte_identical_with_no_extra_rules(
+    seed: Any,
+) -> None:
+    """The whole justification for not moving `PROMPT_VERSION`.
+
+    `extra_rules` exists so a report block can be told its SQL will be re-run
+    months from now. Every other caller passes nothing, and "nothing" has to
+    mean *exactly* what was sent before the field existed — not a stripped
+    version of it, not one trailing newline different. A single byte here
+    would make every eval number since v7 incomparable.
+    """
+    plain, with_field = FakeGateway(), FakeGateway()
+    plain_state, field_state = _state_with_history(), _state_with_history()
+    if seed is not None:
+        seed(plain_state)
+        seed(field_state)
+
+    await generate(plain_state, _deps(plain))
+    await generate(field_state, _deps(with_field, extra_rules="   \n  "))
+
+    assert plain.messages[0].content == with_field.messages[0].content
+    assert plain.messages[1].content == with_field.messages[1].content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("seed", [None, _rejected, _reviewed])
+async def test_extra_rules_reach_the_first_attempt_and_every_repair(
+    seed: Any,
+) -> None:
+    """A repair is a fresh conversation, so a rule the repair is not told is
+    simply gone — which is how the mandatory rules once went missing from this
+    path. A block repaired without its time rules comes back with the literal
+    date those rules exist to forbid."""
+    gateway = FakeGateway()
+    state = _state_with_history()
+    if seed is not None:
+        seed(state)
+
+    await generate(state, _deps(gateway, extra_rules="Never write a literal date."))
+
+    system = gateway.messages[0].content
+    assert system.endswith("Never write a literal date.")
+    # Appended, never substituted: the prompt's own rules still stand.
+    assert [f for f in RULE_FRAGMENTS if f not in system] == []
 
 
 @pytest.mark.asyncio

@@ -667,6 +667,332 @@ class DashboardDataRead(BaseModel):
     results: dict[UUID, TileResultRead] = Field(default_factory=dict)
 
 
+# ── reports ──────────────────────────────────────────────────────────────
+# Every read here carries ids and display *names* only. A report is a document
+# about someone's data; nothing from inside a connection belongs in one.
+class ReportBlockRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    section_id: UUID
+    position: int = 0
+    question: str = ""
+    sql: str = ""
+    sql_hash: str = ""
+    sql_origin: str = "GENERATED"
+    block_type: str = "CHART"
+    # null means Auto: the chart is re-planned from each result, which is what a
+    # report re-run months later on differently-shaped data needs.
+    chart_config: dict[str, Any] | None = None
+    time_window: str = "none"
+    feasibility_status: str = "UNCHECKED"
+    # The guard's own message, shown verbatim — never re-worded here.
+    feasibility_reason: str | None = None
+    feasibility_checked_at: datetime | None = None
+    max_rows: int | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReportBlockCheckRead(BaseModel):
+    """What a feasibility check answers.
+
+    The block as stored, plus the three things that are *about* this check and
+    not about the block: the preview the verdict was reached from, and the
+    chart types the result can actually support. None of the three is
+    persisted — `chart_config` stays NULL, which means Auto, because a report
+    re-run on differently-shaped data must be free to re-decide.
+    """
+
+    block: ReportBlockRead
+    preview: TileResultRead | None = None
+    # The heuristic's read of the preview's shape, for defaulting the picker.
+    chart_suggestion: dict[str, Any] | None = None
+    # Per-type verdicts, so the picker disables what cannot work rather than
+    # offering it and apologising later.
+    chart_options: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ReportSectionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    report_id: UUID
+    position: int = 0
+    heading: str = ""
+    intent: str = ""
+    kind: str = "NORMAL"
+    created_at: datetime
+    updated_at: datetime
+    blocks: list[ReportBlockRead] = Field(default_factory=list)
+
+
+class ReportRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    name: str
+    description: str | None = None
+    prompt: str = ""
+    connection_id: UUID | None = None
+    connection_name: str | None = None
+    llm_config_id: UUID | None = None
+    llm_config_name: str | None = None
+    language: str = "en"
+    status: str = "ACTIVE"
+    created_at: datetime
+    updated_at: datetime
+    sections: list[ReportSectionRead] = Field(default_factory=list)
+
+
+class ReportSummaryRead(BaseModel):
+    """One card on the index: what it is, how big, and when it last ran."""
+
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    name: str
+    description: str | None = None
+    connection_id: UUID | None = None
+    connection_name: str | None = None
+    llm_config_id: UUID | None = None
+    llm_config_name: str | None = None
+    language: str = "en"
+    status: str = "ACTIVE"
+    section_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class ReportCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    description: str | None = None
+    # The user's request, kept verbatim: it is what the outline is proposed
+    # from, and what the prose is narrated towards months later.
+    prompt: str = Field(default="", max_length=8000)
+    # Required and pinned forever — a report keyed to one connection cannot
+    # cross disclosure policies.
+    connection_id: UUID
+    llm_config_id: UUID | None = None
+    # Pinned at creation and stated explicitly in every prose prompt, never
+    # inferred per section.
+    language: Literal["fa", "en"] = "en"
+
+
+class ReportUpdate(BaseModel):
+    """Everything a report may change after creation.
+
+    `connection_id` is here **so it can be refused**, not so it can be set:
+    accepting the field and 422-ing on a different value tells the client what
+    the rule is, where silently ignoring it would look like a save that worked.
+    """
+
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    description: str | None = None
+    prompt: str | None = Field(default=None, max_length=8000)
+    llm_config_id: UUID | None = None
+    status: Literal["ACTIVE", "ARCHIVED"] | None = None
+    connection_id: UUID | None = None
+
+
+class ReportSectionCreate(BaseModel):
+    heading: str = Field(min_length=1, max_length=300)
+    # One line on what this section's paragraph should cover. Prompt input, not
+    # display text.
+    intent: str = Field(default="", max_length=2000)
+    kind: Literal["NORMAL", "EXECUTIVE_SUMMARY"] = "NORMAL"
+    # Omitted means "append". Explicit `0` means *first* — which is where the
+    # executive summary goes, so the two cannot share a value.
+    position: int | None = Field(default=None, ge=0)
+
+
+class ReportSectionUpdate(BaseModel):
+    heading: str | None = Field(default=None, min_length=1, max_length=300)
+    intent: str | None = Field(default=None, max_length=2000)
+    position: int | None = Field(default=None, ge=0)
+
+
+class ReportBlockCreate(BaseModel):
+    """One question, one query, one chart.
+
+    No `sql` field: a block is created from its question and the statement is
+    produced by the feasibility check. Writing one by hand is a separate route
+    (`PUT .../blocks/{id}/sql`), which is also the only thing that can move
+    `sql_origin` off `GENERATED` — nothing a client sends at creation can.
+    """
+
+    question: str = Field(min_length=1, max_length=2000)
+    block_type: Literal["CHART", "TABLE", "METRIC"] = "CHART"
+    chart_config: dict[str, Any] | None = None
+    time_window: Literal[
+        "none", "last_7_days", "last_30_days", "last_month", "last_3_months",
+        "last_12_months", "previous_quarter", "ytd", "custom",
+    ] = "none"
+    max_rows: int | None = Field(default=None, ge=1)
+    # Omitted means "append"; `0` means first. See `ReportSectionCreate`.
+    position: int | None = Field(default=None, ge=0)
+
+
+class ReportBlockSqlUpdate(BaseModel):
+    """A statement the user wrote or edited, on its way to the guard.
+
+    No `sql_origin`: provenance is derived from what the block already held,
+    not asserted by the client. A caller cannot label its own SQL as
+    model-generated, and would gain nothing by it if it could — the column is
+    provenance, never trust.
+    """
+
+    sql: str = Field(min_length=1, max_length=20_000)
+
+
+class ReportBlockUpdate(BaseModel):
+    question: str | None = Field(default=None, min_length=1, max_length=2000)
+    block_type: Literal["CHART", "TABLE", "METRIC"] | None = None
+    # Explicit null is how a client goes back to Auto; omitting the field leaves
+    # whatever is stored alone.
+    chart_config: dict[str, Any] | None = None
+    time_window: Literal[
+        "none", "last_7_days", "last_30_days", "last_month", "last_3_months",
+        "last_12_months", "previous_quarter", "ytd", "custom",
+    ] | None = None
+    max_rows: int | None = Field(default=None, ge=1)
+    position: int | None = Field(default=None, ge=0)
+
+
+# ── report runs ──────────────────────────────────────────────────────────
+class ReportRunRead(BaseModel):
+    """One generation, as the history list and the progress header see it.
+
+    `status` is **derived** from the run's parts rather than set, which is why
+    `PARTIAL` is in it: some sections succeeded and some did not, and calling
+    that either a success or a failure is a lie the reader has to open the
+    document to catch.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    report_id: UUID
+    status: str = "QUEUED"
+    # Free text the header renders as «در حال تولید بخش ۳ از ۷», together with
+    # the two counters below.
+    phase: str = ""
+    progress_current: int = 0
+    progress_total: int = 0
+    llm_config_id: UUID | None = None
+    # Provider and model only — which model wrote this document, kept beside it.
+    model_snapshot: dict[str, Any] = Field(default_factory=dict)
+    prompt_version: str = ""
+    language: str = "en"
+    error_message: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_at: datetime
+
+
+class ReportBlockResultRead(BaseModel):
+    """One block's numbers, as they were at the moment they were computed.
+
+    The heading, the question and the statement are snapshots, not lookups: a
+    run stays readable after its block is edited or deleted.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    block_id: UUID | None = None
+    section_id: UUID | None = None
+    position: int = 0
+    heading_snapshot: str = ""
+    question_snapshot: str = ""
+    # Shown and auditable, exactly as a chat run's SQL is.
+    sql_text: str = ""
+    sql_hash: str = ""
+    columns: list[dict[str, Any]] = Field(default_factory=list)
+    rows: list[list[Any]] = Field(default_factory=list)
+    row_count: int = 0
+    truncated: bool = False
+    vega_spec: dict[str, Any] | None = None
+    chart_source: str | None = None
+    chart_note: str | None = None
+    kpi: dict[str, Any] | None = None
+    computed_at: datetime
+    duration_ms: int = 0
+    status: str = "OK"
+    error_code: str | None = None
+    error_message: str | None = None
+    # Whether the statement behind this figure differs from the one the
+    # *previous* generation ran. **null means there is nothing to compare
+    # with** — a first run, or a block that did not exist last time — which is
+    # a different answer from "unchanged" and has to stay distinguishable.
+    sql_changed: bool | None = None
+
+
+class ReportSectionResultRead(BaseModel):
+    """One section's prose, for one run.
+
+    Two prose fields, not one: `edited_prose` is NULL until the user writes
+    over it, and a regeneration starts a *new* run rather than overwriting
+    this one — so editing never destroys and regenerating never overwrites.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    section_id: UUID | None = None
+    position: int = 0
+    heading_snapshot: str = ""
+    prose: str = ""
+    edited_prose: str | None = None
+    # Figures in the prose that no result row supports. A finding is a
+    # suspicion, never a verdict — it flags, it never blocks.
+    numeric_check: dict[str, Any] | None = None
+    status: str = "OK"
+    error_message: str | None = None
+    created_at: datetime
+
+
+class ReportSectionResultUpdate(BaseModel):
+    """Edit a paragraph of a saved run.
+
+    Explicit `null` reverts to what the model wrote — which is the whole reason
+    the edit lives in a column of its own rather than overwriting `prose`.
+    """
+
+    edited_prose: str | None = Field(default=None, max_length=20_000)
+
+
+class ReportChartRequest(BaseModel):
+    """Draw a saved block a different way. `auto` means "let the planner decide"."""
+
+    chart_type: str
+
+
+class ReportChartRead(BaseModel):
+    """What a redraw changed, and the verdicts the picker needs to stay honest.
+
+    Not the whole `ReportBlockResultRead`, which is the house rule everywhere
+    else: the row's bulk is its `rows`, the redraw does not touch them, and
+    shipping a capped result back to a client that already has it — to change a
+    picture drawn from it — is the one place "return the written row" costs more
+    than it settles. These are exactly the fields that were written.
+
+    `spec` is null when the pick was refused, and `reason` then says why. The
+    picker greys such a type out before it can be clicked; this is the same rule
+    where it would matter if the display were stale.
+    """
+
+    spec: dict[str, Any] | None = None
+    chart_source: str = "none"
+    chart_note: str | None = None
+    reason: str | None = None
+    options: list[ChartOptionRead] = Field(default_factory=list)
+
+
+class ReportRunDetailRead(ReportRunRead):
+    """The poll target: the run, and everything written so far.
+
+    Not "the finished document" — a run half-way through returns the half it
+    has, which is what makes the progressive render need no protocol of its own.
+    """
+
+    blocks: list[ReportBlockResultRead] = Field(default_factory=list)
+    sections: list[ReportSectionResultRead] = Field(default_factory=list)
+
+
 # ── conversations & messages ─────────────────────────────────────────────
 class ConversationCreate(BaseModel):
     title: str | None = None

@@ -9,9 +9,11 @@
 
 import type {
   ArtifactSpec, ChartRedraw, Connection, ConversationSummary, Dashboard, DashboardSummary,
-  DashboardTile, LlmConfig, MessageWithRun, ProblemDetail, RunDetail, RunEvent,
-  SchemaSnapshot, SemanticDocument, SemanticJob, SemanticLayer, SqlDraft,
-  TilePosition, TileResult, TestResult, User,
+  DashboardTile, LlmConfig, MessageWithRun, ProblemDetail, Report, ReportBlock,
+  ReportBlockCheck, ReportChart, ReportRun, ReportRunDetail, ReportSection,
+  ReportSectionResult,
+  ReportSummary, RunDetail, RunEvent, SchemaSnapshot, SemanticDocument, SemanticJob,
+  SemanticLayer, SqlDraft, TilePosition, TileResult, TestResult, User,
 } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? '/api/v1'
@@ -119,6 +121,11 @@ const post = <T>(path: string, body?: unknown) =>
   request<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined })
 const patch = <T>(path: string, body: unknown) =>
   request<T>(path, { method: 'PATCH', body: JSON.stringify(body) })
+// PUT for the routes that replace a thing whole rather than amend it — a
+// password, a semantic layer, a block's statement. Sending one twice is
+// sending it once.
+const put = <T>(path: string, body: unknown) =>
+  request<T>(path, { method: 'PUT', body: JSON.stringify(body) })
 const del = (path: string) => request<void>(path, { method: 'DELETE' })
 
 // ── auth ──────────────────────────────────────────────────────────────────
@@ -295,6 +302,98 @@ export const dashboards = {
     post<TileResult>(
       `/dashboards/${id}/tiles/${tileId}/data${force ? '?force=true' : ''}`,
     ),
+}
+
+// ── reports ───────────────────────────────────────────────────────────────
+/**
+ * A report is a template plus its runs, and the two are addressed apart:
+ * everything up to `startRun` edits the document's *structure*, and everything
+ * after it reads or repairs one generation of it.
+ *
+ * Two calls are deliberately synchronous and slow — `proposeOutline` is one
+ * model call and `checkBlock` is five to ten seconds of guard work on one
+ * heading, both with the user watching a single thing. Generation is the one
+ * that is not: it is minutes, so it returns 202 and `run()` is polled.
+ */
+export const reports = {
+  list: () => get<ReportSummary[]>('/reports'),
+  create: (payload: {
+    name: string
+    description?: string | null
+    prompt?: string
+    connection_id: string
+    llm_config_id?: string | null
+    language?: 'fa' | 'en'
+  }) => post<Report>('/reports', payload),
+  get: (id: string) => get<Report>(`/reports/${id}`),
+  /** Name, description, prompt, model, status. A *different* connection is 422. */
+  update: (id: string, payload: Record<string, unknown>) =>
+    patch<Report>(`/reports/${id}`, payload),
+  remove: (id: string) => del(`/reports/${id}`),
+
+  /** One model call, and it **replaces** the outline. Returns the whole report. */
+  proposeOutline: (id: string) => post<Report>(`/reports/${id}/outline`),
+
+  addSection: (id: string, payload: Record<string, unknown>) =>
+    post<ReportSection>(`/reports/${id}/sections`, payload),
+  updateSection: (id: string, sectionId: string, payload: Record<string, unknown>) =>
+    patch<ReportSection>(`/reports/${id}/sections/${sectionId}`, payload),
+  removeSection: (id: string, sectionId: string) =>
+    del(`/reports/${id}/sections/${sectionId}`),
+
+  addBlock: (id: string, sectionId: string, payload: Record<string, unknown>) =>
+    post<ReportBlock>(`/reports/${id}/sections/${sectionId}/blocks`, payload),
+  /** Editing the question resets the block to UNCHECKED and drops its SQL. */
+  updateBlock: (id: string, blockId: string, payload: Record<string, unknown>) =>
+    patch<ReportBlock>(`/reports/${id}/blocks/${blockId}`, payload),
+  removeBlock: (id: string, blockId: string) =>
+    del(`/reports/${id}/blocks/${blockId}`),
+  /** *Can this be produced, and if not, why.* Answers with a verdict, never a 502. */
+  checkBlock: (id: string, blockId: string) =>
+    post<ReportBlockCheck>(`/reports/${id}/blocks/${blockId}/check`),
+  /**
+   * Write the block's statement by hand. The same answer as `checkBlock`, by
+   * the other road: guarded and previewed, with no model involved at all.
+   *
+   * `sql_origin` comes back derived from what the block already held — a
+   * client neither sends it nor could gain anything by sending it.
+   */
+  editBlockSql: (id: string, blockId: string, sql: string) =>
+    put<ReportBlockCheck>(`/reports/${id}/blocks/${blockId}/sql`, { sql }),
+
+  startRun: (id: string) => post<ReportRun>(`/reports/${id}/runs`),
+  runs: (id: string) => get<ReportRun[]>(`/reports/${id}/runs`),
+  /** The poll target: the run and every result written so far. */
+  run: (id: string, runId: string) =>
+    get<ReportRunDetail>(`/reports/${id}/runs/${runId}`),
+  cancelRun: (id: string, runId: string) =>
+    post<ReportRun>(`/reports/${id}/runs/${runId}/cancel`),
+  /** Rebuild one section of a finished run. 202, onto the same poll. */
+  retrySection: (id: string, runId: string, sectionId: string) =>
+    post<ReportRun>(`/reports/${id}/runs/${runId}/sections/${sectionId}/retry`),
+  /** Write over a paragraph; `null` reverts to what the model wrote. */
+  editProse: (id: string, runId: string, sectionId: string, editedProse: string | null) =>
+    patch<ReportSectionResult>(
+      `/reports/${id}/runs/${runId}/sections/${sectionId}`,
+      { edited_prose: editedProse },
+    ),
+  /**
+   * Draw one saved block a different way, from the rows the run kept.
+   *
+   * Unlike the chat redraw this one **persists**, onto the run: a report is
+   * printed from its saved run, so a chart living only in the browser would not
+   * survive the export. `auto` hands the planner no suggestion at all.
+   */
+  redrawBlockChart: (id: string, runId: string, resultId: string, chartType: string) =>
+    post<ReportChart>(
+      `/reports/${id}/runs/${runId}/blocks/${resultId}/chart`,
+      { chart_type: chartType },
+    ),
+}
+
+/** Whether a report run may still write more rows — the poll's stop condition. */
+export function isReportRunInFlight(status: string): boolean {
+  return status === 'QUEUED' || status === 'RUNNING'
 }
 
 // ── runs ──────────────────────────────────────────────────────────────────

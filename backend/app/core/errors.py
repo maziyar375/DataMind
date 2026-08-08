@@ -29,6 +29,21 @@ class ValidationError(AppError):
     title = "Invalid request"
 
 
+class DisclosureTooNarrowError(ValidationError):
+    """The connection shares too little of a result for what was asked of it.
+
+    Its own code because the frontend has to act on it rather than print it: the
+    connection picker greys out the connections that cannot carry a report, and
+    a run that fails this way names the policy that has to change. A report is
+    *entirely* narration written from result values, so under `NONE` or
+    `AGGREGATE` its paragraphs would carry no numbers while its charts carried
+    real ones — a document that disagrees with itself is worse than no document.
+    """
+
+    code = "E_DISCLOSURE_TOO_NARROW"
+    title = "Disclosure policy too narrow"
+
+
 class AuthenticationError(AppError):
     code = "E_UNAUTHENTICATED"
     http_status = 401

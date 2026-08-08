@@ -58,7 +58,7 @@ MAX_CONCURRENT_TILES = 4
 # is "re-sync the connection", the other is "the query is not allowed".
 _DRIFT_RULES = frozenset({"E_TABLE_NOT_ALLOWED", "E_UNKNOWN_COLUMN"})
 
-_NO_SNAPSHOT = "This connection has no schema snapshot. Sync it, then refresh."
+_NO_SNAPSHOT = "This connection has no schema snapshot. Sync it, then try again."
 
 
 # ── lifted from run_service ──────────────────────────────────────────────
@@ -306,12 +306,12 @@ async def execute_saved_sql(
         )
         return _failed(
             "E_FORBIDDEN",
-            "This tile's database connection is not available to you.",
+            "This query's database connection is not available to you.",
             duration_ms=elapsed(),
         )
 
     if not sql or not sql.strip():
-        return _failed("E_SQL_REJECTED", "This tile has no SQL to run.", duration_ms=elapsed())
+        return _failed("E_SQL_REJECTED", "There is no SQL to run.", duration_ms=elapsed())
 
     owns_connector = connector is None
     try:
@@ -385,7 +385,7 @@ def _guard_failure(report: Any, *, duration_ms: int) -> TileResult:
     if not errors:
         return _failed(
             "E_SQL_REJECTED",
-            "The guard rejected this tile's SQL.",
+            "The guard rejected this SQL.",
             duration_ms=duration_ms,
         )
 
@@ -393,8 +393,8 @@ def _guard_failure(report: Any, *, duration_ms: int) -> TileResult:
     if first.rule_id in _DRIFT_RULES:
         return _failed(
             "E_SCHEMA_CHANGED",
-            f"{first.message} The database schema has changed since this tile "
-            f"was saved — re-sync the connection and edit the tile's SQL.",
+            f"{first.message} The database schema has changed since this query "
+            f"was saved — re-sync the connection, then check it again.",
             duration_ms=duration_ms,
         )
     return _failed(
@@ -534,7 +534,7 @@ async def execute_many(
             for request in group:
                 results[request.tile_id] = _failed(
                     "E_FORBIDDEN",
-                    "This tile's database connection is not available to you.",
+                    "This query's database connection is not available to you.",
                 )
             continue
         runnable.append((group, await latest_snapshot(db, connection_id)))

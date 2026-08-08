@@ -494,3 +494,209 @@ export interface SqlDraft {
   question: string | null
   llm_config_id: string | null
 }
+
+// ── reports ───────────────────────────────────────────────────────────────
+// A report is a *document*: a structure the user approved, prose written over
+// real results, and a run kept as a snapshot of a moment. It shares no table
+// and no code path with dashboards — see docs/reports-plan.md §1.
+
+/** Pinned at creation and stated in every prose prompt, never inferred. */
+export type ReportLanguage = 'fa' | 'en'
+
+/** One question, one query, one rendering. No TEXT: prose belongs to sections. */
+export type ReportBlockType = 'CHART' | 'TABLE' | 'METRIC'
+
+/**
+ * A *label*, and only a label. It drives the prompt when a block is checked and
+ * gives the picker something to show; the window itself lives in the SQL as
+ * relative date arithmetic the database resolves on every run.
+ */
+export type ReportTimeWindow =
+  | 'none' | 'last_7_days' | 'last_30_days' | 'last_month' | 'last_3_months'
+  | 'last_12_months' | 'previous_quarter' | 'ytd' | 'custom'
+
+/** Whether a block can be produced, answered mechanically by the guard. */
+export type ReportFeasibility = 'UNCHECKED' | 'FEASIBLE' | 'EMPTY' | 'INFEASIBLE'
+
+/**
+ * `PARTIAL` exists because nothing else here generates independently-failable
+ * parts: some sections succeeded and some did not, and the status is *derived*
+ * from them rather than set.
+ */
+export type ReportRunStatus =
+  | 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'PARTIAL' | 'FAILED' | 'CANCELLED'
+
+export type ReportSectionKind = 'NORMAL' | 'EXECUTIVE_SUMMARY'
+
+export interface ReportBlock {
+  id: string
+  section_id: string
+  position: number
+  /** What the user edits in v1 — not the SQL. */
+  question: string
+  sql: string
+  sql_hash: string
+  sql_origin: SqlOrigin
+  block_type: ReportBlockType
+  /** null means Auto — right for a re-run against differently-shaped data. */
+  chart_config: Record<string, unknown> | null
+  time_window: ReportTimeWindow
+  feasibility_status: ReportFeasibility
+  /** The guard's own message. Shown verbatim, never re-worded. */
+  feasibility_reason: string | null
+  feasibility_checked_at: string | null
+  max_rows: number | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ReportSection {
+  id: string
+  report_id: string
+  position: number
+  heading: string
+  /** One line on what this section's paragraph covers. Prompt input, not display. */
+  intent: string
+  kind: ReportSectionKind
+  created_at: string
+  updated_at: string
+  blocks: ReportBlock[]
+}
+
+export interface Report {
+  id: string
+  name: string
+  description: string | null
+  /** The user's request, kept verbatim — what the outline was proposed from. */
+  prompt: string
+  /** Pinned forever: a report keyed to one connection cannot cross policies. */
+  connection_id: string | null
+  connection_name: string | null
+  llm_config_id: string | null
+  llm_config_name: string | null
+  language: ReportLanguage
+  status: 'ACTIVE' | 'ARCHIVED'
+  created_at: string
+  updated_at: string
+  sections: ReportSection[]
+}
+
+export interface ReportSummary {
+  id: string
+  name: string
+  description: string | null
+  connection_id: string | null
+  connection_name: string | null
+  llm_config_id: string | null
+  llm_config_name: string | null
+  language: ReportLanguage
+  status: 'ACTIVE' | 'ARCHIVED'
+  section_count: number
+  created_at: string
+  updated_at: string
+}
+
+/** What a feasibility check answers: the block, and what the verdict came from. */
+export interface ReportBlockCheck {
+  block: ReportBlock
+  preview: TileResult | null
+  chart_suggestion: Record<string, unknown> | null
+  chart_options: ChartOption[]
+}
+
+export interface ReportRun {
+  id: string
+  report_id: string
+  status: ReportRunStatus
+  /** Free text the progress header renders with the two counters below. */
+  phase: string
+  progress_current: number
+  progress_total: number
+  llm_config_id: string | null
+  /** Which model wrote this document, kept beside it. */
+  model_snapshot: Record<string, string>
+  prompt_version: string
+  language: ReportLanguage
+  error_message: string | null
+  started_at: string | null
+  finished_at: string | null
+  created_at: string
+}
+
+/** One block's numbers, snapshotted at the moment they were computed. */
+export interface ReportBlockResult {
+  id: string
+  block_id: string | null
+  section_id: string | null
+  position: number
+  heading_snapshot: string
+  question_snapshot: string
+  sql_text: string
+  sql_hash: string
+  columns: { name: string; db_type: string; semantic_type: string }[]
+  rows: unknown[][]
+  row_count: number
+  truncated: boolean
+  vega_spec: Record<string, unknown> | null
+  chart_source: string | null
+  chart_note: string | null
+  kpi: KpiSpec | null
+  computed_at: string
+  duration_ms: number
+  status: 'OK' | 'FAILED'
+  error_code: string | null
+  error_message: string | null
+  /**
+   * Whether the query behind this figure differs from the one the *previous*
+   * generation ran. **null means there was nothing to compare with** — a first
+   * run, or a block that did not exist last time — which is a different answer
+   * from `false` and stays distinguishable.
+   */
+  sql_changed: boolean | null
+}
+
+/** One figure in a paragraph that no result supports. A suspicion, not a verdict. */
+export interface NumericFinding {
+  text: string
+  value: number
+  /** `percentage` findings are the expected false positives — marked softly. */
+  kind: 'figure' | 'percentage'
+}
+
+export interface ReportSectionResult {
+  id: string
+  section_id: string | null
+  position: number
+  heading_snapshot: string
+  /** What the model wrote. */
+  prose: string
+  /** What the user wrote over it. **null = not edited**, and reverting sends null. */
+  edited_prose: string | null
+  /** null means the check did not run; `findings: []` means it ran and found nothing. */
+  numeric_check: { checked: number; findings: NumericFinding[] } | null
+  status: 'OK' | 'FAILED' | 'SKIPPED_NO_DATA'
+  error_message: string | null
+  created_at: string
+}
+
+/** The poll target: the run, and everything written so far. */
+export interface ReportRunDetail extends ReportRun {
+  blocks: ReportBlockResult[]
+  sections: ReportSectionResult[]
+}
+
+/**
+ * What a redraw changed, and the verdicts the picker needs to stay honest.
+ *
+ * Not the whole block result: the row's bulk is its `rows`, a redraw does not
+ * touch them, and the caller already has them. `spec` is null when the pick was
+ * refused, and `reason` then says why.
+ */
+export interface ReportChart {
+  spec: Record<string, unknown> | null
+  /** model | model_adjusted | heuristic | user | none — who chose this picture. */
+  chart_source: string
+  chart_note: string | null
+  reason: string | null
+  options: ChartOption[]
+}

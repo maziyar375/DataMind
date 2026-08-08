@@ -1,6 +1,58 @@
 /* Global shell. Component styling lives with the components; this file only
    sets what must be global: resets, scrollbars, focus, and motion. */
 
+/* ── Vazirmatn, served from here rather than from Google ───────────────────
+   A BI tool pointed at a production database is routinely deployed behind a
+   firewall, and there `fonts.googleapis.com` is simply unreachable. Inter
+   falling back to system-ui makes the app look slightly different; Vazirmatn
+   falling back makes the *deliverable* wrong — a printed Persian report in a
+   face with the wrong metrics and no Persian digits. So this one is ours.
+
+   These are the same three files the Google Fonts CSS pointed at, kept as
+   three because their `unicode-range` is what makes the browser fetch the
+   Arabic subset only for a document that has Persian in it. Each is the
+   variable font (wght 100–900), which is why one file covers every weight
+   the app asks for and there are three faces here rather than twelve.
+
+   Vazirmatn is SIL OFL 1.1 — the licence is beside the files in
+   `public/fonts/OFL.txt`. */
+@font-face {
+  font-family: 'Vazirmatn';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/vazirmatn-arabic.woff2') format('woff2');
+  unicode-range: U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0897-08E1,
+    U+08E3-08FF, U+200C-200E, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74,
+    U+FE76-FEFC, U+102E0-102FB, U+10E60-10E7E, U+10EC2-10EC4, U+10EFC-10EFF,
+    U+1EE00-1EE03, U+1EE05-1EE1F, U+1EE21-1EE22, U+1EE24, U+1EE27, U+1EE29-1EE32,
+    U+1EE34-1EE37, U+1EE39, U+1EE3B, U+1EE42, U+1EE47, U+1EE49, U+1EE4B,
+    U+1EE4D-1EE4F, U+1EE51-1EE52, U+1EE54, U+1EE57, U+1EE59, U+1EE5B, U+1EE5D,
+    U+1EE5F, U+1EE61-1EE62, U+1EE64, U+1EE67-1EE6A, U+1EE6C-1EE72, U+1EE74-1EE77,
+    U+1EE79-1EE7C, U+1EE7E, U+1EE80-1EE89, U+1EE8B-1EE9B, U+1EEA1-1EEA3,
+    U+1EEA5-1EEA9, U+1EEAB-1EEBB, U+1EEF0-1EEF1;
+}
+@font-face {
+  font-family: 'Vazirmatn';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/vazirmatn-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Vazirmatn';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/vazirmatn-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 body {
   margin: 0;
   /* Inter carries no Persian/Arabic glyphs, so the browser falls back to
@@ -400,7 +452,12 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 
 /* Index cards: the whole card is the link (the title button stretches over
    it), so the card itself carries the affordance — pointer, lift, and a
-   border that warms on approach. */
+   border that warms on approach.
+
+   The index chrome below and around it — .rm-dash-index, .rm-dash-toolbar,
+   .rm-search, .rm-seg, .rm-toolbar-select, .rm-bone — is shared with the
+   Reports index, which is the same kind of page. The `dash` in those names is
+   where they were written, not who may use them. */
 .rm-dash-card {
   cursor: pointer;
   border: 1px solid var(--border);
@@ -999,3 +1056,158 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   background: var(--accent-bg);
   color: var(--accent);
 }
+
+/* ── printing a report ─────────────────────────────────────────────────────
+   A report is a document, and a document leaves the tool. Everything below
+   turns the viewer into a page: the app chrome goes, the theme is forced to
+   the light token set whatever the user is running, and a figure is kept whole
+   across a page break.
+
+   The tokens are re-declared with `!important` because `applyTheme` writes
+   them as *inline styles* on `<html>`, and an inline style beats a stylesheet
+   rule at every specificity. This is the one place in the app that has to
+   override the user's chosen theme, and printing dark-mode panels wastes toner
+   on a background nobody wants — so it is worth the shout.
+
+   What this file cannot do is size a chart, because a Vega plot is sized in
+   its spec rather than by CSS, and its colours come from `data-theme` rather
+   than from these tokens. `report-print.ts` redraws them at the width declared
+   here, in the light palette, before the print dialog opens. */
+@media print {
+  :root {
+    --bg: #ffffff !important;
+    --sidebar-bg: #ffffff !important;
+    --panel: #ffffff !important;
+    --panel-hover: #ffffff !important;
+    --panel-alt: #f7f7f5 !important;
+    --border: #d8d5d0 !important;
+    --border-strong: #b4b0aa !important;
+    --input-bg: #fafaf8 !important;
+    --code-bg: #f4f3f0 !important;
+    --code-text: #1c5c46 !important;
+    --text: #1e1c19 !important;
+    --text-strong: #000000 !important;
+    --text2: #33302c !important;
+    --text-dim: #55514c !important;
+    --text-faint: #6d6862 !important;
+    --accent: #6b2f8f !important;
+    --accent-bg: #f3ecf7 !important;
+    --accent-border: #c4a5d6 !important;
+    color-scheme: light !important;
+  }
+
+  @page { margin: 16mm 14mm; }
+
+  html, body {
+    background: #ffffff !important;
+    /* Print colour is opt-in in every browser; without this the panels, the
+       accent and the chart fills all come out grey. */
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* The application, minus the application. */
+  .rm-sidebar,
+  .rm-dash-header,
+  .rm-report-hide-in-print {
+    display: none !important;
+  }
+
+  .rm-app { background: #ffffff !important; display: block !important; }
+
+  /* The scroller becomes the page: a fixed-height overflow container prints
+     one screenful and drops the rest. */
+  .rm-report-scroll {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+    padding: 0 !important;
+  }
+
+  /* A definite page width, in the page's own unit. On screen the article is
+     capped at 860px and centred in whatever the window gives it; on paper the
+     width is known, and `report-print.ts` reads the same number back out of
+     `PRINT_CONTENT_WIDTH_MM` to decide how wide to redraw each chart. A4 minus
+     the horizontal `@page` margin. US Letter is wider, so a report printed on
+     it keeps this measure and gains margin rather than reflowing. */
+  .rm-report {
+    width: 100% !important;
+    max-width: 182mm !important;
+    margin-inline: auto !important;
+    gap: 20px !important;
+  }
+
+  /* A chart split across a page break is a chart nobody can read, and a
+     heading stranded at the foot of a page is the classic printing tell. */
+  .rm-report-figure,
+  .rm-report-section > figure {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .rm-report-section > h2,
+  .rm-report-section > div:first-child {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+  .rm-report-section {
+    break-inside: auto;
+    border-radius: 0 !important;
+  }
+
+  /* The appendix is the part a printed report most needs and the part a
+     collapsed disclosure would silently drop. */
+  .rm-report-method-body[hidden] { display: block !important; }
+  .rm-report-method-toggle > svg { display: none !important; }
+  .rm-report-method { break-before: page; page-break-before: always; }
+
+  /* A table that scrolls on screen has to print whole. */
+  .rm-report-figure table { width: 100% !important; }
+  .rm-report-figure [style*='overflow'] {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  /* The charts redrawn at page width need nothing here. This is for the one
+     kind that keeps its own width — a categorical chart sized per column,
+     which is deliberately wider than its box so its labels stay legible and
+     scrolls sideways on screen. There is no sideways on paper, so it scales
+     down as vector art rather than being clipped at the margin. */
+  .rm-report-figure svg {
+    max-width: 100% !important;
+    height: auto !important;
+  }
+}
+
+/* The headline band is a row on a page and a column on a phone. */
+@media (max-width: 720px) {
+  .rm-report-figures { grid-template-columns: minmax(0, 1fr) !important; }
+}
+
+/* ── the outline editor, and the run history ───────────────────────────────
+   Structural rules only. Everything with a colour in it stays inline beside
+   the component, which is the split the rest of this file already follows. */
+
+/* Reordering and deleting are secondary to writing the question, so they
+   recede until the row is under the cursor. Kept at a legible opacity rather
+   than hidden outright: on a touch screen there is no hover, and a control
+   that only exists on hover does not exist. */
+.rm-outline-actions { opacity: .45; transition: opacity .14s ease; }
+.rm-outline-card:hover .rm-outline-actions,
+.rm-outline-block:hover .rm-outline-actions,
+.rm-outline-actions:focus-within { opacity: 1; }
+
+@media (hover: none) {
+  .rm-outline-actions { opacity: 1; }
+}
+
+/* The four steps wrap onto their own rows on a narrow screen, where the
+   connecting lines would otherwise squeeze the captions to nothing. */
+@media (max-width: 860px) {
+  .rm-outline-steps { flex-wrap: wrap; gap: 10px 16px !important; }
+  .rm-outline-step-line { display: none !important; }
+}
+
+/* A generation in the history list is a document you open. */
+.rm-history-row { transition: background .12s ease, border-color .12s ease; }
+.rm-history-row:hover { background: var(--panel-hover) !important; }
+.rm-history-row:hover { border-color: var(--border-strong) !important; }

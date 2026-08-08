@@ -21,8 +21,8 @@ import {
 } from '../components/dashboard'
 import { TileEditor } from '../components/tile-editor'
 import {
-  Dot, EmptyState, ErrorNote, GhostButton, Icon, Modal, PrimaryButton, Spinner, TextInput,
-  relativeTime,
+  Dot, EmptyState, ErrorNote, GhostButton, Icon, InlineEdit, Modal, PrimaryButton,
+  SearchField, Segmented, Spinner, TextInput, relativeTime,
 } from '../components/ui'
 
 export default function DashboardsPage() {
@@ -234,6 +234,7 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
           <SearchField
             value={query}
             onChange={setQuery}
+            ariaLabel="Search dashboards"
             placeholder={`Search ${cards.length} dashboard${cards.length === 1 ? '' : 's'}…`}
           />
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
@@ -471,75 +472,6 @@ function IndexAttention({
   )
 }
 
-/** Search with the glyph inside the field, and a clear button once typed in. */
-function SearchField({
-  value, onChange, placeholder,
-}: {
-  value: string
-  onChange: (next: string) => void
-  placeholder: string
-}) {
-  return (
-    <div className="rm-search">
-      <span aria-hidden className="rm-search-icon"><Icon.Search size={14} /></span>
-      <input
-        type="search"
-        aria-label="Search dashboards"
-        value={value}
-        placeholder={placeholder}
-        onChange={(event) => onChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') onChange('')
-        }}
-      />
-      {value && (
-        <button
-          type="button"
-          aria-label="Clear search"
-          className="rm-search-clear rm-icon-btn"
-          onClick={() => onChange('')}
-          style={{ ['--rm-hover-bg' as string]: 'var(--panel-alt)' }}
-        >
-          <Icon.Close size={12} />
-        </button>
-      )}
-    </div>
-  )
-}
-
-/**
- * One control, several mutually exclusive states.
- *
- * Three ghost buttons in a row look like three unrelated actions; a segmented
- * control looks like one choice, which is what a filter and a layout switch
- * both are.
- */
-function Segmented<T extends string>({
-  value, onChange, options, ariaLabel,
-}: {
-  value: T
-  onChange: (next: T) => void
-  options: { value: T; label: React.ReactNode; title?: string }[]
-  ariaLabel: string
-}) {
-  return (
-    <div className="rm-seg" role="group" aria-label={ariaLabel}>
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          title={option.title}
-          aria-pressed={value === option.value}
-          className={value === option.value ? 'is-on' : undefined}
-          onClick={() => onChange(option.value)}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  )
-}
-
 /** Cards in outline while the list loads, so the page does not jump. */
 function IndexSkeleton() {
   return (
@@ -641,47 +573,6 @@ function NameDialog({
  * per letter. Escape puts back what was there — the usual contract for editing
  * in place, and the reason this is not just an `<input>` with an `onChange`.
  */
-function InlineEdit({
-  value, onCommit, ariaLabel, placeholder, required = false, style,
-}: {
-  value: string
-  onCommit: (value: string) => void
-  ariaLabel: string
-  placeholder?: string
-  /** A dashboard must have a name, so an empty commit reverts instead. */
-  required?: boolean
-  style?: React.CSSProperties
-}) {
-  const [draft, setDraft] = useState(value)
-  useEffect(() => setDraft(value), [value])
-
-  return (
-    <input
-      className="rm-inline-edit"
-      aria-label={ariaLabel}
-      // A dashboard name and its description are prose; they follow whatever
-      // script they were written in, same rule as a tile title.
-      dir="auto"
-      value={draft}
-      placeholder={placeholder}
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={() => {
-        const next = draft.trim()
-        if (required && !next) return setDraft(value)
-        if (next !== value) onCommit(next)
-      }}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter') event.currentTarget.blur()
-        if (event.key === 'Escape') {
-          setDraft(value)
-          event.currentTarget.blur()
-        }
-      }}
-      style={style}
-    />
-  )
-}
-
 /** The edit-mode alignment guide: thin lines through the middle of each gap. */
 function GridGuide({
   width, columns, rowHeight, gap,
