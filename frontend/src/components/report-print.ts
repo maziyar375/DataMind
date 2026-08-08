@@ -105,25 +105,39 @@ export function printChartWidth(articleWidthPx: number, chartWidthPx: number): n
 const RTL_TEXT = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/
 
 /**
- * Wait for the print dialog to close.
+ * Watch for the print dialog closing. **Call this before `window.print()`.**
  *
- * `window.print()` blocks in Chrome and Firefox, so by the time this is
- * awaited `afterprint` has usually already fired. Safari returns immediately
- * and fires it later, and restoring the charts before the page is rasterised
- * there would print the screen widths after all. The timeout is the third
- * case: a browser that never fires the event at all must not leave the charts
- * stuck at page width.
+ * That order is the whole point, and getting it wrong is a bug this file
+ * already had: `window.print()` *blocks* in Chrome and Firefox and `afterprint`
+ * fires before it returns, so a listener attached afterwards is attached to an
+ * event that has already happened. It then never resolves, the spinner turns
+ * until the timeout, and the re-entrancy guard holds the button shut for a
+ * minute — for a print that finished immediately. So this returns the promise
+ * without awaiting it, and the caller starts watching first and prints second.
+ *
+ * Two signals, because neither is universal. `afterprint` is the direct one.
+ * `matchMedia('print')` going false is the same fact observed from the other
+ * side, and covers an engine that rasterises without firing the event. The
+ * timeout is the last resort: whatever happens, the charts must not stay stuck
+ * at page width on a screen.
  */
-function afterPrint(): Promise<void> {
+function watchForPrintEnd(): Promise<void> {
   return new Promise((resolve) => {
+    const media = window.matchMedia('print')
     let timer = 0
     const done = () => {
       window.clearTimeout(timer)
       window.removeEventListener('afterprint', done)
+      media.removeEventListener('change', onMedia)
       resolve()
+    }
+    // Only the *leaving* edge. The entering one fires as the dialog opens.
+    const onMedia = (event: MediaQueryListEvent) => {
+      if (!event.matches) done()
     }
     timer = window.setTimeout(done, 60_000)
     window.addEventListener('afterprint', done)
+    media.addEventListener('change', onMedia)
   })
 }
 
@@ -169,8 +183,11 @@ export async function printReport(root: HTMLElement | null): Promise<void> {
     }
     await document.fonts.ready
 
+    // Watch first, print second — `window.print()` blocks and the event fires
+    // inside it. See `watchForPrintEnd`.
+    const ended = watchForPrintEnd()
     window.print()
-    await afterPrint()
+    await ended
   } finally {
     await Promise.all(
       plan.map(({ chart }) => chart.draw({ kind: 'screen' }).catch(() => undefined)),

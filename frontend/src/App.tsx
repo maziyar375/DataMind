@@ -97,7 +97,10 @@ export default function App() {
         overflow: 'hidden',
       }}
     >
-      <div style={{ display: 'flex', height: '100vh', width: '100%' }}>
+      {/* The two shell boxes carry classes only so the print stylesheet can
+          reach them: both are viewport-sized scroll containers, and on paper
+          there is no viewport to be sized to — see `@media print`. */}
+      <div className="rm-app-row" style={{ display: 'flex', height: '100vh', width: '100%' }}>
         <Sidebar
           user={user}
           view={view}
@@ -106,7 +109,7 @@ export default function App() {
           onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
           onLogout={handleLogout}
         />
-        <div style={{ flex: 1, display: 'flex', minWidth: 0 }}>
+        <div className="rm-app-view" style={{ flex: 1, display: 'flex', minWidth: 0 }}>
           {view === 'chat' && <ChatPage />}
           {view === 'dashboards' && <DashboardsPage />}
           {view === 'reports' && <ReportsPage />}

@@ -1096,7 +1096,51 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
     color-scheme: light !important;
   }
 
-  @page { margin: 16mm 14mm; }
+  /* The page, and the one mark that belongs in its margin.
+
+     The date and time, the "DataMind" title and the page's URL are the
+     *browser's* header and footer — not in the document, and not removable by
+     hiding anything, because they are drawn into the margin around it.
+
+     They are removable by **taking the margin**. A margin box the document
+     declares belongs to the document, and the browser stops printing its own
+     there; the footer proved it, where declaring `@bottom-center` alone
+     replaced both the URL and the browser's number with ours. So the six boxes
+     the browser uses are all claimed here — five of them empty, which is the
+     whole point of declaring them, and the sixth carrying the one mark a
+     printed document actually wants.
+
+     A browser without margin-box support ignores the block and falls back to
+     its own set, where the print dialog's "Headers and footers" checkbox is
+     still the only switch. */
+  @page {
+    margin: 16mm 14mm;
+
+    /* Claimed and left empty: the date and time, the document title, the URL.
+       `content: ""` is not a no-op here — an undeclared box is the browser's
+       to fill, and an empty declared one is not. */
+    @top-left { content: ""; }
+    @top-center { content: ""; }
+    @top-right { content: ""; }
+    @bottom-left { content: ""; }
+    @bottom-right { content: ""; }
+
+    @bottom-center {
+      content: counter(page);
+      /* Set in the document's own face, a size below the body text, in the
+         dim ink the appendix uses — a folio, not a label. Tabular figures so
+         the digits sit on the same axis from page 9 to page 10. */
+      font-family: Inter, Vazirmatn, system-ui, sans-serif;
+      font-size: 8.5pt;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.04em;
+      color: #8a857e;
+      /* Clear of the last line, sitting in the upper half of the margin
+         rather than against the paper's edge. */
+      padding-top: 5mm;
+      vertical-align: top;
+    }
+  }
 
   html, body {
     background: #ffffff !important;
@@ -1113,16 +1157,49 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
     display: none !important;
   }
 
-  .rm-app { background: #ffffff !important; display: block !important; }
-
-  /* The scroller becomes the page: a fixed-height overflow container prints
-     one screenful and drops the rest. */
-  .rm-report-scroll {
-    overflow: visible !important;
-    height: auto !important;
-    max-height: none !important;
-    padding: 0 !important;
+  /* The light theme's warm wash is a *screen* affordance — four radial
+     gradients that make the open areas read as paper rather than a white void.
+     On paper it is a yellow cast over the whole page, which is where it came
+     from: `:root[data-theme='light'] .rm-app` (line 75) is a more specific
+     selector than `.rm-app`, and both are `!important`, so the wash beat the
+     white. Hence the selector repeated verbatim here, where source order
+     settles it. Dark mode never had the bug because the wash is scoped to
+     light, which is exactly the asymmetry that gives it away. */
+  .rm-app,
+  :root[data-theme='light'] .rm-app {
+    background: #ffffff !important;
   }
+
+  /* The shell has to stop being a window.
+
+     On screen the application is a box exactly one viewport tall that clips
+     what overflows it, and every layer from `.rm-app` down to the article is a
+     flex item sized by that box. Print has no viewport to be a hundred percent
+     of, and a clipped box prints as one page with the rest of the document
+     discarded — the entire report after the fold, silently. So every ancestor
+     of the article is unwound to ordinary block flow with no height of its own,
+     and the article's own scroller becomes the page.
+
+     `!important` throughout because the shell declares these inline: `.rm-app`
+     and the row inside it are `height: 100vh` in App.tsx, and inline styles
+     otherwise beat a stylesheet. That is also why those two boxes carry classes
+     at all. */
+  html,
+  body,
+  #root,
+  .rm-app,
+  .rm-app-row,
+  .rm-app-view,
+  .rm-report-view,
+  .rm-report-scroll {
+    display: block !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  .rm-report-scroll { padding: 0 !important; }
 
   /* A definite page width, in the page's own unit. On screen the article is
      capped at 860px and centred in whatever the window gives it; on paper the
@@ -1134,13 +1211,29 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
     width: 100% !important;
     max-width: 182mm !important;
     margin-inline: auto !important;
-    gap: 20px !important;
   }
+
+  /* Block flow, not flex, for the two boxes that have to fragment.
+
+     The article is a flex column on screen and so is every section in it, and
+     a multi-page document is exactly the case where a browser fragments a flex
+     container worst — dropped children, `break-inside: avoid` ignored, page
+     breaks landing mid-figure. Block flow is the layout page breaking was
+     designed around. The gap each one loses comes back as a margin between
+     siblings, which is what the gap was doing. Figures and the headline band
+     stay as they are: neither is ever split, so neither is ever fragmented. */
+  .rm-report,
+  .rm-report-section {
+    display: block !important;
+  }
+  .rm-report > * + * { margin-block-start: 20px !important; }
+  .rm-report-section > * + * { margin-block-start: 13px !important; }
 
   /* A chart split across a page break is a chart nobody can read, and a
      heading stranded at the foot of a page is the classic printing tell. */
   .rm-report-figure,
-  .rm-report-section > figure {
+  .rm-report-section > figure,
+  .rm-report-figures {
     break-inside: avoid;
     page-break-inside: avoid;
   }

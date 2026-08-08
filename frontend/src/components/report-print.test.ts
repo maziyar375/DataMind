@@ -77,6 +77,98 @@ check(
   PRINT_CONTENT_WIDTH_MM,
 )
 
+// ── the shell, which on paper must stop being a window ───────────────────
+// The application is a box one viewport tall that clips its overflow, and it
+// says so *inline* in App.tsx — so a print stylesheet that does not name every
+// layer of it, with `!important`, prints page one and silently discards the
+// rest of the document. That was the bug. These assert the release survives,
+// and that the classes the selectors depend on are still on the elements.
+const print = /@media print \{([\s\S]*)\n\}/.exec(css)
+check('styles.css has a print block', print !== null, true)
+const printCss = print?.[1] ?? ''
+
+/** The selectors of every rule in the print block that both un-clips and
+ *  un-sizes what it names. Declaration order is not asserted — only that one
+ *  rule does both to a given selector, since either alone still loses pages. */
+const released = new Set<string>()
+const printRules = printCss.replace(/\/\*[\s\S]*?\*\//g, '')
+for (const [, selectors, body] of printRules.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+  if (!/overflow:\s*visible\s*!important/.test(body)) continue
+  if (!/height:\s*auto\s*!important/.test(body)) continue
+  for (const one of selectors.split(',')) released.add(one.trim())
+}
+for (const selector of ['html', 'body', '#root', '.rm-app', '.rm-app-row',
+  '.rm-app-view', '.rm-report-view', '.rm-report-scroll']) {
+  check(
+    `print releases ${selector} from its height and its clipping`,
+    released.has(selector),
+    true,
+  )
+}
+
+const appTsx = readFileSync(fileURLToPath(new URL('../App.tsx', import.meta.url)), 'utf8')
+check('the shell row still carries the class the rule names', /"rm-app-row"/.test(appTsx), true)
+check('and so does the view box', /"rm-app-view"/.test(appTsx), true)
+const reportTsx = readFileSync(fileURLToPath(new URL('./report.tsx', import.meta.url)), 'utf8')
+check('and the run viewer', /"rm-report-view"/.test(reportTsx), true)
+
+// ── the order the handoff hangs on ───────────────────────────────────────
+// `window.print()` blocks in Chrome and Firefox and `afterprint` fires before
+// it returns, so a watch armed *after* the call is armed for an event that has
+// already happened: the promise then runs to its 60s timeout, the spinner
+// turns, and the re-entrancy guard keeps the button shut the whole time. That
+// was the bug. Source order is what fixes it, so source order is what is
+// asserted — there is no DOM here to observe the event in.
+const printTs = readFileSync(fileURLToPath(new URL('./report-print.ts', import.meta.url)), 'utf8')
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/\/\/.*$/gm, '')
+const armed = printTs.indexOf('= watchForPrintEnd()')
+const printed = printTs.indexOf('window.print()')
+check('the print-end watch is armed before window.print() blocks',
+  armed > 0 && printed > 0 && armed < printed, true)
+
+// ── the page margin, which is taken rather than cleared ──────────────────
+// The browser prints its own date, title and URL into the margin boxes the
+// document leaves undeclared. Declaring one takes it: the footer went away the
+// moment `@bottom-center` was claimed, which is what these five empty boxes
+// are for. An empty `content` here is load-bearing, so a tidying pass that
+// deletes them as no-ops brings the header back.
+for (const box of ['top-left', 'top-center', 'top-right',
+  'bottom-left', 'bottom-right']) {
+  check(
+    `@${box} is claimed, so the browser cannot print into it`,
+    new RegExp(`@${box}\\s*\\{\\s*content:\\s*""\\s*;?\\s*\\}`).test(printRules),
+    true,
+  )
+}
+check(
+  'and @bottom-center carries the page number',
+  /@bottom-center\s*\{[^}]*content:\s*counter\(page\)/.test(printRules),
+  true,
+)
+
+// ── the light theme's wash, which is a screen affordance ─────────────────
+// Light mode paints `.rm-app` with four radial gradients so the app reads as
+// paper; on actual paper that is a yellow cast over every page. It is scoped
+// to `:root[data-theme='light'] .rm-app`, which out-specifies a bare `.rm-app`
+// even when both are `!important` — so the print block has to answer it with
+// the same selector, not a broader one. Dark mode never showed the bug, which
+// is what made it look like a theme problem rather than a specificity one.
+check(
+  'print flattens the light wash with a selector that can actually win',
+  /:root\[data-theme='light'\]\s+\.rm-app[^{]*\{[^}]*background:\s*#ffffff\s*!important/
+    .test(printRules),
+  true,
+)
+
+// A flex container is the one layout browsers fragment worst, and these two
+// are the ones that have to cross a page break.
+check(
+  'the article and its sections print as block flow',
+  /\.rm-report,\s*\.rm-report-section\s*\{\s*display:\s*block\s*!important/.test(printCss),
+  true,
+)
+
 // The font this whole phase exists for has to be served by us, not fetched.
 check(
   'Vazirmatn is self-hosted rather than requested from a CDN',

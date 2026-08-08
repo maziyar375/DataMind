@@ -2048,7 +2048,10 @@ export function ReportRunViewer({
   const running = run !== null && isReportRunInFlight(run.status)
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+    <div
+      className="rm-report-view"
+      style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}
+    >
       <header className="rm-dash-header" style={headerStyle}>
         <button
           onClick={onBack}
@@ -2104,9 +2107,19 @@ export function ReportRunViewer({
               chrome, forces the light tokens and keeps a figure whole across a
               page break; `report-print.ts` does the parts CSS cannot reach —
               the fonts, and redrawing the charts at page width. Offered only
-              once there is a document to print. */}
+              once there is a document to print.
+
+              The browser's own date, title and URL are gone by then: the
+              stylesheet claims all six `@page` margin boxes, so there is
+              nowhere left for the browser to print them (docs/reports.md
+              §12). */}
           {!running && document_.length > 0 && (
-            <GhostButton onClick={() => void print()} disabled={printing} style={toolbarBtn}>
+            <GhostButton
+              onClick={() => void print()}
+              disabled={printing}
+              style={toolbarBtn}
+              title="Print the saved run, at page width, with the page numbered."
+            >
               {printing ? <Spinner size={12} /> : <Icon.Doc size={12} />} {t.print}
             </GhostButton>
           )}

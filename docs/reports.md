@@ -476,7 +476,9 @@ CSS variables:
 
 Then `await document.fonts.ready` — with the Arabic subset explicitly requested
 first when the document has Persian in it — and `window.print()`, restoring
-everything afterwards. **Vazirmatn is self-hosted** from `public/fonts` for
+everything afterwards. The watch for the dialog closing is armed **before** the
+call, not after: `window.print()` blocks and `afterprint` fires inside it, so a
+listener attached afterwards waits for an event that has already happened. **Vazirmatn is self-hosted** from `public/fonts` for
 exactly this reason: a BI tool pointed at a production database is routinely
 deployed behind a firewall, and there a Persian report would print in a
 fallback face with the wrong metrics — the *deliverable* rendering wrong while
@@ -485,6 +487,55 @@ the app merely looks different.
 Server-side PDF is refused on purpose: it means shipping headless Chromium in
 the API image, and Persian shaping in pure-Python PDF libraries is where this
 reliably breaks.
+
+### The page margin, and who owns it
+
+Left to itself the browser prints its own header and footer into the margin:
+the date and time, the document `<title>` ("DataMind"), and the page's URL.
+None of it is in the document, so none of it can be hidden — a report somebody
+sends to somebody else with `localhost:5173/…` across the foot is the tell that
+it came out of a tool rather than a press.
+
+It is removed by **taking the margin**, not by clearing it. A margin box the
+document declares belongs to the document, and the browser stops printing its
+own there. So all six are claimed:
+
+```css
+@page {
+  margin: 16mm 14mm;
+
+  @top-left    { content: ""; }   /* the date and time */
+  @top-center  { content: ""; }
+  @top-right   { content: ""; }   /* the title */
+  @bottom-left { content: ""; }   /* the URL */
+  @bottom-right{ content: ""; }
+
+  @bottom-center { content: counter(page); … }   /* ours */
+}
+```
+
+The five empty ones are load-bearing — `content: ""` is what makes a box the
+document's rather than the browser's, so deleting them as no-ops brings the
+header straight back. `test:print` asserts all six.
+
+The folio itself is 8.5pt, tabular figures so digits stay on axis from page 9
+to page 10, in the dim ink the appendix uses, sitting in the upper half of the
+bottom margin.
+
+Where margin boxes are not implemented the whole block is ignored and the
+browser's own set returns, and there the print dialog's *More settings →
+Headers and footers* checkbox is the only switch — it takes all four away
+together, page number included. Nothing else in the print path depends on any
+of this.
+
+### The wash does not print
+
+Light mode paints `.rm-app` with four radial gradients so the open areas read
+as warm paper. On actual paper that is a yellow cast over the page, and the
+print block flattens it — with the selector `:root[data-theme='light'] .rm-app`
+rather than a bare `.rm-app`, because the wash is `!important` and the more
+specific of two `!important` declarations wins. Dark mode never showed it,
+which is what made a specificity bug look like a theme bug.
 
 ---
 
