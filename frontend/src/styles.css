@@ -1,6 +1,58 @@
 /* Global shell. Component styling lives with the components; this file only
    sets what must be global: resets, scrollbars, focus, and motion. */
 
+/* ── Vazirmatn, served from here rather than from Google ───────────────────
+   A BI tool pointed at a production database is routinely deployed behind a
+   firewall, and there `fonts.googleapis.com` is simply unreachable. Inter
+   falling back to system-ui makes the app look slightly different; Vazirmatn
+   falling back makes the *deliverable* wrong — a printed Persian report in a
+   face with the wrong metrics and no Persian digits. So this one is ours.
+
+   These are the same three files the Google Fonts CSS pointed at, kept as
+   three because their `unicode-range` is what makes the browser fetch the
+   Arabic subset only for a document that has Persian in it. Each is the
+   variable font (wght 100–900), which is why one file covers every weight
+   the app asks for and there are three faces here rather than twelve.
+
+   Vazirmatn is SIL OFL 1.1 — the licence is beside the files in
+   `public/fonts/OFL.txt`. */
+@font-face {
+  font-family: 'Vazirmatn';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/vazirmatn-arabic.woff2') format('woff2');
+  unicode-range: U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0897-08E1,
+    U+08E3-08FF, U+200C-200E, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74,
+    U+FE76-FEFC, U+102E0-102FB, U+10E60-10E7E, U+10EC2-10EC4, U+10EFC-10EFF,
+    U+1EE00-1EE03, U+1EE05-1EE1F, U+1EE21-1EE22, U+1EE24, U+1EE27, U+1EE29-1EE32,
+    U+1EE34-1EE37, U+1EE39, U+1EE3B, U+1EE42, U+1EE47, U+1EE49, U+1EE4B,
+    U+1EE4D-1EE4F, U+1EE51-1EE52, U+1EE54, U+1EE57, U+1EE59, U+1EE5B, U+1EE5D,
+    U+1EE5F, U+1EE61-1EE62, U+1EE64, U+1EE67-1EE6A, U+1EE6C-1EE72, U+1EE74-1EE77,
+    U+1EE79-1EE7C, U+1EE7E, U+1EE80-1EE89, U+1EE8B-1EE9B, U+1EEA1-1EEA3,
+    U+1EEA5-1EEA9, U+1EEAB-1EEBB, U+1EEF0-1EEF1;
+}
+@font-face {
+  font-family: 'Vazirmatn';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/vazirmatn-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Vazirmatn';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/vazirmatn-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 body {
   margin: 0;
   /* Inter carries no Persian/Arabic glyphs, so the browser falls back to
@@ -1017,9 +1069,10 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
    override the user's chosen theme, and printing dark-mode panels wastes toner
    on a background nobody wants — so it is worth the shout.
 
-   Vazirmatn is still loaded from Google Fonts in index.html. On a machine that
-   cannot reach it, a Persian report prints in a fallback face with the wrong
-   metrics. Self-hosting the woff2 is the remaining piece (reports-plan §11.1). */
+   What this file cannot do is size a chart, because a Vega plot is sized in
+   its spec rather than by CSS, and its colours come from `data-theme` rather
+   than from these tokens. `report-print.ts` redraws them at the width declared
+   here, in the light palette, before the print dialog opens. */
 @media print {
   :root {
     --bg: #ffffff !important;
@@ -1071,8 +1124,16 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
     padding: 0 !important;
   }
 
+  /* A definite page width, in the page's own unit. On screen the article is
+     capped at 860px and centred in whatever the window gives it; on paper the
+     width is known, and `report-print.ts` reads the same number back out of
+     `PRINT_CONTENT_WIDTH_MM` to decide how wide to redraw each chart. A4 minus
+     the horizontal `@page` margin. US Letter is wider, so a report printed on
+     it keeps this measure and gains margin rather than reflowing. */
   .rm-report {
-    max-width: none !important;
+    width: 100% !important;
+    max-width: 182mm !important;
+    margin-inline: auto !important;
     gap: 20px !important;
   }
 
@@ -1104,6 +1165,16 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   .rm-report-figure [style*='overflow'] {
     overflow: visible !important;
     max-height: none !important;
+  }
+
+  /* The charts redrawn at page width need nothing here. This is for the one
+     kind that keeps its own width — a categorical chart sized per column,
+     which is deliberately wider than its box so its labels stay legible and
+     scrolls sideways on screen. There is no sideways on paper, so it scales
+     down as vector art rather than being clipped at the margin. */
+  .rm-report-figure svg {
+    max-width: 100% !important;
+    height: auto !important;
   }
 }
 

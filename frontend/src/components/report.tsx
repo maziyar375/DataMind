@@ -48,6 +48,7 @@ import {
 } from './report-document'
 // One vocabulary for a run's status across the two screens that show one.
 import { RUN_TONE } from './report-history'
+import { printReport } from './report-print'
 import { VegaChart } from './VegaChart'
 import {
   Chip, CopyButton, DangerButton, EmptyState, ErrorNote, GhostButton, Icon, InlineEdit,
@@ -1833,6 +1834,21 @@ export function ReportRunViewer({
   // right-to-left prose is the seam a reader sees before they read a word.
   const dir = language === 'fa' ? 'rtl' : 'ltr'
 
+  // What gets printed: the article, which is exactly the saved run rendered as
+  // a document. Nothing outside it reaches the page, and nothing the printer
+  // does reaches the run.
+  const article = useRef<HTMLElement>(null)
+  const [printing, setPrinting] = useState(false)
+
+  async function print() {
+    setPrinting(true)
+    try {
+      await printReport(article.current)
+    } finally {
+      setPrinting(false)
+    }
+  }
+
   async function cancel() {
     setBusy(true)
     try {
@@ -1938,11 +1954,12 @@ export function ReportRunViewer({
           {/* Printing is the deliverable, not an extra: a report is a document
               and a document leaves the tool. The stylesheet hides the app
               chrome, forces the light tokens and keeps a figure whole across a
-              page break, so this is one call rather than a renderer.
-              Offered only once there is a document to print. */}
+              page break; `report-print.ts` does the parts CSS cannot reach —
+              the fonts, and redrawing the charts at page width. Offered only
+              once there is a document to print. */}
           {!running && document_.length > 0 && (
-            <GhostButton onClick={() => window.print()} style={toolbarBtn}>
-              <Icon.Doc size={12} /> {t.print}
+            <GhostButton onClick={() => void print()} disabled={printing} style={toolbarBtn}>
+              {printing ? <Spinner size={12} /> : <Icon.Doc size={12} />} {t.print}
             </GhostButton>
           )}
           {running && (
@@ -1971,6 +1988,7 @@ export function ReportRunViewer({
         style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
       >
         <article
+          ref={article}
           className="rm-report"
           dir={dir}
           style={{

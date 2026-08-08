@@ -59,7 +59,7 @@ Size: ~7.1k lines of Python (backend) and ~5.7k lines of TypeScript/TSX
 | Routing | **react-router-dom 6** |
 | Charts | **Vega-Lite** via `vega` / `vega-lite` / `vega-embed` |
 | Styling | Custom design system on **oklch CSS variables** — *no* component library |
-| Fonts | Inter, JetBrains Mono, Vazirmatn (Persian) |
+| Fonts | Inter and JetBrains Mono from Google Fonts; **Vazirmatn** (Persian) self-hosted from `public/fonts` — a printed Persian report is a deliverable and must not depend on a CDN a firewalled deployment cannot reach |
 
 The design tokens in `src/theme/tokens.ts` are copied verbatim from the design
 concept (`docs/ui-design-concept.html`); both dark and light palettes ship.

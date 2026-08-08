@@ -1145,34 +1145,65 @@ Six changes, three of content and three of presentation:
 
 ## Phase 10 — PDF
 
-- [ ] Vazirmatn woff2 self-hosted in `public/` with `@font-face`
-- [ ] Dropped from the Google Fonts link in `index.html`
+- [x] Vazirmatn woff2 self-hosted in `public/` with `@font-face`
+- [x] Dropped from the Google Fonts link in `index.html`
 - [x] `@media print` — forced light tokens, chrome hidden
 - [x] `break-inside: avoid` on sections
-- [ ] Fixed print width in mm
-- [ ] `components/report-print.ts` — `await document.fonts.ready`, re-embed
+- [x] Fixed print width in mm
+- [x] `components/report-print.ts` — `await document.fonts.ready`, re-embed
       charts at print width, then `window.print()`
 - [x] Prints the **saved run**, never live state
 - [ ] Manual check: Persian report, correct shaping and direction
 - [ ] Manual check: English report
 - [ ] Manual check: both themes, charts unbroken across pages
-- [ ] **Gate:** `npm run typecheck` · `npm run build` + the manual checks
+- [x] **Gate:** `npm run typecheck` · `npm run build` · `npm run test:print`
+- [ ] **Gate:** the three manual checks
 
 Phase 9b took the half of this that is a stylesheet: the print rules force the
 light token set over `applyTheme`'s inline styles, hide the chrome, keep a
 figure whole across a break, open the appendix that a collapsed disclosure
-would otherwise drop, and put it on its own page. What is left is the half that
-is a mechanism, and both remaining items are real:
+would otherwise drop, and put it on its own page. This phase is the half that
+is a mechanism.
 
-- **The font.** `index.html` still loads Vazirmatn from `fonts.googleapis.com`.
-  A BI tool pointed at a production database is routinely deployed behind a
-  firewall, and there a Persian report prints in a fallback face with the wrong
-  metrics — the *deliverable* renders wrong while the app looks fine.
-- **The chart width.** `VegaChart` sizes on `width: 'container'` through a
-  `ResizeObserver` that does not run meaningfully in print context, so a chart
-  prints at whatever width it last had on screen. `report-print.ts` re-embedding
-  at a fixed mm width is still the fix, and `await document.fonts.ready` before
-  `window.print()` belongs with it.
+Four things it settled that the plan did not say:
+
+- **Three font files, not four weights.** Google serves Vazirmatn as the
+  *variable* font (`fvar`, wght 100–900), one file per unicode subset, and
+  declares a `@font-face` per requested weight all pointing at the same URL.
+  So the self-hosted version is three files — arabic, latin-ext, latin, 103 KB
+  together — each declared once at `font-weight: 100 900`. Keeping the subsets
+  separate keeps their `unicode-range`, which is what makes an English report
+  never fetch the Arabic file. Verified with fontTools that the Arabic subset
+  still carries `init`/`medi`/`fina`/`rlig`/`ccmp`/`locl` under the `arab`
+  script and the Persian letters and digits: a subset that had dropped its
+  shaping tables is the one real risk of self-hosting, and it has not.
+- **The chart problem was two problems, and the second is worse.** Width was
+  the known one — `width: 'container'` through a `ResizeObserver` that print
+  never fires. The other is colour: a chart's palette comes from `data-theme`,
+  not from the CSS variables, so the token override that turns the *page* light
+  left a dark-theme reader's charts with near-white axis labels on white paper.
+  Neither is reachable from a stylesheet, so `report-print.ts` does a real
+  re-embed — `VegaChart` now builds its spec through a `buildSpec(theme, width)`
+  it exposes as a redraw callback, and registers it. `printReport` redraws only
+  the charts inside the article it was handed, then puts them back.
+- **The inset is measured, not calculated.** Everything between the article's
+  edge and a chart's box is a fixed number of pixels at any article width, so
+  it is read off the screen — where the layout exists — and subtracted from the
+  page, where it does not yet. That beats hardcoding the figure's padding plus
+  its border plus the chart frame's, which is three numbers that go stale
+  silently.
+- **The page width lives in two languages, so a test holds them together.**
+  `styles.css` gives `.rm-report` its width in millimetres and
+  `report-print.ts` redraws against the same measure in pixels; nothing at
+  build time makes them agree. `npm run test:print` reads the stylesheet and
+  asserts it does, and asserts `index.html` has stopped asking Google for
+  Vazirmatn. It needs a filesystem, which is why `src/node-test-env.d.ts`
+  exists: `@types/node` stays out of the SPA, and the two functions this one
+  test uses are declared by hand.
+
+**The three manual checks are still open** — they need a person looking at a
+print preview, and a Persian report to look at, which this repository does not
+yet have generated.
 
 ## Phase 9c — The outline editor, as a workflow
 
