@@ -35,7 +35,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import {
   isReportRunInFlight, llmConfigs as modelsApi, reports as api,
 } from '../api/client'
-import { MAX_SECTIONS, MIN_SECTIONS } from '../api/types'
+import { DEFAULT_SECTIONS, MAX_SECTIONS, MIN_SECTIONS } from '../api/types'
 import type {
   ChartOption, LlmConfig, NumericFinding, Report, ReportBlock, ReportBlockCheck,
   ReportBlockResult,
@@ -226,6 +226,12 @@ export function ReportOutlineEditor({
   const [error, setError] = useState<string | null>(null)
   const [proposing, setProposing] = useState(false)
   const [confirmPropose, setConfirmPropose] = useState(false)
+  // How many sections the *next* proposal asks for. Held here rather than
+  // written on every nudge: a number the user tried and then thought better of
+  // should leave nothing behind, and the report is only told when they commit
+  // to spending the call. Seeded from the row, so it is the number that was
+  // asked for last time rather than a default that forgets.
+  const [sectionTarget, setSectionTarget] = useState(DEFAULT_SECTIONS)
   const [checking, setChecking] = useState<string[]>([])
   const [sweep, setSweep] = useState<{ done: number; total: number; label: string } | null>(null)
   const [previews, setPreviews] = useState<Record<string, string>>({})
@@ -264,6 +270,13 @@ export function ReportOutlineEditor({
     // arrow, and re-running this on every render would re-fetch the document.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reportId])
+
+  // Follows the row, so a proposal made at four leaves the panel showing four
+  // the next time it is opened rather than the default it started at.
+  const stored = report?.section_target
+  useEffect(() => {
+    if (stored !== undefined) setSectionTarget(stored)
+  }, [stored])
 
   /** One place errors surface, and they surface as the API worded them. */
   const guard = useCallback(async <T,>(run: () => Promise<T>): Promise<T | null> => {
@@ -350,10 +363,21 @@ export function ReportOutlineEditor({
    * start it without asking: it is one model call per question, and a user who
    * wants to rewrite the outline before spending that can say so mid-way.
    */
-  async function propose() {
+  /**
+   * @param count how many sections to ask for, as the panel beside the button
+   * has it. Written through first when it differs, because `POST /outline`
+   * reads the stored number — the alternative is a route that takes the shape
+   * of the document as a query parameter, and then two places decide it.
+   */
+  async function propose(count: number) {
     setConfirmPropose(false)
     setProposing(true)
-    const next = await guard(() => api.proposeOutline(reportId))
+    const next = await guard(async () => {
+      if (count !== report?.section_target) {
+        await api.update(reportId, { section_target: count })
+      }
+      return api.proposeOutline(reportId)
+    })
     // Cleared *before* the sweep starts, so the outline is on screen for the
     // render that shows the first question being checked rather than one
     // render later.
@@ -677,7 +701,6 @@ export function ReportOutlineEditor({
             models={models}
             onPrompt={(prompt) => void patchReport({ prompt })}
             onModel={(llm_config_id) => void patchReport({ llm_config_id })}
-            onSections={(section_target) => void patchReport({ section_target })}
           />
 
           {sweep && (
@@ -751,12 +774,14 @@ export function ReportOutlineEditor({
                 proposing ? (
                   <Spinner />
                 ) : (
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <PrimaryButton onClick={() => void propose()} disabled={!report.prompt.trim()}>
-                      <Icon.Sparkle size={14} /> Propose an outline
-                    </PrimaryButton>
-                    <GhostButton onClick={() => void addSection()}>Add a section</GhostButton>
-                  </div>
+                  <ProposePanel
+                    sections={sectionTarget}
+                    onSections={setSectionTarget}
+                    model={models.find((m) => m.id === report.llm_config_id) ?? null}
+                    disabled={!report.prompt.trim()}
+                    onPropose={() => void propose(sectionTarget)}
+                    onAddSection={() => void addSection()}
+                  />
                 )
               }
             />
@@ -804,31 +829,133 @@ export function ReportOutlineEditor({
           footer={
             <>
               <GhostButton onClick={() => setConfirmPropose(false)}>Cancel</GhostButton>
-              <PrimaryButton onClick={() => void propose()}>Replace the outline</PrimaryButton>
+              <PrimaryButton onClick={() => void propose(sectionTarget)}>
+                Replace the outline
+              </PrimaryButton>
             </>
           }
         >
-          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: 'var(--text2)' }}>
-            This <strong>replaces</strong> every section and question below, including anything
-            you have written or checked. Past runs are untouched — they keep their own copy of
-            the structure they were generated from.
-          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
+            <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: 'var(--text2)' }}>
+              This <strong>replaces</strong> every section and question below, including anything
+              you have written or checked. Past runs are untouched — they keep their own copy of
+              the structure they were generated from.
+            </p>
+
+            {/* The one thing worth changing at this exact moment. A structure
+                being replaced is precisely when its length is up for
+                reconsideration — the last one is on screen to judge it by. */}
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                padding: '10px 12px',
+                background: 'var(--panel-alt)',
+                borderRadius: 10,
+                fontSize: 12.5,
+                color: 'var(--text2)',
+              }}
+            >
+              <span>Sections to ask for</span>
+              <NumberStepper
+                ariaLabel="Sections to ask for"
+                value={sectionTarget}
+                onChange={setSectionTarget}
+                min={MIN_SECTIONS}
+                max={MAX_SECTIONS}
+              />
+              <span style={{ marginLeft: 'auto', fontSize: 11.5, color: 'var(--text-faint)' }}>
+                plus the executive summary
+              </span>
+            </label>
+          </div>
         </Modal>
       )}
     </div>
   )
 }
 
+// ── asking for a structure ────────────────────────────────────────────────
+/**
+ * The two knobs that govern the model call, beside the button that spends it.
+ *
+ * The count used to be in the create dialog, which asked a user to choose the
+ * shape of a document before they had seen a single heading of it, and then
+ * stranded the number a screen away from the button it governs. Here the question is
+ * asked at the moment it is answerable — the schema has been read, the request
+ * is on screen above, and the next thing that happens is the call.
+ *
+ * The model is *named*, not chosen, because it is a property of the report
+ * rather than of this call: it also writes the prose and checks the questions,
+ * so it lives one card up with the request. Named here anyway, because this is
+ * where it starts costing money.
+ */
+function ProposePanel({
+  sections, onSections, model, disabled, onPropose, onAddSection,
+}: {
+  sections: number
+  onSections: (count: number) => void
+  model: LlmConfig | null
+  disabled: boolean
+  onPropose: () => void
+  onAddSection: () => void
+}) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 11 }}>
+      <label
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 9,
+          padding: '8px 11px 8px 13px',
+          background: 'var(--panel-alt)',
+          border: '1px solid var(--border)',
+          borderRadius: 10,
+          fontSize: 12.5,
+          color: 'var(--text2)',
+        }}
+      >
+        <span>Sections to ask for</span>
+        <NumberStepper
+          ariaLabel="Sections to ask for"
+          value={sections}
+          onChange={onSections}
+          min={MIN_SECTIONS}
+          max={MAX_SECTIONS}
+        />
+        <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
+          plus the executive summary
+        </span>
+      </label>
+
+      <div style={{ display: 'flex', gap: 8 }}>
+        <PrimaryButton onClick={onPropose} disabled={disabled}>
+          <Icon.Sparkle size={14} /> Propose an outline
+        </PrimaryButton>
+        <GhostButton onClick={onAddSection}>Add a section</GhostButton>
+      </div>
+
+      <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
+        {model
+          ? `Written by ${model.name} — changeable above.`
+          : 'No model chosen yet — pick one above before proposing.'}
+      </span>
+    </div>
+  )
+}
+
 // ── the request ───────────────────────────────────────────────────────────
 /**
- * What the report is for, how big it should be, and who writes it.
+ * What the report is for, and who writes it.
  *
  * The request is kept verbatim and is what the outline is proposed *from*, so
  * it is editable here rather than frozen at creation: rewriting it and
- * proposing again is the loop a user actually runs. The section count sits
- * beside it for the same reason — it is the other half of what the next
- * proposal is asked for, and asking for it only in the create dialog would
- * mean re-proposing forever at whatever number was picked once.
+ * proposing again is the loop a user actually runs. The model sits beside it
+ * because it is a property of the report — it writes the prose and checks the
+ * questions too, not only the one call that proposes a structure. **How many**
+ * sections to ask for is not here for exactly that reason: it governs one call
+ * and nothing else, so it lives with the button that makes it.
  *
  * The connection is not editable and says so: a report keyed to two
  * connections would cross disclosure policies. The language is not editable
@@ -836,13 +963,12 @@ export function ReportOutlineEditor({
  * change it is to write the request in the other language.
  */
 function RequestCard({
-  report, models, onPrompt, onModel, onSections,
+  report, models, onPrompt, onModel,
 }: {
   report: Report
   models: LlmConfig[]
   onPrompt: (prompt: string) => void
   onModel: (id: string) => void
-  onSections: (count: number) => void
 }) {
   const [draft, setDraft] = useState(report.prompt)
   useEffect(() => setDraft(report.prompt), [report.prompt])
@@ -909,19 +1035,6 @@ function RequestCard({
           {report.language === 'fa' ? 'فارسی' : 'English'}
         </span>
 
-        <span aria-hidden style={{ opacity: 0.4 }}>·</span>
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-          <span title="How many sections to ask for the next time an outline is proposed. Add or delete sections yourself at any time.">
-            Sections to propose
-          </span>
-          <NumberStepper
-            ariaLabel="Sections to propose"
-            value={report.section_target}
-            onChange={onSections}
-            min={MIN_SECTIONS}
-            max={MAX_SECTIONS}
-          />
-        </label>
 
         {/* The model is the one pinned-looking choice that is not: it decides
             who writes the prose, not what is in it. */}

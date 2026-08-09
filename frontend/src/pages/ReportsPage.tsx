@@ -20,24 +20,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { ApiError, connections as connectionsApi, llmConfigs as modelsApi, reports as api } from '../api/client'
-import { DEFAULT_SECTIONS, MAX_SECTIONS, MIN_SECTIONS } from '../api/types'
-import type { Connection, LlmConfig, Report, ReportLanguage, ReportSummary } from '../api/types'
+import type { Connection, LlmConfig, Report, ReportSummary } from '../api/types'
 import { ReportOutlineEditor, ReportRunViewer } from '../components/report'
 import { ReportRunHistory } from '../components/report-history'
 import {
   Chip, DisclosureBadge, EmptyState, ErrorNote, Field, GhostButton, Icon, Modal,
-  NumberStepper, PrimaryButton, SearchField, Segmented, Spinner, TextArea, TextInput,
-  relativeTime,
+  PrimaryButton, SearchField, Segmented, Spinner, TextArea, TextInput, relativeTime,
 } from '../components/ui'
 
 /** The policies a report can be written from — the frontend half of §7. */
 const WIDE_ENOUGH = ['SAMPLE', 'FULL']
-
-/** How a derived language is shown on a card. Nothing here sets one. */
-const LANGUAGES: { value: ReportLanguage; label: string }[] = [
-  { value: 'en', label: 'English' },
-  { value: 'fa', label: 'فارسی' },
-]
 
 type SortKey = 'updated' | 'created' | 'name'
 type StatusFilter = 'ACTIVE' | 'ARCHIVED' | 'ALL'
@@ -460,7 +452,6 @@ function ReportCard({
 }) {
   const hue = cardHue(report.id)
   const archived = report.status === 'ARCHIVED'
-  const language = LANGUAGES.find((entry) => entry.value === report.language)
 
   return (
     // `rm-dash-card` carries the pointer and the hover lift of a card you can
@@ -541,7 +532,6 @@ function ReportCard({
             {report.section_count} {report.section_count === 1 ? 'section' : 'sections'}
           </Chip>
         )}
-        {language && <Chip tone="neutral">{language.label}</Chip>}
       </div>
 
       <span
@@ -718,20 +708,26 @@ function IndexSkeleton() {
 
 // ── creating one ──────────────────────────────────────────────────────────
 /**
- * Everything a report is pinned to, asked once.
+ * What a report **is**, and nothing else.
  *
- * The connection is **pinned forever** — a report keyed to two connections
- * would cross disclosure policies. The model is not: it decides who writes the
- * prose, not what is in it. The dialog says so rather than leaving the user to
- * discover it from a 422.
+ * Three questions: what to call it, what it should cover, and which database
+ * it reads. That is the whole set, and the test each one passes is that it
+ * cannot be asked anywhere else:
  *
- * There is no language here, deliberately. It is read off the request — a user
- * who writes «تحلیل فروش» has said which language they want, and asking again
- * is a question whose answer is already on screen. What that slot asks instead
- * is the one thing the prompt used to decide on the user's behalf: **how many
- * sections**. It is a starting point rather than a contract — sections are
- * added and deleted freely once the outline is on screen — so it is offered as
- * a small number beside the model rather than as a decision to agonise over.
+ * * The **connection** is pinned forever — a report keyed to two connections
+ *   would cross disclosure policies — so it can only be chosen up front.
+ * * The **request** is what the report is for. It is also what the language is
+ *   read off, which is why no language is asked for here: a user who writes
+ *   «تحلیل فروش» has already said which one they want.
+ * * The **name** is how it is found again.
+ *
+ * Two things that used to be here are gone, both for the same reason: they
+ * govern a *call*, not a report. **How many sections** is a parameter of the
+ * one call that proposes a structure, and asking for it here made the user
+ * guess the shape of a document before seeing a heading of it. The **model**
+ * decides who writes, not what is in it. Both are asked on the next screen,
+ * beside the button that spends them — the model is defaulted here to the
+ * first configured one and named, so it is never a surprise.
  */
 function CreateDialog({
   onClose, onCreated,
@@ -744,7 +740,6 @@ function CreateDialog({
   const [prompt, setPrompt] = useState('')
   const [connectionId, setConnectionId] = useState<string | null>(null)
   const [modelId, setModelId] = useState<string>('')
-  const [sections, setSections] = useState(DEFAULT_SECTIONS)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -759,7 +754,9 @@ function CreateDialog({
         if (cancelled) return
         setChoices({ connections, models })
         // Preselect the first connection a report can actually be written
-        // from, and the first model — the common case is one of each.
+        // from, and the first model — the common case is one of each. The
+        // model is a default rather than a choice here: it is named below and
+        // changed on the report itself, where it is about to be spent.
         setConnectionId(connections.find((c) => eligible(c))?.id ?? null)
         setModelId(models[0]?.id ?? '')
       } catch (err) {
@@ -785,7 +782,6 @@ function CreateDialog({
           prompt: prompt.trim(),
           connection_id: connectionId,
           llm_config_id: modelId || null,
-          section_target: sections,
         }),
       )
     } catch (err) {
@@ -799,7 +795,7 @@ function CreateDialog({
   return (
     <Modal
       title="New report"
-      subtitle="The database is fixed once it exists. The model, the request and the number of sections can change any time."
+      subtitle="The database is fixed once it exists. Everything else — the request, the model, the shape of the outline — is decided on the report itself."
       width={560}
       onClose={onClose}
       footer={
@@ -874,45 +870,42 @@ function CreateDialog({
             </div>
           )}
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 12, alignItems: 'end' }}>
-            <Field
-              label="Model"
-              hint={
-                choices.models.length === 0
-                  ? 'Add one under LLM providers — a report needs a model to propose its outline and write its prose.'
-                  : 'Changeable at any time.'
-              }
+          {/* Not a picker. The model is not what this report *is* — it decides
+              who writes the prose, not what is in it — so it is chosen on the
+              report itself, beside the request it writes from and the button
+              that first spends it. Named here only so "which model?" is never
+              a surprise, and flagged when there is none, because a report with
+              no model can propose nothing. */}
+          {choices.models.length === 0 ? (
+            <div
+              style={{
+                display: 'flex',
+                gap: 8,
+                padding: '9px 11px',
+                fontSize: 12,
+                lineHeight: 1.5,
+                color: 'var(--text2)',
+                background: 'var(--amber-bg)',
+                border: '1px solid var(--amber-border)',
+                borderRadius: 9,
+              }}
             >
-              <select
-                aria-label="Model"
-                value={modelId}
-                disabled={choices.models.length === 0}
-                onChange={(event) => setModelId(event.target.value)}
-                className="rm-toolbar-select"
-                style={{ width: '100%', padding: '9px 11px' }}
-              >
-                {choices.models.length === 0 && <option value="">No models configured</option>}
-                {choices.models.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-
-            <Field
-              label="Sections"
-              hint="A starting point — add or delete sections after."
-            >
-              <NumberStepper
-                ariaLabel="Sections to propose"
-                value={sections}
-                onChange={setSections}
-                min={MIN_SECTIONS}
-                max={MAX_SECTIONS}
-              />
-            </Field>
-          </div>
+              <span aria-hidden style={{ display: 'flex', color: 'var(--amber)', paddingTop: 1 }}>
+                <Icon.Alert size={13} />
+              </span>
+              <span>
+                No models are configured. Add one under <strong style={{ fontWeight: 600 }}>LLM
+                providers</strong> — a report needs one to propose its outline and write its
+                prose.
+              </span>
+            </div>
+          ) : (
+            <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+              Written by <strong style={{ color: 'var(--text2)', fontWeight: 600 }}>
+                {choices.models[0]?.name}
+              </strong>, and changeable inside the report.
+            </span>
+          )}
 
           {error && <ErrorNote>{error}</ErrorNote>}
         </div>
