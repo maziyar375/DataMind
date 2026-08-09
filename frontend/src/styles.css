@@ -1331,20 +1331,23 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   .rm-report-cover { gap: 9px !important; }
   .rm-report-kicker { font-size: 7pt !important; letter-spacing: 0.18em !important; }
 
-  /* The imprint, a size down with it. The mark is a raster tile, so it is
-     given a print resolution rather than a CSS one: the source is 1024px
-     square and 8mm of it is around 380dpi, which is past what any office
-     printer resolves — it stays crisp wherever the document is printed.
+  /* The mark, sized against the title rather than against the text beside it —
+     14mm is about twice the cap height of a 20pt line, which is what makes it
+     read as an imprint rather than as an ornament on the eyebrow.
+
+     Given a *print* resolution rather than a CSS one: the source is a 1024px
+     raster, and 14mm of it is around 190dpi, above what an office printer
+     resolves, so it stays crisp wherever the document is printed.
      `print-color-adjust` is already exact on `html, body`, so the gradient
      prints as itself instead of as grey. */
-  .rm-report-brand { gap: 5px !important; }
+  .rm-report-masthead { gap: 12mm !important; }
+  .rm-report-coverhead { gap: 9px !important; }
   .rm-report-brand img,
   .rm-report-brand svg {
-    width: 8mm !important;
-    height: 8mm !important;
-    border-radius: 1.8mm !important;
+    width: 14mm !important;
+    height: 14mm !important;
+    border-radius: 3mm !important;
   }
-  .rm-report-brand span { font-size: 9.5pt !important; }
   .rm-report-title { font-size: 20pt !important; line-height: 1.15 !important; }
   .rm-report-subtitle { font-size: 10pt !important; line-height: 1.45 !important; }
   .rm-report-meta {

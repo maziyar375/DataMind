@@ -566,16 +566,20 @@ above and below instead of boxed, `orphans`/`widows` on the prose, a heading
 that cannot be the last mark on a page, a statement in the appendix that cannot
 be split across one, and no folio on the cover.
 
-The cover also carries the **imprint** — the mark and the name, opposite the
-"analytical report" line. It lives inside the article rather than in the
-viewer's header for the same reason the cover states its own provenance: a PDF
-is mailed, filed and read months later by someone who never saw the
-application, and every part of the screen that says where it came from is
-removed by the first rule in the print block. It is set at the weight of a
-byline, not a banner — a cover that advertises the tool louder than it names
-the report has the emphasis backwards — and sized in **millimetres**, because
-the mark is a 1024px raster and 8mm of it is around 380dpi, past what an office
-printer resolves.
+The cover also carries the **imprint**: the mark, alone, in the corner opposite
+the title. It lives inside the article rather than in the viewer's header for
+the same reason the cover states its own provenance — a PDF is mailed, filed
+and read months later by someone who never saw the application, and every part
+of the screen that says where it came from is removed by the first rule in the
+print block.
+
+The mark is set beside the whole title block rather than on the eyebrow's line,
+which is what lets it be 14mm — about twice the cap height of the 20pt title —
+without pushing a single line down. No wordmark beside it: the name is in the
+alt text for a reader who cannot see the mark, and a cover that spells out the
+tool next to the report's own title is a cover arguing about whose document it
+is. Sized in **millimetres** rather than px, because the mark is a 1024px
+raster and 14mm of it is around 190dpi, above what an office printer resolves.
 
 ### The page margin, and who owns it
 

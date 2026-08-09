@@ -2334,60 +2334,69 @@ function DocumentCover({
       className="rm-report-cover"
       style={{ display: 'flex', flexDirection: 'column', gap: 14 }}
     >
-      {/* The masthead line: what kind of document this is, and whose press it
-          came off. They share a row because they are the same statement made
-          twice — one in words, one as a mark — and because a cover reads best
-          when the eye crosses it once, left to right, before it drops to the
-          title. Logical properties throughout, so a Persian report mirrors the
-          whole line rather than stranding the mark on the wrong edge. */}
+      {/* The masthead: what this document is and what it is called on one
+          side, whose press it came off on the other.
+
+          The mark sits beside the whole block rather than on the eyebrow's
+          line, which is what lets it be a real mark instead of a bullet — set
+          against the title it has something its own size to be measured
+          against, and it anchors the top corner of the page without pushing a
+          single line down. Logical properties, so a Persian report mirrors the
+          masthead rather than stranding the mark on the wrong edge. */}
       <div
         className="rm-report-masthead"
-        style={{ display: 'flex', alignItems: 'center', gap: 16 }}
+        style={{ display: 'flex', alignItems: 'flex-start', gap: 24 }}
       >
-        <span
-          className="rm-report-kicker"
-          style={{
-            fontSize: 10.5,
-            fontWeight: 600,
-            letterSpacing: '0.14em',
-            textTransform: 'uppercase',
-            color: 'var(--accent)',
-          }}
+        <div
+          className="rm-report-coverhead"
+          style={{ display: 'flex', flexDirection: 'column', gap: 14, flex: 1, minWidth: 0 }}
         >
-          {t.eyebrow}
-        </span>
-        <Brandmark />
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <h1
-          dir="auto"
-          className="rm-report-title"
-          style={{
-            margin: 0,
-            fontSize: 31,
-            fontWeight: 700,
-            lineHeight: 1.22,
-            letterSpacing: '-0.02em',
-            color: 'var(--text-strong)',
-          }}
-        >
-          {title}
-        </h1>
-        {subtitle && (
-          <p
-            dir="auto"
-            className="rm-report-subtitle"
+          <span
+            className="rm-report-kicker"
             style={{
-              margin: 0,
-              fontSize: 15,
-              lineHeight: 1.6,
-              color: 'var(--text-dim)',
+              fontSize: 10.5,
+              fontWeight: 600,
+              letterSpacing: '0.14em',
+              textTransform: 'uppercase',
+              color: 'var(--accent)',
             }}
           >
-            {subtitle}
-          </p>
-        )}
+            {t.eyebrow}
+          </span>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <h1
+              dir="auto"
+              className="rm-report-title"
+              style={{
+                margin: 0,
+                fontSize: 31,
+                fontWeight: 700,
+                lineHeight: 1.22,
+                letterSpacing: '-0.02em',
+                color: 'var(--text-strong)',
+              }}
+            >
+              {title}
+            </h1>
+            {subtitle && (
+              <p
+                dir="auto"
+                className="rm-report-subtitle"
+                style={{
+                  margin: 0,
+                  fontSize: 15,
+                  lineHeight: 1.6,
+                  color: 'var(--text-dim)',
+                }}
+              >
+                {subtitle}
+              </p>
+            )}
+          </div>
+        </div>
+
+        <Brandmark />
       </div>
 
       {/* A definition list rather than a sentence: these are fields, a reader
@@ -2442,36 +2451,23 @@ function DocumentCover({
  * itself — which is why this sits inside the article rather than in the
  * viewer's header.
  *
- * The lockup is the mark plus the name, at the weight of a byline rather than
- * a banner: it is the publisher's imprint on a document about somebody else's
- * data, and a cover that advertises the tool louder than it names the report
- * has the emphasis backwards. `dir="ltr"` because "DataMind" is a name and
- * reads the same way in a Persian document.
+ * The mark alone, without the name set beside it. The name is already on the
+ * page — it is in the alt text for a reader who cannot see the mark, and a
+ * cover that spells out the tool beside the report's own title is a cover
+ * arguing about whose document it is. A mark needs no caption.
+ *
+ * Which is also what lets it be *big*: at the size of a word it would read as
+ * a bullet in front of the eyebrow, while set against the title it is a mark,
+ * and it anchors the corner of the page the way the rule under the metadata
+ * anchors the foot of the block.
  */
 function Brandmark() {
   return (
     <div
       className="rm-report-brand"
-      dir="ltr"
-      style={{
-        marginInlineStart: 'auto',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        flexShrink: 0,
-      }}
+      style={{ marginInlineStart: 'auto', display: 'flex', flexShrink: 0 }}
     >
-      <Logo size={26} />
-      <span
-        style={{
-          fontSize: 13.5,
-          fontWeight: 700,
-          letterSpacing: '-0.01em',
-          color: 'var(--text-strong)',
-        }}
-      >
-        DataMind
-      </span>
+      <Logo size={54} />
     </div>
   )
 }
