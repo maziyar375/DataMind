@@ -166,19 +166,63 @@ function ReportsIndex({
     void load()
   }, [load])
 
-  const guard = useCallback(
-    async (run: () => Promise<unknown>) => {
-      setBusy(true)
-      try {
-        await run()
-        await load()
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'That did not work.')
-      } finally {
-        setBusy(false)
+  /**
+   * Run one mutation, and hand back its result — `null` if it failed.
+   *
+   * It does **not** re-read the list afterwards, which is what it used to do
+   * and is why a deleted card stayed on screen until a refresh: a dependency
+   * with `yield` commits in its exit code, and FastAPI runs that *after* the
+   * response is sent, so the `GET /reports` a browser fires the instant a
+   * `204` lands can be served from before the delete committed — and then the
+   * card is back, with nothing left to correct it. Every caller below splices
+   * its own row instead, the way create and rename already do (§ `onCreated`).
+   */
+  const guard = useCallback(async <T,>(run: () => Promise<T>): Promise<T | null> => {
+    setBusy(true)
+    try {
+      const value = await run()
+      setError(null)
+      return value
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'That did not work.')
+      return null
+    } finally {
+      setBusy(false)
+    }
+  }, [])
+
+  /** Archive or unarchive: the response *is* the new card. */
+  const toggleArchive = useCallback(
+    async (card: ReportSummary) => {
+      const next = await guard(() =>
+        api.update(card.id, { status: card.status === 'ARCHIVED' ? 'ACTIVE' : 'ARCHIVED' }),
+      )
+      if (next) {
+        setCards((current) =>
+          (current ?? []).map((entry) => (entry.id === next.id ? toCard(next) : entry)),
+        )
       }
     },
-    [load],
+    [guard, setCards],
+  )
+
+  const remove = useCallback(
+    async (card: ReportSummary) => {
+      const done = await guard(async () => {
+        try {
+          await api.remove(card.id)
+        } catch (err) {
+          // A 404 is this same thing already having happened — a second click
+          // on a card that outlived the first. The report is gone either way,
+          // and saying so is more use than an error about it being gone.
+          if (!(err instanceof ApiError && err.status === 404)) throw err
+        }
+      })
+      if (done !== null) {
+        setCards((current) => (current ?? []).filter((entry) => entry.id !== card.id))
+      }
+    },
+    [guard, setCards],
   )
 
   const visible = useMemo(() => {
@@ -331,14 +375,8 @@ function ReportsIndex({
               report={card}
               onOpen={() => onOpen(card.id)}
               onRename={() => setRenaming(card)}
-              onArchive={() =>
-                void guard(() =>
-                  api.update(card.id, {
-                    status: card.status === 'ARCHIVED' ? 'ACTIVE' : 'ARCHIVED',
-                  }),
-                )
-              }
-              onDelete={() => void guard(() => api.remove(card.id))}
+              onArchive={() => void toggleArchive(card)}
+              onDelete={() => void remove(card)}
             />
           ))}
         </div>
