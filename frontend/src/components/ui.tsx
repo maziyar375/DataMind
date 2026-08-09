@@ -1126,7 +1126,12 @@ export function Kpi({ spec, compact = false }: {
   compact?: boolean
 }) {
   return (
+    /* The classes carry no screen styling: they are how the report's print
+       stylesheet reaches a number whose size is set inline here. A headline
+       figure drawn at 40px is right on a dashboard and is a third of a
+       printed page. */
     <div
+      className="rm-kpi"
       style={{
         height: '100%',
         display: 'flex',
@@ -1137,7 +1142,7 @@ export function Kpi({ spec, compact = false }: {
       }}
     >
       <span
-        className="mono"
+        className="mono rm-kpi-value"
         style={{
           fontSize: compact ? 34 : 40,
           fontWeight: 700,
@@ -1150,6 +1155,7 @@ export function Kpi({ spec, compact = false }: {
         {spec.value}
       </span>
       <span
+        className="rm-kpi-label"
         style={{
           fontSize: 11,
           color: 'var(--text-dim)',
@@ -1162,6 +1168,7 @@ export function Kpi({ spec, compact = false }: {
       </span>
       {spec.delta && (
         <span
+          className="rm-kpi-delta"
           style={{
             fontSize: 11.5,
             color: 'var(--text-dim)',
@@ -1186,7 +1193,9 @@ export function Kpi({ spec, compact = false }: {
       )}
       {spec.sparkline.length > 1 && <Sparkline points={spec.sparkline} />}
       {spec.caption && (
-        <span style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>{spec.caption}</span>
+        <span className="rm-kpi-caption" style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>
+          {spec.caption}
+        </span>
       )}
     </div>
   )
@@ -1279,6 +1288,7 @@ export function ResultTable({ spec, previewRows = 5, maxHeight = 420, config }: 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div
+        className="rm-table-wrap"
         style={{
           border: '1px solid var(--border)',
           borderRadius: 10,
@@ -1287,6 +1297,7 @@ export function ResultTable({ spec, previewRows = 5, maxHeight = 420, config }: 
         }}
       >
         <table
+          className="rm-table"
           style={{
             width: '100%',
             borderCollapse: 'collapse',

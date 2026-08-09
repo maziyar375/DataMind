@@ -2196,10 +2196,17 @@ export function ReportRunViewer({
         className="rm-page-pad rm-report-scroll"
         style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
       >
+        {/* `lang` is declared for the hyphenator, not for the layout. The
+            printed body is justified, and `hyphens: auto` picks its break
+            patterns from the language in force — inherited from
+            `<html lang="en">` it would try English patterns on Persian words.
+            Persian is not hyphenated at all, so naming it is how that
+            paragraph gets justified without them. */}
         <article
           ref={article}
           className="rm-report"
           dir={dir}
+          lang={language}
           style={{
             maxWidth: 860,
             margin: '0 auto',
@@ -2323,8 +2330,12 @@ function DocumentCover({
   ]
 
   return (
-    <header style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <header
+      className="rm-report-cover"
+      style={{ display: 'flex', flexDirection: 'column', gap: 14 }}
+    >
       <span
+        className="rm-report-kicker"
         style={{
           fontSize: 10.5,
           fontWeight: 600,
@@ -2339,6 +2350,7 @@ function DocumentCover({
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <h1
           dir="auto"
+          className="rm-report-title"
           style={{
             margin: 0,
             fontSize: 31,
@@ -2353,6 +2365,7 @@ function DocumentCover({
         {subtitle && (
           <p
             dir="auto"
+            className="rm-report-subtitle"
             style={{
               margin: 0,
               fontSize: 15,
@@ -2368,6 +2381,7 @@ function DocumentCover({
       {/* A definition list rather than a sentence: these are fields, a reader
           scans them, and on paper they are what a cover page carries. */}
       <dl
+        className="rm-report-meta"
         style={{
           display: 'flex',
           flexWrap: 'wrap',
@@ -2430,9 +2444,11 @@ function HeadlineFigures({
   return (
     <section
       aria-label={t.keyFigures}
+      className="rm-report-band"
       style={{ display: 'flex', flexDirection: 'column', gap: 9 }}
     >
       <span
+        className="rm-report-bandlabel"
         style={{
           fontSize: 10,
           fontWeight: 600,
@@ -2454,6 +2470,7 @@ function HeadlineFigures({
         {figures.map(({ block, heading }) => (
           <div
             key={block.id}
+            className="rm-report-tile"
             style={{
               display: 'flex',
               flexDirection: 'column',
@@ -2467,6 +2484,7 @@ function HeadlineFigures({
             {block.kpi && <Kpi spec={block.kpi} compact />}
             <span
               dir="auto"
+              className="rm-report-tilecap"
               style={{
                 fontSize: 10.5,
                 color: 'var(--text-faint)',
@@ -2546,6 +2564,7 @@ function MethodNotes({
       <div className="rm-report-method-body" hidden={!open}>
         <p
           dir="auto"
+          className="rm-report-methodintro"
           style={{
             margin: '0 0 14px',
             fontSize: 12.5,
@@ -2559,6 +2578,7 @@ function MethodNotes({
           {blocks.map((block) => (
             <li
               key={block.id}
+              className="rm-report-methoditem"
               style={{
                 display: 'flex',
                 flexDirection: 'column',
@@ -2567,13 +2587,23 @@ function MethodNotes({
                 borderTop: '1px solid var(--border)',
               }}
             >
-              <span style={{ fontSize: 11, fontWeight: 650, color: 'var(--text2)' }}>
+              <span
+                className="rm-report-figlabel"
+                style={{ fontSize: 11, fontWeight: 650, color: 'var(--text2)' }}
+              >
                 {t.figure} {figures.get(block.id) ?? '—'}
               </span>
-              <span dir="auto" style={{ fontSize: 12.5, color: 'var(--text)' }}>
+              <span
+                dir="auto"
+                className="rm-report-caption"
+                style={{ fontSize: 12.5, color: 'var(--text)' }}
+              >
                 {block.question_snapshot}
               </span>
-              <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+              <span
+                className="rm-report-source"
+                style={{ fontSize: 11, color: 'var(--text-faint)' }}
+              >
                 {block.row_count.toLocaleString()}{' '}
                 {block.row_count === 1 ? t.row : t.rows}
                 {block.truncated && ` · ${t.capped}`}
@@ -2589,6 +2619,7 @@ function MethodNotes({
               )}
               <pre
                 dir="ltr"
+                className="rm-report-sql"
                 style={{
                   margin: '3px 0 0',
                   padding: '8px 10px',
@@ -2609,7 +2640,10 @@ function MethodNotes({
         </ol>
       </div>
 
-      <p style={{ margin: 0, fontSize: 11.5, lineHeight: 1.7, color: 'var(--text-faint)' }}>
+      <p
+        className="rm-report-asof"
+        style={{ margin: 0, fontSize: 11.5, lineHeight: 1.7, color: 'var(--text-faint)' }}
+      >
         {t.asOf} {new Date(run.finished_at ?? run.created_at).toLocaleString()}.{' '}
         {t.asOfTail}
       </p>
@@ -2648,7 +2682,7 @@ function SectionView({
 
   return (
     <section
-      className="rm-report-section"
+      className={summary ? 'rm-report-section rm-report-summary' : 'rm-report-section'}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -2669,7 +2703,7 @@ function SectionView({
         {!summary && section.number > 0 && (
           <span
             aria-hidden
-            className="mono"
+            className="mono rm-report-num"
             style={{
               fontSize: 13,
               fontWeight: 700,
@@ -2683,6 +2717,7 @@ function SectionView({
         )}
         <h2
           dir="auto"
+          className="rm-report-heading"
           style={{
             margin: 0,
             flex: 1,
@@ -2716,6 +2751,7 @@ function SectionView({
       {!summary && (
         <div
           aria-hidden
+          className="rm-report-rule"
           style={{ height: 2, background: 'var(--text-strong)', opacity: 0.85 }}
         />
       )}
@@ -2843,7 +2879,10 @@ function ProseView({
   const parts = summary ? summaryParts(text) : { lead: text, findings: [] }
 
   return (
-    <div className="rm-turn" style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+    <div
+      className="rm-turn rm-report-prose"
+      style={{ display: 'flex', flexDirection: 'column', gap: 11 }}
+    >
       {parts.lead && (
         <p
           dir="auto"
@@ -2867,7 +2906,10 @@ function ProseView({
           forgot to format; set out, it is the part of an executive summary
           people actually take away. */}
       {parts.findings.length > 0 && (
-        <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'grid', gap: 8 }}>
+        <ul
+          className="rm-report-findings"
+          style={{ margin: 0, padding: 0, listStyle: 'none', display: 'grid', gap: 8 }}
+        >
           {parts.findings.map((finding, index) => (
             <li
               key={index}
@@ -3040,10 +3082,13 @@ function BlockView({
         borderRadius: 12,
       }}
     >
-      <figcaption style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <figcaption
+        className="rm-report-figcap"
+        style={{ display: 'flex', flexDirection: 'column', gap: 2 }}
+      >
         {figure !== undefined && (
           <span
-            className="mono"
+            className="mono rm-report-figlabel"
             style={{
               fontSize: 10,
               fontWeight: 700,
@@ -3057,6 +3102,7 @@ function BlockView({
         )}
         <span
           dir="auto"
+          className="rm-report-caption"
           style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)', lineHeight: 1.5 }}
         >
           {block.question_snapshot}
@@ -3087,6 +3133,7 @@ function BlockView({
       )}
 
       <div
+        className="rm-report-figfoot"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -3096,7 +3143,10 @@ function BlockView({
           borderTop: '1px solid var(--border)',
         }}
       >
-        <span style={{ fontSize: 10.5, color: 'var(--text-faint)', paddingTop: 5 }}>
+        <span
+          className="rm-report-source"
+          style={{ fontSize: 10.5, color: 'var(--text-faint)', paddingTop: 5 }}
+        >
           {block.row_count.toLocaleString()} {block.row_count === 1 ? t.row : t.rows}
           {block.truncated && ` · ${t.capped}`}
           {' · '}

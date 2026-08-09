@@ -492,8 +492,30 @@ CSS variables:
   page will actually give it. The inset between the article's edge and a
   chart's box is *measured on screen*, where the layout exists, and subtracted
   from the page, where it does not yet.
+- **Height.** A screen plot is 300px tall whatever its width, because a screen
+  scrolls for nothing. A page is a fixed rectangle, and at 300px a figure plus
+  its caption and source line is a third of A4 — so `break-inside: avoid` puts
+  each one on a page of its own with the bottom third blank. On paper the
+  height comes from the width instead (`printChartHeight`, near 3:1), which is
+  what lets three figures share a page. The charts that grow downward with
+  their rows are exempt: their height *is* the row count.
 - **Theme.** The print redraw pins the light palette, so a dark-theme reader
   does not print near-white axis labels onto white paper.
+- **Fit.** On paper the figure's box is the constraint and the plot gives way
+  to it (`autosize: fit`), rather than the screen's `pad`, where axes and
+  legend are added *outside* the given size and the box scrolls to reach them.
+  Two kinds cannot be fitted — a chart sized by its rows, and an arc, whose
+  radius is derived from the plot box — so those stay on `pad` and are scaled
+  down as vector art instead.
+
+That last scaling is a `viewBox` question, not a CSS one. Vega gives the SVG a
+`viewBox` equal to its computed size, which is what makes `max-width: 100%`
+scale rather than crop — but a chart can *draw* outside that box, because a
+legend's width comes from measured label text while the glyphs render to
+wherever they end. An SVG clips at its viewBox, so those few pixels are gone:
+this is why a printed pie chart's longest legend label used to lose its last
+letter. After a print draw, `makeScalable` re-measures the drawing and enlarges
+the box where the drawing won, plus two pixels of bleed.
 
 Then `await document.fonts.ready` — with the Arabic subset explicitly requested
 first when the document has Persian in it — and `window.print()`, restoring
@@ -508,6 +530,41 @@ the app merely looks different.
 Server-side PDF is refused on purpose: it means shipping headless Chromium in
 the API image, and Persian shaping in pure-Python PDF libraries is where this
 reliably breaks.
+
+### The printed document is set, not screenshotted
+
+The components declare their sizes inline, in px, for a screen: 14.5px body,
+20px section headings, a 40px headline figure. Print px are 1/96in **by
+definition**, so those are hard point sizes on paper — a 10.9pt body where a
+report from a BI or consulting team sets 9.5–10pt, and a 30pt number where it
+sets 16. Printed at screen sizes the document does not look large, it looks
+*enlarged*: the wrong size for the surface, which is the same tell as a slide
+deck pasted into a letter.
+
+So the print block restates the scale in **points**, the unit the page is
+measured in, and cuts the padding and the gaps with it — type set a third
+smaller inside boxes that kept their screen padding reads as a document that
+shrank away from its own furniture. Every one of those rules is `!important`,
+which is the price of a design system that styles in JSX; a rule that loses it
+in a tidy-up silently reverts that element to screen size on paper and nowhere
+else. `test:print` asserts the body's size, its unit, and that each class the
+scale hangs on is still on a component.
+
+The body is also **justified, with hyphenation**. Ragged-right is correct on
+screen, where the measure moves with the window and hyphenation across those
+widths is unreliable; the page's measure is fixed and known (182mm, about 90
+characters at 9.5pt), which is the condition justification needs. The article
+carries its own `lang`, because `hyphens: auto` picks its break patterns from
+the language in force and would otherwise hyphenate a Persian report against
+English patterns. Justification is running prose only — never headings,
+captions, table cells or SQL, where the last-line rule stretches a two-word
+line across the measure.
+
+The rest is the ordinary furniture of a printed document rather than of an
+application: squared-off figures instead of 12px-rounded cards, tables ruled
+above and below instead of boxed, `orphans`/`widows` on the prose, a heading
+that cannot be the last mark on a page, a statement in the appendix that cannot
+be split across one, and no folio on the cover.
 
 ### The page margin, and who owns it
 

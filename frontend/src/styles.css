@@ -1142,6 +1142,14 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
     }
   }
 
+  /* No folio on the opening page. The cover states what the document is and
+     when it was made; a "1" under it is the tell of a page printed out of a
+     browser rather than set as a document. Claimed rather than left off, for
+     the same reason as the five above — an undeclared box is the browser's. */
+  @page :first {
+    @bottom-center { content: ""; }
+  }
+
   html, body {
     background: #ffffff !important;
     /* Print colour is opt-in in every browser; without this the panels, the
@@ -1226,8 +1234,13 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   .rm-report-section {
     display: block !important;
   }
-  .rm-report > * + * { margin-block-start: 20px !important; }
-  .rm-report-section > * + * { margin-block-start: 13px !important; }
+  /* The screen's gaps, re-cut for a page. On screen 30px between sections and
+     13px inside one is generous rather than loose, because the eye has a
+     viewport of white to spend; on paper every millimetre of it is a
+     millimetre a figure could have used, and the leftovers collect at the foot
+     of each page as the blank third that makes a printout look unfinished. */
+  .rm-report > * + * { margin-block-start: 14px !important; }
+  .rm-report-section > * + * { margin-block-start: 7px !important; }
 
   /* A chart split across a page break is a chart nobody can read, and a
      heading stranded at the foot of a page is the classic printing tell. */
@@ -1269,6 +1282,209 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
     max-width: 100% !important;
     height: auto !important;
   }
+  /* …which only means anything if the box between it and the figure is not
+     shrink-wrapped to the drawing. `vega-embed` wraps the SVG in an
+     inline-block, so `max-width: 100%` on the SVG resolves against its own
+     width and scales nothing. Both are needed, and neither alone works. */
+  .rm-report-figure .vega-embed {
+    display: block !important;
+    max-width: 100% !important;
+  }
+
+  /* ── the printed type scale ─────────────────────────────────────────────
+
+     Everything below re-sets, for the page, sizes the components declare
+     inline for the screen — hence `!important` on every one of them, which is
+     the price of a design system that styles in JSX. The screen is the source
+     of truth for what a report *is*; this is the same document set for a
+     different surface, and the two disagree about three things:
+
+     **Size.** A screen sets body text at 14.5px because it is read at arm's
+     length on a backlit panel that may be scaled by the OS. Print px are
+     1/96in by definition, so 14.5px is a hard 10.9pt — a large-print edition.
+     A report from a BI or consulting team sets its body at 9.5–10pt, which is
+     what makes a page look composed rather than enlarged, and — because a
+     line of it is around 90 characters on this measure — is also what makes
+     justification work. So the scale is restated here in points, the unit the
+     page is actually measured in.
+
+     **Rhythm.** Padding and gaps are cut with it. They have to be: type set a
+     third smaller inside boxes that kept their screen padding reads as a
+     document that shrank away from its own furniture.
+
+     **Justification.** Ragged-right is correct on screen, where the measure
+     changes with the window and hyphenation is unreliable across the widths a
+     paragraph might take. On a page the measure is fixed and known, so the
+     body is justified with hyphenation on, which is what the eye reads as
+     typeset rather than pasted. Justification is applied only to running
+     prose: never to headings, captions, table cells or the appendix's SQL,
+     where the last-line rule would stretch a two-word line across the
+     measure. */
+
+  .rm-report {
+    font-size: 9.5pt;
+    line-height: 1.5;
+  }
+
+  /* The cover. A title at 31px (23pt) is a poster; a report's is nearer 20pt,
+     with the rule under the metadata doing the work the size was doing. */
+  .rm-report-cover { gap: 9px !important; }
+  .rm-report-kicker { font-size: 7pt !important; letter-spacing: 0.18em !important; }
+  .rm-report-title { font-size: 20pt !important; line-height: 1.15 !important; }
+  .rm-report-subtitle { font-size: 10pt !important; line-height: 1.45 !important; }
+  .rm-report-meta {
+    gap: 6px 26px !important;
+    padding-top: 8px !important;
+    border-top-width: 1.5px !important;
+  }
+  .rm-report-meta dt { font-size: 6.5pt !important; letter-spacing: 0.1em !important; }
+  .rm-report-meta dd { font-size: 8pt !important; }
+  /* Whatever follows the cover starts on the cover's page — a report whose
+     first section is pushed to page 2 by a break it did not ask for wastes the
+     page the reader opens on. */
+  .rm-report-cover { break-after: avoid; page-break-after: avoid; }
+
+  /* Section headings. 20px (15pt) beside 9.5pt body is a two-and-a-half-fold
+     step; a document that has to hold six of them wants nearer 1.3. */
+  .rm-report-heading { font-size: 12.5pt !important; line-height: 1.25 !important; }
+  .rm-report-summary .rm-report-heading { font-size: 9pt !important; }
+  .rm-report-num { font-size: 9pt !important; }
+  /* The rule under a heading is part of the heading: it must never be the
+     last mark on a page. */
+  .rm-report-rule {
+    height: 1.2px !important;
+    break-before: avoid;
+    page-break-before: avoid;
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+
+  /* The summary, which is a panel on screen and a plate on paper: squared off,
+     tinted rather than outlined, and set in the same body size as everything
+     else — it is read first, not read larger. */
+  .rm-report-summary {
+    padding: 11px 13px !important;
+    border-radius: 3px !important;
+    background: #fbfaf8 !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* Running prose: the one thing on the page that is justified. `hyphens` needs
+     the document language to hyphenate, which `index.html` sets; without it the
+     declaration is inert and the paragraph is merely justified, which is the
+     same result the screen would give at this measure. `orphans`/`widows` stop
+     a paragraph leaving one line behind at a page break. */
+  .rm-report-prose p,
+  .rm-report-findings li {
+    font-size: 9.5pt !important;
+    line-height: 1.5 !important;
+    text-align: justify;
+    text-justify: inter-word;
+    hyphens: auto;
+    -webkit-hyphens: auto;
+    orphans: 3;
+    widows: 3;
+  }
+  .rm-report-prose { gap: 7px !important; }
+  .rm-report-findings { gap: 5px !important; }
+  .rm-report-findings li { gap: 7px !important; }
+  /* A bullet aligned to 14px text sits mid-cap-height at 9.5pt. */
+  .rm-report-findings li > span:first-child {
+    width: 3.5px !important;
+    height: 3.5px !important;
+    margin-top: 5.5px !important;
+  }
+
+  /* The headline band. Two figures at 34px each are a quarter of the opening
+     page for two numbers that are also in the prose beside them. */
+  .rm-report-band { gap: 5px !important; }
+  .rm-report-bandlabel { font-size: 6.5pt !important; }
+  .rm-report-tile {
+    padding: 8px 9px !important;
+    border-radius: 3px !important;
+    gap: 3px !important;
+  }
+  .rm-report-tilecap { font-size: 7pt !important; line-height: 1.3 !important; }
+  .rm-report .rm-kpi { gap: 2px !important; }
+  .rm-report .rm-kpi-value { font-size: 16pt !important; line-height: 1.05 !important; }
+  .rm-report .rm-kpi-label { font-size: 6.5pt !important; }
+  .rm-report .rm-kpi-delta,
+  .rm-report .rm-kpi-caption { font-size: 7pt !important; }
+
+  /* A figure: an exhibit with a number, a caption, a picture and a source
+     line. Squared off and tightened — a rounded 12px card with 14px of padding
+     is a UI surface, and six of them down a page is a scroll of cards rather
+     than a document. */
+  .rm-report-figure {
+    padding: 9px 10px !important;
+    border-radius: 3px !important;
+    gap: 5px !important;
+  }
+  .rm-report-figcap { gap: 1px !important; }
+  .rm-report-figlabel { font-size: 6.5pt !important; letter-spacing: 0.1em !important; }
+  .rm-report-caption { font-size: 8.5pt !important; line-height: 1.35 !important; }
+  .rm-report-figfoot { gap: 6px !important; padding-top: 2px !important; }
+  .rm-report-source { font-size: 6.5pt !important; padding-top: 3px !important; }
+
+  /* The chart's own frame, inside the figure's. Its line goes and its box
+     stays: the printer measured that padding and border on screen to work out
+     how wide to redraw the plot (`report-print.ts`), so collapsing it here
+     would leave every chart short of the measure by the amount it removed. */
+  .rm-report .rm-chart-frame {
+    border-color: transparent !important;
+    background: transparent !important;
+    margin-top: 0 !important;
+  }
+
+  /* Tables. 12.5px cells with 12px of padding are a data grid; on paper this
+     is a table in a document, so the type comes down, the padding with it, and
+     the rounded box becomes a rule above and below the way a table is set. */
+  .rm-report-figure .rm-table-wrap {
+    border-radius: 0 !important;
+    border-left: none !important;
+    border-right: none !important;
+  }
+  .rm-report-figure .rm-table { font-size: 8pt !important; }
+  .rm-report-figure .rm-table th {
+    /* Sticky is a scrolling affordance with nothing to stick to on a page, and
+       a stuck header prints over the first row. */
+    position: static !important;
+    padding: 4px 7px !important;
+    font-size: 6.5pt !important;
+  }
+  .rm-report-figure .rm-table td { padding: 3.5px 7px !important; }
+  /* If a table does span a page break, its headings come with it. */
+  .rm-report-figure .rm-table thead { display: table-header-group; }
+
+  /* The appendix, which is reference matter and set as such: one step below
+     the body, and the statements a step below that. It is also the one place
+     a page break is welcome, so nothing here avoids one. */
+  .rm-report-method { padding-top: 12px !important; gap: 8px !important; }
+  .rm-report-method-toggle { font-size: 11pt !important; }
+  .rm-report-methodintro {
+    font-size: 8.5pt !important;
+    line-height: 1.5 !important;
+    margin-bottom: 9px !important;
+  }
+  .rm-report-method ol { gap: 8px !important; }
+  .rm-report-methoditem {
+    gap: 3px !important;
+    padding-top: 7px !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .rm-report-sql {
+    font-size: 7pt !important;
+    line-height: 1.45 !important;
+    padding: 5px 7px !important;
+    border-radius: 2px !important;
+    /* A statement is read as one thing; breaking one across pages costs the
+       reader the join between its clauses. */
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .rm-report-asof { font-size: 7pt !important; line-height: 1.5 !important; }
 }
 
 /* The headline band is a row on a page and a column on a phone. */

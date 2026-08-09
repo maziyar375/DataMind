@@ -19,6 +19,53 @@ import embed, { type VisualizationSpec } from 'vega-embed'
 import { PALETTES, type ThemeName } from './palette.ts'
 import { registerPrintableChart, type DrawTarget } from './report-print.ts'
 
+/**
+ * Widen a printed chart's `viewBox` to whatever it actually drew.
+ *
+ * Vega gives the SVG a `viewBox` equal to the width and height it computed,
+ * which is what lets the print stylesheet's `max-width: 100%` scale an
+ * over-wide chart down rather than crop it. The catch is that a chart can draw
+ * outside that box: a legend's width is computed from its labels' *measured*
+ * text, and the glyphs are then rendered to wherever they end — a couple of
+ * pixels past the box, reliably enough that a printed pie chart's longest
+ * legend label loses its last letter. An SVG clips at its viewBox, so those
+ * pixels are simply gone, and no amount of CSS around it brings them back.
+ *
+ * So after a print draw the box is re-measured against the drawing and
+ * enlarged where the drawing won. Only the origin is fixed: extending right
+ * and down keeps the chart's own padding and its position in the frame.
+ *
+ * Print only. On screen the frame scrolls, so an overflowing legend is reachable
+ * rather than lost, and this would be a per-redraw reflow for nothing.
+ */
+function makeScalable(el: HTMLElement): void {
+  const svg = el.querySelector('svg')
+  if (!svg) return
+  const w = Number(svg.getAttribute('width'))
+  const h = Number(svg.getAttribute('height'))
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return
+
+  let right = w
+  let bottom = h
+  try {
+    const box = svg.getBBox()
+    right = Math.max(right, Math.ceil(box.x + box.width))
+    bottom = Math.max(bottom, Math.ceil(box.y + box.height))
+  } catch {
+    /* getBBox throws on an unrendered SVG; the declared size is the fallback */
+  }
+
+  // And a hair beyond even that. This is measured as the chart is drawn, while
+  // the cut happens later on the page, and the two are not quite the same
+  // layout — a fraction of a pixel of glyph advance is all it takes. Two
+  // pixels in seven hundred is a 0.3% reduction nobody can see, against a
+  // legend label missing its last letter, which everybody does.
+  const BLEED = 2
+
+  svg.setAttribute('viewBox', `0 0 ${right + BLEED} ${bottom + BLEED}`)
+  svg.setAttribute('preserveAspectRatio', 'xMinYMin meet')
+}
+
 function currentTheme(): ThemeName {
   return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'
 }
@@ -126,7 +173,14 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
     const PER_COLUMN = 34
     const width: number | 'container' =
       xIsCategorical && columnCount > 12 ? columnCount * PER_COLUMN : 'container'
-    return { encoding, growsDown, height, width, xIsCategorical, signedMeasure: meta?.signed_measure }
+    return {
+      encoding, growsDown, height, width, xIsCategorical,
+      // A pie's radius is derived from the plot box, which is why Vega's `fit`
+      // autosize does not apply to it — the print path has to size it the
+      // other way round. See the autosize note in `buildSpec`.
+      isArc: mark === 'arc',
+      signedMeasure: meta?.signed_measure,
+    }
   }, [spec, fill])
 
   useEffect(() => {
@@ -143,7 +197,10 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
      * reader is running. See `report-print.ts` for why neither can be done in
      * a stylesheet.
      */
-    const buildSpec = (themeName: ThemeName, widthOverride: number | null) => {
+    const buildSpec = (
+      themeName: ThemeName,
+      page: { widthPx: number; heightPx: number } | null,
+    ) => {
       const p = PALETTES[themeName]
 
       const config = {
@@ -225,14 +282,36 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
       }
 
       // On paper there is no container to fit to and no observer to re-measure,
-      // so both axes need a definite length. The width is the page's; the height
-      // is whatever the chart already occupies on screen, which is the size the
-      // reader chose to look at it in.
-      const printing = widthOverride !== null
-      const drawWidth = printing && width === 'container' ? widthOverride : width
+      // so both axes need a definite length. The width is the page's, and so is
+      // the height: a screen plot is 300px tall whatever its width, which on a
+      // fixed rectangle turns every figure into a third of a page and leaves the
+      // rest of each one blank (`printChartHeight`).
+      //
+      // The charts that grow downward with their rows keep their own height —
+      // a hundred horizontal bars flattened into the height a page can spare
+      // is a smear of labels, and the stylesheet already scales an over-tall
+      // one down as vector art rather than clipping it.
+      const drawWidth = page !== null && width === 'container' ? page.widthPx : width
       const drawHeight =
-        printing && height === 'container' ? Math.max(200, el.clientHeight || 300) : height
+        page === null || layout.growsDown ? height : page.heightPx
 
+      // `pad` means the numbers above size the *plot* and the axes and legend
+      // are added outside it, which is right on screen — the box scrolls, and
+      // a chart that overflows it by twenty pixels is a chart the reader can
+      // still reach. A page has nowhere to scroll to: the same overflow is a
+      // legend printed with its last letter cut off at the figure's edge. So
+      // on paper the figure's box is the constraint and the plot gives way to
+      // it, which is what `fit` means.
+      //
+      // Two exceptions. A chart that grows downward with its rows has a height
+      // that *is* the count of them, and fitting that to a box is the crushing
+      // this component exists to prevent. And Vega cannot fit an arc: a pie's
+      // radius is computed *from* the plot box, so the box cannot be computed
+      // back from the drawing — asked to fit, it leaves its legend outside the
+      // viewport and the last letter of a label is cut off. Those two stay on
+      // `pad` and are scaled down instead, as vector art, by the print
+      // stylesheet's `max-width` on the embed and its SVG.
+      const fitToPage = page !== null && !layout.growsDown && !layout.isArc
       return {
         ...spec,
         encoding: encodingOverride,
@@ -240,7 +319,8 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
         height: drawHeight,
         autosize: {
           type:
-            drawWidth === 'container' && drawHeight === 'container' ? 'fit'
+            fitToPage ? 'fit'
+            : drawWidth === 'container' && drawHeight === 'container' ? 'fit'
             : drawWidth === 'container' ? 'fit-x'
             : drawHeight === 'container' ? 'fit-y'
             : 'pad',
@@ -306,7 +386,9 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
 
       const full = buildSpec(
         target.kind === 'print' ? 'light' : theme,
-        target.kind === 'print' ? target.widthPx : null,
+        target.kind === 'print'
+          ? { widthPx: target.widthPx, heightPx: target.heightPx }
+          : null,
       )
       const previous = result
       result = null
@@ -324,6 +406,7 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
         }
         result = r
         if (target.kind === 'screen') watch(r)
+        else makeScalable(el)
       } catch {
         if (!cancelled) setFailed(true)
       }
@@ -346,8 +429,14 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
   // A chart failure must never blank the answer or the table above it.
   if (failed) return null
 
+  // `rm-chart-frame` is named so the print stylesheet can reach this box.
+  // Inside a report the chart already sits in a bordered figure, and a second
+  // rule around the plot reads as a box in a box on paper — so print keeps the
+  // box, whose padding and border the printer measured to work out the chart's
+  // page width, and takes only its line.
   return (
     <div
+      className={frameless ? undefined : 'rm-chart-frame'}
       style={{
         width: '100%',
         // In fill mode the box's height comes from the parent, and the inner

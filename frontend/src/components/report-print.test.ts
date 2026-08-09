@@ -17,8 +17,8 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import {
-  MIN_PRINT_CHART_WIDTH_PX, PRINT_CONTENT_WIDTH_MM, PRINT_CONTENT_WIDTH_PX,
-  printChartWidth,
+  MAX_PRINT_CHART_HEIGHT_PX, MIN_PRINT_CHART_HEIGHT_PX, MIN_PRINT_CHART_WIDTH_PX,
+  PRINT_CONTENT_WIDTH_MM, PRINT_CONTENT_WIDTH_PX, printChartHeight, printChartWidth,
 } from './report-print.ts'
 
 let failures = 0
@@ -66,6 +66,29 @@ check('so does a chart wider than its own article', printChartWidth(600, 900), 6
 // The floor. Reachable only if a chart is nested far enough that its insets
 // exceed the page, but a negative width renders as nothing at all.
 check('an absurd inset stops at the floor', printChartWidth(2000, 100), MIN_PRINT_CHART_WIDTH_PX)
+
+// ── the height, which is the page's and not the screen's ─────────────────
+// A screen plot is 300px tall whatever its width, because a screen scrolls for
+// free. A page is a fixed rectangle, and at 300px a figure plus its caption
+// and source line is a third of A4 — so `break-inside: avoid` gives each one a
+// page with the bottom third blank. The page sets the height from the width
+// instead, at the proportion a printed exhibit is drawn in.
+check('a full-measure chart is drawn wider than tall', printChartHeight(688), 206)
+check('a half-measure one keeps the same proportion', printChartHeight(500), 150)
+check('and a narrow one stops at the floor', printChartHeight(240), MIN_PRINT_CHART_HEIGHT_PX)
+check(
+  'a chart on a wider page does not eat it',
+  printChartHeight(1200),
+  MAX_PRINT_CHART_HEIGHT_PX,
+)
+// The whole point of the exercise: a figure has to be short enough that more
+// than one of them fits on a page. A4 less the 16mm top and bottom margins is
+// 265mm of column, and the plot is the tall part of a figure.
+check(
+  'so two figures at full measure fit a page with room for their captions',
+  2 * printChartHeight(PRINT_CONTENT_WIDTH_PX) < Math.round(265 * (96 / 25.4)),
+  true,
+)
 
 // ── the number the stylesheet also holds ─────────────────────────────────
 const css = readFileSync(fileURLToPath(new URL('../styles.css', import.meta.url)), 'utf8')
@@ -168,6 +191,63 @@ check(
   /\.rm-report,\s*\.rm-report-section\s*\{\s*display:\s*block\s*!important/.test(printCss),
   true,
 )
+
+// ── the page's own type scale ────────────────────────────────────────────
+// The components set their sizes inline for a screen, in px. Print px are
+// 1/96in by definition, so the screen's 14.5px body is a hard 10.9pt on paper —
+// a large-print edition of a document whose peers set 9.5–10pt. The print
+// block restates the scale in points, and it can only win over an inline style
+// with `!important`, so both facts are asserted: a rule that loses its
+// `!important` in a tidy-up silently reverts the whole document to screen size.
+const printedBody = /\.rm-report-prose p,\s*\.rm-report-findings li\s*\{([^}]*)\}/.exec(printCss)
+check('the printed body has a size of its own', printedBody !== null, true)
+check(
+  'set in points, the unit the page is measured in',
+  /font-size:\s*\d+(\.\d+)?pt\s*!important/.test(printedBody?.[1] ?? ''),
+  true,
+)
+// Ragged-right is right on screen, where the measure moves with the window.
+// The page's measure is fixed and known, which is the condition justification
+// needs — and the reason a printout otherwise reads as a pasted-in web page.
+check(
+  'and it is justified, which a fixed measure is what allows',
+  /text-align:\s*justify/.test(printedBody?.[1] ?? ''),
+  true,
+)
+check(
+  'with hyphenation, which is what keeps justification from opening rivers',
+  /hyphens:\s*auto/.test(printedBody?.[1] ?? ''),
+  true,
+)
+// `hyphens: auto` breaks words using the language in force. Inherited from
+// `<html lang="en">` a Persian report would be hyphenated against English
+// patterns, so the article declares its own.
+check(
+  'the article declares the language the hyphenator reads',
+  /lang=\{language\}/.test(reportTsx),
+  true,
+)
+
+// The classes the scale is hung on. Every one of them is on an element styled
+// inline, so the selector is the only handle print has on it; renaming one in
+// the component without renaming it here reverts that element to screen size
+// on paper and nowhere else, which is invisible until a PDF is sent out.
+for (const [cls, where] of [
+  ['rm-report-title', reportTsx],
+  ['rm-report-heading', reportTsx],
+  ['rm-report-prose', reportTsx],
+  ['rm-report-caption', reportTsx],
+  ['rm-report-source', reportTsx],
+  ['rm-report-sql', reportTsx],
+  ['rm-kpi-value', readFileSync(fileURLToPath(new URL('./ui.tsx', import.meta.url)), 'utf8')],
+  ['rm-table', readFileSync(fileURLToPath(new URL('./ui.tsx', import.meta.url)), 'utf8')],
+] as const) {
+  check(
+    `print sizes .${cls}, and a component still carries it`,
+    printCss.includes(`.${cls}`) && where.includes(cls),
+    true,
+  )
+}
 
 // The font this whole phase exists for has to be served by us, not fetched.
 check(

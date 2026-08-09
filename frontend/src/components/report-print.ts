@@ -13,6 +13,11 @@
  *    a wide monitor that is a chart clipped at the page margin; on a narrow
  *    window it is a chart occupying a third of the page. So every chart is
  *    redrawn at the width the printed page will actually give it.
+ * 1b. **Height.** A plot is 300px tall on screen whatever its width, because a
+ *    screen scrolls for nothing. A page does not: at that height a figure is a
+ *    third of A4, no two of them fit, and `break-inside: avoid` then gives each
+ *    one a page with the bottom third blank. So the page sets the height from
+ *    the width — `printChartHeight`.
  * 2. **Theme.** A chart's colours come from `data-theme`, not from CSS
  *    variables, so the token override that turns the *page* light leaves a
  *    dark-theme chart with near-white axis labels on white paper. The print
@@ -38,8 +43,15 @@ export type DrawTarget =
    * container; a chart with a width of its own (a wide categorical chart,
    * which is sized per column) keeps it and is scaled down by the stylesheet
    * instead — squeezing its columns into the page would smear the labels.
+   *
+   * `heightPx` is the plot height the page can afford (see
+   * `printChartHeight`). A screen chart is 300px tall because a screen scrolls
+   * for free; a page does not, and three figures at screen height are three
+   * pages each two-thirds empty. Charts that grow downward with their rows
+   * ignore it — a hundred horizontal bars squeezed into the height a page can
+   * spare is a smear of labels.
    */
-  | { kind: 'print'; widthPx: number }
+  | { kind: 'print'; widthPx: number; heightPx: number }
 
 type PrintableChart = {
   el: HTMLElement
@@ -95,6 +107,31 @@ export const MIN_PRINT_CHART_WIDTH_PX = 240
 export function printChartWidth(articleWidthPx: number, chartWidthPx: number): number {
   const inset = articleWidthPx > 0 ? Math.max(0, articleWidthPx - chartWidthPx) : 0
   return Math.max(MIN_PRINT_CHART_WIDTH_PX, PRINT_CONTENT_WIDTH_PX - inset)
+}
+
+/* How tall a chart is drawn on paper.
+ *
+ * On screen a plot is 300px tall regardless of how wide its box is, which is
+ * right for a surface that scrolls for nothing. A page is a fixed rectangle:
+ * at 300px a figure plus its caption and source line is a third of A4, three
+ * of them cannot share a page, and `break-inside: avoid` then pushes each one
+ * onto a page of its own with the bottom half blank — the "lots of empty
+ * space" a printed report is judged on.
+ *
+ * So the page sets the height from the width instead, at the proportion a
+ * printed exhibit is normally drawn in — near 3:1, wider than tall, because a
+ * page is read across. The bounds keep a narrow chart from collapsing to a
+ * strip and a full-measure one from eating a third of the page anyway.
+ *
+ * The plot rectangle only: Vega adds the axis labels and title outside it.
+ */
+export const PRINT_CHART_ASPECT = 0.3
+export const MIN_PRINT_CHART_HEIGHT_PX = 150
+export const MAX_PRINT_CHART_HEIGHT_PX = 240
+
+export function printChartHeight(widthPx: number): number {
+  const ideal = Math.round(widthPx * PRINT_CHART_ASPECT)
+  return Math.min(MAX_PRINT_CHART_HEIGHT_PX, Math.max(MIN_PRINT_CHART_HEIGHT_PX, ideal))
 }
 
 /**
@@ -162,15 +199,15 @@ export async function printReport(root: HTMLElement | null): Promise<void> {
   const articleWidth = root?.clientWidth ?? 0
   const targets = [...charts].filter((c) => root !== null && root.contains(c.el))
 
-  const plan = targets.map((chart) => ({
-    chart,
-    widthPx: printChartWidth(articleWidth, chart.el.clientWidth),
-  }))
+  const plan = targets.map((chart) => {
+    const widthPx = printChartWidth(articleWidth, chart.el.clientWidth)
+    return { chart, widthPx, heightPx: printChartHeight(widthPx) }
+  })
 
   try {
     await Promise.all(
-      plan.map(({ chart, widthPx }) =>
-        chart.draw({ kind: 'print', widthPx }).catch(() => undefined),
+      plan.map(({ chart, widthPx, heightPx }) =>
+        chart.draw({ kind: 'print', widthPx, heightPx }).catch(() => undefined),
       ),
     )
 
