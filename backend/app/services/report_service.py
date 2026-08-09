@@ -66,9 +66,11 @@ from app.infra.db.models import (
 )
 from app.infra.llm.litellm_gateway import LiteLLMGateway
 from app.pipeline.state import RetrievedContext
+from app.reports.language import detect as detect_language
 from app.reports.outline import (
     OUTLINE_MIN_MAX_TOKENS,
     OutlineProposal,
+    clamp_section_target,
     executive_summary,
     propose,
 )
@@ -261,10 +263,20 @@ class ReportService:
         if fields.get("llm_config_id") is not None:
             await self._owned_llm_config(fields["llm_config_id"], owner_id)
 
+        prompt = (fields.get("prompt") or "").strip()
         report = Report(
             id=uuid.uuid4(),
             owner_id=owner_id,
-            **{**fields, "name": name, "prompt": (fields.get("prompt") or "").strip()},
+            **{
+                **fields,
+                "name": name,
+                "prompt": prompt,
+                # Derived, not asked: the request already says which language
+                # this document is wanted in. The name is the fallback for a
+                # report created before its request was written.
+                "language": detect_language(prompt, name),
+                "section_target": clamp_section_target(fields.get("section_target")),
+            },
         )
         self._db.add(report)
         await self._db.flush()
@@ -296,6 +308,18 @@ class ReportService:
         # not what is in it — but it still has to be the caller's own.
         if changes.get("llm_config_id") is not None:
             await self._owned_llm_config(changes["llm_config_id"], owner_id)
+
+        if changes.get("section_target") is not None:
+            changes["section_target"] = clamp_section_target(changes["section_target"])
+
+        # The request is editable here — rewriting it and proposing again is the
+        # loop a user actually runs — and the language follows it, because a
+        # request rewritten in Persian asking for an English document is not a
+        # thing anyone means. Past runs are untouched: each snapshots the
+        # language it was written in, so a document stays readable in its own.
+        if (prompt := changes.get("prompt")) is not None:
+            changes["prompt"] = prompt = prompt.strip()
+            changes["language"] = detect_language(prompt, changes.get("name") or report.name)
 
         for field, value in changes.items():
             setattr(report, field, value)
@@ -451,6 +475,7 @@ class ReportService:
             resolve_llm(config, self._secret_box, min_max_tokens=OUTLINE_MIN_MAX_TOKENS),
             request=request,
             language=report.language,
+            sections=report.section_target,
             dialect=connection.database_type,
             schema_block=context.render(connection.disclosure_policy),
         )

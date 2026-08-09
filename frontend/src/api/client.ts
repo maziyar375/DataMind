@@ -323,7 +323,9 @@ export const reports = {
     prompt?: string
     connection_id: string
     llm_config_id?: string | null
-    language?: 'fa' | 'en'
+    /** How many sections the model is asked for. No language: it is derived
+     *  from `prompt` server-side, so there is nothing here to disagree with. */
+    section_target?: number
   }) => post<Report>('/reports', payload),
   get: (id: string) => get<Report>(`/reports/${id}`),
   /** Name, description, prompt, model, status. A *different* connection is 422. */

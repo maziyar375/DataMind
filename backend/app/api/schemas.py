@@ -12,6 +12,15 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr
 
+# The one place that knows what an outline can be asked for. Imported rather
+# than restated so the range the API rejects and the range the prompt honours
+# cannot drift apart.
+from app.reports.outline import (
+    DEFAULT_SECTION_TARGET,
+    MAX_SECTION_TARGET,
+    MIN_SECTION_TARGET,
+)
+
 
 # ── auth ─────────────────────────────────────────────────────────────────
 class LoginRequest(BaseModel):
@@ -735,7 +744,10 @@ class ReportRead(BaseModel):
     connection_name: str | None = None
     llm_config_id: UUID | None = None
     llm_config_name: str | None = None
+    # Derived from `prompt`, never chosen — read by the client for the
+    # document's direction and its own furniture, not for a picker.
     language: str = "en"
+    section_target: int = 5
     status: str = "ACTIVE"
     created_at: datetime
     updated_at: datetime
@@ -754,6 +766,7 @@ class ReportSummaryRead(BaseModel):
     llm_config_id: UUID | None = None
     llm_config_name: str | None = None
     language: str = "en"
+    section_target: int = 5
     status: str = "ACTIVE"
     section_count: int = 0
     created_at: datetime
@@ -764,15 +777,22 @@ class ReportCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     description: str | None = None
     # The user's request, kept verbatim: it is what the outline is proposed
-    # from, and what the prose is narrated towards months later.
+    # from, what the prose is narrated towards months later, and — since the
+    # language picker went away — what the document's language is read off.
     prompt: str = Field(default="", max_length=8000)
     # Required and pinned forever — a report keyed to one connection cannot
     # cross disclosure policies.
     connection_id: UUID
     llm_config_id: UUID | None = None
-    # Pinned at creation and stated explicitly in every prose prompt, never
-    # inferred per section.
-    language: Literal["fa", "en"] = "en"
+    # How many sections to ask the model for. Not the size of the outline:
+    # the executive summary is added on top, and the user edits the structure
+    # afterwards. There is deliberately no `language` here — it is derived
+    # from `prompt`.
+    section_target: int = Field(
+        default=DEFAULT_SECTION_TARGET,
+        ge=MIN_SECTION_TARGET,
+        le=MAX_SECTION_TARGET,
+    )
 
 
 class ReportUpdate(BaseModel):
@@ -789,6 +809,11 @@ class ReportUpdate(BaseModel):
     llm_config_id: UUID | None = None
     status: Literal["ACTIVE", "ARCHIVED"] | None = None
     connection_id: UUID | None = None
+    # Changeable, because it only governs the *next* proposal — the outline on
+    # screen is unaffected until the user asks for a new one.
+    section_target: int | None = Field(
+        default=None, ge=MIN_SECTION_TARGET, le=MAX_SECTION_TARGET
+    )
 
 
 class ReportSectionCreate(BaseModel):

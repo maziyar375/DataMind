@@ -500,8 +500,25 @@ export interface SqlDraft {
 // real results, and a run kept as a snapshot of a moment. It shares no table
 // and no code path with dashboards — see docs/reports-plan.md §1.
 
-/** Pinned at creation and stated in every prose prompt, never inferred. */
+/**
+ * Derived from the request text server-side, never picked in the UI.
+ *
+ * It is still read here — the document is laid out right-to-left in Persian
+ * and its own furniture is written in it — but there is no control that sets
+ * it. See `app/reports/language.py`.
+ */
 export type ReportLanguage = 'fa' | 'en'
+
+/**
+ * What `section_target` may be, mirroring `app/reports/outline.py`.
+ *
+ * Kept beside the types rather than in a component because it is part of the
+ * contract: outside this range the API answers 422, and a stepper that cannot
+ * leave it is how the user never sees that.
+ */
+export const MIN_SECTIONS = 2
+export const MAX_SECTIONS = 8
+export const DEFAULT_SECTIONS = 5
 
 /** One question, one query, one rendering. No TEXT: prose belongs to sections. */
 export type ReportBlockType = 'CHART' | 'TABLE' | 'METRIC'
@@ -574,7 +591,10 @@ export interface Report {
   connection_name: string | null
   llm_config_id: string | null
   llm_config_name: string | null
+  /** Read off the request, never chosen: it sets the document's direction. */
   language: ReportLanguage
+  /** How many sections to ask the model for. The summary is added on top. */
+  section_target: number
   status: 'ACTIVE' | 'ARCHIVED'
   created_at: string
   updated_at: string
@@ -590,6 +610,7 @@ export interface ReportSummary {
   llm_config_id: string | null
   llm_config_name: string | null
   language: ReportLanguage
+  section_target: number
   status: 'ACTIVE' | 'ARCHIVED'
   section_count: number
   created_at: string

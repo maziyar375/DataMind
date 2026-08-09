@@ -39,11 +39,34 @@ from app.reports.prompts import (
     REPORT_OUTLINE_USER,
 )
 
-# Caps, not preferences: the prompt asks for 3-6 sections of 1-3 blocks, and
-# these bound what a model that ignored it can cost. Every block is a query and
-# a model call at generation time, so an outline of forty is not an outline.
+# Caps, not preferences: the prompt asks for the number of sections the user
+# chose, of 1-3 blocks each, and these bound what a model that ignored it can
+# cost. Every block is a query and a model call at generation time, so an
+# outline of forty is not an outline.
 MAX_SECTIONS = 8
 MAX_BLOCKS_PER_SECTION = 4
+
+# How many sections the model is asked for, and the range the user may ask
+# within. The floor is 2 because one section is not a document — it is a chart
+# with a paragraph — and the ceiling is `MAX_SECTIONS`, so the number a user
+# picks and the number the parser will keep can never disagree.
+MIN_SECTION_TARGET = 2
+MAX_SECTION_TARGET = MAX_SECTIONS
+DEFAULT_SECTION_TARGET = 5
+
+
+def clamp_section_target(value: int | None) -> int:
+    """The requested count, brought inside what this module can honour.
+
+    Clamped rather than refused: this is the one number in the create dialog
+    with no wrong answer, and 422-ing a report because someone typed 20 would
+    trade a document for a lecture. The API validates the range at the edge —
+    this is what makes a direct service call, a migrated row, or a future
+    caller safe too.
+    """
+    if value is None:
+        return DEFAULT_SECTION_TARGET
+    return max(MIN_SECTION_TARGET, min(MAX_SECTION_TARGET, value))
 
 # The column widths in `models.py`. Truncating here rather than letting the
 # database do it means the text the user approves is the text that was stored.
@@ -114,12 +137,22 @@ class OutlineProposal:
 
 
 def build_messages(
-    *, request: str, language: str, dialect: str, schema_block: str
+    *,
+    request: str,
+    language: str,
+    sections: int,
+    dialect: str,
+    schema_block: str,
 ) -> list[ChatMessage]:
     """The one call this module makes, as messages.
 
     Separate from `propose` so a test can read the prompt without a gateway,
     and so the language reaches the model as a name rather than a code.
+
+    The section count rides in the *user* message, next to the request it came
+    from, rather than in the system prompt: the system prompt is the house
+    style and is identical for every report, and a number that changes per
+    report does not belong in the part a provider can cache.
     """
     return [
         ChatMessage(role="system", content=REPORT_OUTLINE_SYSTEM),
@@ -127,6 +160,7 @@ def build_messages(
             role="user",
             content=REPORT_OUTLINE_USER.format(
                 language=LANGUAGE_NAMES.get(language, language),
+                sections=clamp_section_target(sections),
                 dialect=dialect,
                 request=request.strip(),
                 schema=schema_block,
@@ -141,6 +175,7 @@ async def propose(
     *,
     request: str,
     language: str,
+    sections: int = DEFAULT_SECTION_TARGET,
     dialect: str,
     schema_block: str,
 ) -> OutlineProposal:
@@ -150,20 +185,28 @@ async def propose(
     reply when the JSON will not parse, and the reply this call gets is long
     enough that "will not parse" usually means "was cut off after four good
     sections". Recovering those four is the entire point of `parse`.
+
+    A reply longer than `sections` is trimmed to it — the user asked for a
+    number and the extra sections are the model's opinion, not theirs. A reply
+    *shorter* is kept as it came: the module's rule is that a malformed part
+    costs that part and never the proposal, and four good sections the user can
+    add a fifth to beats a refusal.
     """
+    target = clamp_section_target(sections)
     completion = await gateway.complete(
         llm,
         build_messages(
             request=request,
             language=language,
+            sections=target,
             dialect=dialect,
             schema_block=schema_block,
         ),
     )
-    return parse(completion.text)
+    return parse(completion.text, limit=target)
 
 
-def parse(text: str) -> OutlineProposal:
+def parse(text: str, *, limit: int = MAX_SECTIONS) -> OutlineProposal:
     """Read a model's reply into an outline, keeping whatever is usable."""
     candidates = _candidates(text or "")
 
@@ -187,9 +230,10 @@ def parse(text: str) -> OutlineProposal:
         seen.add(key)
         sections.append(section)
 
-    dropped_sections += max(0, len(sections) - MAX_SECTIONS)
+    kept = min(max(1, limit), MAX_SECTIONS)
+    dropped_sections += max(0, len(sections) - kept)
     return OutlineProposal(
-        sections=sections[:MAX_SECTIONS],
+        sections=sections[:kept],
         dropped_sections=dropped_sections,
         dropped_blocks=dropped_blocks,
     )

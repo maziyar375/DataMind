@@ -204,6 +204,11 @@ export const Icon = {
       <path d="M12 5v14M5 12h14" />
     </svg>
   ),
+  Minus: ({ size = 15, stroke = 'currentColor', strokeWidth = 2.2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <path d="M5 12h14" />
+    </svg>
+  ),
   Logout: ({ size = 15, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
     <svg {...iconBase(size, stroke, strokeWidth)}>
       <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
@@ -1482,6 +1487,133 @@ export function SearchField({
  * control looks like one choice, which is what a filter and a layout switch
  * both are.
  */
+/**
+ * A small whole number, chosen by nudging it.
+ *
+ * A `<input type="number">` for a value with four usable settings is a text
+ * field that accepts "0", "-3" and "seven" and then argues about them. Two
+ * buttons and a figure cannot express a value outside the range, so the range
+ * needs no error message — and the number stays readable, which is the point
+ * of showing it rather than a slider.
+ *
+ * Typing still works for anyone who prefers it: the figure is a real input,
+ * clamped on blur rather than on keystroke so a half-typed number is not
+ * rewritten under the cursor.
+ */
+export function NumberStepper({
+  value, onChange, min, max, ariaLabel, disabled = false, suffix,
+}: {
+  value: number
+  onChange: (next: number) => void
+  min: number
+  max: number
+  ariaLabel: string
+  disabled?: boolean
+  suffix?: React.ReactNode
+}) {
+  const [draft, setDraft] = useState(String(value))
+  useEffect(() => setDraft(String(value)), [value])
+
+  const clamp = (next: number) => Math.max(min, Math.min(max, next))
+  const step = (delta: number) => onChange(clamp(value + delta))
+
+  return (
+    <div
+      className="rm-stepper"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 2,
+        padding: 3,
+        background: 'var(--panel-alt)',
+        border: '1px solid var(--border)',
+        borderRadius: 9,
+      }}
+    >
+      <StepperButton
+        label={`One fewer — ${ariaLabel}`}
+        disabled={disabled || value <= min}
+        onClick={() => step(-1)}
+      >
+        <Icon.Minus size={13} />
+      </StepperButton>
+      <input
+        aria-label={ariaLabel}
+        inputMode="numeric"
+        value={draft}
+        disabled={disabled}
+        onChange={(event) => setDraft(event.target.value.replace(/[^\d]/g, ''))}
+        onBlur={() => {
+          const parsed = Number.parseInt(draft, 10)
+          onChange(Number.isNaN(parsed) ? value : clamp(parsed))
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') event.currentTarget.blur()
+          if (event.key === 'ArrowUp') step(1)
+          if (event.key === 'ArrowDown') step(-1)
+        }}
+        style={{
+          width: 30,
+          padding: 0,
+          textAlign: 'center',
+          background: 'transparent',
+          border: 'none',
+          outline: 'none',
+          color: 'var(--text-strong)',
+          fontSize: 13.5,
+          fontWeight: 650,
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      />
+      {suffix && (
+        <span style={{ paddingRight: 5, fontSize: 12, color: 'var(--text-faint)' }}>{suffix}</span>
+      )}
+      <StepperButton
+        label={`One more — ${ariaLabel}`}
+        disabled={disabled || value >= max}
+        onClick={() => step(1)}
+      >
+        <Icon.Plus size={13} />
+      </StepperButton>
+    </div>
+  )
+}
+
+function StepperButton({
+  label, disabled, onClick, children,
+}: {
+  label: string
+  disabled: boolean
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+      className="rm-icon-btn"
+      style={{
+        display: 'flex',
+        width: 24,
+        height: 24,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: 7,
+        border: 'none',
+        background: 'transparent',
+        color: disabled ? 'var(--text-faint)' : 'var(--text2)',
+        cursor: disabled ? 'default' : 'pointer',
+        opacity: disabled ? 0.45 : 1,
+        ['--rm-hover-bg' as string]: 'var(--panel)',
+      }}
+    >
+      {children}
+    </button>
+  )
+}
+
 export function Segmented<T extends string>({
   value, onChange, options, ariaLabel,
 }: {

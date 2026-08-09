@@ -45,7 +45,13 @@ from app.infra.db.models import (
     ReportRun,
     ReportSection,
 )
-from app.reports.outline import OutlineProposal, ProposedBlock, ProposedSection
+from app.reports.outline import (
+    DEFAULT_SECTION_TARGET,
+    MAX_SECTION_TARGET,
+    OutlineProposal,
+    ProposedBlock,
+    ProposedSection,
+)
 from app.services import report_service
 from app.services.report_service import ReportService, assert_wide_enough, is_wide_enough
 
@@ -85,6 +91,7 @@ def _report(owner_id: UUID = OWNER) -> Report:
         connection_id=CONNECTION_ID,
         llm_config_id=None,
         language="fa",
+        section_target=5,
         status="ACTIVE",
         created_at=utcnow(),
         updated_at=utcnow(),
@@ -281,6 +288,60 @@ async def test_a_wide_enough_connection_is_accepted(policy: str) -> None:
 
     assert report.owner_id == OWNER
     assert db.added == [report]
+
+
+# ── the language, and how many sections ──────────────────────────────────
+@pytest.mark.parametrize(
+    "prompt,expected",
+    [
+        ("تحلیل فروش سه ماه اخیر", "fa"),
+        ("an analysis of the last three months of sales", "en"),
+    ],
+)
+async def test_the_language_is_read_off_the_request_not_asked_for(
+    prompt: str, expected: str
+) -> None:
+    """The user typed the language when they typed the request."""
+    db = FakeDb(connection=_connection(DisclosurePolicy.FULL))
+
+    report = await _service(db).create(
+        OWNER, name="Q3", connection_id=CONNECTION_ID, prompt=prompt
+    )
+
+    assert report.language == expected
+
+
+async def test_rewriting_the_request_moves_the_language_with_it() -> None:
+    """Otherwise a request rewritten in Persian is narrated in English, and
+    nothing on screen explains why."""
+    db = FakeDb(report=_report())
+
+    report = await _service(db).update(
+        REPORT_ID, OWNER, prompt="an analysis of the last three months"
+    )
+
+    assert report.prompt == "an analysis of the last three months"
+    assert report.language == "en"
+
+
+async def test_the_requested_section_count_is_stored_and_clamped() -> None:
+    db = FakeDb(connection=_connection(DisclosurePolicy.FULL))
+
+    report = await _service(db).create(
+        OWNER, name="Q3", connection_id=CONNECTION_ID, prompt="p", section_target=99
+    )
+
+    assert report.section_target == MAX_SECTION_TARGET
+
+
+async def test_a_report_created_without_a_count_gets_the_default() -> None:
+    db = FakeDb(connection=_connection(DisclosurePolicy.FULL))
+
+    report = await _service(db).create(
+        OWNER, name="Q3", connection_id=CONNECTION_ID, prompt="p"
+    )
+
+    assert report.section_target == DEFAULT_SECTION_TARGET
 
 
 def test_the_gate_is_a_free_function_the_worker_can_call() -> None:
@@ -660,6 +721,8 @@ async def test_the_model_gets_the_request_the_language_and_the_schema(
 
     assert proposal.kwargs["request"] == "a report on the last three months"
     assert proposal.kwargs["language"] == "fa"
+    # The number the user asked for, not a range the prompt asserted for them.
+    assert proposal.kwargs["sections"] == 5
     assert proposal.kwargs["dialect"] == "postgres"
     # The same block the generator sees: schema, keys, and the semantic layer.
     assert "public.orders" in proposal.kwargs["schema_block"]

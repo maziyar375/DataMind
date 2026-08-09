@@ -47,6 +47,11 @@ from app.infra.db.models import (
     ReportSectionResult,
 )
 from app.main import create_app
+from app.reports.outline import (
+    DEFAULT_SECTION_TARGET,
+    MAX_SECTION_TARGET,
+    MIN_SECTION_TARGET,
+)
 from app.services.query_service import TileResult
 from app.services.sql_draft_service import SqlDraft
 
@@ -70,6 +75,7 @@ def _report(owner_id: UUID = USER) -> Report:
         connection_id=CONNECTION_ID,
         llm_config_id=LLM_ID,
         language="fa",
+        section_target=5,
         status="ACTIVE",
         created_at=utcnow(),
         updated_at=utcnow(),
@@ -550,7 +556,7 @@ def test_creating_a_report_returns_201_and_the_written_row(client: Any) -> None:
             "name": "Quarterly sales",
             "prompt": "سه ماه گذشته",
             "connection_id": str(CONNECTION_ID),
-            "language": "fa",
+            "section_target": 4,
         },
     )
 
@@ -629,13 +635,85 @@ def test_a_patch_sends_only_the_fields_the_client_set(client: Any) -> None:
     assert "connection_id" not in kwargs and "language" not in kwargs
 
 
-def test_the_language_is_pinned_and_cannot_be_patched(client: Any) -> None:
-    """Pinned at creation: every run's prose, and every past run's, is in it."""
+def test_the_language_is_derived_and_cannot_be_set_by_a_client(client: Any) -> None:
+    """It follows the request. A client naming one is ignored, not obeyed: two
+    sources of truth for a document's language is one too many."""
     response = client.patch(f"/api/v1/reports/{REPORT_ID}", json={"language": "en"})
 
     assert response.status_code == 200
     _method, kwargs = next(c for c in FakeService.calls if c[0] == "update")
     assert "language" not in kwargs
+
+
+def test_a_language_sent_at_creation_is_ignored_rather_than_honoured(
+    client: Any,
+) -> None:
+    response = client.post(
+        "/api/v1/reports",
+        json={
+            "name": "Q3",
+            "prompt": "سه ماه گذشته",
+            "connection_id": str(CONNECTION_ID),
+            "language": "en",
+        },
+    )
+
+    assert response.status_code == 201
+    _method, kwargs = next(c for c in FakeService.calls if c[0] == "create")
+    assert "language" not in kwargs
+
+
+# ── how many sections ────────────────────────────────────────────────────
+def test_the_requested_section_count_reaches_the_service(client: Any) -> None:
+    client.post(
+        "/api/v1/reports",
+        json={
+            "name": "Q3",
+            "connection_id": str(CONNECTION_ID),
+            "section_target": 3,
+        },
+    )
+
+    _method, kwargs = next(c for c in FakeService.calls if c[0] == "create")
+    assert kwargs["section_target"] == 3
+
+
+def test_a_report_created_without_a_count_asks_for_the_default(client: Any) -> None:
+    client.post(
+        "/api/v1/reports",
+        json={"name": "Q3", "connection_id": str(CONNECTION_ID)},
+    )
+
+    _method, kwargs = next(c for c in FakeService.calls if c[0] == "create")
+    assert kwargs["section_target"] == DEFAULT_SECTION_TARGET
+
+
+@pytest.mark.parametrize("asked", [MIN_SECTION_TARGET - 1, MAX_SECTION_TARGET + 1])
+def test_a_count_outside_the_range_is_422_at_the_edge(client: Any, asked: int) -> None:
+    """Clamped in the service for every other caller; refused here, where the
+    client can still show the stepper that cannot produce it."""
+    response = client.post(
+        "/api/v1/reports",
+        json={
+            "name": "Q3",
+            "connection_id": str(CONNECTION_ID),
+            "section_target": asked,
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_the_count_may_be_patched_because_it_governs_the_next_proposal(
+    client: Any,
+) -> None:
+    response = client.patch(
+        f"/api/v1/reports/{REPORT_ID}", json={"section_target": 7}
+    )
+
+    assert response.status_code == 200
+    _method, kwargs = next(c for c in FakeService.calls if c[0] == "update")
+    assert kwargs["section_target"] == 7
 
 
 def test_a_duplicate_name_is_a_409(client: Any) -> None:

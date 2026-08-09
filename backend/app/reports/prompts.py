@@ -14,15 +14,25 @@ report and a pile of charts.
 """
 from __future__ import annotations
 
-#: r2 — the analyst rewrite. r1 asked for "two to four sentences" per section and
-#: got them: correct, grounded, and reading like a chat transcript with headings
-#: on top. r2 asks for the four moves an analyst actually makes (finding, size,
-#: driver, consequence), states a house style so seven sections read as one
-#: document, tells each section what its neighbours already said so it stops
-#: repeating them, and hands the writer figures computed by `facts.py` rather
-#: than leaving it to do arithmetic over a text table. A document generated
-#: under r1 is a different artefact and the version on the run is what says so.
-REPORT_PROMPT_VERSION = "r2"
+#: r3 — the length of the outline stops being the prompt's opinion. r2 asked
+#: for "between 4 and 7 sections", which is a house style baked into a
+#: constant: a user who wants a three-section brief or an eight-section review
+#: could only get one by deleting or adding sections afterwards, and every one
+#: they added arrived without the model's structure behind it. r3 takes the
+#: number from the request (`reports.section_target`) and states it as a
+#: requirement, which also changes what the five themes below mean — with
+#: fewer sections than themes the model now has to choose between them rather
+#: than cover them all. An outline proposed under r2 is a different artefact,
+#: and the version on the run is what says so.
+#:
+#: r2 was the analyst rewrite. r1 asked for "two to four sentences" per section
+#: and got them: correct, grounded, and reading like a chat transcript with
+#: headings on top. r2 asks for the four moves an analyst actually makes
+#: (finding, size, driver, consequence), states a house style so seven sections
+#: read as one document, tells each section what its neighbours already said so
+#: it stops repeating them, and hands the writer figures computed by `facts.py`
+#: rather than leaving it to do arithmetic over a text table.
+REPORT_PROMPT_VERSION = "r3"
 
 # What a language code means to a model. The code alone ("fa") is understood by
 # the strong models and guessed at by the rest; the endonym removes the guess.
@@ -66,8 +76,13 @@ where does this stand, how did it get here, what is it made of, where is it \
 concentrated or at risk, and what does that point to. Build the sections so \
 that reading their headings in order already tells that story.
 
-Cover as many of these as the schema supports, in this order, and skip any \
-the data cannot answer rather than inventing one:
+These are the themes a report of this kind is built from, in reading order. \
+Cover the ones the requested number of sections has room for and the schema \
+supports — **in this order** — and skip any the data cannot answer rather \
+than inventing one. When fewer sections are asked for than there are themes, \
+choose the ones this request and this schema answer best and drop the rest; \
+never merge two themes into one heading to fit, and never split one theme \
+across two headings to fill:
 1. **Level** — the headline figures for the period. Where things stand now.
 2. **Movement** — how those figures developed over time, at a grain the data \
 supports (daily, monthly, quarterly).
@@ -80,8 +95,14 @@ overdue items, discounts, churn, gaps: whatever this schema records that a \
 reader would want warned about.
 
 Rules:
-- Between 4 and 7 sections. Between 1 and 3 blocks in each. A section with no \
-blocks is not a section.
+- Return **exactly the number of sections the request below asks for**. That \
+number is the user's, not yours: it is what they will read, and they add or \
+remove sections themselves afterwards. Do not round it up because the schema \
+is rich, and do not pad it with a weaker section to reach it — if the data \
+truly cannot support that many, return the ones it can rather than inventing \
+one, but treat that as the exception it is.
+- Between 1 and 3 blocks in each section. A section with no blocks is not a \
+section.
 - Write `heading`, `intent` and `question` in the language named in the \
 request below — whatever language the table and column names happen to be in.
 - A `heading` names the finding's subject, not the chart. "Revenue by month" \
@@ -116,6 +137,8 @@ and the method notes are assembled from the queries themselves.
 - No SQL. No commentary. No markdown. JSON only."""
 
 REPORT_OUTLINE_USER = """Write the outline in: {language}
+
+Sections: exactly {sections}
 
 Dialect: {dialect}
 

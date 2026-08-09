@@ -20,17 +20,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { ApiError, connections as connectionsApi, llmConfigs as modelsApi, reports as api } from '../api/client'
+import { DEFAULT_SECTIONS, MAX_SECTIONS, MIN_SECTIONS } from '../api/types'
 import type { Connection, LlmConfig, Report, ReportLanguage, ReportSummary } from '../api/types'
 import { ReportOutlineEditor, ReportRunViewer } from '../components/report'
 import { ReportRunHistory } from '../components/report-history'
 import {
   Chip, DisclosureBadge, EmptyState, ErrorNote, Field, GhostButton, Icon, Modal,
-  PrimaryButton, SearchField, Segmented, Spinner, TextArea, TextInput, relativeTime,
+  NumberStepper, PrimaryButton, SearchField, Segmented, Spinner, TextArea, TextInput,
+  relativeTime,
 } from '../components/ui'
 
 /** The policies a report can be written from — the frontend half of §7. */
 const WIDE_ENOUGH = ['SAMPLE', 'FULL']
 
+/** How a derived language is shown on a card. Nothing here sets one. */
 const LANGUAGES: { value: ReportLanguage; label: string }[] = [
   { value: 'en', label: 'English' },
   { value: 'fa', label: 'فارسی' },
@@ -427,6 +430,7 @@ function toCard(report: Report): ReportSummary {
     llm_config_id: report.llm_config_id,
     llm_config_name: report.llm_config_name,
     language: report.language,
+    section_target: report.section_target,
     status: report.status,
     section_count: report.sections.length,
     created_at: report.created_at,
@@ -716,11 +720,18 @@ function IndexSkeleton() {
 /**
  * Everything a report is pinned to, asked once.
  *
- * The connection and the language are **pinned forever** — one because a report
- * keyed to two connections would cross disclosure policies, the other because
- * every past run's prose is written in it. The model is not: it decides who
- * writes the prose, not what is in it. The dialog says so rather than leaving
- * the user to discover it from a 422.
+ * The connection is **pinned forever** — a report keyed to two connections
+ * would cross disclosure policies. The model is not: it decides who writes the
+ * prose, not what is in it. The dialog says so rather than leaving the user to
+ * discover it from a 422.
+ *
+ * There is no language here, deliberately. It is read off the request — a user
+ * who writes «تحلیل فروش» has said which language they want, and asking again
+ * is a question whose answer is already on screen. What that slot asks instead
+ * is the one thing the prompt used to decide on the user's behalf: **how many
+ * sections**. It is a starting point rather than a contract — sections are
+ * added and deleted freely once the outline is on screen — so it is offered as
+ * a small number beside the model rather than as a decision to agonise over.
  */
 function CreateDialog({
   onClose, onCreated,
@@ -733,7 +744,7 @@ function CreateDialog({
   const [prompt, setPrompt] = useState('')
   const [connectionId, setConnectionId] = useState<string | null>(null)
   const [modelId, setModelId] = useState<string>('')
-  const [language, setLanguage] = useState<ReportLanguage>('en')
+  const [sections, setSections] = useState(DEFAULT_SECTIONS)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -774,7 +785,7 @@ function CreateDialog({
           prompt: prompt.trim(),
           connection_id: connectionId,
           llm_config_id: modelId || null,
-          language,
+          section_target: sections,
         }),
       )
     } catch (err) {
@@ -788,7 +799,7 @@ function CreateDialog({
   return (
     <Modal
       title="New report"
-      subtitle="The database and the language are fixed once it exists. The model can change any time."
+      subtitle="The database is fixed once it exists. The model, the request and the number of sections can change any time."
       width={560}
       onClose={onClose}
       footer={
@@ -889,12 +900,16 @@ function CreateDialog({
               </select>
             </Field>
 
-            <Field label="Language">
-              <Segmented
-                ariaLabel="Report language"
-                value={language}
-                onChange={setLanguage}
-                options={LANGUAGES.map((entry) => ({ value: entry.value, label: entry.label }))}
+            <Field
+              label="Sections"
+              hint="A starting point — add or delete sections after."
+            >
+              <NumberStepper
+                ariaLabel="Sections to propose"
+                value={sections}
+                onChange={setSections}
+                min={MIN_SECTIONS}
+                max={MAX_SECTIONS}
               />
             </Field>
           </div>

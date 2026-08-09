@@ -105,7 +105,9 @@ backend/app/
                   (bind it to a snapshot, parse metric SQL), generator.py (build
                   one with a model, one call per table), render.py (the prompt
                   block), prompts.py — self-contained like sqlguard
-  reports/        the written document: outline.py (the proposed structure),
+  reports/        the written document: outline.py (the proposed structure,
+                  and how many sections to ask for), language.py (which
+                  language the request is in — derived, never asked),
                   facts.py (the arithmetic a paragraph needs, computed exactly
                   from the rows), narrate.py (the per-section prose prompt, from
                   *disclosed* results), checks.py (the numeric consistency check
@@ -402,6 +404,14 @@ The things worth knowing before you touch it:
   generated draft is dropped (one click to reproduce); a hand-written or
   hand-edited one is kept — the semantic layer's rule about not deleting a
   person's work, applied to the same question.
+- **The language is derived and the length is the user's.** Nobody picks a
+  language: `reports/language.py` reads it off the request (script count, no
+  model call) at creation and again whenever the request is rewritten, so the
+  document cannot disagree with the thing it was asked for. `section_target`
+  (2–8, default 5) is what the outline prompt asks for — the executive summary
+  is added on top of it, and the user adds and deletes sections afterwards
+  like any other edit. Both live on `reports`; a run snapshots the language it
+  was written in, so past documents stay readable in their own.
 - **Reports refuse `NONE`/`AGGREGATE`.** Prose written from no values beside
   charts drawn from real ones is a document that disagrees with itself. Gated
   at creation *and* re-checked at the start of every generation, because a

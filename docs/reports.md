@@ -37,9 +37,9 @@ Two things belong to Reports alone:
    approve a *plan* before spending model calls.
 2. **Prose as the deliverable.** `ANSWER_SYSTEM` writes two sentences for a
    chat bubble; it is deliberately not reused. A report section needs a
-   paragraph that reads as part of a document, in a pinned language, aware of
-   every result under its heading and of what the sections before it
-   established.
+   paragraph that reads as part of a document, in one language for the whole
+   document, aware of every result under its heading and of what the sections
+   before it established.
 
 Everything else — the guard, the connectors, the chart planner, the semantic
 layer, the long-job pattern, RTL handling — already existed and is reused.
@@ -49,8 +49,14 @@ Dashboards feature would leave Reports working.
 ## 2. The journey
 
 1. **Create.** Pick a **connection** (pinned forever), an **LLM config**
-   (changeable at any time), and a **language** (`fa` | `en`, pinned). Type the
-   request: *«یک گزارش تحلیلی از عملکرد فروش سه ماه گذشته می‌خواهم»*.
+   (changeable at any time), and **how many sections** to ask the model for
+   (`section_target`, 2–8, default 5 — a starting point, not a contract).
+   Type the request: *«یک گزارش تحلیلی از عملکرد فروش سه ماه گذشته می‌خواهم»*.
+   The **language is not asked for**: it is read off that request
+   (`app/reports/language.py`) and re-read when the request is rewritten, so a
+   Persian request cannot produce an English document. Whichever script
+   carries more of the letters carries the document, which is what makes a
+   Persian request over Latin table names still Persian.
 2. **Outline.** One model call proposes headings, each with one or more
    **blocks** — a block being one question that becomes one query and one
    figure. The user confirms, edits, removes, reorders, or adds.
@@ -317,7 +323,9 @@ the one the codebase reached twice before — `SemanticLayerRow` vs
 `owner_id` (CASCADE) · `name` (unique per owner) · `description` · `prompt`
 (the request, verbatim — what the outline was proposed from) · `connection_id`
 (**SET NULL**, and immutable after creation → 422) · `llm_config_id` (SET NULL,
-changeable) · `language` (`fa` | `en`, pinned) · `status`.
+changeable) · `language` (`fa` | `en`, **derived from `prompt`**, never sent by
+a client) · `section_target` (how many sections the *model* is asked for; the
+executive summary is added on top of it) · `status`.
 
 `connection_id` is SET NULL rather than CASCADE on purpose: a deleted
 connection must leave a **readable report that cannot regenerate**, never
@@ -643,8 +651,10 @@ self-contained` import-linter contract, not by discipline.
 
 ```
 app/reports/
-  prompts.py    REPORT_PROMPT_VERSION (r2) + the four prompts
-  outline.py    the proposed-outline document: parse, validate, bind
+  prompts.py    REPORT_PROMPT_VERSION (r3) + the four prompts
+  outline.py    the proposed-outline document: parse, validate, bind, and the
+                section-count bounds the API and the prompt both read
+  language.py   which language the request is written in — pure, token-free
   facts.py      the arithmetic a paragraph needs, computed from the rows
   narrate.py    the per-section prose prompt, from disclosed results
   checks.py     the numeric consistency check — pure, DOM-free, token-free

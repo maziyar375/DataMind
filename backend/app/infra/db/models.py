@@ -622,8 +622,16 @@ class Report(Base, TimestampMixin):
     llm_config_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("llm_configs.id", ondelete="SET NULL")
     )
-    # `fa` | `en`. Pinned at creation and sent explicitly in every prose prompt.
+    # `fa` | `en`. **Derived from `prompt`, never chosen** (`reports/language.py`)
+    # and re-derived when the request is rewritten, so a report cannot end up
+    # described in one language and written in another. Still stored rather
+    # than computed on read: a run snapshots it, and the document's direction
+    # and furniture are read off it long after the request has been edited.
     language: Mapped[str] = mapped_column(String(5), nullable=False, default="en")
+    # How many sections the *model* is asked to propose. The executive summary
+    # is added on top of it by the service, and the user adds or removes
+    # sections freely afterwards — this governs the proposal, not the outline.
+    section_target: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
 
     sections: Mapped[list[ReportSection]] = relationship(

@@ -18,13 +18,21 @@ import pytest
 
 from app.domain.ports.llm import ChatMessage, Completion, ResolvedLLM
 from app.reports.outline import (
+    DEFAULT_SECTION_TARGET,
     MAX_BLOCKS_PER_SECTION,
+    MAX_SECTION_TARGET,
     MAX_SECTIONS,
+    MIN_SECTION_TARGET,
+    clamp_section_target,
     executive_summary,
     parse,
     propose,
 )
-from app.reports.prompts import REPORT_OUTLINE_SYSTEM, REPORT_PROMPT_VERSION
+from app.reports.prompts import (
+    REPORT_OUTLINE_SYSTEM,
+    REPORT_OUTLINE_USER,
+    REPORT_PROMPT_VERSION,
+)
 
 LLM = ResolvedLLM(config_id="c", provider="openai", model="m", base_url=None)
 
@@ -123,10 +131,101 @@ async def test_propose_sends_the_language_the_schema_and_the_request() -> None:
 def test_the_prompt_forbids_the_summary_the_service_adds() -> None:
     """Otherwise every report opens with two summaries, one of them empty."""
     assert "executive summary" in REPORT_OUTLINE_SYSTEM.lower()
-    # r2 is the analyst rewrite. The version moves with the wording because a
-    # document generated under r1 is a different artefact, and the run row is
-    # the only thing that says which one a reader is holding.
-    assert REPORT_PROMPT_VERSION == "r2"
+    # r3 takes the number of sections from the request instead of asserting a
+    # range. The version moves with the wording because a document generated
+    # under r2 is a different artefact, and the run row is the only thing that
+    # says which one a reader is holding.
+    assert REPORT_PROMPT_VERSION == "r3"
+
+
+def test_the_prompt_states_no_section_count_of_its_own() -> None:
+    """The count is the user's, and it arrives in the user message.
+
+    A range left behind in the system prompt would be a second, contradictory
+    instruction — and the model would have to choose which to believe.
+    """
+    assert "4 and 7" not in REPORT_OUTLINE_SYSTEM
+    assert "exactly {sections}" in REPORT_OUTLINE_USER
+
+
+# ── how many sections ────────────────────────────────────────────────────
+async def test_the_requested_section_count_reaches_the_model() -> None:
+    gateway = FakeGateway(json.dumps(GOOD, ensure_ascii=False))
+
+    await propose(
+        gateway,  # type: ignore[arg-type]
+        LLM,
+        request="an analysis of sales",
+        language="en",
+        sections=3,
+        dialect="postgres",
+        schema_block="Tables:\n- public.orders(id, total)",
+    )
+
+    _, user = gateway.messages
+    assert "Sections: exactly 3" in user.content
+
+
+async def test_a_longer_reply_is_trimmed_to_what_was_asked_for() -> None:
+    """The extra sections are the model's opinion, not the user's."""
+    reply = {"sections": [_section(f"S{i}") for i in range(6)]}
+    gateway = FakeGateway(json.dumps(reply))
+
+    proposal = await propose(
+        gateway,  # type: ignore[arg-type]
+        LLM,
+        request="an analysis of sales",
+        language="en",
+        sections=3,
+        dialect="postgres",
+        schema_block="",
+    )
+
+    assert [s.heading for s in proposal.sections] == ["S0", "S1", "S2"]
+    assert proposal.dropped_sections == 3
+
+
+async def test_a_shorter_reply_is_kept_as_it_came() -> None:
+    """A malformed part costs that part, never the proposal — and four good
+    sections the user can add a fifth to beat a refusal."""
+    reply = {"sections": [_section("S0"), _section("S1")]}
+    gateway = FakeGateway(json.dumps(reply))
+
+    proposal = await propose(
+        gateway,  # type: ignore[arg-type]
+        LLM,
+        request="an analysis of sales",
+        language="en",
+        sections=6,
+        dialect="postgres",
+        schema_block="",
+    )
+
+    assert len(proposal.sections) == 2
+    assert proposal.dropped_sections == 0
+
+
+@pytest.mark.parametrize(
+    "asked,expected",
+    [
+        (None, DEFAULT_SECTION_TARGET),
+        (0, MIN_SECTION_TARGET),
+        (1, MIN_SECTION_TARGET),
+        (MIN_SECTION_TARGET, MIN_SECTION_TARGET),
+        (4, 4),
+        (MAX_SECTION_TARGET, MAX_SECTION_TARGET),
+        (99, MAX_SECTION_TARGET),
+    ],
+)
+def test_an_impossible_count_is_clamped_rather_than_refused(
+    asked: int | None, expected: int
+) -> None:
+    assert clamp_section_target(asked) == expected
+
+
+def test_the_ceiling_a_user_may_ask_for_is_the_one_the_parser_keeps() -> None:
+    """Otherwise a user could ask for nine and silently be given eight."""
+    assert MAX_SECTION_TARGET == MAX_SECTIONS
 
 
 # ── a truncated reply ────────────────────────────────────────────────────

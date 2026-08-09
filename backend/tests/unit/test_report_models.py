@@ -52,6 +52,9 @@ if "alembic" not in sys.modules:
 # revision in `versions/` does.
 MIGRATIONS = [
     importlib.import_module("app.infra.db.migrations.versions.0008_reports"),
+    importlib.import_module(
+        "app.infra.db.migrations.versions.0009_report_section_target"
+    ),
 ]
 
 TABLES = (
@@ -163,7 +166,7 @@ def test_they_agree_on_every_foreign_key_and_its_delete_rule() -> None:
 
 
 def test_the_revision_chain_is_unbroken() -> None:
-    assert [m.revision for m in MIGRATIONS] == ["0008"]
+    assert [m.revision for m in MIGRATIONS] == ["0008", "0009"]
     assert MIGRATIONS[0].down_revision == "0007"
     # Each revision hangs off the one before it: a fork here is two heads and
     # an `alembic upgrade` that refuses to run.
@@ -176,7 +179,10 @@ def test_the_downgrade_drops_exactly_what_the_upgrade_created() -> None:
 
     assert set(down.dropped_tables) == set(up.tables)
     assert set(down.dropped_indexes) == {name for name, _t, _c in up.indexes}
-    assert down.dropped_columns == []
+    # A column added by a later revision is dropped by its own downgrade, and
+    # by nothing else: a `drop_column` against a table 0008 is about to drop
+    # is a downgrade that only runs in the right order by luck.
+    assert down.dropped_columns == [("reports", "section_target")]
 
 
 def test_the_downgrade_drops_children_before_parents() -> None:

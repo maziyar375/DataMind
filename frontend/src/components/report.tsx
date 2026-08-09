@@ -35,6 +35,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import {
   isReportRunInFlight, llmConfigs as modelsApi, reports as api,
 } from '../api/client'
+import { MAX_SECTIONS, MIN_SECTIONS } from '../api/types'
 import type {
   ChartOption, LlmConfig, NumericFinding, Report, ReportBlock, ReportBlockCheck,
   ReportBlockResult,
@@ -53,8 +54,8 @@ import { printReport } from './report-print'
 import { VegaChart } from './VegaChart'
 import {
   Chip, CopyButton, DangerButton, EmptyState, ErrorNote, GhostButton, Icon, InlineEdit,
-  Kpi, Logo, Modal, PrimaryButton, ProgressBar, ResultTable, Spinner, TextArea,
-  relativeTime,
+  Kpi, Logo, Modal, NumberStepper, PrimaryButton, ProgressBar, ResultTable, Spinner,
+  TextArea, relativeTime,
 } from './ui'
 import type { ChipTone } from './ui'
 
@@ -676,6 +677,7 @@ export function ReportOutlineEditor({
             models={models}
             onPrompt={(prompt) => void patchReport({ prompt })}
             onModel={(llm_config_id) => void patchReport({ llm_config_id })}
+            onSections={(section_target) => void patchReport({ section_target })}
           />
 
           {sweep && (
@@ -819,22 +821,28 @@ export function ReportOutlineEditor({
 
 // ── the request ───────────────────────────────────────────────────────────
 /**
- * What the report is for, and who writes it.
+ * What the report is for, how big it should be, and who writes it.
  *
  * The request is kept verbatim and is what the outline is proposed *from*, so
  * it is editable here rather than frozen at creation: rewriting it and
- * proposing again is the loop a user actually runs. The connection and the
- * language are not editable and say so — one because a report keyed to two
- * connections would cross disclosure policies, the other because every past
- * run's prose is written in it.
+ * proposing again is the loop a user actually runs. The section count sits
+ * beside it for the same reason — it is the other half of what the next
+ * proposal is asked for, and asking for it only in the create dialog would
+ * mean re-proposing forever at whatever number was picked once.
+ *
+ * The connection is not editable and says so: a report keyed to two
+ * connections would cross disclosure policies. The language is not editable
+ * either, but it is not *pinned* — it follows the request, so the way to
+ * change it is to write the request in the other language.
  */
 function RequestCard({
-  report, models, onPrompt, onModel,
+  report, models, onPrompt, onModel, onSections,
 }: {
   report: Report
   models: LlmConfig[]
   onPrompt: (prompt: string) => void
   onModel: (id: string) => void
+  onSections: (count: number) => void
 }) {
   const [draft, setDraft] = useState(report.prompt)
   useEffect(() => setDraft(report.prompt), [report.prompt])
@@ -886,14 +894,34 @@ function RequestCard({
           <Icon.Database size={12} />
           {report.connection_name ?? 'Connection removed'}
         </span>
-        <span aria-hidden style={{ opacity: 0.4 }}>·</span>
-        <span>{report.language === 'fa' ? 'فارسی' : 'English'}</span>
         <span
           style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
-          title="The database and the language are fixed for the life of a report."
+          title="A report is pinned to the connection it was created against."
         >
           <Icon.Lock size={11} /> fixed
         </span>
+        <span aria-hidden style={{ opacity: 0.4 }}>·</span>
+        {/* Derived, not chosen: written wherever the request above is written.
+            Shown because it decides the document's direction, and a user whose
+            Persian request came back marked English needs to see that here
+            rather than at the bottom of a generated document. */}
+        <span title="Taken from the request above — write it in the other language to change it.">
+          {report.language === 'fa' ? 'فارسی' : 'English'}
+        </span>
+
+        <span aria-hidden style={{ opacity: 0.4 }}>·</span>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+          <span title="How many sections to ask for the next time an outline is proposed. Add or delete sections yourself at any time.">
+            Sections to propose
+          </span>
+          <NumberStepper
+            ariaLabel="Sections to propose"
+            value={report.section_target}
+            onChange={onSections}
+            min={MIN_SECTIONS}
+            max={MAX_SECTIONS}
+          />
+        </label>
 
         {/* The model is the one pinned-looking choice that is not: it decides
             who writes the prose, not what is in it. */}
