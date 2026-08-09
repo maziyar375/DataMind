@@ -44,6 +44,29 @@ HISTOGRAM_BINS = 20       # Vega's target, not a promise; it snaps to round edge
 MIN_HISTOGRAM_ROWS = 20   # fewer observations than this is a list, not a shape
 MIN_HISTOGRAM_LEVELS = 10  # ten repeated values are categories, not a spread
 
+# ── the pie's slice labels ───────────────────────────────────────────────
+# A pie is the one chart whose numbers are nowhere on the picture: no axis
+# carries them, so a reader who cannot hover — anyone holding the printed
+# report — is left with six angles and a legend. So the measure is written
+# across each slice, and these three values are where that is drawn.
+#
+# Both radii are expressions rather than numbers because the same spec is
+# drawn at a dashboard tile's size, a chat column's, and the printed page's;
+# `width` and `height` are Vega's own view signals, so the labels follow the
+# pie whatever box it lands in. The arc's radius is stated rather than left to
+# Vega's default (which is the same formula) so that the two cannot drift.
+PIE_OUTER_RADIUS = "min(width, height) / 2"
+PIE_LABEL_RADIUS = "min(width, height) / 2 * 0.68"
+#: Slices thinner than this share of the whole go unlabelled. Two labels sit
+#: about `radius x (a + b) / 2` apart, so a pair of thin neighbours prints one
+#: number on top of another — which is less readable than the tail of a pie
+#: being unlabelled, and the tail is where the thin slices always are once the
+#: rows are ranked. Everything above the line is the part a reader is reading.
+PIE_LABEL_MIN_SHARE = 0.03
+#: The field the labels are switched by. Not a result column — see
+#: `_slice_labels` for why the suppression cannot be an expression.
+PIE_LABEL_FLAG = "__labelled"
+
 # Columns whose *name* says they are an identifier: never a measure, however
 # numeric they look. Charting `customer_id` as a quantity is the classic
 # position-based mistake ("the first numeric column must be the measure").
@@ -1576,6 +1599,29 @@ def _tooltip_number_format(values: Sequence[Any]) -> str | None:
     return _exact_number_format(numbers) if numbers else None
 
 
+def _slice_number_format(values: Sequence[Any]) -> str | None:
+    """How a number is written *on* a mark, rather than beside one.
+
+    Between the two formats above, and for a reason that is a d3 subtlety
+    rather than a preference. An axis reaches d3 through `tickFormat`, which
+    fills in a precision, so `_axis_number_format` can hand over a bare `~s`.
+    A label on a slice is formatted by `format` alone — nothing supplies a
+    precision, and d3's default is **six significant digits**, so the same
+    `~s` writes `1.24732M` across a wedge. Hence the explicit `.3`: three
+    figures is what a reader takes off a picture anyway.
+
+    Below the same threshold the axis uses, the number is written out in full
+    — a label has more room than a tick, and `950` says more than `950`
+    abbreviated to itself.
+    """
+    numbers = [f for f in (_as_float(v) for v in values) if f is not None]
+    if not numbers:
+        return None
+    if max(abs(n) for n in numbers) >= 10_000:
+        return ".3~s"
+    return _exact_number_format(numbers)
+
+
 # ── compilation ──────────────────────────────────────────────────────────
 def _monotonic(values: list[float | None]) -> str | None:
     """"descending" / "ascending" if the rows already arrive ordered by value.
@@ -1732,6 +1778,53 @@ def _tooltip(
     return entries
 
 
+def _slice_labels(
+    measure: AxisSpec, data: list[dict[str, Any]], values: Sequence[Any]
+) -> dict[str, Any]:
+    """The text channel that writes a pie's measure across its slices.
+
+    **Stamps `PIE_LABEL_FLAG` onto the rows it is given** — which is the part
+    worth explaining, because the obvious implementation is an expression and
+    the obvious implementation is wrong. Suppressing a thin slice needs its
+    share of the whole, the whole is a sum over every row, and the two ways to
+    reach one in Vega both cost something this cannot pay: a `joinaggregate`
+    transform recomputes the total per layer, and filtering the label layer's
+    rows changes that layer's stacking — the labels then land at angles the
+    arcs are not at. Python already holds every row, so it does the division
+    once and the spec carries only the verdict.
+
+    The exception is an aggregating pie, where a row is not a slice: Vega adds
+    the rows up, and which of them went into a wedge is not a per-row fact.
+    There every slice is labelled, which is the pre-existing behaviour of every
+    other chart's numbers — right on the picture, and occasionally crowded.
+    """
+    channel: dict[str, Any] = {"field": measure.field, "type": "quantitative"}
+    if measure.aggregation != "none":
+        channel["aggregate"] = measure.aggregation
+    fmt = _slice_number_format(values)
+    if fmt:
+        channel["format"] = fmt
+    if measure.aggregation != "none":
+        return channel
+
+    numbers = [_as_float(row.get(measure.field)) or 0.0 for row in data]
+    total = sum(numbers)
+    if total <= 0:
+        # Nothing to take a share of — an all-zero measure, or no rows at all.
+        # The pie is meaningless either way; labelling it is not what fixes it.
+        return channel
+
+    flag = PIE_LABEL_FLAG
+    while flag in data[0]:
+        flag += "_"          # a result column of that name would be silently lost
+    for row, value in zip(data, numbers, strict=False):
+        row[flag] = value / total >= PIE_LABEL_MIN_SHARE
+    # An empty string is a text mark that draws nothing, which is the point:
+    # the datum stays in the layer, so the stack — and every other label's
+    # angle with it — is exactly the arcs'.
+    return {"condition": {"test": f"datum.{flag}", **channel}, "value": ""}
+
+
 def compile_vega_lite(
     intent: ChartIntent,
     profile: ResultProfile,
@@ -1772,7 +1865,9 @@ def compile_vega_lite(
         "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
         "data": {"values": data},
     }
-    if intent.chart_type != "combo":
+    # The two charts that are a layer of marks rather than one mark state it in
+    # their own branch below; everything else hangs its mark here.
+    if intent.chart_type not in ("combo", "pie"):
         spec["mark"] = {"type": _MARKS[intent.chart_type]}
 
     encoding: dict[str, Any] = {}
@@ -1781,8 +1876,43 @@ def compile_vega_lite(
     if intent.chart_type == "pie":
         # An `arc` mark is encoded by angle (the measure) and colour (the
         # category), not by x/y — an x/y encoding renders nothing.
-        encoding["theta"] = encode(intent.y_axis, positional=False)
+        #
+        # Two layers, because the arcs alone carry no numbers: no axis writes
+        # them, so a pie says its values only through the tooltip, and the
+        # printed report — the one place a chart has to stand on its own — has
+        # no hover. The second layer writes the measure across each slice.
+        #
+        # `stack` is what pairs them. It is already what an arc does with
+        # theta, so it changes nothing about the pie; stating it puts theta
+        # *and* theta2 on the text layer as well, and a text mark between two
+        # angles is drawn at the middle of them — which is how each label finds
+        # the slice it belongs to. Both layers must therefore stack over the
+        # same encodings, which is why `color` stays up here rather than moving
+        # down to the arc: split between the layers, the two stacks come out in
+        # different orders and every label lands on a neighbour's slice.
+        encoding["theta"] = {**encode(intent.y_axis, positional=False), "stack": True}
         encoding["color"] = encode(intent.x_axis, positional=False)
+        spec["layer"] = [
+            {
+                "mark": {
+                    "type": _MARKS["pie"],
+                    "outerRadius": {"expr": PIE_OUTER_RADIUS},
+                }
+            },
+            {
+                # No fill: a label sits *on* a slice, so the ink that reads
+                # against it is a question about the palette, and the palette
+                # belongs to the browser — the same division `signed_measure`
+                # is on. The compiler places the labels; the renderer paints
+                # them.
+                "mark": {"type": "text", "radius": {"expr": PIE_LABEL_RADIUS}},
+                "encoding": {
+                    "text": _slice_labels(
+                        intent.y_axis, data, shown.get(intent.y_axis.field, ())
+                    )
+                },
+            },
+        ]
     elif intent.chart_type == "heatmap":
         # Two dimensions position the cell; the measure is its colour. The
         # measure stays **quantitative** so Vega reaches for a continuous scale
@@ -1879,6 +2009,12 @@ def compile_vega_lite(
         # top-level mark to hang that on, and its tooltip is always the
         # explicit one, since neither of its measures may aggregate.
         spec["mark"]["tooltip"] = True
+    elif intent.chart_type == "pie":
+        # Same fallback, one layer down: the hover belongs to the arcs, not to
+        # the labels drawn over them. Reachable only for an aggregating pie —
+        # which is also the one that carries no `PIE_LABEL_FLAG`, so what the
+        # reader sees listed is the row and nothing this function added to it.
+        spec["layer"][0]["mark"]["tooltip"] = True
 
     # What the renderer needs to know that the encoding does not say.
     #

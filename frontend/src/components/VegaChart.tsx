@@ -16,7 +16,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import embed, { type VisualizationSpec } from 'vega-embed'
-import { PALETTES, type ThemeName } from './palette.ts'
+import { CATEGORY_INK, PALETTES, type ThemeName } from './palette.ts'
 import { registerPrintableChart, type DrawTarget } from './report-print.ts'
 
 /**
@@ -138,6 +138,12 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
     // stacked down the page — but its own row count, and it needs a taller
     // band than a bar because a cell is read as an area, not a length.
     const isHeatmap = meta?.chart_type === 'heatmap'
+    // A pie. Read off `usermeta` rather than the mark, because a pie is a
+    // *layer* — the arcs, then the numbers written across them — and so has no
+    // top-level mark to test. The mark is still the fallback for the specs
+    // compiled before the labels existed, which are single-mark arcs and are
+    // still on screen wherever a chat artifact persisted one.
+    const isArc = meta ? meta.chart_type === 'pie' : mark === 'arc'
     const PER_BAND = isHeatmap ? 26 : 22
     // Marks drawn along the vertical category axis. For a heatmap that is the
     // second dimension; for bars, a stacked split puts its parts on one bar so
@@ -153,7 +159,7 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
       ? Math.min(60_000, Math.max(200, bandCount * PER_BAND))
       : fill
         ? 'container'
-        : mark === 'arc'
+        : isArc
           ? 260
           : 300
     const xIsCategorical = encoding.x?.type === 'nominal' || encoding.x?.type === 'ordinal'
@@ -178,7 +184,13 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
       // A pie's radius is derived from the plot box, which is why Vega's `fit`
       // autosize does not apply to it — the print path has to size it the
       // other way round. See the autosize note in `buildSpec`.
-      isArc: mark === 'arc',
+      isArc,
+      // The column its slices are coloured by, which is what the labels drawn
+      // over them need: the ink is chosen per slice from the fill under it.
+      categoryField:
+        isArc && typeof spec.encoding === 'object'
+          ? (spec.encoding as { color?: { field?: string } }).color?.field
+          : undefined,
       signedMeasure: meta?.signed_measure,
     }
   }, [spec, fill])
@@ -186,7 +198,7 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
   useEffect(() => {
     const el = ref.current
     if (!el) return
-    const { encoding, height, width, xIsCategorical, signedMeasure } = layout
+    const { encoding, height, width, xIsCategorical, signedMeasure, categoryField } = layout
 
     /**
      * The spec as it goes to Vega, for a given palette and a given width.
@@ -242,6 +254,10 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
         scale: { bandPaddingInner: 0.25 },
         mark: { color: p.category[0] },
         arc: { innerRadius: 0 },
+        // The pie's slice numbers — the only text mark this product draws.
+        // Bolder and a shade smaller than an axis label, because it is read
+        // against a colour rather than against the page.
+        text: { fontSize: 10.5, fontWeight: 600 },
         point: { size: 60, filled: true },
         line: { strokeWidth: 2 },
       }
@@ -281,6 +297,30 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
         }
       }
 
+      // The pie's slice numbers. The compiler places them and leaves them
+      // unpainted, because ink on a slice is a question about the palette and
+      // the palette is this file's — the same division `signed_measure` is on.
+      //
+      // Per slice, not per chart: the categorical slots deliberately vary in
+      // lightness (that is the CVD mechanism, see `palette.ts`), so no single
+      // ink clears 4.5:1 against all eight. `contrast()` and `scale()` are
+      // Vega expression functions, so the decision is made from the *resolved*
+      // fill at draw time — which also means it survives a theme flip without
+      // anything here knowing which slice got which hue.
+      let layerOverride = spec.layer
+      if (Array.isArray(layerOverride) && categoryField) {
+        const fillOf = `scale('color', datum[${JSON.stringify(categoryField)}])`
+        const ink = {
+          expr:
+            `contrast(${fillOf}, '${CATEGORY_INK.light}') > ` +
+            `contrast(${fillOf}, '${CATEGORY_INK.dark}') ` +
+            `? '${CATEGORY_INK.light}' : '${CATEGORY_INK.dark}'`,
+        }
+        layerOverride = (layerOverride as { mark?: { type?: string } }[]).map((child) =>
+          child.mark?.type === 'text' ? { ...child, mark: { ...child.mark, fill: ink } } : child,
+        )
+      }
+
       // On paper there is no container to fit to and no observer to re-measure,
       // so both axes need a definite length. The width is the page's, and so is
       // the height: a screen plot is 300px tall whatever its width, which on a
@@ -314,6 +354,10 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
       const fitToPage = page !== null && !layout.growsDown && !layout.isArc
       return {
         ...spec,
+        // Only when there is one: `layer: undefined` still reads as a layered
+        // spec to Vega-Lite — it tests for the key, not for a value — and
+        // every single-mark chart would compile to nothing.
+        ...(layerOverride ? { layer: layerOverride } : {}),
         encoding: encodingOverride,
         width: drawWidth,
         height: drawHeight,

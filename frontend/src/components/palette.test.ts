@@ -22,7 +22,7 @@
  * calibrated to that model, so swapping the simulation would mean recalibrating
  * the gates rather than just changing an implementation detail.
  */
-import { PALETTES, SURFACE, type ThemeName } from './palette.ts'
+import { CATEGORY_INK, PALETTES, SURFACE, type ThemeName } from './palette.ts'
 
 // ── gates ────────────────────────────────────────────────────────────────
 const CVD_TARGET = 8 // adjacent pairs, min(protan, deutan)
@@ -34,6 +34,7 @@ const CHROMA_FLOOR = 0.1 // below this a categorical hue reads as grey
 const NEUTRAL_CHROMA_MAX = 0.02 // the midpoint of a diverging ramp is not a hue
 const SERIES_DISTANCE = 15 // polarity vs every categorical slot
 const SERIES_CAP = 4 // all-pairs cap that holds in BOTH modes
+const LABEL_CONTRAST = 4.5 // 11px text drawn on a mark (WCAG AA, normal text)
 
 // Machado, Oliveira & Fernandes (2009) CVD transforms at severity 1.0, linear RGB.
 const MACHADO: Record<string, number[][]> = {
@@ -242,6 +243,20 @@ for (const mode of ['dark', 'light'] as ThemeName[]) {
     'diverging: every step stays visible',
     faintest >= RAMP_CONTRAST,
     `worst ${round(faintest)}:1 (≥${RAMP_CONTRAST}:1)`,
+  )
+
+  // Ink on a mark: a label drawn on a slice, in whichever of the two inks
+  // contrasts more with the fill under it — the choice the renderer makes per
+  // slice at draw time. Text, not a mark, so the gate is the text one.
+  const worstLabel = Math.min(
+    ...p.category.map((c) =>
+      Math.max(contrast(CATEGORY_INK.light, c), contrast(CATEGORY_INK.dark, c)),
+    ),
+  )
+  check(
+    'category ink: a label stays legible on every slot',
+    worstLabel >= LABEL_CONTRAST,
+    `worst ${round(worstLabel)}:1 (≥${LABEL_CONTRAST}:1)`,
   )
 
   // Polarity: the named poles must not read as an identity.

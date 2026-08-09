@@ -28,6 +28,9 @@ from app.charts import (
     MAX_PIE_SLICES,
     MAX_SERIES,
     MIN_HISTOGRAM_ROWS,
+    PIE_LABEL_FLAG,
+    PIE_LABEL_RADIUS,
+    PIE_OUTER_RADIUS,
     AxisSpec,
     ChartIntent,
     ChartOption,
@@ -246,7 +249,6 @@ def test_chartable_result_has_no_veto() -> None:
         ("line", "line"),
         ("area", "area"),
         ("scatter", "point"),
-        ("pie", "arc"),
     ],
 )
 def test_compile_marks(chart_type: str, mark: str) -> None:
@@ -268,6 +270,70 @@ def test_pie_uses_theta_and_color_not_xy() -> None:
     # ignored — Vega-Lite rejects the spec, and the tile loses its chart.
     assert "axis" not in spec["encoding"]["theta"]
     assert "axis" not in spec["encoding"]["color"]
+
+
+def test_a_pie_writes_its_numbers_on_its_slices() -> None:
+    """The tooltip is not the answer for a pie: a printed report has no hover,
+    and no axis carries a pie's numbers. So the arcs come with a text layer."""
+    spec = compile_vega_lite(_intent("pie"), PROFILE, COLUMNS, ROWS)
+    assert "mark" not in spec                       # a layer of two, not one
+    arc, labels = spec["layer"]
+    assert arc["mark"]["type"] == "arc"
+    assert labels["mark"]["type"] == "text"
+    # Both radii come off the view's own size, so the labels follow the pie
+    # from a dashboard tile to the printed page.
+    assert arc["mark"]["outerRadius"] == {"expr": PIE_OUTER_RADIUS}
+    assert labels["mark"]["radius"] == {"expr": PIE_LABEL_RADIUS}
+    # Stacked theta is what puts a label at the middle of its own slice, and
+    # colour stays *shared* so both layers stack in the same order.
+    assert spec["encoding"]["theta"]["stack"] is True
+    assert "encoding" not in arc
+    # The measure, formatted — never a bare `~s`, which d3 writes to six
+    # significant digits when nothing supplies a precision.
+    text = labels["encoding"]["text"]["condition"]
+    assert text["field"] == "total"
+    assert text["format"] == ","
+
+
+def test_a_pie_labels_only_the_slices_a_label_fits_in() -> None:
+    """Two thin neighbours print one number over the other. The tail of a
+    ranked pie is where they always are, so it is the tail that goes quiet."""
+    rows = [["A", 970], ["B", 20], ["C", 10]]
+    spec = compile_vega_lite(
+        _intent("pie"), profile_result(COLUMNS, rows), COLUMNS, rows
+    )
+    assert [row[PIE_LABEL_FLAG] for row in spec["data"]["values"]] == [True, False, False]
+    # Suppression is a flag on the row, not a filter on the layer: dropping the
+    # row would change that layer's stacking, and every label would then land
+    # at an angle its arc is not at.
+    assert len(spec["data"]["values"]) == 3
+    assert spec["layer"][1]["encoding"]["text"]["value"] == ""
+
+
+def test_a_pie_with_big_numbers_abbreviates_its_labels() -> None:
+    rows = [["A", 1_247_318], ["B", 803_122], ["C", 421_000]]
+    spec = compile_vega_lite(
+        _intent("pie"), profile_result(COLUMNS, rows), COLUMNS, rows
+    )
+    assert spec["layer"][1]["encoding"]["text"]["condition"]["format"] == ".3~s"
+
+
+def test_an_aggregating_pie_labels_every_slice() -> None:
+    """A row is not a slice once Vega is adding them up, so there is no share
+    to suppress by — and the label has to carry the same aggregate the angle
+    does, or it reports a different number from the one it is written on."""
+    rows = [["A", 10], ["A", 20], ["B", 30]]
+    intent = _intent("pie")
+    intent = intent.model_copy(
+        update={"y_axis": AxisSpec(field="total", type="quantitative", aggregation="sum")}
+    )
+    spec = compile_vega_lite(intent, profile_result(COLUMNS, rows), COLUMNS, rows)
+    text = spec["layer"][1]["encoding"]["text"]
+    assert text["aggregate"] == "sum"
+    assert "condition" not in text
+    assert all(PIE_LABEL_FLAG not in row for row in spec["data"]["values"])
+    # The hover belongs to the arcs, not to the labels drawn over them.
+    assert spec["layer"][0]["mark"]["tooltip"] is True
 
 
 def test_horizontal_bar_swaps_axes() -> None:

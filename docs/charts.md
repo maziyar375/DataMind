@@ -46,7 +46,7 @@ Eight types plus `none`, and two presentations that are not charts.
 | **Area** | `stack` | volume trend, composition over time | `mark: area` |
 | **Combo** | dual axis | two measures on different units | `layer` + independent y scale |
 | **Scatter** | `size` → bubble | correlation, three variables | `mark: point` + `size` |
-| **Pie** | `pie \| donut` | parts of a whole (≤ 6) | `mark: arc` |
+| **Pie** | `pie \| donut` | parts of a whole (≤ 6) | `layer`: `arc` + `text` labels |
 | **Heatmap** | — | dimension × dimension × measure | `mark: rect` |
 | **Histogram** | bin count | distribution of one raw measure | `bin` transform |
 | **Big number** | delta, sparkline | the single-value result | own renderer, not Vega |
@@ -155,7 +155,15 @@ HISTOGRAM_BINS       20    Vega's target, not a promise; it snaps to round edges
 MIN_HISTOGRAM_ROWS   20    fewer observations than this is a list, not a shape
 MIN_HISTOGRAM_LEVELS 10    ten repeated values are categories, not a spread
 SPARKLINE_POINTS     60    a strip 60px wide has no room for more
+PIE_LABEL_MIN_SHARE 3%     thinner than this and two labels print on top of
+                           each other; the tail of a ranked pie is where those
+                           slices always are
 ```
+
+The pie's two radii are in that file too, as Vega *expressions* rather than
+numbers (`min(width, height) / 2`, and `0.68` of it for the labels): the same
+spec is drawn at a tile's size, a chat column's and the page's, so the labels
+have to follow the pie into whatever box it lands in.
 
 ## 5. Why the model keeps the choice
 
@@ -224,6 +232,21 @@ wrong often enough to matter:
   thousands separators rather than raw floats.
 - **An explicit mark hint** written into the spec, so the renderer does not have
   to sniff the mark back out of it.
+- **Numbers on the pie itself.** A pie is the one chart with no axis to carry
+  its values, so before this it said them only through the tooltip — and the
+  printed report, where a chart has to stand alone, has no hover. The arcs are
+  now a layer of two: the wedges, then the measure written across each one.
+  Three details are load-bearing. `theta` is explicitly `stack: true`, which
+  puts theta *and* theta2 on the text layer and so lands each label at the
+  middle of its own slice; `color` therefore stays in the *shared* encoding,
+  because split between the layers the two stacks come out in different orders
+  and every label lands on a neighbour's wedge. The format carries an explicit
+  precision (`.3~s`, not the axis's bare `~s`) since nothing supplies one to a
+  `format`, and d3's default is six significant digits — `1.24732M` across a
+  wedge. And a slice under `PIE_LABEL_MIN_SHARE` of the whole goes unlabelled,
+  flagged per row by the compiler rather than filtered out of the layer:
+  dropping the row would change that layer's stacking and move every other
+  label. Labels are placed here and **painted in the browser** — see §8.
 
 `color` and `series` are separate fields on purpose. Both map to the same Vega
 channel and do different jobs: `series` colours by *identity* (one hue per
@@ -259,6 +282,17 @@ numbers are in that file's header, and
 (`npm run test:palette`).
 
 A free hex picker destroys all of that silently, so there isn't one.
+
+**Ink on a mark is chosen per mark, not per chart.** The pie's slice numbers
+are the first label the product draws *on top of* a fill, and no single ink
+serves: the categorical slots vary in lightness on purpose (that is the CVD
+mechanism), so white bottoms out at 3.3:1 in dark and 3.1:1 in light. The
+compiler leaves the labels unpainted and `VegaChart` gives them a `contrast()`
+expression over the two `CATEGORY_INK` values, so each label takes whichever
+reads better against the slice under it — resolved at draw time, and so
+correct through a theme flip without either side knowing which wedge got which
+hue. The worst slot then measures 5.1:1 dark, 4.6:1 light, both asserted in
+`palette.test.ts`.
 
 The dashboard settings drawer offers exactly **one** palette, "Default
 (measured)", and says why. The column, the API field and the picker are all in

@@ -123,6 +123,27 @@
  * of a *value*, which is a fact, and are ready for the delta the day a metric
  * can declare its polarity.
  *
+ * ── Ink on a mark ────────────────────────────────────────────────────────
+ *
+ * Every colour above answers "what is this mark painted?". `CATEGORY_INK`
+ * answers the question after it: what a *label drawn on top of one* is
+ * painted, which the pie's slice numbers are the first thing in the product
+ * to ask.
+ *
+ * It is a pair rather than a colour because no single ink works. The
+ * categorical slots vary in lightness on purpose — that is the CVD mechanism
+ * described above, not a lapse — so one ink is always weak against one end of
+ * the wheel: white bottoms out at 3.3:1 in dark mode and 3.1:1 in light, both
+ * short of the 4.5:1 that 11px text needs. Given both, the renderer picks per
+ * slice whichever contrasts more with the fill under it (`contrast()` is a
+ * Vega expression function, so the choice is made from the resolved colour at
+ * draw time rather than guessed at here). The worst slot then measures
+ * **5.1:1 in dark and 4.6:1 in light**, and no slice is a weak one.
+ *
+ * The pair is one pair for both themes, not one per theme, because the fill
+ * under the label is a categorical colour rather than the page: a slice is the
+ * same mid-dark hue whichever mode it is drawn in.
+ *
  * ── Changing any of this ─────────────────────────────────────────────────
  *
  * Run `npm run test:palette`. Every figure quoted above is asserted there for
@@ -151,6 +172,14 @@ export const SURFACE: Record<ThemeName, string> = {
   dark: '#12171b',
   light: '#fffdfa',
 }
+
+/**
+ * The two inks a label drawn *on* a categorical fill may take — the renderer
+ * picks the one that contrasts more with the slice under it. Shared by both
+ * themes, because the fill under the label is a series colour, not the page.
+ * See "Ink on a mark" above; the floor is asserted in `palette.test.ts`.
+ */
+export const CATEGORY_INK = { light: '#ffffff', dark: '#0f0a06' } as const
 
 export const PALETTES: Record<ThemeName, Palette> = {
   dark: {
