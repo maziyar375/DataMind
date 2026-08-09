@@ -228,6 +228,24 @@ check(
   true,
 )
 
+// ── the imprint on the cover ─────────────────────────────────────────────
+// A printed report leaves the tool, and the app chrome that says where it came
+// from is the first thing the print block removes — so the mark has to be
+// inside the article. Sized in millimetres rather than px: the source is a
+// 1024px raster, and asking for 8mm of it is what keeps it a print resolution
+// instead of a screen one.
+check('the cover carries the mark', /<Brandmark \/>/.test(reportTsx), true)
+check(
+  'and print gives the lockup a size of its own',
+  /\.rm-report-brand[^{]*\{[^}]*\}/.test(printCss),
+  true,
+)
+check(
+  'in millimetres, so the raster prints at print resolution',
+  /\.rm-report-brand img[\s\S]{0,120}?width:\s*\d+(\.\d+)?mm/.test(printCss),
+  true,
+)
+
 // The classes the scale is hung on. Every one of them is on an element styled
 // inline, so the selector is the only handle print has on it; renaming one in
 // the component without renaming it here reverts that element to screen size

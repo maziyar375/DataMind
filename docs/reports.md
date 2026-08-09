@@ -566,6 +566,17 @@ above and below instead of boxed, `orphans`/`widows` on the prose, a heading
 that cannot be the last mark on a page, a statement in the appendix that cannot
 be split across one, and no folio on the cover.
 
+The cover also carries the **imprint** — the mark and the name, opposite the
+"analytical report" line. It lives inside the article rather than in the
+viewer's header for the same reason the cover states its own provenance: a PDF
+is mailed, filed and read months later by someone who never saw the
+application, and every part of the screen that says where it came from is
+removed by the first rule in the print block. It is set at the weight of a
+byline, not a banner — a cover that advertises the tool louder than it names
+the report has the emphasis backwards — and sized in **millimetres**, because
+the mark is a 1024px raster and 8mm of it is around 380dpi, past what an office
+printer resolves.
+
 ### The page margin, and who owns it
 
 Left to itself the browser prints its own header and footer into the margin:

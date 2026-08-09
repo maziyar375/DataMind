@@ -1330,6 +1330,21 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
      with the rule under the metadata doing the work the size was doing. */
   .rm-report-cover { gap: 9px !important; }
   .rm-report-kicker { font-size: 7pt !important; letter-spacing: 0.18em !important; }
+
+  /* The imprint, a size down with it. The mark is a raster tile, so it is
+     given a print resolution rather than a CSS one: the source is 1024px
+     square and 8mm of it is around 380dpi, which is past what any office
+     printer resolves — it stays crisp wherever the document is printed.
+     `print-color-adjust` is already exact on `html, body`, so the gradient
+     prints as itself instead of as grey. */
+  .rm-report-brand { gap: 5px !important; }
+  .rm-report-brand img,
+  .rm-report-brand svg {
+    width: 8mm !important;
+    height: 8mm !important;
+    border-radius: 1.8mm !important;
+  }
+  .rm-report-brand span { font-size: 9.5pt !important; }
   .rm-report-title { font-size: 20pt !important; line-height: 1.15 !important; }
   .rm-report-subtitle { font-size: 10pt !important; line-height: 1.45 !important; }
   .rm-report-meta {

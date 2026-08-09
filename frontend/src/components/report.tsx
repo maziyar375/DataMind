@@ -53,7 +53,7 @@ import { printReport } from './report-print'
 import { VegaChart } from './VegaChart'
 import {
   Chip, CopyButton, DangerButton, EmptyState, ErrorNote, GhostButton, Icon, InlineEdit,
-  Kpi, Modal, PrimaryButton, ProgressBar, ResultTable, Spinner, TextArea,
+  Kpi, Logo, Modal, PrimaryButton, ProgressBar, ResultTable, Spinner, TextArea,
   relativeTime,
 } from './ui'
 import type { ChipTone } from './ui'
@@ -2334,18 +2334,30 @@ function DocumentCover({
       className="rm-report-cover"
       style={{ display: 'flex', flexDirection: 'column', gap: 14 }}
     >
-      <span
-        className="rm-report-kicker"
-        style={{
-          fontSize: 10.5,
-          fontWeight: 600,
-          letterSpacing: '0.14em',
-          textTransform: 'uppercase',
-          color: 'var(--accent)',
-        }}
+      {/* The masthead line: what kind of document this is, and whose press it
+          came off. They share a row because they are the same statement made
+          twice — one in words, one as a mark — and because a cover reads best
+          when the eye crosses it once, left to right, before it drops to the
+          title. Logical properties throughout, so a Persian report mirrors the
+          whole line rather than stranding the mark on the wrong edge. */}
+      <div
+        className="rm-report-masthead"
+        style={{ display: 'flex', alignItems: 'center', gap: 16 }}
       >
-        {t.eyebrow}
-      </span>
+        <span
+          className="rm-report-kicker"
+          style={{
+            fontSize: 10.5,
+            fontWeight: 600,
+            letterSpacing: '0.14em',
+            textTransform: 'uppercase',
+            color: 'var(--accent)',
+          }}
+        >
+          {t.eyebrow}
+        </span>
+        <Brandmark />
+      </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <h1
@@ -2417,6 +2429,50 @@ function DocumentCover({
         ))}
       </dl>
     </header>
+  )
+}
+
+/**
+ * The mark on the cover.
+ *
+ * A printed report leaves the tool: it is mailed, filed and read months later
+ * by someone who never saw the application, and the one thing the page cannot
+ * otherwise say is where it was made. The app chrome that says so on screen is
+ * the first thing `@media print` removes, so the document has to carry it
+ * itself — which is why this sits inside the article rather than in the
+ * viewer's header.
+ *
+ * The lockup is the mark plus the name, at the weight of a byline rather than
+ * a banner: it is the publisher's imprint on a document about somebody else's
+ * data, and a cover that advertises the tool louder than it names the report
+ * has the emphasis backwards. `dir="ltr"` because "DataMind" is a name and
+ * reads the same way in a Persian document.
+ */
+function Brandmark() {
+  return (
+    <div
+      className="rm-report-brand"
+      dir="ltr"
+      style={{
+        marginInlineStart: 'auto',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        flexShrink: 0,
+      }}
+    >
+      <Logo size={26} />
+      <span
+        style={{
+          fontSize: 13.5,
+          fontWeight: 700,
+          letterSpacing: '-0.01em',
+          color: 'var(--text-strong)',
+        }}
+      >
+        DataMind
+      </span>
+    </div>
   )
 }
 
