@@ -174,8 +174,8 @@ export default function LlmProvidersPage() {
 
   const editing = creating || !!selected
 
-  // Ollama and other local endpoints need no key, so only the model is
-  // required before a draft probe can say anything useful. Editing an unsaved
+  // Local/custom endpoints need no key, so only the model is required
+  // before a draft probe can say anything useful. Editing an unsaved
   // change takes the same draft path, so it needs a model name too.
   const canTest = creating || isDirty ? Boolean(draft.model) : true
 
@@ -206,7 +206,7 @@ export default function LlmProvidersPage() {
         {!editing ? (
           <EmptyState
             title="Connect a model"
-            body="DataMind works with any OpenAI-compatible endpoint, Anthropic, or a local Ollama server. Testing a model records what it can actually do."
+            body="DataMind works with any OpenAI-compatible endpoint (including local servers like Ollama) or Anthropic. Testing a model records what it can actually do."
             action={<PrimaryButton onClick={startCreate}>Add a model</PrimaryButton>}
           />
         ) : (

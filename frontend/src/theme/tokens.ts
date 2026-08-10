@@ -160,6 +160,5 @@ export const DATABASE_TYPES: {
 export const PROVIDER_URLS: Record<string, string> = {
   'OpenAI-compatible': 'https://api.openai.com/v1',
   Anthropic: 'https://api.anthropic.com',
-  Ollama: 'http://localhost:11434/v1',
   Custom: 'https://your-endpoint.example.com/v1',
 }

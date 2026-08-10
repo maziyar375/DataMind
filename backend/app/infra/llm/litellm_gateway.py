@@ -139,10 +139,7 @@ class LiteLLMGateway:
     # ── request shaping ──────────────────────────────────────────────────
     def _kwargs(self, llm: ResolvedLLM, messages: Sequence[ChatMessage]) -> dict[str, Any]:
         model = llm.model
-        needs_openai_prefix = (
-            (llm.provider == "Ollama" and not model.startswith("ollama/"))
-            or (llm.provider in {"OpenAI-compatible", "Custom"} and "/" not in model)
-        )
+        needs_openai_prefix = llm.provider in {"OpenAI-compatible", "Custom"} and "/" not in model
         if needs_openai_prefix:
             model = f"openai/{model}"
 
