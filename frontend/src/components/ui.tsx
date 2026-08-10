@@ -1130,6 +1130,13 @@ export function Kpi({ spec, compact = false }: {
   /** Tighter type for a dashboard tile, which is a smaller box than a turn. */
   compact?: boolean
 }) {
+  /* Nothing abbreviates the figure — `_fmt_number` writes it in full, so
+     `12,345,678,901.23` is an ordinary value — and a grouped number has no
+     space to break at. Drawn at a fixed 40px in a quarter-width report tile it
+     runs straight through the border. So the size comes down with the length,
+     which keeps the whole number readable rather than clipping it, and the
+     wrap below catches whatever is longer than any size can save. */
+  const scale = kpiScale(spec.value, compact)
   return (
     /* The classes carry no screen styling: they are how the report's print
        stylesheet reaches a number whose size is set inline here. A headline
@@ -1139,22 +1146,35 @@ export function Kpi({ spec, compact = false }: {
       className="rm-kpi"
       style={{
         height: '100%',
+        maxWidth: '100%',
+        minWidth: 0,
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
         gap: 4,
+        /* Print sets its own base size with `!important` and would drop the
+           correction with it, so the scale travels as a variable the print
+           stylesheet multiplies back in — styles.css, `.rm-kpi-value`. */
+        ['--kpi-scale' as string]: String(scale),
       }}
     >
       <span
+        title={spec.value}
         className="mono rm-kpi-value"
         style={{
-          fontSize: compact ? 34 : 40,
+          fontSize: (compact ? 34 : 40) * scale,
           fontWeight: 700,
           color: 'var(--text-strong)',
           lineHeight: 1.1,
           letterSpacing: '-0.01em',
           fontVariantNumeric: 'tabular-nums',
+          maxWidth: '100%',
+          textAlign: 'center',
+          /* The floor on the scale means a long enough value still will not
+             fit. Wrapping mid-number is ugly; a number crossing the border of
+             the box it labels is worse. */
+          overflowWrap: 'anywhere',
         }}
       >
         {spec.value}
@@ -1167,6 +1187,10 @@ export function Kpi({ spec, compact = false }: {
           textTransform: 'uppercase',
           letterSpacing: '0.05em',
           textAlign: 'center',
+          maxWidth: '100%',
+          /* A column name is one token — `total_revenue_amount` has nowhere to
+             break either. */
+          overflowWrap: 'anywhere',
         }}
       >
         {spec.label}
@@ -1179,7 +1203,10 @@ export function Kpi({ spec, compact = false }: {
             color: 'var(--text-dim)',
             display: 'inline-flex',
             alignItems: 'center',
+            justifyContent: 'center',
+            flexWrap: 'wrap',
             gap: 4,
+            maxWidth: '100%',
             fontVariantNumeric: 'tabular-nums',
           }}
         >
@@ -1198,12 +1225,41 @@ export function Kpi({ spec, compact = false }: {
       )}
       {spec.sparkline.length > 1 && <Sparkline points={spec.sparkline} />}
       {spec.caption && (
-        <span className="rm-kpi-caption" style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>
+        <span
+          className="rm-kpi-caption"
+          style={{
+            fontSize: 10.5,
+            color: 'var(--text-faint)',
+            maxWidth: '100%',
+            textAlign: 'center',
+          }}
+        >
           {spec.caption}
         </span>
       )}
     </div>
   )
+}
+
+/**
+ * How much to shrink a figure so it stays inside the box that holds it.
+ *
+ * Counted, not measured. A measured fit means a layout read per tile and a
+ * ResizeObserver to keep it honest, for a component that renders eight to a
+ * report and a dozen to a dashboard — and it would still leave print, which
+ * has no layout to read at the time the number is drawn, unsolved. The value
+ * is monospaced, so its width *is* its length: at JetBrains Mono's 0.6em
+ * advance, `budget` characters at the base size is about the inner width of
+ * the narrowest box each variant lives in — a quarter-width report tile for
+ * the compact one, a full-width figure for the other.
+ *
+ * The floor stops a pathological value from shrinking to nothing; past it the
+ * value wraps instead.
+ */
+function kpiScale(value: string, compact: boolean): number {
+  const budget = compact ? 8 : 20
+  const fit = Math.min(1, Math.max(0.45, budget / value.length))
+  return Math.round(fit * 100) / 100
 }
 
 export interface KpiSpecView {

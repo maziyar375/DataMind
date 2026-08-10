@@ -1425,7 +1425,15 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   }
   .rm-report-tilecap { font-size: 7pt !important; line-height: 1.3 !important; }
   .rm-report .rm-kpi { gap: 2px !important; }
-  .rm-report .rm-kpi-value { font-size: 16pt !important; line-height: 1.05 !important; }
+  /* 16pt is the base, not the size: `--kpi-scale` is what the component
+     worked out about this particular figure's length, and a printed tile is
+     about as many characters wide as a screen one, so the same correction
+     applies to the smaller base. Without the multiplier this rule would put a
+     long number back over the tile border on paper only. */
+  .rm-report .rm-kpi-value {
+    font-size: calc(16pt * var(--kpi-scale, 1)) !important;
+    line-height: 1.05 !important;
+  }
   .rm-report .rm-kpi-label { font-size: 6.5pt !important; }
   .rm-report .rm-kpi-delta,
   .rm-report .rm-kpi-caption { font-size: 7pt !important; }
