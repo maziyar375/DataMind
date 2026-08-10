@@ -66,7 +66,13 @@ class RetrievedContext(BaseModel):
     tables: list[dict[str, Any]] = Field(default_factory=list)
     relationships: list[dict[str, Any]] = Field(default_factory=list)
     history: list[dict[str, str]] = Field(default_factory=list)
-    strategy: Literal["FULL_SNAPSHOT", "EXACT_MATCH", "TRIGRAM"] = "FULL_SNAPSHOT"
+    # SCHEMA_QUESTION is the one strategy chosen by intent rather than by size:
+    # a METADATA question over a snapshot too wide to send whole is selected
+    # for by `metadata.select_tables`, not by the words it shares with a
+    # column name.
+    strategy: Literal[
+        "FULL_SNAPSHOT", "EXACT_MATCH", "TRIGRAM", "SCHEMA_QUESTION"
+    ] = "FULL_SNAPSHOT"
     # The connection's semantic layer, serialised. None when the connection
     # has none or has switched it off — in which case `render` emits exactly
     # the bytes it emitted before this field existed, so the eval baseline

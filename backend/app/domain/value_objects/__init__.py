@@ -86,6 +86,7 @@ class StepName(StrEnum):
     ROUTE = "route"
     CLARIFY = "clarify"
     RETRIEVE = "retrieve"
+    DESCRIBE = "describe"
     GENERATE = "generate"
     VALIDATE = "validate"
     EXECUTE = "execute"

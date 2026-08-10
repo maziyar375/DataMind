@@ -1,20 +1,31 @@
-"""Schema questions answered from the snapshot, at the granularity asked.
+"""The deterministic half of a schema answer: which tables, and how many.
 
-The behaviour under test is that "what tables do I have?" and "what columns
-does orders have?" are different questions: the first must not answer with
-every column of every table (on the sales fixture that is ~600 names, most of
-them the same audit columns repeated), and the second must not answer with a
-bare inventory.
+Two jobs, tested in that order.
+
+`select_tables` and `census` are what the `describe` node builds its prompt
+from — the tables a schema question is described from when the snapshot is too
+wide to send whole, and the count and names that keep an answer written over
+half a schema from being an answer *about* half a schema.
+
+`answer_metadata` is the fallback underneath it, and the behaviour under test
+there is granularity: "what tables do I have?" and "what columns does orders
+have?" are different questions. The first must not answer with every column of
+every table (on the sales fixture that is ~600 names, most of them the same
+audit columns repeated), and the second must not answer with a bare inventory.
 """
 from __future__ import annotations
 
 from typing import Any
 
 from app.pipeline.metadata import (
+    MAX_CENSUS_NAMES,
     MAX_DETAILED_TABLES,
     MAX_LISTED_TABLES,
     answer_metadata,
+    census,
     match_tables,
+    select_tables,
+    table_chars,
 )
 
 AUDIT = ["created_by", "updated_by", "src_system", "src_batch_id", "audit_notes"]
@@ -47,6 +58,88 @@ TABLES = [
     _table("customer_addresses", rows=2250),
     _table("orders", rows=4200, columns=["id", "customer_id", "total", *AUDIT]),
 ]
+
+
+# ── choosing what to describe ────────────────────────────────────────────
+def test_a_snapshot_that_fits_is_described_whole() -> None:
+    budget = sum(table_chars(t) for t in TABLES)
+    assert select_tables("what tables do I have?", TABLES, budget_chars=budget) == (
+        TABLES
+    )
+
+
+def _named(name: str) -> dict[str, Any]:
+    return next(t for t in TABLES if t["name"] == name)
+
+
+def test_the_budget_goes_to_the_largest_tables() -> None:
+    """"What is in this database?" is answered by where the data is: the two
+    biggest tables get described, the 18-row lookup does not.
+
+    Snapshot order in the result, not size order — the block reads like the
+    schema rather than like a leaderboard.
+    """
+    budget = table_chars(_named("orders")) + table_chars(_named("customer_addresses"))
+    chosen = select_tables("what tables do I have?", TABLES, budget_chars=budget)
+
+    assert [t["name"] for t in chosen] == ["customer_addresses", "orders"]
+
+
+def test_a_named_table_is_described_however_small() -> None:
+    chosen = select_tables("describe brands", TABLES, budget_chars=1)
+    assert [t["name"] for t in chosen] == ["brands"]
+
+
+def test_one_table_always_survives_the_budget() -> None:
+    """A block describing nothing is worse than a block describing one thing."""
+    assert len(select_tables("what tables are there", TABLES, budget_chars=1)) == 1
+
+
+# ── the census ───────────────────────────────────────────────────────────
+def test_a_complete_block_says_so() -> None:
+    assert census(TABLES, TABLES) == (
+        "This connection has 4 tables in public. Every one of them is "
+        "described above."
+    )
+
+
+def test_an_incomplete_block_names_what_it_left_out() -> None:
+    described = [t for t in TABLES if t["name"] == "orders"]
+    said = census(TABLES, described)
+
+    assert said.startswith("This connection has 4 tables in public.")
+    assert "1 of them is described above" in said
+    assert "The other 3 exist but are not described" in said
+    for name in ("brands", "customers", "customer_addresses"):
+        assert name in said
+
+
+def test_the_census_qualifies_names_across_schemas() -> None:
+    mixed = [_table("orders", rows=10), _table("audit_log", rows=5, schema="ops")]
+    said = census(mixed, mixed[:1])
+
+    assert said.startswith("This connection has 2 tables.")
+    assert "ops.audit_log" in said
+
+
+def test_the_census_carries_no_row_counts() -> None:
+    """The counts in the schema block above it are gated by `HintBudget`; a
+    total smuggled in here would be the one number that escaped the gate."""
+    said = census(TABLES, TABLES[:1])
+    for count in ("4,200", "4200", "2,250", "1500"):
+        assert count not in said
+
+
+def test_the_named_list_is_capped() -> None:
+    many = [_table(f"t{i:04}", rows=i) for i in range(MAX_CENSUS_NAMES + 25)]
+    said = census(many, many[:1])
+
+    assert f"The other {len(many) - 1} exist" in said
+    assert "and 24 more." in said
+
+
+def test_an_empty_snapshot_has_no_census() -> None:
+    assert census([], []) == ""
 
 
 # ── the inventory ────────────────────────────────────────────────────────

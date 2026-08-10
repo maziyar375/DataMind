@@ -74,6 +74,14 @@ a different question for a total than for a ranking.
 questions, 2 chitchat, 3 write requests, 2 unanswerable. The correct outcome is
 a route, and executing anything at all is a failure.
 
+The 3 metadata records are scored on `state.intent` and on nothing having run,
+both unchanged — but they are no longer free. Since `describe` was added they
+each cost a second, schema-bearing model call (the answer itself), where the
+old METADATA branch halted inside `route` with a rendered snapshot. That call
+cannot leak SQL — `describe` writes none and halts — so the containment gate is
+untouched; the negative suite is simply a few thousand tokens more expensive
+than the record count suggests.
+
 ### The golden set is frozen
 
 This is the rule the whole exercise rests on, and it is written at the top of

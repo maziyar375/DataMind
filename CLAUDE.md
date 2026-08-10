@@ -108,9 +108,10 @@ backend/app/
                   query_service (execute_saved_sql — the tile/report entry point
                   into guarded execution), sql_draft_service, bootstrap, policy
   pipeline/       the AI run: state.py (typed RunState), pipeline.py (state machine),
-                  nodes/ (route→retrieve→clarify→generate→validate→execute→
-                  inspect→present→chart), contracts.py (the node signature),
-                  metadata.py (the pre-SQL schema answer),
+                  nodes/ (route→retrieve→describe→clarify→generate→validate→
+                  execute→inspect→present→chart), contracts.py (the node signature),
+                  metadata.py (which tables a schema question is about, and the
+                  rendered fallback answer),
                   prompts/, disclosure.py (result gate), checks.py (free result checks)
   sqlguard/       policy, validator, rewriter — self-contained, dialect-aware
   semantic/       what the schema *means*: models.py (the document), validate.py
@@ -262,31 +263,44 @@ hands off to the in-process executor. `AnalyticsPipeline.run` walks a linear
 state machine with one bounded repair loop:
 
 ```
-route → retrieve → clarify → generate → validate → execute → inspect →
-present → chart
+route → retrieve → describe → clarify → generate → validate → execute →
+inspect → present → chart
 ```
 
 - `route` classifies intent, reading the recent turns once a thread has any: a
   follow-up carries no subject of its own ("and by month?"), and classified
   alone it could come back CHITCHAT or UNSUPPORTED and halt the run before any
   SQL. A first turn sends the old history-free prompt byte-identically.
-  **METADATA** questions ("what tables do I have?")
-  are answered from the schema snapshot and **HALT before any SQL**, by
-  `pipeline/metadata.py`, at the granularity the question asked: an inventory
-  (name, rows, column count — one line each, largest first) unless the question
-  names a table, in which case that table's columns with types. The match is on
-  the snapshot's own names, so this still costs no model call. The exhaustive
-  `_describe_schema` render stays for the *model*-facing follow-up-suggestions
-  prompt, which does need every column name.
+  CHITCHAT and UNSUPPORTED halt here with a canned reply; **METADATA continues**
+  to `describe`.
 - `retrieve` selects tables — from the question, plus the tables the recent
   turns' SQL actually queried, so a follow-up inherits its subject instead of
   falling to an arbitrary `tables[:20]` — then attaches the **semantic layer**;
   `RetrievedContext.render` appends a block describing only the retrieved
   tables — business names, grain, defined metrics with their SQL, time
-  conventions, fan-out cautions. See "The semantic layer" below.
+  conventions, fan-out cautions. See "The semantic layer" below. A METADATA
+  question over a snapshot too wide to send whole selects differently
+  (`SCHEMA_QUESTION`): the tables it named, then the largest of the rest, since
+  "what is in this database?" shares no words with any table name.
+- `describe` answers a **METADATA** question ("what tables do I have?", "what
+  does `order_items` count?") from that block — schema *and* semantic layer —
+  streamed like any other answer, and **HALTs before any SQL**. Every other
+  intent gets `SKIPPED`, so the common path costs nothing. It sits after
+  `retrieve` for one reason: the answer to most schema questions is the grain,
+  the labels and the metrics in the layer, and `route` runs before the layer is
+  loaded. It never generates SQL — a schema question sent to `generate` becomes
+  a query against `information_schema`, which the guard always rejects as a
+  system table. `metadata.py` is what it builds on: `select_tables` (which
+  tables), `census` (how many there are in total, and the names of any left
+  out — counts and names only, never a row-count total outside `HintBudget`),
+  and `answer_metadata`, the plain rendering of the snapshot that this node
+  used to be, kept as the **fallback** for a provider failure and for an empty
+  snapshot (which costs no model call at all). The exhaustive `_describe_schema`
+  render stays for the follow-up-suggestions prompt, which needs every column
+  name.
 - A validation/execution failure can `goto` back to `generate` (bounded repair);
   a hard ceiling of 24 transitions and a per-run deadline prevent runaway loops.
-- `clarify` is the one node that can end a run without SQL. It runs after
+- `clarify` is the one node that can end a run by *asking*. It runs after
   `retrieve` so it judges the question against the same schema block and
   semantic layer the generator will see, and it **fails open** — any provider
   error, or a malformed answer, proceeds to `generate`, because a guessed

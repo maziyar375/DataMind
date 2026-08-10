@@ -55,25 +55,36 @@ Stated plainly so nobody assumes otherwise:
 
 ## 2. Every place data leaves for a model provider
 
-There are **eight use cases**, across ten call sites, and no others. The
+There are **nine use cases**, across eleven call sites, and no others. The
 dependency rule forbids importing `litellm` outside `app/infra/llm/`, and CI
 greps for violations, so this list cannot silently grow.
 
 | # | Use case | Trigger | Call site |
 |---|----------|---------|-----------|
-| 1 | Route the question | every run | `pipeline/nodes/__init__.py:92` |
-| 2 | Ask a clarifying question | every run, if enabled | `pipeline/nodes/__init__.py:380` |
-| 3 | Generate SQL | every run | `pipeline/nodes/__init__.py:492` |
-| 4 | Write the answer | every run | `pipeline/nodes/__init__.py:725` |
-| 5 | Choose a chart | every run, if chartable | `pipeline/nodes/__init__.py:822` |
-| 6 | Suggest follow-up questions | SPA opens a thread | `services/run_service.py:736` |
-| 7 | Draft SQL for a dashboard tile | user asks for a tile | `services/sql_draft_service.py` |
-| 8 | Generate a semantic layer | user clicks Generate | `semantic/generator.py:304,338,373` |
+| 1 | Route the question | every run | `pipeline/nodes/__init__.py:112` |
+| 2 | Describe the schema | a run classified METADATA | `pipeline/nodes/__init__.py:425` |
+| 3 | Ask a clarifying question | every run, if enabled | `pipeline/nodes/__init__.py:495` |
+| 4 | Generate SQL | every run | `pipeline/nodes/__init__.py:630` |
+| 5 | Write the answer | every run | `pipeline/nodes/__init__.py:863` |
+| 6 | Choose a chart | every run, if chartable | `pipeline/nodes/__init__.py:960` |
+| 7 | Suggest follow-up questions | SPA opens a thread | `services/run_service.py:736` |
+| 8 | Draft SQL for a dashboard tile | user asks for a tile | `services/sql_draft_service.py` |
+| 9 | Generate a semantic layer | user clicks Generate | `semantic/generator.py:304,338,373` |
 
-Two model interactions send **no customer data at all**: the capability probe
-in `api/v1/llm_configs.py` (a fixed test prompt), and metadata questions such
-as *"what tables do I have?"*, which `pipeline/metadata.py` answers from the
-stored snapshot and **halts before any model call**.
+One model interaction sends **no customer data at all**: the capability probe
+in `api/v1/llm_configs.py`, a fixed test prompt.
+
+> **Changed:** #2 is new. A metadata question — *"what tables do I have?"*,
+> *"what does `order_items` count?"* — used to be answered inside `route` by
+> rendering the stored snapshot, and **halted before any model call**. It now
+> reaches a model, because the answer to most schema questions is in the
+> semantic layer rather than in the catalog, and a table list with row counts
+> is a non-answer to all but the simplest of them. Nothing new leaves the
+> process: the block it sends is `RetrievedContext.render` under the
+> connection's own policy — the same bytes `generate` (#4) has always been
+> sent for the same question — plus a count of tables and the names of any the
+> block left out. The fallback when the provider fails is the old rendering,
+> which still costs nothing.
 
 ### 2.1 What each one sends
 
@@ -86,20 +97,31 @@ Common building blocks, both governed by the disclosure policy (§3):
 | # | Use case | Question | Schema | Transcript | Result rows | Notes |
 |---|----------|:--------:|:------:|:----------:|:-----------:|-------|
 | 1 | Route | ✅ | ❌ | ✅ recent turns | ❌ | Classification only |
-| 2 | Clarify | ✅ | ✅ | ✅ | ❌ | Runs before any SQL exists |
-| 3 | Generate SQL | ✅ | ✅ | ✅ | ❌ | **Never sees results** |
-| 4 | Present | ✅ | ❌ | ❌ | **✅ per policy** | Also sends the executed SQL |
-| 5 | Chart | ✅ | ❌ | ❌ | shape only | Counts and types, not values |
-| 6 | Suggestions | ❌ | ✅ | ✅ | ❌ | Fires without the user asking |
-| 7 | Tile SQL draft | ✅ | ✅ | ❌ none | ❌ | History deliberately empty |
-| 8 | Semantic layer | ❌ | ✅ | ❌ | ❌ | Per-table, one call each |
+| 2 | Describe | ✅ | ✅ | ✅ | ❌ | Schema questions only; no SQL is ever written |
+| 3 | Clarify | ✅ | ✅ | ✅ | ❌ | Runs before any SQL exists |
+| 4 | Generate SQL | ✅ | ✅ | ✅ | ❌ | **Never sees results** |
+| 5 | Present | ✅ | ❌ | ❌ | **✅ per policy** | Also sends the executed SQL |
+| 6 | Chart | ✅ | ❌ | ❌ | shape only | Counts and types, not values |
+| 7 | Suggestions | ❌ | ✅ | ✅ | ❌ | Fires without the user asking |
+| 8 | Tile SQL draft | ✅ | ✅ | ❌ none | ❌ | History deliberately empty |
+| 9 | Semantic layer | ❌ | ✅ | ❌ | ❌ | Per-table, one call each |
 
-The single most important row is **#3**. The node that writes SQL never
+The single most important row is **#4**. The node that writes SQL never
 receives result data under any policy — it works from schema, question, and
-transcript alone. Result values reach exactly one node, `present` (#4), and
+transcript alone. Result values reach exactly one node, `present` (#5), and
 only as far as the policy allows.
 
-**#5, the chart chooser, sends shape rather than data**: the question, the row
+**#2 sends the schema block and nothing else new.** A schema question is
+answered from structure and meaning: the same `RetrievedContext.render` block
+#4 receives, whose row counts and per-column content hints are metered by
+`HintBudget` exactly as they are everywhere else, plus a table count and the
+names of any tables too numerous to describe in full. Counts and names, never a
+row-count total outside the gate. Under `NONE` a schema answer therefore
+carries no row counts at all — names, types and keys still travel, because
+structure is never gated and a question about the schema cannot be answered
+without it.
+
+**#6, the chart chooser, sends shape rather than data**: the question, the row
 count, and per column its type, distinct count, and whether it is constant. A
 count is not a disclosure — the decision needs to know a column holds 1,000
 distinct names or one repeated total, not what those names are. The one
@@ -109,21 +131,21 @@ where result values already do.
 
 Three details worth knowing because they surprise people:
 
-- **#6 fires on its own.** Follow-up suggestions are requested when the SPA
+- **#7 fires on its own.** Follow-up suggestions are requested when the SPA
   refreshes a thread, not when the user asks a question. It renders the
   transcript through the *same* `_render_history` the run path uses, so it
   carries no wider disclosure — but it does mean a thread left open produces
   provider traffic. Set the connection's model to none, or the policy to
   `NONE`, if that matters to you.
-- **#7 sends no history at all.** A tile draft passes `history=[]`
+- **#8 sends no history at all.** A tile draft passes `history=[]`
   deliberately: a dashboard tile has no conversation to inherit, and inventing
   one would put another connection's answers into this prompt.
-- **#4 sends the executed SQL back to the model** along with the disclosed
+- **#5 sends the executed SQL back to the model** along with the disclosed
   result, so the answer can be narrated against the query that produced it.
   That SQL is derived from the schema, not from result values, and it is
   already on the user's screen as an auditable artifact.
 
-### 2.2 The semantic layer (#8) in detail
+### 2.2 The semantic layer (#9) in detail
 
 Generating a semantic layer is the largest single batch of provider traffic:
 one call for a whole-schema overview, then **one call per table**, four

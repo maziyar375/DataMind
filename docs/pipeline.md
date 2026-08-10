@@ -5,7 +5,7 @@ Companion to [architecture.md](architecture.md) (the why) and
 [CODEBASE.md](CODEBASE.md) (the whole stack). This file is only the pipeline.
 
 Code: [`backend/app/pipeline/`](../backend/app/pipeline/) —
-`pipeline.py` (the executor), `nodes/__init__.py` (all nine nodes),
+`pipeline.py` (the executor), `nodes/__init__.py` (all ten nodes),
 `state.py` (typed state), `contracts.py` (the node signature),
 `prompts/` (versioned prompts), `checks.py`, `disclosure.py`, `metadata.py`.
 
@@ -24,7 +24,7 @@ Code: [`backend/app/pipeline/`](../backend/app/pipeline/) —
   |---|---|---|
   | `complete(llm, messages)` | `Completion` (text + token counts + latency) | `route` |
   | `structured(llm, messages, schema)` | a validated Pydantic model | `clarify`, `generate`, `chart` |
-  | `stream(llm, messages)` | `AsyncIterator[str]` | `present` |
+  | `stream(llm, messages)` | `AsyncIterator[str]` | `present`, `describe` |
 
 - **The orchestrator is our own state machine**, `AnalyticsPipeline.run` in
   [pipeline.py](../backend/app/pipeline/pipeline.py) — ~130 lines, a `while`
@@ -40,13 +40,17 @@ Code: [`backend/app/pipeline/`](../backend/app/pipeline/) —
 ## 2. The graph
 
 ```
-                                    ┌─── CHITCHAT / UNSUPPORTED / METADATA ──► HALT (answer, no SQL)
+                                    ┌─── CHITCHAT / UNSUPPORTED ──► HALT (canned answer, no SQL)
                                     │
   route ──────────────────────────► ┤   (history, once there is one)
-                                    │ ANALYTICAL
+                                    │ ANALYTICAL / METADATA
                                     ▼
   retrieve  (no LLM — schema block + semantic layer + history)
       │
+      ▼
+  describe ─── METADATA? ─────────► HALT (the schema block, answered in prose
+      │                                    and streamed — never any SQL)
+      │ skipped for every other intent
       ▼
   clarify ──── asks? ─────────────► HALT (question becomes the answer,
       │                                    run ends NEEDS_CLARIFICATION)
@@ -70,7 +74,7 @@ Code: [`backend/app/pipeline/`](../backend/app/pipeline/) —
   chart    (data veto → model → plan_chart → Vega-Lite)
 ```
 
-`ORDER` in [pipeline.py:25-38](../backend/app/pipeline/pipeline.py#L25-L38) is
+`ORDER` in [pipeline.py:25-43](../backend/app/pipeline/pipeline.py#L25-L43) is
 the single source of truth for sequence. Nodes never decide what runs next
 beyond an optional `goto`.
 
@@ -80,16 +84,20 @@ beyond an optional `goto`.
 |---|---|:--:|:--:|:--:|---|
 | 1 | `route` | ✅ `complete` | ✅ | – | `intent`, `answer`, **tokens** |
 | 2 | `retrieve` | ❌ | – | – | `context` |
-| 3 | `clarify` | ✅ `structured` | ✅ | – | `clarification`, `answer` |
-| 4 | `generate` | ✅ `structured` | – | – | `attempts[]` |
-| 5 | `validate` | ❌ | – | ✅ `generate`/`present` | `attempt.report`, `.rewritten_sql` |
-| 6 | `execute` | ❌ | – | ✅ `generate`/`present` | `execution` |
-| 7 | `inspect` | ❌ | – | ✅ `generate` | `attempt.findings` |
-| 8 | `present` | ✅ `stream` | – | – | `disclosed`, `answer` |
-| 9 | `chart` | ✅ `structured` | – | – | `chart` |
+| 3 | `describe` | ✅ `stream` | ✅ always | – | `answer` |
+| 4 | `clarify` | ✅ `structured` | ✅ | – | `clarification`, `answer` |
+| 5 | `generate` | ✅ `structured` | – | – | `attempts[]` |
+| 6 | `validate` | ❌ | – | ✅ `generate`/`present` | `attempt.report`, `.rewritten_sql` |
+| 7 | `execute` | ❌ | – | ✅ `generate`/`present` | `execution` |
+| 8 | `inspect` | ❌ | – | ✅ `generate` | `attempt.findings` |
+| 9 | `present` | ✅ `stream` | – | – | `disclosed`, `answer` |
+| 10 | `chart` | ✅ `structured` | – | – | `chart` |
 
 **Typical successful run = 4 model calls** (route, clarify, generate, present)
-**+ 1 if a chart survives the veto.** Four of the nine nodes cost nothing.
+**+ 1 if a chart survives the veto.** Four of the ten nodes cost nothing, and a
+fifth — `describe` — is skipped outright unless the question is about the
+schema, in which case it is the *last* node to run: a METADATA run is exactly
+route → retrieve → describe, two model calls and no database access at all.
 
 ---
 
@@ -113,7 +121,7 @@ the way it always did. That matters: the eval suite is single-turn, so its
 baseline is exactly this prompt.
 
 The turns are rendered by `_render_history`, so they arrive filtered by the
-connection's disclosure policy like every other prompt — see §3.8.
+connection's disclosure policy like every other prompt — see §3.9.
 
 **Logic:**
 1. `complete()`, take `text.strip().upper().split()[0]`.
@@ -123,13 +131,14 @@ connection's disclosure policy like every other prompt — see §3.8.
    - **CHITCHAT** → canned greeting, `HALT`.
    - **UNSUPPORTED** (writes, out of scope) → canned refusal, `HALT`. Answered
      gracefully, not as an `E_*` error — a write request isn't a bug to debug.
-   - **METADATA** → `metadata.answer_metadata(question, snapshot tables)`,
-     `HALT`. **No model call, no SQL.** This branch exists because routing
-     "what tables do I have?" into `generate` makes the model write SQL against
-     `information_schema`, which the guard *always* rejects as a system table —
-     the run would fail before an answer could exist. `metadata.py` picks
-     granularity from the question: an inventory (name, rows, column count)
-     unless the question names a table, then that table's columns with types.
+   - **METADATA** → **continue**, exactly like ANALYTICAL, as far as
+     `describe` (§3.3), which answers it and halts. `route` used to answer it
+     here from the snapshot; it does not any more, because the answer needs the
+     semantic layer and at this point `retrieve` has not run. What must never
+     happen is unchanged: a schema question may not reach `generate`, where the
+     model writes SQL against `information_schema` and the guard *always*
+     rejects it as a system table — the run would fail before an answer could
+     exist.
    - **ANALYTICAL** → continue.
 
 **Only node that records tokens** — see §7.
@@ -138,13 +147,23 @@ connection's disclosure policy like every other prompt — see §3.8.
 
 **No LLM call.** Cost: zero tokens, sub-millisecond.
 
-**Logic** ([nodes/__init__.py:159-211](../backend/app/pipeline/nodes/__init__.py#L159-L211)):
+**Logic** ([nodes/__init__.py:252-328](../backend/app/pipeline/nodes/__init__.py#L252-L328)):
 1. `approx_chars = sum(60 + 40 * len(columns))` over all snapshot tables,
    against `_RETRIEVE_BUDGET_CHARS = 50_000`. (The `sales` fixture sits at
    26,480 — under the ceiling, so it takes step 2.)
 2. **Under budget → `FULL_SNAPSHOT`**: send every table. This is the common
-   path for small and medium schemas.
-3. **Over budget → `EXACT_MATCH`**:
+   path for small and medium schemas. Intent does not enter into it — a schema
+   question and an analytical one get the same block.
+3. **Over budget, `intent == METADATA` → `SCHEMA_QUESTION`**:
+   `metadata.select_tables` — every table the question **named** (matched on
+   the snapshot's own names, so "customer addresses" finds
+   `customer_addresses`), then the **largest** of the rest until the budget
+   runs out, returned in snapshot order. The branch below is the wrong selector
+   for this question: it seeds on words the question shares with a table name,
+   and *"what is in this database?"* shares none, so a schema question would
+   land on the arbitrary `tables[:20]` fallback. Nothing is hidden by the cut —
+   `describe` states the true table count and names every table left out (§3.3).
+4. **Over budget → `EXACT_MATCH`**:
    - seed = tables whose *name*, or any of whose *column names*, appears as a
      lowercase **substring of the question**;
    - plus the tables the recent turns actually **queried** —
@@ -163,13 +182,13 @@ connection's disclosure policy like every other prompt — see §3.8.
      cannot find bridges;
    - no seed at all → `tables[:20]` in snapshot order.
 
-   Retrieval reads the **raw** history, before the disclosure filter of §3.8:
+   Retrieval reads the **raw** history, before the disclosure filter of §3.9:
    the selection never leaves the process, and what is rendered from it is
    gated by `RetrievedContext.render` exactly as before. No policy governs
    which of the customer's own tables the customer's own question may be
    answered from.
-4. Keep only relationships touching a selected table.
-5. Attach `deps.history` (last ≤6 messages) and `deps.semantic` (the layer, or
+5. Keep only relationships touching a selected table.
+6. Attach `deps.history` (last ≤6 messages) and `deps.semantic` (the layer, or
    `None`), build `RetrievedContext`.
 
 **What `RetrievedContext.render(policy)` emits** — the block every downstream
@@ -199,7 +218,72 @@ Two independent gates apply here:
   the pre-feature prompt, which is what keeps the eval baseline comparable and
   gives you the A/B switch (`connections.semantic_layer_enabled`).
 
-### 3. `clarify` — ask once, instead of answering a question nobody asked
+### 3. `describe` — the schema question, answered from the schema
+
+**Prompt:** `DESCRIBE_SYSTEM` (schema block + census + history) +
+`DESCRIBE_USER` (question) → `stream()`. **Runs only when `intent ==
+METADATA`**; every other intent gets `SKIPPED` and costs nothing.
+
+**What it replaced, and why.** Until now a METADATA question was answered
+inside `route` by rendering the snapshot: table names, row counts, column
+counts, largest first — or, if the question named a table, that table's
+columns with types. That is a complete answer to *"what tables do I have?"* and
+a non-answer to every other schema question. *"What does `order_items`
+count?"*, *"which of these holds revenue?"*, *"what is one row in this table?"*
+are answered by the **semantic layer** — grain, business labels, defined
+metrics, time conventions — and `route` runs before `retrieve`, so at that
+point the layer had not been loaded and no rendering of the catalog alone could
+have used it.
+
+**Placement is the design, again.** Directly after `retrieve`, so the block it
+answers from is the one `generate` would have received: the same tables, the
+same `HintBudget`-gated column hints, the same scoped semantic layer. Before
+`clarify`, so a schema question never gets asked a clarifying question — the
+schema is in hand, there is nothing to disambiguate against a result that will
+never exist.
+
+**Logic:**
+1. `intent != METADATA` → `SKIPPED`.
+2. Snapshot with **no tables** → answer from `metadata.answer_metadata` and
+   `HALT` **without calling the model**. There is nothing for it to read.
+3. Build the prompt: `context.render(policy)` (schema + semantic block) +
+   `metadata.census(...)` + `_render_history(...)`.
+4. `stream()`, emitting `TEXT_DELTA` per chunk — the same wire contract the SPA
+   already renders for `present`, so a schema answer streams like any other.
+5. `LLMError`, or a stream that yields nothing usable → **`TEXT_RESET`** (only
+   if deltas were already sent) then `metadata.answer_metadata`, the exact
+   rendering this node replaced, emitted as one delta. A provider outage costs
+   the *prose*, never the answer.
+6. `HALT` on every path.
+
+**`census` is the part that is easy to leave out.** On a schema too wide to
+send whole, the model is handed twenty tables — and a model handed twenty
+tables says the database has twenty tables, which is a wrong answer to the
+commonest schema question there is. So `metadata.census` states the true total
+and names the tables the block left out — up to `MAX_CENSUS_NAMES` (200) of
+them, then a count of the remainder. Counts and names only: structure
+travels under every policy, and a row-count total smuggled in here would be the
+one figure that escaped `HintBudget`.
+
+**Selection changes for this intent too.** Over `_RETRIEVE_BUDGET_CHARS`,
+`retrieve` normally seeds on words the question shares with a table or column
+name — and *"what is in this database?"* shares none, which would land a schema
+question on the arbitrary `tables[:20]` fallback. For METADATA it calls
+`metadata.select_tables` instead: every table the question **named**, then the
+**largest** of the rest until the budget runs out, rendered in snapshot order,
+under `strategy="SCHEMA_QUESTION"`.
+
+**It widens no disclosure.** The block is `RetrievedContext.render` under the
+run's own policy and the transcript goes through `disclose_history` like every
+other prompt (§3.9). Under `NONE` a schema answer therefore carries no row
+counts — the names, types and keys still travel, because structure is never
+gated and a question about the schema cannot be answered without it.
+
+**`PROMPT_VERSION` does not move for `DESCRIBE_SYSTEM`** — same reasoning as
+`CLARIFY_SYSTEM` and the chart prompts (§5): nothing on the SQL-producing path
+changed, and a METADATA question produces no SQL for the eval to score.
+
+### 4. `clarify` — ask once, instead of answering a question nobody asked
 
 **Prompt:** `CLARIFY_SYSTEM` (schema block + history) + `CLARIFY_USER`
 (question) → `structured(ClarificationProposal)`.
@@ -252,7 +336,7 @@ that prompt losing 10 points of execution accuracy to an unrelated addition, so
 when a question is answerable the generator sees exactly what it saw before
 clarify existed.
 
-### 4. `generate` — the only node that writes SQL
+### 5. `generate` — the only node that writes SQL
 
 `structured(SqlProposal)` → `{sql, reasoning}`. **Three different
 prompts depending on why we're here:**
@@ -317,7 +401,7 @@ asked for, turning a correct answer into a wrong one.
 > 36% → 26% and parse 98% → 88% on the small model — the extra instructions
 > crowded out the schema. More is not better here.
 
-### 5. `validate` — the hard gate, fails closed
+### 6. `validate` — the hard gate, fails closed
 
 **No LLM call.** `guard(raw_sql, policy)` =
 `SqlValidator.validate` (SQLGlot parse → AST walked against an **allowlist**,
@@ -331,7 +415,7 @@ warning**. An unsynced connection can query nothing.
    earlier working result back and `goto present`;
 3. else `FAILED` with the first error's `rule_id`.
 
-### 6. `execute` — read-only, capped, timed out
+### 7. `execute` — read-only, capped, timed out
 
 **No LLM call.**
 1. `connector.explain(sql)` → `rows_scanned_estimate` (for the step trail).
@@ -341,7 +425,7 @@ warning**. An unsynced connection can query nothing.
    `E_QUERY_FAILED`.
 4. Success → `state.execution`, emit `QUERY_COMPLETED`.
 
-### 7. `inspect` — "it ran, and it's wrong"
+### 8. `inspect` — "it ran, and it's wrong"
 
 The repair loop already covers two failure modes: *the guard said no* and *the
 database said no*. Both mean no result exists. This covers the third and most
@@ -380,7 +464,7 @@ or run. **A check can never turn a working answer into a failed run.**
 carries an always-false `is_archived` on 35 of its 42 tables, which would
 otherwise fire on nearly every query.
 
-### 8. `present` — the disclosure gate, then narration
+### 9. `present` — the disclosure gate, then narration
 
 1. `disclose(execution, policy)` — the **one place** result data is filtered:
 
@@ -454,7 +538,7 @@ the transcript is non-empty (the SPA already locks the picker there; this
 closes the API route around it), and `_recent_history` additionally drops any
 turn it cannot attribute to a run on *this* connection.
 
-### 9. `chart` — the data gets a veto before the model gets a vote
+### 10. `chart` — the data gets a veto before the model gets a vote
 
 Best-effort and fail-open (the opposite of the guard): the answer and table are
 already persisted, so any failure here just means no chart.
@@ -518,7 +602,7 @@ valued feature; keep it visible, don't collapse it behind "Thought for Xs".
 
 ## 5. Prompt versioning
 
-`PROMPT_VERSION` (currently **v6**) is recorded on every run.
+`PROMPT_VERSION` (currently **v7**) is recorded on every run.
 [prompts/__init__.py](../backend/app/pipeline/prompts/__init__.py) is the only
 place run prompts live — except the semantic-layer *generation* prompts, which
 live in `app/semantic/prompts.py` under `SEMANTIC_PROMPT_VERSION`, because
@@ -527,10 +611,12 @@ knows nothing about a run.
 
 **Move `PROMPT_VERSION` when the bytes the SQL-producing path sends change.**
 That's why v3 → v4 for the semantic block, v4 → v5 for the shared rules and
-history on repairs, and v5 → v6 for `ROUTE_SYSTEM_WITH_HISTORY` plus the
-disclosure filter over the history — and why clarify, caveats and chart prompt
-changes *don't* move it, since the eval scores generated SQL and none of those
-touch it.
+history on repairs, v5 → v6 for `ROUTE_SYSTEM_WITH_HISTORY` plus the disclosure
+filter over the history, and v6 → v7 for the runaway-reply fix (§3.5) — and why
+clarify, caveats, chart and `DESCRIBE_SYSTEM` changes *don't* move it, since
+the eval scores generated SQL and none of those touch it. `DESCRIBE_SYSTEM` is
+the clearest case of the rule: the question it answers never produces SQL at
+all, so no suite question is measured through it.
 
 v6 is worth reading closely before you compare numbers across it, because it
 moves for two changes that are each conditional:
@@ -581,7 +667,7 @@ is a lateral move — don't take the dependency for cosmetics.
 ## 7. Known gaps (verified in code, 2026-07-31)
 
 1. **Token accounting only counts `route`.** `state.prompt_tokens` is written
-   in exactly one place — [nodes/__init__.py:78-79](../backend/app/pipeline/nodes/__init__.py#L78-L79)
+   in exactly one place — [nodes/__init__.py:120-121](../backend/app/pipeline/nodes/__init__.py#L120-L121)
    — because `complete()` returns a `Completion` with usage while
    `structured()` and `stream()` return the parsed model / a delta iterator and
    drop it. So `runs.prompt_tokens` and the eval's `estimate_cost_usd` count
@@ -630,6 +716,13 @@ is a lateral move — don't take the dependency for cosmetics.
    a fix for the matcher. A *first* question is still matched exactly this way,
    and it is the first question that decides what the follow-up inherits.
 
+   METADATA questions no longer take this branch at all
+   (`SCHEMA_QUESTION`, §3.2), and `metadata.match_tables` — which already
+   tokenizes, handles snake_case and singular/plural, and refuses to match a
+   short name inside a longer word — is the matcher this gap describes wanting.
+   It is right there in `pipeline/metadata.py`; the fix for `EXACT_MATCH` is
+   largely to call it.
+
 5. **No budget re-check after `_expand_by_fk`.** The branch that exists to
    respect `_RETRIEVE_BUDGET_CHARS` can emit well past it, unbounded.
 
@@ -669,14 +762,14 @@ is a lateral move — don't take the dependency for cosmetics.
    for the next question, not something a run depends on — fixing it means
    joining `query_executions` as well.
 
-8. **v6's history filter is fail-closed, not per-turn-exact** (§3.8). The
+8. **v6's history filter is fail-closed, not per-turn-exact** (§3.9). The
    policy a message was written under is not recorded, so a narrow policy
    withholds prose that may have been permissible when written. Exactness needs
    a `disclosure_policy` snapshot on `runs` and a migration. Two smaller
    residuals sit with it: a value literal inside kept SQL, and a clarifying
    question, both of which can carry a column value that a wider policy's
    `HintBudget` once put in the schema block. All three are deliberate — see
-   the reasoning in §3.8 before "fixing" one.
+   the reasoning in §3.9 before "fixing" one.
 
 9. **v6 is shipped and unmeasured, on top of an unmeasured v5** (gap 6). Its
    route change is a *conditional* addition — a follow-up's classifier prompt

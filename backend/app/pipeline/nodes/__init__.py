@@ -18,6 +18,12 @@ from app.domain.value_objects import DisclosurePolicy, HintBudget
 from app.pipeline.checks import Finding
 from app.pipeline.contracts import ClarificationProposal, SqlProposal
 from app.pipeline.disclosure import disclose_history
+from app.pipeline.metadata import (
+    answer_metadata,
+    census,
+    select_tables,
+    table_chars,
+)
 from app.pipeline.prompts import (
     ANSWER_SYSTEM,
     ANSWER_USER,
@@ -25,6 +31,8 @@ from app.pipeline.prompts import (
     CHART_USER,
     CLARIFY_SYSTEM,
     CLARIFY_USER,
+    DESCRIBE_SYSTEM,
+    DESCRIBE_USER,
     GENERATE_SYSTEM,
     GENERATE_USER,
     REPAIR_SYSTEM,
@@ -140,16 +148,11 @@ async def route(state: RunState, deps: NodeDeps) -> NodeResult:
         )
         return NodeResult(status="HALT", detail="Classified UNSUPPORTED")
 
-    if state.intent == "METADATA":
-        # Answered straight from the already-loaded snapshot. Routing this
-        # through generate/validate would make the LLM write SQL against
-        # information_schema, which the guard always rejects as a system
-        # table — the run would fail before an answer ever existed.
-        from app.pipeline.metadata import answer_metadata
-
-        state.answer = answer_metadata(state.question, deps.snapshot.get("tables", []))
-        return NodeResult(status="HALT", detail=f"Classified METADATA in {elapsed}ms")
-
+    # METADATA falls through with ANALYTICAL, as far as `describe`, which
+    # answers it from the schema block `retrieve` is about to build and halts
+    # there. What it must never reach is `generate`: asked for SQL, the model
+    # queries information_schema, which the guard always rejects as a system
+    # table — the run would fail before an answer could exist.
     return NodeResult(detail=f"Classified {state.intent} in {elapsed}ms")
 
 
@@ -256,10 +259,23 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
     tables = deps.snapshot.get("tables", [])
     relationships = deps.snapshot.get("relationships", [])
 
-    approx_chars = sum(60 + 40 * len(t.get("columns", [])) for t in tables)
+    approx_chars = sum(table_chars(t) for t in tables)
 
     if approx_chars <= _RETRIEVE_BUDGET_CHARS:
         selected, strategy = tables, "FULL_SNAPSHOT"
+    elif state.intent == "METADATA":
+        # A schema question is *about* the snapshot, not answerable from a
+        # corner of it, so the branch below is the wrong selector twice over:
+        # it seeds on words the question shares with a table name — and "what
+        # is in this database?" shares none — then falls back to an arbitrary
+        # twenty. `select_tables` describes what the question named and spends
+        # the rest of the budget on the largest tables, and `describe` states
+        # the total and names what was left out, so an answer written over a
+        # truncated block is still an answer about the whole schema.
+        selected = select_tables(
+            state.question, tables, budget_chars=_RETRIEVE_BUDGET_CHARS
+        )
+        strategy = "SCHEMA_QUESTION"
     else:
         needle = state.question.lower()
         matched = [
@@ -349,6 +365,93 @@ def _render_history(
         if sql:
             lines.append(f"  SQL: {' '.join(sql.split())[:_HISTORY_SQL_CHARS]}")
     return "Earlier in this conversation:\n" + "\n".join(lines)
+
+
+# ── describe ─────────────────────────────────────────────────────────────
+async def describe(state: RunState, deps: NodeDeps) -> NodeResult:
+    """Answer a question about the schema, from the schema. Never any SQL.
+
+    The one node that exists for a single intent, and it is placed here — after
+    `retrieve`, before `clarify` — because what a schema question needs is
+    exactly what `retrieve` has just built: the tables, their columns and keys,
+    and the semantic layer scoped to them. Those are what make "what does
+    `order_items` count?" answerable at all; the grain of a table and the
+    metrics defined over it live in the layer and nowhere else, and the
+    inventory this node replaced could not read them.
+
+    It widens no disclosure. The block is `RetrievedContext.render` under the
+    run's own policy, the same bytes `generate` would have been sent, and the
+    transcript goes through the same `disclose_history` filter as every other
+    prompt. `census` adds counts and names — structure, which travels under
+    every policy — and deliberately no totals derived from the data.
+
+    Fails backwards onto `answer_metadata`, the rendering this node replaced:
+    a provider that breaks mid-sentence, one that streams nothing, and a
+    connection whose snapshot is empty all end with the snapshot rendered
+    directly rather than with an apology. The empty-snapshot case never calls
+    the model at all — there is nothing for it to read.
+
+    HALTs on every path. A METADATA question has its answer here, and every
+    node after this one is about a result that will never exist.
+    """
+    if state.intent != "METADATA":
+        return NodeResult(status="SKIPPED", detail="Not a schema question")
+
+    assert state.context is not None
+    tables = deps.snapshot.get("tables", [])
+    if not tables:
+        state.answer = answer_metadata(state.question, tables)
+        await deps.emit("TEXT_DELTA", {"text": state.answer})
+        return NodeResult(status="HALT", detail="No tables to describe")
+
+    messages = [
+        ChatMessage(
+            role="system",
+            content=DESCRIBE_SYSTEM.format(
+                schema=state.context.render(state.disclosure_policy),
+                census=census(tables, state.context.tables),
+                history=_render_history(
+                    state.context.history, state.disclosure_policy
+                ),
+            ),
+        ),
+        ChatMessage(role="user", content=DESCRIBE_USER.format(question=state.question)),
+    ]
+
+    started = time.perf_counter()
+    buffer: list[str] = []
+    failed = False
+    try:
+        async for delta in deps.llm_gateway.stream(deps.llm, messages):
+            buffer.append(delta)
+            await deps.emit("TEXT_DELTA", {"text": delta})
+    except LLMError as err:
+        log.warning(
+            "describe_stream_failed", run_id=str(state.run_id), error=err.message
+        )
+        failed = True
+
+    text = "" if failed else "".join(buffer).strip()
+    if not text:
+        if buffer:
+            # Every delta is already on the live bus *and* durably stored for
+            # Last-Event-ID replay, so the fallback cannot simply be appended:
+            # a client would render half a sentence with a table listing glued
+            # onto the end. Same contract, and the same handler, as `present`.
+            await deps.emit("TEXT_RESET", {"reason": "stream_failed"})
+        text = answer_metadata(state.question, tables)
+        await deps.emit("TEXT_DELTA", {"text": text})
+
+    state.answer = text
+    elapsed = int((time.perf_counter() - started) * 1000)
+    described = len(state.context.tables)
+    return NodeResult(
+        status="HALT",
+        detail=(
+            f"Described {described} of {len(tables)} tables in {elapsed}ms"
+            + (" (from the snapshot)" if failed else "")
+        ),
+    )
 
 
 # ── clarify ──────────────────────────────────────────────────────────────

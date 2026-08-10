@@ -18,31 +18,32 @@ triggers) and [eval.md](eval.md) (which is how each phase is proved safe).
 | # | Surface | Call site | Orchestration today | Migrate? |
 | --- | --- | --- | --- | :--: |
 | 1 | Chat | `nodes.route` | pipeline node | **Yes** |
-| 2 | Chat | `nodes.clarify` | pipeline node | **Yes** |
-| 3 | Chat | `nodes.generate` | pipeline node, inside the repair loop | **Yes** |
-| 4 | Chat | `nodes.present` | pipeline node, streamed | **Yes** |
-| 5 | Chat | `nodes.chart` | pipeline node | **Yes** |
-| 6 | Chat | `run_service._suggestions` | one-shot, fire-and-forget | No |
-| 7 | Dashboard | `sql_draft_service.draft_sql` | **its own hand-rolled loop over the chat nodes** | **Yes** |
-| 8 | Report | `reports/outline.propose` | one-shot | No |
-| 9 | Report | per-block SQL | `draft_sql(classify=True, extra_rules=…)` | **Yes**, via #7 |
-| 10 | Report | `workers/report._narrate` | sequential `for` loop in the worker | **Yes** |
-| 11 | Report | `workers/report._summarise` | after that loop | **Yes**, via #10 |
-| 12 | Semantic | `semantic/generator.py` | `asyncio.gather` + semaphore, 4 concurrent | No |
-| 13 | Platform | `llm_configs.probe` | capability probe | No |
+| 2 | Chat | `nodes.describe` | pipeline node, streamed, one intent only | **Yes** |
+| 3 | Chat | `nodes.clarify` | pipeline node | **Yes** |
+| 4 | Chat | `nodes.generate` | pipeline node, inside the repair loop | **Yes** |
+| 5 | Chat | `nodes.present` | pipeline node, streamed | **Yes** |
+| 6 | Chat | `nodes.chart` | pipeline node | **Yes** |
+| 7 | Chat | `run_service._suggestions` | one-shot, fire-and-forget | No |
+| 8 | Dashboard | `sql_draft_service.draft_sql` | **its own hand-rolled loop over the chat nodes** | **Yes** |
+| 9 | Report | `reports/outline.propose` | one-shot | No |
+| 10 | Report | per-block SQL | `draft_sql(classify=True, extra_rules=…)` | **Yes**, via #8 |
+| 11 | Report | `workers/report._narrate` | sequential `for` loop in the worker | **Yes** |
+| 12 | Report | `workers/report._summarise` | after that loop | **Yes**, via #11 |
+| 13 | Semantic | `semantic/generator.py` | `asyncio.gather` + semaphore, 4 concurrent | No |
+| 14 | Platform | `llm_configs.probe` | capability probe | No |
 
 ### Why the three that move, move
 
-**The chat pipeline (1–5).** This is the only thing in the codebase already
+**The chat pipeline (1–6).** This is the only thing in the codebase already
 shaped like a graph: a linear order with a bounded `goto` back to `generate`,
-two nodes that can halt the run, and a hand-maintained `_MAX_TRANSITIONS` guard
-against a cycle. `pipeline.py` is a `while` loop doing index arithmetic over
-`ORDER`, with `next(i for i, (n, _) in enumerate(ORDER) if n == result.goto)` to
-resolve a jump. That is an edge list written as a list search. The node
-signature `(state, deps) -> NodeResult` was deliberately built LangGraph-shaped,
-so this is the wiring change the architecture doc predicted.
+three nodes that can halt the run, and a hand-maintained `_MAX_TRANSITIONS`
+guard against a cycle. `pipeline.py` is a `while` loop doing index arithmetic
+over `ORDER`, with `next(i for i, (n, _) in enumerate(ORDER) if n ==
+result.goto)` to resolve a jump. That is an edge list written as a list search.
+The node signature `(state, deps) -> NodeResult` was deliberately built
+LangGraph-shaped, so this is the wiring change the architecture doc predicted.
 
-**The dashboard draft path (7) — the strongest case, and an unplanned one.**
+**The dashboard draft path (8) — the strongest case, and an unplanned one.**
 `sql_draft_service.draft_sql` imports `route`, `retrieve`, `generate` and
 `validate` from `app.pipeline.nodes` and drives them with its own loop:
 
@@ -64,9 +65,9 @@ subgraph invoked by both callers is the fix, and it is worth doing even if
 nothing else on this list happened.
 
 Because a report block's SQL is `draft_sql` with `classify=True` and
-`extra_rules` set, migrating #7 migrates #9 for free.
+`extra_rules` set, migrating #8 migrates #10 for free.
 
-**Report generation (10, 11).** This is the one place where LangGraph's
+**Report generation (11, 12).** This is the one place where LangGraph's
 *durability* argument is real rather than theoretical. A report run is minutes
 long, sections are narrated sequentially, each result is committed as it lands,
 and a process death fails the whole run — the written sections survive, but the
@@ -80,18 +81,18 @@ the reason to migrate this; resume-after-crash is.
 
 ### Why the three that stay, stay
 
-**Follow-up suggestions (6)** — one prompt, one completion, no state, fails open
+**Follow-up suggestions (7)** — one prompt, one completion, no state, fails open
 and returns `[]`. A graph adds a compile step and buys nothing.
 
-**Report outline (8)** — one `complete` call, deliberately not even `structured`
+**Report outline (9)** — one `complete` call, deliberately not even `structured`
 (the docstring explains why). One node is not a graph.
 
-**Semantic generation (12)** — `asyncio.gather` with a semaphore over
+**Semantic generation (13)** — `asyncio.gather` with a semaphore over
 independent per-table calls, then a merge. That is map/reduce, and LangGraph's
 `Send` API would express the same thing with more machinery and a new failure
 mode. It is already the cleanest concurrency in the codebase; leave it.
 
-**The capability probe (13)** — a health check that happens to call a model.
+**The capability probe (14)** — a health check that happens to call a model.
 
 > Migrating these three anyway would mean touching working code with no test
 > that could tell you it got better. If a future feature turns one of them into
@@ -111,9 +112,10 @@ mode. It is already the cleanest concurrency in the codebase; leave it.
 - **A heavy dependency on the request path.** LangGraph pulls in the LangChain
   core object model. The mitigation is the same one used for LiteLLM: confine it
   behind a boundary and let CI prove the boundary holds (Phase 0).
-- **Streaming needs care.** `present` streams tokens through `deps.emit` today.
-  LangGraph has its own streaming model; the migration must not route prose
-  through it, or the SSE contract changes underneath the SPA.
+- **Streaming needs care.** `present` and `describe` both stream tokens through
+  `deps.emit` today, and both emit `TEXT_RESET` before falling back when a
+  stream breaks. LangGraph has its own streaming model; the migration must not
+  route prose through it, or the SSE contract changes underneath the SPA.
 - **`NodeDeps` is not serializable.** It holds a live `DatabaseConnector` and an
   `emit` callable. It cannot live in checkpointed state and must travel through
   the graph's runtime config instead.
@@ -172,11 +174,14 @@ No behaviour change. This phase exists so every later phase can be proved.
 - **Write the SSE snapshot test.** Drive one run end to end with a scripted fake
   gateway and assert the full ordered list of `(seq, type, name, status)` events
   plus the `run_steps` rows. This test is the contract for non-negotiable #2 and
-  it must exist before anything moves.
+  it must exist before anything moves. **Two runs, not one:** an analytical run,
+  and a METADATA run — the second is the only path that ends at `describe`, and
+  it is the one the tempting Phase 1 "improvement" (routing intents with a
+  conditional edge instead of a skipped node) would silently change.
 
 ### Phase 1 — The chat pipeline as a compiled graph (wrap, don't rewrite)
 
-The single most important decision in this migration: **the nine node functions
+The single most important decision in this migration: **the ten node functions
 are not modified.** They keep mutating `RunState` and returning `NodeResult`. A
 thin adapter turns each into a LangGraph node.
 
@@ -204,6 +209,18 @@ thin adapter turns each into a LangGraph node.
 
 - `ORDER` becomes `add_edge` calls; the repair edge becomes the `Command(goto=…)`
   above; `_MAX_TRANSITIONS = 24` becomes `recursion_limit` in the invoke config.
+- **`describe` stays a node, not a conditional edge.** It is the one node that
+  runs for a single intent — METADATA, where it halts — and reports `SKIPPED`
+  for every other, which is genuinely an edge in disguise: an obvious
+  "improvement" is a conditional edge out of `retrieve` that routes METADATA to
+  `describe` and everything else to `clarify`. **Do not do it in this phase.**
+  A skipped node still persists a `run_steps` row and still emits its
+  `STEP_STARTED`/`STEP_FINISHED` pair, and an edge that routes around it emits
+  neither — which breaks non-negotiable #2 and shifts every later `seq` on
+  every analytical run. Same reasoning as `clarify`, which reports `SKIPPED`
+  the same way when the connection has clarification off. If the trail should
+  stop showing skipped nodes, that is a product decision, made on its own, with
+  the SSE snapshot test updated deliberately — not a side effect of a rewiring.
 - **`AnalyticsPipeline.run` keeps its exact signature** and delegates to the
   compiled graph. Nothing above the pipeline — `run_service`, the workers, the
   API — changes at all.
@@ -340,19 +357,24 @@ A phase is done when all five pass, not when the code runs.
 - [ ] `import-linter` contract confining `langgraph` / `langchain_core` added and passing
 - [ ] CI grep: `import langgraph` outside `app/pipeline/` and `app/workers/` fails the build
 - [ ] Eval baseline captured (`eval_run` UUID, accuracy, companion metrics, model, temperature 0) and recorded here
-- [ ] SSE snapshot test written and passing against the current pipeline
+- [ ] SSE snapshot test written and passing against the current pipeline, for
+      an analytical run **and** a METADATA run (the `describe` halt)
 - [ ] `run_steps` rows asserted by that same test
 
 ### Phase 1 — Chat pipeline
 - [ ] `app/pipeline/graph.py` created; state carries `RunState` whole
 - [ ] `NodeDeps` passed via `config["configurable"]`, never in state
 - [ ] Node adapter owns timing, `on_step` persistence, and both `emit` calls
-- [ ] All nine nodes wired; `ORDER` replaced by edges
+- [ ] All ten nodes wired; `ORDER` replaced by edges
 - [ ] Repair edge is `Command(goto="generate")`; `_MAX_TRANSITIONS` is `recursion_limit`
 - [ ] `HALT` and `FAILED` route to `END`
+- [ ] `describe` and `clarify` are still **nodes that report `SKIPPED`**, not
+      conditional edges that route around them — a skipped node still writes a
+      `run_steps` row and emits its event pair
 - [ ] Node crash still becomes an `E_NODE_FAILED` step, not a 500
 - [ ] `AnalyticsPipeline.run` signature unchanged; nothing above the pipeline touched
-- [ ] `present` still streams through `deps.emit`, not through LangGraph streaming
+- [ ] `present` and `describe` still stream through `deps.emit`, not through
+      LangGraph streaming
 - [ ] SSE snapshot test unchanged
 - [ ] `make test`, `make guard`, `lint-imports` green
 - [ ] Eval `sales_v1` within noise of the Phase 0 baseline

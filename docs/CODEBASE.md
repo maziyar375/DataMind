@@ -149,9 +149,10 @@ may reach the model.
 `pipeline.py` is a small explicit **state machine**: a linear order of nodes
 with one bounded repair loop (a node may `goto` back to `generate`), a hard
 ceiling of 24 transitions, and a per-run deadline. `nodes/` implements
-`route → retrieve → generate → validate → execute → present`, plus the METADATA
-short-circuit that answers schema questions without SQL. `prompts/` holds
-versioned prompt templates. A node crash is caught and recorded as a *run
+`route → retrieve → generate → validate → execute → present`, plus `describe`,
+which answers a schema question from the schema block and the semantic layer
+and halts before any SQL is written. `prompts/` holds versioned prompt
+templates. A node crash is caught and recorded as a *run
 failure*, never a bare 500.
 
 ### `backend/app/sqlguard` — the safety net
@@ -224,8 +225,9 @@ scaffolding. `pages/` are Login, Chat, DataSources, LlmProviders, and Users.
 1. **Ask.** `POST /api/v1/conversations/{id}/messages`. `run_service.create_run`
    writes the user `message`, **flushes** (so the `runs` FK resolves), writes
    the `runs` row, and hands off to the `RunExecutor`.
-2. **Route.** Classify intent. A METADATA question is answered directly from the
-   `schema_snapshots` snapshot and **halts before any SQL**.
+2. **Route.** Classify intent. A METADATA question skips ahead to **Describe**,
+   which answers it from the `schema_snapshots` snapshot plus the connection's
+   semantic layer and **halts before any SQL**.
 3. **Retrieve → Generate.** Assemble schema context; the LLM (via `LLMGateway`)
    *proposes* SQL. It never executes anything.
 4. **Validate.** `sqlguard` parses and walks the SQL against the allowlist and

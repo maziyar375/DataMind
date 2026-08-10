@@ -25,6 +25,11 @@ NodeFn = Callable[[RunState, NodeDeps], Awaitable[NodeResult]]
 ORDER: list[tuple[str, NodeFn]] = [
     (StepName.ROUTE, nodes.route),
     (StepName.RETRIEVE, nodes.retrieve),
+    # A schema question ends here, answered from the block retrieve just built
+    # — schema plus semantic layer — and never reaching generate, where it
+    # would become SQL against information_schema and be rejected by the
+    # guard. SKIPPED for every other intent, which is the common case.
+    (StepName.DESCRIBE, nodes.describe),
     # After retrieve, so the question is judged against the schema block the
     # generator will see; before generate, so an unanswerable question costs
     # no SQL. HALTs when it asks — the user's reply arrives as a new run.

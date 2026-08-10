@@ -99,19 +99,21 @@ npm install && npm run dev
 
 ### Chat
 
-Ask a question, watch the run happen. The pipeline is nine nodes with one
+Ask a question, watch the run happen. The pipeline is ten nodes with one
 bounded repair loop:
 
 ```
-route → retrieve → clarify → generate → validate → execute → inspect →
-present → chart
+route → retrieve → describe → clarify → generate → validate → execute →
+inspect → present → chart
 ```
 
 - **`route`** reads the recent turns, so a follow-up with no subject of its own
-  ("and by month?") is understood as one. Schema questions ("what tables do I
-  have?") are answered from the stored snapshot and **halt before any SQL** —
-  no model call, no query.
-- **`clarify`** is the one node that can end a run without SQL, and it **fails
+  ("and by month?") is understood as one.
+- **`describe`** answers questions about the database itself — "what tables do
+  I have?", "what does `order_items` count?", "which of these holds revenue?" —
+  from the schema **and the semantic layer**, and **halts before any SQL**: no
+  query is written, none is run. Every other question skips it entirely.
+- **`clarify`** is the one node that can end a run by *asking*, and it **fails
   open**: a provider error proceeds to `generate`, because a guessed answer
   shown with its SQL beats no answer. It asks at most once per exchange.
 - **`inspect`** covers the third failure mode — the query ran and the answer is
@@ -348,8 +350,8 @@ backend/
     core/       config, logging with redaction, errors, context, clock
     domain/     value objects and ports (Protocols) — no framework imports
     services/   use cases, saved-SQL execution, disclosure policy, bootstrap
-    pipeline/   typed RunState, the nine nodes, executor, versioned prompts,
-                the metadata short-circuit, the disclosure gate, free checks
+    pipeline/   typed RunState, the ten nodes, executor, versioned prompts,
+                the schema-question answer, the disclosure gate, free checks
     sqlguard/   policy, validator, rewriter — self-contained, dialect-aware
     semantic/   what the schema means: the document, its generator, its render
     reports/    outline, language, facts, narration, the numeric check — pure

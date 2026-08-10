@@ -98,6 +98,7 @@ export const NODE_META: Record<string, { label: string; detail: string }> = {
   route: { label: 'Route', detail: 'Classifying question type…' },
   clarify: { label: 'Clarify', detail: 'Checking for ambiguity…' },
   retrieve: { label: 'Retrieve', detail: 'Searching schema for relevant tables…' },
+  describe: { label: 'Describe', detail: 'Answering from the schema and semantic layer…' },
   generate: { label: 'Generate SQL', detail: 'Drafting query…' },
   validate: { label: 'Validate', detail: 'Checking against schema with SQLGlot…' },
   execute: { label: 'Execute', detail: 'Running on read-only connection…' },
