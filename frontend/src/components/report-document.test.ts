@@ -11,8 +11,8 @@
  * section deleted from the outline since the run — not invented ones.
  */
 import {
-  assembleDocument, chartTypeOf, figureNumbers, isEdited, keyFigures, proseOf,
-  renderKindOf, summaryParts,
+  assembleDocument, captionOf, chartTypeOf, figureNumbers, isCallout, isEdited,
+  keyFigures, proseOf, renderKindOf, summaryParts,
 } from './report-document.ts'
 import type { ReportBlockResult, ReportRunDetail, ReportSectionResult } from '../api/types.ts'
 
@@ -31,6 +31,7 @@ function block(
     section_id: sectionId,
     position,
     heading_snapshot: heading,
+    title_snapshot: '',
     question_snapshot: 'revenue by month',
     sql_text: 'SELECT 1',
     sql_hash: 'abc',
@@ -250,6 +251,26 @@ check(
 )
 check('an empty summary comes apart into nothing', summaryParts(''), { lead: '', findings: [] })
 
+// ── what a figure is called ──────────────────────────────────────────────
+// The caption is a statement and the question is provenance. A run written
+// before blocks had titles carries an empty one, which is not a blank caption
+// — it is the instruction to caption the figure with its question.
+check(
+  'a title is what the figure is called',
+  captionOf(block('a', 's1', 0, 'H', { title_snapshot: 'Monthly revenue, 2025' })),
+  'Monthly revenue, 2025',
+)
+check(
+  'and without one the question is shown rather than nothing',
+  captionOf(block('a', 's1', 0, 'H')),
+  'revenue by month',
+)
+check(
+  'a title of spaces is no title',
+  captionOf(block('a', 's1', 0, 'H', { title_snapshot: '   ' })),
+  'revenue by month',
+)
+
 // ── figures, numbered across the whole document ──────────────────────────
 {
   const doc = assembleDocument(
@@ -266,6 +287,36 @@ check('an empty summary comes apart into nothing', summaryParts(''), { lead: '',
     'figures are numbered in reading order, across sections',
     [...figureNumbers(doc).entries()],
     [['a', 1], ['b', 2], ['c', 3]],
+  )
+}
+
+// ── callouts are not numbered figures ────────────────────────────────────
+// One number is a callout in the flow of the section, so it takes no figure
+// number — and the numbering has to close over the gap rather than leave one,
+// or the reader's "Figure 2" is the document's third exhibit.
+{
+  const kpi = { value: '1.4M', raw: 1.4, label: 'Revenue', caption: null, delta: null, sparkline: [] }
+  const doc = assembleDocument(
+    run(
+      [
+        block('a', 's1', 0, 'Revenue'),
+        block('b', 's1', 1, 'Revenue', { kpi }),
+        block('c', 's2', 2, 'Products'),
+      ],
+      [],
+    ),
+  )
+  check('a single number is a callout', isCallout(block('b', 's1', 1, 'H', { kpi })), true)
+  check('a table is not', isCallout(block('a', 's1', 0, 'H')), false)
+  check(
+    'a failed block is not, whatever it was going to be',
+    isCallout(block('b', 's1', 1, 'H', { kpi, status: 'FAILED' })),
+    false,
+  )
+  check(
+    'the numbering skips the callout and stays contiguous',
+    [...figureNumbers(doc).entries()],
+    [['a', 1], ['c', 2]],
   )
 }
 
@@ -287,7 +338,20 @@ check('an empty summary comes apart into nothing', summaryParts(''), { lead: '',
     keyFigures(doc).map((f) => f.block.id),
     ['a'],
   )
-  check('and each carries the heading it was computed under', keyFigures(doc)[0].heading, 'Revenue')
+  check(
+    'and each carries what the document calls it, not its section heading',
+    keyFigures(doc)[0].caption,
+    'revenue by month',
+  )
+  check(
+    'which is the title once one is written',
+    keyFigures(
+      assembleDocument(
+        run([block('a', 's1', 0, 'Revenue', { kpi, title_snapshot: 'Revenue, YTD' })], []),
+      ),
+    )[0].caption,
+    'Revenue, YTD',
+  )
 }
 
 check(

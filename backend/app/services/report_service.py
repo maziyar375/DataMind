@@ -107,6 +107,16 @@ def sql_fingerprint(sql: str) -> str:
     return hashlib.sha256(" ".join(sql.split()).encode()).hexdigest()
 
 
+def _caption(value: Any) -> str:
+    """A figure's title as the column holds it: one line, bounded, never NULL.
+
+    Empty is the meaningful value, not a missing one — it is how a block says
+    "caption me with my question", so clearing the field is a supported edit
+    rather than an omission to be second-guessed.
+    """
+    return " ".join(str(value or "").split())[:300]
+
+
 def _verdict(draft: SqlDraft) -> tuple[str, str | None]:
     """A draft's outcome as a feasibility status and the reason for it.
 
@@ -532,6 +542,7 @@ class ReportService:
                         section_id=section.id,
                         position=index,
                         question=block.question,
+                        title=block.title,
                         block_type=block.block_type,
                         time_window=block.time_window,
                         # No SQL and no feasibility: a proposed question has
@@ -1051,7 +1062,10 @@ class ReportService:
         question = (fields.get("question") or "").strip()
         if not question:
             raise ValidationError("A block needs a question.")
-        fields = await self._clamped(report, {**fields, "question": question})
+        fields = await self._clamped(
+            report,
+            {**fields, "question": question, "title": _caption(fields.get("title"))},
+        )
 
         if fields.get("position") is None:
             fields["position"] = await self._next_position(
@@ -1073,6 +1087,10 @@ class ReportService:
             if not question:
                 raise ValidationError("A block needs a question.")
             changes["question"] = question
+        if "title" in changes:
+            # Explicit null and empty string are the same request — put the
+            # question back over the figure — and the column is NOT NULL.
+            changes["title"] = _caption(changes["title"])
         changes = await self._clamped(report, changes)
 
         stale = any(

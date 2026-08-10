@@ -338,11 +338,23 @@ paragraph should cover) · `kind` (`NORMAL` | `EXECUTIVE_SUMMARY`).
 
 ### `report_blocks` — one question, one query, one figure
 
-`section_id` (CASCADE) · `position` · `question` · `sql`, `sql_hash` ·
+`section_id` (CASCADE) · `position` · `question` · `title` · `sql`, `sql_hash` ·
 `sql_origin` · `block_type` (`CHART` | `TABLE` | `METRIC`) · `chart_config`
 (**NULL means Auto**) · `time_window` · `feasibility_status`,
 `feasibility_reason`, `feasibility_checked_at` · `max_rows` (may only *lower*
 the connection's cap; `effective_max_rows` enforces it).
+
+`question` and `title` are the same block in two registers: the question is
+what is asked of the database, the title is what the document calls the figure
+— "Monthly revenue, last twelve months" against "How did revenue move month by
+month?". Captioning a report with its questions makes it read as a transcript
+of the session that produced it, so the caption is the statement and the
+question moves to where provenance belongs: the query panel and the appendix.
+The outline prompt writes both (r4); the user edits both in the outline; and
+**an empty title means "caption me with my question"**, which is what every
+block written before r4 carries and what clearing the field restores. Unlike
+the question, editing a title changes a label only — it never resets the
+feasibility verdict and never drops the SQL.
 
 ### `report_runs` — one generation
 
@@ -359,7 +371,8 @@ stays readable in the language it was written in.
 ### `report_block_results` — the numbers, snapshotted
 
 `run_id` (CASCADE) · `block_id` (**SET NULL**) · `heading_snapshot`,
-`question_snapshot`, `sql_text`, `sql_hash` · `columns`, `rows`, `row_count`,
+`title_snapshot`, `question_snapshot`, `sql_text`, `sql_hash` · `columns`,
+`rows`, `row_count`,
 `truncated` · `vega_spec`, `chart_source`, `chart_note`, `kpi` · `computed_at`,
 `duration_ms` · `status`, `error_code`, `error_message`.
 
@@ -466,11 +479,21 @@ and the first reason on the button.
 **The viewer renders a document**, not a result list: a cover stating the data
 source, the moment and the model; numbered sections with rules; the executive
 summary set apart with its findings as findings; a band of `plan_kpi` figures;
-numbered figure captions with a source line under each; and a *Method and data
-notes* appendix listing every question, row count, timestamp and statement —
-assembled from rows the run already holds, so it costs no tokens and cannot
-drift from the body. The document's furniture is localised and the article
-carries `dir` from the report's language.
+numbered figures captioned with their titles and a source line under each; and
+a *Method and data notes* appendix listing every question, row count, timestamp
+and statement — assembled from rows the run already holds, so it costs no
+tokens and cannot drift from the body. The document's furniture is localised
+and the article carries `dir` from the report's language.
+
+**A block that produced one number is a callout, not a figure.** An exhibit is
+something a reader studies — a series, a ranking, a composition — and one value
+has none of that structure: given a numbered slot it fills a quarter of a page
+with what the sentence beside it already said, and it teaches the reader that a
+figure number is not worth turning to. So a single-number result is set in the
+flow of its section, `figureNumbers` skips it, and the numbering counts only
+what a reader can be pointed at. It keeps its full provenance either way, and
+the appendix lists it under *Headline figure* rather than under a number that
+matches nothing in the body.
 
 Three fiddly things live in `report-document.ts` and are tested apart from
 React (`npm run test:report`), because they only show up mid-generation: the

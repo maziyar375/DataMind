@@ -73,6 +73,7 @@ def clamp_section_target(value: int | None) -> int:
 MAX_HEADING_CHARS = 300
 MAX_INTENT_CHARS = 2_000
 MAX_QUESTION_CHARS = 2_000
+MAX_TITLE_CHARS = 300
 
 #: Output-token floor for the outline call, whatever the provider row says. An
 #: outline of seven sections is long, and a truncated one is the failure this
@@ -103,6 +104,12 @@ class ProposedBlock(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     question: str
+    #: What the figure is captioned with: a statement, where `question` is a
+    #: question. **Optional, and empty is a real answer** — the reader is shown
+    #: the question when a model omits it, which is what every outline proposed
+    #: before r4 amounts to. A missing title must never cost a block: the
+    #: caption is the one field of a block that can be fixed by typing over it.
+    title: str = ""
     block_type: Literal["CHART", "TABLE", "METRIC"] = "CHART"
     time_window: Literal[
         "none", "last_7_days", "last_30_days", "last_month", "last_3_months",
@@ -266,7 +273,14 @@ def _section(data: Any) -> tuple[ProposedSection | None, int]:
         if not question:
             dropped += 1
             continue
-        blocks.append(block.model_copy(update={"question": question}))
+        blocks.append(
+            block.model_copy(
+                update={
+                    "question": question,
+                    "title": _clean(block.title, MAX_TITLE_CHARS),
+                }
+            )
+        )
 
     dropped += max(0, len(blocks) - MAX_BLOCKS_PER_SECTION)
     blocks = blocks[:MAX_BLOCKS_PER_SECTION]

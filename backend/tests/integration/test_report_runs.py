@@ -150,12 +150,14 @@ def _block(
     position: int = 1,
     block_type: str = "CHART",
     question: str = "revenue by status",
+    title: str = "",
 ) -> ReportBlock:
     return ReportBlock(
         id=uuid4(),
         section_id=section_id,
         position=position,
         question=question,
+        title=title,
         sql=sql,
         sql_hash="hash-of-" + sql[:20],
         sql_origin="GENERATED",

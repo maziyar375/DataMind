@@ -1246,6 +1246,7 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
      heading stranded at the foot of a page is the classic printing tell. */
   .rm-report-figure,
   .rm-report-section > figure,
+  .rm-report-callout,
   .rm-report-figures {
     break-inside: avoid;
     page-break-inside: avoid;
@@ -1423,7 +1424,6 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
     border-radius: 3px !important;
     gap: 3px !important;
   }
-  .rm-report-tilecap { font-size: 7pt !important; line-height: 1.3 !important; }
   .rm-report .rm-kpi { gap: 2px !important; }
   /* 16pt is the base, not the size: `--kpi-scale` is what the component
      worked out about this particular figure's length, and a printed tile is
@@ -1452,6 +1452,22 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   .rm-report-caption { font-size: 8.5pt !important; line-height: 1.35 !important; }
   .rm-report-figfoot { gap: 6px !important; padding-top: 2px !important; }
   .rm-report-source { font-size: 6.5pt !important; padding-top: 3px !important; }
+
+  /* A callout: one number in the flow of the section, rather than an exhibit.
+     Tighter than a figure on purpose — on paper it is the difference between
+     an aside a reader passes through and a plate they stop at, and the accent
+     rail is what carries that distinction once the fill is gone. */
+  .rm-report-callout {
+    padding: 6px 10px !important;
+    border-radius: 3px !important;
+    gap: 3px !important;
+    background: transparent !important;
+  }
+  .rm-report-callout .rm-kpi-value {
+    font-size: calc(13pt * var(--kpi-scale, 1)) !important;
+  }
+  /* The question, in the appendix, under the caption it produced. */
+  .rm-report-methodq { font-size: 8pt !important; line-height: 1.35 !important; }
 
   /* The chart's own frame, inside the figure's. Its line goes and its box
      stays: the printer measured that padding and border on screen to work out

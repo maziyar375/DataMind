@@ -767,6 +767,10 @@ def _block_result(
         section_id=block.section_id,
         position=position,
         heading_snapshot=heading[:300],
+        # `or ""` rather than a bare slice: the column default is applied at
+        # INSERT, so a block that has not been flushed yet — which is every
+        # block a unit test builds — carries None here rather than "".
+        title_snapshot=(block.title or "")[:300],
         question_snapshot=block.question,
         sql_text=block.sql,
         sql_hash=block.sql_hash,

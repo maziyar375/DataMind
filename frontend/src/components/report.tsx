@@ -37,16 +37,16 @@ import {
 } from '../api/client'
 import { DEFAULT_SECTIONS, MAX_SECTIONS, MIN_SECTIONS } from '../api/types'
 import type {
-  ChartOption, LlmConfig, NumericFinding, Report, ReportBlock, ReportBlockCheck,
-  ReportBlockResult,
+  ChartOption, KpiSpec, LlmConfig, NumericFinding, Report, ReportBlock,
+  ReportBlockCheck, ReportBlockResult,
   ReportBlockType, ReportFeasibility, ReportLanguage, ReportRun, ReportRunDetail,
   ReportSection, ReportSectionResult, ReportSummary, ReportTimeWindow,
 } from '../api/types'
 import { ChartGlyph, ChartTypePicker } from './chart-picker'
 import {
-  assembleDocument, chartTypeOf, figureNumbers, isEdited, keyFigures, proseOf,
-  renderKindOf, summaryParts,
-  type DocumentSection,
+  assembleDocument, captionOf, chartTypeOf, figureNumbers, isCallout, isEdited,
+  keyFigures, proseOf, renderKindOf, summaryParts,
+  type DocumentSection, type KeyFigure,
 } from './report-document'
 // One vocabulary for a run's status across the two screens that show one.
 import { RUN_TONE } from './report-history'
@@ -127,6 +127,10 @@ const LABELS: Record<ReportLanguage, Record<string, string>> = {
     model: 'Model',
     keyFigures: 'Key figures',
     figure: 'Figure',
+    // A single number is a callout, not an exhibit, so it carries no figure
+    // number — and the appendix, which lists every query, needs something to
+    // head its entry with instead.
+    headline: 'Headline figure',
     method: 'Method and data notes',
     methodBody:
       'Every figure in this document was produced by one query, run read-only '
@@ -165,6 +169,7 @@ const LABELS: Record<ReportLanguage, Record<string, string>> = {
     model: 'مدل',
     keyFigures: 'شاخص‌های کلیدی',
     figure: 'شکل',
+    headline: 'شاخص کلیدی',
     method: 'روش و ملاحظات داده',
     methodBody:
       'هر شکل این سند نتیجهٔ یک کوئری است که فقط‌خواندنی روی منبع دادهٔ بالا '
@@ -1632,6 +1637,20 @@ function BlockRow({
             style={{ fontSize: 13.5, color: 'var(--text)', lineHeight: 1.55 }}
             onCommit={(question) => onChange({ question })}
           />
+          {/* What the document will caption this figure with — a statement,
+              where the question above is a question. Not required and not
+              pre-filled with the question: **empty means "use the question"**,
+              and a copy of it sitting in this box would be one more thing to
+              keep in step by hand. Editing it changes a label and nothing
+              else, so unlike the question it never resets the verdict. */}
+          <InlineEdit
+            ariaLabel={`Caption for question ${index + 1}`}
+            value={block.title}
+            placeholder="Caption in the report — defaults to the question"
+            multiline
+            style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5 }}
+            onCommit={(title) => onChange({ title })}
+          />
         </div>
         <span
           className="rm-outline-actions"
@@ -2629,7 +2648,7 @@ function Brandmark() {
 function HeadlineFigures({
   figures, t,
 }: {
-  figures: { block: ReportBlockResult; heading: string }[]
+  figures: KeyFigure[]
   t: Record<string, string>
 }) {
   if (figures.length === 0) return null
@@ -2660,7 +2679,7 @@ function HeadlineFigures({
           gap: 10,
         }}
       >
-        {figures.map(({ block, heading }) => (
+        {figures.map(({ block, caption }) => (
           <div
             key={block.id}
             className="rm-report-tile"
@@ -2674,19 +2693,10 @@ function HeadlineFigures({
               borderRadius: 12,
             }}
           >
-            {block.kpi && <Kpi spec={block.kpi} compact />}
-            <span
-              dir="auto"
-              className="rm-report-tilecap"
-              style={{
-                fontSize: 10.5,
-                color: 'var(--text-faint)',
-                textAlign: 'center',
-                lineHeight: 1.4,
-              }}
-            >
-              {heading}
-            </span>
+            {/* Labelled with the document's caption rather than with the
+                column the number was computed from: `total_rev` names a
+                result, and this band is the first thing a reader sees. */}
+            {block.kpi && <Kpi spec={{ ...block.kpi, label: caption }} compact />}
           </div>
         ))}
       </div>
@@ -2780,17 +2790,33 @@ function MethodNotes({
                 borderTop: '1px solid var(--border)',
               }}
             >
+              {/* A callout carries no figure number, so it is headed by what
+                  it is instead. The entry is never headed by a dash: the
+                  appendix is where a number gets attributed, and an entry
+                  nobody can match to something in the body attributes
+                  nothing. */}
               <span
                 className="rm-report-figlabel"
                 style={{ fontSize: 11, fontWeight: 650, color: 'var(--text2)' }}
               >
-                {t.figure} {figures.get(block.id) ?? '—'}
+                {isCallout(block) ? t.headline : `${t.figure} ${figures.get(block.id) ?? '—'}`}
               </span>
               <span
                 dir="auto"
                 className="rm-report-caption"
-                style={{ fontSize: 12.5, color: 'var(--text)' }}
+                style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text)' }}
               >
+                {captionOf(block)}
+              </span>
+              {/* The question, in the one place it belongs: beside the
+                  statement it produced. It is how this number was obtained,
+                  which is the question this whole section exists to answer. */}
+              <span
+                dir="auto"
+                className="rm-report-methodq"
+                style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5 }}
+              >
+                <span style={{ color: 'var(--text-faint)' }}>{t.question}: </span>
                 {block.question_snapshot}
               </span>
               <span
@@ -2863,7 +2889,7 @@ function SectionView({
   runId: string
   section: DocumentSection
   figures: Map<string, number>
-  headline: { block: ReportBlockResult; heading: string }[]
+  headline: KeyFigure[]
   t: Record<string, string>
   busy: boolean
   onRetry: () => void
@@ -3243,6 +3269,15 @@ function NumericMarker({
  * it — none of which is possible for an unlabelled picture, and all of which is
  * ordinary in a document produced by people.
  *
+ * **The caption is a statement, not the question that produced it.** A figure
+ * headed "How did revenue move month by month?" reads as a transcript of the
+ * session the document came out of; a report captions its exhibits with what
+ * they show. The question is not dropped — it moves to the query panel below
+ * and to the appendix, which is where a reader goes to ask how a number was
+ * obtained. `captionOf` falls back to it when no title was ever written.
+ *
+ * A block that produced one number is not drawn here at all: see `BlockCallout`.
+ *
  * The source line under it says how many rows the statement returned and when,
  * for the same reason the SQL is one click away: a number nobody can trace back
  * to a statement is a number nobody should act on.
@@ -3253,13 +3288,20 @@ function BlockView({
   reportId: string
   runId: string
   block: ReportBlockResult
-  /** Its place in the document's numbering; absent only if it arrived mid-merge. */
+  /** Its place in the document's numbering; absent for a callout, and while mid-merge. */
   figure: number | undefined
   t: Record<string, string>
   onBlock: (block: ReportBlockResult) => void
 }) {
-  const [showSql, setShowSql] = useState(false)
   const kind = renderKindOf(block)
+  const caption = captionOf(block)
+
+  if (isCallout(block) && block.kpi) {
+    // The caption *is* the label. `plan_kpi` labels the number with its column
+    // (`total_rev`), which beside a written caption is the same thing said
+    // twice and worse the second time.
+    return <BlockCallout block={block} spec={{ ...block.kpi, label: caption }} t={t} />
+  }
 
   return (
     <figure
@@ -3296,9 +3338,9 @@ function BlockView({
         <span
           dir="auto"
           className="rm-report-caption"
-          style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)', lineHeight: 1.5 }}
+          style={{ fontSize: 13.5, fontWeight: 650, color: 'var(--text-strong)', lineHeight: 1.45 }}
         >
-          {block.question_snapshot}
+          {caption}
         </span>
       </figcaption>
 
@@ -3325,6 +3367,71 @@ function BlockView({
         </>
       )}
 
+      <BlockFoot block={block} t={t} />
+    </figure>
+  )
+}
+
+/**
+ * A single number, in the flow of the section that discusses it.
+ *
+ * The same result a numbered exhibit would have been given a quarter of a page
+ * for. One value has no structure to study — no series, no ranking, no shares —
+ * so it is set as a callout beside the prose instead: the convention every
+ * reporting tool and every consulting deck follows, and the reason a figure
+ * number in this document still means "something worth turning to".
+ *
+ * It keeps its provenance in full. The number is smaller; the audit trail is
+ * not, because that is the promise the product makes about every figure it
+ * prints, and a lone number is the one most likely to be quoted out of the
+ * document.
+ */
+function BlockCallout({
+  block, spec, t,
+}: {
+  block: ReportBlockResult
+  /** The block's own KPI, labelled with the document's caption for it. */
+  spec: KpiSpec
+  t: Record<string, string>
+}) {
+  return (
+    <aside
+      className="rm-report-callout"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+        padding: '12px 16px',
+        background: 'var(--panel)',
+        border: '1px solid var(--border)',
+        // The rail is what says "this is an aside, not an exhibit" at a glance,
+        // and it is logical rather than left so a Persian document gets it on
+        // the side the reader starts from.
+        borderInlineStart: '3px solid var(--accent)',
+        borderRadius: 10,
+      }}
+    >
+      <Kpi spec={spec} compact />
+      <BlockFoot block={block} t={t} />
+    </aside>
+  )
+}
+
+/**
+ * Where a figure came from: how many rows, computed when, and the statement.
+ *
+ * Shared by the exhibit and the callout, because the audit trail is a property
+ * of a result and not of how large it was drawn.
+ *
+ * The question lives here rather than over the picture. It is how the number
+ * was obtained — provenance, like the SQL it sits above and the row count
+ * beside it — and a reader who wants it is already looking in this line.
+ */
+function BlockFoot({ block, t }: { block: ReportBlockResult; t: Record<string, string> }) {
+  const [showSql, setShowSql] = useState(false)
+
+  return (
+    <>
       <div
         className="rm-report-figfoot"
         style={{
@@ -3395,26 +3502,34 @@ function BlockView({
       </div>
 
       {showSql && (
-        <pre
-          dir="ltr"
+        <div
           className="rm-report-hide-in-print"
-          style={{
-            margin: 0,
-            padding: '9px 11px',
-            background: 'var(--input-bg)',
-            border: '1px solid var(--border)',
-            borderRadius: 8,
-            fontSize: 11.5,
-            lineHeight: 1.6,
-            color: 'var(--text2)',
-            overflowX: 'auto',
-            whiteSpace: 'pre',
-          }}
+          style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
         >
-          {block.sql_text}
-        </pre>
+          <span dir="auto" style={{ fontSize: 11.5, color: 'var(--text-dim)', lineHeight: 1.5 }}>
+            <span style={{ color: 'var(--text-faint)' }}>{t.question}: </span>
+            {block.question_snapshot}
+          </span>
+          <pre
+            dir="ltr"
+            style={{
+              margin: 0,
+              padding: '9px 11px',
+              background: 'var(--input-bg)',
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              fontSize: 11.5,
+              lineHeight: 1.6,
+              color: 'var(--text2)',
+              overflowX: 'auto',
+              whiteSpace: 'pre',
+            }}
+          >
+            {block.sql_text}
+          </pre>
+        </div>
       )}
-    </figure>
+    </>
   )
 }
 

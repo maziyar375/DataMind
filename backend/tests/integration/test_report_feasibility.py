@@ -113,6 +113,7 @@ def _db(*, database_type: str = "postgres") -> FakeDb:
         section_id=SECTION_ID,
         position=1,
         question="revenue by month",
+        title="",
         sql="",
         sql_hash="",
         sql_origin="GENERATED",

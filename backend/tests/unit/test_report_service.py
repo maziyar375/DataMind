@@ -117,6 +117,7 @@ def _block(**overrides: Any) -> ReportBlock:
         "section_id": SECTION_ID,
         "position": 1,
         "question": "revenue by month",
+        "title": "",
         "sql": "SELECT month, revenue FROM public.sales",
         "sql_hash": "abc123",
         "sql_origin": "GENERATED",
@@ -438,6 +439,36 @@ async def test_editing_the_question_drops_the_sql_it_was_checked_against() -> No
     assert updated.feasibility_status == ReportFeasibility.UNCHECKED
     assert updated.feasibility_reason is None
     assert updated.feasibility_checked_at is None
+
+
+async def test_retitling_a_figure_changes_a_label_and_nothing_else() -> None:
+    """The caption names the figure; the question is what the SQL answers.
+
+    Rewording a caption must not cost the statement or the verdict, or nobody
+    would ever fix one — which is the difference between a title and every
+    other editable field on a block.
+    """
+    block = _block(title="Revenue by month")
+    db = FakeDb(report=_report(), sections=[_section()], blocks=[block], connection=_connection())
+
+    updated = await _service(db).update_block(
+        REPORT_ID, BLOCK_ID, OWNER, title="  Monthly revenue,  2026  "
+    )
+
+    assert updated.title == "Monthly revenue, 2026"
+    assert updated.sql == "SELECT month, revenue FROM public.sales"
+    assert updated.feasibility_status == ReportFeasibility.FEASIBLE
+
+
+async def test_clearing_a_title_puts_the_question_back_over_the_figure() -> None:
+    """Empty is a value here, not an omission: it is how a block says "caption
+    me with my question", so the edit has to land rather than be skipped."""
+    block = _block(title="Revenue by month")
+    db = FakeDb(report=_report(), sections=[_section()], blocks=[block], connection=_connection())
+
+    updated = await _service(db).update_block(REPORT_ID, BLOCK_ID, OWNER, title="")
+
+    assert updated.title == ""
 
 
 async def test_changing_the_time_window_invalidates_the_sql_too() -> None:
@@ -806,6 +837,7 @@ def _saved_result() -> ReportBlockResult:
         section_id=SECTION_ID,
         position=0,
         heading_snapshot="روند درآمد",
+        title_snapshot="",
         question_snapshot="revenue by month",
         sql_text="SELECT 1",
         sql_hash="abc",

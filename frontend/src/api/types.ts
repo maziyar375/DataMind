@@ -551,6 +551,12 @@ export interface ReportBlock {
   position: number
   /** What the user edits in v1 — not the SQL. */
   question: string
+  /**
+   * What the figure is called in the document: a statement, where `question`
+   * is a question. **Empty means the question is used**, so an unset title is
+   * a caption, not a blank.
+   */
+  title: string
   sql: string
   sql_hash: string
   sql_origin: SqlOrigin
@@ -651,6 +657,8 @@ export interface ReportBlockResult {
   section_id: string | null
   position: number
   heading_snapshot: string
+  /** The caption this figure was published with. Empty falls back to the question. */
+  title_snapshot: string
   question_snapshot: string
   sql_text: string
   sql_hash: string

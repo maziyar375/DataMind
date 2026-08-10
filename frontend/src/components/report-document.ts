@@ -186,6 +186,42 @@ export function summaryParts(prose: string): { lead: string; findings: string[] 
 }
 
 /**
+ * What a block is captioned with: a statement, falling back to its question.
+ *
+ * A caption is the one line of a figure every reader reads, and a document
+ * whose captions are questions reads as a transcript of the session that
+ * produced it. `title_snapshot` is that statement, written by the outline
+ * prompt and editable in the outline; the question stays with the query, in
+ * the appendix and the query panel, where provenance belongs.
+ *
+ * Empty is the ordinary case for a run generated before blocks had titles, and
+ * for one whose author cleared the field — so the fallback is not a defensive
+ * `??`, it is the documented meaning of an empty title.
+ */
+export function captionOf(block: ReportBlockResult): string {
+  return (block.title_snapshot || '').trim() || block.question_snapshot
+}
+
+/**
+ * Whether this block is a callout rather than an exhibit.
+ *
+ * One number is not a figure. An exhibit is something a reader studies —
+ * structure over time, across categories, against a total — and giving a
+ * headline number its own numbered slot fills a quarter of a page with
+ * information the sentence beside it already carried, while training the
+ * reader that a figure number is not worth turning to. Every reporting
+ * convention treats a single value the same way: a scorecard at the top, a
+ * callout in the flow, never Figure 4.
+ *
+ * Read off what was *produced*, like `renderKindOf` — a METRIC block whose
+ * query came back with a hundred rows is a table, and is drawn and numbered as
+ * one.
+ */
+export function isCallout(block: ReportBlockResult): boolean {
+  return renderKindOf(block) === 'kpi'
+}
+
+/**
  * The figures of the document, numbered in reading order.
  *
  * A professional report cites "Figure 4", and it can only do that if the number
@@ -193,22 +229,38 @@ export function summaryParts(prose: string): { lead: string; findings: string[] 
  * once over the assembled sections and read by both the body and the appendix.
  * A block that is still being written has no number yet and simply is not in the
  * map, which is what makes it safe to call mid-run.
+ *
+ * Callouts are skipped rather than numbered, so the numbering counts what a
+ * reader can actually be pointed at. A block that is *not* in the map is
+ * therefore two different things — a callout, or a figure the run has not
+ * written yet — and only the caller with the block in hand can tell them
+ * apart, which is what `isCallout` is for.
  */
 export function figureNumbers(sections: DocumentSection[]): Map<string, number> {
   const numbers = new Map<string, number>()
   let counter = 0
   for (const section of sections) {
     for (const block of section.blocks) {
+      if (isCallout(block)) continue
       numbers.set(block.id, ++counter)
     }
   }
   return numbers
 }
 
-/** One headline figure, with the section it was computed under. */
+/** One headline figure, with what the document calls it. */
 export interface KeyFigure {
   block: ReportBlockResult
-  heading: string
+  /**
+   * The block's caption, not its section's heading.
+   *
+   * The band is read before the document, so each tile has to say what its
+   * number *is* — "Monthly revenue, last twelve months" — where a heading says
+   * only which part of the report it came from. It is also what the number is
+   * labelled with in the section below, so a reader meets the same figure
+   * under the same words twice.
+   */
+  caption: string
 }
 
 /**
@@ -226,7 +278,7 @@ export function keyFigures(sections: DocumentSection[], limit = 4): KeyFigure[] 
   for (const section of sections) {
     for (const block of section.blocks) {
       if (block.status === 'OK' && block.kpi) {
-        figures.push({ block, heading: section.heading })
+        figures.push({ block, caption: captionOf(block) })
       }
     }
   }

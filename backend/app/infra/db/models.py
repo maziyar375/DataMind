@@ -698,6 +698,12 @@ class ReportBlock(Base, TimestampMixin):
     # the SQL — the outline is the primary interaction, and the SQL editor is
     # deferred.
     question: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # What the figure is *called*: a statement naming what it shows, which is
+    # what a document captions an exhibit with. The question above says how the
+    # number was obtained and belongs with the SQL, not over the picture.
+    # **Empty means "use the question"** — every block written before titles
+    # existed, and every one whose title the user cleared.
+    title: Mapped[str] = mapped_column(String(300), nullable=False, default="")
     sql: Mapped[str] = mapped_column(Text, nullable=False, default="")
     # What makes run-to-run comparison honest: comparing two runs whose SQL
     # differs is a lie, so the hash is recorded on the block and copied onto
@@ -811,6 +817,12 @@ class ReportBlockResult(Base):
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     heading_snapshot: Mapped[str] = mapped_column(
+        String(300), nullable=False, default=""
+    )
+    # The caption, snapshotted beside the question for the same reason: a run
+    # keeps the wording it was published with, whatever the block says later.
+    # Empty means the reader is shown the question instead.
+    title_snapshot: Mapped[str] = mapped_column(
         String(300), nullable=False, default=""
     )
     question_snapshot: Mapped[str] = mapped_column(Text, nullable=False, default="")

@@ -255,6 +255,9 @@ for (const [cls, where] of [
   ['rm-report-heading', reportTsx],
   ['rm-report-prose', reportTsx],
   ['rm-report-caption', reportTsx],
+  // A callout is the one block that is deliberately *not* a figure, so it is
+  // the one whose print size no `.rm-report-figure` rule would cover for it.
+  ['rm-report-callout', reportTsx],
   ['rm-report-source', reportTsx],
   ['rm-report-sql', reportTsx],
   ['rm-kpi-value', readFileSync(fileURLToPath(new URL('./ui.tsx', import.meta.url)), 'utf8')],

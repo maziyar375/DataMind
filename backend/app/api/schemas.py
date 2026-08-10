@@ -685,6 +685,11 @@ class ReportBlockRead(BaseModel):
     section_id: UUID
     position: int = 0
     question: str = ""
+    # What the figure is captioned with in the document. **Empty means "use the
+    # question"**, which is what the editor shows as the placeholder rather
+    # than filling the field in — a stored copy of the question would then have
+    # to be kept in step with it.
+    title: str = ""
     sql: str = ""
     sql_hash: str = ""
     sql_origin: str = "GENERATED"
@@ -843,6 +848,9 @@ class ReportBlockCreate(BaseModel):
     """
 
     question: str = Field(min_length=1, max_length=2000)
+    # Optional at every entry point: a block is created from its question, and
+    # a caption nobody wrote is the question itself.
+    title: str = Field(default="", max_length=300)
     block_type: Literal["CHART", "TABLE", "METRIC"] = "CHART"
     chart_config: dict[str, Any] | None = None
     time_window: Literal[
@@ -868,6 +876,10 @@ class ReportBlockSqlUpdate(BaseModel):
 
 class ReportBlockUpdate(BaseModel):
     question: str | None = Field(default=None, min_length=1, max_length=2000)
+    # `""` is a deliberate value here and not a no-op: it clears a caption the
+    # model wrote and puts the question back over the figure. Omitting the
+    # field is what leaves the stored one alone.
+    title: str | None = Field(default=None, max_length=300)
     block_type: Literal["CHART", "TABLE", "METRIC"] | None = None
     # Explicit null is how a client goes back to Auto; omitting the field leaves
     # whatever is stored alone.
@@ -923,6 +935,10 @@ class ReportBlockResultRead(BaseModel):
     section_id: UUID | None = None
     position: int = 0
     heading_snapshot: str = ""
+    # The caption this figure was published with. Empty means the document
+    # captions it with the question, which is every run written before blocks
+    # had titles.
+    title_snapshot: str = ""
     question_snapshot: str = ""
     # Shown and auditable, exactly as a chat run's SQL is.
     sql_text: str = ""

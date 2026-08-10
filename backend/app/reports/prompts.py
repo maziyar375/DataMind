@@ -14,6 +14,16 @@ report and a pile of charts.
 """
 from __future__ import annotations
 
+#: r4 — every block is asked for a `title` as well as a question. A figure
+#: captioned with the question it came from reads as a transcript of the
+#: session that produced it ("How did revenue move month by month?"), where a
+#: report captions its exhibits with statements ("Monthly revenue, last twelve
+#: months"). The question is not lost — it moves to the appendix and the query
+#: panel, which is where provenance belongs. A model that ignores the field
+#: costs nothing: an empty title falls back to the question, so r3 documents
+#: and r4 documents differ in caption wording only, which is exactly the kind
+#: of difference the version on the run exists to record.
+#:
 #: r3 — the length of the outline stops being the prompt's opinion. r2 asked
 #: for "between 4 and 7 sections", which is a house style baked into a
 #: constant: a user who wants a three-section brief or an eight-section review
@@ -32,7 +42,7 @@ from __future__ import annotations
 #: read as one document, tells each section what its neighbours already said so
 #: it stops repeating them, and hands the writer figures computed by `facts.py`
 #: rather than leaving it to do arithmetic over a text table.
-REPORT_PROMPT_VERSION = "r3"
+REPORT_PROMPT_VERSION = "r4"
 
 # What a language code means to a model. The code alone ("fa") is understood by
 # the strong models and guessed at by the rest; the endonym removes the guess.
@@ -67,8 +77,8 @@ it belong under one heading, because the paragraph about them is one thought.
 
 Return JSON in exactly this shape, and nothing else:
 
-{"sections": [{"heading": "...", "intent": "...", "blocks": [{"question": \
-"...", "block_type": "CHART", "time_window": "none"}]}]}
+{"sections": [{"heading": "...", "intent": "...", "blocks": [{"title": "...", \
+"question": "...", "block_type": "CHART", "time_window": "none"}]}]}
 
 **The outline is an argument, not an inventory.** A list of one chart per \
 table is a dashboard someone has to interpret. A report answers, in order: \
@@ -103,8 +113,18 @@ truly cannot support that many, return the ones it can rather than inventing \
 one, but treat that as the exception it is.
 - Between 1 and 3 blocks in each section. A section with no blocks is not a \
 section.
-- Write `heading`, `intent` and `question` in the language named in the \
-request below — whatever language the table and column names happen to be in.
+- Write `heading`, `intent`, `title` and `question` in the language named in \
+the request below — whatever language the table and column names happen to be \
+in.
+- `title` is what the figure is **called** in the finished document, and it is \
+a statement, never a question: "Monthly revenue, last twelve months", "Top ten \
+customers by order value". Name what the exhibit shows and the period it \
+covers, in at most about ten words. No question mark, no "analysis of", no \
+"chart of", no sentence about what the reader should conclude.
+- `question` is what has to be *asked of the database* to produce it, in a \
+full question. The reader sees the title; the question is recorded beside the \
+query it produced. So the two say the same thing in two registers — a title \
+that names a different measure from its question is a mislabelled figure.
 - A `heading` names the finding's subject, not the chart. "Revenue by month" \
 is a chart title; "Revenue trend over the last twelve months" is a heading.
 - `intent` is one line telling the writer what this section's paragraph must \

@@ -131,11 +131,13 @@ async def test_propose_sends_the_language_the_schema_and_the_request() -> None:
 def test_the_prompt_forbids_the_summary_the_service_adds() -> None:
     """Otherwise every report opens with two summaries, one of them empty."""
     assert "executive summary" in REPORT_OUTLINE_SYSTEM.lower()
-    # r3 takes the number of sections from the request instead of asserting a
-    # range. The version moves with the wording because a document generated
-    # under r2 is a different artefact, and the run row is the only thing that
-    # says which one a reader is holding.
-    assert REPORT_PROMPT_VERSION == "r3"
+    # r4 asks each block for a `title` — the statement a figure is captioned
+    # with, as against the question it was produced from. r3 took the number of
+    # sections from the request instead of asserting a range. The version moves
+    # with the wording because a document generated under an earlier one is a
+    # different artefact, and the run row is the only thing that says which one
+    # a reader is holding.
+    assert REPORT_PROMPT_VERSION == "r4"
 
 
 def test_the_prompt_states_no_section_count_of_its_own() -> None:
@@ -406,6 +408,54 @@ def test_whitespace_and_overlong_text_are_cleaned_to_the_column_widths() -> None
     assert section.heading == "Revenue over time"
     assert len(section.intent) == 2_000
     assert len(section.blocks[0].question) == 2_000
+
+
+# ── what a figure is called ──────────────────────────────────────────────
+def test_a_block_carries_the_caption_it_was_proposed_with() -> None:
+    reply = {
+        "sections": [
+            {
+                "heading": "Revenue",
+                "blocks": [
+                    {
+                        "question": "How did revenue move month by month?",
+                        "title": "  Monthly revenue,\n  last twelve months  ",
+                    }
+                ],
+            }
+        ]
+    }
+
+    block = parse(json.dumps(reply)).sections[0].blocks[0]
+
+    assert block.title == "Monthly revenue, last twelve months"
+    assert block.question == "How did revenue move month by month?"
+
+
+def test_a_block_with_no_title_is_kept_and_captioned_with_its_question() -> None:
+    """The r3 shape, and any r4 reply the model wrote carelessly.
+
+    An empty title is not a missing field to recover from — it is the stored
+    value that means "caption this figure with its question", which is what
+    every block proposed before r4 amounts to. Dropping the block over it would
+    cost a question for a label anyone can type.
+    """
+    reply = {"sections": [{"heading": "Revenue", "blocks": [{"question": "revenue?"}]}]}
+
+    proposal = parse(json.dumps(reply))
+
+    assert proposal.sections[0].blocks[0].title == ""
+    assert proposal.dropped_blocks == 0
+
+
+def test_an_overlong_title_is_cut_to_the_column() -> None:
+    reply = {
+        "sections": [
+            {"heading": "Revenue", "blocks": [{"question": "revenue?", "title": "t" * 900}]}
+        ]
+    }
+
+    assert len(parse(json.dumps(reply)).sections[0].blocks[0].title) == 300
 
 
 # ── the summary the user did not ask for ─────────────────────────────────

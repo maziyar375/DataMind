@@ -447,6 +447,15 @@ The things worth knowing before you touch it:
   not in stored parameters and not by regenerating. `NodeDeps.extra_rules`
   carries the dialect rules and is empty for everything else — a chat run's SQL
   prompt is byte-identical to pre-feature, and a test says so.
+- **A figure is captioned with a statement, and one number is not a figure.**
+  A block carries both a `question` (what is asked of the database) and a
+  `title` (what the document calls the exhibit); the caption is the title, and
+  **an empty title falls back to the question**, which is what every block
+  written before prompt r4 has. The question is not lost — it moves to the
+  query panel and the appendix, where provenance belongs. A block whose result
+  is a single number is drawn as a callout in the flow of its section rather
+  than a numbered exhibit, and `figureNumbers` skips it so "Figure 4" still
+  means something a reader can turn to.
 - **No model is asked to do arithmetic.** `plan_kpi` computes the headline,
   `reports/facts.py` computes what a paragraph needs (and yields *nothing* for
   a partial or capped result, because a total over a prefix is a wrong total),
