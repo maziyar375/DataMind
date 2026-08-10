@@ -22,6 +22,7 @@ Nine documents, ~5k lines. This page exists so you don't have to open
 | Tiles, saved-SQL execution, `query_service.py` | [dashboards.md](dashboards.md) | The second entry point to the guard, and the six rules it obeys |
 | Report generation, prose, print | [reports.md](reports.md) | Data model, generation order, where the numbers come from |
 | Retrieval, prompts, anything you want to prove helped | [eval.md](eval.md) | The golden set, the metrics, and the CI gate |
+| Orchestration — moving the pipeline onto LangGraph | [langgraph-migration.md](langgraph-migration.md) | Which surfaces move and which don't, the phases, and the checklist |
 
 ## Historical
 
