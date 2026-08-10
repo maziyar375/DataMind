@@ -16,7 +16,7 @@ const BLANK = {
   provider: 'OpenAI-compatible',
   base_url: PROVIDER_URLS['OpenAI-compatible'],
   model: 'gpt-4o-mini',
-  temperature: 0.2,
+  temperature: 0,
   max_tokens: 2048,
 }
 
