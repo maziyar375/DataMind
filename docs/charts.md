@@ -4,7 +4,7 @@ How DataMind decides what picture to draw, what it refuses to draw, and how a
 decision becomes a Vega-Lite spec.
 
 Everything here is implemented. The chart system is `backend/app/charts/`
-(one module, ~1,500 lines), the renderer is
+(one module, ~2,100 lines), the renderer is
 [`VegaChart.tsx`](../frontend/src/components/VegaChart.tsx), and the picker is
 [`chart-picker.tsx`](../frontend/src/components/chart-picker.tsx).
 

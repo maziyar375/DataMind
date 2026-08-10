@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "lint": "eslint src --ext ts,tsx",
     "typecheck": "tsc --noEmit",
+    "test": "npm run test:schedule && npm run test:format && npm run test:palette && npm run test:report && npm run test:print",
     "test:schedule": "node --experimental-strip-types src/components/dashboard-schedule.test.ts",
     "test:format": "node --experimental-strip-types src/components/table-format.test.ts",
     "test:palette": "node --experimental-strip-types src/components/palette.test.ts",

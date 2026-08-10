@@ -6,8 +6,8 @@ Companion to [architecture.md](architecture.md) (the why) and
 
 Code: [`backend/app/pipeline/`](../backend/app/pipeline/) —
 `pipeline.py` (the executor), `nodes/__init__.py` (all nine nodes),
-`state.py` (typed state), `prompts/` (versioned prompts),
-`checks.py`, `disclosure.py`, `metadata.py`.
+`state.py` (typed state), `contracts.py` (the node signature),
+`prompts/` (versioned prompts), `checks.py`, `disclosure.py`, `metadata.py`.
 
 ---
 
@@ -27,7 +27,7 @@ Code: [`backend/app/pipeline/`](../backend/app/pipeline/) —
   | `stream(llm, messages)` | `AsyncIterator[str]` | `present` |
 
 - **The orchestrator is our own state machine**, `AnalyticsPipeline.run` in
-  [pipeline.py](../backend/app/pipeline/pipeline.py) — ~70 lines, a `while`
+  [pipeline.py](../backend/app/pipeline/pipeline.py) — ~130 lines, a `while`
   loop over an ordered node list with an index. That is the whole engine.
 
 - **LangGraph is deliberately deferred.** The graph is linear with one bounded

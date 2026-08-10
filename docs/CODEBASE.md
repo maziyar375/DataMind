@@ -12,8 +12,8 @@ database, and hands back a written answer, a result table, and a chart — with
 the generated SQL on display. It talks to **PostgreSQL, MySQL, SQL Server, and
 Oracle** through one connector interface.
 
-Size: ~7.1k lines of Python (backend) and ~5.7k lines of TypeScript/TSX
-(frontend).
+Size, as of 2026-08: roughly 26k lines of Python (backend, excluding tests)
+and 23k lines of TypeScript/TSX (frontend).
 
 ---
 
@@ -62,7 +62,7 @@ Size: ~7.1k lines of Python (backend) and ~5.7k lines of TypeScript/TSX
 | Fonts | Inter and JetBrains Mono from Google Fonts; **Vazirmatn** (Persian) self-hosted from `public/fonts` — a printed Persian report is a deliverable and must not depend on a CDN a firewalled deployment cannot reach |
 
 The design tokens in `src/theme/tokens.ts` are copied verbatim from the design
-concept (`docs/ui-design-concept.html`); both dark and light palettes ship.
+concept (`docs/assets/ui-design-concept.html`); both dark and light palettes ship.
 
 ### Infrastructure
 
@@ -269,7 +269,10 @@ make lint    # ruff + import-linter make migrate # alembic upgrade head
 ```
 
 Frontend (from `frontend/`): `npm run dev`, `npm run build`, `npm run
-typecheck`.
+typecheck`, `npm run lint`, `npm test` (the DOM-free logic suites).
+
+The eval harness is separate and calls a real provider, so it is not part of
+`make test` — see [eval.md](eval.md).
 
 CI's non-negotiables: the hostile SQL corpus passes with zero bypasses; the
 import-linter layer/forbidden contracts hold; `import litellm` appears only
@@ -279,11 +282,16 @@ under `infra/llm/`.
 
 ## 8. Deliberately deferred
 
-The semantic layer, clarification turns, model-authored charts, retrieval
-beyond exact matching, rolling conversation summaries, LangGraph, Celery+Redis,
-and the eval harness are all deferred **on purpose** — with named triggers to
-revisit each in [architecture.md](architecture.md). The node signatures are
-already LangGraph-shaped, so adopting it later is wiring, not a rewrite.
+Several things on this list have since been **built**: the semantic layer
+(`app/semantic/`), clarification turns (the `clarify` node), model-authored
+charts (`app/charts/`), FK-neighbour retrieval expansion, and the eval harness
+(`app/eval/` — see [eval.md](eval.md)).
+
+Still deferred **on purpose**, with named triggers to revisit each in
+[architecture.md](architecture.md): rolling conversation summaries, LangGraph,
+Celery+Redis, and sharing a dashboard or report with another user. The node
+signatures are already LangGraph-shaped, so adopting it later is wiring, not a
+rewrite.
 
 > Naming note: the product is **DataMind**; the Python package and compose
 > project are still `raymand` (`import app.*`, `admin@raymand.local`).

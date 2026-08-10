@@ -2,13 +2,15 @@
 
 Read this before touching the code. It is the map, not the territory: it tells
 you where things live, what must not break, and how to run and test — so you
-can make a change without first reading all ~13k lines.
+can make a change without reading the whole codebase first.
 
 For the "why", see [docs/architecture.md](docs/architecture.md) (the full
 proposal) and [docs/CODEBASE.md](docs/CODEBASE.md) (a code-grounded tour of the
 stack). For what reaches a model provider and what stops harmful SQL, see
 [docs/security.md](docs/security.md) — read it before changing `sqlguard/`,
-`disclosure.py`, `HintBudget`, or adding an LLM call site. For users, see
+`disclosure.py`, `HintBudget`, or adding an LLM call site. For how to prove a
+change helped, see [docs/eval.md](docs/eval.md).
+[docs/README.md](docs/README.md) indexes the rest. For users, see
 [README.md](README.md).
 
 ---
@@ -63,14 +65,21 @@ make lint      # ruff + import-linter contracts
 make fmt       # ruff format
 make migrate   # alembic upgrade head
 make fixtures  # rebuild + verify the sales fixtures (PG/MySQL/MSSQL) from clean
+make db-repair # recreate the empty PGDATA runtime dirs the studio drive strips
 ```
 
 Frontend, from `frontend/`: `npm run dev`, `npm run build` (`tsc -b && vite
-build`), `npm run typecheck` (`tsc --noEmit`), `npm run lint`.
+build`), `npm run typecheck` (`tsc --noEmit`), `npm run lint`, `npm test` (all
+five DOM-free logic suites: schedule, format, palette, report document, print).
+
+The **eval harness is not in `make test`** — it calls a real provider and costs
+money. `python -m app.eval.runner --suite sales_v1` from `backend/`, or
+`backend/scripts/eval_run.sh` behind a rate-limiting provider. See
+[docs/eval.md](docs/eval.md).
 
 **Verification loop before you claim done:** `npm run typecheck` + `npm run
-build` for frontend changes; `make test` (and `make guard` if you touched
-`sqlguard/` or a connector) for backend. Several past bugs only surfaced
+build` + `npm test` for frontend changes; `make test` (and `make guard` if you
+touched `sqlguard/` or a connector) for backend. Several past bugs only surfaced
 end-to-end via the API, not in the UI — actually exercise the path you changed.
 
 **Ports:** web `5173`, api `8000` (`/docs` for OpenAPI), app db `5432`, demo
@@ -88,6 +97,7 @@ backend/app/
   api/            HTTP shape ONLY — no business logic.
     v1/           auth, users, connections, llm_configs, semantic, conversations,
                   dashboards, drafts (SQL), reports
+    deps.py       FastAPI dependencies (current user, session, settings)
     schemas.py    Pydantic request/response DTOs (no secrets ever in reads)
     errors.py     RFC 7807 problem+json mapping
   core/           config, logging (with redaction), errors, correlation context, clock
@@ -95,10 +105,12 @@ backend/app/
     ports/        Protocols: database, llm, secrets, identity, events, run_executor
   services/       use cases + transaction boundaries: run_service,
                   semantic_service, report_service, dashboard_service,
-                  sql_draft_service, bootstrap, disclosure_service, policy
+                  query_service (execute_saved_sql — the tile/report entry point
+                  into guarded execution), sql_draft_service, bootstrap, policy
   pipeline/       the AI run: state.py (typed RunState), pipeline.py (state machine),
                   nodes/ (route→retrieve→clarify→generate→validate→execute→
-                  inspect→present→chart),
+                  inspect→present→chart), contracts.py (the node signature),
+                  metadata.py (the pre-SQL schema answer),
                   prompts/, disclosure.py (result gate), checks.py (free result checks)
   sqlguard/       policy, validator, rewriter — self-contained, dialect-aware
   semantic/       what the schema *means*: models.py (the document), validate.py
@@ -114,8 +126,15 @@ backend/app/
                   — pure, token-free, Persian and Latin numerals), prompts.py
                   (REPORT_PROMPT_VERSION) — self-contained, below the pipeline
   charts/         ChartIntent → result profile → shape fit → Vega-Lite
+  eval/           the offline harness — runs the REAL pipeline against a
+                  testcontainers fixture: dataset.py (record schema + fixture
+                  registry), runner.py (CLI + scorecard to eval_runs/
+                  eval_results), metrics.py (pure scoring), suites/ (the FROZEN
+                  golden sets + CHANGELOG), reports/ (past run write-ups).
+                  Costs real money; not in `make test`. See docs/eval.md
   infra/          adapters implementing the ports:
     db/           SQLAlchemy models.py + Alembic migrations + session
+    repositories/ query helpers over the ORM models
     connectors/   factory + postgres/mysql/mssql/oracle (one DatabaseConnector each)
                   + hints.py: the engine-neutral column-hint contract they share
     llm/          LiteLLM behind LLMGateway
@@ -125,18 +144,26 @@ backend/app/
   workers/        inprocess run executor + stale-run reconciler + semantic.py
                   and report.py (generation jobs; minutes long, so they are
                   polled not streamed, with cooperative-then-hard cancel)
-  tests/          unit (incl. test_sqlguard_hostile.py) + integration
+
+backend/           ← these are SIBLINGS of app/, not inside it
+  tests/          unit (incl. test_sqlguard_hostile.py) + integration + eval
+                  (test_golden_set.py and the dual-form verify artifact)
   fixtures/       sales_seed.sql (Postgres demo/eval DB) + sales_seed_mysql.sql
                   and sales_seed_mssql.sql dialect mirrors + rebuild_fixtures.sh
                   (`make fixtures`); each a wide, deliberately-messy 42-table
                   commerce schema with a read-only role, sized so retrieval is
-                  actually exercised (snapshot exceeds the retrieve budget)
+                  actually exercised (snapshot exceeds the retrieve budget).
+                  mysql/ holds the Sakila seed for the second demo DB
+  scripts/        eval_run.sh (rate-limit-tolerant eval wrapper) +
+                  eval_seed_llm_config.py (used by the nightly workflow)
 
 frontend/src/
   main.tsx, App.tsx        entry + router/layout
   theme/tokens.ts          design tokens (oklch), DATABASE_TYPES, dark+light palettes
   api/client.ts, types.ts  typed client, SSE streaming + polling fallback
   components/               ui.tsx (primitives, icons, Logo, ResultTable),
+                            VegaChart.tsx (the renderer), chart-picker.tsx,
+                            palette.ts (+ .test.ts — `npm run test:palette`),
                             chat.tsx, settings.tsx, semantic.tsx (the layer
                             editor), dashboard.tsx (grid + tile shell + the
                             one-tick refresh scheduler), dashboard-schedule.ts

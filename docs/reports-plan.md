@@ -1,4 +1,12 @@
-# Reports
+# Reports — implementation plan (historical)
+
+> **This document is superseded. It is the record of what was *intended*, phase
+> by phase, not a description of what exists.** For the built system — the data
+> model as shipped, the two roads to a block's SQL, the generation order, and
+> the print handoff — read **[reports.md](reports.md)**. Where the two disagree,
+> `reports.md` is right and this file is the reason. It is kept because the
+> phasing and the arguments behind each decision are not recoverable from the
+> code.
 
 A third top-level section, peer to **Chat** and **Dashboards**: the user
 describes what they need in plain language, approves a proposed outline, and
