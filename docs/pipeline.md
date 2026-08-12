@@ -90,7 +90,10 @@ draft:  [route] → retrieve →                     generate → validate      
 
 What a draft deliberately does **not** inherit: history (`[]`), events
 (`_no_emit`), persistence (nothing until the caller stores a verdict), and the
-deadline (see [pipeline-report.md §8](pipeline-report.md)).
+executor's own guard rails — it has a shorter budget of its own
+(`DRAFT_DEADLINE_SECONDS`, checked before each `generate` by
+`_check_deadline`) and no transition ceiling, because a bounded `for` loop
+cannot cycle.
 
 ### 0.4 Every place a model is called, in the whole product
 
@@ -959,15 +962,9 @@ is a lateral move — don't take the dependency for cosmetics.
    have?" after a revenue question coming back ANALYTICAL), the suite will read
    clean. A multi-turn eval case is the only thing that would measure this.
 
-10. **[security.md §2](security.md) predates Reports.** It states "nine use
-    cases, across eleven call sites, and no others", and adds that the
-    dependency rule means "this list cannot silently grow" — but the three
-    report call sites (outline
-    [outline.py:203](../backend/app/reports/outline.py#L203), section prose
-    [workers/report.py:880](../backend/app/workers/report.py#L880), summary
-    [workers/report.py:961](../backend/app/workers/report.py#L961)) are absent
-    from it. Nothing new leaves the process that §2 does not already describe —
-    the outline sends the same `RetrievedContext.render` block `generate` gets,
-    and the prose sends `disclose()`d results — so this is a documentation gap,
-    not a disclosure one. §0.4 above is the complete list; security.md is the
-    file to fix.
+10. ~~**[security.md §2](security.md) predates Reports.**~~ **Fixed
+    2026-08-12.** That table listed "nine use cases across eleven call sites"
+    and was missing the outline, section-prose and summary calls; it now lists
+    twelve across fourteen, with [§2.3](security.md) covering what reports send
+    and why the summary is given no data at all. §0.4 above and that table are
+    the two places a new LLM call site has to be added — keep them in step.

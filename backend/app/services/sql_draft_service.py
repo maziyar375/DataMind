@@ -64,6 +64,15 @@ PREVIEW_MAX_ROWS = 50
 # A draft is interactive and the user is watching, so it gets one repair, not
 # the run pipeline's budget, and a short deadline of its own rather than
 # `run_deadline_seconds` — nothing about a draft is a run.
+#
+# The deadline is checked by `_check_deadline` below rather than by the run
+# executor, because a draft calls the nodes directly and never goes through
+# `AnalyticsPipeline.run`. It bounds the *model* calls: one `structured` call
+# can legitimately take minutes once the gateway's transient-failure retries and
+# their backoff are counted, so without a check between attempts the repair
+# starts however long the first attempt took. The preview that follows is bound
+# by the connection's own `statement_timeout_ms`, which is real containment
+# rather than a budget.
 DRAFT_MAX_REPAIRS = 1
 DRAFT_DEADLINE_SECONDS = 120
 
@@ -179,6 +188,7 @@ async def draft_sql(
 
         await retrieve(state, deps)
         for _ in range(DRAFT_MAX_REPAIRS + 1):
+            _check_deadline(state)
             result = await generate(state, deps)
             if result.status == "FAILED":
                 raise LLMError(
@@ -203,6 +213,29 @@ async def draft_sql(
         )
     finally:
         await connector.close()
+
+
+def _check_deadline(state: RunState) -> None:
+    """Stop before spending another model call the user is no longer waiting for.
+
+    `RunState.deadline_at` is enforced by `AnalyticsPipeline.run`, and a draft
+    never goes through it — so this field was inert on this path until the check
+    was written here. It is checked in the same place the executor checks it:
+    *before* a node, never inside one, because an in-flight provider call is
+    bounded by `llm_request_timeout_seconds` and an in-flight query by the
+    connection's statement timeout.
+
+    `LLMError` rather than `RunTimeoutError` deliberately: the callers already
+    handle it. The tile editor renders it as "the model could not produce a
+    query", and `report_service.check_block` stores it as the block's reason —
+    which is the honest verdict, since the next click is a re-check either way.
+    """
+    if utcnow() >= state.deadline_at:
+        raise LLMError(
+            f"Drafting SQL took longer than {DRAFT_DEADLINE_SECONDS} seconds, "
+            "so it was stopped before asking the model again. Try again, or "
+            "narrow the question."
+        )
 
 
 async def validate_sql(

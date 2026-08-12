@@ -55,7 +55,7 @@ Stated plainly so nobody assumes otherwise:
 
 ## 2. Every place data leaves for a model provider
 
-There are **nine use cases**, across eleven call sites, and no others. The
+There are **twelve use cases**, across fourteen call sites, and no others. The
 dependency rule forbids importing `litellm` outside `app/infra/llm/`, and CI
 greps for violations, so this list cannot silently grow.
 
@@ -68,11 +68,20 @@ greps for violations, so this list cannot silently grow.
 | 5 | Write the answer | every run | `pipeline/nodes/__init__.py:863` |
 | 6 | Choose a chart | every run, if chartable | `pipeline/nodes/__init__.py:960` |
 | 7 | Suggest follow-up questions | SPA opens a thread | `services/run_service.py:736` |
-| 8 | Draft SQL for a dashboard tile | user asks for a tile | `services/sql_draft_service.py` |
-| 9 | Generate a semantic layer | user clicks Generate | `semantic/generator.py:304,338,373` |
+| 8 | Draft SQL for a tile or a report block | user asks for a tile, or checks a block | `services/sql_draft_service.py` |
+| 9 | Generate a semantic layer | user clicks Generate | `semantic/generator.py:383,417,452` |
+| 10 | Propose a report outline | user proposes an outline | `reports/outline.py:203` |
+| 11 | Write a report section | once per section, per generation | `workers/report.py:880` |
+| 12 | Write the executive summary | once per generation | `workers/report.py:961` |
 
 One model interaction sends **no customer data at all**: the capability probe
 in `api/v1/llm_configs.py`, a fixed test prompt.
+
+> **Changed:** #10–#12 are Reports, and were missing from this table until
+> 2026-08-12 — the list had not been revisited since the feature landed.
+> Nothing they send is new in kind (see §2.1 and §2.3), but the claim above is
+> only true if this table is maintained. Adding an LLM call site means adding a
+> row here.
 
 > **Changed:** #2 is new. A metadata question — *"what tables do I have?"*,
 > *"what does `order_items` count?"* — used to be answered inside `route` by
@@ -103,13 +112,21 @@ Common building blocks, both governed by the disclosure policy (§3):
 | 5 | Present | ✅ | ❌ | ❌ | **✅ per policy** | Also sends the executed SQL |
 | 6 | Chart | ✅ | ❌ | ❌ | shape only | Counts and types, not values |
 | 7 | Suggestions | ❌ | ✅ | ✅ | ❌ | Fires without the user asking |
-| 8 | Tile SQL draft | ✅ | ✅ | ❌ none | ❌ | History deliberately empty |
+| 8 | Tile / block SQL draft | ✅ | ✅ | ❌ none | ❌ | History deliberately empty |
 | 9 | Semantic layer | ❌ | ✅ | ❌ | ❌ | Per-table, one call each |
+| 10 | Report outline | ✅ the request | ✅ | ❌ none | ❌ | The whole snapshot, not a retrieval |
+| 11 | Report section | ✅ per block | ❌ | ❌ | **✅ per policy** | Plus figures computed from those same rows |
+| 12 | Report summary | ✅ the request | ❌ | ❌ | ❌ | **Prose only** — the sections' own paragraphs |
 
 The single most important row is **#4**. The node that writes SQL never
 receives result data under any policy — it works from schema, question, and
-transcript alone. Result values reach exactly one node, `present` (#5), and
-only as far as the policy allows.
+transcript alone. That holds for every caller of it, including a tile draft and
+a report block.
+
+**Result values reach exactly two of the twelve**: `present` (#5) and a report
+section (#11). Both go through the same `disclose()`, and neither is reachable
+without it — a report additionally refuses to run at all under `NONE` or
+`AGGREGATE` (§2.3). Everything else works from structure, shape, or prose.
 
 **#2 sends the schema block and nothing else new.** A schema question is
 answered from structure and meaning: the same `RetrievedContext.render` block
@@ -137,9 +154,13 @@ Three details worth knowing because they surprise people:
   carries no wider disclosure — but it does mean a thread left open produces
   provider traffic. Set the connection's model to none, or the policy to
   `NONE`, if that matters to you.
-- **#8 sends no history at all.** A tile draft passes `history=[]`
-  deliberately: a dashboard tile has no conversation to inherit, and inventing
-  one would put another connection's answers into this prompt.
+- **#8 sends no history at all.** A draft passes `history=[]` deliberately:
+  neither a dashboard tile nor a report block has a conversation to inherit, and
+  inventing one would put another connection's answers into this prompt. A
+  report block adds two things a tile does not: `route` runs first
+  (`classify=True`), so a question with no data answer is refused before the
+  schema-sized prompt is spent, and the block's time rules are appended to the
+  SQL prompt through `NodeDeps.extra_rules`.
 - **#5 sends the executed SQL back to the model** along with the disclosed
   result, so the answer can be narrated against the query that produced it.
   That SQL is derived from the schema, not from result values, and it is
@@ -163,6 +184,44 @@ It **widens no disclosure**: generation reads the same schema block a run
 reads, under the same budget. On the way back, `_known_values()` filters the
 model's proposed `value_meanings` down to values already present in the
 snapshot, so a model cannot invent a key and have it stored as fact.
+
+### 2.3 Reports (#10–#12) in detail
+
+A report is the only feature that **refuses to run under a narrow policy**
+rather than degrading. `assert_wide_enough` requires `SAMPLE` or `FULL`, and is
+checked at report creation, at run creation, at the start of every generation,
+and at the start of every section retry — so a policy tightened between any two
+of those stops the work with a message naming the policy in force. The reason
+is honesty, not caution: prose written from no values, printed beside charts
+drawn from real ones, is a document that disagrees with itself.
+
+- **#10, the outline**, sends the user's request and `RetrievedContext.render`
+  under the connection's own policy — the same block #4 receives, `HintBudget`
+  and all. Two differences from a run: there is **no retrieval** (the whole
+  snapshot goes, since an outline is about the whole database, and no
+  `_RETRIEVE_BUDGET_CHARS` ceiling applies), and there is no transcript. No
+  result values, because none exist yet.
+- **#11, a section's prose**, is the second of the two call sites that sees
+  result data, and it sees it through `disclose()` at *narration* time — under
+  the policy in force **now**, not the one in force when the query ran. It is
+  additionally narrowed twice on the way: at most `MAX_PROMPT_ROWS` (50) rows
+  per block, and each cell clipped to `MAX_CELL_CHARS` (120). The computed
+  figures beside them (`reports/facts.py`) are derived from **those same
+  disclosed rows** and only when they are the complete result, so a fact can
+  never carry a value out of a row the policy withheld.
+  `app.reports` sits below `app.pipeline` in the layer order, so `narrate.py`
+  *cannot* call `disclose()` — the worker must disclose and hand down, which is
+  the stricter reading of invariant #4, enforced by import-linter.
+- **#12, the executive summary**, is given **no data at all** — only the
+  finished paragraphs of the sections below it. That is a safety property, not
+  a saving: a summary that could reach the rows would be a second place for a
+  figure to be invented, while one that can only quote the sections can be
+  checked against them, which is exactly what `reports/checks.py` does.
+
+The **saved statements** (`report_blocks.sql`) never reach a model at
+generation time; they are executed through `execute_saved_sql`, which
+re-validates them against the connection's current snapshot like any tile
+(§4.5).
 
 ---
 
@@ -346,7 +405,7 @@ The guard is dialect-aware: the same validator renders PostgreSQL, MySQL,
 T-SQL, and Oracle, so a bypass that works in one dialect is not a bypass in
 another by accident.
 
-### 4.5 Tiles are guarded too, twice
+### 4.5 Stored SQL is guarded too, twice
 
 A dashboard tile stores SQL and re-runs it on a schedule, so a one-time check
 at authoring would be worthless after a schema change.
@@ -354,8 +413,15 @@ at authoring would be worthless after a schema change.
 **again on every execution**, against the connection's *current* snapshot. A
 tile whose table was dropped fails closed rather than running.
 
-Hand-written tile SQL goes through the identical guard — there is no trusted
-path for SQL a human typed.
+**A report block is the same story with a longer gap**: `report_blocks.sql` is
+written by `/check` (a model) or by `PUT .../sql` (a person), and is
+re-validated by `execute_saved_sql` on every generation — which may be months
+later, against a schema that has moved. `tests/unit/test_report_guard.py`
+replays the hostile corpus through that path specifically.
+
+Hand-written SQL goes through the identical guard — there is no trusted path
+for SQL a human typed, and `sql_origin` on either table is provenance for the
+editor, never a signal the guard consults.
 
 ---
 

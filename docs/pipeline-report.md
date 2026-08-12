@@ -256,7 +256,7 @@ gets — and is refused by the same guard. What differs, deliberately:
 | repairs | `max_repairs` (1) | `DRAFT_MAX_REPAIRS` (1) |
 | extra rules | none | `REPORT_TIME_RULES` (§3.3) |
 | persistence | run, steps, events, messages | **nothing** until the verdict is stored |
-| deadline | enforced by the executor before every node | **not enforced** (§8, gap 1) |
+| deadline | enforced by the executor before every node | `DRAFT_DEADLINE_SECONDS` (120s), checked before each `generate` (§8, note 1) |
 
 ### 3.3 `REPORT_TIME_RULES` — the feature turns on this paragraph
 
@@ -706,13 +706,18 @@ compared with one generated after it.
 
 ## 8. Sharp edges, verified in code (2026-08-12)
 
-1. **The draft path's deadline is inert.** `_draft_state` sets
-   `deadline_at = now + DRAFT_DEADLINE_SECONDS` (120s), but only
-   `AnalyticsPipeline.run` checks `deadline_at`, and the draft path calls
-   `route`/`retrieve`/`generate`/`validate` directly. The real bound on a block
-   check is the gateway's `llm_request_timeout_seconds` per call, plus the
-   connection's statement timeout on the preview — so a two-attempt draft can
-   legitimately outlive the 120 seconds the field implies.
+1. **The draft path's deadline bounds the repair, not the whole call.**
+   `deadline_at = now + DRAFT_DEADLINE_SECONDS` (120s) is checked by
+   `_check_deadline` **before each `generate` attempt** — the draft path calls
+   the nodes directly, so `AnalyticsPipeline`'s own check never applies to it.
+   What that buys is the case that actually hurts: one `structured` call can
+   take minutes once the gateway's transient-failure retries and their backoff
+   are counted, and a repair is no longer started on top of a first attempt
+   that already spent the budget. It raises `LLMError`, so `check_block` stores
+   it as the block's reason like any other "the model could not produce a
+   query". A call already in flight is **not** interrupted — that bound is
+   `llm_request_timeout_seconds`, and the preview after it is bounded by the
+   connection's `statement_timeout_ms`.
 
 2. **The outline prompt has no retrieval budget.** Flow A renders the *whole*
    snapshot with no `_RETRIEVE_BUDGET_CHARS` ceiling and no selection, so a
@@ -733,13 +738,10 @@ compared with one generated after it.
    second one a view of the first that the first did not have of it. Intended,
    but it means two retries are not commutative.
 
-5. **The report call sites are missing from
-   [security.md §2](security.md).** That table lists "nine use cases across
-   eleven call sites" and predates Reports: the outline call
-   ([outline.py:203](../backend/app/reports/outline.py#L203)), the section call
-   ([workers/report.py:880](../backend/app/workers/report.py#L880)) and the
-   summary call ([workers/report.py:961](../backend/app/workers/report.py#L961))
-   are all absent. Nothing new leaves the process that §2 does not already
-   describe — the outline sends the same `RetrievedContext.render` block, and
-   the prose sends `disclose()`d results — but the claim *"this list cannot
-   silently grow"* is currently false. Fix the table, not this note.
+5. **The report call sites are now in [security.md §2](security.md)** — fixed
+   2026-08-12, along with a §2.3 covering what each of the three sends. They had
+   been missing since the feature landed, which made the section's own claim
+   (*"this list cannot silently grow"*) false for as long as nobody re-read it.
+   Three prompts and one table: when you add an LLM call site to
+   `app/reports/`, security.md §2 and [pipeline.md §0.4](pipeline.md) are the
+   two lists that have to grow with it.

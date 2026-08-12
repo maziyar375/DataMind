@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import base64
 import os
+from datetime import timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
 
+from app.core.clock import utcnow
 from app.core.errors import (
     LLMError,
     NotFoundError,
@@ -403,6 +405,69 @@ async def test_a_provider_failure_is_an_error_not_an_empty_draft(
     """502 through problem+json. A draft with no SQL in it is not a draft."""
     with pytest.raises(LLMError):
         await _draft(monkeypatch, gateway=FailingGateway())
+
+
+# ── the deadline ─────────────────────────────────────────────────────────
+# `RunState.deadline_at` is enforced by the run executor, and a draft calls the
+# nodes directly — so the field was inert here until the check was written into
+# this path. It bounds the repair specifically: one `structured` call can take
+# minutes once the gateway's transient-failure retries and their backoff are
+# counted, and without this the second attempt starts however long the first
+# one took.
+class SlowGateway(FakeGateway):
+    """Answers, but advances the clock past the draft's budget while doing it."""
+
+    def __init__(self, *sql: str, elapsed_seconds: int) -> None:
+        super().__init__(*sql)
+        self._elapsed = elapsed_seconds
+        self.now = utcnow()
+
+    async def structured(self, llm: Any, messages: Any, schema: Any) -> SqlProposal:
+        self.now += timedelta(seconds=self._elapsed)
+        return await super().structured(llm, messages, schema)
+
+
+async def _with_clock(
+    monkeypatch: pytest.MonkeyPatch, gateway: SlowGateway
+) -> Any:
+    """Run a draft whose clock is the gateway's, so no test ever sleeps."""
+    monkeypatch.setattr(sql_draft_service, "utcnow", lambda: gateway.now)
+    return await _draft(monkeypatch, gateway=gateway)
+
+
+async def test_a_repair_is_not_started_after_the_deadline_has_passed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = SlowGateway(
+        "DROP TABLE orders",
+        VALID_SQL,
+        elapsed_seconds=sql_draft_service.DRAFT_DEADLINE_SECONDS + 1,
+    )
+
+    with pytest.raises(LLMError) as raised:
+        await _with_clock(monkeypatch, gateway)
+
+    # The first attempt was made and rejected; the second was never asked for.
+    assert len(gateway.calls) == 1
+    assert "narrow the question" in raised.value.message
+
+
+async def test_a_draft_inside_its_budget_is_untouched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The check may only stop a draft that is out of time — a slow-but-legal
+    repair still runs, and a first attempt is never refused for the time it has
+    not yet spent."""
+    gateway = SlowGateway(
+        "DROP TABLE orders",
+        VALID_SQL,
+        elapsed_seconds=sql_draft_service.DRAFT_DEADLINE_SECONDS // 4,
+    )
+
+    draft, _db = await _with_clock(monkeypatch, gateway)
+
+    assert len(gateway.calls) == 2
+    assert draft.validation_status == "VALID"
 
 
 # ── classify: the question the guard cannot ask ──────────────────────────
