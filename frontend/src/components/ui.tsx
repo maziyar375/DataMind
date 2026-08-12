@@ -1171,6 +1171,27 @@ export function identityHue(seed: string): number {
   return IDENTITY_HUES[hash % IDENTITY_HUES.length]
 }
 
+/**
+ * A hue per database *engine*, so every Postgres connection is the same colour
+ * and a list can be read by shape as well as by name. Keyed on the engine
+ * rather than on the row id because these are families, and members of one
+ * should look related.
+ *
+ * It lives here rather than in the Data sources page because the chat list
+ * names a connection too: the same source has to be the same colour in both,
+ * or the colour means nothing.
+ */
+const ENGINE_HUES: Record<string, number> = {
+  postgres: 250,
+  mysql: 80,
+  mssql: 25,
+  oracle: 340,
+}
+
+export function engineHue(kind: string): number {
+  return ENGINE_HUES[kind] ?? identityHue(kind)
+}
+
 export function GlyphBadge({
   children, hue, size = 34, radius,
 }: {

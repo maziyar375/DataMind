@@ -4,7 +4,7 @@ import type { Connection, SchemaSnapshot, SchemaTable, TestResult } from '../api
 import {
   Chip, DangerButton, DisclosureBadge, EmptyState, ErrorNote, Field, GhostButton,
   GlyphBadge, Icon, PrimaryButton, SearchField, Segmented, Select, Spinner,
-  TextInput, Toggle, identityHue, relativeTime,
+  TextInput, Toggle, engineHue, relativeTime,
 } from '../components/ui'
 import {
   DetailBody, DetailHeader, FieldRow, MasterColumn, MasterItem, Section,
@@ -12,23 +12,6 @@ import {
 } from '../components/settings'
 import { SemanticLayerTab } from '../components/semantic'
 import { DATABASE_TYPES } from '../theme/tokens'
-
-/**
- * A hue per *engine*, so every Postgres connection is the same colour and the
- * list can be read by shape as well as by name. Keyed on the engine rather
- * than on the row id for the reason the LLM page keys on the provider: these
- * are families, and members of one should look related.
- */
-const ENGINE_HUES: Record<string, number> = {
-  postgres: 250,
-  mysql: 80,
-  mssql: 25,
-  oracle: 340,
-}
-
-function engineHue(kind: string): number {
-  return ENGINE_HUES[kind] ?? identityHue(kind)
-}
 
 /** What a stored row's `status` says, in the words the chips and dots use. */
 function reachability(status: string): { tone: 'green' | 'red' | 'neutral'; label: string } {

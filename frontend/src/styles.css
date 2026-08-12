@@ -1722,7 +1722,7 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 8px 6px 8px 9px;
+  padding: 7px 6px 7px 9px;
   border-radius: 9px;
   background: transparent;
   transition: background .12s ease;

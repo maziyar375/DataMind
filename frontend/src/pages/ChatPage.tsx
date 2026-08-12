@@ -10,8 +10,8 @@ import {
   AssistantTurn, RunErrorCard, ThinkingCard, UserBubble,
 } from '../components/chat'
 import {
-  DisclosureBadge, ErrorNote, Icon, PrimaryButton, SearchField, Spinner,
-  dirOf, initialOf,
+  DisclosureBadge, ErrorNote, GlyphBadge, Icon, PrimaryButton, SearchField, Spinner,
+  dirOf, engineHue,
 } from '../components/ui'
 
 export default function ChatPage() {
@@ -399,6 +399,7 @@ export default function ChatPage() {
     <div style={{ display: 'flex', height: '100%', width: '100%', minWidth: 0 }}>
       <ConversationSidebar
         conversations={conversationList}
+        connections={connections}
         activeId={activeId}
         onSelect={setActiveId}
         onNew={newChat}
@@ -878,11 +879,12 @@ function HeaderTitle({
  *
  * A chat list is unlike the other indexes in the product in one way that
  * decides its shape: nobody remembers what they called a thread, they remember
- * *when* they had it. So the ordering is recency, the grouping is recency, and
- * the search is over the title and the preview line — three answers to the
- * same question. The rest is the furniture every other index here has and this
- * one lacked: a heading with a count, a filter once the list is long enough to
- * need one, and something to read when it is empty.
+ * *when* they had it. So the ordering is recency and the grouping is recency.
+ * The rest is the furniture every other index here has and this one lacked: a
+ * heading with a count, a filter once the list is long enough to need one, and
+ * something to read when it is empty.
+ *
+ * A row is one line and that line is the question — see `ConversationItem`.
  */
 const DAY = 86_400_000
 
@@ -897,9 +899,11 @@ function bucketOf(iso: string, now: number): string {
 const BUCKETS = ['Today', 'Previous 7 days', 'Previous 30 days', 'Older']
 
 function ConversationSidebar({
-  conversations: list, activeId, onSelect, onNew, onDelete, onRename,
+  conversations: list, connections, activeId, onSelect, onNew, onDelete, onRename,
 }: {
   conversations: ConversationSummary[]
+  /** To name the data source each thread is bound to, on its row. */
+  connections: Connection[]
   activeId: string | null
   onSelect: (id: string) => void
   onNew: () => void
@@ -908,14 +912,22 @@ function ConversationSidebar({
 }) {
   const [query, setQuery] = useState('')
 
+  const byId = useMemo(
+    () => new Map(connections.map((connection) => [connection.id, connection])),
+    [connections],
+  )
+
   const groups = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    const matched = list.filter(
-      (conversation) =>
-        !needle
-        || conversation.title.toLowerCase().includes(needle)
-        || (conversation.preview ?? '').toLowerCase().includes(needle),
-    )
+    // Over what the rows actually show: the title and the source name. It used
+    // to search the preview line too, and once that line stopped being drawn a
+    // match on it would have been a row that appeared for no visible reason.
+    const matched = list.filter((conversation) => {
+      if (!needle) return true
+      if (conversation.title.toLowerCase().includes(needle)) return true
+      const source = byId.get(conversation.default_connection_id ?? '')
+      return source !== undefined && source.name.toLowerCase().includes(needle)
+    })
     const now = Date.now()
     const sorted = [...matched].sort(
       (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
@@ -924,7 +936,7 @@ function ConversationSidebar({
       label,
       items: sorted.filter((conversation) => bucketOf(conversation.updated_at, now) === label),
     })).filter((group) => group.items.length > 0)
-  }, [list, query])
+  }, [list, byId, query])
 
   return (
     <aside
@@ -1012,6 +1024,7 @@ function ConversationSidebar({
                 <ConversationItem
                   key={conversation.id}
                   conversation={conversation}
+                  connection={byId.get(conversation.default_connection_id ?? '') ?? null}
                   active={conversation.id === activeId}
                   onSelect={() => onSelect(conversation.id)}
                   onDelete={() => onDelete(conversation.id)}
@@ -1027,9 +1040,11 @@ function ConversationSidebar({
 }
 
 function ConversationItem({
-  conversation, active, onSelect, onDelete, onRename,
+  conversation, connection, active, onSelect, onDelete, onRename,
 }: {
   conversation: ConversationSummary
+  /** The data source the thread is bound to, resolved by the list. */
+  connection: Connection | null
   active: boolean
   onSelect: () => void
   onDelete: () => void
@@ -1079,8 +1094,8 @@ function ConversationItem({
           style={{
             flex: 1,
             minWidth: 0,
-            padding: '5px 8px',
-            fontSize: 12.5,
+            padding: '3px 7px',
+            fontSize: 13,
             fontWeight: 600,
             color: 'var(--text-strong)',
             background: 'var(--input-bg)',
@@ -1090,6 +1105,22 @@ function ConversationItem({
           }}
         />
       ) : (
+        // The question, and the database it was asked of.
+        //
+        // The row used to carry an initial badge and a line of the answer's
+        // opening words. Both are gone: the badge repeated the letter the
+        // title started with two characters to its right, and the preview was
+        // a sentence fragment cut mid-word, so twenty of them stacked read as
+        // noise. Title alone was worse in the other direction — a column of
+        // bare sentences reads as prose, not as a list of things you can open.
+        //
+        // So the second line is an *attribute* rather than a sentence: which
+        // data source the thread is bound to. A thread is pinned to one
+        // connection for its whole life (`_bind_connection`), so it is a fact
+        // about the conversation and not a detail of its last turn — and it is
+        // the thing you actually need when two threads ask the same question
+        // of staging and of production. The engine-tinted glyph says the same
+        // thing at a glance, in the colour the Data sources index uses.
         <button
           onClick={onSelect}
           onDoubleClick={startEdit}
@@ -1097,7 +1128,7 @@ function ConversationItem({
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: 10,
+            gap: 9,
             flex: 1,
             minWidth: 0,
             padding: 0,
@@ -1107,38 +1138,20 @@ function ConversationItem({
             textAlign: 'left',
           }}
         >
-          <span
-            aria-hidden
-            style={{
-              width: 26,
-              height: 26,
-              borderRadius: 8,
-              background: active ? 'var(--accent-bg)' : 'var(--panel-alt)',
-              border: `1px solid ${active ? 'var(--accent-border)' : 'var(--border)'}`,
-              color: active ? 'var(--accent)' : 'var(--text-dim)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: 11,
-              fontWeight: 700,
-              flexShrink: 0,
-            }}
+          <GlyphBadge
+            hue={connection ? engineHue(connection.database_type) : undefined}
+            size={26}
+            radius={8}
           >
-            {initialOf(conversation.title)}
-          </span>
-          <span
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              minWidth: 0,
-              lineHeight: 1.25,
-            }}
-          >
+            <Icon.Database size={13} />
+          </GlyphBadge>
+          <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0, gap: 1 }}>
             <span
               dir={dirOf(conversation.title)}
               style={{
                 fontSize: 12.5,
-                fontWeight: 600,
+                fontWeight: active ? 600 : 500,
+                lineHeight: 1.3,
                 color: active ? 'var(--text-strong)' : 'var(--text)',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
@@ -1149,14 +1162,15 @@ function ConversationItem({
             </span>
             <span
               style={{
-                fontSize: 11,
+                fontSize: 10.5,
+                lineHeight: 1.3,
                 color: 'var(--text-faint)',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 whiteSpace: 'nowrap',
               }}
             >
-              {conversation.preview ?? `${conversation.message_count} messages`}
+              {connection?.name ?? 'No data source'}
             </span>
           </span>
         </button>
