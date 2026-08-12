@@ -655,17 +655,10 @@ export default function DataSourcesPage() {
             )}
 
             {!creating && tab === 'schema' && (
-              <div
-                style={{
-                  flex: 1,
-                  overflowY: 'auto',
-                  padding: 28,
-                  minHeight: 0,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 16,
-                }}
-              >
+              // The same frame the Settings tab uses, rather than a full-bleed
+              // one of its own — three tabs of one record must not move under
+              // the tab strip that switches them. See `DetailBody`.
+              <DetailBody>
                 {error && <ErrorNote>{error}</ErrorNote>}
 
                 <div
@@ -771,7 +764,7 @@ export default function DataSourcesPage() {
                     {schemaView === 'graph' && <GraphView schema={schema} />}
                   </>
                 )}
-              </div>
+              </DetailBody>
             )}
 
             {!creating && tab === 'semantic' && (

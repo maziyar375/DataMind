@@ -35,10 +35,9 @@ import {
   relativeTime,
 } from './ui'
 import type { ChipTone } from './ui'
-import { FieldRow } from './settings'
+import { DetailBody, FieldRow } from './settings'
 
 const ACTIVE = ['QUEUED', 'RUNNING']
-const CONTENT_WIDTH = 900
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -398,31 +397,23 @@ export function SemanticLayerTab({
 }
 
 // ── shell ──────────────────────────────────────────────────────────────────
-/** The scroll container. Content is capped rather than stretched: a 1600px
- *  form field is unreadable, and every other detail tab already caps. */
+/**
+ * The scroll container — `DetailBody`, the one every tab of this record uses.
+ *
+ * It used to be a local copy capped at 900 and centred, which put this tab's
+ * cards on a different left edge from the Settings and Schema tabs beside it:
+ * the tab strip stayed still and the content jumped when you switched. The cap
+ * itself was right and is kept (a 1600px form field is unreadable) — it is now
+ * the shared one, so there is a single answer to how wide a detail tab is.
+ * `padBottom` still buys room for the floating save bar below.
+ */
 function Shell({
   children, padBottom,
 }: {
   children: React.ReactNode
   padBottom?: boolean
 }) {
-  return (
-    <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-      <div
-        style={{
-          maxWidth: CONTENT_WIDTH,
-          margin: '0 auto',
-          // Extra room so the floating save bar never covers the last card.
-          padding: `24px 28px ${padBottom ? 96 : 32}px`,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 16,
-        }}
-      >
-        {children}
-      </div>
-    </div>
-  )
+  return <DetailBody padBottom={padBottom}>{children}</DetailBody>
 }
 
 // ── hero ───────────────────────────────────────────────────────────────────

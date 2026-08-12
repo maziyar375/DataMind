@@ -522,13 +522,45 @@ export function FieldRow({
   )
 }
 
-/** The scrollable body of a detail tab, with a comfortable reading width. */
-export function DetailBody({ children }: { children: React.ReactNode }) {
+/**
+ * The scrollable body of a detail tab — **the** one, for every tab.
+ *
+ * The three tabs of a connection used to disagree about this, and the tab
+ * strip above them did not move while everything under it did: Settings was
+ * capped at 720 and hung on the left, Schema was full-bleed, and the Semantic
+ * layer was capped at 900 and *centred*. Switching tabs therefore moved both
+ * edges of the content, which reads as a broken page rather than as three
+ * views of one record.
+ *
+ * Each of those choices was defensible alone — a form wants a measure, a table
+ * wants width — but they were made three times, independently, and that is the
+ * whole of the bug. So there is one frame now, and its rules are:
+ *
+ * - **One left edge.** The content column hangs from the same rail as the
+ *   record's name and the tab labels above it. Centring is what made the
+ *   semantic tab look detached from its own tabs.
+ * - **One measure.** 1000px: wide enough for a three-column field row and a
+ *   schema table, narrow enough that a text input never runs the width of a
+ *   27-inch display. At the widths this pane actually gets — a sidebar and a
+ *   274px index are already spent — it is usually the full pane anyway.
+ * - **One set of paddings**, so nothing shifts vertically on a tab switch
+ *   either.
+ */
+export const DETAIL_WIDTH = 1000
+
+export function DetailBody({
+  children, padBottom,
+}: {
+  children: React.ReactNode
+  /** Room for the semantic tab's floating save bar, so it covers no card. */
+  padBottom?: boolean
+}) {
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: 28, minHeight: 0 }}>
+    <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
       <div
         style={{
-          maxWidth: 720,
+          maxWidth: DETAIL_WIDTH,
+          padding: `24px 28px ${padBottom ? 96 : 32}px`,
           display: 'flex',
           flexDirection: 'column',
           gap: 16,
