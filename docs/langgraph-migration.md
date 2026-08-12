@@ -457,6 +457,46 @@ and can leave `validate` *forward* to `present`. Extracting the union would drag
   table in §1 is the checklist. Pick an answer per row and record it in the
   commit, rather than letting the merge decide silently.
 
+#### The §1 divergence table, resolved
+
+Row by row, what the merge decided. "Kept" means the difference is real and now
+has to be *written* to exist — it travels in the invoke config, so the two
+rules sit side by side instead of in two executors that drifted apart.
+
+| row | resolution |
+|---|---|
+| **deadline** | **Kept, as a config value.** `DeadlineCheck` is `(state, node) -> None`. Chat passes `_run_deadline`: before **every** node, raises `RunTimeoutError`, writes `E_TIMEOUT`. The draft passes `_deadline_gate` → `_check_deadline`: before each **`generate`** only, raises `LLMError` in its own wording. It takes the node name precisely so this difference is expressible. `validate` is excluded on the draft path on purpose — it is the guard, it costs microseconds, and stopping there would throw away a statement the model was already paid for. |
+| **repair ceiling** | **Mechanism unified, value kept.** Both are `RunState.max_repairs`; `_draft_state` sets it to `DRAFT_MAX_REPAIRS = 1`. The `for _ in range(DRAFT_MAX_REPAIRS + 1)` loop is deleted and nothing replaced it — it was a second copy of a bound `validate` already enforces (`repair_count < max_repairs`), counting to the same number twice. |
+| **transition ceiling** | **Now shared.** The draft had none ("a bounded `for` cannot cycle"); it now invokes with the same `RECURSION_LIMIT` backstop. Unreachable while `max_repairs` bounds the region, and converted to `LLMError` rather than allowed out as a 500 — `check_block` already stores an `LLMError` as the block's reason. |
+| **step persistence** | **Kept, as a config sink.** `on_step` defaults to `_no_step`; only `AnalyticsPipeline` passes a real one. The adapter still *calls* it either way, so a draft can neither silently acquire a step trail nor silently lose one. |
+| **events** | **Kept, unchanged.** Still `deps.emit`, which the draft path already sets to `_no_emit`. No new mechanism was needed for this row. |
+| **history** | **Kept, unchanged.** Still `NodeDeps.history`, `[]` on the draft path. A draft has no thread, and inventing one would put another connection's answers in this prompt. |
+| **a refused question** | **Kept, and both are now edges.** Chat: `route` HALTs with its canned reply → `END`. Draft: a conditional edge from `route` to a `refuse` node that raises `QuestionOutOfScopeError` with the service's wording, passed in as data. The draft's gate reads `state.intent` rather than the label `route` produced, because the two callers read METADATA differently — chat continues to `describe`, a draft has no `describe` to reach. |
+| **the chart ask** | **Unchanged, and outside both graphs.** `propose_chart_intent(composed=True)` still runs after the 50-row preview, which is `execute_saved_sql` — a service call. The tile draft still passes **no** policy. |
+
+#### One deviation from the plan above, and why
+
+The record says "a compiled subgraph… the chat graph invokes it as a node".
+It is built as a **shared region builder** (`_add_repair_region`) compiled into
+both graphs instead, because invoking it as a node costs more than it buys:
+
+- **It would loosen the loop ceiling by a factor of 25.** A subgraph gets its
+  own `recursion_limit` from the config, so a runaway chat run becomes 25
+  parent supersteps each containing up to 25 region executions. Every region
+  execution is a `structured` call. Multiplying the worst case of a runaway
+  model spend is not a lateral move, and the ceiling exists for exactly that.
+  Re-entry makes it worse: chat enters the region up to three times per run,
+  each entry a fresh budget.
+- **It would hide `generate` and `validate` from the parent graph**, so the
+  port map could no longer be read off `CHAT_GRAPH.get_graph()` — which is what
+  `tests/unit/test_pipeline_graph.py` asserts against.
+- **It would need a label-handoff protocol** (an extra state key) purely to get
+  control flow back out to `execute` and `present`.
+
+What the plan actually wanted is intact: one place where a repair loop is
+written down, compiled once at module scope, with the draft's `for` loop gone
+and every difference between the callers stated in config.
+
 **Exit criteria:** one repair implementation in the codebase, provable by grep;
 `test_query_service.py`, `test_report_guard.py` and `test_sql_drafts.py` green;
 a new test asserting chat and draft produce the same SQL for the same question,
@@ -668,22 +708,39 @@ A phase is done when all five pass, not when the code runs.
       Phase 0 baseline above.** Nothing to compare against yet.
 
 ### Phase 2 — The shared repair subgraph
-- [ ] `generate → validate` extracted as a compiled subgraph with three exits
-- [ ] Compiled **once at module scope**, not per request
-- [ ] Chat graph uses it, and owns the `execute`/`inspect` back-edges by re-entry
-- [ ] `_restore_superseded`'s forward jump left outside the subgraph and still working
-- [ ] `propose_chart_intent(composed=True)` left outside the graph, still after the preview
-- [ ] `draft_sql`'s hand-rolled `for` loop deleted
-- [ ] The draft keeps its own deadline (`DRAFT_DEADLINE_SECONDS`) and ceiling (`DRAFT_MAX_REPAIRS`)
-- [ ] The draft still passes **no** policy to `propose_chart_intent` (a test says so)
-- [ ] `_sql_rules_for` still **composes** `extra_rules` with `METRIC_SQL_RULES`
-- [ ] `classify=True` is a conditional entry edge, not an `if` in the service, and
+- [x] `generate → validate` extracted with three exits — as a shared **region
+      builder** (`_add_repair_region`) compiled into both graphs rather than a
+      subgraph invoked as a node. See "One deviation from the plan above" in §4
+      for why: as a node it would have loosened the loop ceiling 25×.
+- [x] Compiled **once at module scope**, not per request — `CHAT_GRAPH` and
+      `DRAFT_GRAPH`, both at import
+- [x] Chat graph uses it, and owns the `execute`/`inspect` back-edges by
+      re-entry — the budget is `repair_count`, a derived property, so nothing
+      is threaded through
+- [x] `_restore_superseded`'s forward jump left outside the region and still
+      working — pinned by the Phase 0 snapshot, unchanged
+- [x] `propose_chart_intent(composed=True)` left outside the graph, still after the preview
+- [x] `draft_sql`'s hand-rolled `for` loop deleted
+- [x] The draft keeps its own deadline (`DRAFT_DEADLINE_SECONDS`, before each
+      `generate` only) and ceiling (`DRAFT_MAX_REPAIRS`, via `max_repairs`)
+- [x] The draft still passes **no** policy to `propose_chart_intent` — a test
+      now asserts the keyword's *absence* directly, not only its effect
+- [x] `_sql_rules_for` still **composes** `extra_rules` with `METRIC_SQL_RULES`
+      — untouched by this phase
+- [x] `classify=True` is a conditional entry edge, not an `if` in the service, and
       still raises `QuestionOutOfScopeError` with the `_OUT_OF_SCOPE` wording
-- [ ] Every remaining row of the §1 divergence table resolved and recorded in the commit message
-- [ ] New test: chat and draft produce the same SQL for the same question
-- [ ] `test_query_service.py`, `test_report_guard.py`, `test_sql_drafts.py` green
-- [ ] Tile creation and report-block `/check` unchanged from the UI
-- [ ] Only one repair implementation remains (provable by grep)
+- [x] Every remaining row of the §1 divergence table resolved and recorded —
+      see "The §1 divergence table, resolved" above
+- [x] New test: chat and draft produce the same SQL for the same question —
+      and from a **byte-identical prompt**, which is the stronger half
+      ([`tests/unit/test_repair_region.py`](../backend/tests/unit/test_repair_region.py))
+- [x] `test_query_service.py`, `test_report_guard.py`, `test_sql_drafts.py` green
+- [x] Tile creation and report-block `/check` unchanged from the UI —
+      `test_drafts_api.py`, `test_report_feasibility.py`, `test_report_sql_editor.py`
+      all green untouched
+- [x] Only one repair implementation remains — `nodes.generate`/`nodes.validate`
+      are referenced only inside `_add_repair_region`, and no
+      `for _ in range(…REPAIRS…)` survives anywhere (`grep`)
 
 ### Phase 3 — Report generation
 - [ ] `app/workers/report_graph.py` created (**not** in `app/reports/`)

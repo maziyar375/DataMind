@@ -5,12 +5,22 @@ There is no conversation, no `messages` row, no `runs` row, no SSE, no step
 trail — a draft is a thing the user is looking at, and if they close the editor
 it should leave nothing behind.
 
-What it does reuse is the part that matters: `retrieve` → `generate` →
-`validate`, the same three nodes a question in chat goes through, so a drafted
-statement is written against the same schema block, the same semantic layer and
-the same disclosure budget, and refused by the same guard. The preview under
-the editor is produced by `execute_saved_sql` — the code that will run the tile
-at 03:00 — so what the user approves is what will actually run.
+What it does reuse is the part that matters: `retrieve` → `generate ⇄
+validate`, the same nodes a question in chat goes through **and now the same
+compiled repair region** (`app/pipeline/graph.py`), so a drafted statement is
+written against the same schema block, the same semantic layer and the same
+disclosure budget, and refused by the same guard. The preview under the editor
+is produced by `execute_saved_sql` — the code that will run the tile at 03:00 —
+so what the user approves is what will actually run.
+
+That sharing is Phase 2 of `docs/langgraph-migration.md`, and it is worth
+knowing why. This module used to drive those nodes with a `for` loop of its
+own, which made it a **second executor over one node set**: every change to
+repair semantics had to be made twice or diverge silently, and it did —
+`RunState.deadline_at` was enforced on the chat path and inert here until
+someone noticed and closed the gap by hand. What a draft legitimately does
+differently now travels in the invoke config (`_deadline_gate`, `_OUT_OF_SCOPE`,
+no step sink) rather than living in a parallel implementation.
 
 The second entry point, `validate_sql`, is the hand-written path *and* the "I
 edited what the model gave me" path, because they are the same thing: guard,
@@ -29,24 +39,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clock import utcnow
 from app.core.config import Settings
-from app.core.errors import (
-    LLMError,
-    NotFoundError,
-    QuestionOutOfScopeError,
-    ValidationError,
-)
+from app.core.errors import LLMError, NotFoundError, ValidationError
 from app.core.logging import get_logger
 from app.domain.ports.database import DatabaseConnector
+from app.domain.value_objects import StepName
 from app.infra.db.models import DatabaseConnection, LlmConfig
 from app.infra.llm.litellm_gateway import LiteLLMGateway
-from app.pipeline.nodes import (
-    NodeDeps,
-    generate,
-    propose_chart_intent,
-    retrieve,
-    route,
-    validate,
-)
+from app.pipeline.graph import draft_statement
+from app.pipeline.nodes import NodeDeps, propose_chart_intent
 from app.pipeline.prompts import METRIC_SQL_RULES
 from app.pipeline.state import RunState
 from app.services.query_service import (
@@ -73,14 +73,21 @@ PREVIEW_MAX_ROWS = 50
 # the run pipeline's budget, and a short deadline of its own rather than
 # `run_deadline_seconds` — nothing about a draft is a run.
 #
-# The deadline is checked by `_check_deadline` below rather than by the run
-# executor, because a draft calls the nodes directly and never goes through
-# `AnalyticsPipeline.run`. It bounds the *model* calls: one `structured` call
-# can legitimately take minutes once the gateway's transient-failure retries and
-# their backoff are counted, so without a check between attempts the repair
-# starts however long the first attempt took. The preview that follows is bound
-# by the connection's own `statement_timeout_ms`, which is real containment
-# rather than a budget.
+# The deadline is checked by `_check_deadline` below rather than by the chat
+# executor's rule, because they are deliberately different checks: a chat run
+# is stopped before *every* node, a draft before each `generate` and nowhere
+# else. It bounds the *model* calls: one `structured` call can legitimately
+# take minutes once the gateway's transient-failure retries and their backoff
+# are counted, so without a check between attempts the repair starts however
+# long the first attempt took. The preview that follows is bound by the
+# connection's own `statement_timeout_ms`, which is real containment rather
+# than a budget.
+#
+# `DRAFT_MAX_REPAIRS` reaches the repair loop as `RunState.max_repairs` — set
+# in `_draft_state` — and that is the *only* thing bounding it now that the
+# hand-rolled `for` loop is gone. It always was the real bound: `validate` asks
+# for a repair only while `repair_count < max_repairs`, so the loop counted to
+# the same number twice.
 DRAFT_MAX_REPAIRS = 1
 DRAFT_DEADLINE_SECONDS = 120
 
@@ -250,28 +257,28 @@ async def draft_sql(
             extra_rules=_sql_rules_for(extra_rules, tile_type),
         )
 
-        if classify:
-            # Before `retrieve`, exactly where chat runs it: the point of the
-            # classifier is to spend nothing on a question that has no data
-            # answer. `route` fails open to ANALYTICAL on a provider error, so
-            # a flaky model widens nothing and refuses nothing.
-            await route(state, deps)
-            if state.intent is not None and state.intent != "ANALYTICAL":
-                raise QuestionOutOfScopeError(
-                    _OUT_OF_SCOPE[state.intent], intent=state.intent
-                )
-
-        await retrieve(state, deps)
-        for _ in range(DRAFT_MAX_REPAIRS + 1):
-            _check_deadline(state)
-            result = await generate(state, deps)
-            if result.status == "FAILED":
-                raise LLMError(
-                    (state.error.hint if state.error else None)
-                    or "The model could not produce a query."
-                )
-            if (await validate(state, deps)).goto != "generate":
-                break
+        # `[route →] retrieve → generate ⇄ validate`, walked by the same
+        # compiled region a chat run walks. `classify` selects the entry edge
+        # — before `retrieve`, exactly where chat runs it, because the point of
+        # the classifier is to spend nothing on a question with no data answer
+        # — and the refusal is raised from inside the graph with this module's
+        # own wording. `route` fails open to ANALYTICAL on a provider error, so
+        # a flaky model widens nothing and refuses nothing.
+        await draft_statement(
+            state,
+            deps,
+            classify=classify,
+            check_deadline=_deadline_gate,
+            out_of_scope=_OUT_OF_SCOPE,
+        )
+        if state.error is not None and state.error.code == "E_LLM":
+            # The one failure that is not a verdict. A *rejected* statement
+            # comes back below with its report, because the editor renders the
+            # guard's reasons inline; a provider that produced nothing at all
+            # leaves no draft to render.
+            raise LLMError(
+                state.error.hint or "The model could not produce a query."
+            )
 
         attempt = state.attempts[-1]
         return await _draft(
@@ -296,15 +303,33 @@ async def draft_sql(
         await connector.close()
 
 
+def _deadline_gate(state: RunState, node: str) -> None:
+    """The draft's deadline rule, handed to the graph: before each `generate`.
+
+    Not before every node, which is the chat executor's rule and the reason
+    this hook takes a node name at all. `validate` is the guard — pure CPU,
+    microseconds — and stopping a draft there would throw away a statement the
+    model has already been paid for and the guard would have accepted. `route`
+    and `retrieve` come before any budget has been spent.
+
+    The difference is deliberate and now has to be *written down* to exist,
+    which is the whole point of Phase 2: this rule and the chat run's sit side
+    by side in the invoke config instead of in two executors that drifted.
+    """
+    if node == StepName.GENERATE:
+        _check_deadline(state)
+
+
 def _check_deadline(state: RunState) -> None:
     """Stop before spending another model call the user is no longer waiting for.
 
-    `RunState.deadline_at` is enforced by `AnalyticsPipeline.run`, and a draft
-    never goes through it — so this field was inert on this path until the check
-    was written here. It is checked in the same place the executor checks it:
-    *before* a node, never inside one, because an in-flight provider call is
-    bounded by `llm_request_timeout_seconds` and an in-flight query by the
-    connection's statement timeout.
+    `RunState.deadline_at` is enforced for a chat run by the node adapter in
+    `app/pipeline/graph.py`, under a different rule — see `_deadline_gate`
+    above. This field was inert on the draft path until the check was written
+    here. It is checked in the same place the executor checks it: *before* a
+    node, never inside one, because an in-flight provider call is bounded by
+    `llm_request_timeout_seconds` and an in-flight query by the connection's
+    statement timeout.
 
     `LLMError` rather than `RunTimeoutError` deliberately: the callers already
     handle it. The tile editor renders it as "the model could not produce a

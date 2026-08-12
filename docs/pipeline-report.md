@@ -232,18 +232,21 @@ nothing and widens nothing.
 
 ### 3.2 The borrowed nodes
 
-After `route`, the draft path calls the chat pipeline's own nodes directly —
-not through `AnalyticsPipeline`:
+The draft path walks the chat pipeline's own nodes — not through
+`AnalyticsPipeline`, but through `DRAFT_GRAPH`, which builds the **same
+compiled repair region** the chat graph does (`_add_repair_region` in
+[graph.py](../backend/app/pipeline/graph.py)):
 
-```python
-await retrieve(state, deps)
-for _ in range(DRAFT_MAX_REPAIRS + 1):        # 2 attempts, max
-    result = await generate(state, deps)
-    if result.status == "FAILED":             # LLMError → raise LLMError
-        raise LLMError(...)
-    if (await validate(state, deps)).goto != "generate":
-        break
 ```
+[route →] retrieve → generate ⇄ validate        # 2 attempts, max
+```
+
+`classify=True` is what puts `route` in front — a conditional entry edge, with
+the refusal raised from a `refuse` node as `QuestionOutOfScopeError` in this
+service's wording. Until Phase 2 of
+[langgraph-migration.md](langgraph-migration.md) this was a hand-rolled `for`
+loop in `sql_draft_service`, i.e. a second executor over the same node set;
+what remains of it is the ceiling, which was always `RunState.max_repairs`.
 
 So a block's statement is written against the **same** schema block, the same
 `HintBudget`, the same semantic layer and the same `_SQL_RULES` a chat question
@@ -256,7 +259,7 @@ gets — and is refused by the same guard. What differs, deliberately:
 | repairs | `max_repairs` (1) | `DRAFT_MAX_REPAIRS` (1) |
 | extra rules | none | `REPORT_TIME_RULES` (§3.3) |
 | persistence | run, steps, events, messages | **nothing** until the verdict is stored |
-| deadline | enforced by the executor before every node | `DRAFT_DEADLINE_SECONDS` (120s), checked before each `generate` (§8, note 1) |
+| deadline | before **every** node → `RunTimeoutError` | `DRAFT_DEADLINE_SECONDS` (120s), before each **`generate`** only → `LLMError` (§8, note 1). Not before `validate`: the guard costs microseconds, and stopping there would throw away a statement the model was already paid for. Both rules are now `DeadlineCheck` values in the invoke config, side by side |
 
 ### 3.3 `REPORT_TIME_RULES` — the feature turns on this paragraph
 

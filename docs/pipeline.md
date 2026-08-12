@@ -108,10 +108,19 @@ picture.
 
 What a draft deliberately does **not** inherit: history (`[]`), events
 (`_no_emit`), persistence (nothing until the caller stores a verdict), and the
-executor's own guard rails — it has a shorter budget of its own
-(`DRAFT_DEADLINE_SECONDS`, checked before each `generate` by
-`_check_deadline`) and no transition ceiling, because a bounded `for` loop
-cannot cycle.
+executor's deadline rule — it has a shorter budget of its own
+(`DRAFT_DEADLINE_SECONDS`, checked before each `generate` by `_check_deadline`,
+where a chat run is checked before *every* node).
+
+Since Phase 2 those are the **only** differences, and each one is a value in
+the invoke config rather than a second executor: `retrieve → generate ⇄
+validate` is one compiled region (`_add_repair_region` in
+[graph.py](../backend/app/pipeline/graph.py)) that both callers build, and the
+draft's hand-rolled `for _ in range(DRAFT_MAX_REPAIRS + 1)` is gone. The
+ceiling it provided was always `RunState.max_repairs` — `validate` asks for a
+repair only while `repair_count < max_repairs` — so the loop was counting to
+the same number twice. That duplication was not theoretical: `deadline_at` was
+enforced on the chat path and inert on the draft path until someone noticed.
 
 ### 0.4 Every place a model is called, in the whole product
 
@@ -180,7 +189,7 @@ knowing before you go looking for an executor that does not exist:
 |---|---|---|
 | dashboard refresh | `DashboardService.refresh` → `execute_many` → `asyncio.gather` | there are no decisions to make: every tile runs the same five steps and cannot branch. The only "routing" is the cache gate, which is a boolean |
 | report generation | `ReportRunExecutor` + `workers/report.py::_generate` | the phases are fixed (execute all → narrate each → summarise → derive status) and the *concurrency* is inside one phase. What it needs from an orchestrator — progress, cancellation, resumability — it gets from the `report_runs` row instead |
-| SQL drafting | a `for` loop in `sql_draft_service` | three nodes and one repair; an executor around it would add a deadline check and a step trail that a draft has nowhere to put |
+| SQL drafting | `DRAFT_GRAPH` — the same compiled repair region the chat graph builds | it *is* a small state machine, and pretending otherwise is what let a second executor grow over the same nodes. What a draft does not want — a step trail, SSE, the run's deadline rule — are no-ops and values in the invoke config, not a second implementation |
 
 The report worker is the one place a LangGraph port would buy something real —
 see [langgraph-migration.md](langgraph-migration.md) Phase 3.

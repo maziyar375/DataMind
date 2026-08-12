@@ -120,14 +120,26 @@ cannot see this.
 
 **Node 3+4 — `generate` → `validate`, up to twice.**
 
+Since Phase 2 of [langgraph-migration.md](langgraph-migration.md) this is not a
+loop in this service at all. It is the **same compiled repair region the chat
+graph builds** — `_add_repair_region` in
+[graph.py](../backend/app/pipeline/graph.py) — reached through `DRAFT_GRAPH`:
+
 ```python
-for _ in range(DRAFT_MAX_REPAIRS + 1):
-    result = await generate(state, deps)
-    if result.status == "FAILED":
-        raise LLMError(state.error.hint or "The model could not produce a query.")
-    if (await validate(state, deps)).goto != "generate":
-        break
+await draft_statement(                    # [route →] retrieve → generate ⇄ validate
+    state, deps,
+    classify=classify,                    # a conditional entry edge
+    check_deadline=_deadline_gate,        # this caller's rule, not chat's
+    out_of_scope=_OUT_OF_SCOPE,           # this caller's wording
+)
 ```
+
+The ceiling is unchanged and now stated once: `validate` asks for a repair only
+while `repair_count < max_repairs`, and `_draft_state` sets that to
+`DRAFT_MAX_REPAIRS`. The `for` loop it replaced was counting to the same number
+a second time — which is exactly the sort of copy that drifts, and did:
+`deadline_at` was enforced on the chat path and inert here until someone
+noticed and closed the gap by hand.
 
 Same prompts as chat — `GENERATE_SYSTEM` with `_SQL_RULES` and `_OUTPUT_RULES`
 on attempt 1, `REPAIR_SYSTEM` with the guard's feedback on attempt 2 — and the

@@ -866,6 +866,43 @@ async def test_a_report_block_draft_does_not_ask_what_to_draw(
     assert draft.chart_source == "heuristic"
 
 
+async def test_the_tile_draft_passes_no_policy_to_the_chart_ask(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One keyword argument stands between a documented guarantee and a quiet
+    regression, so it is asserted directly and not only through its effect.
+
+    `propose_chart_intent` is **one function with two triggers on purpose** —
+    that is what keeps security.md's inventory at fourteen call sites rather
+    than fifteen — and the two differ in exactly this: chat passes
+    `state.disclosure_policy`, a tile draft passes nothing and gets `NONE`.
+    That omission is what makes "no result value ever reaches a model on the
+    dashboard path" true at **every** policy, `FULL` included. A rewiring that
+    helpfully threads the run's policy through here would be a disclosure
+    change wearing a refactor's clothes.
+    """
+    seen: dict[str, Any] = {}
+    original = sql_draft_service.propose_chart_intent
+
+    async def spy(deps: Any, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return await original(deps, **kwargs)
+
+    monkeypatch.setattr(sql_draft_service, "propose_chart_intent", spy)
+
+    connection = FakeConnection()
+    connection.disclosure_policy = "FULL"
+    await _chart_draft(
+        monkeypatch,
+        gateway=ChartingGateway(VALID_SQL, intent=_pie()),
+        connection=connection,
+    )
+
+    assert seen, "the chart ask never happened"
+    assert "policy" not in seen
+    assert seen["composed"] is True
+
+
 async def test_the_chart_call_sends_shape_and_never_a_row_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
