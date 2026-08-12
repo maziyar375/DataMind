@@ -67,12 +67,12 @@ greps for violations, so this list cannot silently grow.
 | 4 | Generate SQL | every run | `pipeline/nodes/__init__.py:630` |
 | 5 | Write the answer | every run | `pipeline/nodes/__init__.py:863` |
 | 6 | Choose a chart | every run, if chartable; **every tile draft**, if chartable | `pipeline/nodes/__init__.py:947` |
-| 7 | Suggest follow-up questions | SPA opens a thread | `services/run_service.py:736` |
+| 7 | Suggest follow-up questions | SPA opens a thread | `services/run_service.py:893` |
 | 8 | Draft SQL for a tile or a report block | user asks for a tile, or checks a block | `services/sql_draft_service.py` |
 | 9 | Generate a semantic layer | user clicks Generate | `semantic/generator.py:383,417,452` |
 | 10 | Propose a report outline | user proposes an outline | `reports/outline.py:203` |
-| 11 | Write a report section | once per section, per generation | `workers/report.py:880` |
-| 12 | Write the executive summary | once per generation | `workers/report.py:961` |
+| 11 | Write a report section | once per section, per generation; **also a per-section retry** | `workers/report.py:742` |
+| 12 | Write the executive summary | once per generation | `workers/report.py:823` |
 
 One model interaction sends **no customer data at all**: the capability probe
 in `api/v1/llm_configs.py`, a fixed test prompt.
@@ -92,6 +92,18 @@ in `api/v1/llm_configs.py`, a fixed test prompt.
 > and ignores the suggestion, so the answer would be discarded unread. (An
 > earlier wording said a block "persists no chart config" — that was wrong;
 > `report_blocks.chart_config` exists. The reason is the missing reader.)
+
+> **Changed:** #11 and #12 each gained a second *trigger* — the same way #6
+> did, and with the same consequence for the count, which is none. The
+> LangGraph migration replaced the report worker's two hand-rolled drivers with
+> one graph (`workers/report_graph.py`), entered twice: a full generation walks
+> the narration loop, a per-section retry re-enters for one section, and a
+> summary section can itself be retried. Both entries call the *same*
+> `report._narrate` / `report._summarise`, so there is still one prompt each,
+> defined once, sent under the policy in force at narration time. The line
+> numbers above moved with that refactor (`:880` → `:742`, `:961` → `:823`);
+> the functions did not change. See
+> [langgraph-migration.md](langgraph-migration.md) Phase 3.
 
 > **Changed:** #10–#12 are Reports, and were missing from this table until
 > 2026-08-12 — the list had not been revisited since the feature landed.

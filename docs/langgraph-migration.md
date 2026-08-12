@@ -1061,9 +1061,43 @@ A phase is done when all five pass, not when the code runs.
       booting replica resumes a run another replica is generating. Finding 3
 
 ### Explicitly not migrating
-- [ ] Confirmed: follow-up suggestions (`run_service.suggest_followups`) stay a one-shot call
-- [ ] Confirmed: `reports/outline.propose` stays a one-shot call
-- [ ] Confirmed: `semantic/generator.py` stays `asyncio.gather` + semaphore
-- [ ] Confirmed: the capability probe stays a plain probe
-- [ ] `PROMPT_VERSION` never moved during the migration (still `v7`)
-- [ ] The call-site inventory never grew: still twelve use cases across fourteen sites
+
+Checked at `e68fb78` (Phase 6), each one against `f4f9578` — the commit this
+record was written at — so "unchanged" below means *diffed*, not *looks the
+same*.
+
+- [x] Confirmed: follow-up suggestions (`run_service.suggest_followups`) stay a
+      one-shot call — one `gateway.complete`, still failing open to `[]`, and
+      the function body is **byte-identical** across the migration. Only its
+      line number moved (736 → 893)
+- [x] Confirmed: `reports/outline.propose` stays a one-shot call — still
+      `complete`, not `structured`, for the partial-recovery reason in its
+      docstring. `app/reports/outline.py` was never touched by any phase
+- [x] Confirmed: `semantic/generator.py` stays `asyncio.gather` + semaphore —
+      `DEFAULT_CONCURRENCY = 4`, file unchanged, no `Send` and no `langgraph`
+      import
+- [x] Confirmed: the capability probe stays a plain probe — fixed prompt, no
+      customer data; `api/v1/llm_configs.py` unchanged
+- [x] `PROMPT_VERSION` never moved during the migration (still `v7`; `r4` and
+      `s2` likewise) — and the stronger check holds: `app/pipeline/prompts/`,
+      `app/reports/prompts.py`, `app/semantic/prompts.py`, `narrate.py` and
+      `outline.py` are all byte-identical to `f4f9578`. The commits that set
+      `v7` and `r4` both predate Phase 0
+- [x] The call-site inventory never grew: still twelve use cases across
+      fourteen sites — every `complete`/`structured`/`stream`/`probe` call
+      outside `app/infra/llm/` enumerated at both revisions, and the two lists
+      are the **same fifteen lines** (six pipeline nodes, three semantic, one
+      outline, one follow-ups, two report worker, two probe entry points for
+      the one probe). No `litellm` import escaped `app/infra/llm/`, and no
+      `langgraph` import reached `app.domain`, `app.sqlguard`, `app.semantic`,
+      `app.reports`, `app.charts` or `app.api`
+
+> **Three line references in [security.md §2](security.md) had drifted, and are
+> now fixed.** The call sites are the same functions; Phases 3 and 6 moved the
+> lines: #7 `run_service.py:736` → **893**, #11 `workers/report.py:880` →
+> **742**, #12 `:961` → **823**. Its "Trigger" column also understated #11 and
+> #12: `_narrate` and `_summarise` are each reached from **two** places in
+> `report_graph.py` — the loop entry and the retry entry — while the functions
+> (and so the prompts) still live once in `report.py`. That is #6's
+> one-function-two-triggers shape, which is why the count stays at twelve and
+> fourteen, and §2 now says so.
