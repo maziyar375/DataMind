@@ -40,6 +40,9 @@ plus a **React + Vite** SPA. No microservices, no broker, no vector DB.
   Pydantic v2 / pydantic-settings, structlog.
 - **SQL safety:** SQLGlot (parse + AST allowlist, dialect-aware).
 - **LLM:** LiteLLM — *only* behind the `LLMGateway` port (`app/infra/llm/`).
+- **Run orchestration:** LangGraph — *only* inside `app/pipeline/` and
+  `app/workers/`. Same bargain as LiteLLM: an import-linter contract and a CI
+  grep hold the boundary.
 - **Crypto/auth:** argon2-cffi (Argon2id), PyJWT, `cryptography` (AES-256-GCM).
 - **Target DB drivers:** asyncpg (Postgres), aiomysql (MySQL), oracledb *thin*
   (Oracle), pymssql (SQL Server). All ship wheels — no system DB client needed.
@@ -107,7 +110,9 @@ backend/app/
                   semantic_service, report_service, dashboard_service,
                   query_service (execute_saved_sql — the tile/report entry point
                   into guarded execution), sql_draft_service, bootstrap, policy
-  pipeline/       the AI run: state.py (typed RunState), pipeline.py (state machine),
+  pipeline/       the AI run: state.py (typed RunState), graph.py (the compiled
+                  LangGraph + the node adapter), pipeline.py (the
+                  AnalyticsPipeline facade over it),
                   nodes/ (route→retrieve→describe→clarify→generate→validate→
                   execute→inspect→present→chart), contracts.py (the node signature),
                   metadata.py (which tables a schema question is about, and the
@@ -204,12 +209,20 @@ api → services → pipeline → reports → semantic → domain ← infra
   lives in `app.pipeline` above it. So the worker has to disclose results
   under the policy in force at narration time and hand them down — which is
   the stricter reading of invariant #4, enforced for free.
+- **`langgraph` stays in the orchestration layer** — `app.domain`,
+  `app.sqlguard`, `app.semantic`, `app.reports`, `app.charts` and `app.api` may
+  not import `langgraph` or `langchain_core`. The contract sets
+  `allow_indirect_imports = true` **on purpose**: `app.api → app.services →
+  app.pipeline.graph → langgraph` is a real chain and is not a violation, since
+  the rule is that those packages do not *know* about langgraph. `app.reports`
+  is in that list deliberately — the report graph belongs in `app/workers/`.
 - Services may reach into infra (that carve-out is explicit in the config).
 
 Ports & adapters exist at **exactly four** seams — the four things most likely
 to be replaced: **LLM, target database, secrets, run execution.** Add adapters
 behind these ports; don't route around them. In particular: **never `import
-litellm` outside `app/infra/llm/`** — CI greps for it.
+litellm` outside `app/infra/llm/`**, and **never `import langgraph` outside
+`app/pipeline/` and `app/workers/`** — CI greps for both.
 
 ---
 
@@ -264,13 +277,25 @@ litellm` outside `app/infra/llm/`** — CI greps for it.
 
 `POST /conversations/{id}/messages` → `run_service.create_run` writes the user
 `message`, **flushes**, then the `runs` row (FK order matters — see below),
-hands off to the in-process executor. `AnalyticsPipeline.run` walks a linear
-state machine with one bounded repair loop:
+hands off to the in-process executor. `AnalyticsPipeline.run` invokes a
+**compiled LangGraph** (`pipeline/graph.py`) whose chain is linear with one
+bounded repair loop — plus five edges that are not the chain, listed below:
 
 ```
 route → retrieve → describe → clarify → generate → validate → execute →
 inspect → present → chart
 ```
+
+The five non-chain edges are the reason this is a graph and not a list: three
+repairs **back** into `generate` (from `validate`, `execute` and `inspect`) and
+two restores **forward** into `present` (from `validate` and `execute`, via
+`_restore_superseded`, skipping `execute` and `inspect`). The node functions
+know nothing about any of it — they name a label in `NodeResult.goto` and the
+adapter in `graph.py` routes it. **The adapter, not the nodes, owns the
+deadline check, the `seq` counter, the `run_steps` write and both `emit`
+calls**, which is what keeps the SSE sequence identical;
+`tests/unit/test_pipeline_events.py` is that contract and
+`tests/unit/test_pipeline_graph.py` is the wiring's.
 
 - `route` classifies intent, reading the recent turns once a thread has any: a
   follow-up carries no subject of its own ("and by month?"), and classified

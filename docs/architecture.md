@@ -13,7 +13,7 @@ Three decisions differ from the research direction in your prompt, and each is a
 
 | Research direction | My recommendation | Why |
 |---|---|---|
-| LangGraph for the AI pipeline | **Defer.** Plain async Python functions over a typed Pydantic state, behind a `Pipeline` protocol with LangGraph-shaped node signatures. | The MVP graph is linear with one bounded retry loop. LangGraph earns its keep when you need durable interrupts, parallel fan-out, or resume-after-crash mid-graph — none of which the MVP needs. Adopting it later is a wiring change, not a rewrite. |
+| LangGraph for the AI pipeline | **Defer.** Plain async Python functions over a typed Pydantic state, behind a `Pipeline` protocol with LangGraph-shaped node signatures. *(Superseded — adopted for the chat pipeline, see §13.3 and [langgraph-migration.md](langgraph-migration.md). The last sentence of this row is what made that cheap.)* | The MVP graph is linear with one bounded retry loop. LangGraph earns its keep when you need durable interrupts, parallel fan-out, or resume-after-crash mid-graph — none of which the MVP needs. Adopting it later is a wiring change, not a rewrite. |
 | Celery + Redis for background execution | **Defer.** In-process asyncio run executor, run state durable in Postgres, stale-run reconciler on startup and on a timer. | A text-to-SQL run is 5–60 seconds, not 5 hours. Celery adds a second deployment unit and a serialization boundary that makes SSE fan-out harder, in exchange for durability you can get more cheaply from a `runs` table plus a heartbeat. Swap point is a single `RunExecutor` protocol. |
 | LiteLLM SDK | **Keep**, but strictly behind `LLMGateway`. | Genuine value: one call shape across OpenAI, Anthropic, Ollama, vLLM. But it is a heavy, fast-moving dependency; the gateway protocol is small enough that a direct `httpx` OpenAI-compatible adapter is a ~200-line escape hatch. |
 
@@ -708,7 +708,19 @@ This is better because the clarification round-trip is already a message in the 
 
 ### 13.3 When to adopt LangGraph
 
-Adopt it when **two or more** of these become true:
+> **Adopted.** The chat pipeline is a compiled graph as of Phase 1 of
+> [langgraph-migration.md](langgraph-migration.md) — and note *which* trigger
+> fired. Not fan-out and not human-in-the-loop: the real one was that the graph
+> turned out to have **five** non-linear edges, and a second executor
+> (`sql_draft_service.draft_sql`) had grown over the same nodes, so every
+> change to repair semantics had to be made twice or diverge silently. That is
+> the fourth trigger below arriving early. The prediction in the paragraph
+> after the list held exactly: the nodes were not modified, `AnalyticsPipeline`
+> stayed the facade, and `services/` and `api/` did not change. Checkpointing
+> is still ahead (Phase 4) and is still where the user-visible payoff is.
+
+The original triggers, kept as written. Adopt it when **two or more** of these
+become true:
 
 - You need parallel fan-out (query decomposition into several sub-queries joined at the end).
 - You need mid-node crash resume, where re-running the node is expensive or non-idempotent.
@@ -991,7 +1003,7 @@ For each: why needed · what it solves · what it costs · can we live without i
 
 **LiteLLM** — Provider normalization. Cost: heavy transitive dependency tree, fast release cadence, occasional behavioural surprises across versions. Can the MVP live without it? Yes — most target providers are OpenAI-compatible and Anthropic is one adapter. **Decision: use it, pin it exactly, and keep `LLMGateway` small enough that a direct httpx adapter is a weekend of work.** That option is the reason the abstraction exists.
 
-**LangGraph** — **Deferred**, §13. Solves durable, branching, interruptible workflows; the MVP has a linear graph with one retry edge. Costs a checkpoint schema, a framework-shaped state model, and a strong pull toward putting domain logic inside graph nodes. Adoption path is designed in.
+**LangGraph** — **Adopted for the chat pipeline** (Phase 1 of [langgraph-migration.md](langgraph-migration.md)); deferred for everything else, §13. Solves durable, branching, interruptible workflows. What actually forced it was not fan-out but *duplication*: the chat graph has five non-linear edges, and a second hand-rolled executor over the same nodes had grown on the dashboard draft path. Costs paid: the LangChain core object model on the request path, confined by an import-linter contract and a CI grep, and compiled once at module scope so no request pays for `.compile()`. Costs still deferred: the checkpoint schema and its second Postgres driver (Phase 4). The pull toward putting domain logic inside graph nodes is answered by the shape of the port — the ten node functions were **not modified**, and `graph.py` is wiring only.
 
 **Celery/Redis** — **Deferred**, §17. Solves durable queuing, scheduling, and process isolation; the MVP gets sufficient durability from Postgres plus a reconciler. Costs a broker, a worker deployment, and a serialization boundary that complicates SSE. Adoption path is `RunExecutor` + `EventPublisher`.
 

@@ -23,6 +23,14 @@ dependencies = [
     "pymssql>=2.3",
     "sqlglot>=25.0",
     "litellm>=1.52",
+    # The run orchestrator. Confined to `app/pipeline/` and `app/workers/` by
+    # the contract below and by a CI grep, exactly as litellm is confined to
+    # `app/infra/llm/` — it pulls in the LangChain core object model, and a
+    # heavy dependency on the request path is only acceptable behind a boundary
+    # something enforces. The checkpointer is deliberately absent: it needs
+    # psycopg 3 alongside asyncpg and arrives with that decision in Phase 4
+    # (docs/langgraph-migration.md).
+    "langgraph>=1.2,<2",
     "argon2-cffi>=23.1",
     "pyjwt>=2.9",
     "cryptography>=43.0",
@@ -118,6 +126,28 @@ name = "reports is self-contained"
 type = "forbidden"
 source_modules = ["app.reports"]
 forbidden_modules = ["fastapi", "sqlalchemy", "litellm", "app.infra", "app.api", "app.services"]
+
+[[tool.importlinter.contracts]]
+# The same bargain the LiteLLM grep makes, for the same reason: LangGraph is
+# only affordable on the request path if it stays behind a boundary, and a
+# boundary nothing checks is a comment. The orchestration layer is
+# `app/pipeline/` (the chat graph and the shared repair subgraph) and
+# `app/workers/` (the report graph); `app.reports` is a *source* here on
+# purpose — that package is self-contained by contract and sits below the
+# pipeline, so the report graph goes in `app/workers/`, never in it.
+name = "langgraph stays in the orchestration layer"
+type = "forbidden"
+source_modules = ["app.domain", "app.sqlguard", "app.semantic", "app.reports",
+                  "app.charts", "app.api"]
+forbidden_modules = ["langgraph", "langchain_core"]
+# Direct imports only, and this is not optional. A forbidden contract reports
+# indirect chains by default, and `app.api -> app.services ->
+# app.pipeline.graph -> langgraph` is a real chain — one that is not a
+# violation, because the rule being enforced is that these packages do not
+# *know* about langgraph, which is the same rule the CI grep enforces. Without
+# this the contract goes red for a reason that has nothing to do with layering,
+# and the next person deletes the contract instead of the import.
+allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "eval is offline-only (never on the request path)"

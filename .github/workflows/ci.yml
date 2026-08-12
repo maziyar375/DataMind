@@ -36,6 +36,19 @@ jobs:
             exit 1
           fi
 
+      # The same grep, for the same bargain: LangGraph is affordable on the
+      # request path only while it stays behind the orchestration boundary.
+      # `app/pipeline/` holds the chat graph and the shared repair subgraph;
+      # `app/workers/` holds the report graph. Nothing else may know it exists.
+      # See docs/langgraph-migration.md.
+      - name: LangGraph stays in the orchestration layer
+        run: |
+          if grep -rnE "^\s*(import|from)\s+(langgraph|langchain_core)\b" app/ \
+             | grep -vE "^app/(pipeline|workers)/"; then
+            echo "::error::langgraph imported outside app/pipeline/ and app/workers/"
+            exit 1
+          fi
+
       # Milestone item 6 — the hard gate.
       - name: Hostile SQL corpus
         run: pytest tests/unit/test_sqlguard_hostile.py -q

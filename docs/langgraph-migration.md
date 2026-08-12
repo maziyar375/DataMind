@@ -608,40 +608,64 @@ A phase is done when all five pass, not when the code runs.
 ## 6. Checklist
 
 ### Phase 0 — Groundwork
-- [ ] `langgraph>=1.2,<2` added to `[project.dependencies]`
-- [ ] Seventh `import-linter` contract confining `langgraph` / `langchain_core`,
+- [x] `langgraph>=1.2,<2` added to `[project.dependencies]` (resolves to 1.2.11)
+- [x] Seventh `import-linter` contract confining `langgraph` / `langchain_core`,
       **with `allow_indirect_imports = true`**, added and passing
-- [ ] CI grep: `import langgraph` outside `app/pipeline/` and `app/workers/` fails the build
-- [ ] Eval baseline captured (`eval_run` UUID, accuracy, companion metrics, model, temperature 0) and recorded here
-- [ ] Baseline note records the prompt version as the **constant** (`v7`), not `runs.prompt_version`
-- [ ] SSE snapshot tests written and passing against the current pipeline, for
+- [x] CI grep: `import langgraph` outside `app/pipeline/` and `app/workers/` fails the build
+- [ ] **Eval baseline captured** (`eval_run` UUID, accuracy, companion metrics, model, temperature 0) and recorded here
+      → **outstanding.** The slot and the protocol are
+      [`backend/app/eval/reports/langgraph_phase0_baseline.md`](../backend/app/eval/reports/langgraph_phase0_baseline.md);
+      the harness calls a real provider and costs real money, so it needs an
+      account. **Phase 2 must not start until this is filled in** — until it is,
+      Phase 1 has four of its five gates, not five.
+- [x] Baseline note records the prompt version as the **constant** (`v7`), not `runs.prompt_version`
+- [x] SSE snapshot tests written and passing against the current pipeline, for
       **three** runs: analytical, METADATA (the `describe` halt), and a failed
       check-driven retry (the `_restore_superseded` forward jump)
-- [ ] Those tests assert artifact and text events too — including
-      `ARTIFACT_CREATED {"kind": "KPI"}` on a single-row result
-- [ ] `run_steps` rows asserted by the same tests
+      → [`tests/unit/test_pipeline_events.py`](../backend/tests/unit/test_pipeline_events.py).
+      **Five runs, not three:** the other two walk `validate → generate` and
+      `execute → generate` / `execute → present`, so that all five non-linear
+      edges have a snapshot before Phase 1 rewires them.
+- [x] Those tests assert artifact and text events too — including
+      `ARTIFACT_CREATED {"kind": "KPI"}` on a single-row result, and the
+      `CHART` branch on a multi-row one
+- [x] `run_steps` rows asserted by the same tests — both the settled row per
+      `seq` and the RUNNING-then-terminal pair `_record_step` upserts
 
 ### Phase 1 — Chat pipeline
-- [ ] `app/pipeline/graph.py` created; state carries `RunState` whole
-- [ ] `NodeDeps` passed via `config["configurable"]`, never in state
-- [ ] Node adapter owns the deadline check, timing, `on_step` persistence, and both `emit` calls
-- [ ] All ten nodes wired; `ORDER` replaced by edges
-- [ ] **All five** non-linear edges wired: three repairs into `generate`, two
-      restores forward to `present`
-- [ ] `HALT` and `FAILED` route to `END`
-- [ ] `_MAX_TRANSITIONS` is `recursion_limit` **and** `GraphRecursionError` is
-      caught and written as `E_PIPELINE_LOOP` — never a 500
-- [ ] `RunTimeoutError` still raised *before* a node, never inside one
-- [ ] `describe` and `clarify` are still **nodes that report `SKIPPED`**, not
+- [x] `app/pipeline/graph.py` created; state carries `RunState` whole
+      (`GraphState = TypedDict("run": RunState)`, no per-field reducers)
+- [x] `NodeDeps` passed via `config["configurable"]`, never in state — with
+      `on_step` and the per-run `seq` counter beside it, for the same reason:
+      the graph is compiled once and shared, so nothing run-specific may be
+      closed over by the adapter
+- [x] Node adapter owns the deadline check, timing, `on_step` persistence, and both `emit` calls
+- [x] All ten nodes wired; `ORDER` replaced by edges (it survives as the
+      linear-successor table `_next` reads, and as what `test_clarify.py` asserts on)
+- [x] **All five** non-linear edges wired: three repairs into `generate`, two
+      restores forward to `present` — pinned structurally in
+      [`tests/unit/test_pipeline_graph.py`](../backend/tests/unit/test_pipeline_graph.py)
+      and behaviourally in the event snapshots
+- [x] `HALT` and `FAILED` route to `END`
+- [x] `_MAX_TRANSITIONS` is `recursion_limit` **and** `GraphRecursionError` is
+      caught and written as `E_PIPELINE_LOOP` — never a 500. Same ceiling, and
+      measured: 25 node executions under both executors
+- [x] `RunTimeoutError` still raised *before* a node, never inside one
+- [x] `describe` and `clarify` are still **nodes that report `SKIPPED`**, not
       conditional edges that route around them — a skipped node still writes a
       `run_steps` row and emits its event pair
-- [ ] Node crash still becomes an `E_NODE_FAILED` step, not a 500
-- [ ] `AnalyticsPipeline.run` signature unchanged; nothing above the pipeline touched
-- [ ] `present` and `describe` still stream through `deps.emit`, not through
-      LangGraph streaming
-- [ ] All three SSE snapshot runs unchanged
-- [ ] `make test`, `make guard`, `lint-imports` green
-- [ ] Eval `sales_v1` within noise of the Phase 0 baseline
+- [x] Node crash still becomes an `E_NODE_FAILED` step, not a 500
+- [x] `AnalyticsPipeline.run` signature unchanged; nothing above the pipeline touched
+      — `run_service`, `app.eval.runner` and `app.pipeline.__init__` still
+      import it from `app.pipeline.pipeline`, which is now a facade over `graph.py`
+- [x] `present` and `describe` still stream through `deps.emit`, not through
+      LangGraph streaming — the graph is driven with `ainvoke`, and no node
+      was modified
+- [x] All three SSE snapshot runs unchanged (all five, and the two non-node
+      stop paths) — the same test file passes against both executors
+- [x] `make test` (1196 passed), `make guard`, `lint-imports` (7 contracts) green
+- [ ] Eval `sales_v1` within noise of the Phase 0 baseline → **blocked on the
+      Phase 0 baseline above.** Nothing to compare against yet.
 
 ### Phase 2 — The shared repair subgraph
 - [ ] `generate → validate` extracted as a compiled subgraph with three exits

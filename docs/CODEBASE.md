@@ -290,10 +290,14 @@ charts (`app/charts/`), FK-neighbour retrieval expansion, and the eval harness
 (`app/eval/` — see [eval.md](eval.md)).
 
 Still deferred **on purpose**, with named triggers to revisit each in
-[architecture.md](architecture.md): rolling conversation summaries, LangGraph,
-Celery+Redis, and sharing a dashboard or report with another user. The node
-signatures are already LangGraph-shaped, so adopting it later is wiring, not a
-rewrite.
+[architecture.md](architecture.md): rolling conversation summaries,
+Celery+Redis, and sharing a dashboard or report with another user.
+
+LangGraph is no longer on that list: the chat pipeline is a compiled graph
+(`app/pipeline/graph.py`), and the bet that the node signatures were already
+the right shape paid — the ten node functions were not modified. Checkpointing,
+which is the part a user would actually notice, is still ahead. See
+[langgraph-migration.md](langgraph-migration.md) for the phases and the gates.
 
 > Naming note: the product is **DataMind**; the Python package and compose
 > project are still `raymand` (`import app.*`, `admin@raymand.local`).

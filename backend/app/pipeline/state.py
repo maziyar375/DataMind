@@ -1,9 +1,16 @@
 """Typed run state.
 
-Node signatures are deliberately LangGraph-shaped — `async def node(state) ->
-NodeResult` over a single typed state object. If the graph ever needs durable
-interrupts or parallel fan-out, adopting LangGraph is a wiring change here,
-not a rewrite of the nodes.
+Node signatures were built LangGraph-shaped — `async def node(state, deps) ->
+NodeResult` over a single typed state object — and that bet paid: adopting
+LangGraph was a wiring change in [`graph.py`](graph.py), not a rewrite of the
+nodes. `RunState` is carried through the graph **whole**, as the one key of the
+state schema, rather than decomposed into per-field reducers; the nodes mutate
+it in place exactly as they always did.
+
+One thing to know before adding a field: from Phase 4 this model has to
+round-trip through a checkpointer. `repair_count` and `last_attempt` below are
+derived properties on purpose — they must never become persisted fields that
+can drift from `attempts`.
 """
 from __future__ import annotations
 

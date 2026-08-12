@@ -154,14 +154,24 @@ key is revoked.
   | `structured(llm, messages, schema)` | a validated Pydantic model | `clarify`, `generate`, `chart` |
   | `stream(llm, messages)` | `AsyncIterator[str]` | `present`, `describe` |
 
-- **The orchestrator is our own state machine**, `AnalyticsPipeline.run` in
-  [pipeline.py](../backend/app/pipeline/pipeline.py) — ~130 lines, a `while`
-  loop over an ordered node list with an index. That is the whole engine.
+- **The orchestrator is a compiled LangGraph**, built in
+  [graph.py](../backend/app/pipeline/graph.py) and reached through the same
+  `AnalyticsPipeline.run` facade in
+  [pipeline.py](../backend/app/pipeline/pipeline.py). It replaced a `while`
+  loop that did index arithmetic over an ordered node list — see §6 for what
+  moved and what did not.
 
-- **LangGraph is deliberately deferred.** The graph is linear with one bounded
-  loop: no parallel fan-out, no durable interrupts, no resume-mid-graph. Node
-  signatures are already LangGraph-shaped (`async (state, deps) -> result`), so
-  adopting it is wiring, not a rewrite. See §6 for the port map.
+- **The ten node functions were not modified.** They still take
+  `(RunState, NodeDeps)`, still mutate the state in place, and still report a
+  `NodeResult`; a thin adapter turns each into a graph node and keeps the
+  executor's duties — the deadline check, the `seq` counter, `on_step`, and
+  both `emit` calls. That is why the SSE contract is unchanged, and it is what
+  `tests/unit/test_pipeline_events.py` exists to prove.
+
+- **LangGraph is confined to `app/pipeline/` and `app/workers/`**, by an
+  import-linter contract and a CI grep — the same bargain LiteLLM gets, because
+  it pulls in the LangChain core object model and a heavy dependency on the
+  request path is only affordable behind a boundary something checks.
 
 **The other two pipelines are not state machines, and deliberately not.** Worth
 knowing before you go looking for an executor that does not exist:
@@ -852,26 +862,36 @@ multi-turn suite would need re-measuring.
 
 ---
 
-## 6. When you port to LangGraph
+## 6. The LangGraph port — what moved (Phase 1, done)
 
-The shapes already line up. Nothing here needs redesigning:
+The shapes lined up, and nothing needed redesigning. What the port actually
+did, in [graph.py](../backend/app/pipeline/graph.py):
 
-| today | LangGraph |
+| before | now |
 |---|---|
-| `async def node(state, deps) -> NodeResult` | node function (bind `deps` via `functools.partial` or config) |
-| `RunState` (Pydantic, `extra="forbid"`) | graph state schema — already the right shape |
-| `ORDER` list + `index += 1` | `add_edge` chain |
-| `NodeResult.goto` | `add_conditional_edges` |
-| `status="HALT"` | edge to `END` |
-| `_MAX_TRANSITIONS = 24` | `recursion_limit` |
-| `deps.emit(...)` + `on_step(...)` | `astream_events` / callbacks |
-| `clarify` HALT + new run | `interrupt()` + checkpointer — **the actual upgrade** |
+| `async def node(state, deps) -> NodeResult` | **unchanged** — `_adapt` wraps each one; `deps` arrives via `config["configurable"]`, never in state (it holds a live connector and an `emit` callable) |
+| `RunState` (Pydantic, `extra="forbid"`) | carried whole as the one key of the state schema, not decomposed into reducers |
+| `ORDER` list + `index += 1` | an edge per node; `ORDER` survives as the linear-successor table `_next` reads |
+| `NodeResult.goto` | `Command(goto=…)`, one expression for all five jumps |
+| `status="HALT"` / `"FAILED"` | edge to `END` |
+| `_MAX_TRANSITIONS = 24` | `recursion_limit = 25` — the same 25 node executions — **plus a handler**, because the old loop wrote `E_PIPELINE_LOOP` and returned while LangGraph raises, and an unhandled `GraphRecursionError` would reach `run_service` as a 500 |
+| `deps.emit(...)` + `on_step(...)` | **still `deps.emit` and `on_step`, from the adapter.** Deliberately *not* `astream_events`: routing prose through LangGraph's streaming model would change the SSE contract underneath the SPA |
+| `clarify` HALT + new run | unchanged — that is Phase 5, and it is a product change |
 
-**The one thing worth migrating for** is clarification. Today a clarifying
-question ends the run and the user's reply arrives as a brand-new run, with
-continuity carried only by the 6-message history tail. A checkpointer plus
-`interrupt()` would make it a real durable pause. Everything else on this list
-is a lateral move — don't take the dependency for cosmetics.
+The five edges that are not the linear chain are the reason the port is
+interesting at all: three repairs *back* into `generate` (from `validate`,
+`execute` and `inspect`) and two restores *forward* into `present` (from
+`validate` and `execute`, via `_restore_superseded`, skipping `execute` and
+`inspect`). `result.goto or _next(name)` reads a *label*, not a direction, so
+all five are carried by one expression and none can be forgotten.
+
+**Still to come** is the payoff: checkpointing (Phase 4), which is what makes
+a minutes-long report run survive a process death. And clarification — today a
+clarifying question ends the run and the user's reply arrives as a brand-new
+run, with continuity carried by the history tail; `interrupt()` plus a
+checkpointer would make it a real durable pause. That is Phase 5, it is
+optional, and [langgraph-migration.md](langgraph-migration.md) argues it is
+*not* the strongest case. Full plan and phase gates there.
 
 ---
 
