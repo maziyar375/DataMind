@@ -358,6 +358,51 @@ export const Icon = {
       <circle cx="9" cy="18" r="1.2" /><circle cx="15" cy="18" r="1.2" />
     </svg>
   ),
+  // The settings screens group a long form into a few titled cards, and a
+  // glyph beside each title is what lets the eye find "the credentials one"
+  // without reading three headings. One icon per section, no decoration.
+  Link: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" />
+      <path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" />
+    </svg>
+  ),
+  Sliders: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3" />
+      <path d="M1 14h6M9 8h6M17 16h6" />
+    </svg>
+  ),
+  Shield: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      <path d="M9.5 12l1.8 1.8 3.4-3.6" />
+    </svg>
+  ),
+  Server: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <rect x="3" y="4" width="18" height="7" rx="2" />
+      <rect x="3" y="13" width="18" height="7" rx="2" />
+      <path d="M7 7.5h.01M7 16.5h.01" />
+    </svg>
+  ),
+  Mail: ({ size = 13, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <rect x="2.5" y="5" width="19" height="14" rx="2.5" />
+      <path d="M3 7.5l8.2 5.4a1.5 1.5 0 0 0 1.6 0L21 7.5" />
+    </svg>
+  ),
+  Calendar: ({ size = 13, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <rect x="3" y="5" width="18" height="16" rx="2.5" />
+      <path d="M3 10h18M8 3v4M16 3v4" />
+    </svg>
+  ),
+  Zap: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <path d="M13 2L4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5z" />
+    </svg>
+  ),
 }
 
 // ── hoverable button ──────────────────────────────────────────────────────
@@ -1087,6 +1132,63 @@ export function initialOf(value: string): string {
   return (value.trim()[0] ?? '?').toUpperCase()
 }
 
+// ── identity glyph ────────────────────────────────────────────────────────
+/**
+ * A record's mark: an icon or an initial in a tinted rounded tile.
+ *
+ * The same idea as the dashboard card's glyph, and deliberately the same six
+ * hues: a colour derived from the id is *stable* for a given record without
+ * pretending to mean anything, so a connection, a model, and a teammate are
+ * each recognisable at a glance in a list and again in the header of the pane
+ * that edits them. Anything that carries real meaning — reachable, admin,
+ * archived — stays a chip or a dot, because a hue nobody can decode is not a
+ * status.
+ *
+ * `hue` is optional: pass one from `identityHue` for per-record colour, or
+ * leave it out for the neutral panel tone (used where the tile sits beside a
+ * heading that already names the thing).
+ */
+export const IDENTITY_HUES = [250, 300, 340, 25, 80, 160]
+
+export function identityHue(seed: string): number {
+  let hash = 0
+  for (let index = 0; index < seed.length; index += 1) {
+    hash = (hash * 31 + seed.charCodeAt(index)) >>> 0
+  }
+  return IDENTITY_HUES[hash % IDENTITY_HUES.length]
+}
+
+export function GlyphBadge({
+  children, hue, size = 34, radius,
+}: {
+  children: React.ReactNode
+  hue?: number
+  size?: number
+  radius?: number
+}) {
+  const tinted = hue != null
+  return (
+    <span
+      aria-hidden
+      style={{
+        display: 'grid',
+        placeItems: 'center',
+        width: size,
+        height: size,
+        flexShrink: 0,
+        borderRadius: radius ?? Math.round(size * 0.28),
+        fontSize: Math.round(size * 0.4),
+        fontWeight: 700,
+        background: tinted ? `oklch(0.7 0.16 ${hue} / 0.16)` : 'var(--panel-alt)',
+        border: `1px solid ${tinted ? `oklch(0.7 0.16 ${hue} / 0.3)` : 'var(--border)'}`,
+        color: tinted ? `oklch(0.65 0.17 ${hue})` : 'var(--text-dim)',
+      }}
+    >
+      {children}
+    </span>
+  )
+}
+
 // Persian, Arabic, and related scripts. If the first strong character of a
 // string is one of these, the text should be laid out right-to-left.
 const RTL_CHARS = /[֐-׿؀-ۿ܀-߿ࢠ-ࣿיִ-﷿ﹰ-﻿]/
@@ -1446,6 +1548,70 @@ export function ResultTable({ spec, previewRows = 5, maxHeight = 420, config }: 
  * quietly stop agreeing about what a filter looks like, which is the reason
  * `ResultTable` was moved here rather than duplicated (docs/dashboards.md §6).
  */
+/**
+ * The title block every index page opens with: a name, one line of facts about
+ * the collection, and the action that adds to it.
+ *
+ * Dashboards and Reports each wrote this header by hand and agree on it to the
+ * pixel — 25px, -0.022em, a 13.5px subtitle, the primary action pushed right.
+ * Users is the third page of that kind, and a third hand-written copy is how
+ * three headers quietly stop agreeing. Extracted here rather than left in
+ * either page, on the same reasoning as `SearchField` and `Segmented` above.
+ */
+export function PageHeader({
+  title, subtitle, actions,
+}: {
+  title: string
+  /** One line under the title: what this collection currently contains. */
+  subtitle: React.ReactNode
+  actions?: React.ReactNode
+}) {
+  return (
+    <header
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        alignItems: 'flex-start',
+        gap: 12,
+        marginBottom: 18,
+      }}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 }}>
+        <h1
+          style={{
+            margin: 0,
+            fontSize: 25,
+            fontWeight: 700,
+            letterSpacing: '-0.022em',
+            color: 'var(--text-strong)',
+          }}
+        >
+          {title}
+        </h1>
+        <span style={{ fontSize: 13.5, color: 'var(--text-dim)' }}>{subtitle}</span>
+      </div>
+      {actions && (
+        <div
+          style={{
+            marginLeft: 'auto',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            flexShrink: 0,
+          }}
+        >
+          {actions}
+        </div>
+      )}
+    </header>
+  )
+}
+
+/** A dot between two facts on one line — the index pages' own punctuation. */
+export function MetaDot() {
+  return <span aria-hidden style={{ opacity: 0.4 }}> · </span>
+}
+
 export function DisclosureBadge({ policy }: { policy?: string }) {
   if (!policy) return null
 

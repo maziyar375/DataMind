@@ -768,6 +768,19 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   cursor: pointer;
 }
 
+/* The right-hand half of an index toolbar: filters, sort, layout. It wraps
+   inside itself rather than running off the edge, because four controls at a
+   narrow pane width are wider than the row that holds them. */
+.rm-toolbar-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-left: auto;
+  min-width: 0;
+}
+
 .rm-toolbar-select {
   background: var(--panel-alt);
   border: 1px solid var(--border);
@@ -1562,3 +1575,141 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .rm-history-row { transition: background .12s ease, border-color .12s ease; }
 .rm-history-row:hover { background: var(--panel-hover) !important; }
 .rm-history-row:hover { border-color: var(--border-strong) !important; }
+
+/* ── the settings screens ─────────────────────────────────────────────────
+   Data sources and LLM providers are one shape of page — pick a record on the
+   left, edit it on the right — and everything below is that frame. They are
+   here rather than inline beside the components for the reason the file header
+   gives: these are states (hover, selection, focus) a style attribute cannot
+   express, and the rest of the settings styling stays in the JSX.
+
+   The list is the page's navigation, so its rows behave like navigation: they
+   warm under the pointer and the open one keeps an accent rail, which is the
+   same vocabulary the sidebar's nav buttons use one column to the left. */
+.rm-master-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background .12s ease, box-shadow .12s ease;
+}
+.rm-master-item:hover { background: var(--panel-hover); }
+.rm-master-item.is-on {
+  background: var(--accent-bg);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* The filter above the list is the index search at column width. */
+.rm-master-search { flex: 1; min-width: 0; max-width: none; }
+.rm-master-search input { padding-top: 7px; padding-bottom: 7px; font-size: 12.5px; }
+
+/* Where the sidebar collapses to an icon rail, this column gives ground too —
+   the form beside it is the working surface, and a fixed 274px of index takes
+   it from the fields at exactly the width they have least to spare. */
+@media (max-width: 900px) {
+  .rm-master { width: 212px !important; }
+}
+
+/* Adding a record is the one thing this column does besides listing them, so
+   it is a full-width action rather than a glyph in a corner — it reads as the
+   end of the chrome and the start of the list. */
+.rm-master-new {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background .12s ease, border-color .12s ease;
+}
+.rm-master-new:hover { background: color-mix(in oklch, var(--accent) 20%, transparent); }
+
+/* The pane's header is a toolbar over its body, exactly as the dashboard's is
+   over its canvas. */
+.rm-detail-header {
+  background: color-mix(in oklch, var(--panel) 45%, transparent);
+}
+
+/* One restrained accent wash at the top of the pane, in the theme's own
+   accent — the same treatment the Dashboards and Reports indexes carry, so a
+   settings screen reads as a place in the product rather than a container for
+   fields. Nothing sits behind the cards themselves, which hold data.
+
+   It belongs to the *pane*, not to the form inside it: the header is
+   translucent, so a wash that started below it drew a hard horizontal seam
+   across the pane at exactly the line where the two met. Started above, the
+   header floats on it and the gradient runs out on its own. */
+.rm-detail-pane { position: relative; isolation: isolate; }
+.rm-detail-pane::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 320px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(70% 100% at 8% 0%, var(--accent-bg), transparent 72%);
+}
+
+.rm-tab { transition: color .12s ease, background .12s ease; }
+.rm-tab:hover { color: var(--text-strong); }
+
+/* A schema table, which is a disclosure rather than a link: it fills on
+   approach instead of lifting, the way the dense dashboard rows do. */
+.rm-table-card {
+  border: 1px solid var(--border);
+  transition: border-color .14s ease, background .14s ease;
+}
+.rm-table-card:hover { border-color: var(--border-strong); }
+.rm-table-card > button:hover { background: var(--panel-hover); }
+
+/* Visually hidden, still read aloud. Used where a colour carries a status and
+   the words behind it must survive for anyone who cannot see it. */
+.rm-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── the people index ─────────────────────────────────────────────────────
+   Users is the third index page, so it borrows the second one's furniture
+   (.rm-dash-index, .rm-dash-row, .rm-dash-toolbar). It is a list and only a
+   list — a person has no face to put on a card, just a name, an address, a
+   role, a state and a date, which is a line.
+
+   What it adds is the one thing a dashboard row has no equivalent of: the row
+   for the person who is signed in, which is marked rather than merely listed. */
+.rm-user-self { border-color: var(--accent-border) !important; }
+.rm-user-card:hover .rm-tile-actions,
+.rm-user-card:focus-within .rm-tile-actions { opacity: 1; }
+
+/* Narrow enough and the columns stop being columns: the date drops (it is the
+   fact nobody scans for), the chips keep their place but stop reserving a
+   fixed width, and the legend goes with the alignment it was describing — a
+   caption over a column that no longer exists is worse than no caption. */
+@media (max-width: 880px) {
+  .rm-user-added,
+  .rm-user-legend { display: none !important; }
+  .rm-user-chips { width: auto !important; }
+}

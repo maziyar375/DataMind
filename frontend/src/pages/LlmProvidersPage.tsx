@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { llmConfigs as api } from '../api/client'
 import type { LlmConfig, TestResult } from '../api/types'
 import {
-  Chip, DangerButton, EmptyState, ErrorNote, Field, GhostButton, Icon,
-  PrimaryButton, Select, Spinner, TextInput,
+  Chip, DangerButton, EmptyState, ErrorNote, Field, GhostButton, GlyphBadge, Icon,
+  PrimaryButton, Select, Spinner, TextInput, identityHue, relativeTime,
 } from '../components/ui'
 import {
   DetailBody, DetailHeader, FieldRow, MasterColumn, MasterItem, Section,
@@ -20,8 +20,35 @@ const BLANK = {
   max_tokens: 2048,
 }
 
+/**
+ * A hue per *provider*, not per row.
+ *
+ * Three models behind one endpoint are a family and should look like one, so
+ * the colour is keyed on the provider rather than on the config id — which is
+ * the one place this page departs from the dashboard cards' per-record hue.
+ * Anything not in the map falls back to a stable hue for its name.
+ */
+const PROVIDER_HUES: Record<string, number> = {
+  'OpenAI-compatible': 160,
+  Anthropic: 25,
+  Custom: 250,
+}
+
+function providerHue(provider: string): number {
+  return PROVIDER_HUES[provider] ?? identityHue(provider)
+}
+
+/** What a stored row's `status` says, in the words the chips and dots use. */
+function reachability(status: string): { tone: 'green' | 'red' | 'neutral'; label: string } {
+  if (status === 'OK') return { tone: 'green', label: 'Reachable' }
+  if (status === 'ERROR') return { tone: 'red', label: 'Unreachable' }
+  return { tone: 'neutral', label: 'Untested' }
+}
+
 export default function LlmProvidersPage() {
   const [list, setList] = useState<LlmConfig[]>([])
+  const [loading, setLoading] = useState(true)
+  const [query, setQuery] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [draft, setDraft] = useState<Record<string, any>>(BLANK)
   const [apiKey, setApiKey] = useState('')
@@ -72,6 +99,7 @@ export default function LlmProvidersPage() {
         if (items.length > 0) setSelectedId(items[0].id)
       })
       .catch(() => setError('Could not load your model configurations.'))
+      .finally(() => setLoading(false))
   }, [refresh])
 
   useEffect(() => {
@@ -179,56 +207,94 @@ export default function LlmProvidersPage() {
   // change takes the same draft path, so it needs a model name too.
   const canTest = creating || isDirty ? Boolean(draft.model) : true
 
+  const visible = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    if (!needle) return list
+    return list.filter(
+      (config) =>
+        config.name.toLowerCase().includes(needle)
+        || config.model.toLowerCase().includes(needle)
+        || config.provider.toLowerCase().includes(needle),
+    )
+  }, [list, query])
+
   return (
     <div style={{ display: 'flex', height: '100%', width: '100%', minWidth: 0 }}>
       <MasterColumn
         title="LLM providers"
+        icon={<Icon.Sparkle size={15} />}
         count={list.length}
+        loading={loading}
+        query={query}
+        onQuery={setQuery}
         onNew={startCreate}
         newLabel="Add a model"
         empty="No models configured yet. Add one to start asking questions."
       >
-        {list.map((config) => (
-          <MasterItem
-            key={config.id}
-            title={config.name}
-            subtitle={config.model}
-            active={config.id === selectedId}
-            tone={
-              config.status === 'OK' ? 'green' : config.status === 'ERROR' ? 'red' : 'neutral'
-            }
-            onClick={() => setSelectedId(config.id)}
-          />
-        ))}
+        {visible.map((config) => {
+          const state = reachability(config.status)
+          return (
+            <MasterItem
+              key={config.id}
+              title={config.name}
+              subtitle={config.model}
+              active={config.id === selectedId}
+              tone={state.tone}
+              toneLabel={state.label}
+              glyph={
+                <GlyphBadge size={30} hue={providerHue(config.provider)}>
+                  <Icon.Sparkle size={15} />
+                </GlyphBadge>
+              }
+              onClick={() => setSelectedId(config.id)}
+            />
+          )
+        })}
+        {visible.length === 0 && list.length > 0 && (
+          <p style={{ fontSize: 12.5, color: 'var(--text-dim)', padding: '4px 6px', margin: 0 }}>
+            Nothing matches “{query.trim()}”.
+          </p>
+        )}
       </MasterColumn>
 
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      <div
+        className="rm-detail-pane"
+        style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}
+      >
         {!editing ? (
-          <EmptyState
-            title="Connect a model"
-            body="DataMind works with any OpenAI-compatible endpoint (including local servers like Ollama) or Anthropic. Testing a model records what it can actually do."
-            action={<PrimaryButton onClick={startCreate}>Add a model</PrimaryButton>}
-          />
+          // Centred in the pane rather than pinned to the top of it: with no
+          // record open the pane has nothing else in it, and an invitation
+          // hanging from the ceiling of an empty room reads as a page that
+          // failed to load.
+          <div style={{ flex: 1, display: 'grid', placeItems: 'center' }}>
+            <EmptyState
+              icon={<Icon.Sparkle size={20} />}
+              title="Connect a model"
+              body="DataMind works with any OpenAI-compatible endpoint (including local servers like Ollama) or Anthropic. Testing a model records what it can actually do."
+              action={<PrimaryButton onClick={startCreate}>Add a model</PrimaryButton>}
+            />
+          </div>
         ) : (
           <>
             <DetailHeader
+              glyph={
+                <GlyphBadge size={40} hue={providerHue(draft.provider)}>
+                  <Icon.Sparkle size={19} />
+                </GlyphBadge>
+              }
               title={creating ? 'New model' : selected!.name}
               subtitle={`${draft.provider} · ${draft.model}`}
               chips={
                 creating ? undefined : (
                   <>
-                    <Chip tone={selected!.status === 'OK' ? 'green' : selected!.status === 'ERROR' ? 'red' : 'neutral'}>
-                      {selected!.status === 'OK'
-                        ? 'reachable'
-                        : selected!.status === 'ERROR'
-                          ? 'unreachable'
-                          : 'untested'}
+                    <Chip tone={reachability(selected!.status).tone}>
+                      {reachability(selected!.status).label}
                     </Chip>
                     <Chip tone={selected!.has_api_key ? 'green' : 'amber'}>
-                      {selected!.has_api_key ? 'key stored' : 'no key'}
+                      {selected!.has_api_key ? 'Key stored' : 'No key'}
                     </Chip>
                     {selected!.last_tested_at && (
-                      <Chip>tested {new Date(selected!.last_tested_at).toLocaleString()}</Chip>
+                      <Chip>Tested {relativeTime(selected!.last_tested_at)}</Chip>
                     )}
                   </>
                 )
@@ -241,7 +307,7 @@ export default function LlmProvidersPage() {
                     disabled={testing || !canTest}
                     title={canTest ? undefined : 'Enter a model name first.'}
                   >
-                    {testing && <Spinner />}
+                    {testing ? <Spinner /> : <Icon.Zap size={14} />}
                     Test model
                   </GhostButton>
                   <PrimaryButton
@@ -269,6 +335,7 @@ export default function LlmProvidersPage() {
               <Section
                 title="Endpoint"
                 description="Where DataMind sends completion requests."
+                icon={<Icon.Link size={14} />}
               >
                 <FieldRow>
                   <Field label="Name">
@@ -316,6 +383,7 @@ export default function LlmProvidersPage() {
               <Section
                 title="Credentials"
                 description="Stored encrypted with the server's secret box. The API never returns it."
+                icon={<Icon.Key size={14} />}
               >
                 <Field
                   label="API key"
@@ -340,6 +408,7 @@ export default function LlmProvidersPage() {
               <Section
                 title="Generation"
                 description="Applied to every request this model serves."
+                icon={<Icon.Sliders size={14} />}
               >
                 <FieldRow>
                   <Field label="Temperature" hint="0 is deterministic, 2 is wildest.">
@@ -368,7 +437,7 @@ export default function LlmProvidersPage() {
 
               {!creating && (
                 <>
-                  <Section title="How testing works">
+                  <Section title="How testing works" icon={<Icon.Zap size={14} />}>
                     <p
                       style={{
                         fontSize: 12.5,
@@ -387,6 +456,7 @@ export default function LlmProvidersPage() {
                   <Section
                     title="Danger zone"
                     description="Conversations that already ran on this model keep their recorded snapshot."
+                    icon={<Icon.Alert size={14} />}
                     danger
                   >
                     <DangerButton onClick={remove} style={{ alignSelf: 'flex-start' }}>

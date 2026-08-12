@@ -6,24 +6,40 @@
  * pages visually identical and leaves each page file holding only its own
  * fields.
  */
-import React, { useState } from 'react'
-import { Icon } from './ui'
+import React from 'react'
+import { GlyphBadge, Icon } from './ui'
 
 // ── left column ───────────────────────────────────────────────────────────
+/**
+ * The index side of the screen: what exists, and the button that adds to it.
+ *
+ * Three rows of chrome above the list — identity, filter, action — because the
+ * list is the page's navigation and a name is the only way back to a record.
+ * The filter is offered only when a page passes `onQuery`; a search box over
+ * four rows is furniture, which is the same rule the Dashboards toolbar
+ * follows for its archived filter.
+ */
 export function MasterColumn({
-  title, count, onNew, newLabel, empty, children,
+  title, icon, count, onNew, newLabel, empty, query, onQuery, loading, children,
 }: {
   title: string
+  /** The section's own glyph — the same mark the sidebar uses for this page. */
+  icon?: React.ReactNode
   count: number
   onNew: () => void
   newLabel: string
   empty: string
+  query?: string
+  onQuery?: (next: string) => void
+  /** Outline rows while the first read is in flight, so the column has shape. */
+  loading?: boolean
   children: React.ReactNode
 }) {
   return (
     <div
+      className="rm-master"
       style={{
-        width: 268,
+        width: 274,
         flexShrink: 0,
         display: 'flex',
         flexDirection: 'column',
@@ -35,47 +51,67 @@ export function MasterColumn({
       <div
         style={{
           display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '18px 16px 12px',
+          flexDirection: 'column',
+          gap: 10,
+          padding: '16px 14px 12px',
         }}
       >
-        <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-strong)' }}>
-          {title}
-        </span>
-        <span
-          style={{
-            fontSize: 11,
-            fontWeight: 600,
-            color: 'var(--text-faint)',
-            background: 'var(--panel-alt)',
-            padding: '2px 7px',
-            borderRadius: 20,
-          }}
-        >
-          {count}
-        </span>
-        <button
-          onClick={onNew}
-          title={newLabel}
-          aria-label={newLabel}
-          style={{
-            marginLeft: 'auto',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 5,
-            fontSize: 12,
-            fontWeight: 600,
-            color: 'var(--accent)',
-            background: 'var(--accent-bg)',
-            border: '1px solid var(--accent-border)',
-            padding: '5px 10px',
-            borderRadius: 7,
-            cursor: 'pointer',
-          }}
-        >
-          <Icon.Plus size={13} stroke="var(--accent)" />
-          New
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+          {icon && <GlyphBadge size={28}>{icon}</GlyphBadge>}
+          <span
+            style={{
+              fontSize: 14.5,
+              fontWeight: 700,
+              letterSpacing: '-0.01em',
+              color: 'var(--text-strong)',
+            }}
+          >
+            {title}
+          </span>
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              color: 'var(--text-faint)',
+              background: 'var(--panel-alt)',
+              padding: '2px 7px',
+              borderRadius: 20,
+            }}
+          >
+            {loading ? '–' : count}
+          </span>
+        </div>
+
+        {onQuery && count > 0 && (
+          <div className="rm-search rm-master-search">
+            <span aria-hidden className="rm-search-icon"><Icon.Search size={14} /></span>
+            <input
+              type="search"
+              aria-label={`Filter ${title.toLowerCase()}`}
+              value={query ?? ''}
+              placeholder="Filter…"
+              onChange={(event) => onQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') onQuery('')
+              }}
+            />
+            {query && (
+              <button
+                type="button"
+                aria-label="Clear filter"
+                className="rm-search-clear rm-icon-btn"
+                onClick={() => onQuery('')}
+                style={{ ['--rm-hover-bg' as string]: 'var(--panel-alt)' }}
+              >
+                <Icon.Close size={12} />
+              </button>
+            )}
+          </div>
+        )}
+
+        <button onClick={onNew} title={newLabel} className="rm-master-new">
+          <Icon.Plus size={14} stroke="var(--accent)" />
+          {newLabel}
         </button>
       </div>
 
@@ -89,7 +125,9 @@ export function MasterColumn({
           gap: 3,
         }}
       >
-        {count === 0 ? (
+        {loading ? (
+          <MasterSkeleton />
+        ) : count === 0 ? (
           <p
             style={{
               fontSize: 12.5,
@@ -109,53 +147,59 @@ export function MasterColumn({
   )
 }
 
+/** Rows in outline while the list loads — the column's own `rm-bone`. */
+function MasterSkeleton() {
+  return (
+    <div aria-hidden style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      {[0, 1, 2, 3].map((index) => (
+        <div
+          key={index}
+          style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px' }}
+        >
+          <div className="rm-bone" style={{ width: 30, height: 30, borderRadius: 9 }} />
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 5 }}>
+            <div className="rm-bone" style={{ width: `${70 - index * 8}%`, height: 9, borderRadius: 5 }} />
+            <div className="rm-bone" style={{ width: '52%', height: 8, borderRadius: 5 }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * One record in that column.
+ *
+ * The row carries three things and no more: what it is (the glyph), what it is
+ * called (name over the address it points at), and whether it works (the tone
+ * dot, which keeps a text label in `toneLabel` so colour is never the only
+ * carrier). Hover and selection are in the stylesheet — `.rm-master-item` —
+ * rather than in React state, so a list of forty rows costs forty listeners
+ * fewer than it used to.
+ */
 export function MasterItem({
-  title, subtitle, active, tone, onClick,
+  title, subtitle, active, tone, toneLabel, glyph, onClick,
 }: {
   title: string
   subtitle: string
   active: boolean
   tone: 'green' | 'red' | 'neutral'
+  /** What the dot means, in words — a tooltip, and the screen-reader text. */
+  toneLabel?: string
+  glyph?: React.ReactNode
   onClick: () => void
 }) {
-  const [hover, setHover] = useState(false)
   const dotColor =
     tone === 'green' ? 'var(--green)' : tone === 'red' ? 'var(--red)' : 'var(--text-faint)'
 
   return (
     <button
       onClick={onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        width: '100%',
-        padding: '9px 10px',
-        borderRadius: 8,
-        cursor: 'pointer',
-        textAlign: 'left',
-        border: 'none',
-        background: active
-          ? 'var(--accent-bg)'
-          : hover
-            ? 'var(--panel-hover)'
-            : 'transparent',
-        boxShadow: active ? 'inset 2px 0 0 var(--accent)' : 'none',
-        transition: 'background .12s ease',
-      }}
+      aria-current={active ? 'true' : undefined}
+      className={`rm-master-item${active ? ' is-on' : ''}`}
     >
-      <span
-        style={{
-          width: 7,
-          height: 7,
-          borderRadius: '50%',
-          background: dotColor,
-          flexShrink: 0,
-        }}
-      />
-      <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0, gap: 1 }}>
+      {glyph}
+      <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0, gap: 1, flex: 1 }}>
         <span
           style={{
             fontSize: 13,
@@ -181,35 +225,65 @@ export function MasterItem({
           {subtitle}
         </span>
       </span>
+      <span
+        aria-hidden
+        title={toneLabel}
+        style={{
+          width: 7,
+          height: 7,
+          borderRadius: '50%',
+          background: dotColor,
+          flexShrink: 0,
+        }}
+      />
+      {/* The dot's meaning in words, for anyone who cannot see the colour. */}
+      {toneLabel && <span className="rm-sr">{toneLabel}</span>}
     </button>
   )
 }
 
 // ── detail pane ───────────────────────────────────────────────────────────
+/**
+ * The header of the pane that edits one record: what is open, what state it is
+ * in, and what can be done to it.
+ *
+ * A whisper of panel tone lifts it off the body below without drawing another
+ * hard box — the same treatment `.rm-dash-header` gives the dashboard toolbar,
+ * which is the equivalent strip on the pages next door.
+ */
 export function DetailHeader({
-  title, subtitle, chips, actions,
+  title, subtitle, chips, actions, glyph,
 }: {
   title: string
   subtitle: React.ReactNode
   chips?: React.ReactNode
   actions: React.ReactNode
+  glyph?: React.ReactNode
 }) {
   return (
     <div
+      className="rm-detail-header"
       style={{
         display: 'flex',
         alignItems: 'flex-start',
+        flexWrap: 'wrap',
         gap: 16,
-        padding: '20px 28px 16px',
+        padding: '18px 28px 16px',
         borderBottom: '1px solid var(--border)',
         flexShrink: 0,
       }}
     >
-      <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {glyph}
+      {/* A basis, not just `minWidth: 0`: with the actions unshrinkable beside
+          it, a pure `min-width: 0` column collapses to nothing on a narrow
+          pane and the record's name — the one thing the header exists to
+          state — disappears. Below the basis the actions wrap under instead. */}
+      <div style={{ flex: '1 1 240px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 }}>
         <div
           style={{
-            fontSize: 17,
+            fontSize: 18,
             fontWeight: 700,
+            letterSpacing: '-0.015em',
             color: 'var(--text-strong)',
             overflow: 'hidden',
             textOverflow: 'ellipsis',
@@ -220,12 +294,18 @@ export function DetailHeader({
         </div>
         <div
           className="mono"
-          style={{ fontSize: 12, color: 'var(--text-dim)' }}
+          style={{
+            fontSize: 12,
+            color: 'var(--text-dim)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
         >
           {subtitle}
         </div>
         {chips && (
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 3 }}>
             {chips}
           </div>
         )}
@@ -305,6 +385,8 @@ export function Tabs({
           <button
             key={item.value}
             onClick={() => onChange(item.value)}
+            aria-current={active ? 'true' : undefined}
+            className="rm-tab"
             style={{
               display: 'inline-flex',
               alignItems: 'center',
@@ -342,12 +424,19 @@ export function Tabs({
   )
 }
 
-/** A titled card. Groups related fields so a long form reads as a few parts. */
+/**
+ * A titled card. Groups related fields so a long form reads as a few parts.
+ *
+ * The glyph is what makes the group findable on the way back: a reader
+ * returning to "the credentials one" recognises the key before they read the
+ * word, and a form of five identical white cards gives them nothing to aim at.
+ */
 export function Section({
-  title, description, danger, children,
+  title, description, icon, danger, children,
 }: {
   title: string
   description?: string
+  icon?: React.ReactNode
   danger?: boolean
   children: React.ReactNode
 }) {
@@ -362,25 +451,49 @@ export function Section({
     >
       <div
         style={{
-          padding: '13px 18px',
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 10,
+          padding: '12px 16px',
           borderBottom: '1px solid var(--border)',
-          background: danger ? 'var(--red-bg)' : 'transparent',
+          background: danger ? 'var(--red-bg)' : 'var(--panel-alt)',
         }}
       >
-        <div
-          style={{
-            fontSize: 12.5,
-            fontWeight: 700,
-            color: danger ? 'var(--red)' : 'var(--text-strong)',
-          }}
-        >
-          {title}
-        </div>
-        {description && (
-          <div style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 3 }}>
-            {description}
-          </div>
+        {icon && (
+          <span
+            aria-hidden
+            style={{
+              display: 'grid',
+              placeItems: 'center',
+              width: 26,
+              height: 26,
+              flexShrink: 0,
+              borderRadius: 8,
+              background: danger ? 'var(--red-bg)' : 'var(--panel)',
+              border: `1px solid ${danger ? 'var(--red-border)' : 'var(--border)'}`,
+              color: danger ? 'var(--red)' : 'var(--text-dim)',
+            }}
+          >
+            {icon}
+          </span>
         )}
+        <div style={{ minWidth: 0 }}>
+          <div
+            style={{
+              fontSize: 12.5,
+              fontWeight: 700,
+              letterSpacing: '0.01em',
+              color: danger ? 'var(--red)' : 'var(--text-strong)',
+            }}
+          >
+            {title}
+          </div>
+          {description && (
+            <div style={{ fontSize: 11.5, color: 'var(--text-dim)', marginTop: 3, lineHeight: 1.5 }}>
+              {description}
+            </div>
+          )}
+        </div>
       </div>
       <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 14 }}>
         {children}

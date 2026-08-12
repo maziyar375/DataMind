@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { connections as api } from '../api/client'
 import type { Connection, SchemaSnapshot, SchemaTable, TestResult } from '../api/types'
 import {
-  Chip, DangerButton, EmptyState, ErrorNote, Field, GhostButton, Icon,
-  PrimaryButton, Select, Spinner, TextInput, Toggle, relativeTime,
+  Chip, DangerButton, DisclosureBadge, EmptyState, ErrorNote, Field, GhostButton,
+  GlyphBadge, Icon, PrimaryButton, SearchField, Segmented, Select, Spinner,
+  TextInput, Toggle, identityHue, relativeTime,
 } from '../components/ui'
 import {
   DetailBody, DetailHeader, FieldRow, MasterColumn, MasterItem, Section,
@@ -11,6 +12,30 @@ import {
 } from '../components/settings'
 import { SemanticLayerTab } from '../components/semantic'
 import { DATABASE_TYPES } from '../theme/tokens'
+
+/**
+ * A hue per *engine*, so every Postgres connection is the same colour and the
+ * list can be read by shape as well as by name. Keyed on the engine rather
+ * than on the row id for the reason the LLM page keys on the provider: these
+ * are families, and members of one should look related.
+ */
+const ENGINE_HUES: Record<string, number> = {
+  postgres: 250,
+  mysql: 80,
+  mssql: 25,
+  oracle: 340,
+}
+
+function engineHue(kind: string): number {
+  return ENGINE_HUES[kind] ?? identityHue(kind)
+}
+
+/** What a stored row's `status` says, in the words the chips and dots use. */
+function reachability(status: string): { tone: 'green' | 'red' | 'neutral'; label: string } {
+  if (status === 'OK') return { tone: 'green', label: 'Reachable' }
+  if (status === 'ERROR') return { tone: 'red', label: 'Unreachable' }
+  return { tone: 'neutral', label: 'Untested' }
+}
 
 const BLANK = {
   name: 'New connection',
@@ -30,6 +55,8 @@ const BLANK = {
 
 export default function DataSourcesPage() {
   const [list, setList] = useState<Connection[]>([])
+  const [loading, setLoading] = useState(true)
+  const [filter, setFilter] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [draft, setDraft] = useState<Record<string, any>>(BLANK)
   const [password, setPassword] = useState('')
@@ -102,7 +129,9 @@ export default function DataSourcesPage() {
   }, [selectedId])
 
   useEffect(() => {
-    refresh().catch(() => setError('Could not load your data sources.'))
+    refresh()
+      .catch(() => setError('Could not load your data sources.'))
+      .finally(() => setLoading(false))
   }, [])
 
   useEffect(() => {
@@ -279,72 +308,106 @@ export default function DataSourcesPage() {
       ? hasConnFields
       : true
 
+  const visible = useMemo(() => {
+    const needle = filter.trim().toLowerCase()
+    if (!needle) return list
+    return list.filter(
+      (connection) =>
+        connection.name.toLowerCase().includes(needle)
+        || connection.host.toLowerCase().includes(needle)
+        || connection.database_name.toLowerCase().includes(needle)
+        || engineLabel(connection.database_type).toLowerCase().includes(needle),
+    )
+  }, [list, filter])
+
   return (
     <div style={{ display: 'flex', height: '100%', width: '100%', minWidth: 0 }}>
       <MasterColumn
         title="Data sources"
+        icon={<Icon.Database size={15} />}
         count={list.length}
+        loading={loading}
+        query={filter}
+        onQuery={setFilter}
         onNew={startCreate}
         newLabel="Add a connection"
         empty="No data sources yet. Add one to start asking questions."
       >
-        {list.map((connection) => (
-          <MasterItem
-            key={connection.id}
-            title={connection.name}
-            subtitle={`${engineLabel(connection.database_type)} · ${connection.host}:${connection.port}`}
-            active={connection.id === selectedId}
-            tone={
-              connection.status === 'OK'
-                ? 'green'
-                : connection.status === 'ERROR'
-                  ? 'red'
-                  : 'neutral'
-            }
-            onClick={() => setSelectedId(connection.id)}
-          />
-        ))}
+        {visible.map((connection) => {
+          const state = reachability(connection.status)
+          return (
+            <MasterItem
+              key={connection.id}
+              title={connection.name}
+              subtitle={`${engineLabel(connection.database_type)} · ${connection.host}:${connection.port}`}
+              active={connection.id === selectedId}
+              tone={state.tone}
+              toneLabel={state.label}
+              glyph={
+                <GlyphBadge size={30} hue={engineHue(connection.database_type)}>
+                  <Icon.Database size={15} />
+                </GlyphBadge>
+              }
+              onClick={() => setSelectedId(connection.id)}
+            />
+          )
+        })}
+        {visible.length === 0 && list.length > 0 && (
+          <p style={{ fontSize: 12.5, color: 'var(--text-dim)', padding: '4px 6px', margin: 0 }}>
+            Nothing matches “{filter.trim()}”.
+          </p>
+        )}
       </MasterColumn>
 
-      {/* `position: relative` anchors the semantic tab's floating save bar,
-          which hovers over the content instead of eating a strip of the pane. */}
+      {/* `position: relative` (from `.rm-detail-pane`) anchors the semantic
+          tab's floating save bar, which hovers over the content instead of
+          eating a strip of the pane. */}
       <div
+        className="rm-detail-pane"
         style={{
           flex: 1,
           display: 'flex',
           flexDirection: 'column',
           minWidth: 0,
-          position: 'relative',
         }}
       >
         {!editing ? (
-          <EmptyState
-            title="Connect a database"
-            body="DataMind reads your schema over a read-only role, writes SQL against only what it finds there, and shows you every query it ran."
-            action={<PrimaryButton onClick={startCreate}>Add a connection</PrimaryButton>}
-          />
+          // Centred in the pane rather than pinned to the top of it — see the
+          // same note on the LLM providers page.
+          <div style={{ flex: 1, display: 'grid', placeItems: 'center' }}>
+            <EmptyState
+              icon={<Icon.Database size={20} />}
+              title="Connect a database"
+              body="DataMind reads your schema over a read-only role, writes SQL against only what it finds there, and shows you every query it ran."
+              action={<PrimaryButton onClick={startCreate}>Add a connection</PrimaryButton>}
+            />
+          </div>
         ) : (
           <>
             <DetailHeader
+              glyph={
+                <GlyphBadge size={40} hue={engineHue(draft.database_type)}>
+                  <Icon.Database size={19} />
+                </GlyphBadge>
+              }
               title={creating ? 'New connection' : selected!.name}
               subtitle={`${engine.label} · ${draft.host}:${draft.port}/${draft.database_name || '—'}`}
               chips={
                 creating ? undefined : (
                   <>
-                    <Chip tone={selected!.status === 'OK' ? 'green' : selected!.status === 'ERROR' ? 'red' : 'neutral'}>
-                      {selected!.status === 'OK'
-                        ? 'reachable'
-                        : selected!.status === 'ERROR'
-                          ? 'unreachable'
-                          : 'untested'}
+                    <Chip tone={reachability(selected!.status).tone}>
+                      {reachability(selected!.status).label}
                     </Chip>
                     <Chip tone={selected!.readonly_confirmed ? 'green' : 'amber'}>
-                      {selected!.readonly_confirmed ? 'read-only confirmed' : 'role can write'}
+                      {selected!.readonly_confirmed ? 'Read-only confirmed' : 'Role can write'}
                     </Chip>
+                    {/* The same badge the chat header shows, so the policy in
+                        force reads identically wherever it is stated. */}
+                    <DisclosureBadge policy={selected!.disclosure_policy} />
                     <Chip>
                       {selected!.last_synced_at
-                        ? `synced ${relativeTime(selected!.last_synced_at)}`
-                        : 'never synced'}
+                        ? `Synced ${relativeTime(selected!.last_synced_at)}`
+                        : 'Never synced'}
                     </Chip>
                   </>
                 )
@@ -365,7 +428,7 @@ export default function DataSourcesPage() {
                           : 'Fill in host, database, user, and password first.'
                       }
                     >
-                      {testing && <Spinner />}
+                      {testing ? <Spinner /> : <Icon.Zap size={14} />}
                       Test connection
                     </GhostButton>
                     <PrimaryButton
@@ -411,6 +474,7 @@ export default function DataSourcesPage() {
                 <Section
                   title="Connection"
                   description="Point DataMind at the database. Use a role with read-only rights."
+                  icon={<Icon.Server size={14} />}
                 >
                   <FieldRow>
                     <Field label="Name">
@@ -513,6 +577,7 @@ export default function DataSourcesPage() {
                 <Section
                   title="Safety & limits"
                   description="Applied to every query DataMind runs on this connection."
+                  icon={<Icon.Shield size={14} />}
                 >
                   <Field
                     label="Result sharing"
@@ -577,6 +642,7 @@ export default function DataSourcesPage() {
                   <Section
                     title="Danger zone"
                     description="Conversations that used this connection keep their recorded history."
+                    icon={<Icon.Alert size={14} />}
                     danger
                   >
                     <DangerButton onClick={remove} style={{ alignSelf: 'flex-start' }}>
@@ -611,7 +677,7 @@ export default function DataSourcesPage() {
                   }}
                 >
                   <GhostButton onClick={sync} disabled={syncing}>
-                    {syncing && <Spinner />}
+                    {syncing ? <Spinner /> : <Icon.Refresh size={14} />}
                     Re-sync schema
                   </GhostButton>
                   <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
@@ -629,6 +695,7 @@ export default function DataSourcesPage() {
 
                 {!schema ? (
                   <EmptyState
+                    icon={<Icon.Database size={20} />}
                     title="No schema yet"
                     body="Sync this connection to read its tables, columns, and foreign keys. DataMind only ever writes SQL against what it finds here."
                     action={
@@ -640,48 +707,29 @@ export default function DataSourcesPage() {
                   />
                 ) : (
                   <>
-                    <div
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 10,
-                        flexWrap: 'wrap',
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: 'flex',
-                          gap: 2,
-                          background: 'var(--panel-alt)',
-                          borderRadius: 8,
-                          padding: 3,
-                        }}
-                      >
-                        <SegButton
-                          active={schemaView === 'tables'}
-                          onClick={() => setSchemaView('tables')}
-                        >
-                          Table list
-                        </SegButton>
-                        <SegButton
-                          active={schemaView === 'graph'}
-                          onClick={() => setSchemaView('graph')}
-                        >
-                          Graph view
-                        </SegButton>
-                      </div>
+                    {/* The index pages' own toolbar, at the width of this pane:
+                        the shared segmented control and the shared search field,
+                        rather than the local copies of both that used to live
+                        here and had already drifted from them. */}
+                    <div className="rm-dash-toolbar" style={{ marginBottom: 0 }}>
+                      <Segmented
+                        ariaLabel="Schema view"
+                        value={schemaView}
+                        onChange={setSchemaView}
+                        options={[
+                          { value: 'tables', label: 'Table list' },
+                          { value: 'graph', label: 'Graph view' },
+                        ]}
+                      />
                       {schemaView === 'tables' && (
-                        <TextInput
-                          placeholder="Search tables & columns…"
-                          value={search}
-                          onChange={(e) => setSearch(e.target.value)}
-                          style={{
-                            width: 280,
-                            marginLeft: 'auto',
-                            fontSize: 13,
-                            padding: '8px 11px',
-                          }}
-                        />
+                        <div className="rm-toolbar-group">
+                          <SearchField
+                            value={search}
+                            onChange={setSearch}
+                            ariaLabel="Search tables and columns"
+                            placeholder={`Search ${schema.tables.length} tables…`}
+                          />
+                        </div>
                       )}
                     </div>
 
@@ -702,9 +750,20 @@ export default function DataSourcesPage() {
                           />
                         ))}
                         {filteredTables.length === 0 && (
-                          <p style={{ fontSize: 13, color: 'var(--text-dim)' }}>
-                            Nothing matches “{search}”.
-                          </p>
+                          search.trim() ? (
+                            <EmptyState
+                              icon={<Icon.Search size={20} />}
+                              title="Nothing matches"
+                              body={`No table or column in this schema is called “${search.trim()}”.`}
+                              action={<GhostButton onClick={() => setSearch('')}>Clear search</GhostButton>}
+                            />
+                          ) : (
+                            <EmptyState
+                              icon={<Icon.Database size={20} />}
+                              title="No tables"
+                              body="This snapshot holds no tables. Re-sync once the role can see them."
+                            />
+                          )
                         )}
                       </div>
                     )}
@@ -729,33 +788,6 @@ export default function DataSourcesPage() {
   )
 }
 
-function SegButton({
-  active, onClick, children,
-}: {
-  active: boolean
-  onClick: () => void
-  children: React.ReactNode
-}) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        fontSize: 12.5,
-        fontWeight: 600,
-        padding: '6px 12px',
-        borderRadius: 6,
-        cursor: 'pointer',
-        border: 'none',
-        color: active ? 'var(--text-strong)' : 'var(--text-dim)',
-        background: active ? 'var(--panel)' : 'transparent',
-        boxShadow: active ? '0 1px 3px rgba(0,0,0,0.10)' : 'none',
-      }}
-    >
-      {children}
-    </button>
-  )
-}
-
 function TableCard({
   table, open, onToggle,
 }: {
@@ -765,8 +797,8 @@ function TableCard({
 }) {
   return (
     <div
+      className="rm-table-card"
       style={{
-        border: '1px solid var(--border)',
         borderRadius: 10,
         background: 'var(--panel)',
         overflow: 'hidden',
@@ -785,10 +817,14 @@ function TableCard({
           border: 'none',
           cursor: 'pointer',
           textAlign: 'left',
+          transition: 'background .12s ease',
         }}
       >
         <Icon.Chevron open={open} size={13} stroke="var(--text-dim)" />
-        <span style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-strong)' }}>
+        <span
+          className="mono"
+          style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-strong)' }}
+        >
           {table.name}
         </span>
         <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
