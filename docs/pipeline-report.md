@@ -432,9 +432,20 @@ mirrors `workers/semantic.py`, deliberately does not share it:
 
 ### 4.3 The run, node by node
 
-`generate_run` → `_generate`
-([workers/report.py:279-425](../backend/app/workers/report.py#L279-L425)). Five
+`generate_run` → `run_generation`
+([workers/report_graph.py](../backend/app/workers/report_graph.py)). Five
 phases; the ordering is the design.
+
+Since Phase 3 of [langgraph-migration.md](langgraph-migration.md) those phases
+are **nodes of a compiled graph** —
+`check_disclosure → resolve_outline → execute_blocks → write_results →
+narrate_section (loop) → summarise → finish` — and §5's retry is a second
+*entry* into the same graph rather than a second driver over the same
+functions. The nodes are thin: each delegates to the helper in
+`workers/report.py` that always did the work, so the prompts, the disclosure
+gating and the numeric checks are exactly where they were. The graph lives in
+`app/workers/`, **not** `app/reports/`, because that package is self-contained
+by contract and may not see the pipeline, infra, or langgraph.
 
 #### C1 · Load and re-check
 
@@ -667,8 +678,10 @@ connection is refused), sets the run back to `RUNNING` with
 `phase = "Retrying {heading}"`, and hands off. The viewer's existing poll
 renders the section rebuilding itself — no new endpoint, no new protocol.
 
-`retry_section` → `_retry`
-([workers/report.py:464-571](../backend/app/workers/report.py#L464-L571)):
+`retry_section` → `run_retry`
+([workers/report_graph.py](../backend/app/workers/report_graph.py)) — the
+**same graph as a full generation**, entered in `retry` mode, which is what
+collapsed the two drivers this section and §4.3 used to describe separately:
 
 1. `_clear_section` deletes that section's block-result and section-result rows
    and **returns the position the old rows sat at**, so the replacements reuse

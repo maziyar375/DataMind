@@ -44,7 +44,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clock import utcnow
 from app.core.config import Settings
-from app.core.errors import DisclosureTooNarrowError
 from app.core.logging import get_logger
 from app.domain.ports.database import ResultColumn
 from app.domain.ports.llm import LLMGateway, ResolvedLLM
@@ -52,7 +51,6 @@ from app.domain.value_objects import (
     ReportBlockResultStatus,
     ReportBlockType,
     ReportRunStatus,
-    ReportSectionKind,
     ReportSectionResultStatus,
 )
 from app.infra.db.models import (
@@ -78,7 +76,6 @@ from app.services.query_service import (
     resolve_llm,
     secret_box,
 )
-from app.services.report_service import assert_wide_enough
 
 log = get_logger(__name__)
 
@@ -266,163 +263,19 @@ async def generate_run(
     if run is None:
         return
 
+    # Local, and it has to be: `report_graph` imports this module for the
+    # helpers its nodes delegate to, so importing it at module scope here would
+    # close the cycle. The graph still compiles once, at first use.
+    from app.workers.report_graph import run_generation
+
     try:
-        await _generate(db, settings, run, cancelled)
+        await run_generation(db, settings, run, cancelled)
     except asyncio.CancelledError:
         await _finish(db, run, ReportRunStatus.CANCELLED)
         raise
     except Exception as err:  # a broken run is a failed run, never a bare 500
         log.exception("report_run_failed", run_id=str(run_id))
         await _finish(db, run, ReportRunStatus.FAILED, error=str(err)[:500])
-
-
-async def _generate(
-    db: AsyncSession, settings: Settings, run: ReportRun, cancelled: asyncio.Event
-) -> None:
-    report = await db.get(Report, run.report_id)
-    if report is None:
-        await _finish(db, run, ReportRunStatus.FAILED, error="The report was removed.")
-        return
-
-    connection = (
-        await db.get(DatabaseConnection, report.connection_id)
-        if report.connection_id is not None
-        else None
-    )
-    if connection is None:
-        await _finish(
-            db,
-            run,
-            ReportRunStatus.FAILED,
-            error=(
-                "This report's database connection has been removed, so it "
-                "cannot be generated. Past runs stay readable."
-            ),
-        )
-        return
-
-    try:
-        # §7, and the half of it that is easy to forget: the gate at creation
-        # says what was true then. A policy tightened since must stop this run
-        # rather than let it write paragraphs from values the model never saw.
-        assert_wide_enough(connection)
-    except DisclosureTooNarrowError as err:
-        await _finish(db, run, ReportRunStatus.FAILED, error=err.message)
-        return
-
-    sections, blocks = await _outline(db, report.id)
-    if cancelled.is_set():
-        await _finish(db, run, ReportRunStatus.CANCELLED)
-        return
-
-    steps = len(blocks) + len(sections)
-    await _touch(
-        db,
-        run,
-        status=ReportRunStatus.RUNNING,
-        started_at=utcnow(),
-        progress_total=steps,
-        progress_current=0,
-        phase=f"Running {len(blocks)} quer{'y' if len(blocks) == 1 else 'ies'}",
-    )
-
-    results = await _execute_blocks(db, settings, connection, blocks, run.owner_id)
-
-    outcomes: list[bool] = []
-    done = 0
-    written: dict[UUID, list[ReportBlockResult]] = {}
-    for position, (block, section) in enumerate(blocks):
-        result = results.get(block.id) or _no_sql_result()
-        row = _block_result(run, block, section.heading, result, position)
-        db.add(row)
-        written.setdefault(section.id, []).append(row)
-        outcomes.append(result.status == "OK")
-        done += 1
-        await _touch(
-            db,
-            run,
-            progress_current=done,
-            phase=f"Wrote result {position + 1} of {len(blocks)}",
-        )
-
-    if cancelled.is_set():
-        # The results that landed are kept: they were paid for, and a cancelled
-        # run that threw them away would be a slower way of doing nothing.
-        await _finish(db, run, ReportRunStatus.CANCELLED)
-        return
-
-    # ── the document ─────────────────────────────────────────────────────
-    narrator = await _narrator(db, settings, run)
-    prose: list[WrittenSection] = []
-    summary: tuple[int, ReportSection] | None = None
-
-    # What every section is told about the rest of the report. Computed once:
-    # the outline does not change mid-run, and this is what stops three
-    # paragraphs each opening on the same total because it was the largest
-    # number each of them was handed.
-    headings = [
-        s.heading
-        for s in sections
-        if s.kind != ReportSectionKind.EXECUTIVE_SUMMARY
-    ]
-
-    for position, section in enumerate(sections):
-        if section.kind == ReportSectionKind.EXECUTIVE_SUMMARY:
-            # Written last, from the sections it summarises. Its *position* is
-            # wherever the user put it — usually first, which is the point.
-            summary = (position, section)
-            continue
-
-        done += 1
-        await _touch(
-            db,
-            run,
-            progress_current=done,
-            phase=f"Writing {section.heading}"[:200],
-        )
-        row = await _narrate(
-            settings,
-            run=run,
-            report=report,
-            section=section,
-            position=position,
-            results=written.get(section.id, []),
-            policy=connection.disclosure_policy,
-            narrator=narrator,
-            other_headings=[h for h in headings if h != section.heading],
-            # The sections written so far, in order — so section five contrasts
-            # with section two rather than restating it. `prose` grows as the
-            # run goes; `narrate` keeps only the most recent few.
-            established=list(prose),
-        )
-        db.add(row)
-        await db.commit()
-        outcomes.append(row.status != ReportSectionResultStatus.FAILED)
-        if row.prose:
-            prose.append(WrittenSection(heading=row.heading_snapshot, prose=row.prose))
-
-        if cancelled.is_set():
-            await _finish(db, run, ReportRunStatus.CANCELLED)
-            return
-
-    if summary is not None:
-        position, section = summary
-        done += 1
-        await _touch(db, run, progress_current=done, phase="Writing the summary")
-        row = await _summarise(
-            settings,
-            run=run,
-            report=report,
-            section=section,
-            position=position,
-            written=prose,
-            narrator=narrator,
-        )
-        db.add(row)
-        await db.commit()
-        outcomes.append(row.status != ReportSectionResultStatus.FAILED)
-
-    await _finish(db, run, derive_status(outcomes))
 
 
 async def retry_section(
@@ -449,8 +302,10 @@ async def retry_section(
     if run is None:
         return
 
+    from app.workers.report_graph import run_retry  # see `generate_run`
+
     try:
-        await _retry(db, settings, run, section_id, cancelled)
+        await run_retry(db, settings, run, section_id, cancelled)
     except asyncio.CancelledError:
         await _finish(db, run, ReportRunStatus.CANCELLED)
         raise
@@ -459,116 +314,6 @@ async def retry_section(
             "report_retry_failed", run_id=str(run_id), section_id=str(section_id)
         )
         await _finish(db, run, ReportRunStatus.FAILED, error=str(err)[:500])
-
-
-async def _retry(
-    db: AsyncSession,
-    settings: Settings,
-    run: ReportRun,
-    section_id: UUID,
-    cancelled: asyncio.Event,
-) -> None:
-    report = await db.get(Report, run.report_id)
-    connection = (
-        await db.get(DatabaseConnection, report.connection_id)
-        if report is not None and report.connection_id is not None
-        else None
-    )
-    if report is None or connection is None:
-        await _finish(
-            db,
-            run,
-            ReportRunStatus.FAILED,
-            error=(
-                "This report's database connection has been removed, so its "
-                "sections cannot be retried. Past runs stay readable."
-            ),
-        )
-        return
-
-    try:
-        # Every entry into a generation re-checks it, not just the first.
-        assert_wide_enough(connection)
-    except DisclosureTooNarrowError as err:
-        await _finish(db, run, ReportRunStatus.FAILED, error=err.message)
-        return
-
-    sections, blocks = await _outline(db, report.id)
-    positions = {section.id: index for index, section in enumerate(sections)}
-    section = next((s for s in sections if s.id == section_id), None)
-    if section is None:
-        # Deleted between the request and the worker picking it up. The run is
-        # re-derived from what it still holds rather than left RUNNING.
-        await _rederive(db, run)
-        return
-
-    start = await _clear_section(db, run.id, section_id)
-    mine = [(block, section) for block, sec in blocks if sec.id == section_id]
-
-    await _touch(db, run, phase=f"Retrying {section.heading}"[:200])
-    results = (
-        await _execute_blocks(db, settings, connection, mine, run.owner_id)
-        if mine
-        else {}
-    )
-
-    rewritten: list[ReportBlockResult] = []
-    for offset, (block, _section) in enumerate(mine):
-        result = results.get(block.id) or _no_sql_result()
-        row = _block_result(run, block, section.heading, result, start + offset)
-        db.add(row)
-        rewritten.append(row)
-        await db.commit()
-
-    if cancelled.is_set():
-        await _finish(db, run, ReportRunStatus.CANCELLED)
-        return
-
-    narrator = await _narrator(db, settings, run)
-    if section.kind == ReportSectionKind.EXECUTIVE_SUMMARY:
-        row = await _summarise(
-            settings,
-            run=run,
-            report=report,
-            section=section,
-            position=positions[section.id],
-            written=await _written_sections(db, run.id, section_id),
-            narrator=narrator,
-        )
-    else:
-        row = await _narrate(
-            settings,
-            run=run,
-            report=report,
-            section=section,
-            position=positions[section.id],
-            results=rewritten,
-            policy=connection.disclosure_policy,
-            narrator=narrator,
-            other_headings=[
-                s.heading
-                for s in sections
-                if s.id != section_id
-                and s.kind != ReportSectionKind.EXECUTIVE_SUMMARY
-            ],
-            # A retried section is rewritten *into* a document that already
-            # exists, so it reads the paragraphs around it — including the ones
-            # written after it, which the first pass could not see. The summary
-            # is left out: see `_written_sections`.
-            established=await _written_sections(
-                db,
-                run.id,
-                section_id,
-                *(
-                    s.id
-                    for s in sections
-                    if s.kind == ReportSectionKind.EXECUTIVE_SUMMARY
-                ),
-            ),
-        )
-    db.add(row)
-    await db.commit()
-    await _rederive(db, run)
 
 
 async def _clear_section(db: AsyncSession, run_id: UUID, section_id: UUID) -> int:

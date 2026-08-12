@@ -743,21 +743,43 @@ A phase is done when all five pass, not when the code runs.
       `for _ in range(…REPAIRS…)` survives anywhere (`grep`)
 
 ### Phase 3 — Report generation
-- [ ] `app/workers/report_graph.py` created (**not** in `app/reports/`)
-- [ ] Nodes: check disclosure → resolve outline → execute blocks → write results
-      → narrate section (loop) → summarise → finish
-- [ ] `assert_wide_enough` is the first node and still fails the run
-- [ ] Progress writes (`_touch`) owned by the adapter, like `on_step`
-- [ ] Narration still **sequential**; `established` and `other_headings` still threaded forward
-- [ ] Executive summary still skipped in the loop, written last, placed at its own position
-- [ ] `retry_section` is a **second entry point into the same graph** — queries then paragraph
-- [ ] A retry still reads the whole document (minus the summary) as `established`
-- [ ] A retry still does **not** rewrite the executive summary
-- [ ] Cancel check preserved between phases; written results still kept
-- [ ] Run status still **derived** from section rows
-- [ ] Before/after documents identical, `title_snapshot` included
-- [ ] Progressive poll still updates as each result lands
-- [ ] Per-section retry still turns `PARTIAL` into `SUCCEEDED`
+- [x] `app/workers/report_graph.py` created (**not** in `app/reports/`)
+- [x] Nodes: check disclosure → resolve outline → execute blocks → write results
+      → narrate section (loop) → summarise → finish — plus `clear_section`,
+      which only the retry entry walks
+- [x] `assert_wide_enough` is the first node and still fails the run, on **both**
+      entries
+- [x] Progress writes (`_touch`) owned by the adapter, like `on_step` — injected
+      as one `progress` callable bound to the session and the run, so a node has
+      no other way to touch the row. The *content* stays at the call site
+      because it is content: the phase string names the section being written
+- [x] Narration still **sequential**; `established` and `other_headings` still
+      threaded forward. The loop is an edge from `narrate_section` back into
+      itself — no `Send`, and a test says so
+- [x] Executive summary still skipped in the loop, written last, placed at its own position
+- [x] `retry_section` is a **second entry point into the same graph** — queries
+      then paragraph, through `clear_section → execute_blocks → write_results`
+      like everything else
+- [x] A retry still reads the whole document (minus the summary) as `established`
+- [x] A retry still does **not** rewrite the executive summary
+- [x] Cancel check preserved between phases; written results still kept —
+      see the note below, this one nearly went wrong
+- [x] Run status still **derived** from section rows; `finish` is the only node
+      that writes a terminal row
+- [x] Before/after documents identical, `title_snapshot` included
+- [x] Progressive poll still updates as each result lands
+- [x] Per-section retry still turns `PARTIAL` into `SUCCEEDED`
+
+> **The cancel check is not "before every node", and the equivalence suite is
+> what caught it.** Putting it there — the obvious reading of "a graph-level
+> check" — discards results the customer's database has already produced,
+> because the flag is routinely set *while the queries are in flight* and the
+> naive version then skips the node that writes them down. `execute_blocks` and
+> `write_results` are one uninterruptible unit, and `clear_section` is excluded
+> for the mirror-image reason: a retry that dropped a section's rows and then
+> stopped would leave the document worse than it found it. The remaining check
+> points are exactly the two the hand-rolled drivers had — before any query is
+> spent, and between paragraphs.
 
 ### Phase 4 — Checkpointing
 - [ ] Driver decision made and written down (second psycopg pool vs. custom SQLAlchemy saver)

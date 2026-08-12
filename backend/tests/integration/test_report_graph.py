@@ -1,0 +1,280 @@
+"""Two entries, one graph — and the differences that must survive the merge.
+
+Phase 3 of [docs/langgraph-migration.md](../../../docs/langgraph-migration.md)
+collapsed `_generate` and `_retry` into one compiled graph entered two ways.
+`tests/integration/test_report_runs.py` is the equivalence proof: 43 tests that
+drove the two hand-rolled drivers and now drive the graph, **unmodified**.
+
+This file tests what that proof cannot. A merge of two drivers fails in one of
+two directions, and the passing suite only rules out the first:
+
+1. something the two shared stops working — caught there;
+2. something the two deliberately did **differently** quietly becomes the same
+   — which every test above would keep passing through, because each one drives
+   one entry at a time.
+
+The migration record names the two that matter, so they are named here too: a
+retry reads the *whole* document as `established`, and a retry does **not**
+rewrite the executive summary. Both are about not destroying writing.
+"""
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+import pytest
+
+from app.domain.value_objects import ReportRunStatus
+from app.services import query_service
+from app.workers import report as worker
+from app.workers.report_graph import (
+    CHECK_DISCLOSURE,
+    CLEAR_SECTION,
+    EXECUTE_BLOCKS,
+    FINISH,
+    NARRATE_SECTION,
+    REPORT_GRAPH,
+    RESOLVE_OUTLINE,
+    SUMMARISE,
+    WRITE_RESULTS,
+)
+from tests.integration.test_report_runs import (
+    OTHER_SECTION_ID,
+    PROSE,
+    SECTION_ID,
+    SUMMARY_SECTION_ID,
+    FakeConnector,
+    FakeGateway,
+    _readable,
+    _retry,
+)
+from tests.integration.test_report_runs import _generate as _run_generation
+
+END = "__end__"
+START = "__start__"
+
+
+def edges() -> set[tuple[str, str]]:
+    return {(e.source, e.target) for e in REPORT_GRAPH.get_graph().edges}
+
+
+# The same two fixtures `test_report_runs.py` uses, for the same reason:
+# nothing here dials a network, and narration is part of every run. Fixtures do
+# not travel with an import, so they are declared rather than borrowed.
+@pytest.fixture
+def connector(monkeypatch: pytest.MonkeyPatch) -> FakeConnector:
+    fake = FakeConnector()
+    monkeypatch.setattr(query_service, "bind_connector", lambda *a, **k: fake)
+    return fake
+
+
+@pytest.fixture(autouse=True)
+def gateway(monkeypatch: pytest.MonkeyPatch) -> FakeGateway:
+    fake = FakeGateway()
+    monkeypatch.setattr(
+        worker.LiteLLMGateway, "from_settings", classmethod(lambda _cls, _s: fake)
+    )
+    return fake
+
+
+# ── the two things that must keep differing ──────────────────────────────
+async def test_a_retry_reads_the_whole_document_not_just_the_prefix(
+    connector: FakeConnector, gateway: FakeGateway
+) -> None:
+    """The first pass sees only what came before it; a retry sees everything.
+
+    Section two, written first time round, is told nothing about section three
+    because section three does not exist yet. Retried, it is told about it —
+    that is the point of rewriting a paragraph *into* a document rather than
+    into a gap, and it is a difference a merge would erase by handing both
+    entries the same `established`.
+    """
+    db = _readable()
+    await _run_generation(db)
+
+    # The first section is written into an empty document: `established` is the
+    # prose written *so far*, and nothing has been. (Its heading list names the
+    # other sections — that is `other_headings`, a different argument, and it
+    # carries no prose.)
+    assert PROSE not in gateway.prompts[0]
+
+    # Give the section written *after* it something only it could say.
+    later = next(r for r in db.prose if r.section_id == OTHER_SECTION_ID)
+    later.prose = "بخش سوم این را نوشت."
+
+    gateway.prompts.clear()
+    await _retry(db, SECTION_ID)
+
+    # Retried, it reads the paragraph that did not exist when it was first
+    # written — which is the whole difference between the two entries.
+    assert "بخش سوم این را نوشت." in gateway.prompts[-1]
+
+
+async def test_a_retry_is_not_told_the_summary_that_already_contains_it(
+    connector: FakeConnector, gateway: FakeGateway
+) -> None:
+    """The whole document *minus* the summary.
+
+    Handing a section the executive summary would be circular: the summary
+    already states this section's own finding, so the section would dutifully
+    avoid restating it and write around the very thing it exists to say.
+    """
+    db = _readable()
+    await _run_generation(db)
+    summary_row = next(r for r in db.prose if r.section_id == SUMMARY_SECTION_ID)
+    summary_row.prose = "این خلاصه نباید به بخش بازنویسی‌شده داده شود."
+
+    gateway.prompts.clear()
+    await _retry(db, SECTION_ID)
+
+    assert "این خلاصه نباید" not in gateway.prompts[-1]
+
+
+async def test_retrying_a_section_leaves_the_executive_summary_alone(
+    connector: FakeConnector, gateway: FakeGateway
+) -> None:
+    """A summary is a paragraph the user may have edited by hand.
+
+    Silently rewriting it because a section below it was retried destroys
+    writing, so a retry never touches it. A summary that *should* reflect the
+    retry is one click away — the summary section can be retried on its own,
+    which is why `write_results` routes to `summarise` for it.
+    """
+    db = _readable()
+    await _run_generation(db)
+    summary_row = next(r for r in db.prose if r.section_id == SUMMARY_SECTION_ID)
+    summary_row.edited_prose = "خلاصه‌ای که کاربر خودش نوشته است."
+    summary_id = summary_row.id
+
+    await _retry(db, SECTION_ID)
+
+    survivor = next(r for r in db.prose if r.section_id == SUMMARY_SECTION_ID)
+    # The same row object, with the user's words still on it.
+    assert survivor.id == summary_id
+    assert survivor.edited_prose == "خلاصه‌ای که کاربر خودش نوشته است."
+    assert len([r for r in db.prose if r.section_id == SUMMARY_SECTION_ID]) == 1
+
+
+async def test_the_summary_section_can_still_be_retried_on_its_own(
+    connector: FakeConnector, gateway: FakeGateway
+) -> None:
+    """The branch that exists precisely because the rule above exists."""
+    db = _readable()
+    await _run_generation(db)
+    before = next(r for r in db.prose if r.section_id == SUMMARY_SECTION_ID).id
+
+    await _retry(db, SUMMARY_SECTION_ID)
+
+    after = [r for r in db.prose if r.section_id == SUMMARY_SECTION_ID]
+    assert len(after) == 1 and after[0].id != before
+
+
+async def test_the_snapshots_a_document_stays_readable_by_survive_both_entries(
+    connector: FakeConnector, gateway: FakeGateway
+) -> None:
+    """`heading_snapshot` and `title_snapshot` are copied onto every result row.
+
+    They are what keeps a historical document readable after the section it
+    came from is renamed or deleted, so they are worth asserting on their own
+    rather than trusting them to ride along: a retry writes *new* rows, and a
+    retry that dropped them would silently un-caption half a document.
+    """
+    db = _readable()
+    await _run_generation(db)
+
+    def captions() -> set[tuple[str, str]]:
+        return {(r.heading_snapshot, r.title_snapshot) for r in db.results}
+
+    first_pass = captions()
+    assert first_pass and all(heading for heading, _title in first_pass)
+
+    await _retry(db, SECTION_ID)
+
+    assert captions() == first_pass
+
+
+# ── cancellation is about not losing what was paid for ───────────────────
+async def test_a_cancel_between_the_queries_and_their_rows_is_not_honoured(
+    monkeypatch: pytest.MonkeyPatch, connector: FakeConnector, gateway: FakeGateway
+) -> None:
+    """`execute_blocks` and `write_results` are one unit, and must stay one.
+
+    The flag is routinely set *while the queries are in flight*, so a graph
+    that checked cancellation before writing the rows down would discard
+    results the customer's database had already been made to produce. This is
+    the regression the equivalence suite caught when the check was naively put
+    in front of every node, and it is worth its own test because the next
+    person to add a node here will have to make the same decision.
+    """
+    cancelled = asyncio.Event()
+    real = worker.execute_many
+
+    async def then_cancel(*args: Any, **kwargs: Any) -> dict:
+        results = await real(*args, **kwargs)
+        cancelled.set()
+        return results
+
+    monkeypatch.setattr(worker, "execute_many", then_cancel)
+    db = _readable()
+
+    await _run_generation(db, cancelled)
+
+    assert db.run is not None and db.run.status == ReportRunStatus.CANCELLED
+    # Paid for, therefore kept — and no paragraph was written over them.
+    assert len(db.results) == 2
+    assert db.prose == []
+
+
+# ── the wiring ───────────────────────────────────────────────────────────
+def test_the_graph_has_the_nodes_the_plan_named() -> None:
+    assert set(REPORT_GRAPH.get_graph().nodes) == {
+        START, CHECK_DISCLOSURE, RESOLVE_OUTLINE, CLEAR_SECTION, EXECUTE_BLOCKS,
+        WRITE_RESULTS, NARRATE_SECTION, SUMMARISE, FINISH, END,
+    }
+
+
+def test_disclosure_is_the_first_node_on_both_entries() -> None:
+    """Not a precondition hoisted into the caller: a policy tightened between
+    creation and generation has to stop the run from inside, and a retry is a
+    second generation of one section that gets no exemption."""
+    assert (START, CHECK_DISCLOSURE) in edges()
+    assert edges() >= {(CHECK_DISCLOSURE, RESOLVE_OUTLINE), (CHECK_DISCLOSURE, FINISH)}
+
+
+def test_retry_is_a_second_entry_into_the_same_graph_not_a_call_on_one_node() -> None:
+    """It runs the section's blocks *and* its paragraph, which is why it goes
+    through `clear_section → execute_blocks → write_results` like everything
+    else rather than jumping straight to the narrator."""
+    assert (RESOLVE_OUTLINE, CLEAR_SECTION) in edges()
+    assert (CLEAR_SECTION, EXECUTE_BLOCKS) in edges()
+    assert (WRITE_RESULTS, NARRATE_SECTION) in edges()
+    # A retried summary section takes the other branch.
+    assert (WRITE_RESULTS, SUMMARISE) in edges()
+
+
+def test_narration_loops_back_into_itself_and_is_not_a_fan_out() -> None:
+    """Sequential on purpose. Each iteration passes the prose written so far
+    forward as `established`, which is what lets section five contrast with
+    section two instead of restating it. `Send` would be faster and worse."""
+    assert (NARRATE_SECTION, NARRATE_SECTION) in edges()
+    assert (NARRATE_SECTION, SUMMARISE) in edges()
+
+
+def test_the_summary_is_an_explicit_edge_after_the_loop() -> None:
+    """Not "last" by accident. It is skipped inside the loop, written after it,
+    and then placed at its own position — usually first."""
+    assert (SUMMARISE, FINISH) in edges()
+    assert (SUMMARISE, NARRATE_SECTION) not in edges()
+
+
+def test_every_path_ends_at_finish() -> None:
+    """One place writes the run's terminal row, so the status derivation
+    cannot be bypassed by a node that decides to stop early."""
+    terminal = {source for source, target in edges() if target == END}
+    assert terminal == {FINISH}
+
+
+def test_the_graph_is_compiled_once() -> None:
+    from app.workers import report_graph
+
+    assert report_graph.REPORT_GRAPH is REPORT_GRAPH

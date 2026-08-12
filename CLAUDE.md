@@ -149,7 +149,9 @@ backend/app/
     events/       SSE event publisher
   workers/        inprocess run executor + stale-run reconciler + semantic.py
                   and report.py (generation jobs; minutes long, so they are
-                  polled not streamed, with cooperative-then-hard cancel)
+                  polled not streamed, with cooperative-then-hard cancel) +
+                  report_graph.py (the compiled report graph; a full generation
+                  and a per-section retry are two entries into it)
 
 backend/           ← these are SIBLINGS of app/, not inside it
   tests/          unit (incl. test_sqlguard_hostile.py) + integration + eval
