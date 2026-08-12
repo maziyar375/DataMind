@@ -706,6 +706,21 @@ Your mock pauses and asks "revenue or units sold?", then continues. The tempting
 
 This is better because the clarification round-trip is already a message in the conversation — the UI shows it as one, the history needs it as one, and it may take hours. Holding a graph checkpoint open across that window buys nothing and costs you a durable-state system.
 
+> **Revisited with the graph in hand, and upheld.** Phase 5 of
+> [langgraph-migration.md](langgraph-migration.md) existed to reopen this once
+> `interrupt()` was actually available. It was reopened and the answer is the
+> same, on two reasons this section could not have known and one it already
+> gave. The new ones: `_compose_question` would not have disappeared — a
+> resumed run still has to fold the reply into `state.question`, the sole
+> channel into `GENERATE_USER`, so the function relocates into a node rather
+> than being deleted — and a paused checkpoint would be **88 KB, 97% of it the
+> schema block**, held across the whole think-time and then read back *stale*,
+> where today the reply is a new run whose `retrieve` sees the current
+> snapshot. The old one: the window is hours. Revisit if a clarification ever
+> needs to pause *inside* a node — §13.3's third trigger, an analyst approving
+> SQL before it runs — which is the one thing the run-outcome design cannot
+> express.
+
 ### 13.3 When to adopt LangGraph
 
 > **Adopted.** The chat pipeline is a compiled graph as of Phase 1 of

@@ -622,13 +622,18 @@ would write ~0.9 MB per chat run, almost all of it the same 88 KB ten times, to
 protect a run of 5–60 seconds that `runs` + heartbeat + reconciler already
 recover. Not worth it at any price, and least of all a second driver's.
 
-**3. A custom saver is not a weekend.** `BaseCheckpointSaver` in 1.2.11 has
-**15 mandatory methods** — `get_tuple`/`aget_tuple`, `list`/`alist`,
-`put`/`aput`, `put_writes`/`aput_writes`, `delete_thread`/`adelete_thread`,
-`delete_for_runs`/`adelete_for_runs`, `acopy_thread`, `aprune`,
-`get_next_version`. That is the checkpointer's entire storage protocol,
-including versioning and pending-write semantics, and a subtly wrong one breaks
-resume in a way only a crash reveals.
+**3. A custom saver is not a weekend.** `BaseCheckpointSaver` in 1.2.11 leaves
+its whole storage protocol unimplemented — `get_tuple`/`aget_tuple`,
+`list`/`alist`, `put`/`aput`, `put_writes`/`aput_writes`,
+`delete_thread`/`adelete_thread`, `delete_for_runs`/`adelete_for_runs`,
+`copy_thread`/`acopy_thread`, `prune`/`aprune`, `get_next_version` — including
+versioning and pending-write semantics, and a subtly wrong one breaks resume in
+a way only a crash reveals.
+
+> **Corrected in Phase 5, and smaller than written.** This first said "15
+> mandatory methods"; it is seventeen that raise, of which an **async-only
+> caller reaches about six**. See Phase 5's "A correction to Phase 4's third
+> finding". The decision above does not rest on this one — findings 1 and 2 do.
 
 **What this costs.** Phase 5's `interrupt()` needs a real checkpointer, so
 declining one here declines that too — but Phase 5 is already marked optional
@@ -637,6 +642,10 @@ worse". If it is ever taken up, this decision is the thing to revisit first,
 and finding 1 says what to solve: the checkpoint and the work product have to
 land in one transaction, which is the argument *for* the SQLAlchemy saver and
 against the psycopg pool.
+
+> **Phase 5 was taken up, and declined on its own merits** — three of them, none
+> of which is this checkpointer decision. So this cost was never paid: there is
+> nothing Phase 5 wanted that declining a checkpointer took away.
 
 **`RunState` was audited anyway**, because the audit is cheap and the answer
 outlives the decision: it round-trips through `JsonPlusSerializer` unchanged,
@@ -673,6 +682,97 @@ something reaps it.
 **Exit criteria:** a clarify round-trip is one run; the reconciler leaves paused
 threads alone; abandoned threads are reaped on a schedule; `clarify_enabled=false`
 is still byte-identical to the pre-feature pipeline.
+
+#### The go/no-go, made: **no-go.** Clarification stays a run outcome.
+
+This phase asked for a decision rather than an implementation, because it
+changes something a user can see. The decision is **no**, and it is not Phase 4's
+declined checkpointer cascading downhill. Three findings came out of re-reading
+the code against the design, and each is sufficient on its own.
+
+**1. `_compose_question` does not disappear — which was half the stated gain.**
+`state.question` is the only channel into `GENERATE_USER`, and seven other sites
+read that same field: `retrieve` matches tables against it, `describe` and
+`clarify` quote it, `present` narrates it, `chart` captions from it. A resumed
+run whose `question` still holds the original ambiguous text hands `generate`
+exactly the question the clarification existed to sharpen. There are three ways
+out and all three are worse than what is there now:
+
+- **Fold the reply into `state.question` on resume.** That is
+  `_compose_question`, moved out of `run_service` and into a node — relocated,
+  not deleted, and now living in a layer that may not read the `messages` table
+  it composes from.
+- **Pass the exchange as history instead.** This is the failure the function was
+  written to fix, and its docstring records the incident: "Total sales (order
+  amount)" answered alone produced one figure for the question "who are the best
+  sellers?", because the transcript was passive context and lost every time to
+  the `_SQL_RULES` line about answering at exactly the granularity asked.
+- **Put the reply in `GENERATE_SYSTEM`.** Non-negotiable #1, and eval Round 2
+  already priced additions to that prompt in accuracy.
+
+What actually survives of the gain: `_pending_clarification` goes — one query,
+about twenty-five lines — and "at most once per exchange" becomes structural
+instead of a status check on the previous run. A real improvement, and a much
+smaller prize than the record above claimed.
+
+**2. A paused checkpoint is Phase 4's chat-run measurement, held far longer and
+stale when it is finally read.** The pause is at `clarify`, two nodes past
+`retrieve`, and neither `describe` nor `clarify` adds materially to state — so
+the row is the 88,368 B in Phase 4's table, **97% of it the schema block**.
+Phase 4 declined that write for a run lasting 5–60 seconds. Here the same row is
+held across human think-time, which [architecture.md §13.2](architecture.md)
+puts in hours, and *then read back*. The reading is the new part: today the reply
+is an ordinary new run, so `retrieve` runs again and sees the current snapshot.
+A resumed thread instead answers against a schema block captured before the
+pause — re-sync a connection while a clarification is open and the resumed run
+generates SQL against columns that may have moved. That failure does not exist
+today, and this phase would introduce it.
+
+**3. [architecture.md §13.2](architecture.md) already decided this, and nothing
+found since has weakened it.** Its title is "Why clarification is a run outcome,
+not an interrupt", and unlike §13.3's LangGraph triggers it was never a
+deferral — it is a decision, with reasons that still hold: the round trip is
+already a message in the conversation, the UI shows it as one, history needs it
+as one, and it may take hours. §13.3's own adoption note is worth reading beside
+it, because it names which trigger actually fired for Phase 1 — five non-linear
+edges and a second executor over one node set — and human-in-the-loop was
+explicitly not it.
+
+**A correction to Phase 4's third finding, while we are here.** The custom saver
+is smaller than that finding claimed. `BaseCheckpointSaver` in 1.2.11 has
+**seventeen** methods that raise `NotImplementedError`, not fifteen — but an
+async-only caller reaches about **six** of them: `aget_tuple`, `alist`, `aput`,
+`aput_writes`, `get_next_version`, and `adelete_thread` for the reaper. The
+entire sync half is dead code in this process, and `acopy_thread`, `aprune` and
+`adelete_for_runs` serve operations nothing here performs. So "not a weekend"
+overstates it. Phase 4's decision does not rest on that finding — findings 1 and
+2 there are the load-bearing ones — and neither does this one: the saver's price
+was never the reason to decline Phase 5. Points 1–3 above are.
+
+**What the remaining checklist items become.** They are the implementation of a
+design that was not adopted, so they are not outstanding work — and two of them
+turn out to be already satisfied by the design that stayed:
+
+- **The reconciler already leaves paused threads alone**, for free and by
+  construction. `reconcile_stale` sweeps `QUEUED` and `RUNNING`;
+  `NEEDS_CLARIFICATION` is neither, which is exactly why `RunStatus.is_in_flight`
+  is not the inverse of `is_terminal`. Cancel still reaches such a run because
+  it is non-terminal, and the reconciler stays away because it is not in flight.
+  One status carries both facts.
+- **There are no abandoned threads to reap.** An abandoned clarification is an
+  ordinary `runs` row with a `CLARIFICATION` artifact, costing what every other
+  finished run costs. The scheduled reaper this phase would have needed exists
+  only to clean up after the checkpoint it would also have introduced.
+- **`clarify_enabled=false` is still byte-identical** to the pre-feature
+  pipeline, unchanged by this phase and still asserted by `test_clarify.py`.
+
+**When to revisit.** If a clarification ever has to pause *inside* a node rather
+than between turns — an analyst approving generated SQL before it executes, which
+is architecture.md §13.3's third trigger and the serious version of this idea —
+then an interrupt expresses something the run-outcome design cannot, and this
+decision is wrong. Reopen it then, and reopen Phase 4's finding 1 with it: the
+checkpoint and the work product have to land in one transaction, which is the
+argument for the SQLAlchemy saver and against the psycopg pool.
 
 ### Phase 6 — Cross-replica execution
 
@@ -870,13 +970,25 @@ A phase is done when all five pass, not when the code runs.
       it is now `stranded_runs`, which *names* interrupted runs and writes
       nothing; startup hands each to `submit_resume`
 
-### Phase 5 — Durable clarification (optional)
-- [ ] Explicit go/no-go decision recorded — this changes user-visible behaviour
-- [ ] `interrupt()` replaces the end-run-and-recompose design
-- [ ] `_compose_question` and `_pending_clarification` removed
-- [ ] Reconciler leaves paused threads alone
-- [ ] Abandoned threads reaped on a schedule
-- [ ] `clarify_enabled=false` still byte-identical to the pre-feature pipeline
+### Phase 5 — Durable clarification (optional) — **not adopted**
+- [x] **Explicit go/no-go decision recorded — no-go.** Three findings, any one
+      sufficient: `_compose_question` would have survived the change, an
+      88 KB checkpoint would be held across human think-time and read back
+      stale, and [architecture.md §13.2](architecture.md) already decided this
+      on reasons that still hold. See "The go/no-go, made" above
+- [x] ~~`interrupt()` replaces the end-run-and-recompose design~~ → not adopted;
+      a clarify round-trip stays two runs and a `CLARIFICATION` artifact
+- [x] ~~`_compose_question` and `_pending_clarification` removed~~ → only the
+      second would have gone. `_compose_question` relocates into a node under
+      any resume design, because `state.question` is the sole channel into
+      `GENERATE_USER` and six other nodes read it — finding 1
+- [x] Reconciler leaves paused threads alone — **already true, by
+      construction**: it sweeps `QUEUED`/`RUNNING`, and `NEEDS_CLARIFICATION` is
+      neither, while staying non-terminal so `cancel` still reaches it
+- [x] ~~Abandoned threads reaped on a schedule~~ → nothing to reap. An abandoned
+      clarification is an ordinary run row, not an 88 KB checkpoint
+- [x] `clarify_enabled=false` still byte-identical to the pre-feature pipeline —
+      untouched by this phase, still asserted by `test_clarify.py`
 
 ### Phase 6 — Cross-replica
 - [ ] Redis-backed `EventPublisher` adapter
