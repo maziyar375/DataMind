@@ -31,7 +31,7 @@ from app.core.errors import (
 from app.domain.ports.database import QueryResult, ResultColumn
 from app.domain.ports.llm import Completion
 from app.pipeline.contracts import SqlProposal
-from app.pipeline.prompts import CHART_SYSTEM_COMPOSED
+from app.pipeline.prompts import _SQL_RULES, CHART_SYSTEM_COMPOSED, GENERATE_SYSTEM
 from app.services import query_service, sql_draft_service
 from app.services.sql_draft_service import PREVIEW_MAX_ROWS, draft_sql, validate_sql
 
@@ -880,3 +880,107 @@ async def test_the_chart_call_sends_shape_and_never_a_row_value(
     assert "3 distinct" in sent          # cardinality: a count, always shared
     assert "120" not in sent             # the largest total_amount in ROWS
     assert "20" not in sent              # the smallest
+
+
+# ── the METRIC tile's SQL rules and its preview ──────────────────────────
+# `tile_type` is the only thing on this path that tells the SQL prompt what the
+# result will be *shown* as. What it must buy, and what it must not disturb.
+async def _typed_draft(
+    monkeypatch: pytest.MonkeyPatch, *, gateway: Any, tile_type: str | None, **kwargs: Any
+) -> Any:
+    db, connection, llm_config, _connector = _world(
+        monkeypatch, gateway=gateway, **kwargs
+    )
+    return await draft_sql(
+        db,
+        FakeSettings(),
+        connection_id=connection.id,
+        llm_config_id=llm_config.id,
+        question="revenue",
+        owner_id=OWNER,
+        tile_type=tile_type,
+    ), db
+
+
+async def test_a_metric_tile_asks_the_prompt_for_a_series(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_SQL_RULES` says to return one row for a single figure — right for chat,
+    and exactly what made every big-number tile a lonely number. `plan_kpi`
+    needs more than one row *and* a temporal column before a delta or a
+    sparkline is reachable at all, so the rules have to be told."""
+    gateway = FakeGateway(VALID_SQL)
+    await _typed_draft(monkeypatch, gateway=gateway, tile_type="METRIC")
+
+    system = gateway.calls[0][0].content
+    assert "This query feeds a big-number tile" in system
+    assert "two columns" in system
+    # Appended, never substituted: the prompt's own mandatory rules come first.
+    assert system.index("Rules, all mandatory:") < system.index("big-number tile")
+
+
+async def test_no_other_tile_type_sees_those_rules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A CHART tile wants a breakdown, not a time series, and a rule telling it
+    otherwise would be a regression dressed as a feature."""
+    for tile_type in ("CHART", "TABLE", None):
+        gateway = FakeGateway(VALID_SQL)
+        await _typed_draft(monkeypatch, gateway=gateway, tile_type=tile_type)
+        assert "big-number tile" not in gateway.calls[0][0].content
+
+
+async def test_a_chat_run_never_sees_the_metric_rules() -> None:
+    """The rules live behind `extra_rules`, so `GENERATE_SYSTEM` itself is
+    untouched. This is why `PROMPT_VERSION` does not move and why the eval
+    suite — which drafts nothing — cannot see this change."""
+    assert "big-number tile" not in GENERATE_SYSTEM
+    assert "big-number tile" not in _SQL_RULES
+
+
+async def test_a_metric_draft_previews_the_big_number(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`want_kpi` is asked for, not inferred, so the editor used to preview a
+    big-number tile as a table and show the figure only after saving."""
+    draft, _db = await _typed_draft(
+        monkeypatch, gateway=FakeGateway(VALID_SQL), tile_type="METRIC"
+    )
+
+    assert draft.preview is not None
+    assert draft.preview.kpi is not None
+    assert draft.preview.kpi["label"] == "total_amount"
+
+
+async def test_only_a_metric_tile_pays_for_the_kpi(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Profiling a wide TABLE tile to build a big number nobody looks at is
+    work with no reader — `execute_saved_sql`'s own reason for the flag."""
+    draft, _db = await _typed_draft(
+        monkeypatch, gateway=FakeGateway(VALID_SQL), tile_type="TABLE"
+    )
+
+    assert draft.preview is not None
+    assert draft.preview.kpi is None
+
+
+async def test_the_hand_written_road_previews_a_big_number_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Someone writing their own `SELECT month, SUM(...)` sees the same figure
+    the plain-language road does. No model is involved either way here."""
+    gateway = FakeGateway(VALID_SQL)
+    db, connection, _llm_config, _connector = _world(monkeypatch, gateway=gateway)
+
+    draft = await validate_sql(
+        db,
+        FakeSettings(),
+        connection_id=connection.id,
+        sql=VALID_SQL,
+        owner_id=OWNER,
+        tile_type="METRIC",
+    )
+
+    assert gateway.calls == []
+    assert draft.preview is not None and draft.preview.kpi is not None

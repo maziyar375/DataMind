@@ -66,6 +66,7 @@ async def create_draft(
             # A tile keeps what it is drawn as, so it is worth asking. The
             # report-block route deliberately does not — see `draft_sql`.
             compose_chart=True,
+            tile_type=payload.tile_type,
         )
     )
 
@@ -86,5 +87,6 @@ async def validate_draft(
             connection_id=payload.connection_id,
             sql=payload.sql,
             owner_id=ctx.user_id,
+            tile_type=payload.tile_type,
         )
     )

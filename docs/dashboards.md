@@ -181,8 +181,8 @@ is the only way a reader tells a 30-second tile from the hourly one beside it.
 ### Authoring endpoints
 
 ```
-POST /sql/drafts            {connection_id, llm_config_id, question} -> draft
-POST /sql/drafts/validate   {connection_id, sql} -> report + preview
+POST /sql/drafts            {connection_id, llm_config_id, question, tile_type?} -> draft
+POST /sql/drafts/validate   {connection_id, sql, tile_type?} -> report + preview
 ```
 
 `draft_sql` reuses the pipeline's `retrieve` → `generate` → `validate` nodes
@@ -285,6 +285,15 @@ that a model wrote the other twenty lines.
 
 **Axis pickers are populated from the preview's columns**, never from the SQL
 text — a name the result does not have loses the chart.
+
+**The type picker is an input, not just an output.** `tile_type` rides on both
+draft requests: `METRIC` appends SQL rules asking for a time series rather than
+a lone figure, and asks the preview for a KPI so the editor shows the big number
+it will actually draw — delta and sparkline included — instead of the rows
+underneath it. Switching *to* METRIC re-checks once for that reason, since the
+previous check did not ask for a KPI. It is a hint about the destination and
+never a promise: nothing is saved by a draft, and the tile save path validates
+the real type on its own.
 
 **Whether the suggestion also moves the *type* depends on who chose it.**
 `chart_source` comes back on the draft saying which: a `heuristic` pick defaults

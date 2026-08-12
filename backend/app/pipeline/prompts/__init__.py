@@ -420,6 +420,37 @@ Return JSON matching the ChartIntent schema."""
 # `test_charts.py::test_every_chart_type_is_described` holds the first half of
 # that; the second half is a reading, not a test.
 
+METRIC_SQL_RULES = """\
+This query feeds a big-number tile. One figure is what it shows; a figure with
+its recent history is what makes it worth looking at.
+
+So when the measure is something that moves over time, return **two columns and
+several rows** — a time column first (a month, a day, whatever the question's
+grain is), then the measure, grouped by that time column and ordered by it
+ascending. The platform reads the latest row as the number, the row before it
+as the change, and the whole series as the line drawn underneath. A single row
+is drawn as a bare figure with nothing to compare it to.
+
+End the window at the start of the current period rather than at today, so a
+part-finished month is not drawn as a collapse against the full ones before it.
+
+Return one row only when the question genuinely has no time dimension — a
+count of something that exists now rather than something that accumulated."""
+# Appended to `GENERATE_SYSTEM` for METRIC tiles only, through
+# `NodeDeps.extra_rules` — the same hook and the same reasoning as
+# `report_time_rules`. With no METRIC tile in play the SQL prompts are
+# byte-identical to what chat has always sent, which is why `PROMPT_VERSION`
+# does not move for this and why the eval suite (which drafts nothing) cannot
+# see it. `test_a_chat_run_never_sees_the_metric_rules` holds that.
+#
+# It exists because `_SQL_RULES` says the opposite for good reasons of its own:
+# "if the question asks for a single figure, return one row with just that
+# value". That rule is right for chat, where a one-row answer is read as a
+# sentence — and it is exactly what made every METRIC tile a lonely number.
+# `plan_kpi` needs more than one row *and* a non-constant temporal column
+# before it will compute a delta or a sparkline, so under the base rule alone
+# both were unreachable rather than merely unchosen.
+
 CHART_COMPOSED_RULES = """\
 This result is a dashboard tile, not a chat answer. The reader has already
 decided there will be a picture; the question is which one, not whether.

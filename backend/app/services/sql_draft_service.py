@@ -47,6 +47,7 @@ from app.pipeline.nodes import (
     route,
     validate,
 )
+from app.pipeline.prompts import METRIC_SQL_RULES
 from app.pipeline.state import RunState
 from app.services.query_service import (
     TileResult,
@@ -134,6 +135,27 @@ class SqlDraft:
     llm_config_id: UUID | None = None
 
 
+def _sql_rules_for(extra_rules: str, tile_type: str | None) -> str:
+    """The caller's own SQL constraints, plus any the tile type earns.
+
+    The two sources are disjoint in practice — `extra_rules` is a report
+    block's date arithmetic and a report has no tiles — but they compose rather
+    than override, because a rule that silently replaced another would be found
+    only by reading a prompt nobody prints.
+
+    Order matters: `_with_extra_rules` appends this whole block after the
+    prompt's own mandatory rules, so a caller can add to them and never restate
+    them differently.
+    """
+    parts = [part.strip() for part in (extra_rules, _METRIC_RULES.get(tile_type or "", ""))]
+    return "\n\n".join(part for part in parts if part)
+
+
+#: Which tile types append SQL rules of their own. A dict rather than an `if`
+#: so adding one is a line here and not a branch to find.
+_METRIC_RULES = {"METRIC": METRIC_SQL_RULES}
+
+
 @dataclass(frozen=True, slots=True)
 class _ChartAsk:
     """What `_draft` needs in order to ask a model what to draw.
@@ -161,6 +183,7 @@ async def draft_sql(
     extra_rules: str = "",
     classify: bool = False,
     compose_chart: bool = False,
+    tile_type: str | None = None,
 ) -> SqlDraft:
     """Ask a model for SQL that answers `question`, then guard it and run it.
 
@@ -188,6 +211,13 @@ async def draft_sql(
     deliberately persists none of its three chart fields (`chart_config` stays
     NULL so a re-run on differently-shaped data may re-decide), which would make
     the same call a token spent on a value thrown away before it is read.
+
+    `tile_type` is what the editor's type picker is set to, and it is the only
+    thing on this path that tells the SQL prompt what the result will be *shown
+    as*. It buys two things and costs no extra model call: `METRIC` appends
+    `METRIC_SQL_RULES`, and it asks the preview for a KPI so the editor can show
+    the big number it is actually going to draw. `None` — a caller that does not
+    know, or a report block, which has no tiles — behaves exactly as before.
     """
     connection = await _owned(db, DatabaseConnection, connection_id, owner_id)
     llm_config = await _owned(db, LlmConfig, llm_config_id, owner_id)
@@ -211,7 +241,7 @@ async def draft_sql(
             policy=policy_from_snapshot(snapshot, connection),
             emit=_no_emit,
             semantic=await _semantic(db, connection),
-            extra_rules=extra_rules,
+            extra_rules=_sql_rules_for(extra_rules, tile_type),
         )
 
         if classify:
@@ -249,6 +279,7 @@ async def draft_sql(
             owner_id=owner_id,
             question=question,
             llm_config_id=llm_config.id,
+            want_kpi=tile_type == "METRIC",
             ask=(
                 _ChartAsk(deps=deps, state=state, question=question)
                 if compose_chart
@@ -289,11 +320,17 @@ async def validate_sql(
     connection_id: UUID,
     sql: str,
     owner_id: UUID,
+    tile_type: str | None = None,
 ) -> SqlDraft:
     """Guard and preview a statement the user wrote or edited. No model.
 
     Passing here is not authorisation to save, and saving is not authorisation
     to run: the tile save path guards again, and so does every refresh.
+
+    `tile_type` buys the preview's KPI here and nothing else — there is no
+    prompt on this road to append rules to. Which is the point: a user writing
+    their own `SELECT month, SUM(...)` for a big-number tile sees the delta and
+    the sparkline in the editor exactly as the plain-language road does.
     """
     connection = await _owned(db, DatabaseConnection, connection_id, owner_id)
     snapshot = await _snapshot_or_refuse(db, connection)
@@ -308,6 +345,7 @@ async def validate_sql(
         snapshot=snapshot,
         connector=None,
         owner_id=owner_id,
+        want_kpi=tile_type == "METRIC",
     )
 
 
@@ -324,6 +362,7 @@ async def _draft(
     owner_id: UUID,
     question: str | None = None,
     llm_config_id: UUID | None = None,
+    want_kpi: bool = False,
     ask: _ChartAsk | None = None,
 ) -> SqlDraft:
     """Attach a preview and a chart suggestion to a statement and its report.
@@ -346,6 +385,12 @@ async def _draft(
             max_rows=PREVIEW_MAX_ROWS,
             connector=connector,
             snapshot=snapshot,
+            # So the editor can show the big number it will actually draw.
+            # `plan_kpi` is a pure function over rows already fetched, so the
+            # only reason this was ever withheld is the one `execute_saved_sql`
+            # states: profiling a wide TABLE tile to build a KPI nobody looks
+            # at is work with no reader. A METRIC tile has the reader.
+            want_kpi=want_kpi,
         )
 
     suggestion, source = await _chart_suggestion(preview, ask)

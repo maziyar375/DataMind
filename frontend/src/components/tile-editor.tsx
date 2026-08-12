@@ -44,7 +44,7 @@ import type {
 import { ChartTypePicker } from './chart-picker'
 import { REFRESH_OPTIONS, rateLabel } from './dashboard'
 import {
-  Chip, ErrorNote, Field, GhostButton, Icon, Modal, PrimaryButton, ResultTable,
+  Chip, ErrorNote, Field, GhostButton, Icon, Kpi, Modal, PrimaryButton, ResultTable,
   Select, Spinner, TextArea, TextInput,
 } from './ui'
 
@@ -304,7 +304,7 @@ export function TileEditor({
     let cancelled = false
     setChecking(true)
     sqlDrafts
-      .validate({ connection_id: connectionId, sql: checkTarget })
+      .validate({ connection_id: connectionId, sql: checkTarget, tile_type: tileType })
       .then((result) => {
         if (cancelled) return
         setDraft(result)
@@ -326,6 +326,21 @@ export function TileEditor({
       setChecking(false)
     }
   }, [checkTarget, checkedSql, connectionId, needsSql])
+
+  // Switching *to* METRIC changes what the preview has to carry. `want_kpi` is
+  // asked for rather than inferred, so the check that already ran did not ask
+  // for one — and a big-number tile previewed with no big number in it is the
+  // thing this whole feature exists to stop. Re-check once, on the transition
+  // only: `checkedSql` is cleared so the guard below does not skip it as
+  // already-checked, and the effect cannot loop because nothing it sets is in
+  // its own dependency list.
+  useEffect(() => {
+    if (tileType !== 'METRIC' || !sql.trim()) return
+    if (draft?.preview?.kpi) return
+    setCheckedSql(null)
+    setCheckTarget(sql)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tileType])
 
   // Pre-fill the pickers from the shape that just came back. Whether that
   // includes the *type* depends on who chose it — see below.
@@ -403,6 +418,11 @@ export function TileEditor({
         connection_id: connectionId,
         llm_config_id: llmConfigId,
         question: question.trim(),
+        // The one thing on this path that tells the SQL prompt what the result
+        // will be *shown* as. A big number asked for as "total revenue" comes
+        // back as one row, which is a figure with nothing under it — METRIC
+        // asks for the series that earns a delta and a sparkline instead.
+        tile_type: tileType,
       })
       setDraft(result)
       setSql(result.sql)
@@ -690,7 +710,10 @@ export function TileEditor({
                 />
               </Field>
 
-              <GuardReport draft={draft} checking={checking} origin={origin} stale={stale} />
+              <GuardReport
+                draft={draft} checking={checking} origin={origin} stale={stale}
+                tileType={tileType}
+              />
 
               {tileType === 'TABLE' && (
                 <Field
@@ -933,13 +956,15 @@ function SqlBox({
  * rendering is the one the save path will use.
  */
 function GuardReport({
-  draft, checking, origin, stale,
+  draft, checking, origin, stale, tileType,
 }: {
   draft: SqlDraft | null
   checking: boolean
   origin: SqlOrigin
   /** The text has moved on since this verdict was issued. */
   stale: boolean
+  /** Which preview to lead with: a METRIC tile is a number before it is rows. */
+  tileType: TileType
 }) {
   if (!draft) {
     return (
@@ -999,6 +1024,17 @@ function GuardReport({
 
       {draft.preview?.error && <ErrorNote>{draft.preview.error.message}</ErrorNote>}
 
+      {/* The big number as the tile will draw it, above the rows it came from.
+          `plan_kpi` decides on the backend — which column is the value, whether
+          the extra rows are a comparison or clutter — so what is previewed here
+          is the same object the saved tile renders, not a second opinion. When
+          it is absent on a METRIC tile the rows below are the explanation: one
+          row, or no time column, and there is no delta or sparkline to draw. */}
+      {tileType === 'METRIC' && draft.preview?.kpi && (
+        <div style={{ marginBottom: 12 }}>
+          <Kpi spec={draft.preview.kpi} compact />
+        </div>
+      )}
       {draft.preview && draft.preview.status === 'OK' && draft.preview.columns.length > 0 && (
         <ResultTable spec={draft.preview} previewRows={5} maxHeight={220} />
       )}

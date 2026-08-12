@@ -13,7 +13,7 @@ import type {
   ReportBlockCheck, ReportChart, ReportRun, ReportRunDetail, ReportSection,
   ReportSectionResult,
   ReportSummary, RunDetail, RunEvent, SchemaSnapshot, SemanticDocument, SemanticJob,
-  SemanticLayer, SqlDraft, TilePosition, TileResult, TestResult, User,
+  SemanticLayer, SqlDraft, TilePosition, TileResult, TileType, TestResult, User,
 } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? '/api/v1'
@@ -264,9 +264,16 @@ export const conversations = {
 // Two ways to reach one shape. `draft` asks a model; `validate` never does, so
 // a user with no provider configured can still build a whole dashboard.
 export const sqlDrafts = {
-  draft: (payload: { connection_id: string; llm_config_id: string; question: string }) =>
-    post<SqlDraft>('/sql/drafts', payload),
-  validate: (payload: { connection_id: string; sql: string }) =>
+  // `tile_type` is a hint about where the statement is headed, not a promise:
+  // METRIC earns SQL rules that ask for a series rather than a lone figure, and
+  // a KPI on the preview. Optional, and omitting it behaves as before.
+  draft: (payload: {
+    connection_id: string
+    llm_config_id: string
+    question: string
+    tile_type?: TileType
+  }) => post<SqlDraft>('/sql/drafts', payload),
+  validate: (payload: { connection_id: string; sql: string; tile_type?: TileType }) =>
     post<SqlDraft>('/sql/drafts/validate', payload),
 }
 

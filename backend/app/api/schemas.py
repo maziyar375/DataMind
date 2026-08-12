@@ -432,10 +432,22 @@ class TileResultRead(BaseModel):
     error: TileErrorRead | None = None
 
 
+#: What the editor's type picker is set to while a draft is being made. It is a
+#: *hint about the destination*, never a promise — nothing is saved here, and
+#: the tile save path validates the real type independently. Optional so a
+#: client that does not send it behaves exactly as one written before this
+#: existed.
+TileTypeHint = Literal["CHART", "TABLE", "METRIC", "TEXT"] | None
+
+
 class SqlDraftRequest(BaseModel):
     connection_id: UUID
     llm_config_id: UUID
     question: str = Field(min_length=1, max_length=2000)
+    # METRIC earns two things: SQL rules that ask for a series rather than a
+    # lone figure, and a KPI on the preview so the editor shows the big number
+    # it will actually draw.
+    tile_type: TileTypeHint = None
 
 
 class SqlValidateRequest(BaseModel):
@@ -443,6 +455,10 @@ class SqlValidateRequest(BaseModel):
 
     connection_id: UUID
     sql: str = Field(min_length=1, max_length=100_000)
+    # No prompt on this road, so this buys the preview's KPI alone — which is
+    # what lets someone writing their own `SELECT month, SUM(...)` see the
+    # delta and the sparkline before saving.
+    tile_type: TileTypeHint = None
 
 
 class SqlDraftRead(BaseModel):

@@ -106,6 +106,18 @@ The connection's **semantic layer** is loaded on exactly the run path's terms
 (`load_document`, and `RetrievedContext.render` scopes and gates it). A draft is
 not a loophole around the layer's switch, nor around the disclosure budget.
 
+**Node 2.5 — the rules the tile type earns.** `tile_type` rides on the request
+as a *hint about the destination* — nothing is saved here, and the tile save
+path validates the real type independently. `METRIC` appends
+`METRIC_SQL_RULES` through `NodeDeps.extra_rules`, the same hook a report
+block's date arithmetic uses. It exists because `_SQL_RULES` tells the model to
+return **one row** for a single figure, which is right for chat and is what made
+every big-number tile a lonely number: `plan_kpi` needs more than one row *and*
+a non-constant temporal column before a delta or a sparkline is reachable at
+all. Every other type appends nothing, so their prompts are byte-identical —
+and so is chat's, which is why `PROMPT_VERSION` does not move and the eval suite
+cannot see this.
+
 **Node 3+4 — `generate` → `validate`, up to twice.**
 
 ```python
@@ -119,8 +131,10 @@ for _ in range(DRAFT_MAX_REPAIRS + 1):
 
 Same prompts as chat — `GENERATE_SYSTEM` with `_SQL_RULES` and `_OUTPUT_RULES`
 on attempt 1, `REPAIR_SYSTEM` with the guard's feedback on attempt 2 — and the
-same `SqlProposal` contract. `extra_rules` is empty for a tile, which means the
-prompt is **byte-identical** to what chat sends.
+same `SqlProposal` contract. `extra_rules` is empty for every tile type except
+`METRIC` (node 2.5 above), which means those prompts are **byte-identical** to
+what chat sends — `_with_extra_rules` returns its input unchanged rather than
+rebuilding it, so this is identity and not a coincidence.
 
 If the second attempt is also rejected, the loop simply ends: the draft is
 returned with `validation_status != "VALID"`, no preview, and the guard's issues
@@ -133,6 +147,13 @@ takes with metric-expression errors.
 **raw** statement, not the guard's rewrite, because `execute_saved_sql` re-guards
 from scratch and previewing the rewrite would preview something the tile will
 never be asked to run.
+
+It is asked for a **KPI** when `tile_type` is `METRIC` (`want_kpi`), on both
+roads. `plan_kpi` is a pure function over rows already fetched, so the only
+reason to withhold it is the one `execute_saved_sql` states — profiling a wide
+TABLE tile to build a big number nobody looks at is work with no reader — and a
+METRIC tile has the reader. Before this, the editor previewed a big-number tile
+as a table and the figure appeared only after saving.
 
 **Node 6 — what it should be drawn as.** `_chart_suggestion` runs
 `profile_result` → `plan_chart` over the preview, and `_chart_options` returns a
@@ -178,6 +199,11 @@ question moves the type picker off Auto.** [dashboards.md](dashboards.md), under
 `validate_sql` — guard, preview, verdict, **no model**. Same `SqlDraft` response
 shape, which is what lets one editor serve both roads, and what makes a whole
 dashboard buildable by a user with **no LLM provider configured at all**.
+
+It takes `tile_type` too, and there it buys the preview's KPI alone — there is
+no prompt on this road to append rules to. Which is the point: someone writing
+their own `SELECT month, SUM(...)` sees the delta and the sparkline in the
+editor exactly as the plain-language road does.
 
 It is also the "I edited what the model gave me" road, because those are the
 same thing.

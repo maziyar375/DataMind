@@ -299,6 +299,24 @@ written, whether extra rows are a comparison or clutter. One renderer,
 dashboard `METRIC` tile — which is what stops the two from disagreeing about
 the same number.
 
+**A big number needs a series before it can have a line.** `plan_kpi` attaches a
+delta and a sparkline only when the result carries more than one row *and* a
+non-constant temporal column it can sort — a gap in the series would draw a line
+through a point that is not there, so the sparkline is all-or-nothing. A
+one-row result is a bare figure, and a multi-row result with no time column
+reports the first row and says so (*"first of 4,200 rows"*).
+
+That made every tile written from a sentence a lonely number, because
+`_SQL_RULES` says the opposite for reasons of its own: *"if the question asks
+for a single figure, return one row with just that value"*. Right for chat,
+where a one-row answer is read as a sentence — and it put the delta and the
+sparkline out of reach rather than merely unchosen. A tile draft that knows it
+is feeding a METRIC tile now appends `METRIC_SQL_RULES` through
+`NodeDeps.extra_rules`, asking for a time column and the rows behind it. Same
+hook and same reasoning as a report block's date arithmetic: `GENERATE_SYSTEM`
+is untouched, a chat run's prompt is byte-identical, and `PROMPT_VERSION` does
+not move.
+
 **Direction is drawn, never coloured.** Green-for-up is a judgement the data
 does not carry: a rising refund rate is not good news, and the backend cannot
 know which metric this is. The delta shows ▲ ▼ — with a semantic colour pair
