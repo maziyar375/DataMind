@@ -122,6 +122,21 @@ export default function App() {
   )
 }
 
+/**
+ * The application's rail.
+ *
+ * One flat list of destinations, in the order the product is used. It was
+ * briefly cut into "Workspace" and "Configure" groups and that was worse:
+ * captions over six items are furniture, and the split invited a decision
+ * ("which half is this in?") on every glance at a list short enough to read
+ * whole.
+ *
+ * What the rail does carry is state made visible — the open page keeps an
+ * accent rail and an accent glyph, matching the selected row of the settings
+ * index one column to the right, so "where am I" is answered the same way
+ * everywhere in the product. Hover and selection live in the stylesheet
+ * (`.rm-nav-btn`), so the rail holds no React state per button.
+ */
 function Sidebar({
   user, view, onNavigate, theme, onToggleTheme, onLogout,
 }: {
@@ -152,37 +167,22 @@ function Sidebar({
       aria-label="Main"
       className="rm-sidebar"
       style={{
-        width: 224,
+        width: 232,
         flexShrink: 0,
         display: 'flex',
         flexDirection: 'column',
         background: 'var(--sidebar-bg)',
         borderRight: '1px solid var(--border)',
-        padding: '20px 14px',
+        padding: '18px 12px 14px',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: '0 8px 20px' }}>
-        <Logo />
-        <div className="rm-sidebar-text" style={{ fontWeight: 700, fontSize: 15, letterSpacing: '-0.01em' }}>
-          DataMind
-        </div>
-        <div
-          className="rm-sidebar-text"
-          style={{
-            marginLeft: 'auto',
-            fontSize: 10,
-            fontWeight: 600,
-            color: 'var(--text-dim)',
-            background: 'var(--panel-alt)',
-            padding: '2px 6px',
-            borderRadius: 4,
-          }}
-        >
-          v0
-        </div>
+      <div className="rm-brand">
+        <Logo size={34} />
+        <span className="rm-sidebar-text rm-brand-name">DataMind</span>
+        <span className="rm-sidebar-text rm-brand-tag">v0.1</span>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 18 }}>
         {items.map((item) => (
           <NavButton
             key={item.key}
@@ -194,79 +194,53 @@ function Sidebar({
         ))}
       </div>
 
-      <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <button
-          onClick={onToggleTheme}
-          aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
-          className="rm-sidebar-theme"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 9,
-            padding: '8px',
-            background: 'transparent',
-            border: 'none',
-            color: 'var(--text-dim)',
-            fontSize: 12.5,
-            cursor: 'pointer',
-          }}
-        >
-          <span
-            style={{
-              width: 34,
-              height: 18,
-              borderRadius: 9,
-              background: 'var(--panel-alt)',
-              border: '1px solid var(--border-strong)',
-              position: 'relative',
-              flexShrink: 0,
-            }}
+      <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {/* Drawn as the two things you can pick rather than as a track with a
+            knob: a switch labelled "Dark" never says whether that is the state
+            or the offer. Collapsed to the icon of the *other* theme on the
+            narrow rail, where there is no room for both. */}
+        <div className="rm-theme" role="group" aria-label="Theme">
+          <button
+            type="button"
+            className={theme === 'dark' ? 'is-on' : undefined}
+            aria-pressed={theme === 'dark'}
+            title="Dark theme"
+            onClick={() => theme !== 'dark' && onToggleTheme()}
           >
-            <span
-              style={{
-                position: 'absolute',
-                top: 1,
-                left: theme === 'dark' ? 1 : 16,
-                width: 14,
-                height: 14,
-                borderRadius: '50%',
-                background: 'var(--accent)',
-                transition: 'left .15s ease',
-              }}
-            />
-          </span>
-          <span className="rm-sidebar-text">{theme === 'dark' ? 'Dark' : 'Light'}</span>
-        </button>
+            <Icon.Moon size={13} />
+            <span className="rm-sidebar-text">Dark</span>
+          </button>
+          <button
+            type="button"
+            className={theme === 'light' ? 'is-on' : undefined}
+            aria-pressed={theme === 'light'}
+            title="Light theme"
+            onClick={() => theme !== 'light' && onToggleTheme()}
+          >
+            <Icon.Sun size={13} />
+            <span className="rm-sidebar-text">Light</span>
+          </button>
+        </div>
 
-        <div
-          className="rm-sidebar-user"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 9,
-            padding: '8px',
-            borderTop: '1px solid var(--border)',
-            paddingTop: 14,
-          }}
-        >
+        <div className="rm-sidebar-user">
           <span
             style={{
-              width: 28,
-              height: 28,
-              borderRadius: 8,
+              width: 30,
+              height: 30,
+              borderRadius: 9,
               background: 'var(--accent)',
               color: 'var(--on-accent)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              fontSize: 12,
+              fontSize: 12.5,
               fontWeight: 700,
               flexShrink: 0,
             }}
           >
             {initialOf(user.display_name || user.email)}
           </span>
-          <div className="rm-sidebar-text" style={{ display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.2 }}>
+          <div className="rm-sidebar-text" style={{ display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.25 }}>
             <span
               style={{
                 fontSize: 12.5,
@@ -287,7 +261,7 @@ function Sidebar({
             onClick={onLogout}
             title="Sign out"
             aria-label="Sign out"
-            className="rm-sidebar-logout"
+            className="rm-sidebar-logout rm-icon-btn"
             style={{
               marginLeft: 'auto',
               flexShrink: 0,
@@ -296,11 +270,12 @@ function Sidebar({
               justifyContent: 'center',
               width: 28,
               height: 28,
-              borderRadius: 7,
+              borderRadius: 8,
               background: 'transparent',
-              border: '1px solid var(--border-strong)',
-              color: 'var(--text-dim)',
+              border: 'none',
+              color: 'var(--text-faint)',
               cursor: 'pointer',
+              ['--rm-hover-bg' as string]: 'var(--panel-hover)',
             }}
           >
             <Icon.Logout size={14} />
@@ -319,34 +294,12 @@ function NavButton({
   label: string
   onClick: () => void
 }) {
-  const [hover, setHover] = useState(false)
   return (
     <button
       onClick={onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
       aria-current={active ? 'page' : undefined}
-      className="rm-nav-btn"
+      className={`rm-nav-btn${active ? ' is-on' : ''}`}
       title={label}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        width: '100%',
-        padding: '9px 10px',
-        borderRadius: 8,
-        border: 'none',
-        cursor: 'pointer',
-        fontSize: 13.5,
-        fontWeight: active ? 600 : 500,
-        textAlign: 'left',
-        color: active ? 'var(--text-strong)' : 'var(--text-dim)',
-        background: active
-          ? 'var(--accent-bg)'
-          : hover
-            ? 'var(--panel-hover)'
-            : 'transparent',
-      }}
     >
       {icon}
       <span className="rm-sidebar-text">{label}</span>

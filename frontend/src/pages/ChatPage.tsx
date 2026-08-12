@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   conversations, connections as connectionsApi, llmConfigs,
   isRunInFlight, streamRun,
@@ -10,7 +10,8 @@ import {
   AssistantTurn, RunErrorCard, ThinkingCard, UserBubble,
 } from '../components/chat'
 import {
-  DisclosureBadge, ErrorNote, Icon, PrimaryButton, Spinner, dirOf, initialOf,
+  DisclosureBadge, ErrorNote, Icon, PrimaryButton, SearchField, Spinner,
+  dirOf, initialOf,
 } from '../components/ui'
 
 export default function ChatPage() {
@@ -396,37 +397,14 @@ export default function ChatPage() {
 
   return (
     <div style={{ display: 'flex', height: '100%', width: '100%', minWidth: 0 }}>
-      {/* conversation list */}
-      <aside
-        style={{
-          width: 244,
-          flexShrink: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 12,
-          padding: '20px 14px',
-          borderRight: '1px solid var(--border)',
-          overflowY: 'auto',
-        }}
-      >
-        <PrimaryButton onClick={newChat} style={{ width: '100%', borderRadius: 9 }}>
-          <Icon.Plus size={15} />
-          New chat
-        </PrimaryButton>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {conversationList.map((conversation) => (
-            <ConversationItem
-              key={conversation.id}
-              conversation={conversation}
-              active={conversation.id === activeId}
-              onSelect={() => setActiveId(conversation.id)}
-              onDelete={() => deleteConversation(conversation.id)}
-              onRename={(title) => renameConversation(conversation.id, title)}
-            />
-          ))}
-        </div>
-      </aside>
+      <ConversationSidebar
+        conversations={conversationList}
+        activeId={activeId}
+        onSelect={setActiveId}
+        onNew={newChat}
+        onDelete={deleteConversation}
+        onRename={renameConversation}
+      />
 
       {/* main column */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
@@ -894,6 +872,160 @@ function HeaderTitle({
   )
 }
 
+// ── the conversation list ───────────────────────────────────────────────────
+/**
+ * The threads, newest first, cut into the periods people actually think in.
+ *
+ * A chat list is unlike the other indexes in the product in one way that
+ * decides its shape: nobody remembers what they called a thread, they remember
+ * *when* they had it. So the ordering is recency, the grouping is recency, and
+ * the search is over the title and the preview line — three answers to the
+ * same question. The rest is the furniture every other index here has and this
+ * one lacked: a heading with a count, a filter once the list is long enough to
+ * need one, and something to read when it is empty.
+ */
+const DAY = 86_400_000
+
+function bucketOf(iso: string, now: number): string {
+  const age = now - new Date(iso).getTime()
+  if (age < DAY) return 'Today'
+  if (age < 7 * DAY) return 'Previous 7 days'
+  if (age < 30 * DAY) return 'Previous 30 days'
+  return 'Older'
+}
+
+const BUCKETS = ['Today', 'Previous 7 days', 'Previous 30 days', 'Older']
+
+function ConversationSidebar({
+  conversations: list, activeId, onSelect, onNew, onDelete, onRename,
+}: {
+  conversations: ConversationSummary[]
+  activeId: string | null
+  onSelect: (id: string) => void
+  onNew: () => void
+  onDelete: (id: string) => void
+  onRename: (id: string, title: string) => void
+}) {
+  const [query, setQuery] = useState('')
+
+  const groups = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    const matched = list.filter(
+      (conversation) =>
+        !needle
+        || conversation.title.toLowerCase().includes(needle)
+        || (conversation.preview ?? '').toLowerCase().includes(needle),
+    )
+    const now = Date.now()
+    const sorted = [...matched].sort(
+      (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+    )
+    return BUCKETS.map((label) => ({
+      label,
+      items: sorted.filter((conversation) => bucketOf(conversation.updated_at, now) === label),
+    })).filter((group) => group.items.length > 0)
+  }, [list, query])
+
+  return (
+    <aside
+      className="rm-chats"
+      style={{
+        width: 252,
+        flexShrink: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 0,
+        background: 'var(--sidebar-bg)',
+        borderRight: '1px solid var(--border)',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+          padding: '16px 12px 12px',
+          flexShrink: 0,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '0 2px' }}>
+          <span style={{ fontSize: 14.5, fontWeight: 700, letterSpacing: '-0.01em', color: 'var(--text-strong)' }}>
+            Chats
+          </span>
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              color: 'var(--text-faint)',
+              background: 'var(--panel-alt)',
+              padding: '2px 7px',
+              borderRadius: 20,
+            }}
+          >
+            {list.length}
+          </span>
+        </div>
+
+        <PrimaryButton onClick={onNew} style={{ width: '100%', borderRadius: 9 }}>
+          <Icon.Plus size={15} />
+          New chat
+        </PrimaryButton>
+
+        {/* Offered once the list outgrows a glance — the same rule the
+            Dashboards toolbar follows for its archived filter. */}
+        {list.length > 7 && (
+          <div className="rm-chats-search">
+            <SearchField
+              value={query}
+              onChange={setQuery}
+              ariaLabel="Search chats"
+              placeholder="Search chats…"
+            />
+          </div>
+        )}
+      </div>
+
+      <div
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          padding: '0 10px 16px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+        }}
+      >
+        {list.length === 0 ? (
+          <p style={{ fontSize: 12.5, lineHeight: 1.55, color: 'var(--text-dim)', padding: '4px 6px', margin: 0 }}>
+            No chats yet. Ask a question in plain language and DataMind writes
+            the SQL, runs it read-only, and shows you both.
+          </p>
+        ) : groups.length === 0 ? (
+          <p style={{ fontSize: 12.5, color: 'var(--text-dim)', padding: '4px 6px', margin: 0 }}>
+            Nothing matches “{query.trim()}”.
+          </p>
+        ) : (
+          groups.map((group) => (
+            <div key={group.label} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <span className="rm-chats-caption">{group.label}</span>
+              {group.items.map((conversation) => (
+                <ConversationItem
+                  key={conversation.id}
+                  conversation={conversation}
+                  active={conversation.id === activeId}
+                  onSelect={() => onSelect(conversation.id)}
+                  onDelete={() => onDelete(conversation.id)}
+                  onRename={(title) => onRename(conversation.id, title)}
+                />
+              ))}
+            </div>
+          ))
+        )}
+      </div>
+    </aside>
+  )
+}
+
 function ConversationItem({
   conversation, active, onSelect, onDelete, onRename,
 }: {
@@ -903,7 +1035,6 @@ function ConversationItem({
   onDelete: () => void
   onRename: (title: string) => void
 }) {
-  const [hover, setHover] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [editing, setEditing] = useState(false)
   const [value, setValue] = useState(conversation.title)
@@ -926,21 +1057,8 @@ function ConversationItem({
 
   return (
     <div
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => {
-        setHover(false)
-        setConfirming(false)
-      }}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        width: '100%',
-        padding: '9px 8px 9px 10px',
-        borderRadius: 8,
-        background: active || hover ? 'var(--panel-hover)' : 'transparent',
-        transition: 'background .12s ease',
-      }}
+      onMouseLeave={() => setConfirming(false)}
+      className={`rm-chat-item${active ? ' is-on' : ''}`}
     >
       {editing ? (
         <input
@@ -990,12 +1108,14 @@ function ConversationItem({
           }}
         >
           <span
+            aria-hidden
             style={{
               width: 26,
               height: 26,
-              borderRadius: 7,
-              background: 'var(--panel-alt)',
-              color: 'var(--text-dim)',
+              borderRadius: 8,
+              background: active ? 'var(--accent-bg)' : 'var(--panel-alt)',
+              border: `1px solid ${active ? 'var(--accent-border)' : 'var(--border)'}`,
+              color: active ? 'var(--accent)' : 'var(--text-dim)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -1043,7 +1163,13 @@ function ConversationItem({
       )}
 
       {editing ? null : confirming ? (
-        <span style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
+        // Same floating cluster, pinned open: a confirmation that moved the
+        // title out from under the pointer would be answering a different
+        // question than the one it asked.
+        <span
+          className="rm-chat-actions is-open"
+          style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}
+        >
           <button
             className="rm-icon-btn"
             onClick={onDelete}
@@ -1064,14 +1190,11 @@ function ConversationItem({
           </button>
         </span>
       ) : (
+        // Revealed on approach — and kept for the keyboard, which never
+        // produces a hover, by `:focus-within` in the stylesheet.
         <span
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 2,
-            flexShrink: 0,
-            visibility: hover ? 'visible' : 'hidden',
-          }}
+          className="rm-chat-actions"
+          style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}
         >
           <button
             className="rm-icon-btn"

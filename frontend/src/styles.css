@@ -539,10 +539,16 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 
 @media (max-width: 860px) {
   /* !important throughout: the shell declares these inline. */
-  .rm-sidebar { width: 66px !important; padding: 20px 10px !important; }
-  .rm-sidebar-text { display: none; }
-  .rm-sidebar .rm-nav-btn { justify-content: center; padding: 9px !important; }
-  .rm-sidebar-theme { justify-content: center; }
+  .rm-sidebar { width: 66px !important; padding: 18px 10px 14px !important; }
+  /* `!important` because two of these wrappers declare `display: flex`
+     inline, and an inline style beats an unmarked rule — which is how the
+     signed-in user's name used to spill out of a 66px rail and across the
+     panel beside it. */
+  .rm-sidebar-text { display: none !important; }
+  .rm-sidebar .rm-nav-btn { justify-content: center; padding: 9px; }
+  .rm-brand { justify-content: center; }
+  .rm-theme { flex-direction: column; }
+  .rm-theme button { justify-content: center; padding: 7px; }
   .rm-sidebar-user { flex-direction: column; align-items: center; gap: 8px; }
   .rm-sidebar-logout { margin-left: 0 !important; }
 }
@@ -1576,6 +1582,194 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .rm-history-row:hover { background: var(--panel-hover) !important; }
 .rm-history-row:hover { border-color: var(--border-strong) !important; }
 
+/* ── the application rail ─────────────────────────────────────────────────
+   The nav's states live here rather than in App.tsx for the reason the master
+   list's do: hover and selection are pseudo-classes, and a style attribute
+   cannot express one — the rail used to hold a `useState` per button to fake
+   it. The vocabulary is deliberately the same as `.rm-master-item`: warm on
+   approach, an accent-tinted pill when open. Two lists that both answer
+   "where am I" should answer it the same way.
+
+   The open row used to carry `inset 2px 0 0 var(--accent)` as well. It went,
+   for two reasons. It was the fourth cue for one bit of information — the row
+   already changes ground, weight and glyph colour — and an inset shadow is
+   clipped by the 9px radius, so the "rail" rendered as a hook curving around
+   the top and bottom corners rather than a straight edge. A full-bleed square
+   row can wear that marker (this is where VS Code's file tree gets it); a
+   rounded pill cannot, and the pill is the shape the whole product uses. */
+.rm-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 6px;
+}
+.rm-brand-name {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--text-strong);
+}
+.rm-brand-tag {
+  margin-left: auto;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--panel-alt);
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.rm-nav-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background .12s ease, color .12s ease;
+}
+.rm-nav-btn:hover { background: var(--panel-hover); color: var(--text); }
+.rm-nav-btn.is-on {
+  background: var(--accent-bg);
+  color: var(--text-strong);
+  font-weight: 600;
+}
+/* The glyph carries the accent too, so the open page reads at a glance on the
+   collapsed rail — where the label, and with it every other cue, is gone. */
+.rm-nav-btn.is-on svg { stroke: var(--accent); }
+
+/* Two choices, not a switch: a track labelled "Dark" never says whether that
+   is the current state or the offer. Same segmented vocabulary as `.rm-seg`. */
+.rm-theme {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.rm-theme button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background .12s ease, color .12s ease;
+}
+.rm-theme button:hover { color: var(--text-strong); }
+.rm-theme button.is-on {
+  background: var(--panel);
+  color: var(--text-strong);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.16);
+}
+
+.rm-sidebar-user {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 6px 0;
+  border-top: 1px solid var(--border);
+}
+
+/* ── the chat list ────────────────────────────────────────────────────────
+   The third list in the product that answers "which one am I on", after the
+   nav rail and the settings index, and it now says so the same way: warm on
+   approach, an accent-tinted pill when open. Its own quirk is
+   the recency captions, which are what people actually navigate a chat history
+   by — not the titles, which nobody remembers writing. */
+.rm-chats-caption {
+  padding: 6px 8px 3px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* The shared index search, at column width. */
+.rm-chats-search .rm-search { max-width: none; }
+.rm-chats-search input { padding-top: 7px; padding-bottom: 7px; font-size: 12.5px; }
+
+/* Where the nav collapses to a rail, the thread list gives ground too — the
+   transcript is the working surface, and the same rule the settings index
+   follows applies here. */
+@media (max-width: 900px) {
+  .rm-chats { width: 208px !important; }
+}
+
+.rm-chat-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 6px 8px 9px;
+  border-radius: 9px;
+  background: transparent;
+  transition: background .12s ease;
+}
+.rm-chat-item:hover { background: var(--panel-hover); }
+/* Selection is the tint plus the avatar going accent and the title going
+   strong — see `.rm-nav-btn` for why there is no edge marker on top of that. */
+.rm-chat-item.is-on { background: var(--accent-bg); }
+
+/* Rename and delete are secondary to reading the list, so they wait to be
+   approached — and they are always there for a keyboard, which has no hover.
+
+   They *float* over the row's right edge rather than sitting in it. Laid out
+   inline they reserved their 56px on every row, hidden or not, which is why a
+   thread called "Revenue by month, 2026" was clipped to "Revenue by mo…" in a
+   column with room to spare. Out of flow, the title gets the whole row until
+   the pointer arrives, and the fade under the buttons keeps whatever they
+   cover from reading as a collision. */
+.rm-chat-actions {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding-left: 16px;
+  opacity: 0;
+  transition: opacity .12s ease;
+  background: linear-gradient(to right, transparent, var(--sidebar-bg) 16px);
+}
+.rm-chat-item:hover .rm-chat-actions {
+  background: linear-gradient(to right, transparent, var(--panel-hover) 16px);
+}
+/* The open row keeps its accent tint under the buttons. `--accent-bg` is
+   translucent, so the fade cannot just name it — it has to reproduce the
+   composite. Two stacked gradients do that exactly: the translucent accent
+   over an opaque sidebar ground is, by definition, what the row is painted.
+   A single `color-mix` at a guessed percentage was close in dark and visibly
+   off in light, where the tint carries a different alpha. */
+.rm-chat-item.is-on .rm-chat-actions {
+  background:
+    linear-gradient(to right, transparent, var(--accent-bg) 16px),
+    linear-gradient(to right, transparent, var(--sidebar-bg) 16px);
+}
+.rm-chat-item:hover .rm-chat-actions,
+.rm-chat-actions:focus-within,
+.rm-chat-actions.is-open { opacity: 1; }
+@media (hover: none) { .rm-chat-actions { opacity: 1; } }
+
 /* ── the settings screens ─────────────────────────────────────────────────
    Data sources and LLM providers are one shape of page — pick a record on the
    left, edit it on the right — and everything below is that frame. They are
@@ -1584,8 +1778,9 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
    express, and the rest of the settings styling stays in the JSX.
 
    The list is the page's navigation, so its rows behave like navigation: they
-   warm under the pointer and the open one keeps an accent rail, which is the
-   same vocabulary the sidebar's nav buttons use one column to the left. */
+   warm under the pointer and the open one keeps an accent-tinted pill, which
+   is the same vocabulary the sidebar's nav buttons use one column to the
+   left — including the absence of an edge marker. */
 .rm-master-item {
   position: relative;
   display: flex;
@@ -1598,13 +1793,10 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   background: transparent;
   text-align: left;
   cursor: pointer;
-  transition: background .12s ease, box-shadow .12s ease;
+  transition: background .12s ease;
 }
 .rm-master-item:hover { background: var(--panel-hover); }
-.rm-master-item.is-on {
-  background: var(--accent-bg);
-  box-shadow: inset 2px 0 0 var(--accent);
-}
+.rm-master-item.is-on { background: var(--accent-bg); }
 
 /* The filter above the list is the index search at column width. */
 .rm-master-search { flex: 1; min-width: 0; max-width: none; }
