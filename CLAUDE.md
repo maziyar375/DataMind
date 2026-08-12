@@ -256,6 +256,11 @@ litellm` outside `app/infra/llm/`** — CI greps for it.
 > Node-by-node reference — what each node does, its exact logic, the prompts it
 > sends, the control-flow rules, and the LangGraph port map:
 > **[docs/pipeline.md](docs/pipeline.md)**. Read that before changing a node.
+> Its §0 maps all three pipelines (chat, dashboard, report), lists every LLM
+> call site in the product, and names the five failure postures (§4.1); the
+> other two have the same treatment in
+> **[docs/pipeline-dashboard.md](docs/pipeline-dashboard.md)** and
+> **[docs/pipeline-report.md](docs/pipeline-report.md)**.
 
 `POST /conversations/{id}/messages` → `run_service.create_run` writes the user
 `message`, **flushes**, then the `runs` row (FK order matters — see below),

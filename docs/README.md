@@ -1,7 +1,12 @@
 # Documentation index
 
-Nine documents, ~5k lines. This page exists so you don't have to open
+Eleven documents, ~6k lines. This page exists so you don't have to open
 `architecture.md` (1,500 lines) to answer a question about charts.
+
+The three `pipeline*.md` files are one set: [pipeline.md](pipeline.md) holds the
+chat run **and** the map of all three pipelines (§0), with
+[pipeline-dashboard.md](pipeline-dashboard.md) and
+[pipeline-report.md](pipeline-report.md) taking the other two in the same shape.
 
 ## Start here
 
@@ -17,7 +22,9 @@ Nine documents, ~5k lines. This page exists so you don't have to open
 | Touching | Read first | Why |
 | --- | --- | --- |
 | `sqlguard/`, `disclosure.py`, `HintBudget`, or adding an LLM call site | [security.md](security.md) | Every claim names the module that enforces it, and states its limits |
-| A pipeline node, a prompt, the routing | [pipeline.md](pipeline.md) | Node by node: exact logic, prompts sent, control flow |
+| A pipeline node, a prompt, the routing | [pipeline.md](pipeline.md) | The chat run node by node — plus §0, which maps all three pipelines and lists every LLM call site |
+| A tile's SQL or its refresh | [pipeline-dashboard.md](pipeline-dashboard.md) | Authoring (model, once) vs refresh (no model, forever), step by step, with every error code |
+| Outline, feasibility, report generation | [pipeline-report.md](pipeline-report.md) | The four report flows node by node: prompts, salvage parsing, prose, and what each failure costs |
 | Chart selection, Vega-Lite output | [charts.md](charts.md) | What it draws, what it refuses to draw, and why |
 | Tiles, saved-SQL execution, `query_service.py` | [dashboards.md](dashboards.md) | The second entry point to the guard, and the six rules it obeys |
 | Report generation, prose, print | [reports.md](reports.md) | Data model, generation order, where the numbers come from |

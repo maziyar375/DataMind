@@ -1,13 +1,120 @@
-# The run pipeline, node by node
+# The chat run pipeline, node by node
 
 What happens between "user hits enter" and "answer + table + chart appear".
 Companion to [architecture.md](architecture.md) (the why) and
-[CODEBASE.md](CODEBASE.md) (the whole stack). This file is only the pipeline.
+[CODEBASE.md](CODEBASE.md) (the whole stack).
+
+**There are three pipelines in this product, and this file is the first of
+three.** §0 maps all three and states what they share; §1 onwards is the chat
+run in full. The other two have files of their own, written to the same shape:
+
+| Pipeline | Produces | File |
+|---|---|---|
+| **Chat** | an answer + table + chart, streamed | this file |
+| **Dashboard** | a tile's SQL (once), then its result (forever) | [pipeline-dashboard.md](pipeline-dashboard.md) |
+| **Report** | an outline, a statement per block, then a written document | [pipeline-report.md](pipeline-report.md) |
 
 Code: [`backend/app/pipeline/`](../backend/app/pipeline/) —
 `pipeline.py` (the executor), `nodes/__init__.py` (all ten nodes),
 `state.py` (typed state), `contracts.py` (the node signature),
 `prompts/` (versioned prompts), `checks.py`, `disclosure.py`, `metadata.py`.
+
+---
+
+## 0. The three pipelines, and what they share
+
+### 0.1 Side by side
+
+| | **Chat** | **Dashboard** | **Report** |
+|---|---|---|---|
+| Entry | `POST /conversations/{id}/messages` | `POST /sql/drafts` → tile save → `POST /dashboards/{id}/data` | `POST /reports/{id}/outline` → `.../blocks/{id}/check` → `POST /reports/{id}/runs` |
+| Orchestrator | `AnalyticsPipeline` — a 10-node state machine | none: a service function + `asyncio.gather` | `ReportRunExecutor` + a linear worker body |
+| Shape | streamed (SSE), 5–60s | request/response, sub-second on a cache hit | queued (**202**) + polled, minutes |
+| Model runs | **at ask time**, every time | **at authoring time only** | at authoring time *and* at generation time |
+| Typical calls | 4 (+1 for a chart) | 1 per drafted tile, **0** per refresh | 1 outline + 1 per block + 1 per section + 1 summary |
+| SQL comes from | `generate`, fresh per question | `dashboard_tiles.sql`, stored | `report_blocks.sql`, stored |
+| Guard entry point | `validate` node | `execute_saved_sql` | `execute_saved_sql` |
+| Result values → model? | `present`, per policy | **never** | `narrate`, per policy (and `NONE`/`AGGREGATE` are refused outright) |
+| Repair loop | 1, shared by guard/DB/checks | 1, at draft time only | 1, at block-check time only |
+| Failure posture | the run fails, with an error artifact | a per-tile `ERROR` **value** | per section; the run's status is **derived** |
+| Persists | `runs`, `run_steps`, `messages`, artifacts | `dashboard_tile_cache` | `report_runs` + block/section result rows |
+
+### 0.2 What all three sit on
+
+Four pieces of machinery are shared, and every claim about safety in this
+product is a claim about one of them:
+
+1. **`LLMGateway`** — three methods, one adapter
+   ([`app/infra/llm/`](../backend/app/infra/llm/)). `import litellm` outside
+   that package fails CI. Before any node sees an error, the gateway has
+   already: retried transient failures (429/5xx/connection/timeout) up to
+   `llm_max_retries` (default **4**) with exponential backoff from 2s to 30s,
+   honouring the provider's own `Retry-After` over its own schedule, while
+   failing *fast* on permanent errors (auth, bad request, context length);
+   re-asked once without
+   `response_format` if the provider rejected it (litellm's model map is a
+   claim about a provider, not a contract with it); and, for `structured`,
+   re-asked once with the unparseable reply quoted back
+   (`STRUCTURED_REPAIRS = 1`). Only then is `LLMError` raised. `Completion`
+   carries `truncated` (`finish_reason == "length"`) so a caller can tell a
+   short answer from a cut-off one.
+2. **The SQL guard** ([`app/sqlguard/`](../backend/app/sqlguard/)) — parse with
+   SQLGlot, walk the AST against an allowlist, resolve every name against the
+   connection's stored snapshot, rewrite with the row `LIMIT`. **Fails closed:
+   an unknown node type is a rejection, not a warning.** Three entry points —
+   `validate` (chat), `execute_saved_sql` (tiles and report blocks), tile save —
+   and **none of them is privileged**. `sql_origin` is provenance, never trust.
+3. **Disclosure** — the same policy governs three things at *render* time, never
+   only at write time: `disclose()` (the result), `HintBudget` (per-column
+   content hints in the schema block), `disclose_history()` (the transcript).
+   Reports add a fourth application: the policy is re-checked at the start of
+   every generation.
+4. **`app.charts`** — `profile_result` → `plan_chart` → `compile_vega_lite`, plus
+   `plan_kpi`. Every surface decides its picture with the same planner, and in
+   all three the model's pick is a *suggestion* the data can veto.
+
+### 0.3 The reused nodes
+
+`retrieve`, `generate` and `validate` are called **directly**, outside the state
+machine, by `sql_draft_service.draft_sql` — which is how both a dashboard tile
+and a report block get their SQL. `route` joins them when the caller passes
+`classify=True` (report blocks only). So a stored statement anywhere in the
+product was written against the same schema block, the same semantic layer, the
+same `_SQL_RULES` and the same guard as a chat answer:
+
+```
+chat:    route → retrieve → describe → clarify → generate → validate → execute → inspect → present → chart
+draft:  [route] → retrieve →                     generate → validate            (then a 50-row preview)
+                                                     └── one repair ──┘
+```
+
+What a draft deliberately does **not** inherit: history (`[]`), events
+(`_no_emit`), persistence (nothing until the caller stores a verdict), and the
+deadline (see [pipeline-report.md §8](pipeline-report.md)).
+
+### 0.4 Every place a model is called, in the whole product
+
+| # | Call site | Gateway method | Prompt | Fires when |
+|---|---|---|---|---|
+| 1 | `route` | `complete` | `ROUTE_SYSTEM` / `ROUTE_SYSTEM_WITH_HISTORY` | every chat run |
+| 2 | `describe` | `stream` | `DESCRIBE_SYSTEM` / `_USER` | a chat run classified METADATA |
+| 3 | `clarify` | `structured(ClarificationProposal)` | `CLARIFY_SYSTEM` / `_USER` | every chat run, if enabled |
+| 4 | `generate` | `structured(SqlProposal)` | `GENERATE_` / `REVIEW_` / `REPAIR_SYSTEM` | every chat run; every draft |
+| 5 | `present` | `stream` | `ANSWER_SYSTEM` / `_USER` | every chat run that got rows |
+| 6 | `chart` | `structured(ChartIntent)` | `CHART_SYSTEM` / `_USER` | a chat result that survives the data veto |
+| 7 | follow-up suggestions | `complete` | inline, in `run_service.suggest_followups` | the SPA refreshes a thread — **not** because a user asked |
+| 8 | semantic layer | `structured`-shaped drafts | `OVERVIEW_` / `TABLE_` / `GLOSSARY_SYSTEM` | user clicks Generate; one call per table |
+| 9 | report outline | `complete` | `REPORT_OUTLINE_SYSTEM` / `_USER` | user proposes an outline |
+| 10 | report section prose | `complete` | `REPORT_SECTION_SYSTEM` / `_USER` | once per section per generation |
+| 11 | report summary | `complete` | `REPORT_SUMMARY_SYSTEM` / `_USER` | once per generation |
+| — | capability probe | `complete` | fixed test prompt | saving an LLM config — **sends no customer data** |
+
+[security.md §2](security.md) analyses what each one *sends*; note that its
+table predates Reports and is missing #9–#11 (§7, gap 10).
+
+**Nothing calls a model at dashboard refresh time.** That is the single most
+load-bearing "no" in the product: a dashboard keeps working after the provider
+key is revoked.
 
 ---
 
@@ -34,6 +141,18 @@ Code: [`backend/app/pipeline/`](../backend/app/pipeline/) —
   loop: no parallel fan-out, no durable interrupts, no resume-mid-graph. Node
   signatures are already LangGraph-shaped (`async (state, deps) -> result`), so
   adopting it is wiring, not a rewrite. See §6 for the port map.
+
+**The other two pipelines are not state machines, and deliberately not.** Worth
+knowing before you go looking for an executor that does not exist:
+
+| | orchestrator | why not a state machine |
+|---|---|---|
+| dashboard refresh | `DashboardService.refresh` → `execute_many` → `asyncio.gather` | there are no decisions to make: every tile runs the same five steps and cannot branch. The only "routing" is the cache gate, which is a boolean |
+| report generation | `ReportRunExecutor` + `workers/report.py::_generate` | the phases are fixed (execute all → narrate each → summarise → derive status) and the *concurrency* is inside one phase. What it needs from an orchestrator — progress, cancellation, resumability — it gets from the `report_runs` row instead |
+| SQL drafting | a `for` loop in `sql_draft_service` | three nodes and one repair; an executor around it would add a deadline check and a step trail that a draft has nowhere to put |
+
+The report worker is the one place a LangGraph port would buy something real —
+see [langgraph-migration.md](langgraph-migration.md) Phase 3.
 
 ---
 
@@ -598,6 +717,52 @@ valued feature; keep it visible, don't collapse it behind "Thought for Xs".
 **Terminal states:** `SUCCEEDED | FAILED | TIMED_OUT | CANCELLED`.
 `NEEDS_CLARIFICATION` is deliberately **not** terminal.
 
+### 4.1 The five failure postures
+
+Every error path in every pipeline is one of five. Naming them is worth more
+than any individual handler, because the question *"what should this do when it
+breaks?"* is answered by asking which posture the step belongs to.
+
+| Posture | Means | Where |
+|---|---|---|
+| **Fail closed** | the refusal *is* the answer; nothing proceeds | the guard (unknown AST node → rejection), name resolution against the snapshot, an unsynced connection, `disclose*` defaulting to the narrowest policy when an argument is missing, reports refusing `NONE`/`AGGREGATE` |
+| **Fail open** | the feature is dropped, the work continues | `route` (→ ANALYTICAL), `clarify` (→ proceed), `inspect` (→ leave the answer alone), `chart` (→ no chart), the semantic layer (→ no block), follow-up suggestions (→ empty list) |
+| **Fail backwards** | something computed replaces something generated | `describe` → `answer_metadata`, `present` → the fallback sentence, `plan_chart` → the shape heuristic, report prose → trimmed to its last sentence |
+| **Fail as a value** | the failure is data, returned or stored, not raised | `TileResult(status="ERROR")`, `ReportBlockResult(FAILED)`, `ReportSectionResult(FAILED)`, `feasibility_status = INFEASIBLE` |
+| **Fail the run** | stop, record, tell the user | `generate`'s `E_LLM`, a guard rejection out of budget, `E_TIMEOUT`, `E_NODE_FAILED`, `E_PIPELINE_LOOP`, `E_ORPHANED` |
+
+Two rules keep the postures honest:
+
+- **A step that has already produced correct data may not lose it to a
+  presentation failure.** `TEXT_RESET` exists for this (deltas are already on
+  the live bus *and* durably stored for `Last-Event-ID` replay, so discarding a
+  buffer is not enough); `_restore_superseded` exists for this; caching a failed
+  tile result exists for this.
+- **A fail-open step may never widen anything.** `route` failing open to
+  ANALYTICAL cannot skip the guard; `clarify` failing open cannot bypass
+  disclosure; a missing policy argument always renders the *narrowest* block.
+
+### 4.2 Every way a chat run ends
+
+| Code | Raised by | Posture | What the user sees |
+|---|---|---|---|
+| — | `route` CHITCHAT/UNSUPPORTED | HALT with a canned answer | a reply, **not** an error — a write request is not a bug to debug |
+| — | `describe` | HALT | a streamed schema answer (or the snapshot rendering, if the provider failed) |
+| — | `clarify` | HALT, `NEEDS_CLARIFICATION` | a question with 2–4 option chips; the reply arrives as a new run |
+| `E_LLM` | `generate` (after the gateway's own retry + one structured repair) | FAILED | "The model could not produce a query", with the provider's message as the hint |
+| *guard `rule_id`* | `validate`, out of repair budget | FAILED | the guard's first error verbatim (`E_TABLE_NOT_ALLOWED`, `E_UNKNOWN_COLUMN`, `E_NOT_A_SELECT`, `E_NODE_NOT_ALLOWED`, …) |
+| `E_QUERY_FAILED` | `execute`, out of repair budget | FAILED | "The query could not be run", with the driver's message |
+| `E_TIMEOUT` | the executor, before a node | raise → `TIMED_OUT` | "The run exceeded its time budget" — checked *between* nodes; the statement timeout is what interrupts a query in flight |
+| `E_PIPELINE_LOOP` | the executor, past `_MAX_TRANSITIONS` (24) | FAILED | "The run did not converge and was stopped" |
+| `E_NODE_FAILED` | any node raising | FAILED | "The *n* step failed" + `str(err)[:300]`. **Never a bare HTTP 500** |
+| `E_INTERNAL` | `execute_run` outside the pipeline | FAILED | logged `run_crashed` |
+| `E_ORPHANED` | the reconciler / startup sweep | FAILED | "The worker handling this run stopped responding" |
+| — | `cancel` | `CANCELLED` | only while non-terminal; `NEEDS_CLARIFICATION` still qualifies |
+
+Every one of these also writes an `ERROR` artifact and emits an `ERROR` event,
+so the SPA renders the failure inside the thread rather than as a toast that
+scrolls away. The step trail keeps whatever succeeded before it.
+
 ---
 
 ## 5. Prompt versioning
@@ -608,6 +773,21 @@ place run prompts live — except the semantic-layer *generation* prompts, which
 live in `app/semantic/prompts.py` under `SEMANTIC_PROMPT_VERSION`, because
 `app.semantic` sits *below* the pipeline: the pipeline reads a layer, a layer
 knows nothing about a run.
+
+**Three version constants, one rule.** Each is recorded on the row its prompts
+produced, and each belongs to the layer that owns the prompt — a module below
+the pipeline cannot be versioned by it:
+
+| Constant | Lives in | Recorded on | Covers |
+|---|---|---|---|
+| `PROMPT_VERSION` = **v7** | `app/pipeline/prompts/` | `runs.prompt_version` | route, describe, clarify, generate/review/repair, answer, chart |
+| `SEMANTIC_PROMPT_VERSION` | `app/semantic/prompts.py` | the generated layer | overview, per-table, glossary |
+| `REPORT_PROMPT_VERSION` = **r4** | `app/reports/prompts.py` | `report_runs.prompt_version` | outline, section prose, executive summary |
+
+A report block's SQL is generated by the *pipeline's* prompts plus
+`NodeDeps.extra_rules`, and `extra_rules` is empty for every other caller —
+empty meaning byte-identical — which is why report work does not move
+`PROMPT_VERSION`. See [pipeline-report.md §7](pipeline-report.md).
 
 **Move `PROMPT_VERSION` when the bytes the SQL-producing path sends change.**
 That's why v3 → v4 for the semantic block, v4 → v5 for the shared rules and
@@ -664,7 +844,7 @@ is a lateral move — don't take the dependency for cosmetics.
 
 ---
 
-## 7. Known gaps (verified in code, 2026-07-31)
+## 7. Known gaps (1–9 verified in code 2026-07-31; 10 added 2026-08-12)
 
 1. **Token accounting only counts `route`.** `state.prompt_tokens` is written
    in exactly one place — [nodes/__init__.py:120-121](../backend/app/pipeline/nodes/__init__.py#L120-L121)
@@ -778,3 +958,16 @@ is a lateral move — don't take the dependency for cosmetics.
    dragging classifications toward the previous turn's label ("what tables do I
    have?" after a revenue question coming back ANALYTICAL), the suite will read
    clean. A multi-turn eval case is the only thing that would measure this.
+
+10. **[security.md §2](security.md) predates Reports.** It states "nine use
+    cases, across eleven call sites, and no others", and adds that the
+    dependency rule means "this list cannot silently grow" — but the three
+    report call sites (outline
+    [outline.py:203](../backend/app/reports/outline.py#L203), section prose
+    [workers/report.py:880](../backend/app/workers/report.py#L880), summary
+    [workers/report.py:961](../backend/app/workers/report.py#L961)) are absent
+    from it. Nothing new leaves the process that §2 does not already describe —
+    the outline sends the same `RetrievedContext.render` block `generate` gets,
+    and the prose sends `disclose()`d results — so this is a documentation gap,
+    not a disclosure one. §0.4 above is the complete list; security.md is the
+    file to fix.
