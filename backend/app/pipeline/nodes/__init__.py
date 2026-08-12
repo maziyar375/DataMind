@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.core.errors import ConnectorError, LLMError
 from app.core.logging import get_logger
@@ -28,7 +28,9 @@ from app.pipeline.prompts import (
     ANSWER_SYSTEM,
     ANSWER_USER,
     CHART_SYSTEM,
+    CHART_SYSTEM_COMPOSED,
     CHART_USER,
+    CHART_USER_COMPOSED,
     CLARIFY_SYSTEM,
     CLARIFY_USER,
     DESCRIBE_SYSTEM,
@@ -51,6 +53,9 @@ from app.pipeline.state import (
 )
 from app.sqlguard import GuardPolicy, guard
 from app.sqlguard.validator import ValidationReport
+
+if TYPE_CHECKING:  # `app.charts` is imported lazily inside the nodes that use it
+    from app.charts import ChartIntent, ResultProfile
 
 log = get_logger(__name__)
 
@@ -890,6 +895,80 @@ async def present(state: RunState, deps: NodeDeps) -> NodeResult:
 
 
 # ── chart ──────────────────────────────────────────────────────────────────
+async def propose_chart_intent(
+    deps: NodeDeps,
+    *,
+    question: str,
+    profile: ResultProfile,
+    row_count: int,
+    truncated: bool,
+    policy: str = DisclosurePolicy.NONE,
+    composed: bool = False,
+    log_context: dict[str, str] | None = None,
+) -> ChartIntent | None:
+    """Ask the model what this result should be drawn as. None if it could not say.
+
+    The one place `CHART_SYSTEM` is sent, for both of its triggers: the `chart`
+    node at the end of a chat run, and a dashboard tile's draft. Keeping it one
+    function is what keeps [security.md §2](../../../docs/security.md)'s
+    inventory of call sites true — a second trigger is a row's worth of change
+    there, a second `structured` call would be a new line to audit.
+
+    **`composed` is the difference between the two questions.** Chat asks "does
+    this result deserve a picture?" and `"none"` is a good answer; a tile has
+    already been told there will be one, and `validate_intent` refuses `"none"`
+    outright — so on that path declining does not produce a table, it produces
+    the shape heuristic's pick with the question's meaning thrown away. The
+    composed rules say so in the prompt; `plan_chart` catches a model that
+    ignores them, because a refused intent falls back to that same heuristic and
+    is therefore never worse than not asking.
+
+    **`policy` defaults to the narrowest**, the same convention `describe`,
+    `disclose_history` and `HintBudget.from_policy` follow. Every rule in the
+    prompt is written in counts, ratios and grain, which are facts about shape
+    and travel under every policy; the one row value in that block is a numeric
+    column's `min`/`max`, and a caller that wants it shared has to say so. The
+    chat node passes the run's policy because a chat result already reaches a
+    model through `present`. A tile draft passes nothing, which is what lets
+    [pipeline-dashboard.md §5](../../../docs/pipeline-dashboard.md) keep saying
+    that no result value ever reaches a model on the dashboard path — at any
+    policy, including `FULL`.
+
+    Fail-open by contract: a provider error, or a model that cannot emit a valid
+    nested `ChartIntent` (common with small models), returns None and every
+    caller falls through to the deterministic shape heuristic. This function
+    never raises `LLMError`.
+    """
+    from app.charts import ChartIntent
+
+    system = CHART_SYSTEM_COMPOSED if composed else CHART_SYSTEM
+    template = CHART_USER_COMPOSED if composed else CHART_USER
+    try:
+        return await deps.llm_gateway.structured(
+            deps.llm,
+            [
+                ChatMessage(role="system", content=system),
+                ChatMessage(
+                    role="user",
+                    content=template.format(
+                        question=question,
+                        row_count=row_count,
+                        truncated=(
+                            " (capped: the query returned at least this many)"
+                            if truncated
+                            else ""
+                        ),
+                        columns=profile.describe(policy),
+                    ),
+                ),
+            ],
+            ChartIntent,
+        )
+    except LLMError as err:
+        log.warning("chart_intent_failed", error=err.message, **(log_context or {}))
+        return None
+
+
 async def chart(state: RunState, deps: NodeDeps) -> NodeResult:
     """Let the model choose a chart for the result, then fit it and compile.
 
@@ -910,7 +989,6 @@ async def chart(state: RunState, deps: NodeDeps) -> NodeResult:
     salvageable intent, and falls back to the shape heuristic otherwise.
     """
     from app.charts import (
-        ChartIntent,
         compile_vega_lite,
         plan_chart,
         plan_kpi,
@@ -952,33 +1030,15 @@ async def chart(state: RunState, deps: NodeDeps) -> NodeResult:
         await deps.emit("ARTIFACT_CREATED", {"kind": "KPI"})
         return NodeResult(detail="big number")
 
-    # A provider error, or a model that cannot emit a valid nested ChartIntent
-    # (common with small models), falls through to a deterministic choice from
-    # the data shape, so a chart still appears and still varies by question.
-    suggestion: ChartIntent | None = None
-    try:
-        suggestion = await deps.llm_gateway.structured(
-            deps.llm,
-            [
-                ChatMessage(role="system", content=CHART_SYSTEM),
-                ChatMessage(
-                    role="user",
-                    content=CHART_USER.format(
-                        question=state.question,
-                        row_count=execution.row_count,
-                        truncated=(
-                            " (capped: the query returned at least this many)"
-                            if execution.truncated
-                            else ""
-                        ),
-                        columns=profile.describe(state.disclosure_policy),
-                    ),
-                ),
-            ],
-            ChartIntent,
-        )
-    except LLMError as err:
-        log.warning("chart_intent_failed", run_id=str(state.run_id), error=err.message)
+    suggestion = await propose_chart_intent(
+        deps,
+        question=state.question,
+        profile=profile,
+        row_count=execution.row_count,
+        truncated=execution.truncated,
+        policy=state.disclosure_policy,
+        log_context={"run_id": str(state.run_id)},
+    )
 
     plan = plan_chart(profile, suggestion)
     if plan.intent is None:

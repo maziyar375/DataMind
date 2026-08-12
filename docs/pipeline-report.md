@@ -295,6 +295,22 @@ run. The preview carries a `chart_suggestion` (the *heuristic*, not a model —
 picker disables what will not work rather than offering it and apologising
 later).
 
+**The heuristic here is a choice, not a limitation.** `draft_sql` can spend a
+second call asking a model what the result should be *drawn* as
+(`compose_chart`), and a dashboard tile does exactly that — see
+[pipeline-dashboard.md §2 A1](pipeline-dashboard.md). A report block leaves it
+off, and the reason is the rule in §4.3 that a block persists none of its three
+chart fields: `chart_config` stays NULL — the common case and the right default
+— so a run months from now may re-decide over a differently-shaped result. An answer to "what did they mean to see" would be computed,
+returned once to the picker, and then discarded unread — a token spent on a
+value nothing keeps.
+
+So the two opt-ins on this shared function run **opposite ways**, and each
+caller pays for the question whose answer it stores: a block passes
+`classify=True` because its answer is stored and read months later, while a
+tile passes `compose_chart=True` because its *picture* is stored and redrawn
+for as long as the tile lives.
+
 ### 3.5 The verdict ladder
 
 `_verdict(draft)`

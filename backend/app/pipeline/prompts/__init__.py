@@ -420,12 +420,51 @@ Return JSON matching the ChartIntent schema."""
 # `test_charts.py::test_every_chart_type_is_described` holds the first half of
 # that; the second half is a reading, not a test.
 
+CHART_COMPOSED_RULES = """\
+This result is a dashboard tile, not a chat answer. The reader has already
+decided there will be a picture; the question is which one, not whether.
+
+Two rules replace their equivalents above:
+
+1. Declining is not available. "none" is refused by the platform, which then
+   falls back to a shape heuristic — so declining does not produce a table, it
+   produces whichever chart the heuristic would have drawn anyway, minus your
+   reading of the question. When nothing fits well, pick the form that loses the
+   least and let the platform trim it.
+2. Prefer the form the question implies over the safest one the shape allows.
+   Almost any two columns can be drawn as a bar; that is the fallback, not a
+   choice. A share or a mix reads as a normalized stack, a composition over time
+   as a stacked area, a ranking as bars, two dimensions crossed as a heatmap.
+
+A tile is stored and redrawn on a schedule against data that keeps growing, and
+none of that changes the pick: the platform re-fits this intent to the real
+shape on every refresh and demotes it with a note when it stops fitting. Choose
+for the result in front of you rather than hedging against a future one."""
+# Appended rather than edited in, for two reasons. `CHART_SYSTEM` is what the
+# chat run sends and it stays byte-identical, so this feature cannot regress the
+# path the eval suite and every existing run share. And
+# `test_every_chart_type_is_described_to_the_model` reads `CHART_SYSTEM`'s own
+# `- "` lines as the list of types the model was told about — a rule stated in
+# an appended block must therefore never open a line that way, or it registers
+# as a chart type. That is why the two rules above are numbered and not bulleted.
+
+CHART_SYSTEM_COMPOSED = f"""{CHART_SYSTEM}
+
+{CHART_COMPOSED_RULES}"""
+
 CHART_USER = """Question: {question}
 
 Result shape ({row_count} rows{truncated}):
 {columns}
 
 Choose the best chart, or "none"."""
+
+CHART_USER_COMPOSED = """Question: {question}
+
+Result shape ({row_count} rows{truncated}):
+{columns}
+
+Choose the chart this tile should be drawn as."""
 # What crosses the wire here is shape, not data. Counts, ratios, a time grain
 # and a span *length* are facts about the result rather than values out of it,
 # and they go under every disclosure policy — a chart decision has to know that

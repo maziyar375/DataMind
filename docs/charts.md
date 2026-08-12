@@ -181,6 +181,38 @@ facts each rule is written in terms of: temporal grain and span *length*, the
 range ratio between measures, the prospective cell count against the heatmap
 budget, `rows == distinct` per dimension, and what the mark budget will drop.
 
+### Two questions, one engine
+
+The model is asked what to draw in two places, and they are **not** asking the
+same thing:
+
+| | Chat (`CHART_SYSTEM`) | Tile draft (`CHART_SYSTEM_COMPOSED`) |
+|---|---|---|
+| The question | does this result deserve a picture? | which picture did they mean? |
+| `"none"` | a good answer — an unreadable chart is worse than none | not available: `validate_intent` refuses it |
+| The SQL | fixed; the answer text was written over it | the tile has no prose, so shape is the only constraint |
+| Lifetime | one turn | stored, redrawn on a schedule |
+
+Only the **policy** forks. `profile_result`, `_fit`, the vetoes, every budget
+constant and `compile_vega_lite` are shared and unchanged — those are facts
+about data and pixels, identical everywhere. What changes is whether declining
+is an allowed answer, and the prompt framing that follows from it.
+
+The composed variant is `CHART_SYSTEM` **plus an appended block**, never an
+edited copy. Two reasons: the chat path stays byte-identical, so this cannot
+regress what the eval suite and every historical run share; and
+`test_every_chart_type_is_described_to_the_model` reads `CHART_SYSTEM`'s own
+`- "` lines as the list of types the model was told about, so a rule stated in
+an appended block must never open a line that way. That is why the composed
+rules are numbered rather than bulleted.
+
+`"none"` is worth stating plainly, because the failure is silent: storing
+`chart_type: "none"` on a tile does not draw nothing. `validate_intent` refuses
+it, `plan_chart` falls through to the heuristic, and the tile is drawn as
+whatever the shape suggests — the model's reading of the question discarded
+without a word. The prompt says not to; `plan_chart` catches a model that does
+anyway; `chart_source` reports which happened.
+
 ### Prompt/type parity
 
 The rule this leaves behind: **a chart type is not "added" when the compiler

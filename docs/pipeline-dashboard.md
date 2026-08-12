@@ -41,7 +41,7 @@ forever**. That split is the whole design:
 | | Authoring | Refresh |
 |---|---|---|
 | **Trigger** | `POST /sql/drafts`, `POST /sql/drafts/validate`, tile save | browser tick, first paint, or "Refresh now" |
-| **Model calls** | 1 (`generate`), +1 per repair. **0** on the hand-written road | **zero, always** |
+| **Model calls** | 2 (`generate`, then `propose_chart_intent`), +1 per repair. **0** on the hand-written road | **zero, always** |
 | **Persists** | nothing until the tile is saved | the tile cache |
 | **Failure posture** | raise — the user is looking at the editor | **a value** — `TileResult(status="ERROR")`, never an exception |
 | **Guard** | at draft, at save | **again**, on every single execution |
@@ -134,14 +134,44 @@ takes with metric-expression errors.
 from scratch and previewing the rewrite would preview something the tile will
 never be asked to run.
 
-**Node 6 — the chart defaults.** `_chart_suggestion` runs `profile_result` →
-`plan_chart` over the preview (the **heuristic**, not a model: the editor needs
-sensible defaults the user is about to override, not an opinion worth a token),
-and `_chart_options` returns a per-type verdict list so the picker **disables**
-what will not work rather than offering it and letting the save path demote it
-with an apology. Both are wrapped in `try/except`: a defaulted picker is never
-worth a 500, and an empty options list means "no opinion", which leaves every
-type enabled — exactly the behaviour before the feature existed.
+**Node 6 — what it should be drawn as.** `_chart_suggestion` runs
+`profile_result` → `plan_chart` over the preview, and `_chart_options` returns a
+per-type verdict list so the picker **disables** what will not work rather than
+offering it and letting the save path demote it with an apology. Both are
+wrapped in `try/except`: a defaulted picker is never worth a 500, and an empty
+options list means "no opinion", which leaves every type enabled — exactly the
+behaviour before the feature existed.
+
+Between the profile and the plan, **the plain-language road asks a model**
+(`compose_chart=True`, set by the tile route and by nothing else). This is the
+one place the two roads differ, and the reason is that a shape cannot answer the
+question a sentence asks. Almost any two columns *can* be drawn as a bar, so the
+heuristic said bar to nearly everything and every tile written from a sentence
+came out looking like every other one — while the demo dashboard, whose SQL and
+`chart_config` were written together by hand, covers nine chart families.
+
+Four properties bound it, in the order they matter:
+
+- **The veto runs first**, exactly as in the chat node: `unchartable_reason`
+  over the profile, so a result no chart could serve costs no tokens.
+- **It sends less than chat does.** `propose_chart_intent` is called with no
+  policy argument, so `describe` renders at the narrowest budget under every
+  policy — see §5, which this feature is written not to break.
+- **It cannot fail the draft.** A provider error, a spent deadline
+  (`_check_deadline` runs before it, as before each `generate`), an unparseable
+  intent: each falls back to the heuristic's pick, which is what this returned
+  for every draft before the model was asked. Fail *backwards*, per
+  [pipeline.md §4.1](pipeline.md).
+- **The answer is never stored raw.** It goes through `plan_chart` like any
+  other intent, so it gets the same name check and shape repair. A model that
+  ignores `CHART_SYSTEM_COMPOSED` and answers `"none"` is refused by
+  `validate_intent` and falls back to that same heuristic — which is why asking
+  is never worse than not asking.
+
+`chart_source` (`model` | `model_adjusted` | `heuristic` | `none`) rides back on
+the draft so the editor can tell the two apart: **only a pick that read the
+question moves the type picker off Auto.** [dashboards.md](dashboards.md), under
+"The tile editor", is where that default and why it changed are argued.
 
 ### A2 · The hand-written road: `POST /sql/drafts/validate`
 
@@ -367,6 +397,17 @@ be planned or compiled (the table stands), and a KPI that cannot be computed
   reaches a model on this path**, at any policy, so there is nothing for the
   policy to gate. The rows go from the customer's database to the customer's own
   browser.
+
+  That claim survived the chart call of §2 A1 **because the call was written not
+  to break it.** `propose_chart_intent` takes a `policy` argument and the tile
+  path passes none, so the block it sends renders at the narrowest budget even
+  under `FULL` — counts, ratios, a time grain and a span length, which are facts
+  about a result's *shape*, and never the one row value that block can carry (a
+  measure's `min`/`max`). It costs the decision nothing: no rule in
+  `CHART_SYSTEM` asks what the largest revenue **is**, only how it compares to
+  the measure beside it, which is the ratio. Pinned by
+  `test_the_chart_call_sends_shape_and_never_a_row_value`; the sentence above is
+  what that test exists to keep true.
 - **No background scheduler.** Refresh is driven by an open browser. A dashboard
   nobody has open computes nothing — which is a deliberate cost decision, not an
   oversight ([dashboards.md §10](dashboards.md)).

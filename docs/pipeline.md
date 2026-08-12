@@ -31,7 +31,7 @@ Code: [`backend/app/pipeline/`](../backend/app/pipeline/) —
 | Orchestrator | `AnalyticsPipeline` — a 10-node state machine | none: a service function + `asyncio.gather` | `ReportRunExecutor` + a linear worker body |
 | Shape | streamed (SSE), 5–60s | request/response, sub-second on a cache hit | queued (**202**) + polled, minutes |
 | Model runs | **at ask time**, every time | **at authoring time only** | at authoring time *and* at generation time |
-| Typical calls | 4 (+1 for a chart) | 1 per drafted tile, **0** per refresh | 1 outline + 1 per block + 1 per section + 1 summary |
+| Typical calls | 4 (+1 for a chart) | 2 per drafted tile (SQL, then chart), **0** per refresh | 1 outline + 1 per block + 1 per section + 1 summary |
 | SQL comes from | `generate`, fresh per question | `dashboard_tiles.sql`, stored | `report_blocks.sql`, stored |
 | Guard entry point | `validate` node | `execute_saved_sql` | `execute_saved_sql` |
 | Result values → model? | `present`, per policy | **never** | `narrate`, per policy (and `NONE`/`AGGREGATE` are refused outright) |
@@ -78,15 +78,24 @@ product is a claim about one of them:
 `retrieve`, `generate` and `validate` are called **directly**, outside the state
 machine, by `sql_draft_service.draft_sql` — which is how both a dashboard tile
 and a report block get their SQL. `route` joins them when the caller passes
-`classify=True` (report blocks only). So a stored statement anywhere in the
+`classify=True` (report blocks only), and `propose_chart_intent` — the model
+call inside the `chart` node — joins them when the caller passes
+`compose_chart=True` (tiles only). So a stored statement anywhere in the
 product was written against the same schema block, the same semantic layer, the
 same `_SQL_RULES` and the same guard as a chat answer:
 
 ```
 chat:    route → retrieve → describe → clarify → generate → validate → execute → inspect → present → chart
 draft:  [route] → retrieve →                     generate → validate            (then a 50-row preview)
-                                                     └── one repair ──┘
+                                                     └── one repair ──┘          └─ [propose_chart_intent] ─┘
 ```
+
+**The two opt-ins are deliberately opposite.** `classify` is on for report
+blocks and off for tiles, because a block's answer is stored and read months
+later while a tile's preview is on screen in front of the person who asked.
+`compose_chart` is on for tiles and off for blocks, because a tile *stores*
+what it is drawn as and a block does not (its `chart_config` stays NULL so a
+re-run may re-decide). Each caller pays for the question whose answer it keeps.
 
 What a draft deliberately does **not** inherit: history (`[]`), events
 (`_no_emit`), persistence (nothing until the caller stores a verdict), and the
@@ -104,7 +113,7 @@ cannot cycle.
 | 3 | `clarify` | `structured(ClarificationProposal)` | `CLARIFY_SYSTEM` / `_USER` | every chat run, if enabled |
 | 4 | `generate` | `structured(SqlProposal)` | `GENERATE_` / `REVIEW_` / `REPAIR_SYSTEM` | every chat run; every draft |
 | 5 | `present` | `stream` | `ANSWER_SYSTEM` / `_USER` | every chat run that got rows |
-| 6 | `chart` | `structured(ChartIntent)` | `CHART_SYSTEM` / `_USER` | a chat result that survives the data veto |
+| 6 | `propose_chart_intent` | `structured(ChartIntent)` | `CHART_SYSTEM` / `_USER`, or `CHART_SYSTEM_COMPOSED` / `_USER_COMPOSED` | a chat result that survives the data veto; a **tile draft's** preview that survives it |
 | 7 | follow-up suggestions | `complete` | inline, in `run_service.suggest_followups` | the SPA refreshes a thread — **not** because a user asked |
 | 8 | semantic layer | `structured`-shaped drafts | `OVERVIEW_` / `TABLE_` / `GLOSSARY_SYSTEM` | user clicks Generate; one call per table |
 | 9 | report outline | `complete` | `REPORT_OUTLINE_SYSTEM` / `_USER` | user proposes an outline |

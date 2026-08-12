@@ -488,6 +488,12 @@ export interface SqlDraft {
   }
   referenced_tables: string[]
   chart_suggestion: Record<string, unknown> | null
+  /**
+   * Who chose `chart_suggestion`. `model` / `model_adjusted` mean a model read
+   * the question; `heuristic` means only the result's column shape was
+   * consulted. Only the first two are worth moving the type picker off Auto.
+   */
+  chart_source: string | null
   /** Per-type verdicts for the picker; empty means "no opinion yet". */
   chart_options: ChartOption[]
   preview: TileResult | null

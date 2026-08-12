@@ -284,9 +284,25 @@ nothing, because switching to tab 2 to fix one join does not erase the fact
 that a model wrote the other twenty lines.
 
 **Axis pickers are populated from the preview's columns**, never from the SQL
-text — a name the result does not have loses the chart. The suggestion defaults
-the **axes, not the type**: the type stays *Auto* until the user says
-otherwise, which is right for a tile whose data changes shape.
+text — a name the result does not have loses the chart.
+
+**Whether the suggestion also moves the *type* depends on who chose it.**
+`chart_source` comes back on the draft saying which: a `heuristic` pick defaults
+the axes only and leaves the type on *Auto*; a `model` / `model_adjusted` pick —
+one made by reading the question, on the plain-language road — pre-selects the
+type as well, once per draft and only from Auto.
+
+That default used to be Auto for everything, on the reasoning that a tile whose
+data changes shape should be free to re-plan. The reasoning was sound and the
+protection was redundant: `plan_chart` already re-fits a stored intent on every
+refresh and demotes it with a note rather than failing (a pie past six slices
+becomes a bar, an intent naming a dropped column degrades to the table). So Auto
+was guarding against a risk the planner absorbs, at the cost of every tile
+written from a sentence being drawn as a bar chart — because almost any two
+columns *can* be a bar, and a shape heuristic has no way to know the question
+asked about a share. The user can still set it back to Auto, and the editor will
+not overrule them: adoption is keyed on the draft object, so it happens once per
+round trip and never twice.
 
 > **"Table only" is a tile type, not a chart intent.** Storing
 > `chart_type: "none"` reads like "draw nothing" and does the opposite —
@@ -324,7 +340,10 @@ quiet. `npm run test:format`.
 3. **Credentials encrypted, never exposed** — a tile carries ids and display
    names, never connection internals or provider keys.
 4. **Disclosure is explicit** — `DisclosurePolicy` gates what reaches *the
-   model*, including in `POST /sql/drafts`. A tile *result* reaching the
+   model*, including in `POST /sql/drafts`. That route's second call, which asks
+   what the tile should be drawn as, is narrower still: it passes no policy at
+   all, so it sends the result's *shape* — counts, ratios, a grain — under every
+   policy including `FULL`, and never a row value. A tile *result* reaching the
    owner's own browser is the same exposure as the chat table and needs no new
    gate. **This stops being true the moment dashboards are shared** — see §9.
 

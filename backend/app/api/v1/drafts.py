@@ -34,6 +34,7 @@ def _read(draft: SqlDraft) -> SqlDraftRead:
         validation_report=draft.validation_report,
         referenced_tables=draft.referenced_tables,
         chart_suggestion=draft.chart_suggestion,
+        chart_source=draft.chart_source,
         chart_options=[ChartOptionRead(**option) for option in draft.chart_options],
         preview=(
             None
@@ -62,6 +63,9 @@ async def create_draft(
             llm_config_id=payload.llm_config_id,
             question=payload.question,
             owner_id=ctx.user_id,
+            # A tile keeps what it is drawn as, so it is worth asking. The
+            # report-block route deliberately does not — see `draft_sql`.
+            compose_chart=True,
         )
     )
 

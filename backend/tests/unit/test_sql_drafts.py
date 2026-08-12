@@ -20,6 +20,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from app.charts import AxisSpec, ChartIntent
 from app.core.clock import utcnow
 from app.core.errors import (
     LLMError,
@@ -30,6 +31,7 @@ from app.core.errors import (
 from app.domain.ports.database import QueryResult, ResultColumn
 from app.domain.ports.llm import Completion
 from app.pipeline.contracts import SqlProposal
+from app.pipeline.prompts import CHART_SYSTEM_COMPOSED
 from app.services import query_service, sql_draft_service
 from app.services.sql_draft_service import PREVIEW_MAX_ROWS, draft_sql, validate_sql
 
@@ -289,6 +291,24 @@ async def _draft(
         llm_config_id=llm_config.id,
         question="revenue by status",
         owner_id=OWNER,
+    ), db
+
+
+async def _chart_draft(
+    monkeypatch: pytest.MonkeyPatch, *, gateway: Any, **kwargs: Any
+) -> Any:
+    """`_draft`, with the tile route's `compose_chart=True`."""
+    db, connection, llm_config, _connector = _world(
+        monkeypatch, gateway=gateway, **kwargs
+    )
+    return await draft_sql(
+        db,
+        FakeSettings(),
+        connection_id=connection.id,
+        llm_config_id=llm_config.id,
+        question="revenue by status",
+        owner_id=OWNER,
+        compose_chart=True,
     ), db
 
 
@@ -681,13 +701,15 @@ async def test_validate_refuses_another_users_connection(
 async def test_the_draft_suggests_a_chart_from_the_previews_shape(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Deterministic and free — the heuristic reads the result, no model is
-    asked what to draw, and the user overrides it in the editor anyway."""
+    """Without `compose_chart` the suggestion is the heuristic's, and free:
+    the shape is read, no model is asked what to draw, and the user overrides
+    it in the editor anyway."""
     draft, _db = await _draft(monkeypatch, gateway=FakeGateway(VALID_SQL))
 
     assert draft.chart_suggestion is not None
     assert draft.chart_suggestion["x_axis"]["field"] == "status"
     assert draft.chart_suggestion["y_axis"]["field"] == "total_amount"
+    assert draft.chart_source == "heuristic"
 
 
 async def test_a_rejected_draft_suggests_no_chart(
@@ -698,3 +720,163 @@ async def test_a_rejected_draft_suggests_no_chart(
     )
 
     assert draft.chart_suggestion is None
+
+
+# ── asking the model what to draw ────────────────────────────────────────
+# `compose_chart` is the tile route's opt-in to a second model call. The rules
+# it has to hold: it may not fire on the hand-written road, it may not fire for
+# a report block, it may not fail the draft, and it may not widen what leaves
+# the process. One test each.
+class ChartingGateway(FakeGateway):
+    """A `FakeGateway` that also answers the chart question.
+
+    The two calls on this path ask for different schemas, so dispatching on the
+    schema is both how the fake tells them apart and how the tests assert the
+    chart call happened at all.
+    """
+
+    def __init__(
+        self, *sql: str, intent: Any = None, chart_fails: bool = False
+    ) -> None:
+        super().__init__(*sql)
+        self.intent = intent
+        self.chart_fails = chart_fails
+        self.chart_calls: list[list[Any]] = []
+
+    async def structured(self, llm: Any, messages: Any, schema: Any) -> Any:
+        if schema is ChartIntent:
+            self.chart_calls.append(list(messages))
+            if self.chart_fails:
+                raise LLMError("The provider is unavailable.")
+            return self.intent
+        return await super().structured(llm, messages, schema)
+
+
+def _pie() -> ChartIntent:
+    """A pick the shape heuristic would never make for this preview."""
+    return ChartIntent(
+        chart_type="pie",
+        x_axis=AxisSpec(field="status", type="nominal"),
+        y_axis=AxisSpec(field="total_amount", type="quantitative"),
+    )
+
+
+async def test_a_tile_draft_asks_the_model_what_to_draw(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The whole point: a pie is a pick only a reader of the *question* makes.
+
+    The heuristic sees one nominal column and one measure and says bar, every
+    time, which is why every tile written from a sentence used to look alike.
+    """
+    gateway = ChartingGateway(VALID_SQL, intent=_pie())
+    draft, _db = await _chart_draft(monkeypatch, gateway=gateway)
+
+    assert len(gateway.chart_calls) == 1
+    assert draft.chart_suggestion is not None
+    assert draft.chart_suggestion["chart_type"] == "pie"
+    assert draft.chart_source == "model"
+
+
+async def test_the_composed_prompt_is_the_one_that_is_sent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tile is told there will be a picture; chat is asked whether there
+    should be. Sending the chat prompt here is how a tile gets `"none"`."""
+    gateway = ChartingGateway(VALID_SQL, intent=_pie())
+    await _chart_draft(monkeypatch, gateway=gateway)
+
+    system = gateway.chart_calls[0][0].content
+    assert system == CHART_SYSTEM_COMPOSED
+    assert "Declining is not available" in system
+    assert gateway.chart_calls[0][1].content.endswith(
+        "Choose the chart this tile should be drawn as."
+    )
+
+
+async def test_a_model_that_declines_anyway_falls_back_to_the_heuristic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`validate_intent` refuses `"none"`, so a tile cannot store it.
+
+    The prompt says not to, and this is what happens when a model says it
+    regardless: `plan_chart` falls through to the shape heuristic, which is
+    exactly what the draft returned before it asked. Asking is never worse
+    than not asking — and `chart_source` says who really decided, so the
+    editor does not move its type picker on a pick nobody made.
+    """
+    gateway = ChartingGateway(VALID_SQL, intent=ChartIntent(chart_type="none"))
+    draft, _db = await _chart_draft(monkeypatch, gateway=gateway)
+
+    assert draft.chart_suggestion is not None
+    assert draft.chart_suggestion["chart_type"] == "bar"
+    assert draft.chart_source == "heuristic"
+
+
+async def test_a_failed_chart_call_leaves_the_draft_standing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The statement is valid and its preview has already run. Losing either
+    to a picker default would break the rule that a step which produced
+    correct data may not lose it to a presentation failure."""
+    gateway = ChartingGateway(VALID_SQL, chart_fails=True)
+    draft, _db = await _chart_draft(monkeypatch, gateway=gateway)
+
+    assert draft.validation_status == "VALID"
+    assert draft.preview is not None and draft.preview.status == "OK"
+    assert draft.chart_suggestion is not None
+    assert draft.chart_source == "heuristic"
+
+
+async def test_the_hand_written_road_asks_no_model_what_to_draw(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dashboard is buildable with no LLM provider configured at all, and
+    `validate_sql` is also the road every edit of generated SQL takes."""
+    gateway = ChartingGateway(VALID_SQL, intent=_pie())
+    db, connection, _llm_config, _connector = _world(monkeypatch, gateway=gateway)
+
+    draft = await validate_sql(
+        db,
+        FakeSettings(),
+        connection_id=connection.id,
+        sql=VALID_SQL,
+        owner_id=OWNER,
+    )
+
+    assert gateway.chart_calls == []
+    assert draft.chart_source == "heuristic"
+
+
+async def test_a_report_block_draft_does_not_ask_what_to_draw(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`compose_chart` is off by default, and a report block leaves it off: it
+    persists none of its chart fields, so the answer would be thrown away
+    before anything read it."""
+    gateway = ChartingGateway(VALID_SQL, intent=_pie())
+    draft, _db = await _draft(monkeypatch, gateway=gateway)
+
+    assert gateway.chart_calls == []
+    assert draft.chart_source == "heuristic"
+
+
+async def test_the_chart_call_sends_shape_and_never_a_row_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No result value reaches a model on the dashboard path, at any policy.
+
+    `describe` is called with no policy argument, so it renders at the
+    narrowest budget even under `FULL` — the one part of that block which is a
+    row value, a measure's min/max, is withheld. Every chart rule is written in
+    counts, ratios and grain, so this costs the decision nothing.
+    """
+    connection = FakeConnection()
+    connection.disclosure_policy = "FULL"
+    gateway = ChartingGateway(VALID_SQL, intent=_pie())
+    await _chart_draft(monkeypatch, gateway=gateway, connection=connection)
+
+    sent = gateway.chart_calls[0][1].content
+    assert "3 distinct" in sent          # cardinality: a count, always shared
+    assert "120" not in sent             # the largest total_amount in ROWS
+    assert "20" not in sent              # the smallest

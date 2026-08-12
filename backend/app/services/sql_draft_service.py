@@ -39,7 +39,14 @@ from app.core.logging import get_logger
 from app.domain.ports.database import DatabaseConnector
 from app.infra.db.models import DatabaseConnection, LlmConfig
 from app.infra.llm.litellm_gateway import LiteLLMGateway
-from app.pipeline.nodes import NodeDeps, generate, retrieve, route, validate
+from app.pipeline.nodes import (
+    NodeDeps,
+    generate,
+    propose_chart_intent,
+    retrieve,
+    route,
+    validate,
+)
 from app.pipeline.state import RunState
 from app.services.query_service import (
     TileResult,
@@ -108,10 +115,16 @@ class SqlDraft:
     validation_status: str
     validation_report: dict[str, Any]
     referenced_tables: list[str]
-    # The heuristic's read of the preview's shape, for defaulting the editor's
-    # chart pickers. Deterministic and free: no model is asked what to draw,
-    # and the user overrides it anyway.
+    # What the tile should be drawn as, for defaulting the editor's chart
+    # pickers. On the hand-written road this is the shape heuristic, free and
+    # deterministic; on the plain-language road a model is asked, because the
+    # question says things the column types cannot.
     chart_suggestion: dict[str, Any] | None = None
+    # Who decided: `model`, `model_adjusted`, `heuristic`, `none`, or None when
+    # there was nothing to decide. The editor moves its type picker off *Auto*
+    # only for the first two — a heuristic pick is a default for the axes, not
+    # an opinion about the type worth overriding Auto's re-planning for.
+    chart_source: str | None = None
     # Which types this preview can actually be drawn as, and why not for the
     # rest. The picker disables what will not work rather than offering it and
     # letting the save path demote it with an apology.
@@ -119,6 +132,22 @@ class SqlDraft:
     preview: TileResult | None = None
     question: str | None = None
     llm_config_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _ChartAsk:
+    """What `_draft` needs in order to ask a model what to draw.
+
+    Absent on the hand-written road, and that absence is the mechanism rather
+    than an oversight: `validate_sql` has no question to ask about and no
+    resolved model to ask, so it cannot accidentally acquire a model call. A
+    dashboard stays buildable with no LLM provider configured because the type
+    system says so, not because a branch remembers to check.
+    """
+
+    deps: NodeDeps
+    state: RunState
+    question: str
 
 
 async def draft_sql(
@@ -131,6 +160,7 @@ async def draft_sql(
     owner_id: UUID,
     extra_rules: str = "",
     classify: bool = False,
+    compose_chart: bool = False,
 ) -> SqlDraft:
     """Ask a model for SQL that answers `question`, then guard it and run it.
 
@@ -149,6 +179,15 @@ async def draft_sql(
     to begin with, and chat only escapes this because `route` halts the run
     before any SQL is written. This is that same halt, for the one other
     caller whose answer is stored rather than shown.
+
+    `compose_chart` spends a second model call asking what the result should be
+    *drawn* as. **Off by default, and the asymmetry with `classify` is the
+    point**: that one is on for report blocks and off for tiles, this one is the
+    reverse. A tile stores `chart_config`, so an answer to "what did they mean
+    to see" is kept and redrawn for as long as the tile lives; a report block
+    deliberately persists none of its three chart fields (`chart_config` stays
+    NULL so a re-run on differently-shaped data may re-decide), which would make
+    the same call a token spent on a value thrown away before it is read.
     """
     connection = await _owned(db, DatabaseConnection, connection_id, owner_id)
     llm_config = await _owned(db, LlmConfig, llm_config_id, owner_id)
@@ -210,6 +249,11 @@ async def draft_sql(
             owner_id=owner_id,
             question=question,
             llm_config_id=llm_config.id,
+            ask=(
+                _ChartAsk(deps=deps, state=state, question=question)
+                if compose_chart
+                else None
+            ),
         )
     finally:
         await connector.close()
@@ -280,6 +324,7 @@ async def _draft(
     owner_id: UUID,
     question: str | None = None,
     llm_config_id: UUID | None = None,
+    ask: _ChartAsk | None = None,
 ) -> SqlDraft:
     """Attach a preview and a chart suggestion to a statement and its report.
 
@@ -303,12 +348,14 @@ async def _draft(
             snapshot=snapshot,
         )
 
+    suggestion, source = await _chart_suggestion(preview, ask)
     return SqlDraft(
         sql=sql,
         validation_status=report.status,
         validation_report=report.model_dump(mode="json"),
         referenced_tables=list(report.referenced_tables),
-        chart_suggestion=_chart_suggestion(preview),
+        chart_suggestion=suggestion,
+        chart_source=source,
         chart_options=_chart_options(preview),
         preview=preview,
         question=question,
@@ -316,28 +363,87 @@ async def _draft(
     )
 
 
-def _chart_suggestion(preview: TileResult | None) -> dict[str, Any] | None:
-    """What the data shape says it should be drawn as, if anything.
+async def _chart_suggestion(
+    preview: TileResult | None, ask: _ChartAsk | None = None
+) -> tuple[dict[str, Any] | None, str | None]:
+    """What this tile should be drawn as, and who decided.
 
-    The *heuristic*, not a model: the chart node's question ("what does this
-    question want to see?") needs a run behind it, while the editor only needs
-    sensible defaults in its pickers that the user is about to override.
+    Two roads meet here. Without `ask` — the hand-written road, and every
+    re-validation of edited SQL — this is the *heuristic* alone: no model is
+    called, which is what lets a user with no LLM provider configured build a
+    whole dashboard. With `ask`, the model is asked the question a shape cannot
+    answer: not "what can this be drawn as" but "what did the person mean to
+    see". The difference is the whole reason a tile written from a sentence used
+    to come out as a bar chart every time — two columns *can* always be a bar,
+    so the heuristic always said bar.
+
+    Three properties, in the order they matter:
+
+    1. **The veto still runs before the model**, exactly as it does in the chat
+       node: a result no chart could serve costs no tokens and no latency.
+    2. **It cannot fail the draft.** A provider error, a deadline already spent,
+       an unparseable intent — each falls back to the heuristic's pick, which is
+       what this function returned for every draft before the model was asked.
+       The statement is already valid and its preview already ran; losing a
+       picker default to a presentation failure would break the rule in
+       [pipeline.md §4.1](../../../docs/pipeline.md) that a step which has
+       produced correct data may not lose it to one.
+    3. **The model's answer is never stored raw.** It goes through `plan_chart`
+       like any other intent, so it gets the same name check and shape repair a
+       user's explicit pick gets — and a model that ignores the composed rules
+       and answers `"none"` is refused there and falls back to the heuristic,
+       which is why asking is never worse than not asking.
+
+    `source` is `plan_chart`'s own word for who decided (`model`,
+    `model_adjusted`, `heuristic`, `none`). The editor needs it to tell a pick
+    that read the question from one that read only the column types: only the
+    first is worth moving the type picker off *Auto* for.
     """
     if preview is None or preview.status != "OK" or len(preview.columns) < 2:
-        return None
+        return None, None
 
-    from app.charts import plan_chart, profile_result
+    from app.charts import plan_chart, profile_result, unchartable_reason
 
     try:
         profile = profile_result(
             preview.columns, preview.rows, truncated=preview.truncated
         )
-        plan = plan_chart(profile)
+    except Exception:  # noqa: BLE001 — a defaulted picker is never worth a 500
+        log.exception("draft_chart_profile_failed")
+        return None, None
+
+    suggestion = None
+    if ask is not None and unchartable_reason(profile) is None:
+        try:
+            # The same check `generate` gets, for the same reason: one
+            # `structured` call can take minutes once the gateway's retries and
+            # their backoff are counted, and by here the user has already waited
+            # for a draft and a preview.
+            _check_deadline(ask.state)
+            suggestion = await propose_chart_intent(
+                ask.deps,
+                question=ask.question,
+                profile=profile,
+                row_count=preview.row_count,
+                truncated=preview.truncated,
+                # No policy argument, deliberately: the narrowest budget, at
+                # every policy. Shape is all the chart rules are written in, so
+                # this costs the decision nothing and keeps "no result value
+                # ever reaches a model on the dashboard path" true as stated.
+                composed=True,
+            )
+        except Exception:  # noqa: BLE001 — the heuristic below is the fallback
+            log.exception("draft_chart_intent_failed")
+
+    try:
+        plan = plan_chart(profile, suggestion)
     except Exception:  # noqa: BLE001 — a defaulted picker is never worth a 500
         log.exception("draft_chart_suggestion_failed")
-        return None
+        return None, None
 
-    return plan.intent.model_dump(mode="json") if plan.intent is not None else None
+    if plan.intent is None:
+        return None, plan.source
+    return plan.intent.model_dump(mode="json"), plan.source
 
 
 def _chart_options(preview: TileResult | None) -> list[dict[str, Any]]:

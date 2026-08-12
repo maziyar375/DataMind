@@ -51,7 +51,7 @@ from app.core.errors import LLMError
 from app.domain.ports.database import ResultColumn
 from app.domain.ports.llm import ChatMessage, ResolvedLLM
 from app.pipeline.nodes import NodeDeps, chart
-from app.pipeline.prompts import CHART_SYSTEM
+from app.pipeline.prompts import CHART_SYSTEM, CHART_SYSTEM_COMPOSED
 from app.pipeline.state import ExecutionResult, RunState
 
 COLUMNS = [
@@ -1486,6 +1486,26 @@ def test_the_prompt_quotes_live_budgets_not_copied_numbers() -> None:
         DUAL_AXIS_RATIO, MIN_HISTOGRAM_ROWS,
     ):
         assert str(budget) in CHART_SYSTEM
+
+
+def test_the_composed_variant_extends_the_prompt_it_does_not_edit_it() -> None:
+    """The tile prompt is `CHART_SYSTEM` plus a block, never a second copy.
+
+    Two things depend on that. The chat path stays byte-identical, so a change
+    made for dashboards cannot regress the prompt every historical run and the
+    eval suite share. And the parity test above reads `CHART_SYSTEM`'s own
+    `- "` lines as the list of chart types the model was told about — so a rule
+    stated in the appended block must never open a line that way, or it
+    registers as a type that does not exist. The composed rules are numbered
+    rather than bulleted for exactly this reason, and nothing but this test
+    stops the next edit from reaching for a dash.
+    """
+    assert CHART_SYSTEM_COMPOSED.startswith(CHART_SYSTEM)
+
+    appended = CHART_SYSTEM_COMPOSED[len(CHART_SYSTEM):]
+    assert [line for line in appended.splitlines() if line.startswith('- "')] == []
+    # And the rule the whole variant exists for is actually stated.
+    assert "Declining is not available" in appended
 
 
 # ── the node ─────────────────────────────────────────────────────────────

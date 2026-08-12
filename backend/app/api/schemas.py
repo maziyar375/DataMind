@@ -461,6 +461,11 @@ class SqlDraftRead(BaseModel):
     # A `ChartIntent` for the editor's pickers to default from; null when the
     # preview's shape suggests nothing.
     chart_suggestion: dict[str, Any] | None = None
+    # Who chose it: `model` / `model_adjusted` when a model read the question,
+    # `heuristic` when only the column shape was consulted, null when nothing
+    # was decided. The editor pre-selects a chart type for the first two and
+    # leaves *Auto* alone for the rest.
+    chart_source: str | None = None
     # Per-type verdicts for the picker: `{chart_type, supported, reason}`.
     # Empty means "no opinion" — the editor leaves every type enabled.
     chart_options: list[ChartOptionRead] = Field(default_factory=list)

@@ -66,7 +66,7 @@ greps for violations, so this list cannot silently grow.
 | 3 | Ask a clarifying question | every run, if enabled | `pipeline/nodes/__init__.py:495` |
 | 4 | Generate SQL | every run | `pipeline/nodes/__init__.py:630` |
 | 5 | Write the answer | every run | `pipeline/nodes/__init__.py:863` |
-| 6 | Choose a chart | every run, if chartable | `pipeline/nodes/__init__.py:960` |
+| 6 | Choose a chart | every run, if chartable; **every tile draft**, if chartable | `pipeline/nodes/__init__.py:947` |
 | 7 | Suggest follow-up questions | SPA opens a thread | `services/run_service.py:736` |
 | 8 | Draft SQL for a tile or a report block | user asks for a tile, or checks a block | `services/sql_draft_service.py` |
 | 9 | Generate a semantic layer | user clicks Generate | `semantic/generator.py:383,417,452` |
@@ -76,6 +76,20 @@ greps for violations, so this list cannot silently grow.
 
 One model interaction sends **no customer data at all**: the capability probe
 in `api/v1/llm_configs.py`, a fixed test prompt.
+
+> **Changed:** #6 gained a second trigger. Choosing a chart used to fire only
+> at the end of a chat run; a **dashboard tile draft** now asks it too, so that
+> a tile written from a sentence is drawn as what the sentence meant rather
+> than as whatever a shape heuristic defaults to. It is the *same* call site —
+> `propose_chart_intent`, one function, sent from two places — which is what
+> keeps the count above at twelve and fourteen. **Nothing new leaves the
+> process, and less does than on the chat path:** the tile call passes no
+> policy argument at all, so `ResultProfile.describe` renders at the narrowest
+> budget under *every* policy including `FULL`, withholding the one row value
+> that block can carry (a measure's `min`/`max`). Asserted by
+> `test_the_chart_call_sends_shape_and_never_a_row_value`. A report block's
+> check deliberately does **not** fire it — it persists no chart config, so the
+> answer would be discarded unread.
 
 > **Changed:** #10–#12 are Reports, and were missing from this table until
 > 2026-08-12 — the list had not been revisited since the feature landed.
@@ -110,7 +124,7 @@ Common building blocks, both governed by the disclosure policy (§3):
 | 3 | Clarify | ✅ | ✅ | ✅ | ❌ | Runs before any SQL exists |
 | 4 | Generate SQL | ✅ | ✅ | ✅ | ❌ | **Never sees results** |
 | 5 | Present | ✅ | ❌ | ❌ | **✅ per policy** | Also sends the executed SQL |
-| 6 | Chart | ✅ | ❌ | ❌ | shape only | Counts and types, not values |
+| 6 | Chart | ✅ | ❌ | ❌ | shape only | Counts and types, not values. From a tile draft, the **narrowest** shape block at every policy |
 | 7 | Suggestions | ❌ | ✅ | ✅ | ❌ | Fires without the user asking |
 | 8 | Tile / block SQL draft | ✅ | ✅ | ❌ none | ❌ | History deliberately empty |
 | 9 | Semantic layer | ❌ | ✅ | ❌ | ❌ | Per-table, one call each |

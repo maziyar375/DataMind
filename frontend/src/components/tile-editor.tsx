@@ -31,7 +31,7 @@
  *   backstop, not the interface. Being told "your pick does not fit this
  *   result" *after* saving was the thing worth removing.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   ApiError, connections as connectionsApi, dashboards as api,
@@ -220,6 +220,10 @@ export function TileEditor({
     tile?.refresh_interval_seconds == null ? '' : String(tile.refresh_interval_seconds),
   )
   const [axes, setAxes] = useState<AxisState>(() => axisStateFrom(tile?.chart_config))
+  // Which draft's suggestion has already been adopted into `axes`. A ref, not
+  // state: adopting must not itself schedule a render, and comparing object
+  // identity is what makes "once per draft" mean once per round trip.
+  const adoptedFrom = useRef<SqlDraft | null>(null)
   const [table, setTable] = useState<TableConfig>(
     () => tile?.table_config ?? { columns: [], sort_column: null, sort_direction: 'asc' },
   )
@@ -323,20 +327,43 @@ export function TileEditor({
     }
   }, [checkTarget, checkedSql, connectionId, needsSql])
 
-  // Pre-fill the axis pickers from the shape that just came back, without
-  // moving the type off Auto: the suggestion is a sensible default for *if*
-  // the user picks a type, not a reason to stop re-planning every refresh.
+  // Pre-fill the pickers from the shape that just came back. Whether that
+  // includes the *type* depends on who chose it — see below.
   useEffect(() => {
     const preview = draft?.preview
     if (!preview) return
     const names = new Set(preview.columns.map((column) => column.name))
+    const suggested = axisStateFrom(draft.chart_suggestion)
+
+    // A suggestion that read the **question** may move the type off Auto; one
+    // that read only the column types may not. `chart_source` is the backend's
+    // own word for which happened, and the distinction is the whole feature:
+    // almost any two columns *can* be a bar chart, so a shape heuristic says
+    // "bar" to nearly everything and a tile written from a sentence came out
+    // looking like every other one. Leaving Auto to re-plan on every refresh
+    // still protects nothing the platform does not already handle — a stored
+    // intent the data outgrows is re-fitted and demoted with a note rather
+    // than failing — so the cost of adopting a considered pick is a note the
+    // reader may see, and the cost of not adopting it is every tile looking
+    // the same.
+    //
+    // Once per draft, and only from Auto. Re-adopting is the bug this guards:
+    // a user who deliberately sets the type back to Auto would have the effect
+    // undo them on its next run.
+    const modelChose =
+      draft.chart_source === 'model' || draft.chart_source === 'model_adjusted'
+    if (modelChose && adoptedFrom.current !== draft && axes.type === 'auto') {
+      adoptedFrom.current = draft
+      setAxes(suggested)
+      return
+    }
+
     // Defaults for the type actually selected, not for the one the heuristic
     // would have chosen. `chart_suggestion` answers "what should this be
     // drawn as", which is only the right question while the type is Auto —
     // once a type is picked, the columns that make *that* type work are the
     // ones the option carries.
     const fitted = columnsForType(axes.type, draft.chart_options)
-    const suggested = axisStateFrom(draft.chart_suggestion)
     setAxes((current) => {
       // A pick this result can still honour is kept; one it cannot is
       // replaced. Leaving it would store an axis naming a column the query no
