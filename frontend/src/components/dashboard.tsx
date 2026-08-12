@@ -28,7 +28,7 @@ import 'react-resizable/css/styles.css'
 import { dashboards as api } from '../api/client'
 import { dueTileIds } from './dashboard-schedule'
 import type { Dashboard, DashboardSummary, DashboardTile, TileResult } from '../api/types'
-import { Chip, Dot, ErrorNote, Icon, Kpi, ResultTable, Spinner, relativeTime } from './ui'
+import { Chip, Dot, ErrorNote, Icon, Kpi, ResultTable, Spinner, glyphTint, relativeTime } from './ui'
 import { VegaChart } from './VegaChart'
 
 // ── refresh rates ─────────────────────────────────────────────────────────
@@ -1101,9 +1101,7 @@ function DashboardGlyph({ hue, size = 34 }: { hue: number; size?: number }) {
         height: size,
         flexShrink: 0,
         borderRadius: Math.round(size * 0.28),
-        background: `oklch(0.7 0.16 ${hue} / 0.16)`,
-        border: `1px solid oklch(0.7 0.16 ${hue} / 0.3)`,
-        color: `oklch(0.65 0.17 ${hue})`,
+        ...glyphTint(hue),
       }}
     >
       <Icon.Grid size={Math.round(size * 0.47)} />

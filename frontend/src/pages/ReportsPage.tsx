@@ -25,7 +25,8 @@ import { ReportOutlineEditor, ReportRunViewer } from '../components/report'
 import { ReportRunHistory } from '../components/report-history'
 import {
   Chip, DisclosureBadge, EmptyState, ErrorNote, Field, GhostButton, Icon, Modal,
-  PrimaryButton, SearchField, Segmented, Spinner, TextArea, TextInput, relativeTime,
+  PrimaryButton, SearchField, Segmented, Spinner, TextArea, TextInput, glyphTint,
+  relativeTime,
 } from '../components/ui'
 
 /** The policies a report can be written from — the frontend half of §7. */
@@ -479,9 +480,7 @@ function ReportCard({
             height: 34,
             flexShrink: 0,
             borderRadius: 10,
-            background: `oklch(0.7 0.16 ${hue} / 0.16)`,
-            border: `1px solid oklch(0.7 0.16 ${hue} / 0.3)`,
-            color: `oklch(0.65 0.17 ${hue})`,
+            ...glyphTint(hue),
           }}
         >
           <Icon.Doc size={16} />

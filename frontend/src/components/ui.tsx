@@ -1192,6 +1192,27 @@ export function engineHue(kind: string): number {
   return ENGINE_HUES[kind] ?? identityHue(kind)
 }
 
+/**
+ * The three colours a hue-tinted glyph is drawn from, resolved per theme.
+ *
+ * The lightness is a token rather than a constant because the same hue has to
+ * behave differently on the two grounds: 0.65 lightness is a bright mark on a
+ * 0.16 background and a washed-out one on 0.96 paper. The hue is passed
+ * through untouched — that part identifies the record, and a connection that
+ * changed colour with the theme would be identifying nothing.
+ *
+ * The dashboard tile, the report card and this badge all draw from here, so
+ * the same record looks the same in all three.
+ */
+export function glyphTint(hue: number): { background: string; border: string; color: string } {
+  const tint = `var(--glyph-tint-l, 0.7) var(--glyph-tint-c, 0.16) ${hue}`
+  return {
+    background: `oklch(${tint} / 0.16)`,
+    border: `1px solid oklch(${tint} / 0.3)`,
+    color: `oklch(var(--glyph-ink-l, 0.65) var(--glyph-ink-c, 0.17) ${hue})`,
+  }
+}
+
 export function GlyphBadge({
   children, hue, size = 34, radius,
 }: {
@@ -1201,6 +1222,7 @@ export function GlyphBadge({
   radius?: number
 }) {
   const tinted = hue != null
+  const tint = tinted ? glyphTint(hue) : null
   return (
     <span
       aria-hidden
@@ -1213,9 +1235,9 @@ export function GlyphBadge({
         borderRadius: radius ?? Math.round(size * 0.28),
         fontSize: Math.round(size * 0.4),
         fontWeight: 700,
-        background: tinted ? `oklch(0.7 0.16 ${hue} / 0.16)` : 'var(--panel-alt)',
-        border: `1px solid ${tinted ? `oklch(0.7 0.16 ${hue} / 0.3)` : 'var(--border)'}`,
-        color: tinted ? `oklch(0.65 0.17 ${hue})` : 'var(--text-dim)',
+        background: tint?.background ?? 'var(--panel-alt)',
+        border: tint?.border ?? '1px solid var(--border)',
+        color: tint?.color ?? 'var(--text-dim)',
       }}
     >
       {children}

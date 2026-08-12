@@ -26,6 +26,15 @@ export const THEMES: Record<ThemeName, Record<string, string>> = {
     text2: 'oklch(0.85 0.01 250)',
     'text-dim': 'oklch(0.65 0.015 250)',
     'text-faint': 'oklch(0.55 0.015 250)',
+    // How a per-record identity hue is *rendered* (`glyphTint` in ui.tsx). The
+    // hue itself belongs to the record — a Postgres source is hue 250 in both
+    // themes, or the colour stops being a legend — but the lightness it is
+    // mixed at belongs to the ground it sits on. These are the values every
+    // glyph used to hardcode, so dark is unchanged.
+    'glyph-tint-l': '0.7',
+    'glyph-tint-c': '0.16',
+    'glyph-ink-l': '0.65',
+    'glyph-ink-c': '0.17',
     accent: 'oklch(0.7 0.15 250)',
     'accent-bg': 'oklch(0.7 0.15 250 / 0.14)',
     'accent-border': 'oklch(0.7 0.15 250 / 0.3)',
@@ -68,6 +77,16 @@ export const THEMES: Record<ThemeName, Record<string, string>> = {
     text2: 'oklch(0.34 0.012 72)',
     'text-dim': 'oklch(0.5 0.013 74)',
     'text-faint': 'oklch(0.62 0.013 76)',
+    // Ink on paper, not a sticker on it. A glyph mixed at the dark theme's
+    // 0.65 lightness sits at roughly 3:1 against a 0.96 ground — technically
+    // legible, visibly washed out, and cold enough beside the warm neutrals to
+    // read as a stray pastel. Dropping the ink to 0.46 gives it the weight of
+    // the text it labels; the tint behind it darkens to match, so the badge
+    // still reads as one object.
+    'glyph-tint-l': '0.62',
+    'glyph-tint-c': '0.15',
+    'glyph-ink-l': '0.46',
+    'glyph-ink-c': '0.16',
     accent: 'oklch(0.52 0.19 315)',
     'accent-bg': 'oklch(0.52 0.19 315 / 0.1)',
     'accent-border': 'oklch(0.52 0.19 315 / 0.35)',
