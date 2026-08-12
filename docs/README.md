@@ -30,6 +30,7 @@ chat run **and** the map of all three pipelines (§0), with
 | Report generation, prose, print | [reports.md](reports.md) | Data model, generation order, where the numbers come from |
 | Retrieval, prompts, anything you want to prove helped | [eval.md](eval.md) | The golden set, the metrics, and the CI gate |
 | Orchestration — moving the pipeline onto LangGraph | [langgraph-migration.md](langgraph-migration.md) | Which surfaces move and which don't, the phases, and the checklist |
+| Claiming, cancelling, SSE fan-out, the reconciler | [cross-replica.md](cross-replica.md) | What stops being true with more than one API process, and the seven fixes |
 
 ## Historical
 

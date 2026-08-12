@@ -786,6 +786,48 @@ on replica A, and cancellation as a durable flag rather than a local task handle
 LangGraph does not solve those three on its own — but Phase 4 is what makes
 solving them possible.
 
+#### Done, and folded in as the record said. Full write-up:
+#### [cross-replica.md](cross-replica.md)
+
+Not one line of graph code changed, which is the strongest evidence the
+instruction above was right. Four things came out differently from the sketch.
+
+**1. The premise moved, and improved.** "Once runs are checkpointed they are
+resumable by any process" — but Phase 4 declined checkpointing. What it built
+instead is *better* for this phase, not worse: a report run resumes from
+`report_block_results` and `report_section_results`, rows written in the same
+transaction as the work they record, so **any** replica can resume one and none
+needs a thread identity. A checkpoint would have been a second copy of that
+fact, reachable only through a second driver.
+
+**2. Redis was not needed, for Phase 4's own reason.** The checklist said
+"Redis-backed `EventPublisher`". `run_events` is already a durable ordered log
+with `UNIQUE(run_id, seq)`, written on every emit, and the SPA already polled
+it. So the transport is Postgres `LISTEN`/`NOTIFY`, and the notification carries
+`run_id:seq` rather than the event — which sidesteps the 8000-byte payload
+ceiling, and gets ordering and visibility from the fact that Postgres delivers a
+notification *at commit*, in the same transaction that wrote the row. No second
+deployment unit, and [CLAUDE.md](../CLAUDE.md)'s "no broker" holds.
+
+**3. Phase 4 left a cross-replica hazard that this phase had to close.** Startup
+resume took *every* `QUEUED`/`RUNNING` report run, which at one replica could
+only mean a crash. At two it also means "the other replica is generating this
+right now" — so a booting replica would resume a live run and narrate every
+section twice. `report_runs` had no heartbeat to tell them apart; it has one
+now. This is the most damaging bug of the set and it was introduced, not
+inherited.
+
+**4. The reconciler's lock leaked, and only two live replicas showed it.** The
+first version paired `pg_try_advisory_lock` with `pg_advisory_unlock` in a
+`try/finally` and passed its unit test. `reconcile_stale` commits, SQLAlchemy
+may return the connection to the pool at that point, and the unlock then runs on
+a different backend and quietly fails — leaving the lock held and the sweep
+**silently disabled**, which is invisible because a reconciler that never runs
+looks exactly like one that keeps finding nothing. `pg_try_advisory_xact_lock`
+in the sweep's own transaction cannot leak. Worth recording as a method note:
+this was found by `SELECT count(*) FROM pg_locks`, not by a test, and no fake
+session would have modelled it.
+
 ---
 
 ## 5. How each phase is proved
@@ -991,12 +1033,32 @@ A phase is done when all five pass, not when the code runs.
       untouched by this phase, still asserted by `test_clarify.py`
 
 ### Phase 6 — Cross-replica
-- [ ] Redis-backed `EventPublisher` adapter
-- [ ] `SELECT … FOR UPDATE SKIP LOCKED` claim over `runs`
-- [ ] Cancellation as a durable flag, not a local task handle (`ReportRunExecutor._flags`)
-- [ ] `event_bus.forget()` actually called on run completion
-- [ ] Reconciler holds an advisory lock
-- [ ] Two replicas behind a load balancer: streaming and cancel both verified
+- [x] ~~Redis-backed~~ **Postgres `LISTEN`/`NOTIFY`** `EventPublisher` adapter —
+      the notification carries `run_id:seq`, the body is read from the
+      `run_events` log that was already being written
+      ([`infra/events/listener.py`](../backend/app/infra/events/listener.py)).
+      No broker, for Phase 4's reason: the rows already exist
+- [x] `SELECT … FOR UPDATE SKIP LOCKED` claim over `runs` (`RunService.claim`),
+      plus a claim poller for runs left unowned by a process that died between
+      committing the row and submitting it
+- [x] Cancellation as a durable flag, not a local task handle — `cancel_requested`
+      on **both** `runs` and `report_runs`, read on the owner's heartbeat.
+      `ReportRunExecutor._flags` survives as the same-replica fast path, and
+      `_finalise` no longer overwrites a terminal status it did not set
+- [x] `event_bus.forget()` actually called on run completion — and on cancel,
+      and by a mirroring replica when it sees `RUN_FINISHED`. Nothing had ever
+      called it, so every event since boot was held behind a durable copy
+- [x] Reconciler holds an advisory lock — `pg_try_advisory_xact_lock`, **not**
+      the session-scoped form, which leaked in the first version. See finding 4
+- [x] Two replicas behind a load balancer: streaming and cancel both verified —
+      `docker-compose.replicas.yml` + `scripts/nginx-replicas.conf`. Verified
+      live: an event written by neither replica reached an SSE client through
+      the balancer; two concurrent claims produced exactly one winner with the
+      loser skipping rather than blocking; a cancel through the balancer set the
+      durable flag and the owner's heartbeat observed it; the claim poller
+      reclaimed an orphaned queued run; five sweeps left zero advisory locks
+- [x] Report-run resume is heartbeat-gated — the Phase 4 hazard: without it a
+      booting replica resumes a run another replica is generating. Finding 3
 
 ### Explicitly not migrating
 - [ ] Confirmed: follow-up suggestions (`run_service.suggest_followups`) stay a one-shot call

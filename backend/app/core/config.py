@@ -51,9 +51,16 @@ class Settings(BaseSettings):
     # ── run execution ────────────────────────────────────────────────────
     max_concurrent_runs: int = 8
     run_deadline_seconds: int = 120
+    # Also the worst-case latency of a cancel issued at another replica: the
+    # owning process learns about `cancel_requested` on this timer.
     run_heartbeat_seconds: int = 10
     run_stale_after_seconds: int = 60
     reconciler_interval_seconds: int = 30
+    # How often a replica looks for runs nobody is executing. Only ever finds
+    # anything after a process died between committing a run and submitting
+    # it, so it is deliberately slower than the heartbeat — the normal path is
+    # the direct hand-off in `post_message`, which costs nothing.
+    run_claim_interval_seconds: int = 15
 
     # ── sql guard / execution defaults ───────────────────────────────────
     default_max_rows: int = 1000

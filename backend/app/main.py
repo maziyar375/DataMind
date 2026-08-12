@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.core.context import set_correlation_id
 from app.core.logging import configure_logging, get_logger
 from app.infra.db.session import dispose_engine, get_sessionmaker
+from app.infra.events.listener import RunEventListener
 from app.services.bootstrap import ensure_admin
 from app.workers.inprocess import InProcessRunExecutor
 from app.workers.reconciler import reconcile_once, reconciler_loop
@@ -51,9 +52,23 @@ async def lifespan(app: FastAPI):
     # written say which blocks ran and which sections were narrated, so a
     # resumed run pays only for what is missing. Queued here rather than
     # awaited — startup must not block on minutes of generation.
-    for run_id in await stranded_report_runs():
+    #
+    # `stranded_report_runs` takes settings because it filters on the heartbeat
+    # window: with more than one replica, "QUEUED or RUNNING at startup" also
+    # describes a run another replica is generating right now, and resuming
+    # that one would write every section twice.
+    for run_id in await stranded_report_runs(settings):
         await app.state.report_executor.submit_resume(run_id)
         log.warning("startup_resumed_report_run", run_id=str(run_id))
+
+    # Carries events from the process executing a run to the processes serving
+    # the browsers watching it. Started before anything can be claimed.
+    app.state.run_event_listener = RunEventListener(settings)
+    app.state.run_event_listener.start()
+
+    # The queue half of `RunService.claim`: picks up runs left unowned by a
+    # process that died between committing the row and submitting it.
+    app.state.run_executor.start_claiming()
 
     reconciler = asyncio.create_task(reconciler_loop(settings))
     log.info("raymand_started", environment=settings.environment)
@@ -62,6 +77,8 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         reconciler.cancel()
+        await app.state.run_executor.stop_claiming()
+        await app.state.run_event_listener.stop()
         await dispose_engine()
 
 

@@ -56,6 +56,9 @@ MIGRATIONS = [
         "app.infra.db.migrations.versions.0009_report_section_target"
     ),
     importlib.import_module("app.infra.db.migrations.versions.0010_report_block_title"),
+    # Touches `runs` as well as `report_runs`; the recorder ignores tables
+    # these revisions never created, so only the report half is checked here.
+    importlib.import_module("app.infra.db.migrations.versions.0011_cross_replica"),
 ]
 
 TABLES = (
@@ -94,7 +97,11 @@ class OpRecorder:
         self.dropped_indexes.append(name)
 
     def add_column(self, table: str, column: sa.Column[Any], **_kw: Any) -> None:
-        self.tables[table].append_column(column)
+        # A revision may touch a table outside this set — 0011 adds
+        # `cancel_requested` to `runs` and `report_runs` in one loop. Only the
+        # report tables were created here, so the rest is not ours to check.
+        if table in self.tables:
+            self.tables[table].append_column(column)
 
     def drop_column(self, table: str, name: str, **_kw: Any) -> None:
         self.dropped_columns.append((table, name))
@@ -167,7 +174,7 @@ def test_they_agree_on_every_foreign_key_and_its_delete_rule() -> None:
 
 
 def test_the_revision_chain_is_unbroken() -> None:
-    assert [m.revision for m in MIGRATIONS] == ["0008", "0009", "0010"]
+    assert [m.revision for m in MIGRATIONS] == ["0008", "0009", "0010", "0011"]
     assert MIGRATIONS[0].down_revision == "0007"
     # Each revision hangs off the one before it: a fork here is two heads and
     # an `alembic upgrade` that refuses to run.
@@ -183,7 +190,17 @@ def test_the_downgrade_drops_exactly_what_the_upgrade_created() -> None:
     # A column added by a later revision is dropped by its own downgrade, and
     # by nothing else: a `drop_column` against a table 0008 is about to drop
     # is a downgrade that only runs in the right order by luck.
+    #
+    # `runs` is in this list and in none of the tables above because 0011 adds
+    # `cancel_requested` to both run tables in one loop. It is recorded rather
+    # than filtered out so this assertion stays a full account of the DDL —
+    # the upgrade's `add_column` for that table *is* skipped, since `runs` was
+    # never created here to add it to.
     assert down.dropped_columns == [
+        ("report_runs", "heartbeat_at"),
+        ("report_runs", "worker_id"),
+        ("runs", "cancel_requested"),
+        ("report_runs", "cancel_requested"),
         ("report_block_results", "title_snapshot"),
         ("report_blocks", "title"),
         ("reports", "section_target"),

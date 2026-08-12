@@ -324,20 +324,43 @@ async def stream_events(
     # never saw it close — is a stream that hangs open until the client gives up.
     in_flight = RunStatus(run.status).is_in_flight
 
+    async def replay_log(after: int):
+        result = await db.execute(
+            select(RunEventRow)
+            .where(RunEventRow.run_id == run_id, RunEventRow.seq > after)
+            .order_by(RunEventRow.seq)
+        )
+        return list(result.scalars())
+
     async def generate():
         if not in_flight:
             # The run already finished; replay from the durable log and close.
-            result = await db.execute(
-                select(RunEventRow)
-                .where(RunEventRow.run_id == run_id, RunEventRow.seq > start_from)
-                .order_by(RunEventRow.seq)
-            )
-            for row in result.scalars():
+            for row in await replay_log(start_from):
                 yield _sse(row.seq, row.type, row.data)
             return
 
+        # Attach *before* backfilling, then skip what the backfill covered.
+        #
+        # The order is the point. This replica may not be the one executing the
+        # run — since Phase 6 events arrive here through `LISTEN`/`NOTIFY`, and
+        # the local bus holds nothing for a run it never published. Backfilling
+        # first and subscribing second would drop anything emitted between the
+        # two, which on a fast node is most of a step. Subscribing first makes
+        # the overlap a duplicate instead of a gap, and a duplicate is one
+        # comparison to throw away.
+        stream = event_bus.subscribe(run_id, after_seq=start_from)
         try:
-            async for event in event_bus.subscribe(run_id, after_seq=start_from):
+            last = start_from
+            for row in await replay_log(start_from):
+                yield _sse(row.seq, row.type, row.data)
+                last = max(last, row.seq)
+                if row.type == "RUN_FINISHED":
+                    # It finished between the status read above and this query.
+                    return
+
+            async for event in stream:
+                if event["seq"] <= last:
+                    continue
                 if await request.is_disconnected():
                     break
                 yield _sse(event["seq"], event["type"], event["data"])
@@ -345,6 +368,8 @@ async def stream_events(
                     break
         except asyncio.CancelledError:
             return
+        finally:
+            await stream.aclose()
 
     return StreamingResponse(
         generate(),

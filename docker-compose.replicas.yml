@@ -1,0 +1,43 @@
+# Two API replicas behind a load balancer — the Phase 6 verification rig.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.replicas.yml up
+#
+# Everything cross-replica is invisible with one process, because a dict, a
+# task handle and an `asyncio.Event` all happen to be reachable from wherever
+# the request landed. This overlay is how those assumptions get tested: nginx
+# round-robins, so a run started through one replica is very likely watched and
+# cancelled through the other.
+#
+# What it deliberately does *not* add is a broker. The event fan-out is
+# Postgres `LISTEN`/`NOTIFY` over the `run_events` log both replicas already
+# write to — see `backend/app/infra/events/listener.py` and
+# `docs/cross-replica.md`. The only new container here is the load balancer.
+services:
+  api:
+    # No fixed host port: two containers cannot both own 8000. `lb` below is
+    # the way in.
+    ports: !reset []
+    # `--reload` runs a file-watching supervisor that is fine for one dev
+    # container and misleading for two — a reload restarts one replica's
+    # listener and claim loop while the other keeps going, which looks exactly
+    # like the failure modes this rig is meant to surface.
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    deploy:
+      replicas: 2
+
+  lb:
+    image: nginx:1.27-alpine
+    depends_on: [api]
+    ports: ["8000:8000"]
+    volumes:
+      - ./scripts/nginx-replicas.conf:/etc/nginx/conf.d/default.conf:ro
+
+  web:
+    depends_on: [lb]
+    environment:
+      VITE_API_BASE_URL: /api/v1
+      # Through the balancer, so the SPA's requests are spread across replicas
+      # exactly as they would be in production.
+      VITE_PROXY_TARGET: http://lb:8000

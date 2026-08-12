@@ -2,12 +2,19 @@
 
 The same trade `SemanticJobExecutor` makes, for the same reason: a generation is
 minutes of database and provider latency rather than seconds, so it gets a low
-concurrency ceiling and no heartbeat. Durability comes from the `report_runs`
-row **and from the result rows themselves**: `stranded_runs` at startup names
-the runs a dead process interrupted, and each is resumed rather than failed, so
-the sections that finished are not paid for twice. That resume needs no
-checkpoint — the rows are the progress record, written in the same transaction
-as the work they record. See `report_graph._seed_from_written`.
+concurrency ceiling. Durability comes from the `report_runs` row **and from the
+result rows themselves**: `stranded_runs` at startup names the runs a dead
+process interrupted, and each is resumed rather than failed, so the sections
+that finished are not paid for twice. That resume needs no checkpoint — the
+rows are the progress record, written in the same transaction as the work they
+record. See `report_graph._seed_from_written`.
+
+It gained a heartbeat in Phase 6, and the resume above is exactly why. "A dead
+process interrupted this run" and "another replica is generating it right now"
+are the same row until something distinguishes them, so with two replicas the
+startup resume would have re-run a live generation and written every section
+twice. `_watch` writes `heartbeat_at`, `stranded_runs` reads it, and the same
+round trip carries the durable cancel back the other way.
 
 **It mirrors `workers/semantic.py`; it does not share it.** The two jobs have the
 same shape and different bodies, and a shared executor would be one class with
@@ -35,13 +42,16 @@ being abandoned, and the task is cancelled outright if it does not stop.
 from __future__ import annotations
 
 import asyncio
+import os
+import socket
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict
+from datetime import timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clock import utcnow
@@ -124,6 +134,7 @@ class ReportRunExecutor:
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENT_JOBS)
         self._tasks: dict[UUID, asyncio.Task[None]] = {}
         self._flags: dict[UUID, asyncio.Event] = {}
+        self._worker_id = f"{socket.gethostname()}:{os.getpid()}"
 
     async def submit(self, run_id: UUID) -> None:
         self._schedule(run_id, generate_run, f"report:{run_id}")
@@ -155,11 +166,15 @@ class ReportRunExecutor:
         task.add_done_callback(lambda _: self._forget(run_id))
 
     async def cancel(self, run_id: UUID) -> bool:
-        """Ask first, then insist.
+        """Ask first, then insist — for a run *this* process is executing.
 
         Setting the flag lets the run stop between phases and keep the results
         it has already paid for; the hard cancel a moment later covers a run
         stuck in a query or a provider call that will never return.
+
+        Still the fast path, no longer the only one. `report_service.cancel_run`
+        writes `cancel_requested`, and `_watch` below is where the replica that
+        actually owns the run picks it up. `False` here means "not mine".
         """
         flag = self._flags.get(run_id)
         task = self._tasks.get(run_id)
@@ -185,6 +200,9 @@ class ReportRunExecutor:
         from app.infra.db.session import get_sessionmaker
 
         async with self._semaphore:
+            watch = asyncio.create_task(
+                self._watch(run_id, cancelled), name=f"report-watch:{run_id}"
+            )
             try:
                 async with get_sessionmaker()() as session:
                     await body(session, self._settings, run_id, cancelled)
@@ -193,10 +211,59 @@ class ReportRunExecutor:
                 raise
             except Exception:
                 log.exception("report_executor_failed", run_id=str(run_id))
+            finally:
+                watch.cancel()
+
+    async def _watch(self, run_id: UUID, cancelled: asyncio.Event) -> None:
+        """Claim the run, keep saying so, and notice if it is cancelled.
+
+        A report run is minutes long, so both halves matter more here than on
+        the chat path. The heartbeat is what lets a restarting replica tell a
+        run being generated *right now* from one whose process died
+        mid-sentence — Phase 4 made stranded runs resume, and without a
+        heartbeat a second replica booting mid-generation would resume a run
+        that was never stranded and write the same sections twice.
+
+        The cancel read is the same round trip, for the same reason it is on
+        the chat path: the ask arrives at whichever replica the browser is
+        talking to, and has to reach the one holding the `asyncio.Event`.
+        """
+        from app.infra.db.session import get_sessionmaker
+
+        while True:
+            try:
+                async with get_sessionmaker()() as session:
+                    result = await session.execute(
+                        update(ReportRun)
+                        .where(ReportRun.id == run_id)
+                        .values(heartbeat_at=utcnow(), worker_id=self._worker_id)
+                        .returning(ReportRun.cancel_requested)
+                    )
+                    stop = result.scalar_one_or_none()
+                    await session.commit()
+                if stop and not cancelled.is_set():
+                    log.info("report_cancel_observed", run_id=str(run_id))
+                    cancelled.set()
+                    # The same "ask, then insist" the local path uses: a phase
+                    # boundary is the polite stop, and a provider call that
+                    # never returns is why there is a rude one.
+                    task = self._tasks.get(run_id)
+                    if task is not None:
+                        await asyncio.sleep(
+                            self._settings.llm_request_timeout_seconds + 5
+                        )
+                        if not task.done():
+                            task.cancel()
+                    return
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.warning("report_heartbeat_failed", run_id=str(run_id))
+            await asyncio.sleep(self._settings.run_heartbeat_seconds)
 
 
-async def stranded_runs() -> list[UUID]:
-    """Runs left QUEUED or RUNNING by a process that died.
+async def stranded_runs(settings: Settings) -> list[UUID]:
+    """Runs left QUEUED or RUNNING by a process that died — and *only* those.
 
     They are **not** failed here any more. A report run is minutes long, so a
     restart used to cost the user everything that had not finished — the rows
@@ -208,15 +275,34 @@ async def stranded_runs() -> list[UUID]:
     what is missing. That is the whole mechanism, and it needs no checkpoint —
     see `report_graph._seed_from_written` for why the rows are a *better*
     record of progress than a checkpoint would be.
+
+    **The heartbeat filter is what makes that safe with more than one replica**,
+    and Phase 6 added it because Phase 4 had made this genuinely dangerous.
+    With a single process, "QUEUED or RUNNING at startup" could only mean a
+    crash — nothing else was executing. With two, it also means "replica A is
+    generating this right now", and a booting replica B would resume it: two
+    processes narrating the same sections into the same run, paying twice and
+    interleaving the results. A live run answers with a fresh `heartbeat_at`;
+    a stranded one stopped answering when its process did.
+
+    A run that never started (`heartbeat_at IS NULL`) is claimable once it is
+    older than the stale window, which is the same grace `runs` gets — a run
+    submitted moments before this replica booted may still be starting up.
     """
     from app.infra.db.session import get_sessionmaker
 
+    cutoff = utcnow() - timedelta(seconds=settings.run_stale_after_seconds)
     async with get_sessionmaker()() as session:
         result = await session.execute(
             select(ReportRun).where(
                 ReportRun.status.in_(
                     (ReportRunStatus.QUEUED, ReportRunStatus.RUNNING)
-                )
+                ),
+                or_(
+                    ReportRun.heartbeat_at.is_(None),
+                    ReportRun.heartbeat_at < cutoff,
+                ),
+                ReportRun.created_at < cutoff,
             )
         )
         return [row.id for row in result.scalars()]

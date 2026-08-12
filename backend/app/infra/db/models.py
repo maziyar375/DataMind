@@ -19,6 +19,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
     func,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
@@ -321,6 +322,13 @@ class Run(Base, TimestampMixin):
     worker_id: Mapped[str | None] = mapped_column(String(100))
     fencing_token: Mapped[int | None] = mapped_column(BigInteger)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Cancellation as a durable request, not a local task handle. The replica
+    # holding the `asyncio.Task` is the only one that can stop it, and it is
+    # not necessarily the replica the cancel arrived at — so the ask is written
+    # here and the owner reads it on its next heartbeat.
+    cancel_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -753,6 +761,7 @@ class ReportRun(Base):
     __tablename__ = "report_runs"
     __table_args__ = (
         Index("ix_report_runs_report_created", "report_id", "created_at"),
+        Index("ix_report_runs_status_heartbeat", "status", "heartbeat_at"),
     )
 
     id: Mapped[uuid.UUID] = _pk()
@@ -775,6 +784,15 @@ class ReportRun(Base):
     # readable even if the template is somehow migrated later.
     language: Mapped[str] = mapped_column(String(5), nullable=False, default="en")
     error_message: Mapped[str | None] = mapped_column(Text)
+    # The same three `runs` has carried since 0001, added here in 0011 for the
+    # same reason. Without a heartbeat there is no way to tell a run being
+    # generated right now from one whose process died mid-sentence, and startup
+    # resume has to tell them apart or it duplicates a live replica's work.
+    worker_id: Mapped[str | None] = mapped_column(String(100))
+    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancel_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(

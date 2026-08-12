@@ -3,6 +3,20 @@
 Durability comes from the `runs` table plus a heartbeat rather than from a
 broker. The swap point for Celery is `RunExecutor`; nothing here knows how a
 run gets scheduled.
+
+Three of the rules here exist because more than one replica may be running
+(Phase 6 of [docs/langgraph-migration.md](../../../docs/langgraph-migration.md)):
+
+* **`claim` is how a run starts, and it is atomic.** Exactly one process may
+  execute a run, and "exactly one" has to be enforced by the database rather
+  than by which handler happened to receive the POST.
+* **Cancelling is a row, not a task handle.** `cancel` writes
+  `cancel_requested`; the process that owns the run reads it on its next
+  heartbeat and stops itself. The API's local `executor.cancel` is still
+  called first, and is still what makes a same-replica cancel instant.
+* **`_finalise` may not overwrite a terminal status it did not set.** A run
+  cancelled from another replica is `CANCELLED` before its executor notices,
+  and the executor must not write `SUCCEEDED` over it on the way out.
 """
 from __future__ import annotations
 
@@ -41,6 +55,7 @@ from app.infra.db.models import (
     RunStep,
 )
 from app.infra.events.bus import event_bus
+from app.infra.events.listener import notify_run_event
 from app.infra.llm.litellm_gateway import LiteLLMGateway
 from app.pipeline.nodes import NodeDeps, _describe_schema, _render_history
 from app.pipeline.pipeline import AnalyticsPipeline
@@ -142,20 +157,88 @@ class RunService:
         await self._db.flush()
         return run
 
+    # ── claiming ─────────────────────────────────────────────────────────
+    def _claimable(self) -> Any:
+        """Runs no live process is executing: queued, or abandoned mid-run.
+
+        The second half is what makes a claim a *takeover*. A run whose worker
+        died is `RUNNING` with a heartbeat that stopped, and it is claimable
+        for the same reason the reconciler is allowed to fail it — nobody is
+        driving it. The reconciler still wins the race often, and that is
+        fine: a failed run is a claimable run's alternative, not its enemy.
+        """
+        cutoff = utcnow() - timedelta(seconds=self._settings.run_stale_after_seconds)
+        return or_(
+            Run.status == RunStatus.QUEUED,
+            (Run.status == RunStatus.RUNNING) & (Run.heartbeat_at < cutoff),
+        )
+
+    async def claim(self, run_id: UUID, *, worker_id: str) -> bool:
+        """Take ownership of one run, or report that someone else has it.
+
+        `FOR UPDATE SKIP LOCKED` over the candidate row, then an update of the
+        row that survived. Two replicas racing for the same run take the lock
+        in some order; the loser skips rather than blocks and gets `False`.
+        The `UPDATE … WHERE` is not redundant with the lock — the lock
+        serialises the readers, the predicate is what makes the second one see
+        a row that no longer qualifies.
+
+        `fencing_token` moves on every claim so a taken-over run's original
+        worker can be told apart from its new one, which is what
+        `_still_ours` reads on the way out.
+        """
+        candidate = (
+            select(Run.id)
+            .where(Run.id == run_id, self._claimable())
+            .with_for_update(skip_locked=True)
+            .scalar_subquery()
+        )
+        now = utcnow()
+        result = await self._db.execute(
+            update(Run)
+            .where(Run.id == candidate)
+            .values(
+                status=RunStatus.RUNNING,
+                worker_id=worker_id,
+                started_at=now,
+                heartbeat_at=now,
+                fencing_token=int(now.timestamp() * 1000),
+            )
+            .returning(Run.id)
+        )
+        claimed = result.scalar_one_or_none() is not None
+        await self._db.commit()
+        return claimed
+
+    async def claimable_runs(self, *, limit: int = 8) -> list[UUID]:
+        """Runs this replica could pick up — the queue half of the claim.
+
+        The direct hand-off in `post_message` covers the normal path and costs
+        no latency; this covers the one it cannot, where the process that
+        accepted the request died between the commit and the submit. Without
+        it such a run sits `QUEUED` until the reconciler fails it, and the user
+        is told a question they asked was never started.
+        """
+        result = await self._db.execute(
+            select(Run.id)
+            .where(self._claimable())
+            .order_by(Run.created_at)
+            .limit(limit)
+        )
+        return list(result.scalars())
+
     # ── execution ────────────────────────────────────────────────────────
     async def execute_run(self, run_id: UUID, *, worker_id: str) -> None:
+        if not await self.claim(run_id, worker_id=worker_id):
+            # Another replica has it, or it is already finished. Either way
+            # this process must not touch it: two executors on one run would
+            # write two answers into one thread.
+            log.info("run_not_claimed", run_id=str(run_id))
+            return
         run = await self._db.get(Run, run_id)
-        if run is None:
+        if run is None:  # pragma: no cover - claimed rows exist by definition
             return
-        if run.status not in (RunStatus.QUEUED, RunStatus.RUNNING):
-            return
-
-        run.status = RunStatus.RUNNING
-        run.worker_id = worker_id
-        run.started_at = utcnow()
-        run.heartbeat_at = utcnow()
-        run.fencing_token = int(utcnow().timestamp() * 1000)
-        await self._db.commit()
+        fencing_token = run.fencing_token
 
         await self._emit(run_id, "RUN_STARTED", {
             "run_id": str(run_id),
@@ -221,10 +304,36 @@ class RunService:
         finally:
             await connector.close()
 
-        await self._finalise(run, state)
+        await self._finalise(run, state, fencing_token=fencing_token)
 
     # ── persistence of run output ────────────────────────────────────────
-    async def _finalise(self, run: Run, state: RunState) -> None:
+    async def _finalise(
+        self, run: Run, state: RunState, *, fencing_token: int | None = None
+    ) -> None:
+        # What the *database* thinks, which is not what this session thinks:
+        # sessions are `expire_on_commit=False`, so `run.status` here is the
+        # value read when the run was claimed. A cancel that arrived at another
+        # replica in the meantime is invisible to it.
+        status_now, token_now = await self._authority(run.id)
+
+        if fencing_token is not None and token_now != fencing_token:
+            # This run was taken over — its heartbeat lapsed and another
+            # process claimed it. That process is writing the answer now, so
+            # writing ours too would put two answers in one thread.
+            log.warning(
+                "run_superseded", run_id=str(run.id),
+                held=fencing_token, current=token_now,
+            )
+            return
+
+        if status_now is not None and RunStatus(status_now).is_terminal:
+            # Cancelled (or otherwise finished) elsewhere while we worked.
+            # Adopt that verdict rather than overwriting it — every
+            # `run.status == RUNNING` guard below then declines on its own,
+            # and the results already paid for are still written, because a
+            # cancelled run is a stopped run and not an erased one.
+            run.status = status_now
+
         for attempt in state.attempts:
             gq = GeneratedQuery(
                 id=uuid.uuid4(),
@@ -376,6 +485,11 @@ class RunService:
             "total_latency_ms": run.total_latency_ms,
         })
         await event_bus.close_run(run.id)
+        # Before Phase 6 nothing ever called this, so every event of every run
+        # since boot stayed in memory behind a durable copy of itself. Safe
+        # here because the SSE endpoint backfills from `run_events` before it
+        # attaches: a client reconnecting after this reads the log instead.
+        event_bus.forget(run.id)
 
     # ── reconciliation ───────────────────────────────────────────────────
     async def reconcile_stale(self) -> int:
@@ -398,31 +512,61 @@ class RunService:
         await self._db.commit()
         return result.rowcount or 0
 
-    async def heartbeat(self, run_id: UUID) -> None:
-        await self._db.execute(
-            update(Run).where(Run.id == run_id).values(heartbeat_at=utcnow())
+    async def heartbeat(self, run_id: UUID) -> bool:
+        """Say we are alive; find out whether we have been asked to stop.
+
+        One statement for both, because they are the same round trip and the
+        heartbeat already happens on a timer. That timer is therefore also the
+        worst-case latency of a cross-replica cancel — the replica that owns
+        the run learns about it here, and nowhere else.
+        """
+        result = await self._db.execute(
+            update(Run)
+            .where(Run.id == run_id)
+            .values(heartbeat_at=utcnow())
+            .returning(Run.cancel_requested)
         )
+        cancel_requested = result.scalar_one_or_none()
         await self._db.commit()
+        return bool(cancel_requested)
 
     async def cancel(self, run_id: UUID, owner_id: UUID) -> bool:
+        """Record the cancellation. Stopping the work is the owner's job.
+
+        The status goes terminal here so the user sees the run close
+        immediately, and `cancel_requested` is what reaches the process
+        actually executing it — which may be this one, may be another, and on
+        a single replica is both. `_finalise` reads the terminal status back
+        and declines to overwrite it, so the run stays cancelled even though
+        its executor keeps going for another heartbeat or two.
+        """
         run = await self._db.get(Run, run_id)
         if run is None or run.owner_id != owner_id:
             raise NotFoundError("Run not found.")
         if RunStatus(run.status).is_terminal:
             return False
+        run.cancel_requested = True
         run.status = RunStatus.CANCELLED
         run.finished_at = utcnow()
         await self._db.commit()
         await self._emit(run_id, "RUN_FINISHED", {"status": RunStatus.CANCELLED})
         await event_bus.close_run(run_id)
+        event_bus.forget(run_id)
         return True
 
     # ── helpers ──────────────────────────────────────────────────────────
     async def _emit(self, run_id: UUID, event_type: str, data: dict[str, Any]) -> None:
         seq = await event_bus.publish(run_id, event_type, data)
-        # Durable copy so a reconnecting client can replay from Last-Event-ID.
+        # Durable copy so a reconnecting client can replay from Last-Event-ID —
+        # and, since Phase 6, so a replica that is not executing this run can
+        # read the event at all.
         self._db.add(RunEventRow(run_id=run_id, seq=seq, type=event_type, data=data))
         try:
+            # On this transaction, before this commit, deliberately: Postgres
+            # holds a notification until commit and drops it on rollback, so a
+            # listener elsewhere either sees the announcement *and* the row or
+            # neither of them. See `infra/events/listener.py`.
+            await notify_run_event(self._db, run_id, seq)
             await self._db.commit()
         except Exception:
             await self._db.rollback()
@@ -447,6 +591,19 @@ class RunService:
             step.finished_at = utcnow()
             step.duration_ms = duration_ms
         await self._db.commit()
+
+    async def _authority(self, run_id: UUID) -> tuple[str | None, int | None]:
+        """`(status, fencing_token)` as the row has them, not as we remember.
+
+        A fresh `SELECT` rather than `db.refresh`: the point is to read past
+        this session's identity map, which `expire_on_commit=False` keeps
+        populated with values from whenever the object was loaded.
+        """
+        result = await self._db.execute(
+            select(Run.status, Run.fencing_token).where(Run.id == run_id)
+        )
+        row = result.one_or_none()
+        return (row[0], row[1]) if row is not None else (None, None)
 
     async def _owned(self, model: type, entity_id: UUID, owner_id: UUID) -> Any:
         entity = await self._db.get(model, entity_id)

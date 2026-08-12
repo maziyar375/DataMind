@@ -1036,15 +1036,23 @@ class ReportService:
         return row, options, None
 
     async def cancel_run(self, report_id: UUID, run_id: UUID, owner_id: UUID) -> bool:
-        """Mark it cancelled. The worker stops between blocks and sees this.
+        """Mark it cancelled. The worker stops between phases and sees this.
 
         Writing the row here rather than waiting for the worker is what makes
         the answer immediate: the poll shows CANCELLED on its next tick even
         though an in-flight query is still finishing.
+
+        `cancel_requested` is the half that crosses a process boundary. The
+        status alone never did — the worker's stop signal was an
+        `asyncio.Event` in `ReportRunExecutor._flags`, reachable only from the
+        replica holding it, so a cancel that arrived anywhere else marked the
+        row and left a generation running to completion, spending model calls
+        on a document the user had already closed.
         """
         run = await self.run(report_id, run_id, owner_id)
         if run.status not in ACTIVE_RUN_STATUSES:
             return False
+        run.cancel_requested = True
         run.status = ReportRunStatus.CANCELLED
         run.finished_at = utcnow()
         await self._db.flush()

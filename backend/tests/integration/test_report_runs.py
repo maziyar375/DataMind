@@ -267,11 +267,13 @@ class FakeDb:
         self.snapshot = snapshot
         self.added: list[Any] = []
         self.journal: list[str] = []
+        self.statements: list[str] = []
         self.commits = 0
         self.flushes = 0
 
     async def execute(self, statement: Any) -> FakeResult:
         sql = str(statement).lower()
+        self.statements.append(sql)
         if "schema_snapshots" in sql:
             return FakeResult([FakeSnapshotRow()] if self.snapshot else [])
         # Declared above `report_blocks`/`report_sections`: the result tables
@@ -358,7 +360,11 @@ def gateway(monkeypatch: pytest.MonkeyPatch) -> FakeGateway:
 
 
 def _settings() -> Any:
-    return FakeSettings()
+    settings = FakeSettings()
+    # `stranded_runs` reads this to size the heartbeat window that tells a
+    # crashed run from one another replica is generating right now.
+    settings.run_stale_after_seconds = 60
+    return settings
 
 
 async def _generate(db: FakeDb, cancelled: asyncio.Event | None = None) -> None:
@@ -1144,11 +1150,52 @@ async def test_a_restart_reports_the_runs_it_interrupted_rather_than_failing_the
 
     monkeypatch.setattr(session_module, "get_sessionmaker", lambda: _Maker())
 
-    assert await worker.stranded_runs() == [run.id for run in stranded]
+    assert await worker.stranded_runs(_settings()) == [run.id for run in stranded]
     # Untouched: not failed, not finished, and nothing committed.
     assert all(run.status != ReportRunStatus.FAILED for run in stranded)
     assert all(run.finished_at is None for run in stranded)
     assert db.commits == 0
+
+
+async def test_a_restart_leaves_a_run_another_replica_is_generating_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The heartbeat filter, which is the whole safety of Phase 4's resume.
+
+    With one process, "QUEUED or RUNNING at startup" could only mean a crash —
+    nothing else was executing. With two it also means "replica A is generating
+    this right now", and a booting replica B that resumed it would narrate the
+    same sections into the same run: paid for twice, interleaved, and
+    unreadable.
+
+    The predicate is asserted rather than the result because `FakeDb` ignores
+    `WHERE` clauses — it returns whatever it was handed. That makes the *shape*
+    of the query the only thing a fake can honestly check, and the shape is
+    exactly what regressed if someone deletes the filter.
+    """
+    from app.infra.db import session as session_module
+
+    db = FakeDb(active_runs=[_run(ReportRunStatus.RUNNING)])
+
+    class _Maker:
+        def __call__(self) -> Any:
+            return self
+
+        async def __aenter__(self) -> Any:
+            return db
+
+        async def __aexit__(self, *_exc: Any) -> None: ...
+
+    monkeypatch.setattr(session_module, "get_sessionmaker", lambda: _Maker())
+    await worker.stranded_runs(_settings())
+
+    sql = next(s for s in db.statements if "report_runs" in s)
+    # A live run answers with a fresh heartbeat; a stranded one stopped
+    # answering when its process did. A run that never started has none at all,
+    # and gets the same grace window `runs` gets before anyone claims it.
+    assert "heartbeat_at is null" in sql
+    assert "heartbeat_at <" in sql
+    assert "created_at <" in sql
 
 
 async def test_cancelling_a_running_run_writes_the_row_immediately() -> None:

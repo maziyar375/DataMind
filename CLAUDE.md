@@ -147,7 +147,9 @@ backend/app/
     crypto/       SecretBox (AES-256-GCM)
     identity/     local Argon2id + JWT provider
     events/       SSE event publisher
-  workers/        inprocess run executor + stale-run reconciler + semantic.py
+  workers/        inprocess run executor (claims a run before executing it, so
+                  two replicas cannot both run one) + stale-run reconciler
+                  (behind a transaction-scoped advisory lock) + semantic.py
                   and report.py (generation jobs; minutes long, so they are
                   polled not streamed, with cooperative-then-hard cancel) +
                   report_graph.py (the compiled report graph; a full generation
@@ -393,6 +395,26 @@ calls**, which is what keeps the SSE sequence identical;
 A node crash is caught and recorded as a **run failure**, never a bare HTTP
 500. A process that dies mid-run is healed by the reconciler + a startup sweep,
 so no row is stuck `RUNNING`.
+
+**More than one API replica is supported, and three rules make it work** — see
+[docs/cross-replica.md](docs/cross-replica.md) before touching any of them:
+
+1. **A run is claimed before it is executed.** `RunService.claim` is
+   `SELECT … FOR UPDATE SKIP LOCKED` + a conditional `UPDATE`, so exactly one
+   process runs a given run and the loser skips instead of blocking. The
+   direct hand-off from the POST handler is still the normal path; a claim
+   poller picks up runs left unowned by a process that died before submitting.
+2. **Cancelling is a row, not a task handle.** `runs.cancel_requested` and
+   `report_runs.cancel_requested` reach the process actually doing the work,
+   which reads them on its heartbeat (so worst case is
+   `run_heartbeat_seconds`). The local `executor.cancel` stays as the
+   same-replica fast path. `_finalise` will not overwrite a terminal status it
+   did not set, or a cancel from elsewhere would be undone on the way out.
+3. **Events cross processes over `LISTEN`/`NOTIFY`, not a broker.** The
+   notification carries `run_id:seq`; the body is read from `run_events`, which
+   was always being written. It is issued on the transaction that writes the
+   row — that is the delivery guarantee, not a style choice — and the SSE
+   endpoint backfills from the log before attaching to the local bus.
 
 ---
 
