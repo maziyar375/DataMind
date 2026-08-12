@@ -464,8 +464,13 @@ The things worth knowing before you touch it:
   policy tightened in between has to stop the run.
 - **Time windows resolve in the SQL** (`CURRENT_DATE - INTERVAL '3 months'`),
   not in stored parameters and not by regenerating. `NodeDeps.extra_rules`
-  carries the dialect rules and is empty for everything else — a chat run's SQL
-  prompt is byte-identical to pre-feature, and a test says so.
+  carries the dialect rules, and a **METRIC dashboard tile** is the only other
+  caller that appends anything (`METRIC_SQL_RULES` — a big number needs a time
+  series before it can carry a delta or a sparkline). Empty for everyone else,
+  so a chat run's SQL prompt is byte-identical to pre-feature and a test says
+  so. Two callers means they **compose rather than override**
+  (`_sql_rules_for`): a rule that silently replaced another would be found only
+  by reading a prompt nobody prints.
 - **A figure is captioned with a statement, and one number is not a figure.**
   A block carries both a `question` (what is asked of the database) and a
   `title` (what the document calls the exhibit); the caption is the title, and
