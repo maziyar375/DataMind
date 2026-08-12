@@ -84,7 +84,7 @@ NARRATE_SECTION = "narrate_section"
 SUMMARISE = "summarise"
 FINISH = "finish"
 
-Mode = Literal["generate", "retry"]
+Mode = Literal["generate", "retry", "resume"]
 
 #: Writes `report_runs.progress_current` / `.phase` and commits, so the next
 #: poll sees them. This graph's `on_step`: bound to the session and the run by
@@ -140,6 +140,10 @@ class ReportWork:
     #: queueing and generating still produces its numbers, and every section
     #: says plainly why it has no paragraph.
     narrator: Any = _UNSET
+
+    #: Resume only: sections that already have a paragraph, so the loop walks
+    #: past them instead of writing a second one.
+    narrated: set[UUID] = field(default_factory=set)
 
     #: The narration loop's cursor into `sections`.
     cursor: int = 0
@@ -260,12 +264,17 @@ async def _resolve_outline(work: ReportWork, config: RunnableConfig) -> str:
             return FINISH
         return CLEAR_SECTION
 
+    # The whole outline, before a resume narrows it: the progress bar counts
+    # the document, not what is left of it.
     steps = len(work.blocks) + len(work.sections)
+    if work.mode == "resume":
+        await _seed_from_written(work, config)
+
     await progress(
         status=ReportRunStatus.RUNNING,
-        started_at=utcnow(),
+        started_at=work.run.started_at or utcnow(),
         progress_total=steps,
-        progress_current=0,
+        progress_current=work.done,
         phase=(
             f"Running {len(work.blocks)} "
             f"quer{'y' if len(work.blocks) == 1 else 'ies'}"
@@ -413,6 +422,12 @@ async def _narrate_section(work: ReportWork, config: RunnableConfig) -> str:
             work.summary = (position, section)
             continue
 
+        if section.id in work.narrated:
+            # Resume: this paragraph survived the crash that stopped the run.
+            # Rewriting it would spend a model call to replace prose the reader
+            # may already have seen — and would overwrite an edit.
+            continue
+
         work.done += 1
         await progress(
             progress_current=work.done, phase=f"Writing {section.heading}"[:200]
@@ -465,7 +480,7 @@ async def _summarise(work: ReportWork, config: RunnableConfig) -> str:
         await db.commit()
         return FINISH
 
-    if work.summary is None:
+    if work.summary is None or work.summary[1].id in work.narrated:
         return FINISH
 
     position, section = work.summary
@@ -498,7 +513,11 @@ async def _finish_run(work: ReportWork, config: RunnableConfig) -> str:
     db = _cfg(config)["db"]
     if work.status is not None:
         await report._finish(db, work.run, work.status, error=work.error)
-    elif work.mode == "retry":
+    elif work.mode in ("retry", "resume"):
+        # Both write only part of the document, so neither can read its status
+        # off what *this* pass produced. `_rederive` reads every row the run
+        # now holds — which is the same reason a successful retry turns
+        # `PARTIAL` into `SUCCEEDED` with no state machine.
         await report._rederive(db, work.run)
     else:
         await report._finish(db, work.run, report.derive_status(work.outcomes))
@@ -516,6 +535,64 @@ def _section(work: ReportWork) -> ReportSection:
     """The section a retry is rewriting. Present by the time anything asks."""
     section = next(s for s in work.sections if s.id == work.section_id)
     return section
+
+
+async def _seed_from_written(work: ReportWork, config: RunnableConfig) -> None:
+    """Pick the run back up from the rows it already wrote.
+
+    **This is the resume mechanism, and there is no checkpoint behind it.** The
+    document *is* the progress: `report_block_results` and
+    `report_section_results` say exactly which blocks ran and which sections
+    were narrated, in order, durably, in the same transactions that produced
+    them. A checkpointer would be a second and less reliable copy of that —
+    less reliable because it would be written in a *different* transaction, so
+    a crash in the window between committing a section and committing its
+    checkpoint would resume onto a node that had already written its row and
+    duplicate it. Reading the rows cannot have that bug: the row's existence is
+    the fact being recorded.
+
+    So this narrows the work to what is missing and seeds what the narrator
+    needs to carry on: the block results it will read, and the prose already
+    written, which the next section receives as `established`.
+    """
+    db = _cfg(config)["db"]
+    block_rows = await report._block_rows(db, work.run.id)
+    section_rows = await report._section_rows(db, work.run.id)
+
+    # `section_id` is nullable on both result tables: deleting a section sets
+    # it NULL rather than cascading, so a past document stays readable. Such a
+    # row belongs to no section in this outline, so it can neither supply data
+    # to a narrator nor mark anything as already written — but it still counts
+    # as work that was done.
+    done_blocks = {row.block_id for row in block_rows}
+    for row in block_rows:
+        if row.section_id is not None:
+            work.written.setdefault(row.section_id, []).append(row)
+    for rows in work.written.values():
+        rows.sort(key=lambda r: r.position)
+
+    work.narrated = {
+        row.section_id for row in section_rows if row.section_id is not None
+    }
+    work.blocks = [
+        (block, section)
+        for block, section in work.blocks
+        if block.id not in done_blocks
+    ]
+    work.done = len(block_rows) + len(section_rows)
+    # The sections written before the crash, in reading order — what the next
+    # one is told was already established. The summary is not among them: it is
+    # written last, so on a resume it either does not exist yet or the run had
+    # already finished.
+    work.prose = await report._written_sections(
+        db,
+        work.run.id,
+        *(
+            s.id
+            for s in work.sections
+            if s.kind == ReportSectionKind.EXECUTIVE_SUMMARY
+        ),
+    )
 
 
 async def _ensure_narrator(work: ReportWork, config: RunnableConfig) -> None:
@@ -619,6 +696,25 @@ async def run_generation(
     """A whole report: every block, then the document over the results."""
     await _invoke(
         ReportWork(run=run, mode="generate"),
+        _configurable(db, settings, run, cancelled),
+    )
+
+
+async def run_resume(
+    db: Any, settings: Any, run: ReportRun, cancelled: Any
+) -> None:
+    """Pick up a run a dead process left half-written. **No checkpoint.**
+
+    The same graph again, entered a third way. It re-checks disclosure (a
+    policy may have been tightened while the process was down), re-reads the
+    outline (the report may have been edited), and then runs only what is
+    missing — because the rows already written say exactly what that is.
+
+    Safe to call twice: everything it skips, it skips because the row exists,
+    so a resume that itself crashes simply resumes again.
+    """
+    await _invoke(
+        ReportWork(run=run, mode="resume"),
         _configurable(db, settings, run, cancelled),
     )
 

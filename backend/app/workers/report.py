@@ -3,9 +3,11 @@
 The same trade `SemanticJobExecutor` makes, for the same reason: a generation is
 minutes of database and provider latency rather than seconds, so it gets a low
 concurrency ceiling and no heartbeat. Durability comes from the `report_runs`
-row, and `sweep_orphans` at startup turns a run stranded by a dead process into
-a FAILED one — honest, because the results that *did* land are still there to
-read and the user can simply generate again.
+row **and from the result rows themselves**: `stranded_runs` at startup names
+the runs a dead process interrupted, and each is resumed rather than failed, so
+the sections that finished are not paid for twice. That resume needs no
+checkpoint — the rows are the progress record, written in the same transaction
+as the work they record. See `report_graph._seed_from_written`.
 
 **It mirrors `workers/semantic.py`; it does not share it.** The two jobs have the
 same shape and different bodies, and a shared executor would be one class with
@@ -126,6 +128,10 @@ class ReportRunExecutor:
     async def submit(self, run_id: UUID) -> None:
         self._schedule(run_id, generate_run, f"report:{run_id}")
 
+    async def submit_resume(self, run_id: UUID) -> None:
+        """Pick up a run a dead process left half-written. See `resume_run`."""
+        self._schedule(run_id, resume_run, f"report-resume:{run_id}")
+
     async def submit_retry(self, run_id: UUID, section_id: UUID) -> None:
         """Re-run one section of a finished run, through the same machinery.
 
@@ -189,13 +195,19 @@ class ReportRunExecutor:
                 log.exception("report_executor_failed", run_id=str(run_id))
 
 
-async def sweep_orphans() -> int:
-    """Fail runs left QUEUED or RUNNING by a process that died. Returns how many.
+async def stranded_runs() -> list[UUID]:
+    """Runs left QUEUED or RUNNING by a process that died.
 
-    Unlike a semantic job, a stranded run may have written real results before
-    the process went, and those rows stay: a document that lost half its
-    sections to a restart is still worth reading, and the message says the rest
-    is one more generation away.
+    They are **not** failed here any more. A report run is minutes long, so a
+    restart used to cost the user everything that had not finished — the rows
+    already written stayed, but the run was closed and the rest was "one more
+    generation away", which meant paying for the finished sections again.
+
+    Since Phase 4 they are resumed instead: the rows already written say which
+    blocks ran and which sections were narrated, so a resumed run does only
+    what is missing. That is the whole mechanism, and it needs no checkpoint —
+    see `report_graph._seed_from_written` for why the rows are a *better*
+    record of progress than a checkpoint would be.
     """
     from app.infra.db.session import get_sessionmaker
 
@@ -207,17 +219,32 @@ async def sweep_orphans() -> int:
                 )
             )
         )
-        rows = list(result.scalars())
-        for row in rows:
-            row.status = ReportRunStatus.FAILED
-            row.finished_at = utcnow()
-            row.error_message = (
-                "The server restarted while this report was being generated. "
-                "Whatever had already been computed was kept — generate again "
-                "for the rest."
-            )
-        await session.commit()
-        return len(rows)
+        return [row.id for row in result.scalars()]
+
+
+async def resume_run(
+    db: AsyncSession, settings: Settings, run_id: UUID, cancelled: asyncio.Event
+) -> None:
+    """Finish a run a dead process left half-written.
+
+    Same posture as `generate_run`: a crash is a failed run, never a bare 500,
+    and never a row left RUNNING. A resume that fails leaves the document
+    exactly as it found it plus whatever it managed to add.
+    """
+    run = await db.get(ReportRun, run_id)
+    if run is None:
+        return
+
+    from app.workers.report_graph import run_resume  # see `generate_run`
+
+    try:
+        await run_resume(db, settings, run, cancelled)
+    except asyncio.CancelledError:
+        await _finish(db, run, ReportRunStatus.CANCELLED)
+        raise
+    except Exception as err:
+        log.exception("report_resume_failed", run_id=str(run_id))
+        await _finish(db, run, ReportRunStatus.FAILED, error=str(err)[:500])
 
 
 def derive_status(succeeded: list[bool]) -> str:
@@ -323,13 +350,7 @@ async def _clear_section(db: AsyncSession, run_id: UUID, section_id: UUID) -> in
     stays where the reader left it instead of jumping to the end of the
     document.
     """
-    rows = list(
-        (
-            await db.execute(
-                select(ReportBlockResult).where(ReportBlockResult.run_id == run_id)
-            )
-        ).scalars()
-    )
+    rows = await _block_rows(db, run_id)
     mine = [row for row in rows if row.section_id == section_id]
     for row in mine:
         await db.delete(row)
@@ -374,19 +395,29 @@ async def _written_sections(
 
 async def _rederive(db: AsyncSession, run: ReportRun) -> None:
     """Read the run's status off every row it now holds."""
-    blocks = list(
-        (
-            await db.execute(
-                select(ReportBlockResult).where(ReportBlockResult.run_id == run.id)
-            )
-        ).scalars()
-    )
+    blocks = await _block_rows(db, run.id)
     outcomes = [row.status == ReportBlockResultStatus.OK for row in blocks]
     outcomes += [
         row.status != ReportSectionResultStatus.FAILED
         for row in await _section_rows(db, run.id)
     ]
     await _finish(db, run, derive_status(outcomes))
+
+
+async def _block_rows(db: AsyncSession, run_id: UUID) -> list[ReportBlockResult]:
+    """Every block result this run has written, in no particular order.
+
+    Read by three callers now, and the third is the interesting one: a resumed
+    run reads these to learn which blocks already ran. That is the whole resume
+    mechanism — see `report_graph._seed_from_written`.
+    """
+    return list(
+        (
+            await db.execute(
+                select(ReportBlockResult).where(ReportBlockResult.run_id == run_id)
+            )
+        ).scalars()
+    )
 
 
 async def _section_rows(db: AsyncSession, run_id: UUID) -> list[ReportSectionResult]:

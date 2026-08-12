@@ -417,10 +417,17 @@ mirrors `workers/semantic.py`, deliberately does not share it:
 - `MAX_CONCURRENT_JOBS = 2`. A generation already runs its blocks concurrently
   against the customer's database; two whole reports at once is a load test of
   it, not a speed-up.
-- **No heartbeat.** Durability is the `report_runs` row plus `sweep_orphans()`
-  at startup, which turns a run stranded by a dead process into `FAILED` with
-  *"the server restarted… whatever had already been computed was kept"*. Honest,
-  because the results that did land are still there to read.
+- **No heartbeat, and since Phase 4 no loss either.** Durability is the
+  `report_runs` row plus the result rows themselves. `stranded_runs()` at
+  startup *names* the runs a dead process interrupted and writes nothing;
+  each is handed to `submit_resume`, and the resumed run does only what is
+  missing — because `report_block_results` and `report_section_results` say
+  exactly which blocks ran and which sections were narrated. It used to fail
+  them instead, which kept the rows but charged the user again for every
+  finished section. **There is no checkpoint behind this**: the rows are the
+  progress record, written in the same transaction as the work, so a resume
+  cannot disagree with the document. See
+  [langgraph-migration.md](langgraph-migration.md) §4 Phase 4.
 - **Cancellation is cooperative *then* hard**: the flag is checked between
   phases so an in-flight query finishes rather than being abandoned; the task is
   cancelled outright `llm_request_timeout_seconds + 5` later if it has not
@@ -665,7 +672,7 @@ half-finished document *is* the response; there is no separate progress channel.
 | reply hit `max_tokens` | C5/C6 | the tail of a paragraph | trimmed to the last sentence; `FAILED` + `_TRUNCATED` only if no sentence completed |
 | figures in the prose match nothing | C5/C6 | nothing | recorded in `numeric_check`, marked in the UI |
 | user cancels | between phases | nothing already computed | `CANCELLED` |
-| process dies | `sweep_orphans` at startup | nothing already committed | `FAILED`, "generate again for the rest" |
+| process dies | `stranded_runs` at startup → `submit_resume` | **nothing** | resumed: only the missing blocks and sections are written, then the status is re-derived |
 | any uncaught exception | `generate_run` | the run | `FAILED` with `str(err)[:500]`, logged `report_run_failed` |
 
 ---

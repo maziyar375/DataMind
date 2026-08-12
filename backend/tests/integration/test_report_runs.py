@@ -1112,14 +1112,21 @@ async def test_cancelling_a_finished_run_changes_nothing() -> None:
     assert db.run is not None and db.run.status == ReportRunStatus.SUCCEEDED
 
 
-async def test_a_restart_fails_the_runs_it_interrupted_but_keeps_their_results(
+async def test_a_restart_reports_the_runs_it_interrupted_rather_than_failing_them(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A process that died mid-run leaves a row saying RUNNING forever.
 
-    It is failed rather than resumed — nothing here knows how far it got — but
-    unlike a semantic job, whatever it had already computed is real and stays:
-    a document that lost half its sections to a restart is still worth reading.
+    **Changed deliberately in Phase 4** of `docs/langgraph-migration.md`. This
+    used to fail every such run on the reasoning that "nothing here knows how
+    far it got" — which was never quite true: the result and section rows say
+    exactly how far it got. A report run is minutes long, so failing it charged
+    the user again for every section that had already finished.
+
+    Now the sweep only *names* them, and startup hands each to the executor to
+    be resumed. It writes nothing, which is the other half of the change: a run
+    it touched and then failed to resume would be worse off than one it left
+    alone.
     """
     from app.infra.db import session as session_module
 
@@ -1137,12 +1144,11 @@ async def test_a_restart_fails_the_runs_it_interrupted_but_keeps_their_results(
 
     monkeypatch.setattr(session_module, "get_sessionmaker", lambda: _Maker())
 
-    assert await worker.sweep_orphans() == 2
-    assert all(run.status == ReportRunStatus.FAILED for run in stranded)
-    assert all(run.finished_at is not None for run in stranded)
-    assert "restarted" in (stranded[0].error_message or "")
-    assert "generate again" in (stranded[0].error_message or "")
-    assert db.commits == 1
+    assert await worker.stranded_runs() == [run.id for run in stranded]
+    # Untouched: not failed, not finished, and nothing committed.
+    assert all(run.status != ReportRunStatus.FAILED for run in stranded)
+    assert all(run.finished_at is None for run in stranded)
+    assert db.commits == 0
 
 
 async def test_cancelling_a_running_run_writes_the_row_immediately() -> None:

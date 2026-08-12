@@ -37,6 +37,7 @@ from app.workers.report_graph import (
     RESOLVE_OUTLINE,
     SUMMARISE,
     WRITE_RESULTS,
+    run_generation,
 )
 from tests.integration.test_report_runs import (
     OTHER_SECTION_ID,
@@ -45,8 +46,10 @@ from tests.integration.test_report_runs import (
     SUMMARY_SECTION_ID,
     FakeConnector,
     FakeGateway,
+    _connection,
     _readable,
     _retry,
+    _settings,
 )
 from tests.integration.test_report_runs import _generate as _run_generation
 
@@ -102,7 +105,7 @@ async def test_a_retry_reads_the_whole_document_not_just_the_prefix(
     later = next(r for r in db.prose if r.section_id == OTHER_SECTION_ID)
     later.prose = "بخش سوم این را نوشت."
 
-    gateway.prompts.clear()
+    gateway.calls.clear()  # `prompts` is a derived property; `calls` is the state
     await _retry(db, SECTION_ID)
 
     # Retried, it reads the paragraph that did not exist when it was first
@@ -124,7 +127,7 @@ async def test_a_retry_is_not_told_the_summary_that_already_contains_it(
     summary_row = next(r for r in db.prose if r.section_id == SUMMARY_SECTION_ID)
     summary_row.prose = "این خلاصه نباید به بخش بازنویسی‌شده داده شود."
 
-    gateway.prompts.clear()
+    gateway.calls.clear()  # `prompts` is a derived property; `calls` is the state
     await _retry(db, SECTION_ID)
 
     assert "این خلاصه نباید" not in gateway.prompts[-1]
@@ -223,6 +226,140 @@ async def test_a_cancel_between_the_queries_and_their_rows_is_not_honoured(
     # Paid for, therefore kept — and no paragraph was written over them.
     assert len(db.results) == 2
     assert db.prose == []
+
+
+# ── resume: the payoff, and the thing that needs no checkpoint ───────────
+async def _crash_after_first_section(
+    monkeypatch: pytest.MonkeyPatch, db: Any
+) -> None:
+    """Generate, but die the way a killed process dies: mid-narration.
+
+    Driven through `run_generation` rather than `generate_run` on purpose. The
+    facade's `except Exception` is what turns a *crash* into a FAILED run; a
+    process that is killed never reaches it. So the exception is allowed to
+    escape, which leaves exactly what `kill -9` leaves: the rows that were
+    committed, and a run row still claiming to be RUNNING.
+    """
+    real = worker._narrate
+    calls = {"n": 0}
+
+    async def narrate(*args: Any, **kwargs: Any) -> Any:
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise RuntimeError("the process was killed")
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(worker, "_narrate", narrate)
+    with pytest.raises(RuntimeError, match="killed"):
+        await run_generation(db, _settings(), db.run, asyncio.Event())
+    # Restore just this patch — `monkeypatch.undo()` would also revert the
+    # autouse gateway fixture and let the resume dial a real provider.
+    monkeypatch.setattr(worker, "_narrate", real)
+
+
+async def test_a_run_killed_mid_report_resumes_from_the_last_written_section(
+    monkeypatch: pytest.MonkeyPatch, connector: FakeConnector, gateway: FakeGateway
+) -> None:
+    """The Phase 4 exit criterion, minus the actual `kill -9`.
+
+    Kill the process mid-report, start it again, and the run finishes from
+    where it stopped instead of being swept to `FAILED`. What makes that work
+    is not a checkpoint — it is that the rows already written *are* the
+    progress, so resuming is a matter of reading them.
+    """
+    db = _readable()
+    await _crash_after_first_section(monkeypatch, db)
+
+    # What a killed process leaves: one paragraph, both query results, and a
+    # run row still claiming to be RUNNING.
+    assert len(db.prose) == 1
+    survivor = db.prose[0].heading_snapshot
+    assert len(db.results) == 2
+
+    # Startup finds it and hands it back to the executor.
+    db.run.status = ReportRunStatus.RUNNING
+    await worker.resume_run(db, _settings(), db.run.id, asyncio.Event())
+
+    assert db.run.status == ReportRunStatus.SUCCEEDED
+    headings = [row.heading_snapshot for row in db.prose]
+    assert sorted(headings) == sorted(["روند درآمد", "محصولات", "خلاصه مدیریتی"])
+    # Written exactly once each: the survivor was not rewritten.
+    assert len(headings) == len(set(headings))
+    assert headings.count(survivor) == 1
+
+
+async def test_a_resume_does_not_pay_for_the_work_that_survived(
+    monkeypatch: pytest.MonkeyPatch, connector: FakeConnector, gateway: FakeGateway
+) -> None:
+    """The whole reason to resume rather than regenerate.
+
+    A report run is minutes of provider and database latency. Re-running the
+    sections that already finished would charge the user twice for them, which
+    is what failing the run and asking them to "generate again" used to do.
+    """
+    db = _readable()
+    await _crash_after_first_section(monkeypatch, db)
+
+    connector.calls.clear()
+    gateway.calls.clear()  # `prompts` is a derived property; `calls` is the state
+    db.run.status = ReportRunStatus.RUNNING
+    await worker.resume_run(db, _settings(), db.run.id, asyncio.Event())
+
+    # Two sections and a summary in the outline; one section survived, so the
+    # resume writes the other section and the summary. Two calls, not three.
+    assert len(gateway.prompts) == 2
+    # And the queries that already ran are not re-run against the customer's
+    # database either.
+    assert connector.calls == []
+
+
+async def test_resuming_twice_is_safe(
+    monkeypatch: pytest.MonkeyPatch, connector: FakeConnector, gateway: FakeGateway
+) -> None:
+    """Idempotent by construction, which a checkpoint would not have been.
+
+    Everything a resume skips, it skips because the row exists — so a resume
+    that itself dies simply resumes again. There is no window in which the
+    progress record and the document disagree, because they are the same thing.
+    """
+    db = _readable()
+    await _crash_after_first_section(monkeypatch, db)
+    db.run.status = ReportRunStatus.RUNNING
+    await worker.resume_run(db, _settings(), db.run.id, asyncio.Event())
+
+    rows_after_first = {(r.section_id, r.position) for r in db.prose}
+    gateway.calls.clear()  # `prompts` is a derived property; `calls` is the state
+
+    db.run.status = ReportRunStatus.RUNNING
+    await worker.resume_run(db, _settings(), db.run.id, asyncio.Event())
+
+    assert {(r.section_id, r.position) for r in db.prose} == rows_after_first
+    assert len(db.prose) == 3
+    # Nothing left to do, so nothing was asked of the model.
+    assert gateway.prompts == []
+    assert db.run.status == ReportRunStatus.SUCCEEDED
+
+
+async def test_a_resume_still_re_checks_disclosure(
+    monkeypatch: pytest.MonkeyPatch, connector: FakeConnector, gateway: FakeGateway
+) -> None:
+    """Every entry re-checks it, and a resume is an entry.
+
+    The process was down; the policy may have been tightened while it was. A
+    run that carried on writing paragraphs from values the model may no longer
+    read would be the exact hole invariant #4 exists to close.
+    """
+    from app.domain.value_objects import DisclosurePolicy
+
+    db = _readable()
+    await _crash_after_first_section(monkeypatch, db)
+    db.connection = _connection(DisclosurePolicy.NONE)
+    db.run.status = ReportRunStatus.RUNNING
+
+    await worker.resume_run(db, _settings(), db.run.id, asyncio.Event())
+
+    assert db.run.status == ReportRunStatus.FAILED
+    assert "disclosure" in (db.run.error_message or "").lower()
 
 
 # ── the wiring ───────────────────────────────────────────────────────────

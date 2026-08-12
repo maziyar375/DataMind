@@ -17,7 +17,7 @@ from app.services.bootstrap import ensure_admin
 from app.workers.inprocess import InProcessRunExecutor
 from app.workers.reconciler import reconcile_once, reconciler_loop
 from app.workers.report import ReportRunExecutor
-from app.workers.report import sweep_orphans as sweep_report_runs
+from app.workers.report import stranded_runs as stranded_report_runs
 from app.workers.semantic import SemanticJobExecutor, sweep_orphans
 
 log = get_logger(__name__)
@@ -46,11 +46,14 @@ async def lifespan(app: FastAPI):
     if stranded:
         log.warning("startup_failed_stranded_semantic_jobs", count=stranded)
 
-    # And for a report run — except that one may have written real results
-    # before the process died, and those stay: the run is failed, not erased.
-    interrupted = await sweep_report_runs()
-    if interrupted:
-        log.warning("startup_failed_stranded_report_runs", count=interrupted)
+    # A report run is minutes long, so a restart used to cost the user every
+    # section that had not finished. It is resumed instead: the rows already
+    # written say which blocks ran and which sections were narrated, so a
+    # resumed run pays only for what is missing. Queued here rather than
+    # awaited — startup must not block on minutes of generation.
+    for run_id in await stranded_report_runs():
+        await app.state.report_executor.submit_resume(run_id)
+        log.warning("startup_resumed_report_run", run_id=str(run_id))
 
     reconciler = asyncio.create_task(reconciler_loop(settings))
     log.info("raymand_started", environment=settings.environment)

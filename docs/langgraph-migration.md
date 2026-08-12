@@ -581,6 +581,71 @@ something they did not have.
 resumes from the last completed section instead of being swept to `FAILED` by
 `sweep_report_runs`. A test proves it.
 
+#### The driver decision, made: **neither. No checkpointer.**
+
+The record above framed this as a two-way choice — a second `psycopg` pool, or
+a `BaseCheckpointSaver` over SQLAlchemy — and asked for one to be picked and
+the reason written down. Measuring first turned up a third answer, and it is
+the one that was taken. **The report graph resumes from the rows it already
+wrote, and `langgraph-checkpoint-postgres` was not added.**
+
+Three findings, in the order they mattered:
+
+**1. The rows already are the checkpoint, and a better one.**
+`report_block_results` and `report_section_results` record which blocks ran and
+which sections were narrated — in order, durably, **in the same transaction
+that produced the work**. A checkpoint would be a second copy of that fact,
+written through a *different* connection, and the two can disagree: crash in
+the window between committing a section and committing its checkpoint, and the
+resume replays a node that already wrote its row. That is a duplicated
+paragraph in a document — a correctness regression, introduced by the machinery
+meant to make crashes safer. Reading the rows cannot have that bug, because the
+row's existence *is* the fact being recorded. `report_graph._seed_from_written`
+is the whole mechanism, and it is idempotent by construction: everything it
+skips, it skips because the row exists, so a resume that itself dies simply
+resumes again.
+
+**2. Chat runs: measured, and the answer is no.** The plan said to measure
+rather than assume. On the real 42-table `sales` fixture:
+
+| after node | serialized `RunState` |
+|---|---:|
+| route | 716 B |
+| retrieve | 88,368 B |
+| execute (12 rows) | 88,951 B |
+| inspect (retry in flight, two result sets) | 89,381 B |
+| chart (compiled Vega-Lite) | 90,026 B |
+
+**97% of every checkpoint is the schema block** — `context.tables`, which is
+immutable after `retrieve` and already stored in `schema_snapshots`. Ten nodes
+would write ~0.9 MB per chat run, almost all of it the same 88 KB ten times, to
+protect a run of 5–60 seconds that `runs` + heartbeat + reconciler already
+recover. Not worth it at any price, and least of all a second driver's.
+
+**3. A custom saver is not a weekend.** `BaseCheckpointSaver` in 1.2.11 has
+**15 mandatory methods** — `get_tuple`/`aget_tuple`, `list`/`alist`,
+`put`/`aput`, `put_writes`/`aput_writes`, `delete_thread`/`adelete_thread`,
+`delete_for_runs`/`adelete_for_runs`, `acopy_thread`, `aprune`,
+`get_next_version`. That is the checkpointer's entire storage protocol,
+including versioning and pending-write semantics, and a subtly wrong one breaks
+resume in a way only a crash reveals.
+
+**What this costs.** Phase 5's `interrupt()` needs a real checkpointer, so
+declining one here declines that too — but Phase 5 is already marked optional
+and "the one phase that can be skipped entirely without leaving the codebase
+worse". If it is ever taken up, this decision is the thing to revisit first,
+and finding 1 says what to solve: the checkpoint and the work product have to
+land in one transaction, which is the argument *for* the SQLAlchemy saver and
+against the psycopg pool.
+
+**`RunState` was audited anyway**, because the audit is cheap and the answer
+outlives the decision: it round-trips through `JsonPlusSerializer` unchanged,
+and `repair_count` / `last_attempt` / `executable_sql` stay derived rather than
+becoming persisted fields that could diverge. One thing to know if this is ever
+revisited: LangGraph warns on deserializing unregistered types and says it
+**will be blocked in a future version**, so `RunState` would need registering
+in `allowed_msgpack_modules`.
+
 ### Phase 5 — Durable clarification (optional, and a product change)
 
 This one is **not a refactor** — it changes behaviour a user can see. Do it
@@ -781,15 +846,29 @@ A phase is done when all five pass, not when the code runs.
 > points are exactly the two the hand-rolled drivers had — before any query is
 > spent, and between paragraphs.
 
-### Phase 4 — Checkpointing
-- [ ] Driver decision made and written down (second psycopg pool vs. custom SQLAlchemy saver)
-- [ ] `RunState` audited for checkpoint round-trip, derived properties included
-- [ ] Checkpoint row size measured on a real chat run before enabling it there
-- [ ] Report runs checkpointed, keyed by `report_run` UUID
-- [ ] Retry-vs-resume thread semantics decided and written down
-- [ ] Crash test: kill mid-report, restart, run resumes from the last completed section
-- [ ] Chat-run checkpointing decided on measurement, not assumption
-- [ ] `sweep_report_runs` updated so a resumable run is not swept to `FAILED`
+### Phase 4 — Resume after crash
+- [x] **Driver decision made and written down — neither.** No checkpointer, no
+      second driver; the report graph resumes from the rows it already wrote.
+      See "The driver decision, made" above for the three findings
+- [x] `RunState` audited for checkpoint round-trip, derived properties included
+      — it round-trips clean, and `repair_count` / `last_attempt` /
+      `executable_sql` stay derived
+- [x] Checkpoint row size measured on a real chat run before enabling it there
+      — 88 KB per node on the `sales` fixture, **97% of it the schema block**
+- [x] ~~Report runs checkpointed, keyed by `report_run` UUID~~ → report runs
+      **resumable**, keyed by the result rows themselves
+- [x] Retry-vs-resume thread semantics decided and written down — they are
+      separate entries into one graph (`retry` rewrites one section
+      deliberately; `resume` writes only what is missing), and neither needs a
+      thread identity because neither carries state between invocations
+- [x] Crash test: kill mid-report, restart, run resumes from the last completed
+      section — plus a test that a resume does not pay twice for the sections
+      that survived, one that resuming twice is safe, and one that a resume
+      still re-checks disclosure
+- [x] Chat-run checkpointing decided on measurement, not assumption — **no**
+- [x] `sweep_report_runs` updated so a resumable run is not swept to `FAILED` —
+      it is now `stranded_runs`, which *names* interrupted runs and writes
+      nothing; startup hands each to `submit_resume`
 
 ### Phase 5 — Durable clarification (optional)
 - [ ] Explicit go/no-go decision recorded — this changes user-visible behaviour
