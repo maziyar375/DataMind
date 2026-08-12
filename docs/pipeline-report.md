@@ -299,17 +299,34 @@ later).
 second call asking a model what the result should be *drawn* as
 (`compose_chart`), and a dashboard tile does exactly that — see
 [pipeline-dashboard.md §2 A1](pipeline-dashboard.md). A report block leaves it
-off, and the reason is the rule in §4.3 that a block persists none of its three
-chart fields: `chart_config` stays NULL — the common case and the right default
-— so a run months from now may re-decide over a differently-shaped result. An answer to "what did they mean to see" would be computed,
-returned once to the picker, and then discarded unread — a token spent on a
-value nothing keeps.
+off, and the reason is that **nothing here would read the answer**: the block
+editor has no chart-type control while a block is authored, and it consumes
+neither `chart_suggestion` nor `chart_options` from this response. A report's
+chart type is chosen *after* a run, by redrawing on the result. Turning
+`compose_chart` on for reports means building that picker first; until then it
+is a model call whose output is discarded unread.
 
-So the two opt-ins on this shared function run **opposite ways**, and each
-caller pays for the question whose answer it stores: a block passes
-`classify=True` because its answer is stored and read months later, while a
-tile passes `compose_chart=True` because its *picture* is stored and redrawn
-for as long as the tile lives.
+> **Corrected.** This paragraph first said a block "persists none of its three
+> chart fields". A `report_blocks.chart_config` column does exist, and
+> `ReportBlockCreate` / `ReportBlockUpdate` both accept it — NULL is the common
+> default, not a constraint. The decision above stands on the missing *reader*,
+> not on a missing column.
+
+**`tile_type` is passed, and it is the one that matters here.** A `METRIC` block
+appends `METRIC_SQL_RULES` on top of `report_time_rules` — they compose rather
+than replace (`_sql_rules_for`) — because a block needs both: relative dates so
+a re-run in Mehr describes Mehr, and a series so the figure has a history under
+it. Without it, `_SQL_RULES`' "one row for a single figure" put the delta and
+the sparkline out of reach for every big number in every document, whatever the
+data could have shown. `workers/report.py` already runs `plan_kpi` with
+`want_kpi=block_type == METRIC` at generation time — it was being handed one row
+to work from.
+
+So the three opt-ins on this shared function are each decided by where their
+answer lands: a block passes `classify=True` because its answer is stored and
+read months later; a tile passes `compose_chart=True` because its editor has a
+picker to pre-select; and **both** pass `tile_type`, because both store a
+statement that will be drawn as a big number.
 
 ### 3.5 The verdict ladder
 

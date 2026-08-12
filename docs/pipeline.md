@@ -90,12 +90,21 @@ draft:  [route] → retrieve →                     generate → validate      
                                                      └── one repair ──┘          └─ [propose_chart_intent] ─┘
 ```
 
-**The two opt-ins are deliberately opposite.** `classify` is on for report
-blocks and off for tiles, because a block's answer is stored and read months
-later while a tile's preview is on screen in front of the person who asked.
-`compose_chart` is on for tiles and off for blocks, because a tile *stores*
-what it is drawn as and a block does not (its `chart_config` stays NULL so a
-re-run may re-decide). Each caller pays for the question whose answer it keeps.
+**The three opt-ins are deliberately not uniform**, and each is decided by where
+its answer lands:
+
+| Flag | On for | Off for | Because |
+|---|---|---|---|
+| `classify` | report blocks | tiles | a block's answer is stored and read months later; a tile's preview is on screen in front of the person who asked |
+| `compose_chart` | tiles | report blocks | the tile editor has a chart-type picker a suggestion can pre-select; the report block editor has none and ignores `chart_suggestion` — a report's chart type is chosen *after* a run, by redrawing |
+| `tile_type` | tiles **and** report blocks | chat | both store a statement that will be drawn as a big number; chat declares no destination at all |
+
+`tile_type` is the one that applies to both, because the defect it fixes is the
+same in both: `_SQL_RULES` asks for one row for a single figure, and `plan_kpi`
+needs a series before a delta or a sparkline exists. Chat is deliberately
+excluded — it has no tile type to declare, and `present` writes prose that leads
+with the figure, so a series there would change the *answer* and not just the
+picture.
 
 What a draft deliberately does **not** inherit: history (`[]`), events
 (`_no_emit`), persistence (nothing until the caller stores a verdict), and the

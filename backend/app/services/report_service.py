@@ -602,6 +602,19 @@ class ReportService:
                 # has always halted here; a block is the one place the answer
                 # is stored instead of shown, which is why it was missed.
                 classify=True,
+                # A METRIC block is a big number in a document, and it had the
+                # same defect a METRIC tile had: `_SQL_RULES` tells the model to
+                # return one row for a single figure, and `plan_kpi` — which
+                # `workers/report.py` runs at generation time with
+                # `want_kpi=block_type == METRIC` — cannot compute a delta or a
+                # sparkline from one row. So the figure in the finished document
+                # had nothing under it, whatever the data could have shown.
+                #
+                # This composes with `report_time_rules` above rather than
+                # replacing it (`_sql_rules_for`); the two say different things
+                # and a block needs both — relative dates so a re-run in Mehr
+                # describes Mehr, and a series so the number has a history.
+                tile_type=block.block_type,
             )
         except QuestionOutOfScopeError as err:
             # A verdict, not a failure: the question is answerable by nothing,
@@ -669,6 +682,11 @@ class ReportService:
             connection_id=connection.id,
             sql=statement,
             owner_id=owner_id,
+            # No prompt on this road to append rules to, so this buys the
+            # preview's KPI alone — the same figure `workers/report.py` will
+            # compute for a METRIC block at generation time, available to the
+            # response that reports the verdict.
+            tile_type=block.block_type,
         )
 
         _record_check(block, *_verdict(draft))

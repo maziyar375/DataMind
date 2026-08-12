@@ -206,11 +206,17 @@ async def draft_sql(
     `compose_chart` spends a second model call asking what the result should be
     *drawn* as. **Off by default, and the asymmetry with `classify` is the
     point**: that one is on for report blocks and off for tiles, this one is the
-    reverse. A tile stores `chart_config`, so an answer to "what did they mean
-    to see" is kept and redrawn for as long as the tile lives; a report block
-    deliberately persists none of its three chart fields (`chart_config` stays
-    NULL so a re-run on differently-shaped data may re-decide), which would make
-    the same call a token spent on a value thrown away before it is read.
+    reverse.
+
+    The reason is where the answer *lands*, not whether it could be stored. A
+    tile editor has a chart-type picker that a suggestion can pre-select, and
+    the tile keeps `chart_config` for as long as it lives. A report block also
+    has a `chart_config` column — that much was stated wrongly here at first —
+    but it is not set while a block is authored: the block editor has no type
+    control and reads neither `chart_suggestion` nor `chart_options` from the
+    check response, because a report's chart type is chosen *after* a run, by
+    redrawing on the result. So the call would be a token spent on a value with
+    no reader. Turning it on for reports means building that picker first.
 
     `tile_type` is what the editor's type picker is set to, and it is the only
     thing on this path that tells the SQL prompt what the result will be *shown

@@ -95,7 +95,7 @@ def _draft(
     )
 
 
-def _db(*, database_type: str = "postgres") -> FakeDb:
+def _db(*, database_type: str = "postgres", block_type: str = "CHART") -> FakeDb:
     report = Report(
         id=REPORT_ID,
         owner_id=OWNER,
@@ -117,7 +117,7 @@ def _db(*, database_type: str = "postgres") -> FakeDb:
         sql="",
         sql_hash="",
         sql_origin="GENERATED",
-        block_type="CHART",
+        block_type=block_type,
         time_window="last_3_months",
         feasibility_status=ReportFeasibility.UNCHECKED,
         created_at=utcnow(),
@@ -498,3 +498,51 @@ def test_the_fingerprint_ignores_only_whitespace() -> None:
     different statement."""
     assert sql_fingerprint("SELECT  1\n  FROM t") == sql_fingerprint("SELECT 1 FROM t")
     assert sql_fingerprint("SELECT 1 FROM t") != sql_fingerprint("SELECT 2 FROM t")
+
+
+# ── the block type reaches the SQL prompt ────────────────────────────────
+# A METRIC block is a big number in a finished document, and it had the defect
+# a METRIC tile had: `_SQL_RULES` asks for one row for a single figure, and
+# `plan_kpi` — which `workers/report.py` runs at generation time with
+# `want_kpi=block_type == METRIC` — cannot compute a delta or a sparkline from
+# one row. The figure had nothing under it whatever the data could have shown.
+async def test_a_metric_block_tells_the_prompt_it_is_a_big_number(
+    drafting: Any,
+) -> None:
+    fake = drafting(_draft(preview=_rows(3)))
+
+    await _service(_db(block_type="METRIC")).check_block(REPORT_ID, BLOCK_ID, OWNER)
+
+    assert fake.kwargs["tile_type"] == "METRIC"
+    # And it does not replace the block's own date arithmetic: a re-run in Mehr
+    # still has to describe Mehr, so both sets of rules travel.
+    assert fake.kwargs["extra_rules"]
+
+
+async def test_other_block_types_pass_their_own_type_and_earn_nothing(
+    drafting: Any,
+) -> None:
+    """`_sql_rules_for` appends for METRIC alone, so a CHART block's prompt is
+    what it always was — the type is passed, not the rules."""
+    for block_type in ("CHART", "TABLE"):
+        fake = drafting(_draft(preview=_rows(3)))
+        await _service(_db(block_type=block_type)).check_block(
+            REPORT_ID, BLOCK_ID, OWNER
+        )
+        assert fake.kwargs["tile_type"] == block_type
+
+
+async def test_a_report_block_still_does_not_ask_what_to_draw(
+    drafting: Any,
+) -> None:
+    """`compose_chart` stays off here, and not because a block cannot store a
+    chart type — `report_blocks.chart_config` exists. It is that nothing reads
+    the answer: the block editor has no type control while a block is authored
+    and ignores `chart_suggestion`, because a report's chart type is chosen
+    after a run, by redrawing. Turning it on means building that picker first.
+    """
+    fake = drafting(_draft(preview=_rows(3)))
+
+    await _service(_db(block_type="METRIC")).check_block(REPORT_ID, BLOCK_ID, OWNER)
+
+    assert fake.kwargs.get("compose_chart", False) is False

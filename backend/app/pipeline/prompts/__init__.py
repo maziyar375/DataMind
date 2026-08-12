@@ -436,17 +436,19 @@ part-finished month is not drawn as a collapse against the full ones before it.
 
 Return one row only when the question genuinely has no time dimension — a
 count of something that exists now rather than something that accumulated."""
-# Appended to `GENERATE_SYSTEM` for METRIC tiles only, through
-# `NodeDeps.extra_rules` — the same hook and the same reasoning as
-# `report_time_rules`. With no METRIC tile in play the SQL prompts are
-# byte-identical to what chat has always sent, which is why `PROMPT_VERSION`
+# Appended to `GENERATE_SYSTEM` for a METRIC dashboard tile *and* a METRIC
+# report block, through `NodeDeps.extra_rules` — the same hook and the same
+# reasoning as `report_time_rules`, which it composes with rather than replaces
+# (`_sql_rules_for`) since a block needs both. With no METRIC in play the SQL
+# prompts are byte-identical to what chat has always sent, which is why `PROMPT_VERSION`
 # does not move for this and why the eval suite (which drafts nothing) cannot
 # see it. `test_a_chat_run_never_sees_the_metric_rules` holds that.
 #
 # It exists because `_SQL_RULES` says the opposite for good reasons of its own:
 # "if the question asks for a single figure, return one row with just that
 # value". That rule is right for chat, where a one-row answer is read as a
-# sentence — and it is exactly what made every METRIC tile a lonely number.
+# sentence — and it is exactly what made every METRIC tile, and every big
+# number in every report, a lonely figure.
 # `plan_kpi` needs more than one row *and* a non-constant temporal column
 # before it will compute a delta or a sparkline, so under the base rule alone
 # both were unreachable rather than merely unchosen.

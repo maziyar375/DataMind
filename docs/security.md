@@ -88,8 +88,10 @@ in `api/v1/llm_configs.py`, a fixed test prompt.
 > budget under *every* policy including `FULL`, withholding the one row value
 > that block can carry (a measure's `min`/`max`). Asserted by
 > `test_the_chart_call_sends_shape_and_never_a_row_value`. A report block's
-> check deliberately does **not** fire it — it persists no chart config, so the
-> answer would be discarded unread.
+> check deliberately does **not** fire it: its editor has no chart-type control
+> and ignores the suggestion, so the answer would be discarded unread. (An
+> earlier wording said a block "persists no chart config" — that was wrong;
+> `report_blocks.chart_config` exists. The reason is the missing reader.)
 
 > **Changed:** #10–#12 are Reports, and were missing from this table until
 > 2026-08-12 — the list had not been revisited since the feature landed.

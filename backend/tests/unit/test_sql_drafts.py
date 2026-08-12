@@ -33,7 +33,12 @@ from app.domain.ports.llm import Completion
 from app.pipeline.contracts import SqlProposal
 from app.pipeline.prompts import _SQL_RULES, CHART_SYSTEM_COMPOSED, GENERATE_SYSTEM
 from app.services import query_service, sql_draft_service
-from app.services.sql_draft_service import PREVIEW_MAX_ROWS, draft_sql, validate_sql
+from app.services.sql_draft_service import (
+    PREVIEW_MAX_ROWS,
+    _sql_rules_for,
+    draft_sql,
+    validate_sql,
+)
 
 OWNER = uuid4()
 
@@ -984,3 +989,32 @@ async def test_the_hand_written_road_previews_a_big_number_too(
 
     assert gateway.calls == []
     assert draft.preview is not None and draft.preview.kpi is not None
+
+
+# ── two callers, one hook ────────────────────────────────────────────────
+def test_a_reports_rules_and_a_metrics_rules_compose() -> None:
+    """A METRIC *report block* needs both, and neither may silently win.
+
+    `report_time_rules` makes a re-run in Mehr describe Mehr; `METRIC_SQL_RULES`
+    makes the figure carry a history. A hook that let one replace the other
+    would be found only by reading a prompt nobody prints — so they concatenate,
+    with the caller's own rules first.
+    """
+    composed = _sql_rules_for("Dates: use CURRENT_DATE - INTERVAL '3 months'.", "METRIC")
+
+    assert "CURRENT_DATE" in composed
+    assert "big-number tile" in composed
+    assert composed.index("CURRENT_DATE") < composed.index("big-number tile")
+
+
+def test_a_type_that_earns_nothing_leaves_the_callers_rules_alone() -> None:
+    assert _sql_rules_for("Dates: whatever.", "CHART") == "Dates: whatever."
+    assert _sql_rules_for("Dates: whatever.", None) == "Dates: whatever."
+
+
+def test_no_rules_and_no_type_is_the_empty_string() -> None:
+    """Empty means byte-identical: `_with_extra_rules` returns the prompt
+    unchanged rather than rebuilding it, which is what keeps a chat run's SQL
+    prompt exactly what it was before any of this existed."""
+    assert _sql_rules_for("", None) == ""
+    assert _sql_rules_for("", "CHART") == ""
