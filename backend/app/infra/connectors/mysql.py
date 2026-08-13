@@ -46,6 +46,11 @@ from app.domain.value_objects import (
     HintBudget,
     is_sensitive_column,
 )
+from app.infra.connectors.comments import (
+    business_schemas,
+    fold_column_comments,
+    fold_table_comments,
+)
 from app.infra.connectors.hints import (
     PROBE_TIMEOUT_MS,
     ColumnHints,
@@ -217,6 +222,33 @@ FROM information_schema.tables
 WHERE table_type = 'BASE TABLE' AND table_schema IN ({placeholders})
 """
 
+# Catalog comments. `information_schema` is the right source on MySQL for the
+# reason in the module docstring — it is privilege-filtered, not
+# ownership-filtered — and `TABLE_COMMENT` reads `VIEW` for a view, which the
+# `table_type` filter removes along with the view itself.
+_TABLE_COMMENT_SQL = """
+SELECT t.table_schema, t.table_name, t.table_comment
+FROM information_schema.tables t
+WHERE t.table_schema IN ({placeholders})
+  AND t.table_type = 'BASE TABLE'
+  AND t.table_comment <> ''
+"""
+
+# The join to `tables` is not decoration: `information_schema.columns` carries a
+# **view's** columns too, and a view inherits the column comments of the table
+# under it. Without the filter, every commented column came back once per view
+# over it (verified on 8.0.46) and the fold would have attached comments to
+# relations the snapshot does not contain.
+_COLUMN_COMMENT_SQL = """
+SELECT c.table_schema, c.table_name, c.column_name, c.column_comment
+FROM information_schema.columns c
+JOIN information_schema.tables t
+  ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+WHERE c.table_schema IN ({placeholders})
+  AND t.table_type = 'BASE TABLE'
+  AND c.column_comment <> ''
+"""
+
 
 class MySqlConnector:
     dialect = "mysql"
@@ -356,8 +388,12 @@ class MySqlConnector:
         self, *, schema_allowlist: list[str], hints: HintBudget = HintBudget()
     ) -> SchemaSnapshot:
         # MySQL has no schema/database distinction, so the connected database
-        # is the schema unless the caller narrowed it further.
-        schemas = schema_allowlist or [self._database]
+        # is the schema unless the caller narrowed it further. System schemas
+        # are dropped first: `mysql`, `sys` and `performance_schema` are the
+        # server describing itself.
+        schemas = business_schemas(
+            self.dialect, schema_allowlist or [self._database]
+        )
         marks = ", ".join(["%s"] * len(schemas))
 
         pool = await self._acquire()
@@ -392,6 +428,22 @@ class MySqlConnector:
                     )
                     histogram_rows = list(await cur.fetchall())
 
+            # Comments are captured whatever the hint budget says: a comment is
+            # DDL a human wrote, not something read out of the rows. Suppressed
+            # like the reads above — documentation never fails a sync.
+            table_comment_rows: list[Any] = []
+            column_comment_rows: list[Any] = []
+            with contextlib.suppress(Exception):
+                await cur.execute(
+                    _TABLE_COMMENT_SQL.format(placeholders=marks), schemas
+                )
+                table_comment_rows = list(await cur.fetchall())
+            with contextlib.suppress(Exception):
+                await cur.execute(
+                    _COLUMN_COMMENT_SQL.format(placeholders=marks), schemas
+                )
+                column_comment_rows = list(await cur.fetchall())
+
         pks = {(r[0], r[1], r[2]) for r in pk_rows}
         fks = {
             (r[0], r[1], r[2]): f"{r[3]}.{r[4]}.{r[5]}"
@@ -412,6 +464,9 @@ class MySqlConnector:
             )
         captured = enforce_budget(captured, hints)
 
+        table_comments = fold_table_comments(table_comment_rows)
+        column_comments = fold_column_comments(column_comment_rows)
+
         grouped: dict[tuple[str, str], list[ColumnInfo]] = {}
         for schema, table, column, data_type, nullable, _pos, _column_type in col_rows:
             ident = (schema, table, column)
@@ -423,6 +478,7 @@ class MySqlConnector:
                     is_primary_key=ident in pks,
                     is_foreign_key=ident in fks,
                     references=fks.get(ident),
+                    comment=column_comments.get(ident),
                     **captured.get(ident, ColumnHints()).as_kwargs(),
                 )
             )
@@ -431,6 +487,7 @@ class MySqlConnector:
             TableInfo(
                 schema=schema, name=name, columns=cols,
                 approx_row_count=counts.get((schema, name)),
+                comment=table_comments.get((schema, name)),
             )
             for (schema, name), cols in sorted(grouped.items())
         ]

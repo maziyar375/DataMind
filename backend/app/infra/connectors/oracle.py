@@ -44,6 +44,11 @@ from app.domain.value_objects import (
     HintBudget,
     is_sensitive_column,
 )
+from app.infra.connectors.comments import (
+    business_schemas,
+    fold_column_comments,
+    fold_table_comments,
+)
 from app.infra.connectors.hints import (
     ColumnHints,
     apply_probe,
@@ -97,6 +102,30 @@ _ROWCOUNT_SQL = """
 SELECT owner, table_name, num_rows
 FROM all_tables
 WHERE owner IN ({placeholders})
+"""
+
+# Catalog comments, from the ALL_* views for the reason at the top of this
+# module: they show exactly what the connecting role was granted. Verified on
+# 23.26 as a user holding nothing but CREATE SESSION and SELECT on one table —
+# it saw that table's comments and no others, which is the read this feature
+# most needed to be true.
+#
+# `table_type = 'TABLE'` because ALL_TAB_COMMENTS covers views and synonyms
+# too, and the snapshot holds base tables only: without it a view's comment
+# would be attached to nothing.
+_TABLE_COMMENT_SQL = """
+SELECT owner, table_name, comments
+FROM all_tab_comments
+WHERE owner IN ({placeholders})
+  AND table_type = 'TABLE'
+  AND comments IS NOT NULL
+"""
+
+_COLUMN_COMMENT_SQL = """
+SELECT owner, table_name, column_name, comments
+FROM all_col_comments
+WHERE owner IN ({placeholders})
+  AND comments IS NOT NULL
 """
 
 # Oracle keeps the richest column statistics of the four engines: a distinct
@@ -308,7 +337,15 @@ class OracleConnector:
     async def introspect(
         self, *, schema_allowlist: list[str], hints: HintBudget = HintBudget()
     ) -> SchemaSnapshot:
-        schemas = [s.upper() for s in schema_allowlist] or [self._default_schema]
+        # A schema here is a *user*, so a production instance carries dozens of
+        # Oracle's own: SYS, XDB, MDSYS, CTXSYS, APEX_*… Left in, the generator
+        # would spend one model call per dictionary table and produce a semantic
+        # layer describing Oracle. This is the engine that made the filter
+        # necessary; every engine gets it.
+        schemas = business_schemas(
+            self.dialect,
+            [s.upper() for s in schema_allowlist] or [self._default_schema],
+        )
         # Oracle binds by name; positional :1 style keeps the IN list simple.
         marks = ", ".join(f":{i + 1}" for i in range(len(schemas)))
 
@@ -346,6 +383,21 @@ class OracleConnector:
                         )
                         histogram_rows = await cur.fetchall()
 
+                # Comments regardless of the hint budget: a comment is DDL a
+                # human wrote, not a statistic read out of the rows.
+                table_comment_rows: list[Any] = []
+                column_comment_rows: list[Any] = []
+                with contextlib.suppress(Exception):
+                    await cur.execute(
+                        _TABLE_COMMENT_SQL.format(placeholders=marks), schemas
+                    )
+                    table_comment_rows = list(await cur.fetchall())
+                with contextlib.suppress(Exception):
+                    await cur.execute(
+                        _COLUMN_COMMENT_SQL.format(placeholders=marks), schemas
+                    )
+                    column_comment_rows = list(await cur.fetchall())
+
         pks = {(r[0], r[1], r[2]) for r in pk_rows}
         fks = {(r[0], r[1], r[2]): f"{r[3]}.{r[4]}.{r[5]}" for r in fk_rows}
         counts = {(r[0], r[1]): int(r[2] or 0) for r in count_rows}
@@ -362,6 +414,9 @@ class OracleConnector:
             )
         captured = enforce_budget(captured, hints)
 
+        table_comments = fold_table_comments(table_comment_rows)
+        column_comments = fold_column_comments(column_comment_rows)
+
         grouped: dict[tuple[str, str], list[ColumnInfo]] = {}
         for owner, table, column, data_type, nullable, _pos in col_rows:
             ident = (owner, table, column)
@@ -373,6 +428,7 @@ class OracleConnector:
                     is_primary_key=ident in pks,
                     is_foreign_key=ident in fks,
                     references=fks.get(ident),
+                    comment=column_comments.get(ident),
                     **captured.get(ident, ColumnHints()).as_kwargs(),
                 )
             )
@@ -381,6 +437,7 @@ class OracleConnector:
             TableInfo(
                 schema=owner, name=name, columns=cols,
                 approx_row_count=counts.get((owner, name)),
+                comment=table_comments.get((owner, name)),
             )
             for (owner, name), cols in sorted(grouped.items())
         ]
