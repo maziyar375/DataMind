@@ -26,6 +26,15 @@ class ColumnInfo:
     min_value: str | None = None
     max_value: str | None = None
 
+    # The description the database's own catalog carries for this column —
+    # `COMMENT ON COLUMN`, MySQL's `COLUMN_COMMENT`, an `MS_Description`
+    # extended property, `ALL_COL_COMMENTS`. Unlike every field above it, this
+    # is **not derived from the data**: a human wrote it in DDL, it does not
+    # change when a row changes, and it is therefore exactly as much "customer
+    # data" as `name` is. That is why it is captured regardless of `HintBudget`,
+    # which gates only what was read out of the rows.
+    comment: str | None = None
+
     def as_dict(self) -> dict[str, Any]:
         """The stored snapshot shape.
 
@@ -52,6 +61,8 @@ class ColumnInfo:
             out["min_value"] = self.min_value
         if self.max_value is not None:
             out["max_value"] = self.max_value
+        if self.comment:
+            out["comment"] = self.comment
         return out
 
 
@@ -68,12 +79,22 @@ class TableInfo:
         return f"{self.schema}.{self.name}"
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        # `comment` is emitted only when it is set, the same rule the column
+        # hints follow: a snapshot from a database with no comments has to
+        # serialise byte-identically to one taken before the field existed, or
+        # every stored snapshot and the eval baseline drift on the same day.
+        # (The field has been on this dataclass since the beginning and was
+        # never populated *or* serialised — so it could not have survived a sync
+        # even if a connector had set it.)
+        out: dict[str, Any] = {
             "schema": self.schema,
             "name": self.name,
             "approx_row_count": self.approx_row_count,
             "columns": [c.as_dict() for c in self.columns],
         }
+        if self.comment:
+            out["comment"] = self.comment
+        return out
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +111,18 @@ class SchemaSnapshot:
     tables: list[TableInfo] = field(default_factory=list)
     relationships: list[RelationshipInfo] = field(default_factory=list)
     server_version: str | None = None
+
+    # Catalog descriptions one level up from a table. Table and column comments
+    # ride inside `tables`, which is already stored as JSONB and needs no
+    # migration; these two have nowhere to go and are what
+    # `schema_snapshots.catalog_meta` is for (Phase 2).
+    #
+    # Only PostgreSQL and SQL Server have either — MySQL has no schema comment
+    # outside MariaDB, and Oracle has neither — so nothing downstream may depend
+    # on them being present. They are the natural seed for the semantic layer's
+    # `business_context`, which stays fully generated on the other two.
+    database_comment: str | None = None
+    schema_comments: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

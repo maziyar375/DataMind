@@ -40,6 +40,13 @@ from app.domain.value_objects import (
     HintBudget,
     is_sensitive_column,
 )
+from app.infra.connectors.comments import (
+    business_schemas,
+    clean_comment,
+    fold_column_comments,
+    fold_schema_comments,
+    fold_table_comments,
+)
 from app.infra.connectors.hints import (
     PROBE_TIMEOUT_MS,
     ColumnHints,
@@ -144,6 +151,53 @@ WHERE s.schemaname = ANY($1::text[])
 _TEXT_TYPES = {
     "text", "character varying", "character", "varchar", "char", "bpchar",
 }
+
+# Catalog comments. `pg_description` is not in `information_schema` at all — no
+# version of it has a comment column — so this follows the same rule the
+# constraint reads already do, for one more reason than they had.
+#
+# `relkind = ANY('{r,p}')`, not `'r'`: `_TABLE_SQL` selects `table_type = 'BASE
+# TABLE'`, which *includes* partitioned tables (relkind 'p'). Filtering to 'r'
+# here would silently drop the comment on every partitioned table while the
+# table itself stayed in the snapshot. (`_ROWCOUNT_SQL` above has exactly that
+# bug for row counts; fixing it is a separate change, deliberately not bundled.)
+_TABLE_COMMENT_SQL = """
+SELECT ns.nspname AS table_schema, cls.relname AS table_name,
+       obj_description(cls.oid, 'pg_class') AS comment
+FROM pg_class cls
+JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+WHERE cls.relkind = ANY('{r,p}')
+  AND ns.nspname = ANY($1::text[])
+  AND obj_description(cls.oid, 'pg_class') IS NOT NULL
+"""
+
+_COLUMN_COMMENT_SQL = """
+SELECT ns.nspname AS table_schema, cls.relname AS table_name,
+       att.attname AS column_name,
+       col_description(cls.oid, att.attnum) AS comment
+FROM pg_attribute att
+JOIN pg_class cls ON cls.oid = att.attrelid
+JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+WHERE att.attnum > 0 AND NOT att.attisdropped
+  AND cls.relkind = ANY('{r,p}')
+  AND ns.nspname = ANY($1::text[])
+  AND col_description(cls.oid, att.attnum) IS NOT NULL
+"""
+
+_SCHEMA_COMMENT_SQL = """
+SELECT ns.nspname, obj_description(ns.oid, 'pg_namespace') AS comment
+FROM pg_namespace ns
+WHERE ns.nspname = ANY($1::text[])
+  AND obj_description(ns.oid, 'pg_namespace') IS NOT NULL
+"""
+
+# `pg_database` is a shared catalog, hence `shobj_description` rather than
+# `obj_description`.
+_DATABASE_COMMENT_SQL = """
+SELECT shobj_description(d.oid, 'pg_database') AS comment
+FROM pg_database d
+WHERE d.datname = current_database()
+"""
 
 
 def _column_hints(
@@ -326,7 +380,10 @@ class PostgresConnector:
     async def introspect(
         self, *, schema_allowlist: list[str], hints: HintBudget = HintBudget()
     ) -> SchemaSnapshot:
-        schemas = schema_allowlist or ["public"]
+        # System schemas are dropped before anything is asked about them:
+        # everything downstream costs per table, and nobody asks a business
+        # question about `pg_catalog`.
+        schemas = business_schemas(self.dialect, schema_allowlist or ["public"])
         pool = await self._acquire()
         async with pool.acquire() as conn:
             version = await conn.fetchval("SELECT version()")
@@ -343,6 +400,25 @@ class PostgresConnector:
                 # database that has never been ANALYZEd, or a role that cannot
                 # read pg_stats, degrades to a snapshot with no hints at all.
                 stat_rows = []
+
+            # Comments are captured under every disclosure policy, unlike the
+            # hints above: a comment is DDL a human wrote, not something read
+            # out of the rows. Suppressed like the stats read for the same
+            # reason — documentation is never a correctness dependency, and a
+            # role that somehow cannot read `pg_description` must still get a
+            # complete snapshot.
+            table_comment_rows: list[Any] = []
+            column_comment_rows: list[Any] = []
+            schema_comment_rows: list[Any] = []
+            database_comment = None
+            with contextlib.suppress(Exception):
+                table_comment_rows = await conn.fetch(_TABLE_COMMENT_SQL, schemas)
+            with contextlib.suppress(Exception):
+                column_comment_rows = await conn.fetch(_COLUMN_COMMENT_SQL, schemas)
+            with contextlib.suppress(Exception):
+                schema_comment_rows = await conn.fetch(_SCHEMA_COMMENT_SQL, schemas)
+            with contextlib.suppress(Exception):
+                database_comment = await conn.fetchval(_DATABASE_COMMENT_SQL)
 
         pks = {(r["table_schema"], r["table_name"], r["column_name"]) for r in pk_rows}
         fks = {
@@ -381,6 +457,9 @@ class PostgresConnector:
             )
         captured = enforce_budget(captured, hints)
 
+        table_comments = fold_table_comments(table_comment_rows)
+        column_comments = fold_column_comments(column_comment_rows)
+
         grouped: dict[tuple[str, str], list[ColumnInfo]] = {}
         for r in col_rows:
             key = (r["table_schema"], r["table_name"])
@@ -393,6 +472,7 @@ class PostgresConnector:
                     is_primary_key=ident in pks,
                     is_foreign_key=ident in fks,
                     references=fks.get(ident),
+                    comment=column_comments.get(ident),
                     **captured.get(ident, ColumnHints()).as_kwargs(),
                 )
             )
@@ -401,6 +481,7 @@ class PostgresConnector:
             TableInfo(
                 schema=schema, name=name, columns=cols,
                 approx_row_count=counts.get((schema, name)),
+                comment=table_comments.get((schema, name)),
             )
             for (schema, name), cols in sorted(grouped.items())
         ]
@@ -418,6 +499,8 @@ class PostgresConnector:
             tables=tables,
             relationships=relationships,
             server_version=str(version).split(" on ")[0] if version else None,
+            database_comment=clean_comment(database_comment),
+            schema_comments=fold_schema_comments(schema_comment_rows),
         )
 
     # ── execution ────────────────────────────────────────────────────────

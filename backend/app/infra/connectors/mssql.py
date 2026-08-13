@@ -45,6 +45,13 @@ from app.domain.value_objects import (
     HintBudget,
     is_sensitive_column,
 )
+from app.infra.connectors.comments import (
+    business_schemas,
+    clean_comment,
+    fold_column_comments,
+    fold_schema_comments,
+    fold_table_comments,
+)
 from app.infra.connectors.hints import (
     ColumnHints,
     apply_probe,
@@ -136,6 +143,54 @@ WHERE sch.name IN ({placeholders})
 _TEXT_TYPES = frozenset({
     "char", "varchar", "text", "nchar", "nvarchar", "ntext",
 })
+
+# T-SQL has no `COMMENT ON`. A description is an **extended property**, and the
+# one that matters is the conventional name `MS_Description` — what the SSMS
+# "Description" field and every schema-doc tool writes. A shop can name a
+# property anything (SSMS itself writes `microsoft_database_tools_support`), so
+# filtering to `MS_Description` is what keeps a ticket number out of the prompt.
+#
+# Two details are load-bearing, both confirmed on 2022 CU26:
+#   * `value` is `sql_variant`; without the CAST pymssql hands back a type the
+#     fold cannot read.
+#   * joining `sys.tables` (not `sys.objects`) confines this to base tables, so
+#     a description on a *view* stays out — matching what `_TABLE_SQL` snapshots.
+_TABLE_COMMENT_SQL = """
+SELECT s.name AS table_schema, t.name AS table_name,
+       CAST(ep.value AS nvarchar(max)) AS comment
+FROM sys.extended_properties ep
+JOIN sys.tables  t ON t.object_id = ep.major_id
+JOIN sys.schemas s ON s.schema_id = t.schema_id
+WHERE ep.class = 1 AND ep.minor_id = 0 AND ep.name = 'MS_Description'
+  AND s.name IN ({placeholders})
+"""
+
+_COLUMN_COMMENT_SQL = """
+SELECT s.name AS table_schema, t.name AS table_name, c.name AS column_name,
+       CAST(ep.value AS nvarchar(max)) AS comment
+FROM sys.extended_properties ep
+JOIN sys.tables  t ON t.object_id = ep.major_id
+JOIN sys.schemas s ON s.schema_id = t.schema_id
+JOIN sys.columns c ON c.object_id = ep.major_id AND c.column_id = ep.minor_id
+WHERE ep.class = 1 AND ep.minor_id > 0 AND ep.name = 'MS_Description'
+  AND s.name IN ({placeholders})
+"""
+
+# class 3 = schema, class 0 = the database itself.
+_SCHEMA_COMMENT_SQL = """
+SELECT s.name, CAST(ep.value AS nvarchar(max)) AS comment
+FROM sys.extended_properties ep
+JOIN sys.schemas s ON s.schema_id = ep.major_id
+WHERE ep.class = 3 AND ep.name = 'MS_Description'
+  AND s.name IN ({placeholders})
+"""
+
+_DATABASE_COMMENT_SQL = """
+SELECT CAST(value AS nvarchar(max)) AS comment
+FROM sys.extended_properties
+WHERE class = 0 AND major_id = 0 AND minor_id = 0
+  AND name = 'MS_Description'
+"""
 
 
 def _build_hints(stat_rows: list[Any]) -> dict[tuple[str, str, str], ColumnHints]:
@@ -262,7 +317,7 @@ class MsSqlConnector:
     async def introspect(
         self, *, schema_allowlist: list[str], hints: HintBudget = HintBudget()
     ) -> SchemaSnapshot:
-        schemas = schema_allowlist or ["dbo"]
+        schemas = business_schemas(self.dialect, schema_allowlist or ["dbo"])
         return await asyncio.to_thread(self._introspect_blocking, schemas, hints)
 
     def _probe_values(
@@ -337,11 +392,40 @@ class MsSqlConnector:
                         row_counts=counts,
                     )
                 hints = enforce_budget(hints, budget)
+
+                # Descriptions, under every disclosure policy — a description is
+                # DDL, not data. Suppressed individually: a login without
+                # metadata visibility on some object must still get a snapshot.
+                table_comment_rows: list[Any] = []
+                column_comment_rows: list[Any] = []
+                schema_comment_rows: list[Any] = []
+                database_comment: Any = None
+                with contextlib.suppress(Exception):
+                    cur.execute(
+                        _TABLE_COMMENT_SQL.format(placeholders=marks), params
+                    )
+                    table_comment_rows = list(cur.fetchall())
+                with contextlib.suppress(Exception):
+                    cur.execute(
+                        _COLUMN_COMMENT_SQL.format(placeholders=marks), params
+                    )
+                    column_comment_rows = list(cur.fetchall())
+                with contextlib.suppress(Exception):
+                    cur.execute(
+                        _SCHEMA_COMMENT_SQL.format(placeholders=marks), params
+                    )
+                    schema_comment_rows = list(cur.fetchall())
+                with contextlib.suppress(Exception):
+                    cur.execute(_DATABASE_COMMENT_SQL)
+                    row = cur.fetchone()
+                    database_comment = row[0] if row else None
         finally:
             conn.close()
 
         pks = {(r[0], r[1], r[2]) for r in pk_rows}
         fks = {(r[0], r[1], r[2]): f"{r[3]}.{r[4]}.{r[5]}" for r in fk_rows}
+        table_comments = fold_table_comments(table_comment_rows)
+        column_comments = fold_column_comments(column_comment_rows)
 
         grouped: dict[tuple[str, str], list[ColumnInfo]] = {}
         for schema, table, column, data_type, nullable, _pos in col_rows:
@@ -354,6 +438,7 @@ class MsSqlConnector:
                     is_primary_key=ident in pks,
                     is_foreign_key=ident in fks,
                     references=fks.get(ident),
+                    comment=column_comments.get(ident),
                     **hints.get(ident, ColumnHints()).as_kwargs(),
                 )
             )
@@ -362,6 +447,7 @@ class MsSqlConnector:
             TableInfo(
                 schema=schema, name=name, columns=cols,
                 approx_row_count=counts.get((schema, name)),
+                comment=table_comments.get((schema, name)),
             )
             for (schema, name), cols in sorted(grouped.items())
         ]
@@ -379,6 +465,8 @@ class MsSqlConnector:
             tables=tables,
             relationships=relationships,
             server_version=version,
+            database_comment=clean_comment(database_comment),
+            schema_comments=fold_schema_comments(schema_comment_rows),
         )
 
     # ── execution ────────────────────────────────────────────────────────

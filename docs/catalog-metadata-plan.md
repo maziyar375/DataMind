@@ -1,10 +1,13 @@
 # Catalog metadata (comments & descriptions) — design and implementation plan
 
-> **Status: proposed, nothing implemented.** Every code reference below is to
-> code that exists *today*; every behaviour described in §4–§6 is what the
-> phases in §7 are meant to build. The ledger at the end (§10) is where the
-> executing agent records what actually landed. Until a phase is ticked there,
-> assume it does not exist.
+> **Status: Phases 0 and 1 landed; 2–6 proposed.** Every code reference below
+> is to code that exists *today*; the behaviour described in §4–§6 is what the
+> remaining phases in §7 are meant to build. The ledger at the end (§10) records
+> what actually landed. Until a phase is ticked there, assume it does not exist.
+>
+> **§1's SQL has been executed** against all four engines (§9 has the banners);
+> where a query needed correcting, the correction is inline and marked
+> **[corrected in Phase 0]**.
 
 Companion to [pipeline.md](pipeline.md) (the AI run), [security.md](security.md)
 (what reaches a provider), [CODEBASE.md](CODEBASE.md) (the code tour) and the
@@ -41,6 +44,9 @@ bodies) either says nothing about business meaning or is too long to spend
 tokens on.
 
 ### 1.1 Coverage at a glance
+
+Every ✅ below was executed in Phase 0, as a read-only role, against the versions
+in §9 — and every ❌ was confirmed as an error or an absent column, not assumed.
 
 | | Column | Table | Schema | Database | Value/code meanings |
 | --- | :---: | :---: | :---: | :---: | :---: |
@@ -105,6 +111,12 @@ WHERE d.datname = current_database();
 
 Notes:
 
+- **Verified on 16.14, as `analytics_ro`.** All four reads return byte-identical
+  rows for the read-only role and for the owner: `pg_description` carries no
+  privilege filter of its own. A partitioned table's comment came back, which is
+  the `{r,p}` note below being load-bearing rather than theoretical, and a
+  comment containing `\nTables:\n- injected(x)` was stored and returned
+  **verbatim, newlines and all** — which is §2.3 step 3 and §3.2 in one row.
 - **`relkind = ANY('{r,p}')`, not `'r'`.** The existing `_ROWCOUNT_SQL`
   ([postgres.py:118-122](../backend/app/infra/connectors/postgres.py#L118-L122))
   filters `relkind = 'r'` while `_TABLE_SQL` selects `information_schema` rows
@@ -135,22 +147,36 @@ WHERE t.table_schema IN (…)
   AND t.table_type = 'BASE TABLE'
   AND t.table_comment <> '';
 
--- column comments
+-- column comments   [corrected in Phase 0 — the join is not optional]
 SELECT c.table_schema, c.table_name, c.column_name, c.column_comment
 FROM information_schema.columns c
+JOIN information_schema.tables t
+  ON t.table_schema = c.table_schema AND t.table_name = c.table_name
 WHERE c.table_schema IN (…)
+  AND t.table_type = 'BASE TABLE'
   AND c.column_comment <> '';
 ```
 
 Notes:
 
+- **[corrected in Phase 0] A view carries its base table's column comments.**
+  The original query had no `table_type` filter — the table query did — so on
+  8.0.46 every commented column came back once per view over it
+  (`recent_orders.status` alongside `orders.status`), and the fold would have
+  attached a comment to a relation the snapshot does not contain. The join is
+  the same one `_TABLE_SQL` already makes.
+- **Verified on 8.0.46, as `analytics_ro`** (plain `GRANT SELECT ON sales.*`):
+  identical rows to root. `information_schema` is privilege-filtered here, which
+  works in our favour.
 - **Limits are the engine's:** table comment 2048 chars, column comment 1024.
 - **`TABLE_COMMENT` is not always a comment.** InnoDB has historically appended
   storage chatter (`InnoDB free: 4096 kB`) and the column reads `VIEW` for
   views. The `table_type = 'BASE TABLE'` filter kills the second; the first
   needs the noise filter in §4.4. Treat `TABLE_COMMENT` as *dirty input* on
   every version.
-- **There is no database or schema comment in MySQL.** `information_schema.SCHEMATA`
+- **There is no database or schema comment in MySQL** — confirmed on 8.0.46,
+  where `SELECT schema_comment FROM information_schema.schemata` is error 1054,
+  *unknown column*. `information_schema.SCHEMATA`
   has no such column, in 8.0 or 8.4. MariaDB 10.5+ added `SCHEMA_COMMENT`; if
   the MySQL connector is pointed at MariaDB (it already carries MariaDB-aware
   code around `max_execution_time`), attempt it inside `contextlib.suppress`
@@ -173,12 +199,14 @@ choice of `sys.*` over `INFORMATION_SCHEMA`
 
 ```sql
 -- table descriptions  (class 1 = object/column, minor_id 0 = the object itself)
+-- [corrected in Phase 0] the allowlist filter was missing from both of these
 SELECT s.name AS table_schema, t.name AS table_name,
        CAST(ep.value AS nvarchar(max)) AS comment
 FROM sys.extended_properties ep
 JOIN sys.tables  t ON t.object_id = ep.major_id
 JOIN sys.schemas s ON s.schema_id = t.schema_id
-WHERE ep.class = 1 AND ep.minor_id = 0 AND ep.name = 'MS_Description';
+WHERE ep.class = 1 AND ep.minor_id = 0 AND ep.name = 'MS_Description'
+  AND s.name IN (…);
 
 -- column descriptions  (minor_id = column_id)
 SELECT s.name AS table_schema, t.name AS table_name, c.name AS column_name,
@@ -187,7 +215,8 @@ FROM sys.extended_properties ep
 JOIN sys.tables  t ON t.object_id = ep.major_id
 JOIN sys.schemas s ON s.schema_id = t.schema_id
 JOIN sys.columns c ON c.object_id = ep.major_id AND c.column_id = ep.minor_id
-WHERE ep.class = 1 AND ep.minor_id > 0 AND ep.name = 'MS_Description';
+WHERE ep.class = 1 AND ep.minor_id > 0 AND ep.name = 'MS_Description'
+  AND s.name IN (…);
 
 -- schema descriptions (class 3)
 SELECT s.name, CAST(ep.value AS nvarchar(max)) AS comment
@@ -204,6 +233,15 @@ WHERE class = 0 AND major_id = 0 AND minor_id = 0
 
 Notes:
 
+- **Verified on 16.0.4265.3 (2022 CU26), as a `db_datareader` login.** Identical
+  rows to `sa` — metadata visibility follows the SELECT grant. Two of the notes
+  below were confirmed rather than assumed: a description added to a **view** did
+  not appear (the `sys.tables` join keeps it out), and an extended property named
+  something else (`ticket` = `JIRA-4412`) was correctly ignored.
+- **[corrected in Phase 0] Both object queries need the allowlist filter.** As
+  written they returned every schema's descriptions, including a `marts` schema
+  the connection never asked about. Every other catalog read in `mssql.py` is
+  filtered by `s.name IN (…)`; these two were not.
 - **`value` is `sql_variant`.** It must be `CAST(... AS nvarchar(max))` or
   pymssql returns a type the row folding will not handle.
 - **`MS_Description` is a convention, not a rule.** A shop can name its property
@@ -240,19 +278,46 @@ WHERE owner IN (…) AND comments IS NOT NULL;
 
 Notes:
 
+- **Verified on 23.26.2.0.0 (Free), both as the owning schema and as a plain
+  read-only user** — one holding nothing but `CREATE SESSION` and
+  `GRANT SELECT` on a single table, with **no `SELECT_CATALOG_ROLE`**. It saw
+  the comments on exactly that table and nothing else, which is the `ALL_*`
+  views doing what [oracle.py:16-18](../backend/app/infra/connectors/oracle.py#L16-L18)
+  says they do. This was the read most likely to need a privilege we could not
+  ask customers for; it does not.
 - `COMMENTS` is `VARCHAR2(4000)`.
 - `ALL_TAB_COMMENTS` covers views and synonyms too (`TABLE_TYPE` says which);
-  filter to `'TABLE'` so the snapshot's contents and its comments agree.
+  filter to `'TABLE'` so the snapshot's contents and its comments agree —
+  confirmed by giving a view a comment and watching the filter drop it.
 - **Oracle has no database comment and no schema comment.** There is nothing to
   seed `business_context` from. `database_name` on the connection is a *service
   name*, not a catalogue, so it is not a label either.
-- **Oracle 23ai annotations** (`ALL_ANNOTATIONS_USAGE`: object, column,
-  annotation name, annotation value) are the one place any engine stores
-  structured key/value metadata on a column — the natural home for a real
-  `value_meanings` map. It is 23ai-only, absent from 19c, and querying it on
-  19c raises `ORA-00942`. Treat it as **optional, version-gated, Phase 5**, and
-  wrap it in `contextlib.suppress(Exception)` exactly as the histogram read
-  already is ([oracle.py:342-347](../backend/app/infra/connectors/oracle.py#L342-L347)).
+- **Oracle 23ai annotations** are the one place any engine stores structured
+  key/value metadata on a column — the natural home for a real `value_meanings`
+  map. **[corrected in Phase 0]** `ALL_ANNOTATIONS_USAGE` has **no `OWNER`
+  column**; its eight are `OBJECT_NAME`, `OBJECT_TYPE`, `COLUMN_NAME`,
+  `DOMAIN_NAME`, `DOMAIN_OWNER`, `ANNOTATION_OWNER`, `ANNOTATION_NAME`,
+  `ANNOTATION_VALUE`. So `WHERE owner IN (…)` fails with **`ORA-00904`, not
+  `ORA-00942`** — and unfiltered the view returns ~100 rows of Oracle's *own*
+  built-in domain annotations (`UUID4_D`, `HOSTNAME_D`, …) before it reaches a
+  single one of yours. The owner has to come from a join:
+
+  ```sql
+  SELECT o.owner, a.object_name, a.column_name,
+         a.annotation_name, a.annotation_value
+  FROM all_annotations_usage a
+  JOIN all_objects o
+    ON o.object_name = a.object_name AND o.object_type = a.object_type
+  WHERE o.owner IN (…) AND a.column_name IS NOT NULL;
+  ```
+
+  That version was run against a real annotation
+  (`ALTER TABLE orders MODIFY (status ANNOTATIONS (meaning 'P=pending, …'))`)
+  and returned exactly it. Still **optional, version-gated, Phase 5** — it is
+  23ai-only and absent from 19c — and still wrapped in
+  `contextlib.suppress(Exception)` exactly as the histogram read already is
+  ([oracle.py:342-347](../backend/app/infra/connectors/oracle.py#L342-L347)),
+  which now has to catch two different ORA codes rather than the one.
 
 ---
 
@@ -698,44 +763,49 @@ phase starts heading that way, stop and re-read this section.
 Each phase is independently shippable and independently verifiable. Run
 `make lint` and `make test` at the end of every one.
 
-### Phase 0 — Prove the catalog reads (no app code)
+### Phase 0 — Prove the catalog reads (no app code) — ☑ done
 
-The SQL in §1 is written from each engine's documented catalog views and has
+The SQL in §1 was written from each engine's documented catalog views and had
 **not been executed**. Verify it first; everything downstream assumes it.
 
-- [ ] Write `backend/scripts/catalog_probe.py`: connect with the existing
+- [x] Write `backend/scripts/catalog_probe.py`: connect with the existing
       connector's credentials, apply a handful of comments, run the §1 queries,
       print rows + the server version banner.
-- [ ] Postgres 16, MySQL 8.0, SQL Server 2022 — containers already used by
+- [x] Postgres 16, MySQL 8.0, SQL Server 2022 — containers already used by
       `make fixtures`.
-- [ ] **Oracle: stand up a container for the first time in this repo**
-      (`gvenzl/oracle-free:23-slim`), and verify against 19c too if one is
-      reachable.
-- [ ] Confirm each query returns rows **as a read-only role**, not just as the
+- [x] **Oracle: stand up a container for the first time in this repo**
+      (`gvenzl/oracle-free:23-slim`). ~~and verify against 19c too if one is
+      reachable~~ — **no 19c was reachable; that gap is recorded in §9.**
+- [x] Confirm each query returns rows **as a read-only role**, not just as the
       owner. This is the failure mode that has bitten this codebase before.
-- [ ] Record the exact server version string per engine into §9.
+- [x] Record the exact server version string per engine into §9.
 
 **Done when:** §1's SQL is corrected to what actually ran, and §9's version
-table is filled in from real banners.
+table is filled in from real banners. ✅ — three queries needed correcting; see
+"What Phase 0 found" in §10.
 
-### Phase 1 — Capture
+### Phase 1 — Capture — ☑ done
 
-- [ ] `app/infra/connectors/comments.py` — `clean_comment`, `is_noise`, caps,
+- [x] `app/infra/connectors/comments.py` — `clean_comment`, `is_noise`, caps,
       `SYSTEM_SCHEMAS`.
-- [ ] `ColumnInfo.comment` + serialisation in both `as_dict()`s;
+- [x] `ColumnInfo.comment` + serialisation in both `as_dict()`s;
       `SchemaSnapshot.database_comment` / `schema_comments`.
-- [ ] Four connectors: run the comment queries inside the existing `introspect`
+- [x] Four connectors: run the comment queries inside the existing `introspect`
       connection, fold into the records. **Wrap in `contextlib.suppress` exactly
       as the stats reads are** — a comment is an accuracy aid, never a
       correctness dependency, and a role that cannot read `sys.extended_properties`
       must still get a snapshot.
-- [ ] Apply `SYSTEM_SCHEMAS` at introspection on all four.
-- [ ] Tests: `tests/unit/test_catalog_comments.py`, pure folds over the real row
+- [x] Apply `SYSTEM_SCHEMAS` at introspection on all four — with one refinement
+      recorded in §10: filtering never empties the allowlist.
+- [x] Tests: `tests/unit/test_catalog_comments.py`, pure folds over the real row
       shapes each engine returns — no container. Copy
       `test_connector_hints.py`'s structure exactly.
 
 **Done when:** `make test` green; a snapshot with no comments serialises
-byte-identically to one taken before the change (asserted).
+byte-identically to one taken before the change (asserted). ✅ — 1366 tests
+green, `test_a_snapshot_with_no_comments_is_byte_identical_to_the_old_format`
+is the assertion, and every engine was additionally driven end to end through
+its real connector against a real server as the read-only role.
 
 ### Phase 2 — Persist and expose
 
@@ -839,15 +909,36 @@ business, not about Oracle.
 
 ## 9. Versions this was checked against
 
-**Fill in from Phase 0.** Until then this table records the *target*, and the
-"verified" column is the truth.
+Filled in from Phase 0, on 2026-08-13. Every row was read **twice** — once as
+the owner and once as a read-only role — and the two agreed on all four engines.
 
 | Engine | Target version | Image | Verified | Server banner |
 | --- | --- | --- | :---: | --- |
-| PostgreSQL | **16** | `postgres:16-alpine` | ☐ | _(record `SELECT version()`)_ |
-| MySQL | **8.0** | `mysql:8.0` | ☐ | _(record `SELECT VERSION()`)_ |
-| SQL Server | **2022** | `mcr.microsoft.com/mssql/server:2022-latest` | ☐ | _(record `@@VERSION`)_ |
-| Oracle | **23ai Free** (floor: 19c) | `gvenzl/oracle-free:23-slim` | ☐ | _(record `v$version` banner)_ |
+| PostgreSQL | **16** | `postgres:16-alpine` | ☑ | `PostgreSQL 16.14 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit` |
+| MySQL | **8.0** | `mysql:8.0` | ☑ | `8.0.46` |
+| SQL Server | **2022** | `mcr.microsoft.com/mssql/server:2022-latest` | ☑ | `Microsoft SQL Server 2022 (RTM-CU26) (KB5093420) - 16.0.4265.3 (X64)` |
+| Oracle | **23ai Free** (floor: 19c) | `gvenzl/oracle-free:23-slim` | ☑ | `Oracle AI Database 26ai Free Release 23.26.2.0.0 - Develop, Learn, and Run for Free` |
+
+The read-only roles each read was checked under, since that is the question the
+table exists to answer:
+
+| Engine | Role | Grants it had |
+| --- | --- | --- |
+| PostgreSQL | `analytics_ro` | `CONNECT`, `USAGE ON SCHEMA public`, `SELECT ON ALL TABLES`, `CREATE` revoked |
+| MySQL | `analytics_ro` | `GRANT SELECT ON sales.*` |
+| SQL Server | `analytics_ro` | `db_datareader` |
+| Oracle | `plain_ro` | `CREATE SESSION` + `SELECT` on **one table**, no `SELECT_CATALOG_ROLE` |
+
+**Oracle 19c was not reachable and is therefore not verified.** The two reads
+Phase 1 depends on (`ALL_TAB_COMMENTS`, `ALL_COL_COMMENTS`) have existed since
+long before 19c and are wrapped in `contextlib.suppress` regardless; the only
+19c-specific claim left untested is *which* ORA code the annotations read raises
+there, and that read is Phase 5 and optional.
+
+Re-run any of it with
+[`backend/scripts/catalog_probe.py`](../backend/scripts/catalog_probe.py) —
+`--seed` applies the comments first, `--ro-user` runs everything a second time
+as the read-only role.
 
 Where those targets come from: `docker-compose.yml` (Postgres 16, MySQL 8.0),
 `backend/fixtures/rebuild_fixtures.sh` (all three of PG/MySQL/MSSQL),
@@ -881,19 +972,48 @@ Minimum engine version each read needs, if a customer runs something older:
 
 | Phase | What it covers | Status | Date | Notes |
 | --- | --- | --- | --- | --- |
-| 0 | Prove the catalog reads on all four engines | ☐ not started | | |
-| 1 | Capture — port objects, `comments.py`, four connectors | ☐ not started | | |
-| 2 | Persist — migration, `catalog_meta`, DTOs, UI | ☐ not started | | |
+| 0 | Prove the catalog reads on all four engines | ☑ **done** | 2026-08-13 | All four run, each twice (owner + read-only). Three queries needed correcting — see below. **Oracle 19c not reachable**, so only 23ai is verified. |
+| 1 | Capture — port objects, `comments.py`, four connectors | ☑ **done** | 2026-08-13 | Verified through the real connectors against real servers of all four engines, as the read-only role. |
+| 2 | Persist — migration, `catalog_meta`, DTOs, UI | ☐ not started | | Nothing captured in Phase 1 is stored yet: `sync_schema` writes `tables` (so table and column comments **do** persist inside it) but `database_comment`/`schema_comments` are dropped on the floor until `catalog_meta` exists. |
 | 3 | Semantic-layer generation reads and seeds comments | ☐ not started | | |
-| 4 | Run-time rendering + the layer-wins suppression rule | ☐ not started | | |
-| 5 | Per-engine edges (Oracle first) | ☐ not started | | |
-| 6 | Verification, eval, doc updates | ☐ not started | | |
+| 4 | Run-time rendering + the layer-wins suppression rule | ☐ not started | | **Nothing reaches a model yet.** Phase 1 only captures. |
+| 5 | Per-engine edges (Oracle first) | ☐ not started | | The annotations query is now proven and corrected (§1.5), so this is smaller than it was. |
+| 6 | Verification, eval, doc updates | ☐ not started | | `make guard` and `make lint` were run against the Phase 1 connector changes and are green; the eval comparison and the doc updates are still outstanding. |
 
-### Files touched (fill in as you go)
+### What Phase 0 found
+
+The point of the phase, and it earned its place — three of the plan's queries
+were wrong, each in a way that would have shipped:
+
+1. **MySQL column comments returned a row per view.** `information_schema.columns`
+   carries a view's columns, and a view inherits its base table's column
+   comments; the table query filtered `table_type` and the column query did not.
+   Fixed in §1.3.
+2. **The SQL Server object queries had no allowlist filter**, so they returned
+   descriptions for schemas the connection never asked about. Fixed in §1.4.
+3. **`ALL_ANNOTATIONS_USAGE` has no `OWNER` column** — the failure is
+   `ORA-00904`, not the `ORA-00942` the plan predicted, and unfiltered the view
+   returns ~100 of Oracle's own built-in domain annotations. Fixed in §1.5 with
+   a proven join.
+
+Four things were confirmed rather than assumed: a Postgres partitioned table's
+comment (the `{r,p}` note), a SQL Server description on a *view* staying out via
+the `sys.tables` join, a non-`MS_Description` extended property being ignored,
+and an Oracle read-only user with **no `SELECT_CATALOG_ROLE`** — only
+`CREATE SESSION` and one `GRANT SELECT` — seeing exactly that table's comments.
+
+### Files touched
 
 | File | Phase | What changed |
 | --- | --- | --- |
-| _(none yet)_ | | |
+| `backend/scripts/catalog_probe.py` | 0 | New. Runs §1's SQL against a real server of each engine, twice — as the owner and as the read-only role — with `--seed` to apply comments first. The corrections above are inline in it. |
+| `backend/app/infra/connectors/comments.py` | 1 | New. `clean_comment`, `is_noise`, the two stored caps, `SYSTEM_SCHEMAS` + `business_schemas`, and the three folds every connector shares. |
+| `backend/app/domain/ports/database.py` | 1 | `ColumnInfo.comment` (new) and its serialisation; `TableInfo.comment` **serialised at last** (the field existed and was never emitted); `SchemaSnapshot.database_comment` / `.schema_comments`. All emitted only when set. |
+| `backend/app/infra/connectors/postgres.py` | 1 | Four comment queries (table, column, schema, database), each suppressed individually; `business_schemas` on the allowlist. |
+| `backend/app/infra/connectors/mysql.py` | 1 | Table + column comment queries (with the corrected `BASE TABLE` join); `business_schemas`. |
+| `backend/app/infra/connectors/mssql.py` | 1 | Four `MS_Description` queries with the added allowlist filter; `business_schemas`. |
+| `backend/app/infra/connectors/oracle.py` | 1 | Table + column comment queries from the `ALL_*` views; `business_schemas` — the engine that made the filter necessary. |
+| `backend/tests/unit/test_catalog_comments.py` | 1 | New, 81 tests. The cleaning contract, each engine's real row shapes, the system-schema sets, and the byte-identical serialisation guarantee. |
 
 ### Decisions changed while executing
 
@@ -902,4 +1022,7 @@ this is the record.
 
 | Date | Section | What changed, and why |
 | --- | --- | --- |
-| | | |
+| 2026-08-13 | §2.3 | **ZWNJ and ZWJ survive cleaning.** Step 3 says "strip ASCII control characters and collapse whitespace", implemented as "drop Unicode categories Cc/Cf/Zl/Zp" — and `Cf` contains `U+200C`, the zero-width non-joiner, which is *orthography* in Persian: `سفارش‌ها` ("orders") became `سفارش ها`, two words that are not the word. Half this product's users write Persian, and a comment mangled at capture stays mangled in the prompt, the semantic layer and the UI. Everything else in `Cf` still goes, bidi overrides included — those are a spoofing vector and mean nothing inside a one-line description. The test that found it is `test_a_persian_zero_width_non_joiner_is_orthography_not_formatting`. |
+| 2026-08-13 | §6.1.1 | **`SYSTEM_SCHEMAS` filtering never empties the allowlist.** "Applied at introspection, before anything else runs" would make an empty snapshot out of a connection whose allowlist is *only* system schemas — and an empty snapshot answers no question at all, because the guard resolves every name against it. Two ways that happens in practice: somebody points DataMind at `SYS` on purpose, or connects to Oracle *as* `SYSTEM`, where the allowlist defaults to the connecting user's own schema. `business_schemas` therefore returns the filtered list **or the original if filtering left nothing**. |
+| 2026-08-13 | §6.1.1 | **`C##` is not a system prefix on Oracle.** A common user in a multitenant setup can legitimately own business tables, and dropping a schema somebody allowlisted on purpose is worse than carrying one they did not. `APEX_*`, `ORDS_*` and `FLOWS_*` are still filtered. |
+| 2026-08-13 | §7, Phase 0 | **A shell driver for the containers was not written.** The probe takes connection flags and the four containers were driven by hand; the exact images and roles are in §9 so the run is reproducible without another script to maintain. |
