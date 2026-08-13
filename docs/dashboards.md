@@ -160,6 +160,8 @@ POST   /dashboards/{id}/tiles/{tid}/duplicate
 PATCH  /dashboards/{id}/layout            bulk positions, one call per drag-end
 POST   /dashboards/{id}/tiles/{tid}/data  (?force=true)
 POST   /dashboards/{id}/data              {tile_ids?: [...]}  (?force=true)
+GET    /dashboards/{id}/export            the portable document — see §11
+POST   /dashboards/import                 {document, name?, connection_map, skip_invalid?}
 ```
 
 Cache rule: serve cached when `now - computed_at < effective_refresh_interval`
@@ -360,10 +362,10 @@ quiet. `npm run test:format`.
 
 ```bash
 make test     # test_query_service, test_dashboards_api, test_dashboard_cache,
-              # test_dashboard_service, test_sql_drafts, test_drafts_api,
-              # test_tile_charts, test_dashboard_models
+              # test_dashboard_service, test_dashboard_transfer, test_sql_drafts,
+              # test_drafts_api, test_tile_charts, test_dashboard_models
 make guard    # the hostile corpus
-npm run test:schedule && npm run test:format
+npm run test:schedule && npm run test:format && npm run test:document
 ```
 
 Worth knowing what a few of them pin:
@@ -376,6 +378,9 @@ Worth knowing what a few of them pin:
   against `ChartIntent`. See [charts.md](charts.md) §9 for why.
 - **`test_dashboard_cache.py`** — a changed `sql_hash` invalidates regardless
   of TTL; two tiles with different rates expire independently.
+- **`test_dashboard_transfer.py`** — the hostile corpus through an imported
+  *file*, and the two claims that make a file safe to hand someone: it carries
+  no connection internals, and a refused import creates nothing at all.
 - **`test_openapi_has_no_secrets.py`** — walks every schema the app can return.
 
 ## 9. Decisions, and what would reopen them
@@ -395,14 +400,104 @@ Worth knowing what a few of them pin:
 
 ## 10. Not built
 
-Filters, sharing, export, "add to dashboard" from a chat run, and scheduled
-server-side warm refresh.
+Filters, sharing, "add to dashboard" from a chat run, and scheduled
+server-side warm refresh. (Export and import are built — §11.)
 
 "Add to dashboard" is the cheapest of these — a succeeded run already has
 validated SQL, a connection and a chart spec to copy into a tile. It was left
 out so the dashboard would stand on its own: a user who never opens chat still
 builds one, and promotion is a shortcut on top of a feature that has to exist
 first.
+
+## 11. Moving a dashboard: export and import
+
+A dashboard is a layout, a set of statements and a rate for each of them. Two of
+the three things a tile points at — a connection and a model — are rows in *this*
+installation's database, so a file carries neither.
+
+`services/dashboard_transfer.py` is the format;
+`dashboard_service.export` / `import_document` are the two ends;
+`components/dashboard-document.ts` is the browser's half of the reading, DOM-free
+and tested like the scheduler.
+
+### What is in the file
+
+```json
+{ "format": "datamind.dashboard", "version": 1, "exported_at": "…",
+  "dashboard": { "name": "Ops", "grid_columns": 12, … },
+  "connections": [ { "ref": "c1", "name": "sales", "database_type": "postgres" } ],
+  "tiles": [ { "connection_ref": "c1", "sql": "…", "grid_x": 0, … } ] }
+```
+
+Three absences define it:
+
+- **No ids.** A `connection_id` means nothing in another account, and a file
+  that named one would either be useless or resolve to a row its reader was
+  never meant to reach. Each database becomes a `ref` with a display name, and
+  the importer says which of *their* connections that is.
+- **No results.** An export is the SQL, never the rows it returned. Exporting
+  the cache would turn "share this dashboard" into "send this person an extract
+  of the customer's database" — a disclosure decision no file format gets to
+  make (invariant #4).
+- **Nothing from inside a connection.** The name and the engine are what the
+  importer needs — the engine because SQL written for one dialect usually will
+  not parse on another, and saying so in the dialog costs one line where finding
+  out costs twelve rejections. The host, the database, the user and the password
+  stay where they are (invariant #3).
+
+`llm_config_id` does not survive either: which model drafted the SQL is
+provenance about a row somewhere else, and it is never consulted at refresh.
+
+### Importing is a fourth entry point to the guard
+
+`sql` in a `.json` file is typed as easily as `sql` in the editor's textarea. So
+every tile in a document goes through `_validated_tile_fields` — the *same* call
+the save path makes — against the importing user's own snapshot.
+`test_dashboard_transfer.py` replays a sample of the hostile corpus through a
+file, which is what proves import opened nothing.
+
+Two rules follow from that, and they are the reason import is not a loop around
+`add_tile`:
+
+1. **Every tile is validated before anything is created.** A file with one bad
+   statement leaves no half-built dashboard behind, and the refusal names *all*
+   the tiles it refused (in the problem body's `tiles`), because the user is
+   holding one file and deciding about it once.
+2. **`skip_invalid` is the user's answer to that report, never a default.**
+   Importing a board against a database whose schema has moved on genuinely
+   loses tiles; dropping them silently would be a dashboard that looks complete
+   and is not. The response lists what it dropped, with the guard's own reason.
+
+Connections resolve from the caller's own rows: the explicit `connection_map`
+first — every id re-checked for ownership, since it arrives in a request body —
+then an exact **name** match for anything left, which is what makes re-importing
+your own export one click. Nothing softer than an exact name is attempted: a
+match on engine alone would point a revenue tile at whichever Postgres came
+first, and a wrong number under the right title is worse than a picker the user
+has to fill in.
+
+A name already taken gets a number. Every other write path refuses a duplicate;
+here it would be a wall in front of the common case, raised after every statement
+in the file had already passed the guard.
+
+### The UI
+
+Export sits in two places, one per state the dashboard can be in: on the index
+card's kebab (next to Duplicate — both answer "I want another one of these"),
+and in the open dashboard's **header**, in the group with Present / Edit grid /
+Settings. It is the one action in a group of modes, and it earns the place: it
+started inside the settings drawer, on the reasoning that "what this is, as a
+file" is a property of the dashboard — and that is exactly where nobody looked
+for it. Wanting the file is something you feel *while looking at the board*.
+
+It is *fetched*, not linked: `<a download>` carries no bearer token, so the
+browser saves the body the API returns.
+
+Import is a dialog, because of the one question the file cannot answer: which
+database is this? The browser parses the file, shows what is in it, asks the
+mapping question, and warns before sending about the two things that will
+otherwise come back as a dozen rejections — a changed engine, and tiles whose
+connection was already gone when the file was written.
 
 ---
 

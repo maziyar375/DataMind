@@ -6,6 +6,8 @@ export interface ProblemDetail {
   code?: string
   correlation_id?: string
   errors?: { field: string; message: string }[]
+  /** A refused dashboard import: every tile it would not store, by title. */
+  tiles?: string[]
 }
 
 export interface User {
@@ -444,6 +446,76 @@ export interface DashboardSummary {
   last_refreshed_at: string | null
   created_at: string
   updated_at: string
+}
+
+// ── a dashboard as a file ─────────────────────────────────────────────────
+/**
+ * What an export holds, and the only shape import accepts.
+ *
+ * Two absences are the point of the format. There are **no ids**: a
+ * `connection_id` means nothing in the account that reads the file, so each
+ * database a tile needs is a `ref` with a display name, and the importing user
+ * says which of *their* connections it is. And there are **no results**: an
+ * export is the SQL, never the rows it returned — a file that carried the
+ * numbers would turn "share this dashboard" into "send this person an extract
+ * of the customer's database".
+ */
+export interface DashboardDocumentConnection {
+  ref: string
+  name: string
+  /** The engine, so a dialect change can be pointed out before the guard does. */
+  database_type: string
+}
+
+export interface DashboardDocumentTile {
+  /** null for a TEXT tile, and for one whose connection was deleted. */
+  connection_ref: string | null
+  title: string
+  tile_type: TileType
+  question: string | null
+  sql: string
+  sql_origin: SqlOrigin
+  chart_config: Record<string, unknown> | null
+  table_config: TableConfig | null
+  max_rows: number | null
+  refresh_interval_seconds: number | null
+  grid_x: number
+  grid_y: number
+  grid_w: number
+  grid_h: number
+  position: number
+}
+
+export interface DashboardDocument {
+  format: string
+  version: number
+  exported_at: string
+  dashboard: {
+    name: string
+    description: string | null
+    grid_columns: number
+    row_height_px: number
+    gap_px: number
+    compact_mode: 'VERTICAL' | 'NONE'
+    palette: string
+    theme_override: 'INHERIT' | 'DARK' | 'LIGHT'
+    default_refresh_interval_seconds: number
+  }
+  connections: DashboardDocumentConnection[]
+  tiles: DashboardDocumentTile[]
+}
+
+/** A tile the import dropped, named the way the user will look for it. */
+export interface ImportSkip {
+  title: string
+  code: string
+  reason: string
+}
+
+export interface DashboardImportResult {
+  dashboard: Dashboard
+  imported_tiles: number
+  skipped: ImportSkip[]
 }
 
 export interface TilePosition {

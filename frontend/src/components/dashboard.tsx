@@ -983,6 +983,7 @@ export function DashboardSettings({
           What a tile uses when it sets no rate of its own.
         </span>
       </label>
+
     </aside>
   )
 }
@@ -1109,13 +1110,14 @@ function DashboardGlyph({ hue, size = 34 }: { hue: number; size?: number }) {
   )
 }
 
-/** Rename / duplicate / archive / delete — shared by the card and the row. */
+/** Rename / duplicate / export / archive / delete — shared by card and row. */
 function DashboardMenu({
-  dashboard, onRename, onDuplicate, onArchive, onDelete,
+  dashboard, onRename, onDuplicate, onExport, onArchive, onDelete,
 }: {
   dashboard: DashboardSummary
   onRename: () => void
   onDuplicate: () => void
+  onExport: () => void
   onArchive: () => void
   onDelete: () => void
 }) {
@@ -1123,6 +1125,9 @@ function DashboardMenu({
   const items = [
     { label: 'Rename', run: onRename },
     { label: 'Duplicate', run: onDuplicate },
+    // Next to Duplicate on purpose: both answer "I want another one of these",
+    // and the only difference is whether the copy lands in this account.
+    { label: 'Export…', run: onExport },
     { label: dashboard.status === 'ARCHIVED' ? 'Unarchive' : 'Archive', run: onArchive },
     { label: 'Delete', run: onDelete, danger: true },
   ]
@@ -1241,12 +1246,13 @@ function CardMeta({ dashboard }: { dashboard: DashboardSummary }) {
 }
 
 export function DashboardCard({
-  dashboard, onOpen, onRename, onDuplicate, onArchive, onDelete,
+  dashboard, onOpen, onRename, onDuplicate, onExport, onArchive, onDelete,
 }: {
   dashboard: DashboardSummary
   onOpen: () => void
   onRename: () => void
   onDuplicate: () => void
+  onExport: () => void
   onArchive: () => void
   onDelete: () => void
 }) {
@@ -1298,6 +1304,7 @@ export function DashboardCard({
           dashboard={dashboard}
           onRename={onRename}
           onDuplicate={onDuplicate}
+          onExport={onExport}
           onArchive={onArchive}
           onDelete={onDelete}
         />
@@ -1362,12 +1369,13 @@ export function DashboardCard({
  * many names on screen, and every comparable product offers the switch.
  */
 export function DashboardRow({
-  dashboard, onOpen, onRename, onDuplicate, onArchive, onDelete,
+  dashboard, onOpen, onRename, onDuplicate, onExport, onArchive, onDelete,
 }: {
   dashboard: DashboardSummary
   onOpen: () => void
   onRename: () => void
   onDuplicate: () => void
+  onExport: () => void
   onArchive: () => void
   onDelete: () => void
 }) {
@@ -1449,6 +1457,7 @@ export function DashboardRow({
         dashboard={dashboard}
         onRename={onRename}
         onDuplicate={onDuplicate}
+        onExport={onExport}
         onArchive={onArchive}
         onDelete={onDelete}
       />

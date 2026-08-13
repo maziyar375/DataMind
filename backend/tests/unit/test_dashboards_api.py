@@ -26,8 +26,13 @@ from app.core.clock import utcnow
 from app.core.context import RequestContext
 from app.core.errors import NotFoundError, SqlRejectedError
 from app.domain.ports.database import ResultColumn
-from app.infra.db.models import Dashboard, DashboardTile
+from app.infra.db.models import Dashboard, DashboardTile, DatabaseConnection
 from app.main import create_app
+from app.services.dashboard_transfer import (
+    DashboardDocument,
+    SkippedTile,
+    build_document,
+)
 from app.services.query_service import TileResult
 
 USER = uuid4()
@@ -80,6 +85,22 @@ def _tile(tile_id: UUID = TILE_ID, interval: int | None = None) -> DashboardTile
     )
 
 
+def _connection() -> DatabaseConnection:
+    return DatabaseConnection(
+        id=CONNECTION_ID,
+        owner_id=USER,
+        name="sales",
+        database_type="postgres",
+        host="db.internal",
+        port=5432,
+        database_name="sales",
+        username="analytics_ro",
+        encrypted_password="ciphertext",
+        max_rows=1000,
+        statement_timeout_ms=30_000,
+    )
+
+
 OK_RESULT = TileResult(
     status="OK",
     columns=[ResultColumn(name="status", db_type="text")],
@@ -123,6 +144,7 @@ class FakeService:
     results: dict[UUID, TileResult] = {}
     raises: Exception | None = None
     tiles: list[DashboardTile] = []
+    skipped: list[SkippedTile] = []
 
     def __init__(self, _db: Any, _settings: Any) -> None:
         pass
@@ -214,6 +236,29 @@ class FakeService:
         )
         return list(FakeService.tiles)
 
+    async def export(self, dashboard_id: UUID, owner_id: UUID) -> DashboardDocument:
+        self._record("export", dashboard_id=dashboard_id, owner_id=owner_id)
+        return build_document(_dashboard(), [_tile()], {CONNECTION_ID: _connection()})
+
+    async def import_document(
+        self,
+        owner_id: UUID,
+        *,
+        document: Any,
+        name: str | None = None,
+        connection_map: dict[str, UUID] | None = None,
+        skip_invalid: bool = False,
+    ) -> tuple[Any, list[SkippedTile]]:
+        self._record(
+            "import_document",
+            owner_id=owner_id,
+            document=document,
+            name=name,
+            connection_map=connection_map,
+            skip_invalid=skip_invalid,
+        )
+        return NoLazyLoads(_dashboard()), list(FakeService.skipped)
+
     async def refresh(
         self,
         dashboard_id: UUID,
@@ -237,6 +282,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Any:
     FakeService.results = {TILE_ID: OK_RESULT}
     FakeService.raises = None
     FakeService.tiles = [_tile()]
+    FakeService.skipped = []
     monkeypatch.setattr(dashboards, "DashboardService", FakeService)
 
     app = create_app()
@@ -421,6 +467,97 @@ def test_asking_a_text_tile_for_data_is_answered_not_refused(client: Any) -> Non
     assert response.json()["row_count"] == 0
 
 
+# ── import / export ──────────────────────────────────────────────────────
+def test_an_export_carries_the_definition_and_nothing_from_the_database(
+    client: Any,
+) -> None:
+    """The whole point of the file, in one assertion: it describes a dashboard,
+    it does not contain one row of anyone's data and nothing that would let its
+    reader dial a database."""
+    response = client.get(f"/api/v1/dashboards/{DASHBOARD_ID}/export")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["format"] == "datamind.dashboard"
+    assert body["dashboard"]["name"] == "Ops"
+    tile = body["tiles"][0]
+    assert tile["sql"] == "SELECT status FROM public.orders"
+    # No ids of any kind: they mean nothing in the account that reads this.
+    assert "id" not in tile and "connection_id" not in tile
+    assert str(CONNECTION_ID) not in response.text
+    # A label and an engine — never a host, a user, a password, or a result.
+    assert body["connections"] == [
+        {"ref": "c1", "name": "sales", "database_type": "postgres"}
+    ]
+    for leak in ("db.internal", "analytics_ro", "ciphertext", "paid"):
+        assert leak not in response.text
+    # An export is a definition, not an extract: no cached result rides along.
+    assert "rows" not in tile and "row_count" not in tile
+
+
+def test_a_tile_carries_a_ref_its_document_declares(client: Any) -> None:
+    """A tile points at a name the importing user can answer for, not at a row
+    id from an installation they have never seen."""
+    body = client.get(f"/api/v1/dashboards/{DASHBOARD_ID}/export").json()
+
+    refs = {connection["ref"] for connection in body["connections"]}
+    assert body["tiles"][0]["connection_ref"] in refs
+
+
+def test_importing_reports_what_it_dropped(client: Any) -> None:
+    FakeService.skipped = [
+        SkippedTile(title="Refunds", code="E_SQL_REJECTED", reason="Unknown table.")
+    ]
+
+    response = client.post(
+        "/api/v1/dashboards/import",
+        json={
+            "document": {"format": "datamind.dashboard", "version": 1},
+            "connection_map": {"c1": str(CONNECTION_ID)},
+            "skip_invalid": True,
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["dashboard"]["name"] == "Ops"
+    assert body["skipped"] == [
+        {"title": "Refunds", "code": "E_SQL_REJECTED", "reason": "Unknown table."}
+    ]
+
+
+def test_an_import_passes_the_clients_choices_through_untouched(client: Any) -> None:
+    """The name and the connection map are the two things only the importing
+    user can decide, and the route decides neither of them."""
+    client.post(
+        "/api/v1/dashboards/import",
+        json={
+            "document": {"format": "datamind.dashboard", "version": 1},
+            "name": "Ops (from Ana)",
+            "connection_map": {"c1": str(CONNECTION_ID)},
+        },
+    )
+
+    _name, kwargs = next(c for c in FakeService.calls if c[0] == "import_document")
+    assert kwargs["name"] == "Ops (from Ana)"
+    assert kwargs["connection_map"] == {"c1": CONNECTION_ID}
+    assert kwargs["skip_invalid"] is False
+
+
+def test_an_import_whose_sql_the_guard_refuses_is_a_422(client: Any) -> None:
+    """A file is not authorisation either — it reaches the same guard the
+    editor's save path does, and is answered the same way."""
+    FakeService.raises = SqlRejectedError("Not a SELECT.", rule_id="E_NOT_A_SELECT")
+
+    response = client.post(
+        "/api/v1/dashboards/import",
+        json={"document": {"format": "datamind.dashboard", "version": 1}},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "E_SQL_REJECTED"
+
+
 # ── scoping ──────────────────────────────────────────────────────────────
 def test_another_users_dashboard_is_a_404(client: Any) -> None:
     """404, not 403: someone else's dashboard is indistinguishable from one
@@ -436,7 +573,9 @@ def test_another_users_dashboard_is_a_404(client: Any) -> None:
 ROUTES: list[tuple[str, str, dict | None]] = [
     ("get", "", None),
     ("post", "", {"name": "New"}),
+    ("post", "/import", {"document": {}}),
     ("get", f"/{DASHBOARD_ID}", None),
+    ("get", f"/{DASHBOARD_ID}/export", None),
     ("patch", f"/{DASHBOARD_ID}", {"name": "Renamed"}),
     ("delete", f"/{DASHBOARD_ID}", None),
     ("patch", f"/{DASHBOARD_ID}/layout", {"positions": []}),

@@ -73,8 +73,8 @@ make db-repair # recreate the empty PGDATA runtime dirs the studio drive strips
 
 Frontend, from `frontend/`: `npm run dev`, `npm run build` (`tsc -b && vite
 build`), `npm run typecheck` (`tsc --noEmit`), `npm run lint`, `npm test` (all
-six DOM-free logic suites: schedule, format, palette, report document, report
-readiness, print).
+seven DOM-free logic suites: schedule, format, dashboard document, palette,
+report document, report readiness, print).
 
 The **eval harness is not in `make test`** — it calls a real provider and costs
 money. `python -m app.eval.runner --suite sales_v1` from `backend/`, or
@@ -109,6 +109,9 @@ backend/app/
     ports/        Protocols: database, llm, secrets, identity, events, run_executor
   services/       use cases + transaction boundaries: run_service,
                   semantic_service, report_service, dashboard_service,
+                  dashboard_transfer (a dashboard as a portable file: no ids,
+                  no results, no connection internals — and an imported
+                  statement is hostile input like any other),
                   query_service (execute_saved_sql — the tile/report entry point
                   into guarded execution), sql_draft_service, bootstrap, policy
   pipeline/       the AI run: state.py (typed RunState), graph.py (the compiled
@@ -181,7 +184,12 @@ frontend/src/
                             (the due-tile rule, DOM-free, + its .test.ts —
                             `npm run test:schedule`), table-format.ts (how a
                             configured table resolves/sorts/formats, also
-                            DOM-free — `npm run test:format`), tile-editor.tsx
+                            DOM-free — `npm run test:format`),
+                            dashboard-document.ts (reading an exported file:
+                            what it is, and which connection each of its
+                            databases is here — `npm run test:document`) +
+                            dashboard-transfer.tsx (the download and the import
+                            dialog), tile-editor.tsx
                             (ask or write the SQL; one guard check for both),
                             report.tsx (the outline editor + the document
                             viewer), report-history.tsx, report-document.ts

@@ -8,7 +8,8 @@
  */
 
 import type {
-  ArtifactSpec, ChartRedraw, Connection, ConversationSummary, Dashboard, DashboardSummary,
+  ArtifactSpec, ChartRedraw, Connection, ConversationSummary, Dashboard, DashboardDocument,
+  DashboardImportResult, DashboardSummary,
   DashboardTile, LlmConfig, MessageWithRun, ProblemDetail, Report, ReportBlock,
   ReportBlockCheck, ReportChart, ReportRun, ReportRunDetail, ReportSection,
   ReportSectionResult,
@@ -299,6 +300,26 @@ export const dashboards = {
   // One call per drag-end, carrying every tile the drag moved.
   setLayout: (id: string, positions: TilePosition[]) =>
     patch<DashboardTile[]>(`/dashboards/${id}/layout`, { positions }),
+
+  /**
+   * The dashboard as a portable document — the layout and the SQL, no ids and
+   * no results. Fetched rather than linked: a `<a download>` carries no bearer
+   * token, so the browser saves the body this returns (see
+   * `components/dashboard-transfer.tsx`).
+   */
+  exportDocument: (id: string) => get<DashboardDocument>(`/dashboards/${id}/export`),
+  /**
+   * Create a dashboard from a document. `connection_map` answers the one
+   * question a file cannot: which of *this* user's connections each of its
+   * databases is. Every statement in it runs the guard on the way in, so a
+   * rejected tile is a 422 — or, with `skip_invalid`, a reported loss.
+   */
+  importDocument: (payload: {
+    document: unknown
+    name?: string | null
+    connection_map: Record<string, string>
+    skip_invalid?: boolean
+  }) => post<DashboardImportResult>('/dashboards/import', payload),
 
   data: (id: string, tileIds: string[] = [], force = false) =>
     post<{ results: Record<string, TileResult> }>(
