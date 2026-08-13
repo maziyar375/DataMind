@@ -211,6 +211,7 @@ class FakeSnapshotRow:
         self.relationships = SNAPSHOT["relationships"]
         self.dialect = SNAPSHOT["dialect"]
         self.version = 1
+        self.catalog_meta: dict[str, Any] = {}
 
 
 class FakeGateway:

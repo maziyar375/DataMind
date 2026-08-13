@@ -258,6 +258,14 @@ def _detail(tables: list[dict[str, Any]]) -> str:
     blocks = []
     for table in tables[:MAX_DETAILED_TABLES]:
         header = f"{table.get('schema')}.{table.get('name')} — {_shape(table)}:"
+        # The DBA's own sentence about this table, where there is one. It costs
+        # no model call, and this is the one path where a user gets a raw dump
+        # of the snapshot — a provider that failed mid-sentence, or a connection
+        # with no tables. "What does `order_items` count?" is precisely a
+        # comment question, so the answer to it belongs in the fallback too.
+        comment = str(table.get("comment") or "").strip()
+        if comment:
+            header += f"\n  {comment}"
         columns = table.get("columns") or []
         blocks.append("\n".join([header, *(_column_line(c) for c in columns)]))
 

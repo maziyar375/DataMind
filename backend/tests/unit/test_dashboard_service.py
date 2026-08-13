@@ -41,6 +41,7 @@ class FakeSnapshotRow:
         self.tables = tables
         self.relationships: list[dict] = []
         self.dialect = "postgres"
+        self.catalog_meta: dict[str, Any] = {}
 
 
 class FakeResult:

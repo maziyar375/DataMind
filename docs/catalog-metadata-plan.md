@@ -1,18 +1,17 @@
 # Catalog metadata (comments & descriptions) — design and implementation plan
 
-> **Status: Phases 0, 1, 2 and 3 landed; 4–6 proposed.** Every code reference
-> below is to code that exists *today*; the behaviour described in §4 and §6 is
-> what the remaining phases in §7 are meant to build. The ledger at the end
-> (§10) records what actually landed. Until a phase is ticked there, assume it
-> does not exist.
+> **Status: Phases 0–4 landed; 5 and 6 proposed.** Every code reference below is
+> to code that exists *today*; the behaviour described in §6 is what the
+> remaining phases in §7 are meant to build. The ledger at the end (§10) records
+> what actually landed. Until a phase is ticked there, assume it does not exist.
 >
-> **A comment now reaches a model — during semantic generation only.** Phase 3
-> feeds the catalog descriptions to the generator and promotes them into the
-> document (§5). A **run** prompt is still byte-identical to one from before this
-> document existed *unless a layer has been generated since*, because the seeded
-> descriptions travel out through the semantic block that already exists — which
-> is §5.2's whole point. §4's rendering rules, which put a raw DDL comment in
-> front of a run, are still Phase 4.
+> **Comments reach the model.** Phase 3 feeds them to the semantic generator and
+> seeds the document from them (§5); Phase 4 renders them into the run prompt
+> under §4's rules — the layer wins per entity, comments travel under every
+> disclosure policy, and `connections.include_db_comments` turns the whole thing
+> off. A prompt is still byte-identical to a pre-feature one when the database
+> carries no comments or the switch is off, on every policy tier, and there is a
+> test for each.
 >
 > **§1's SQL has been executed** against all four engines (§9 has the banners);
 > where a query needed correcting, the correction is inline and marked
@@ -860,23 +859,32 @@ green, all seven import-linter contracts kept (`app.semantic` stays
 self-contained: it reads the `comment` keys the connectors already cleaned and
 imports nothing new).
 
-### Phase 4 — Feed the run
+### Phase 4 — Feed the run — ☑ done
 
-- [ ] `covered_keys()` in `app/semantic/render.py`, sharing predicates with the
-      renderer.
-- [ ] `RetrievedContext.render` emits comments per §4.2–§4.4, with the legend
+- [x] `covered_keys()` in `app/semantic/render.py`, sharing predicates with the
+      renderer — and reading the rendered block back, which turned out to matter;
+      see §10.
+- [x] `RetrievedContext.render` emits comments per §4.2–§4.4, with the legend
       line and the caps.
-- [ ] `connections.include_db_comments` column + migration + API + the checkbox
-      next to the semantic-layer switch.
-- [ ] `metadata._detail` includes table comments.
-- [ ] Tests: (a) **byte-identical output when no comments** — the same guarantee
+- [x] `connections.include_db_comments` column + migration `0013` + API + the
+      checkbox next to the disclosure-policy select.
+- [x] `metadata._detail` includes table comments.
+- [x] Tests: (a) **byte-identical output when no comments** — the same guarantee
       `test_semantic_render.py` makes for the layer; (b) suppression where the
       layer speaks; (c) rendering where it does not; (d) the block cap drops
       whole comments in the documented order; (e) a comment containing newlines
       and a fake `Tables:` header renders as one quoted line.
 
 **Done when:** on a commented connection with a partial layer, the prompt shows
-the layer for covered tables and the DDL comment for the rest, once each.
+the layer for covered tables and the DDL comment for the rest, once each. ✅ —
+1413 backend tests green, `make guard` 44 green, all seven import-linter
+contracts kept, frontend `typecheck`/`build`/`test` green. Driven end to end
+against the running stack on the commented `sales` demo: on a three-table
+retrieval with the real 42-entity layer, `orders`' table comment and
+`orders.status`' column comment are suppressed (the layer describes both) while
+`order_items.quantity` keeps its comment, the `About this database:` line is the
+layer's `business_context` rather than the DDL one, and the switch off renders
+the pre-feature block exactly.
 
 ### Phase 5 — Per-engine edges
 
@@ -914,18 +922,25 @@ business, not about Oracle.
 
 ## 8. Cross-cutting — verify before calling the feature done
 
-- [ ] A snapshot from a database with **no** comments produces a prompt
-      byte-identical to pre-feature, on every policy tier
-- [ ] `include_db_comments = false` is byte-identical to pre-feature
-- [ ] Comments render under `NONE` (they are structure, §3.1) and no count,
-      range or value escapes with them
-- [ ] A comment cannot introduce a newline into any prompt
-- [ ] A comment never reaches a prompt twice — layer *or* DDL, never both
-- [ ] A connector whose comment query fails still returns a full snapshot
-- [ ] A read-only role gets comments on all four engines
-- [ ] System schemas are excluded on all four engines
-- [ ] `make test`, `make guard`, `make lint` green; `npm run typecheck`,
-      `npm run build`, `npm test` green
+- [x] A snapshot from a database with **no** comments produces a prompt
+      byte-identical to pre-feature, on every policy tier *(Phase 4)*
+- [x] `include_db_comments = false` is byte-identical to pre-feature *(Phase 4)*
+- [x] Comments render under `NONE` (they are structure, §3.1) and no count,
+      range or value escapes with them *(Phase 4)*
+- [x] A comment cannot introduce a newline into any prompt *(Phases 1 and 4 —
+      stripped at capture, collapsed again at render)*
+- [x] A comment never reaches a prompt twice — layer *or* DDL, never both
+      *(Phase 4, all four combinations of table/column coverage)*
+- [x] A connector whose comment query fails still returns a full snapshot
+      *(Phase 1 — every read is individually suppressed)*
+- [x] A read-only role gets comments on all four engines *(Phases 0 and 1)*
+- [x] System schemas are excluded on all four engines *(Phase 1)*
+- [x] `make test`, `make guard`, `make lint` green; `npm run typecheck`,
+      `npm run build`, `npm test` green *(Phase 4)*
+
+Still open, and both belong to Phase 6: the eval comparison that would justify
+claiming the feature *helped*, and the doc updates ([security.md](security.md),
+[CLAUDE.md](../CLAUDE.md), [docs/README.md](README.md)).
 
 ---
 
@@ -998,7 +1013,7 @@ Minimum engine version each read needs, if a customer runs something older:
 | 1 | Capture — port objects, `comments.py`, four connectors | ☑ **done** | 2026-08-13 | Verified through the real connectors against real servers of all four engines, as the read-only role. |
 | 2 | Persist — migration, `catalog_meta`, DTOs, UI | ☑ **done** | 2026-08-13 | Migration `0012`, applied and round-tripped against the live app database. Driven end to end through the real API against the commented `sales` demo. Still nothing reaching a model — that is Phase 4. |
 | 3 | Semantic-layer generation reads and seeds comments | ☑ **done** | 2026-08-13 | `SEMANTIC_PROMPT_VERSION` **s2 → s3**. The first phase where a comment reaches a model — generation only. Verified against fakes, not a provider; the honest end-to-end check is Phase 6's eval. |
-| 4 | Run-time rendering + the layer-wins suppression rule | ☐ not started | | **No raw comment reaches a run prompt yet** — but a *seeded* one does, through the semantic block, once a layer is regenerated under s3. See the note below on `_render_entity`. |
+| 4 | Run-time rendering + the layer-wins suppression rule | ☑ **done** | 2026-08-13 | Migration `0013`, applied, downgraded and re-applied against the live app database. Verified end to end on the commented `sales` demo through the real sync API. `PROMPT_VERSION` does **not** move: a snapshot with no comments, and a connection with the switch off, render byte-identically to before. |
 | 5 | Per-engine edges (Oracle first) | ☐ not started | | The annotations query is now proven and corrected (§1.5), so this is smaller than it was. |
 | 6 | Verification, eval, doc updates | ☐ not started | | `make guard` and `make lint` were run against the Phase 1 connector changes and are green; the eval comparison and the doc updates are still outstanding. |
 
@@ -1047,6 +1062,17 @@ and an Oracle read-only user with **no `SELECT_CATALOG_ROLE`** — only
 | `backend/app/semantic/prompts.py` | 3 | `SEMANTIC_PROMPT_VERSION` **s2 → s3**; one rule each in `TABLE_SYSTEM` and `OVERVIEW_SYSTEM` saying what a quoted string is; `OVERVIEW_USER` gains a `{catalog}` slot that renders to nothing when there is nothing to say. |
 | `backend/app/semantic/generator.py` | 3 | `_ddl` renders the table comment after the row count and the column comment after the hints; new `_catalog_block` for the overview pass; `generate_document` takes `catalog_meta`; `business_context` falls back to the database comment; new `_seed_from_catalog` promotes a comment into the document as `provenance.source = "derived"`. |
 | `backend/app/services/semantic_service.py` | 3 | `_snapshot` carries `catalog_meta` off the snapshot row (`{}` on a pre-0012 row); `execute_job` passes it to the generator. |
+| `backend/app/semantic/render.py` | 4 | `_entity_head` split out of `_render_entity` and `_scoped` out of `render_semantic`, so `covered_keys` asks the renderer's own questions; new `covered_keys`; `DEFAULT_MAX_CHARS` named so both agree on the budget. |
+| `backend/app/pipeline/state.py` | 4 | The three render caps, the legend, `_clip`; `RetrievedContext.catalog_meta` / `.include_db_comments`; `render` emits the database line, the legend and the per-table/per-column comments; `_render_semantic` became `_semantic`, returning the block *and* what it covered. |
+| `backend/app/pipeline/metadata.py` | 4 | `_detail` carries the table comment under the header — the one path where a user gets a raw dump, and it costs no model call. |
+| `backend/app/pipeline/nodes/__init__.py` | 4 | `NodeDeps.include_db_comments`; `retrieve` passes it and the snapshot's `catalog_meta` into the context. |
+| `backend/app/services/query_service.py` | 4 | `latest_snapshot` carries `catalog_meta` (`{}` on a pre-0012 row). |
+| `backend/app/services/run_service.py` | 4 | Passes the connection's switch into `NodeDeps`. |
+| `backend/app/services/report_service.py` | 4 | The outline path builds its own `RetrievedContext`, so it gets both fields too — §4.6's "reports inherit this" is true of the SQL path for free, but not of this one. |
+| `backend/app/infra/db/models.py`, `.../versions/0013_include_db_comments.py` | 4 | `database_connections.include_db_comments`, not-null, server default true. |
+| `backend/app/api/schemas.py`, `backend/app/api/v1/connections.py` | 4 | The switch on create, update and read. |
+| `frontend/src/api/types.ts`, `frontend/src/pages/DataSourcesPage.tsx` | 4 | `include_db_comments` on `Connection`, and a "Schema descriptions" toggle under Safety & limits whose hint says where the descriptions come from and that they ignore the result-sharing setting. |
+| `backend/tests/unit/test_comment_render.py` | 4 | New, 23 tests. The byte-identity guarantees, the per-entity suppression rule in all four combinations, the caps and the spend order, the untrusted-text properties, `covered_keys` on its own, and the METADATA fallback. |
 | `backend/tests/unit/test_semantic_generator.py` | 3 | 11 new tests. What reaches each prompt, the closed-policy case, seeding and its gap-only rule, the fallback for `business_context`, and `merge_documents` over an edited seeded description. `ScriptedGateway` now records the prompts it was sent, so the assertions are about what a model would actually have read. |
 
 ### Decisions changed while executing
@@ -1063,6 +1089,12 @@ this is the record.
 | 2026-08-13 | §2.2 | **Stored `catalog_meta` omits empty keys; the DTO fills them in.** §2.2 shows all three keys always present, which would write `{"counts": {"tables": 0, "columns": 0}}` for the overwhelmingly common case of a database with no comments — a stored row that is *not* the `'{}'` the migration defaults to, so a re-synced connection would stop matching one that was never re-synced, for no gain. Storage therefore omits what is empty and an uncommented snapshot stores exactly `{}`. The **wire** shape is the opposite: `SchemaCatalogMeta` defaults every field, so a client reads `counts.columns` without guarding. Storage optimises for "indistinguishable from before the feature"; the DTO optimises for "no null checks in the browser", and they are allowed to differ because one is a schema and the other is a document. |
 | 2026-08-13 | §2.2 | **The document is built by `SchemaSnapshot.catalog_meta()`, not at the call site.** It is the same argument `ColumnInfo.as_dict()`'s own docstring makes — a serialisation written where it is used gets copied the second time it is needed and the copies stop agreeing — and it keeps the counts fold out of `app/api/`, which is HTTP shape only. |
 | 2026-08-13 | §7, Phase 2 | **The schema browser searches descriptions, not just names.** One line in the existing filter. A description is most useful for exactly the search a name cannot serve — nobody names a table `cancellations`, but a DBA wrote the word in a comment — and a list that displays the sentence while refusing to match on it invites a search that silently finds nothing. |
+| 2026-08-13 | §4.1 | **`covered_keys` renders the block and reads its own output back, and it takes `max_chars`.** §4.1 says it must reuse the renderer's predicates "or the two will drift". Re-deriving them is not enough, because `render_semantic` also **drops whole sections from the back when the block is over budget** — and that is not a corner case. Measured on the live 42-table `sales` layer: scoped to all 42 tables the semantic block renders **420 characters with no entity section at all**, because the entities did not fit under the 8,000-char cap. A coverage rule derived from the *document* would have called all 42 tables covered and suppressed every comment, while the model saw no table descriptions whatsoever — strictly worse than before the feature. Scoped to the three tables a real run retrieves, the same layer renders 7,841 chars, covers all three plus 37 columns, and suppression fires correctly. So coverage is read off the rendered string, and the two calls share `DEFAULT_MAX_CHARS`. |
+| 2026-08-13 | §4.1 | **A table is covered only when the layer speaks about the *table*.** `_render_entity` returns a block whenever a *column* line renders, so "the entity rendered" is the wrong test — an entity whose head is the bare `- sales.orders` has said nothing about the table, and its DDL comment is still the only sentence there is. `_entity_head` was split out for exactly this question; the column rule stays "did `_render_column` return anything", which also means a column whose entry is only `value_meanings` is *uncovered* under `NONE`, where those are withheld. |
+| 2026-08-13 | §4.4 | **The database comment is spent first and counts against the block cap.** §4.4's table gives caps for table and column comments and a 2,500-char total, but no row for the database comment, and its spend order starts at table comments. It is one line, it outranks everything else per token, and it is clipped to the table cap (200) on the same "one sentence is the useful part" logic. |
+| 2026-08-13 | §4.4 | **A comment that does not fit is skipped, not a stopping point.** "Drop it whole" leaves open whether the walk ends at the first comment that will not fit. It does not: one long comment cannot shut out the twenty short ones behind it, and skipping is exactly as deterministic as stopping. |
+| 2026-08-13 | §2.3 | **Whitespace is collapsed at render as well as at capture.** Capture is where it is documented and where it matters, but `state.py` is the function that puts the string inside a prompt, and the property "a comment cannot forge a section header" should hold where it is relied on rather than only in the module that happened to write the snapshot. Six lines, and it makes the untrusted-text test honest instead of a test of Phase 1. |
+| 2026-08-13 | §4.2 | **`RetrievedContext.include_db_comments` defaults true; `NodeDeps.include_db_comments` defaults false.** The context mirrors the column, so a caller that builds one from a snapshot renders what the connection asked for. The deps object mirrors `clarify_enabled` — a `NodeDeps` assembled without a connection in hand renders what it always rendered. Both are byte-identical to pre-feature in their "no information" state, which is the property that matters. |
 | 2026-08-13 | §5.1 | **A neighbour table carries its own comment but not its columns'.** `_ddl` renders the described table and up to six FK neighbours, and §5.1 said only "add the column comment after the existing bits". Applied to neighbours that is six tables × forty columns × up to 240 stored chars — tens of thousands of characters of prose per call, on every one of forty-odd calls, about tables the model is not being asked to describe. A neighbour is rendered so a cross-table metric can *name a real column*, so it keeps its names, types and keys, and it keeps its one-line table comment (cheap, and it says what the neighbour is). `_ddl` grew a `column_comments` flag; the described table is unchanged. |
 | 2026-08-13 | §5.1 | **Table comments were not added to the overview pass.** §5.1 scopes `_overview` to the database and schema comments and that is what landed. The temptation is real — a comment per table would be the richest input `business_context` could get — but it is 200 tables × up to 400 chars against a prompt whose own system message says "you are NOT given column detail", and the per-table pass is where that detail is supposed to land. Reconsider only with an eval number behind it. |
 | 2026-08-13 | §5.2 | **`business_context` also falls back when the overview pass *fails*.** §5.2 says "empty and a database comment exists → use it", and a provider failure returns an empty `_Overview` — so the fallback covers the case the plan did not name, which is the one where it matters most: a failed orientation call used to leave the whole layer with no business context at all. |

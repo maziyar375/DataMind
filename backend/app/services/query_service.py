@@ -76,11 +76,18 @@ async def latest_snapshot(db: AsyncSession, connection_id: UUID) -> dict[str, An
     )
     row = result.scalar_one_or_none()
     if row is None:
-        return {"tables": [], "relationships": [], "dialect": "postgres"}
+        return {
+            "tables": [], "relationships": [],
+            "dialect": "postgres", "catalog_meta": {},
+        }
     return {
         "tables": row.tables,
         "relationships": row.relationships,
         "dialect": row.dialect,
+        # Database and schema descriptions, for the schema block. A pre-0012
+        # row reads back as `{}`, which is the same absence a database with no
+        # comments produces — nothing downstream tells the two apart.
+        "catalog_meta": row.catalog_meta or {},
     }
 
 

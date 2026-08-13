@@ -78,6 +78,11 @@ def _connection(policy: str = DisclosurePolicy.SAMPLE, max_rows: int = 1000) -> 
         encrypted_password="x",
         max_rows=max_rows,
         disclosure_policy=policy,
+        # Spelled out for the same reason `max_rows` is: a column default is
+        # applied on INSERT, so an ORM object built in memory carries `None`
+        # where a loaded row carries the default. Every caller of this reads a
+        # row the database has already filled in.
+        include_db_comments=True,
     )
 
 
@@ -157,6 +162,7 @@ class FakeSnapshotRow:
         self.relationships: list[dict] = []
         self.dialect = "postgres"
         self.version = 1
+        self.catalog_meta: dict[str, Any] = {}
 
 
 class FakeDb:

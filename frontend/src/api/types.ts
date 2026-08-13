@@ -34,6 +34,7 @@ export interface Connection {
   disclosure_policy: 'NONE' | 'AGGREGATE' | 'SAMPLE' | 'FULL'
   semantic_layer_enabled: boolean
   clarify_enabled: boolean
+  include_db_comments: boolean
   status: string
   readonly_confirmed: boolean
   server_version: string | null

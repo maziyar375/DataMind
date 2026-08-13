@@ -132,6 +132,13 @@ class DatabaseConnection(Base, TimestampMixin):
     # the pre-feature behaviour exactly: the `clarify` node is skipped, so the
     # prompt, the step trail and the eval baseline are unchanged.
     clarify_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Whether the database's own catalog descriptions — what a DBA wrote with
+    # `COMMENT ON` — reach the model. They travel with structure rather than
+    # under `HintBudget`, because a comment is DDL a human wrote and is exactly
+    # as much customer data as a column name. Some shops nonetheless keep
+    # secrets and ticket numbers in comments; this is their one checkbox, and
+    # off is byte-identical to the prompt from before the feature existed.
+    include_db_comments: Mapped[bool] = mapped_column(Boolean, default=True)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(20), default="UNTESTED")
     readonly_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)

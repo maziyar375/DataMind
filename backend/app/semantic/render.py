@@ -34,13 +34,19 @@ _MONTHS = (
     "July", "August", "September", "October", "November", "December",
 )
 
+# The cap `RetrievedContext` renders under. Named so `covered_keys` can default
+# to the same one: the two answer the same question about the same block, and a
+# caller that passed a different budget to each would be told a table was
+# described when it had been trimmed away.
+DEFAULT_MAX_CHARS = 8_000
+
 
 def render_semantic(
     doc: SemanticDocument,
     *,
     tables: list[str],
     budget: HintBudget,
-    max_chars: int = 8_000,
+    max_chars: int = DEFAULT_MAX_CHARS,
 ) -> str:
     """The semantic block for `tables`, or `""` when there is nothing to say.
 
@@ -52,10 +58,7 @@ def render_semantic(
         return ""
 
     wanted = {t.lower() for t in tables}
-    entities = [
-        e for e in doc.entities
-        if e.valid and not e.exclude and e.table.lower() in wanted
-    ]
+    entities = _scoped(doc, wanted)
 
     parts: list[str] = []
     if doc.business_context.strip():
@@ -107,6 +110,62 @@ def render_semantic(
     return block[:max_chars]
 
 
+def _scoped(doc: SemanticDocument, wanted: set[str]) -> list[SemanticEntity]:
+    """The entities this block is allowed to speak about, in document order."""
+    return [
+        e for e in doc.entities
+        if e.valid and not e.exclude and e.table.lower() in wanted
+    ]
+
+
+def covered_keys(
+    doc: SemanticDocument,
+    *,
+    tables: list[str],
+    budget: HintBudget,
+    max_chars: int = DEFAULT_MAX_CHARS,
+) -> tuple[set[str], set[str]]:
+    """The tables and `"table.column"` keys the rendered block actually speaks about.
+
+    The question the caller is really asking is "may I render the raw DDL
+    comment for this table, or would that describe it twice in different
+    words?". So the answer has to be what `render_semantic` *did*, not what the
+    document contains — a table with an entry that renders to nothing has not
+    been described, and neither has one whose section was trimmed off the back
+    when the block went over budget.
+
+    Which is why this renders the block and reads its own output back rather
+    than re-deriving the rules: two predicates that must agree forever are one
+    predicate, or they drift and the model is told about `orders` twice. The
+    same reason `_entity_head` exists.
+
+    A table counts as covered only when the layer says something about the
+    *table* — a label, a grain, a role, a date column, a synonym. An entity that
+    renders solely because one of its columns did leaves the table itself
+    undescribed, and its DDL comment is still the only sentence about it.
+    """
+    if doc.is_empty:
+        return set(), set()
+
+    block = render_semantic(doc, tables=tables, budget=budget, max_chars=max_chars)
+    if not block:
+        return set(), set()
+
+    covered_tables: set[str] = set()
+    covered_columns: set[str] = set()
+    for entity in _scoped(doc, {t.lower() for t in tables}):
+        rendered = _render_entity(entity, budget)
+        if not rendered or rendered not in block:
+            continue
+        key = entity.table.lower()
+        if _entity_head(entity) != f"- {entity.table}":
+            covered_tables.add(key)
+        for column in entity.columns:
+            if column.valid and _render_column(column, budget):
+                covered_columns.add(f"{key}.{column.name.lower()}")
+    return covered_tables, covered_columns
+
+
 def _render_time(doc: SemanticDocument) -> str:
     time = doc.time
     bits: list[str] = []
@@ -127,7 +186,13 @@ def _render_time(doc: SemanticDocument) -> str:
     return "Time conventions: " + "; ".join(bits) + "."
 
 
-def _render_entity(entity: SemanticEntity, budget: HintBudget) -> str:
+def _entity_head(entity: SemanticEntity) -> str:
+    """The entity's own line — everything the layer says about the *table*.
+
+    Split out so `covered_keys` can ask "does the layer speak about this table?"
+    with the renderer's own answer rather than a second opinion. A head equal to
+    `- schema.table` says nothing; anything longer does.
+    """
     head = f"- {entity.table}"
     if entity.label:
         head += f' ("{entity.label}")'
@@ -142,6 +207,11 @@ def _render_entity(entity: SemanticEntity, budget: HintBudget) -> str:
         tail.append("also called " + ", ".join(entity.synonyms[:4]))
     if tail:
         head += ": " + "; ".join(tail) + "."
+    return head
+
+
+def _render_entity(entity: SemanticEntity, budget: HintBudget) -> str:
+    head = _entity_head(entity)
     lines = [head]
 
     for column in entity.columns:

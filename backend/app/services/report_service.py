@@ -478,6 +478,8 @@ class ReportService:
             tables=snapshot["tables"],
             relationships=snapshot.get("relationships") or [],
             semantic=(semantic.model_dump(mode="json") if semantic else None),
+            catalog_meta=snapshot.get("catalog_meta") or {},
+            include_db_comments=connection.include_db_comments,
         )
 
         proposal = await propose(

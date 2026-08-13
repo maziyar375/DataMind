@@ -157,6 +157,7 @@ class ConnectionCreate(BaseModel):
     statement_timeout_ms: int = Field(default=30_000, ge=1_000, le=300_000)
     disclosure_policy: Literal["NONE", "AGGREGATE", "SAMPLE", "FULL"] = "SAMPLE"
     clarify_enabled: bool = True
+    include_db_comments: bool = True
 
 
 class ConnectionUpdate(BaseModel):
@@ -173,6 +174,7 @@ class ConnectionUpdate(BaseModel):
     disclosure_policy: Literal["NONE", "AGGREGATE", "SAMPLE", "FULL"] | None = None
     semantic_layer_enabled: bool | None = None
     clarify_enabled: bool | None = None
+    include_db_comments: bool | None = None
 
 
 class ConnectionRead(BaseModel):
@@ -192,6 +194,7 @@ class ConnectionRead(BaseModel):
     disclosure_policy: str
     semantic_layer_enabled: bool = True
     clarify_enabled: bool = True
+    include_db_comments: bool = True
     status: str
     readonly_confirmed: bool
     server_version: str | None = None

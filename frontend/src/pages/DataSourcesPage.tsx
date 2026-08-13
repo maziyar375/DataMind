@@ -34,6 +34,7 @@ const BLANK = {
   statement_timeout_ms: 30000,
   disclosure_policy: 'SAMPLE',
   clarify_enabled: true,
+  include_db_comments: true,
 }
 
 export default function DataSourcesPage() {
@@ -136,6 +137,7 @@ export default function DataSourcesPage() {
       statement_timeout_ms: selected.statement_timeout_ms,
       disclosure_policy: selected.disclosure_policy,
       clarify_enabled: selected.clarify_enabled,
+      include_db_comments: selected.include_db_comments,
     })
     api
       .schema(selected.id)
@@ -611,6 +613,23 @@ export default function DataSourcesPage() {
                         draft.clarify_enabled !== false
                           ? 'Ask before answering'
                           : 'Always answer, never ask'
+                      }
+                    />
+                  </Field>
+
+                  <Field
+                    label="Schema descriptions"
+                    hint="Descriptions your DBA wrote in the database itself (COMMENT ON, MS_Description). They travel with the column names, under every result-sharing setting — turn this off if your comments hold anything you would not send."
+                  >
+                    <Toggle
+                      checked={draft.include_db_comments !== false}
+                      onChange={(next) =>
+                        setDraft({ ...draft, include_db_comments: next })
+                      }
+                      label={
+                        draft.include_db_comments !== false
+                          ? 'Send them to the model'
+                          : 'Keep them out of prompts'
                       }
                     />
                   </Field>

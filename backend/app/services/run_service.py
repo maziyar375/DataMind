@@ -282,6 +282,7 @@ class RunService:
             emit=lambda t, d: self._emit(run_id, t, d),
             semantic=(semantic.model_dump(mode="json") if semantic else None),
             clarify_enabled=connection.clarify_enabled and pending is None,
+            include_db_comments=connection.include_db_comments,
         )
 
         pipeline = AnalyticsPipeline(

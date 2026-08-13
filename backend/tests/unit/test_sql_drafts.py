@@ -186,6 +186,7 @@ class FakeSnapshotRow:
         self.tables = snapshot["tables"]
         self.relationships = snapshot["relationships"]
         self.dialect = snapshot["dialect"]
+        self.catalog_meta = snapshot.get("catalog_meta") or {}
 
 
 class FakeDb:

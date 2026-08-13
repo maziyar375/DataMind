@@ -76,6 +76,12 @@ class NodeDeps:
     # connection has the switch off and when this run *is* the answer to a
     # question we already asked — see `run_service.execute_run`.
     clarify_enabled: bool = False
+    # Whether the database's own catalog descriptions reach the schema block.
+    # On by default like the column it comes from; off is byte-identical to the
+    # prompt from before comments existed. Defaults False here for the same
+    # reason `clarify_enabled` does — a `NodeDeps` built without the connection
+    # in hand renders what it always rendered.
+    include_db_comments: bool = False
     # Extra constraints appended to every SQL-producing prompt, for callers
     # whose SQL has to satisfy something a chat question does not. Today that
     # is exactly one caller: a report block, whose statement is saved and
@@ -318,6 +324,8 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
         history=deps.history,
         strategy=strategy,
         semantic=deps.semantic,
+        catalog_meta=deps.snapshot.get("catalog_meta") or {},
+        include_db_comments=deps.include_db_comments,
     )
     described = (
         sum(
