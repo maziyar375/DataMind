@@ -23,6 +23,17 @@ import {
  */
 const TEXT_FLUSH_MS = 40
 
+/**
+ * `smooth`, unless the reader asked for less motion.
+ *
+ * The reduced-motion guard in styles.css can silence a CSS transition but not
+ * a programmatic scroll, and the transcript glides on every arriving turn —
+ * which is the movement that setting exists to stop.
+ */
+function glideBehavior(): ScrollBehavior {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+}
+
 export default function ChatPage() {
   const [conversationList, setConversationList] = useState<ConversationSummary[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -242,7 +253,7 @@ export default function ChatPage() {
     const el = scrollRef.current
     if (!el) return
     followRef.current = true
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    el.scrollTo({ top: el.scrollHeight, behavior: glideBehavior() })
   }
 
   // A turn arriving is worth a glide. A token is not: asking for `smooth`
@@ -253,7 +264,7 @@ export default function ChatPage() {
     if (!followRef.current) return
     const el = scrollRef.current
     if (!el) return
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    el.scrollTo({ top: el.scrollHeight, behavior: glideBehavior() })
   }, [messages])
 
   useEffect(() => {

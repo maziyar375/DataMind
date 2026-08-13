@@ -211,8 +211,23 @@ function StepPanel({
   const total = totalMs ?? steps.reduce((sum, s) => sum + (s.duration_ms ?? 0), 0)
   const seconds = (total / 1000).toFixed(total < 1000 ? 2 : 1)
 
+  /** One line of truth for what the run is doing, so the visible label and the
+   *  spoken announcement below cannot drift apart. */
+  const status = streaming
+    ? active
+      ? (NODE_META[active.name]?.detail ?? 'Working…')
+      : 'Starting…'
+    : failed
+      ? `Stopped after ${steps.length} steps · ${seconds}s`
+      : `All ${steps.length} steps passed · ${seconds}s`
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {/* The visible copy of this lives inside the toggle below, where a live
+          region would make a screen reader re-announce the whole control every
+          time the step changed. Announcing it here instead gives one polite
+          update per pipeline step — the trail a sighted user is watching. */}
+      <span className="rm-sr" role="status">{status}</span>
       <button
         onClick={() => setOpen(!open)}
         aria-expanded={open}
@@ -236,15 +251,7 @@ function StepPanel({
         }}
       >
         <Icon.Chevron open={open} size={12} stroke="currentColor" />
-        {streaming ? (
-          <span className="rm-pulse">
-            {active ? (NODE_META[active.name]?.detail ?? 'Working…') : 'Starting…'}
-          </span>
-        ) : failed ? (
-          <>Stopped after {steps.length} steps · {seconds}s</>
-        ) : (
-          <>All {steps.length} steps passed · {seconds}s</>
-        )}
+        {streaming ? <span className="rm-pulse">{status}</span> : status}
       </button>
       {open && <StepTrail steps={steps} />}
     </div>

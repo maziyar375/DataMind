@@ -196,6 +196,19 @@ body {
 
 *, *::before, *::after { box-sizing: border-box; }
 
+/* Motion is opt-out globally, not per effect. The rules further down silence
+   individual decorative animations, but the primitives in ui.tsx set their
+   transitions inline, where a class-scoped rule can never reach them — so this
+   guard has to be universal and !important to outrank an inline style. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -215,6 +228,15 @@ a:focus-visible,
 [role='button']:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* The field inside a stepper draws no border of its own, so the rule above has
+   no border-colour to change and the control was the one input in the app that
+   showed a keyboard user nothing. Give it the ring its own buttons get. */
+.rm-stepper input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 5px;
 }
 
 /* JetBrains Mono carries no Arabic at all, so before Vazirmatn joined this

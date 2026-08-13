@@ -641,12 +641,14 @@ export function Toggle({
           style={{
             position: 'absolute',
             top: 2,
-            left: checked ? 16 : 2,
+            left: 2,
             width: 14,
             height: 14,
             borderRadius: '50%',
             background: checked ? 'var(--on-accent)' : 'var(--text-faint)',
-            transition: 'left 120ms ease',
+            // translate rather than `left`, for the same reason as ProgressBar.
+            transform: checked ? 'translateX(14px)' : 'translateX(0)',
+            transition: 'transform 120ms ease, background 120ms ease',
           }}
         />
       </button>
@@ -706,11 +708,15 @@ export function ProgressBar({
       >
         <div
           style={{
-            width: `${pct}%`,
+            width: '100%',
             height: '100%',
             background: 'var(--accent)',
-            borderRadius: 999,
-            transition: 'width 240ms ease',
+            // Scaled, not width-animated: width is a layout property, so
+            // growing it re-lays out the row on every frame of a fill that
+            // runs for minutes. The track above clips the cap.
+            transformOrigin: 'left center',
+            transform: `scaleX(${pct / 100})`,
+            transition: 'transform 240ms ease',
           }}
         />
       </div>
@@ -1836,7 +1842,6 @@ export function NumberStepper({
           textAlign: 'center',
           background: 'transparent',
           border: 'none',
-          outline: 'none',
           color: 'var(--text-strong)',
           fontSize: 13.5,
           fontWeight: 650,

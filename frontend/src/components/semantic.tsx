@@ -54,10 +54,12 @@ const ROLE_TONE: Record<string, string> = {
 
 /** What each table's kind is called, and the chip tone that carries it.
  *
- *  The kind used to be encoded only as the 3px stripe down the left of a
- *  collapsed row — a colour with no legend, so the one thing a reader most
- *  wants while scanning ("which of these are facts?") was the one thing they
- *  had to open every row to find out. The stripe stays; this names it. */
+ *  The kind used to be encoded only as a stripe down the left of a collapsed
+ *  row — a colour with no legend, so the one thing a reader most wants while
+ *  scanning ("which of these are facts?") was the one thing they had to open
+ *  every row to find out. The chip is the legend now; the stripe stays as a
+ *  scanning echo, thinned to 2px so a row reads as a card with an accent
+ *  rather than a colour-tabbed template. */
 const ROLE_META: Record<string, { label: string; tone: ChipTone }> = {
   fact: { label: 'Fact', tone: 'accent' },
   dimension: { label: 'Dimension', tone: 'green' },
@@ -1322,7 +1324,7 @@ function EntityCard({
           padding: '12px 14px',
           background: 'transparent',
           border: 'none',
-          borderLeft: `3px solid ${ROLE_TONE[entity.role] ?? ROLE_TONE.unknown}`,
+          borderLeft: `2px solid ${ROLE_TONE[entity.role] ?? ROLE_TONE.unknown}`,
           cursor: 'pointer',
           textAlign: 'left',
         }}
