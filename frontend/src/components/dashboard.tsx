@@ -853,13 +853,11 @@ export function TileSkeleton({ height }: { height: number }) {
  * prevent, so the picker is honest about having one validated set.
  */
 export function DashboardSettings({
-  dashboard, onChange, onClose, onExport,
+  dashboard, onChange, onClose,
 }: {
   dashboard: Dashboard
   onChange: (patch: Record<string, unknown>) => void
   onClose: () => void
-  /** Save this dashboard as a file. See `dashboard-transfer.tsx`. */
-  onExport: () => void
 }) {
   return (
     <aside
@@ -986,19 +984,6 @@ export function DashboardSettings({
         </span>
       </label>
 
-      {/* Export lives with the settings rather than in the header, because it
-          is a property of the dashboard — "what this is, as a file" — and the
-          header's three controls are modes. The index's kebab carries the same
-          action for a dashboard you have not opened. */}
-      <SectionLabel>Transfer</SectionLabel>
-      <button type="button" className="rm-drawer-action" onClick={onExport}>
-        <Icon.ArrowDown size={13} />
-        Export as a file
-      </button>
-      <span style={{ fontSize: 10.5, color: 'var(--text-faint)', marginTop: -6 }}>
-        The layout and the SQL, so this dashboard can be rebuilt in another
-        account. No results and no credentials are in the file.
-      </span>
     </aside>
   )
 }

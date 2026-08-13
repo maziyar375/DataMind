@@ -482,10 +482,16 @@ in the file had already passed the guard.
 
 ### The UI
 
-Export sits on the index card's kebab (next to Duplicate — both answer "I want
-another one of these") and in the open dashboard's settings drawer. It is
-*fetched*, not linked: `<a download>` carries no bearer token, so the browser
-saves the body the API returns.
+Export sits in two places, one per state the dashboard can be in: on the index
+card's kebab (next to Duplicate — both answer "I want another one of these"),
+and in the open dashboard's **header**, in the group with Present / Edit grid /
+Settings. It is the one action in a group of modes, and it earns the place: it
+started inside the settings drawer, on the reasoning that "what this is, as a
+file" is a property of the dashboard — and that is exactly where nobody looked
+for it. Wanting the file is something you feel *while looking at the board*.
+
+It is *fetched*, not linked: `<a download>` carries no bearer token, so the
+browser saves the body the API returns.
 
 Import is a dialog, because of the one question the file cannot answer: which
 database is this? The browser parses the file, shows what is in it, asks the

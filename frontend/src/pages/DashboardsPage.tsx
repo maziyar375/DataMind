@@ -1104,6 +1104,25 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
                   >
                     <Icon.Gear size={13} /> Settings
                   </button>
+                  {/* The one action in a group of modes, and it earns the
+                      place: "give me this dashboard as a file" is something
+                      you want *while looking at the dashboard*, and it was a
+                      click deep inside the settings drawer — which is where
+                      nobody looked for it. The index's kebab carries the same
+                      action for a dashboard you have not opened. */}
+                  <button
+                    type="button"
+                    title="Download this dashboard as a .json file"
+                    onClick={() =>
+                      void exportDashboard(dashboard.id, dashboard.name).catch((err) =>
+                        setError(
+                          err instanceof Error ? err.message : 'That export did not work.',
+                        ),
+                      )
+                    }
+                  >
+                    <Icon.ArrowDown size={13} /> Export
+                  </button>
                 </div>
                 <PrimaryButton style={{ padding: '8px 14px' }} onClick={() => setEditorTile(null)}>
                   <Icon.Plus /> Add tile
@@ -1177,11 +1196,6 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
           dashboard={dashboard}
           onChange={(patch) => void patchDashboard(patch)}
           onClose={() => setShowSettings(false)}
-          onExport={() =>
-            void exportDashboard(dashboard.id, dashboard.name).catch((err) =>
-              setError(err instanceof Error ? err.message : 'That export did not work.'),
-            )
-          }
         />
       )}
 

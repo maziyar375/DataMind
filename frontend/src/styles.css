@@ -2060,22 +2060,3 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   border-radius: 9px;
 }
 
-/* An action inside the settings drawer, which is otherwise all inputs. Shaped
-   like the drawer's selects so it sits in the same column, not like a page
-   button dropped into a sidebar. */
-.rm-drawer-action {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  width: 100%;
-  padding: 8px 9px;
-  font-family: inherit;
-  font-size: 12.5px;
-  color: var(--text);
-  background: var(--input-bg);
-  border: 1px solid var(--border-strong);
-  border-radius: 7px;
-  cursor: pointer;
-}
-.rm-drawer-action:hover { border-color: var(--accent); color: var(--text-strong); }
