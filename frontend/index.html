@@ -6,18 +6,27 @@
     <link rel="icon" type="image/png" href="/favicon.png" />
     <title>DataMind</title>
     <!--
-      Vazirmatn is deliberately absent from this list: it is self-hosted from
-      /fonts in styles.css. A printed Persian report is the product's
-      deliverable, and a deployment behind a firewall must not render it in a
-      fallback face. Inter and JetBrains Mono degrade to system-ui and
-      ui-monospace, which is a cosmetic difference in the app, not a wrong
-      document leaving it.
+      No Google Fonts. All three families are self-hosted from /fonts and
+      declared in styles.css, because this app is routinely deployed behind a
+      firewall that cannot reach fonts.gstatic.com — and a render-blocking
+      stylesheet on an unreachable host delays first paint by the whole
+      connection timeout before it fails.
+
+      Preloaded here are only the two faces every first paint needs: the Latin
+      subsets of the UI face and the mono face. Vazirmatn is deliberately not
+      preloaded — its `unicode-range` is what keeps the Arabic subset off the
+      critical path for an English session, and preloading would spend that
+      saving on every user to help some. A Persian document that needs the file
+      resident before it is measured asks for it explicitly instead; see
+      `report-print.ts`, which loads it prior to printing.
     -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="preload" as="font" type="font/woff2" href="/fonts/inter-latin.woff2" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
-      rel="stylesheet"
+      rel="preload"
+      as="font"
+      type="font/woff2"
+      href="/fonts/jetbrains-mono-latin.woff2"
+      crossorigin
     />
   </head>
   <body>

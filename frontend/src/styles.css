@@ -1,26 +1,72 @@
 /* Global shell. Component styling lives with the components; this file only
    sets what must be global: resets, scrollbars, focus, and motion. */
 
-/* ── Vazirmatn, served from here rather than from Google ───────────────────
+/* ── the type: all three families served from here, never from Google ──────
    A BI tool pointed at a production database is routinely deployed behind a
-   firewall, and there `fonts.googleapis.com` is simply unreachable. Inter
-   falling back to system-ui makes the app look slightly different; Vazirmatn
-   falling back makes the *deliverable* wrong — a printed Persian report in a
-   face with the wrong metrics and no Persian digits. So this one is ours.
+   firewall, and there `fonts.googleapis.com` is simply unreachable. Vazirmatn
+   was self-hosted first because it carries the *deliverable*: a printed
+   Persian report in a fallback face is a wrong document leaving the building.
+   Inter and JetBrains Mono followed for a less obvious reason — when they
+   failed to load, Latin dropped to system-ui while Persian stayed on
+   Vazirmatn, so the firewalled install got exactly the mismatched pairing the
+   overrides below exist to prevent. A blocked stylesheet also stalls first
+   paint until the connection times out, which is not cosmetic either.
 
-   These are the same three files the Google Fonts CSS pointed at, kept as
-   three because their `unicode-range` is what makes the browser fetch the
-   Arabic subset only for a document that has Persian in it. Each is the
-   variable font (wght 100–900), which is why one file covers every weight
-   the app asks for and there are three faces here rather than twelve.
+   Each family is the variable font (wght 100–900), so one file per subset
+   covers every weight the app asks for. The subsets are kept separate because
+   `unicode-range` is what makes the browser fetch the Arabic file only for a
+   document that actually has Persian in it. Inter and JetBrains Mono carry no
+   Arabic, so they need latin + latin-ext only; Persian always resolves to
+   Vazirmatn.
 
-   Vazirmatn is SIL OFL 1.1 — the licence is beside the files in
-   `public/fonts/OFL.txt`. */
+   All three are SIL OFL 1.1 — the licences sit beside the files in
+   `public/fonts/OFL-*.txt`.
+
+   ── why every face carries the same three metric overrides ────────────────
+   Two scripts in one line box only agree if they are *made* to. Measured from
+   the files themselves (ink extents at 1em, tallest glyph to deepest):
+
+       Inter            +0.997 (Å)  →  −0.234        natural box 1.210em
+       JetBrains Mono   +0.994 (Å)  →  −0.203        natural box 1.320em
+       Vazirmatn Latin  +0.947 (Å)  →  −0.225        natural box 1.563em
+       Vazirmatn Arabic +0.878 (أ)  →  −0.337 (ج)    natural box 1.563em
+
+   Persian hangs a third of an em *below* the baseline — half again as deep as
+   anything Latin does — while Inter's natural line box reserves only 0.241em
+   down there. That is why Persian descenders were being clipped, and why the
+   fix had to be pushed down here rather than patched at each call site: the
+   box is a property of the font, so it belongs on the font.
+
+   So all four faces are given one shared box — ascent 1.00em, descent 0.38em,
+   no line gap — chosen as the smallest that clears every glyph above with room
+   to spare (the binding constraint is ج at −0.354em after size-adjust). Two
+   things fall out of it. `line-height: normal` now yields the same height
+   whether the text is English, Persian, or both, so a row no longer changes
+   size with its language. And at 1.38em it stays close to Inter's native
+   1.21em rather than dragging the whole dense UI out to Vazirmatn's 1.56em.
+
+   `size-adjust: 105%` on Vazirmatn is the apparent-size match, bracketed by
+   two measurements: x-height parity with Inter wants 103.3% (0.5459/0.5283),
+   alef-against-Inter's-cap-height wants 108.2% (0.7275/0.6724). 105% sits
+   between them — Persian gains the presence it needs beside Latin without
+   English embedded in a Persian sentence looking shrunken.
+
+   Because size-adjust scales the overrides too ("all metrics ... including
+   overrides provided by @font-face descriptors are scaled by the given
+   percentage" — CSS Fonts 5 §4.4), Vazirmatn's percentages are pre-divided by
+   1.05 so all four faces land on the same effective box: 95.24% × 1.05 = 100%,
+   36.19% × 1.05 = 38%. Change one number here and you must change the other. */
+
+/* ── Vazirmatn — Persian and Arabic, and the Latin fallback ────────────── */
 @font-face {
   font-family: 'Vazirmatn';
   font-style: normal;
   font-weight: 100 900;
   font-display: swap;
+  size-adjust: 105%;
+  ascent-override: 95.24%;
+  descent-override: 36.19%;
+  line-gap-override: 0%;
   src: url('/fonts/vazirmatn-arabic.woff2') format('woff2');
   unicode-range: U+0600-06FF, U+0750-077F, U+0870-088E, U+0890-0891, U+0897-08E1,
     U+08E3-08FF, U+200C-200E, U+2010-2011, U+204F, U+2E41, U+FB50-FDFF, U+FE70-FE74,
@@ -37,6 +83,10 @@
   font-style: normal;
   font-weight: 100 900;
   font-display: swap;
+  size-adjust: 105%;
+  ascent-override: 95.24%;
+  descent-override: 36.19%;
+  line-gap-override: 0%;
   src: url('/fonts/vazirmatn-latin-ext.woff2') format('woff2');
   unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
     U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
@@ -47,16 +97,79 @@
   font-style: normal;
   font-weight: 100 900;
   font-display: swap;
+  size-adjust: 105%;
+  ascent-override: 95.24%;
+  descent-override: 36.19%;
+  line-gap-override: 0%;
   src: url('/fonts/vazirmatn-latin.woff2') format('woff2');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
     U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
     U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
+/* ── Inter — the Latin UI face ─────────────────────────────────────────── */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  ascent-override: 100%;
+  descent-override: 38%;
+  line-gap-override: 0%;
+  src: url('/fonts/inter-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  ascent-override: 100%;
+  descent-override: 38%;
+  line-gap-override: 0%;
+  src: url('/fonts/inter-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ── JetBrains Mono — SQL, ids, and the figures in a table ─────────────── */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  ascent-override: 100%;
+  descent-override: 38%;
+  line-gap-override: 0%;
+  src: url('/fonts/jetbrains-mono-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  ascent-override: 100%;
+  descent-override: 38%;
+  line-gap-override: 0%;
+  src: url('/fonts/jetbrains-mono-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
 body {
   margin: 0;
   /* Inter carries no Persian/Arabic glyphs, so the browser falls back to
-     Vazirmatn for those code points while Latin text stays on Inter. */
+     Vazirmatn for those code points while Latin text stays on Inter. The two
+     are matched in apparent size and share one line box — see the overrides
+     above — so a mixed "سفارش‌های Q3" reads as one piece of typography rather
+     than two fonts meeting in the middle of a word. */
   font-family: Inter, Vazirmatn, system-ui, sans-serif;
   background: var(--bg);
   color: var(--text);
@@ -104,7 +217,24 @@ a:focus-visible,
   outline-offset: 2px;
 }
 
-code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+/* JetBrains Mono carries no Arabic at all, so before Vazirmatn joined this
+   stack every Persian character in a `.mono` context — and that class is what
+   numeric table cells, KPI values and report figures wear — landed on whatever
+   Arabic face the operating system happened to offer. Different metrics per
+   machine, in the one place in the app whose whole job is that the digits line
+   up.
+
+   `tabular-nums` is here for the same column. Latin digits are already fixed
+   width in both faces (JetBrains Mono is monospaced; Vazirmatn's are a uniform
+   1151 units), but Persian digits ۰–۹ ship *proportional* — 591 units for ۱
+   against 1349 for ۴ — and a `fa-IR` browser is what `toLocaleString()` reads
+   to decide which numerals to emit. So the audience this product is for is
+   precisely the audience whose numbers did not align. Vazirmatn's `tnum`
+   feature maps all ten to a single 1349 and is a no-op for the Latin faces. */
+code, pre, .mono {
+  font-family: 'JetBrains Mono', Vazirmatn, ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
 
 /* Small icon buttons (delete/confirm/cancel in the conversation list). The
    hover tint comes from a per-button --rm-hover-bg custom property. */
@@ -424,7 +554,7 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 }
 .rm-composer.is-active .rm-composer-hint { opacity: 1; transform: translateY(0); }
 .rm-kbd {
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-family: 'JetBrains Mono', Vazirmatn, ui-monospace, monospace;
   font-size: 10px;
   line-height: 1;
   padding: 2px 5px;

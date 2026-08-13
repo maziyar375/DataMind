@@ -270,17 +270,68 @@ for (const [cls, where] of [
   )
 }
 
-// The font this whole phase exists for has to be served by us, not fetched.
-check(
-  'Vazirmatn is self-hosted rather than requested from a CDN',
-  /@font-face[^}]*vazirmatn-arabic\.woff2/.test(css),
-  true,
-)
+// ── the type ─────────────────────────────────────────────────────────────
+// Every face this app prints in has to be served by us, not fetched. A report
+// is the deliverable, and a firewalled install that cannot reach a CDN must
+// still put the right glyphs on the page.
+for (const file of [
+  'vazirmatn-arabic', 'vazirmatn-latin', 'vazirmatn-latin-ext',
+  'inter-latin', 'inter-latin-ext',
+  'jetbrains-mono-latin', 'jetbrains-mono-latin-ext',
+] as const) {
+  check(
+    `${file} is self-hosted rather than requested from a CDN`,
+    new RegExp(`@font-face[^}]*${file}\\.woff2`).test(css),
+    true,
+  )
+}
 const html = readFileSync(fileURLToPath(new URL('../../index.html', import.meta.url)), 'utf8')
 check(
-  'and index.html no longer asks Google Fonts for it',
-  /fonts\.googleapis\.com\/css2[^"]*Vazirmatn/.test(html),
+  'and index.html asks Google Fonts for nothing at all',
+  // Comments stripped first: the note in that file explains why the CDN is
+  // gone, and naming a host is not requesting from it.
+  /fonts\.(googleapis|gstatic)\.com/.test(html.replace(/<!--[\s\S]*?-->/g, '')),
   false,
+)
+
+// One line box for both scripts, or a row changes height with its language and
+// Persian descenders clip. Every face has to land on the same effective
+// ascent/descent — and Vazirmatn gets there via different numbers, because
+// `size-adjust` scales the overrides too (CSS Fonts 5 §4.4). That is the drift
+// hazard: raise size-adjust, forget to re-divide, and the box silently splits
+// in two. These read the declared values back and multiply them out.
+const faces = [...css.matchAll(/@font-face\s*\{([^}]*)\}/g)].map((m) => m[1])
+check('every declared face is accounted for', faces.length, 7)
+const box = (face: string): [number, number] => {
+  const num = (prop: string, fallback: number): number => {
+    const m = face.match(new RegExp(`${prop}:\\s*([\\d.]+)%`))
+    return m ? Number(m[1]) : fallback
+  }
+  const scale = num('size-adjust', 100) / 100
+  // Rounded because the declared percentages are themselves rounded to 2dp.
+  return [
+    Math.round(num('ascent-override', -1) * scale * 100) / 100,
+    Math.round(num('descent-override', -1) * scale * 100) / 100,
+  ]
+}
+check(
+  'and all seven resolve to the one shared box',
+  [...new Set(faces.map((f) => JSON.stringify(box(f))))],
+  [JSON.stringify([100, 38])],
+)
+// The box has to clear the deepest glyph in either script. Persian ج reaches
+// −0.3374em and is the binding constraint at Vazirmatn's 105%; Inter's Å is
+// the tallest thing above the baseline at +0.9971em. Both measured from the
+// woff2 files themselves.
+check('the box clears Persian ج below the baseline', 0.3374 * 1.05 < 0.38, true)
+check('and Inter Å above it', 0.9971 < 1.0, true)
+
+// Persian digits ship proportional and only become tabular under `tnum`, so
+// the class that numeric cells and KPI values wear has to ask for it.
+check(
+  '.mono asks for tabular figures and can render Persian ones',
+  /code, pre, \.mono \{[^}]*Vazirmatn[^}]*font-variant-numeric:\s*tabular-nums/s.test(css),
+  true,
 )
 
 if (failures > 0) {

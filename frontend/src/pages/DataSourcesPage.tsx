@@ -975,7 +975,7 @@ function GraphView({ schema }: { schema: SchemaSnapshot }) {
                 y={node.y + 46 + i * 20}
                 fill="var(--text-dim)"
                 fontSize={11}
-                fontFamily="'JetBrains Mono', monospace"
+                fontFamily="'JetBrains Mono', Vazirmatn, monospace"
               >
                 {column.is_primary_key ? '◆ ' : column.is_foreign_key ? '→ ' : '  '}
                 {column.name}
