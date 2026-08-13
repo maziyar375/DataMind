@@ -73,8 +73,8 @@ make db-repair # recreate the empty PGDATA runtime dirs the studio drive strips
 
 Frontend, from `frontend/`: `npm run dev`, `npm run build` (`tsc -b && vite
 build`), `npm run typecheck` (`tsc --noEmit`), `npm run lint`, `npm test` (all
-seven DOM-free logic suites: schedule, format, dashboard document, palette,
-report document, report readiness, print).
+eight DOM-free logic suites: schedule, format, dashboard document, palette,
+chat format, report document, report readiness, print).
 
 The **eval harness is not in `make test`** — it calls a real provider and costs
 money. `python -m app.eval.runner --suite sales_v1` from `backend/`, or
@@ -178,7 +178,11 @@ frontend/src/
   components/               ui.tsx (primitives, icons, Logo, ResultTable),
                             VegaChart.tsx (the renderer), chart-picker.tsx,
                             palette.ts (+ .test.ts — `npm run test:palette`),
-                            chat.tsx, settings.tsx, semantic.tsx (the layer
+                            chat.tsx, chat-format.ts (the three markdown
+                            constructs a model writes anyway — bold, `code`,
+                            bullets — read at display time into spans, never
+                            into markup; `npm run test:chat`),
+                            settings.tsx, semantic.tsx (the layer
                             editor), dashboard.tsx (grid + tile shell + the
                             one-tick refresh scheduler), dashboard-schedule.ts
                             (the due-tile rule, DOM-free, + its .test.ts —

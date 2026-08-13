@@ -11,8 +11,9 @@
  * the transcript read as a stack of forms; only the things that genuinely are
  * objects — a result table, the SQL — keep a border of their own.
  */
-import { memo, useState } from 'react'
+import { Fragment, memo, useMemo, useState } from 'react'
 import { runs } from '../api/client'
+import { formatAnswer } from './chat-format'
 import type {
   Artifact, ChartOption, ClarificationSpec, GeneratedQuery, KpiSpec, RunDetail,
   RunStep, TableArtifactSpec,
@@ -689,6 +690,57 @@ function ChatChart({ runId, spec }: { runId: string; spec: Record<string, unknow
 }
 
 
+// ── the answer's prose ────────────────────────────────────────────────────
+/**
+ * The answer, with the markdown a model writes anyway drawn rather than
+ * printed. `chat-format.ts` decides what the text means; this decides only
+ * what each piece looks like.
+ *
+ * The container above keeps `pre-wrap`, so the newlines rejoined here and
+ * every run of spaces land exactly where they used to — this changes how
+ * three constructs are painted and nothing about the layout. Spans become
+ * elements with text children; **no string here is ever interpreted as
+ * markup**, which is what makes rendering a model's output safe by
+ * construction rather than by sanitising.
+ */
+function AnswerText({ text }: { text: string }) {
+  // An answer streams, so this runs on every flush of new tokens over the
+  // whole text so far — cheap, but not free, and `memo` on the turn means the
+  // other turns are not paying it too.
+  const lines = useMemo(() => formatAnswer(text), [text])
+  return (
+    <>
+      {lines.map((spans, line) => (
+        <Fragment key={line}>
+          {line > 0 && '\n'}
+          {spans.map((span, i) => {
+            if (span.kind === 'strong') {
+              return <strong key={i} style={{ fontWeight: 650 }}>{span.text}</strong>
+            }
+            if (span.kind === 'code') {
+              return (
+                <code
+                  key={i}
+                  style={{
+                    fontSize: '0.92em',
+                    padding: '1px 5px',
+                    borderRadius: 5,
+                    background: 'var(--code-bg)',
+                    color: 'var(--code-text)',
+                  }}
+                >
+                  {span.text}
+                </code>
+              )
+            }
+            return <Fragment key={i}>{span.text}</Fragment>
+          })}
+        </Fragment>
+      ))}
+    </>
+  )
+}
+
 // ── assistant turn ────────────────────────────────────────────────────────
 /**
  * One turn, live or persisted.
@@ -746,7 +798,7 @@ export const AssistantTurn = memo(function AssistantTurn({
           whiteSpace: 'pre-wrap',
         }}
       >
-        {text}
+        <AnswerText text={text} />
         {streaming && (
           <span
             className="rm-pulse"
