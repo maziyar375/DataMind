@@ -11,7 +11,7 @@
  * the transcript read as a stack of forms; only the things that genuinely are
  * objects — a result table, the SQL — keep a border of their own.
  */
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { runs } from '../api/client'
 import type {
   Artifact, ChartOption, ClarificationSpec, GeneratedQuery, KpiSpec, RunDetail,
@@ -80,7 +80,7 @@ function Turn({
 }
 
 // ── user turn ─────────────────────────────────────────────────────────────
-export function UserBubble({ text }: { text: string }) {
+export const UserBubble = memo(function UserBubble({ text }: { text: string }) {
   return (
     <div
       className="rm-enter"
@@ -102,9 +102,14 @@ export function UserBubble({ text }: { text: string }) {
       {text}
     </div>
   )
-}
+})
 
 // ── step chips ────────────────────────────────────────────────────────────
+/** A step's own time, in the unit a reader can hold: `840ms`, then `4.2s`. */
+function stepTime(ms: number): string {
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`
+}
+
 export function StepTrail({ steps }: { steps: RunStep[] }) {
   if (steps.length === 0) return null
   return (
@@ -134,6 +139,7 @@ export function StepTrail({ steps }: { steps: RunStep[] }) {
           <span
             key={step.seq}
             title={step.detail ?? meta.detail}
+            className="rm-chip-in"
             style={{
               display: 'inline-flex',
               alignItems: 'center',
@@ -149,8 +155,18 @@ export function StepTrail({ steps }: { steps: RunStep[] }) {
           >
             {running ? <Spinner size={11} /> : <Dot color={color} />}
             {meta.label}
-            {step.duration_ms != null && step.status === 'DONE' && (
-              <span style={{ color: 'var(--text-faint)' }}>{step.duration_ms}ms</span>
+            {/*
+              Every finished step shows its own time, not only the ones that
+              ended DONE. A step that ran for forty seconds and then reported
+              SKIPPED — `clarify` failing open on a provider timeout is the
+              real case — spent that time whatever it concluded, and hiding it
+              made the slowest node in the run look like the one that never
+              ran.
+            */}
+            {step.duration_ms != null && !running && (
+              <span style={{ color: 'var(--text-faint)' }}>
+                {stepTime(step.duration_ms)}
+              </span>
             )}
           </span>
         )
@@ -160,23 +176,39 @@ export function StepTrail({ steps }: { steps: RunStep[] }) {
 }
 
 /**
- * The step trail stays open on a finished run.
+ * The step trail and the line above it — from the first step to the finished
+ * answer, as one thing.
  *
  * Showing route → retrieve → generate → validate → execute → present, each
  * with its own timing, is how a reader can see that an answer went through a
  * validated pipeline rather than a single model call. That evidence is the
  * product's argument for itself, so it is not hidden behind a disclosure;
  * the toggle only exists for anyone who wants the transcript quieter.
+ *
+ * One component for both states, deliberately. The live trail and the finished
+ * one used to be two — a thinking card while the run worked, a summary once it
+ * had persisted — and the swap happened at the exact moment the first token
+ * arrived: the chips for route, retrieve, clarify and the rest vanished as the
+ * answer started writing itself, which is precisely when the reader is
+ * watching them. Now only the header line changes, and the chips below it are
+ * the same element throughout — fed by live events, then by the persisted run.
  */
-function StepSummary({ run }: { run: RunDetail }) {
+function StepPanel({
+  steps, streaming, totalMs,
+}: {
+  steps: RunStep[]
+  /** The run is still in flight, so the header names what it is doing now. */
+  streaming?: boolean
+  /** The run's own measured latency, once it has one. */
+  totalMs?: number | null
+}) {
   const [open, setOpen] = useState(true)
-  if (run.steps.length === 0) return null
+  if (steps.length === 0) return null
 
-  const total =
-    run.total_latency_ms ??
-    run.steps.reduce((sum, s) => sum + (s.duration_ms ?? 0), 0)
+  const failed = steps.some((s) => s.status === 'FAILED')
+  const active = steps.find((s) => s.status === 'RUNNING')
+  const total = totalMs ?? steps.reduce((sum, s) => sum + (s.duration_ms ?? 0), 0)
   const seconds = (total / 1000).toFixed(total < 1000 ? 2 : 1)
-  const failed = run.steps.some((s) => s.status === 'FAILED')
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -190,43 +222,31 @@ function StepSummary({ run }: { run: RunDetail }) {
           alignSelf: 'flex-start',
           fontSize: 11.5,
           fontWeight: 600,
-          color: failed ? 'var(--red)' : 'var(--green)',
+          color: streaming
+            ? 'var(--text-dim)'
+            : failed
+              ? 'var(--red)'
+              : 'var(--green)',
           background: 'transparent',
           border: 'none',
           padding: 0,
           cursor: 'pointer',
+          textAlign: 'left',
         }}
       >
         <Icon.Chevron open={open} size={12} stroke="currentColor" />
-        {failed ? (
-          <>Stopped after {run.steps.length} steps · {seconds}s</>
+        {streaming ? (
+          <span className="rm-pulse">
+            {active ? (NODE_META[active.name]?.detail ?? 'Working…') : 'Starting…'}
+          </span>
+        ) : failed ? (
+          <>Stopped after {steps.length} steps · {seconds}s</>
         ) : (
-          <>All {run.steps.length} steps passed · {seconds}s</>
+          <>All {steps.length} steps passed · {seconds}s</>
         )}
       </button>
-      {open && <StepTrail steps={run.steps} />}
+      {open && <StepTrail steps={steps} />}
     </div>
-  )
-}
-
-export function ThinkingCard({ steps, detail }: { steps: RunStep[]; detail?: string }) {
-  const active = steps.find((s) => s.status === 'RUNNING')
-  const label = active
-    ? (NODE_META[active.name]?.detail ?? 'Working…')
-    : (detail ?? 'Starting…')
-
-  return (
-    <Turn avatar={<AssistantAvatar busy />}>
-      <div
-        style={{
-          fontSize: 13.5,
-          color: 'var(--text-dim)',
-        }}
-      >
-        <span className="rm-pulse">{label}</span>
-      </div>
-      <StepTrail steps={steps} />
-    </Turn>
   )
 }
 
@@ -241,11 +261,13 @@ export function SqlPanel({ queries }: { queries: GeneratedQuery[] }) {
 
   return (
     <div
+      className="rm-artifact"
       style={{
         border: '1px solid var(--border)',
         borderRadius: 10,
         overflow: 'hidden',
         background: 'var(--code-bg)',
+        animationDelay: '.09s',
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -402,7 +424,10 @@ export function RunMetadata({ run }: { run: RunDetail }) {
       <TablesChip key="tables" names={tables.map((t) => t.split('.').pop() ?? t)} />,
     )
   }
-  if (run.db_latency_ms != null) {
+  // Only where a query ran. A schema question is answered from the snapshot
+  // and never reaches the database, so this reads 0 — and a lone "0ms" chip
+  // under an answer claims a database round trip that did not happen.
+  if (run.db_latency_ms != null && run.queries.length > 0) {
     chips.push(<Chip key="ms">{run.db_latency_ms}ms</Chip>)
   }
   const scanned = findScanned(run.artifacts)
@@ -420,6 +445,7 @@ export function RunMetadata({ run }: { run: RunDetail }) {
   if (chips.length === 0) return null
   return (
     <div
+      className="rm-artifact"
       style={{
         display: 'flex',
         gap: 6,
@@ -427,6 +453,7 @@ export function RunMetadata({ run }: { run: RunDetail }) {
         alignItems: 'center',
         minWidth: 0,
         maxWidth: '100%',
+        animationDelay: '.12s',
       }}
     >
       {chips}
@@ -441,7 +468,7 @@ function findScanned(artifacts: Artifact[]): number | null {
 }
 
 // ── error card ────────────────────────────────────────────────────────────
-export function RunErrorCard({ run }: { run: RunDetail }) {
+export const RunErrorCard = memo(function RunErrorCard({ run }: { run: RunDetail }) {
   return (
     <Turn avatar={<AssistantAvatar failed />}>
       <div
@@ -475,7 +502,7 @@ export function RunErrorCard({ run }: { run: RunDetail }) {
       {run.queries.length > 0 && <SqlPanel queries={run.queries} />}
     </Turn>
   )
-}
+})
 
 /**
  * The readings offered when a run stopped to ask rather than guess.
@@ -494,7 +521,10 @@ export function ClarificationOptions({
 }) {
   if (!spec.options?.length) return null
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 2 }}>
+    <div
+      className="rm-artifact"
+      style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 2 }}
+    >
       <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
         Pick one, or just say it in your own words.
       </span>
@@ -613,7 +643,10 @@ function ChatChart({ runId, spec }: { runId: string; spec: Record<string, unknow
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div
+      className="rm-artifact"
+      style={{ display: 'flex', flexDirection: 'column', gap: 8 }}
+    >
       <VegaChart spec={redrawn ?? spec} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <button
@@ -657,12 +690,28 @@ function ChatChart({ runId, spec }: { runId: string; spec: Record<string, unknow
 
 
 // ── assistant turn ────────────────────────────────────────────────────────
-export function AssistantTurn({
-  text, run, streaming, onPickOption, optionsDisabled,
+/**
+ * One turn, live or persisted.
+ *
+ * `memo` is not an optimisation detail here, it is what keeps a long
+ * transcript still while an answer streams: the page re-renders on every
+ * flush of new tokens, and without this every earlier turn — its table, its
+ * chart, its SQL — re-rendered with it. That needs `onPickOption` to keep its
+ * identity between renders, which is why `ChatPage` holds it in a `useCallback`
+ * rather than writing an arrow in the JSX.
+ */
+export const AssistantTurn = memo(function AssistantTurn({
+  text, run, streaming, steps, onPickOption, optionsDisabled,
 }: {
   text: string
   run: RunDetail | null
   streaming?: boolean
+  /**
+   * The trail for a run still in flight, assembled from live events. A
+   * finished turn has no use for it and reads `run.steps` instead — same
+   * chips, from the persisted record.
+   */
+  steps?: RunStep[]
   onPickOption?: (text: string) => void
   optionsDisabled?: boolean
 }) {
@@ -674,11 +723,20 @@ export function AssistantTurn({
   const kpiSpec = kpi?.spec as unknown as KpiSpec | undefined
   const clarification = run?.artifacts.find((a) => a.kind === 'CLARIFICATION')
   const clarifySpec = clarification?.spec as unknown as ClarificationSpec | undefined
+  const trail = steps ?? run?.steps ?? []
 
   return (
     <Turn avatar={<AssistantAvatar busy={streaming} />}>
-      {run && !streaming && <StepSummary run={run} />}
+      <StepPanel
+        steps={trail}
+        streaming={streaming}
+        totalMs={run?.total_latency_ms}
+      />
 
+      {/* Nothing written yet: the panel's header is already saying which node
+          is working, and an empty paragraph with a caret in it under that just
+          moves the layout twice. */}
+      {(text.length > 0 || !streaming) && (
       <div
         dir={dirOf(text)}
         style={{
@@ -704,6 +762,7 @@ export function AssistantTurn({
           />
         )}
       </div>
+      )}
 
       {clarifySpec && onPickOption && (
         <ClarificationOptions
@@ -729,6 +788,7 @@ export function AssistantTurn({
           the node reaches for one only where it declined the other. */}
       {kpiSpec && (
         <div
+          className="rm-artifact"
           style={{
             marginTop: 6,
             padding: '18px 10px',
@@ -740,7 +800,15 @@ export function AssistantTurn({
           <Kpi spec={kpiSpec} />
         </div>
       )}
-      {spec && <ResultTable spec={spec} />}
+      {/* The artifacts under an answer arrive together — the run persisted them
+          in one go — so they are staggered by a few frames each rather than
+          landing as one block. Small on purpose: this is the difference between
+          a result appearing and a result being dumped, not an effect. */}
+      {spec && (
+        <div className="rm-artifact" style={{ animationDelay: '.06s' }}>
+          <ResultTable spec={spec} />
+        </div>
+      )}
       {run && run.queries.length > 0 && <SqlPanel queries={run.queries} />}
       {run && <RunMetadata run={run} />}
 
@@ -755,4 +823,4 @@ export function AssistantTurn({
       )}
     </Turn>
   )
-}
+})

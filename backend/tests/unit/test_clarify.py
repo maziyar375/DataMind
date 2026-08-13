@@ -160,12 +160,18 @@ async def test_the_model_sees_the_schema_and_the_history() -> None:
 @pytest.mark.asyncio
 async def test_a_provider_error_proceeds_rather_than_stalling() -> None:
     """An unanswered question is worse than a guessed one — and the guess is
-    still shown with its SQL for the user to check."""
+    still shown with its SQL for the user to check.
+
+    It proceeds as a step that *ran*: the call was made and the time was spent
+    whatever came back. `SKIPPED` is reserved for the switch being off, so the
+    trail can say which of the two happened — see the node's docstring.
+    """
     state = _state()
 
     result = await clarify(state, _deps(FakeGateway(error=LLMError("down")))[0])
 
-    assert result.status == "SKIPPED"
+    assert result.status == "OK"
+    assert result.detail is not None and "unavailable" in result.detail
     assert state.clarification is None
 
 

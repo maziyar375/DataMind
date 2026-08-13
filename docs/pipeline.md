@@ -457,10 +457,15 @@ Before `generate` so an unanswerable question costs no SQL.
 1. `deps.clarify_enabled` false → `SKIPPED`. It is false both when the
    connection switch is off **and** when this run *is* the answer to a question
    we already asked — enforced in `run_service` by checking the previous run's
-   status, not by trusting the model to remember.
+   status, not by trusting the model to remember. **This is the only `SKIPPED`
+   the node writes**, because it is the only case where the check did not run.
+   A check that ran is a step that ran, whatever it concluded — see (2).
 2. **Fails open in every direction**: `LLMError`, `ValueError`, or an empty
    question all mean *proceed*. A guessed answer shown with its SQL beats no
-   answer.
+   answer. The failure still reports `OK` with the time it spent in the detail:
+   a provider that takes forty seconds to time out is the slowest thing in the
+   run, and a trail that greyed it out as "skipped" hid that from the one
+   person who could act on it.
 3. `answerable=True` → proceed.
 4. Otherwise: options cleaned (deduped, trimmed to 120 chars, capped at 4),
    **`state.answer` = the question itself** so the thread reads as a

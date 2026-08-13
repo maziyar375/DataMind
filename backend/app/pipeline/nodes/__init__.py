@@ -488,6 +488,15 @@ async def clarify(state: RunState, deps: NodeDeps) -> NodeResult:
     empty question all mean "proceed" — an unanswered question is a worse
     outcome than a guessed one, and the guessed one is still shown with its
     SQL for the user to check.
+
+    **SKIPPED means the check did not run**, and nothing else. That is one
+    case: the switch is off for this run — the connection has it disabled, or
+    this run is the *answer* to a question already asked, which may not ask
+    again. Every other outcome is a check that happened and cost what it cost,
+    including the one that failed open on a provider error, and each reports
+    itself as a step that ran. The distinction is not cosmetic: a step trail
+    that greys out a node which just spent forty seconds on a timing-out
+    provider hides the slowest thing in the run behind the word "skipped".
     """
     if not deps.clarify_enabled:
         return NodeResult(status="SKIPPED", detail="Clarification off for this run")
@@ -515,7 +524,10 @@ async def clarify(state: RunState, deps: NodeDeps) -> NodeResult:
         )
     except (LLMError, ValueError) as err:
         log.warning("clarify_failed", run_id=str(state.run_id), error=str(err))
-        return NodeResult(status="SKIPPED", detail="Clarification check unavailable")
+        elapsed = int((time.perf_counter() - started) * 1000)
+        return NodeResult(
+            detail=f"Clarification check unavailable, after {elapsed}ms — proceeded"
+        )
 
     elapsed = int((time.perf_counter() - started) * 1000)
     question = " ".join(proposal.question.split())

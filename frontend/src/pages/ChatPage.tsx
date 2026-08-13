@@ -7,12 +7,21 @@ import type {
   Connection, ConversationSummary, LlmConfig, MessageWithRun, RunStep,
 } from '../api/types'
 import {
-  AssistantTurn, RunErrorCard, ThinkingCard, UserBubble,
+  AssistantTurn, RunErrorCard, UserBubble,
 } from '../components/chat'
 import {
   DisclosureBadge, ErrorNote, GlyphBadge, Icon, PrimaryButton, SearchField, Spinner,
   dirOf, engineHue,
 } from '../components/ui'
+
+/**
+ * How long streamed tokens are collected before they are painted.
+ *
+ * Short enough that the text still reads as typing, long enough that a
+ * provider sending forty tokens a second costs the page a handful of renders
+ * a second rather than forty.
+ */
+const TEXT_FLUSH_MS = 40
 
 export default function ChatPage() {
   const [conversationList, setConversationList] = useState<ConversationSummary[]>([])
@@ -42,12 +51,52 @@ export default function ChatPage() {
   const [liveText, setLiveText] = useState('')
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
   const stopStreamRef = useRef<(() => void) | null>(null)
+  // Which attachment owns the live view. A stream that finishes after another
+  // has taken over must not clear the newer one's steps out from under it.
+  const streamToken = useRef(0)
   const scrollRef = useRef<HTMLDivElement>(null)
   const followRef = useRef(true)
   // Id of a conversation `send` just created and is already populating, so the
   // load effect below doesn't re-fetch it out from under the optimistic turn.
   const justCreatedRef = useRef<string | null>(null)
   const [showJump, setShowJump] = useState(false)
+
+  // Tokens arrive faster than a screen can usefully show them, and each one
+  // used to be its own `setState` — so the whole transcript re-rendered and
+  // re-scrolled forty times a second while the reader was trying to read it.
+  // They are collected here and painted on a fixed cadence instead: the same
+  // text, a fraction of the work.
+  const pendingText = useRef('')
+  const flushTimer = useRef<number | null>(null)
+
+  const flushText = useCallback(() => {
+    flushTimer.current = null
+    const chunk = pendingText.current
+    if (!chunk) return
+    pendingText.current = ''
+    setLiveText((prev) => prev + chunk)
+  }, [])
+
+  const appendText = useCallback(
+    (delta: string) => {
+      if (!delta) return
+      pendingText.current += delta
+      if (flushTimer.current === null) {
+        flushTimer.current = window.setTimeout(flushText, TEXT_FLUSH_MS)
+      }
+    },
+    [flushText],
+  )
+
+  /** Drop what has not been painted yet: a `TEXT_RESET`, or the end of a run. */
+  const clearText = useCallback(() => {
+    pendingText.current = ''
+    if (flushTimer.current !== null) {
+      window.clearTimeout(flushTimer.current)
+      flushTimer.current = null
+    }
+    setLiveText('')
+  }, [])
 
   // ── bootstrap ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -96,6 +145,7 @@ export default function ChatPage() {
     return () => {
       cancelled = true
       stopStreamRef.current?.()
+      if (flushTimer.current !== null) window.clearTimeout(flushTimer.current)
     }
   }, [])
 
@@ -148,16 +198,26 @@ export default function ChatPage() {
   }, [])
 
   useEffect(() => {
-    if (!activeId) {
-      setMessages([])
-      dropSuggestions()
-      return
-    }
     // A conversation `send` just created already holds the optimistic turn and
     // owns its stream; re-loading it here would race that POST and could blank
     // the question the reader just asked.
     if (justCreatedRef.current === activeId) {
       justCreatedRef.current = null
+      return
+    }
+    // Anything still streaming belongs to the thread being left. Left running,
+    // its steps and its tokens kept arriving into whichever conversation was
+    // opened next — an answer to a question that thread never asked.
+    stopStreamRef.current?.()
+    stopStreamRef.current = null
+    streamToken.current += 1
+    setActiveRunId(null)
+    setLiveSteps([])
+    clearText()
+
+    if (!activeId) {
+      setMessages([])
+      dropSuggestions()
       return
     }
     dropSuggestions()
@@ -185,20 +245,31 @@ export default function ChatPage() {
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
   }
 
+  // A turn arriving is worth a glide. A token is not: asking for `smooth`
+  // again on every flush restarts an animation that never gets to finish, so
+  // the transcript crawls along behind the text instead of staying pinned to
+  // it — which is most of what made streaming feel unsteady.
   useEffect(() => {
     if (!followRef.current) return
-    scrollRef.current?.scrollTo({
-      top: scrollRef.current.scrollHeight,
-      behavior: 'smooth',
-    })
-  }, [messages, liveText, liveSteps])
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+  }, [messages])
+
+  useEffect(() => {
+    if (!followRef.current) return
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+  }, [liveText, liveSteps])
 
   // ── streaming ───────────────────────────────────────────────────────────
   function attachStream(runId: string, conversationId: string) {
     stopStreamRef.current?.()
+    const token = (streamToken.current += 1)
     setActiveRunId(runId)
     setLiveSteps([])
-    setLiveText('')
+    clearText()
 
     stopStreamRef.current = streamRun(runId, {
       onEvent: (event) => {
@@ -230,35 +301,66 @@ export default function ChatPage() {
             )
             break
           case 'TEXT_DELTA':
-            setLiveText((prev) => prev + (event.data.text ?? ''))
+            appendText(event.data.text ?? '')
             break
           // Narration failed part-way through: the deltas already rendered are
           // half a sentence, and the fallback that follows replaces them
           // rather than continuing them. Same path on replay, since polling
           // and SSE both land here.
           case 'TEXT_RESET':
-            setLiveText('')
+            clearText()
             break
           default:
             break
         }
       },
       onDone: async () => {
+        // Fetch first, *then* swap — in one batch, so the persisted turn
+        // replaces the live one within a single paint. Clearing first and
+        // loading afterwards left the answer, its steps and its table off the
+        // page for the length of a round trip, which read as the whole reply
+        // vanishing and then coming back.
+        let loaded: MessageWithRun[] | null = null
+        try {
+          loaded = await conversations.messages(conversationId)
+        } catch {
+          /* handled below: the live turn is what the reader still has */
+        }
+
+        // Another run took the view over while this one was finishing (a
+        // clarification answered fast, a thread switched). It owns the live
+        // state now; ours is stale.
+        if (streamToken.current !== token) return
+
         setActiveRunId(null)
         setLiveSteps([])
-        setLiveText('')
-        let asked = false
-        try {
-          const loaded = await loadMessages(conversationId)
-          asked = loaded.at(-1)?.run?.status === 'NEEDS_CLARIFICATION'
-          setConversationList(await conversations.list())
-        } catch {
-          /* the run finished; a list refresh failure is not worth an error */
+        clearText()
+        if (loaded === null) {
+          setError('Could not refresh this conversation. Try reloading.')
+          return
         }
+        setMessages(loaded)
+
+        // The reply may itself still be in flight — a reconnect landing on a
+        // run that has more to say — in which case the newest run keeps the
+        // live view rather than the thread looking frozen.
+        const lastRun = loaded.at(-1)?.run
+        if (lastRun && isRunInFlight(lastRun.status)) {
+          attachStream(lastRun.id, conversationId)
+          return
+        }
+
+        // Titles and ordering move when a turn lands, but nothing on screen
+        // waits for them.
+        conversations.list().then(setConversationList).catch(() => {
+          /* a list refresh failure is not worth an error over an answer */
+        })
         // After the answer lands, offer where the reader might go next — but
         // not when the turn ended by asking a question of its own. The row is
         // hidden in that state anyway, and computing it is a model call.
-        if (!asked) void refreshSuggestions(conversationId)
+        if (lastRun?.status !== 'NEEDS_CLARIFICATION') {
+          void refreshSuggestions(conversationId)
+        }
       },
       onError: () => {
         /* the client falls back to polling internally */
@@ -319,15 +421,28 @@ export default function ChatPage() {
     }
   }
 
+  // `send` is redefined every render, and a turn given a fresh callback is a
+  // turn that re-renders on every streamed token however well it is memoised.
+  // So the transcript gets this one, which never changes identity, and it
+  // reads the current `send` at the moment it is actually clicked.
+  const sendRef = useRef(send)
+  useEffect(() => {
+    sendRef.current = send
+  })
+  const pickOption = useCallback((text: string) => {
+    void sendRef.current(text)
+  }, [])
+
   // A new chat starts empty and unbound: no database, no model, nothing
   // persisted. The conversation row is created lazily on the first send (see
   // `send`), stored with exactly the database/model pair chosen there — the
   // pair the thread then stays locked to.
   function newChat() {
     stopStreamRef.current?.()
+    streamToken.current += 1
     setActiveRunId(null)
     setLiveSteps([])
-    setLiveText('')
+    clearText()
     setActiveId(null)
     setMessages([])
     dropSuggestions()
@@ -343,7 +458,10 @@ export default function ChatPage() {
     setConversationList(remaining)
     if (activeId === id) {
       stopStreamRef.current?.()
+      streamToken.current += 1
       setActiveRunId(null)
+      setLiveSteps([])
+      clearText()
       setMessages([])
       setActiveId(remaining[0]?.id ?? null)
     }
@@ -507,18 +625,25 @@ export default function ChatPage() {
                     run={message.run}
                     // Answering a clarifying question is just the next
                     // message, so the chips send exactly what typing would.
-                    onPickOption={(text) => void send(text)}
+                    onPickOption={pickOption}
                     optionsDisabled={Boolean(activeRunId)}
                   />
                 )
               })}
 
-              {activeRunId &&
-                (liveText ? (
-                  <AssistantTurn text={liveText} run={null} streaming />
-                ) : (
-                  <ThinkingCard steps={liveSteps} />
-                ))}
+              {/* One turn for the whole run, from the first step chip to the
+                  last token. It used to be two components with a swap the
+                  moment text started arriving, and the swap took the step
+                  trail — route, retrieve, clarify, generate — off the screen
+                  at exactly the moment the answer began writing itself. */}
+              {activeRunId && (
+                <AssistantTurn
+                  text={liveText}
+                  run={null}
+                  steps={liveSteps}
+                  streaming
+                />
+              )}
 
               {/* Not while the thread is waiting on an answer: the turn
                   already offers chips, and a second row of unrelated ones
@@ -745,7 +870,13 @@ function SuggestedFollowups({
 }
 
 /** Three chip-shaped placeholders, sized so the row does not jump when the
- *  real questions replace them. */
+ *  real questions replace them.
+ *
+ *  They are painted in `--panel-alt` over `--border`, which are tokens that
+ *  exist. The first version asked for `--surface-2` and `--border-subtle`,
+ *  which do not: three fully transparent boxes under a heading that says
+ *  "Suggested follow-ups", for the twelve to eighteen seconds that call takes.
+ *  The row read as empty at exactly the moment it was there to say "not yet". */
 function SuggestionSkeleton() {
   return (
     <>
@@ -757,8 +888,8 @@ function SuggestionSkeleton() {
             width,
             height: 32,
             borderRadius: 16,
-            border: '1px solid var(--border-subtle)',
-            background: 'var(--surface-2)',
+            border: '1px solid var(--border)',
+            background: 'var(--panel-alt)',
           }}
         />
       ))}

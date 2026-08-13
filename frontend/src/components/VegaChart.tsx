@@ -102,6 +102,11 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const [failed, setFailed] = useState(false)
+  // Vega draws asynchronously, so the box exists a beat before the plot does.
+  // Fading the first drawing in covers that beat; once it is up it stays up,
+  // and a redraw (theme, picker, print) replaces the SVG in place rather than
+  // blinking the frame.
+  const [drawn, setDrawn] = useState(false)
   const theme = useThemeName()
 
   // Layout depends only on the spec's shape, so compute it once and share it
@@ -449,6 +454,7 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
           return
         }
         result = r
+        setDrawn(true)
         if (target.kind === 'screen') watch(r)
         else makeScalable(el)
       } catch {
@@ -514,6 +520,8 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
           width: '100%',
           minHeight: 40,
           height: fill && !layout.growsDown ? '100%' : undefined,
+          opacity: drawn ? 1 : 0,
+          transition: 'opacity .22s ease',
         }}
       />
     </div>
