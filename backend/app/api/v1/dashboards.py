@@ -22,10 +22,13 @@ from app.api.schemas import (
     DashboardCreate,
     DashboardDataRead,
     DashboardDataRequest,
+    DashboardImportRead,
+    DashboardImportRequest,
     DashboardRead,
     DashboardSummaryRead,
     DashboardTileRead,
     DashboardUpdate,
+    ImportSkipRead,
     LayoutUpdate,
     TileCreate,
     TileResultRead,
@@ -33,6 +36,7 @@ from app.api.schemas import (
 )
 from app.infra.db.models import Dashboard, DashboardTile
 from app.services.dashboard_service import DashboardService, effective_refresh_interval
+from app.services.dashboard_transfer import DashboardDocument
 from app.services.query_service import TileResult
 
 router = APIRouter(prefix="/dashboards", tags=["dashboards"])
@@ -112,6 +116,39 @@ async def create_dashboard(
     return await _dashboard_read(service, dashboard)
 
 
+@router.post(
+    "/import", response_model=DashboardImportRead, status_code=status.HTTP_201_CREATED
+)
+async def import_dashboard(
+    payload: DashboardImportRequest, ctx: CtxDep, db: DbDep, settings: SettingsDep
+) -> DashboardImportRead:
+    """Create a dashboard from an exported document.
+
+    Declared above `/{dashboard_id}` — the house rule — and taking the file as
+    JSON rather than as an upload, because the browser has to read it anyway:
+    the import dialog shows what is in the document and asks which connection
+    each of its databases is *here* before anything is sent.
+
+    A document's SQL is hostile input like any other. Every tile in it goes
+    through the same guard call the editor's save path makes, so this is a
+    fourth way into a stored statement and not a way around anything.
+    """
+    service = DashboardService(db, settings)
+    dashboard, skipped = await service.import_document(
+        ctx.user_id,
+        document=payload.document,
+        name=payload.name,
+        connection_map=payload.connection_map,
+        skip_invalid=payload.skip_invalid,
+    )
+    read = await _dashboard_read(service, dashboard)
+    return DashboardImportRead(
+        dashboard=read,
+        imported_tiles=len(read.tiles),
+        skipped=[ImportSkipRead.model_validate(item) for item in skipped],
+    )
+
+
 @router.get("/{dashboard_id}", response_model=DashboardRead)
 async def get_dashboard(
     dashboard_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
@@ -134,6 +171,20 @@ async def update_dashboard(
         dashboard_id, ctx.user_id, **payload.model_dump(exclude_unset=True)
     )
     return await _dashboard_read(service, dashboard)
+
+
+@router.get("/{dashboard_id}/export", response_model=DashboardDocument)
+async def export_dashboard(
+    dashboard_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+) -> DashboardDocument:
+    """The dashboard as a portable document — the layout and the SQL, nothing else.
+
+    Answered as JSON rather than as a download: the SPA sends a bearer token,
+    which a plain `<a download>` cannot, so the browser saves the body itself.
+    No results and nothing from inside a connection are in it — see
+    `services/dashboard_transfer.py` for what that costs and why.
+    """
+    return await DashboardService(db, settings).export(dashboard_id, ctx.user_id)
 
 
 @router.delete("/{dashboard_id}", status_code=status.HTTP_204_NO_CONTENT)

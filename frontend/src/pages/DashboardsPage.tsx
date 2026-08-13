@@ -19,6 +19,7 @@ import {
   DashboardCard, DashboardGrid, DashboardRow, DashboardSettings, STACK_BELOW_PX,
   TileShell, TileSkeleton, rateLabel, type TileAction, useTileScheduler,
 } from '../components/dashboard'
+import { ImportDialog, exportDashboard } from '../components/dashboard-transfer'
 import { TileEditor } from '../components/tile-editor'
 import {
   Dot, EmptyState, ErrorNote, GhostButton, Icon, InlineEdit, Modal, PrimaryButton,
@@ -70,6 +71,7 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
   const [cards, setCards] = useState<DashboardSummary[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  const [importing, setImporting] = useState(false)
   const [renaming, setRenaming] = useState<DashboardSummary | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -176,6 +178,13 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
       onOpen: () => onOpen(card.id),
       onRename: () => setRenaming(card),
       onDuplicate: () => void guard(() => duplicate(card)),
+      // Not through `guard`: an export changes nothing, so there is no list to
+      // reload afterwards — only a failure worth showing.
+      onExport: () => {
+        void exportDashboard(card.id, card.name).catch((err) =>
+          setError(err instanceof Error ? err.message : 'That export did not work.'),
+        )
+      },
       onArchive: () =>
         void guard(() =>
           api.update(card.id, {
@@ -214,13 +223,21 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
             <IndexSummary cards={cards} />
           )}
         </div>
-        <PrimaryButton
-          style={{ marginLeft: 'auto', padding: '10px 17px' }}
-          onClick={() => setCreating(true)}
-          disabled={busy}
-        >
-          <Icon.Plus /> New dashboard
-        </PrimaryButton>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+          {/* A ghost next to the primary: importing is how a dashboard arrives
+              from somewhere else, which is a real way to start — but creating
+              one is still the page's own verb. */}
+          <GhostButton style={{ padding: '10px 15px' }} onClick={() => setImporting(true)}>
+            <Icon.ArrowDown size={13} /> Import
+          </GhostButton>
+          <PrimaryButton
+            style={{ padding: '10px 17px' }}
+            onClick={() => setCreating(true)}
+            disabled={busy}
+          >
+            <Icon.Plus /> New dashboard
+          </PrimaryButton>
+        </div>
       </header>
 
       {cards !== null && cards.length > 0 && (
@@ -344,6 +361,19 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
             const created = await api.create({ name, description })
             setCreating(false)
             onOpen(created.id)
+          }}
+        />
+      )}
+
+      {importing && (
+        <ImportDialog
+          onClose={() => setImporting(false)}
+          onImported={(result) => {
+            setImporting(false)
+            // Straight into it, the same way creating one does: an import that
+            // dropped tiles has already said so in its own dialog, and either
+            // way the thing to check is the dashboard itself.
+            onOpen(result.dashboard.id)
           }}
         />
       )}
@@ -1147,6 +1177,11 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
           dashboard={dashboard}
           onChange={(patch) => void patchDashboard(patch)}
           onClose={() => setShowSettings(false)}
+          onExport={() =>
+            void exportDashboard(dashboard.id, dashboard.name).catch((err) =>
+              setError(err instanceof Error ? err.message : 'That export did not work.'),
+            )
+          }
         />
       )}
 

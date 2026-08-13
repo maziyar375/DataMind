@@ -11,6 +11,8 @@ The two parts that are not CRUD:
   authorisation to save; `dashboard_tiles.sql` is user-typed text, so it is
   validated against the connection's current snapshot on the way in — and again
   on every refresh, by `query_service`, which trusts nothing this module did.
+  **Importing a file is the same act**, and gets the same treatment: every tile
+  in a document goes through `_validated_tile_fields` before a row exists.
 * **The cache is what makes per-tile rates safe.** Five people with a 30-second
   tile open is a load generator pointed at the customer's database unless a
   result computed a moment ago is reused. Freshness is `now - computed_at <
@@ -40,6 +42,14 @@ from app.infra.db.models import (
     DashboardTileCache,
     DatabaseConnection,
     LlmConfig,
+)
+from app.services.dashboard_transfer import (
+    DashboardDocument,
+    SkippedTile,
+    build_document,
+    label_of,
+    parse_document,
+    tile_fields,
 )
 from app.services.query_service import (
     TileRequest,
@@ -214,8 +224,21 @@ class DashboardService:
         self, dashboard_id: UUID, owner_id: UUID, **fields: Any
     ) -> DashboardTile:
         await self.get(dashboard_id, owner_id)
-        fields = await self._validated_tile_fields(owner_id, fields)
+        return await self._store_tile(
+            dashboard_id, await self._validated_tile_fields(owner_id, fields)
+        )
 
+    async def _store_tile(
+        self, dashboard_id: UUID, fields: dict[str, Any]
+    ) -> DashboardTile:
+        """Write a tile whose fields have already been through the guard.
+
+        Split out for `import_document`, which validates every tile in a file
+        *before* creating anything — so a document with one bad statement is
+        refused whole rather than half-written. The split is only over where the
+        validated fields came from: nothing reaches this method that
+        `_validated_tile_fields` has not returned.
+        """
         tile = DashboardTile(id=uuid.uuid4(), dashboard_id=dashboard_id, **fields)
         if tile.position == 0:
             tile.position = len(await self.tiles_of(dashboard_id))
@@ -386,6 +409,154 @@ class DashboardService:
         if config is None:
             raise NotFoundError("Model configuration not found.")
         return config
+
+    # ── import / export ──────────────────────────────────────────────────
+    async def export(self, dashboard_id: UUID, owner_id: UUID) -> DashboardDocument:
+        """The dashboard as a portable document. No ids, no results, no secrets.
+
+        The connections are loaded in full because the document needs two things
+        off them — the name and the engine — and `display_names` deliberately
+        returns only the first. Both queries are owner-scoped; a tile pointing at
+        a row this user does not own contributes no connection to the file, and
+        its tile exports unmapped.
+        """
+        dashboard = await self.get(dashboard_id, owner_id)
+        tiles = await self.tiles_of(dashboard_id)
+        connections = await self._connections_of(tiles, owner_id)
+        return build_document(dashboard, tiles, connections)
+
+    async def import_document(
+        self,
+        owner_id: UUID,
+        *,
+        document: Any,
+        name: str | None = None,
+        connection_map: dict[str, UUID] | None = None,
+        skip_invalid: bool = False,
+    ) -> tuple[Dashboard, list[SkippedTile]]:
+        """Create a dashboard from a document, one guard pass per tile.
+
+        Order matters, and it is the reason this is not a loop around
+        `add_tile`:
+
+        1. **Every tile is validated before anything is created.** A file with
+           one statement the guard refuses leaves no half-built dashboard behind
+           and reports *all* the tiles it refused, not the first — the user is
+           holding one file and deciding once what to do about it.
+        2. **`skip_invalid` is the user's answer to that report**, not a
+           default. Importing a board against a database whose schema has moved
+           on genuinely does lose tiles; dropping them silently would be a
+           dashboard that looks complete and is not.
+        3. The dashboard row is created only once tiles are known to be
+           storable, so the common failure costs no name.
+
+        A connection is resolved from the caller's own rows, never from the
+        file: the document names a database, and only the person importing it
+        can say which of *their* connections that is.
+        """
+        parsed = parse_document(document)
+        targets = await self._resolve_refs(parsed, connection_map or {}, owner_id)
+
+        prepared: list[dict[str, Any]] = []
+        skipped: list[SkippedTile] = []
+        for index, tile in enumerate(parsed.tiles):
+            try:
+                prepared.append(
+                    await self._validated_tile_fields(
+                        owner_id, tile_fields(tile, targets)
+                    )
+                )
+            except (SqlRejectedError, ValidationError, NotFoundError) as exc:
+                skipped.append(
+                    SkippedTile(
+                        title=label_of(tile, index),
+                        code=getattr(exc, "code", "E_VALIDATION"),
+                        reason=exc.message,
+                    )
+                )
+
+        if skipped and not skip_invalid:
+            raise ValidationError(_refusal(skipped), tiles=[s.title for s in skipped])
+
+        wanted = (name or parsed.dashboard.name).strip()
+        if not wanted:
+            raise ValidationError("A dashboard needs a name.")
+        settings = parsed.dashboard.model_dump(exclude={"name"})
+        dashboard = await self.create(
+            owner_id, name=await self._free_name(owner_id, wanted), **settings
+        )
+        for fields in prepared:
+            await self._store_tile(dashboard.id, fields)
+        return dashboard, skipped
+
+    async def _resolve_refs(
+        self,
+        document: DashboardDocument,
+        connection_map: dict[str, UUID],
+        owner_id: UUID,
+    ) -> dict[str, UUID]:
+        """Which connection each `ref` in the file means, for this user.
+
+        The client's map wins, and every id in it is checked against the
+        caller's own rows — this is a route that takes an id from a request
+        body, so the ownership check is the wall. Refs the map leaves out fall
+        back to an exact name match, which is what makes re-importing a file
+        into the account it came from a single click. Names are unique per owner
+        (`uq_conn_owner_name`), so that match is never ambiguous.
+        """
+        declared = {connection.ref: connection for connection in document.connections}
+        resolved: dict[str, UUID] = {}
+        for ref, connection_id in connection_map.items():
+            if ref not in declared:
+                continue  # a ref for a connection this document never mentions
+            await self._owned_connection(connection_id, owner_id)
+            resolved[ref] = connection_id
+
+        unmapped = [
+            connection
+            for ref, connection in declared.items()
+            if ref not in resolved and connection.name.strip()
+        ]
+        if unmapped:
+            by_name = await self._connection_ids_by_name(owner_id)
+            for connection in unmapped:
+                match = by_name.get(connection.name.strip().casefold())
+                if match is not None:
+                    resolved[connection.ref] = match
+        return resolved
+
+    async def _connection_ids_by_name(self, owner_id: UUID) -> dict[str, UUID]:
+        rows = await self._db.execute(
+            select(DatabaseConnection.id, DatabaseConnection.name).where(
+                DatabaseConnection.owner_id == owner_id
+            )
+        )
+        return {str(row[1]).strip().casefold(): row[0] for row in rows}
+
+    async def _free_name(self, owner_id: UUID, wanted: str) -> str:
+        """`wanted`, or the first free number after it.
+
+        Names are unique per owner, and the collision that matters here is the
+        ordinary one: importing a file back into the account that wrote it.
+        Refusing the whole document over its name — after every statement in it
+        has passed the guard — would be a wall in front of the common case, so
+        an import renames instead. Every other write path still refuses a
+        duplicate, because renaming what a user typed would be a different thing
+        entirely.
+        """
+        rows = await self._db.execute(
+            select(Dashboard.name).where(Dashboard.owner_id == owner_id)
+        )
+        taken = {str(name).strip().casefold() for name in rows.scalars()}
+        if wanted.casefold() not in taken:
+            return wanted
+
+        for number in range(2, 1000):
+            suffix = f" ({number})"
+            candidate = f"{wanted[: 100 - len(suffix)].rstrip()}{suffix}"
+            if candidate.casefold() not in taken:
+                return candidate
+        raise ConflictError("You already have a dashboard with that name.")
 
     # ── display names for the tile chrome ────────────────────────────────
     async def display_names(
@@ -604,6 +775,25 @@ class DashboardService:
         for (dashboard_id,) in rows:
             counts[dashboard_id] = counts.get(dashboard_id, 0) + 1
         return counts
+
+
+def _refusal(skipped: list[SkippedTile]) -> str:
+    """The sentence a refused import is answered with.
+
+    It names the first few tiles and the reason the first one gave, because the
+    two questions a user has are "which tiles?" and "is this the wrong
+    connection or the wrong database?" — and the guard's own message answers the
+    second. The full list rides along in the problem body as `tiles`.
+    """
+    names = ", ".join(f"“{item.title}”" for item in skipped[:3])
+    if len(skipped) > 3:
+        names += f" and {len(skipped) - 3} more"
+    count = "1 tile" if len(skipped) == 1 else f"{len(skipped)} tiles"
+    return (
+        f"{count} in this file could not be imported against the connections "
+        f"chosen: {names}. The first was refused because: {skipped[0].reason} "
+        "Choose a different connection, or import the rest without them."
+    )
 
 
 def _chart_intent(tile: DashboardTile) -> Any:

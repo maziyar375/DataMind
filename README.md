@@ -145,7 +145,14 @@ execution**, and it gets no exemption: stored SQL is re-validated against the
 connection's current snapshot on every single refresh, ownership is re-checked
 at execution, and a tile may only *lower* the connection's row cap and timeout,
 never raise them. A broken tile is a value, not an exception — it never fails
-the dashboard. **[docs/dashboards.md](docs/dashboards.md)**.
+the dashboard.
+
+A dashboard also **exports to a file and imports from one**, so a board built
+against one database can be rebuilt against another. The file holds the layout
+and the SQL and nothing else: no ids, no results, and nothing from inside a
+connection — you pick which of *your* data sources each of its databases is on
+the way in, and every statement in it faces the guard exactly like one you
+typed. **[docs/dashboards.md](docs/dashboards.md)**.
 
 ### Reports
 
@@ -212,7 +219,8 @@ Data sources with an engine picker, a table list, an FK graph view, and the
 semantic-layer editor (metric expressions validated live by the *same parser*
 the save path uses, so the editor never promises something the backend will
 reject). LLM providers. A user-management panel with per-user editing.
-Dashboards with drag-and-resize tiles and per-tile refresh. Reports get three
+Dashboards with drag-and-resize tiles, per-tile refresh, and import/export of a
+whole board as a file. Reports get three
 screens of their own: an outline editor that walks Describe → Structure → Check
 → Generate with the guard's verdict on every question, a viewer that watches
 the document write itself and lets any paragraph or chart be refined

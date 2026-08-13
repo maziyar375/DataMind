@@ -2008,3 +2008,74 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   .rm-user-legend { display: none !important; }
   .rm-user-chips { width: auto !important; }
 }
+
+/* ── moving a dashboard as a file ─────────────────────────────────────────
+   Import is the one flow in the app that starts outside it, so the first
+   thing it shows is a target for the file rather than a form: the user is
+   holding a download, and "choose a file" is the whole first step. */
+.rm-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 26px 18px;
+  text-align: center;
+  background: var(--panel-alt);
+  border: 1px dashed var(--border-strong);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease;
+}
+.rm-dropzone:hover,
+.rm-dropzone:focus-visible { border-color: var(--accent); }
+/* A drag has no cursor feedback of its own — without this, the drop target
+   and the rest of the dialog look identical while a file is over one of them. */
+.rm-dropzone.is-over {
+  border-color: var(--accent);
+  border-style: solid;
+  background: var(--accent-bg);
+}
+
+/* What is in the file, in one line, above the question it is asking. */
+.rm-import-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.rm-import-facts strong { color: var(--text-strong); font-weight: 600; }
+
+/* One dropped tile: what it was called, and the guard's own sentence about
+   it. Named first and reasoned second, because the user is looking for the
+   tile they know by name. */
+.rm-import-skip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+/* An action inside the settings drawer, which is otherwise all inputs. Shaped
+   like the drawer's selects so it sits in the same column, not like a page
+   button dropped into a sidebar. */
+.rm-drawer-action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  padding: 8px 9px;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--input-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  cursor: pointer;
+}
+.rm-drawer-action:hover { border-color: var(--accent); color: var(--text-strong); }
