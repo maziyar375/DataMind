@@ -122,26 +122,51 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .rm-turn:hover .rm-turn-actions,
 .rm-turn-actions:focus-within { opacity: 1; }
 
+/* ── the grid motif ────────────────────────────────────────────────────────
+   One thin-line grid, defined here and drawn by everything that draws it: the
+   signed-out screen, the empty chat, the empty rooms below, and the
+   dashboard's alignment guide. It lives up here rather than beside its first
+   user because four copies of a pair of gradients drift apart the first time
+   someone changes the line colour.
+
+   Held as a custom property rather than a class so each site keeps its own
+   opacity, mask and inset while sharing the definition. `var(--border)`
+   resolves at the element that uses it, so the motif follows light and dark
+   for free.
+
+   Where it is allowed to appear is the more important half of the rule. A
+   grid, because the product's subject is tables — but a texture behind a
+   result table, a SQL block or a step trail costs legibility, and the working
+   surfaces carry all three. So: the motif goes on surfaces that have nothing
+   on them, and it is gone the moment content arrives. That is what the
+   signed-out screen, the empty chat and `.rm-emptyfield` have in common; it
+   is why a populated index gets a plain accent wash instead
+   (`.rm-dash-index`), and why the transient "Nothing matches" states get
+   nothing at all — texture that flashes in and out under a search field is
+   noise, and a filter that found nothing is not a moment to decorate. */
+:root {
+  --grid-lines:
+    linear-gradient(to right, var(--border) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--border) 1px, transparent 1px);
+  --grid-cell: 46px;
+}
+
 /* Ambient treatment for the welcome screen only.
-   Deliberately not applied to the app shell: the working surfaces carry
-   tables, SQL, and step chips, and anything textured behind those costs
-   legibility. Here there is nothing to compete with, and it is gone as
-   soon as the first message lands. Both layers read from theme tokens, so
-   they follow light and dark without a second definition. */
+   Deliberately not applied to the app shell, for the reason above. Here there
+   is nothing to compete with, and it is gone as soon as the first message
+   lands. Both layers read from theme tokens, so they follow light and dark
+   without a second definition. */
 .rm-welcome { position: relative; isolation: isolate; }
 
-/* A grid, because the product's subject is tables. Masked to fade out
-   before it reaches the text. */
+/* Masked to fade out before it reaches the text. */
 .rm-welcome::before {
   content: '';
   position: absolute;
   inset: -40px -80px;
   z-index: -1;
   pointer-events: none;
-  background-image:
-    linear-gradient(to right, var(--border) 1px, transparent 1px),
-    linear-gradient(to bottom, var(--border) 1px, transparent 1px);
-  background-size: 46px 46px;
+  background-image: var(--grid-lines);
+  background-size: var(--grid-cell) var(--grid-cell);
   -webkit-mask-image: radial-gradient(closest-side at 50% 38%, #000, transparent);
   mask-image: radial-gradient(closest-side at 50% 38%, #000, transparent);
   opacity: 0.55;
@@ -180,6 +205,56 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 
 @media (prefers-reduced-motion: reduce) {
   .rm-welcome::before, .rm-welcome::after { opacity: 0.3; }
+}
+
+/* ── the empty room ────────────────────────────────────────────────────────
+   The same motif, attached to an invitation rather than to a page. It goes on
+   the wrapper around an `EmptyState` wherever the welcome screen's argument
+   holds: a surface with nothing on it but one centred thing to do. Those
+   screens are a first run — the detail pane before any connection or model
+   exists, an index before the first dashboard or report, a report before its
+   first generation — and a first run is the one moment the product has to
+   look like somewhere rather than like a container that failed to fill.
+
+   Drawn as a pool of fixed proportion rather than an inset of the container,
+   because the containers differ: a detail pane is tall and a zero-state index
+   is short, and a mask keyed to either would be a circle on one and a
+   letterbox on the other. Sizing the field itself gives every screen the same
+   field. Lighter than the welcome screen's (0.5 against 0.55) because these
+   sit inside the lit app shell rather than on a bare surface.
+
+   `min-height` and `overflow: hidden` are load-bearing, not styling. The pool
+   is taller than an `EmptyState`, and on an index page the wrapper is only as
+   tall as its contents — so without the floor the pool hangs out of the
+   bottom, and an absolutely positioned box still counts towards its scroll
+   container's overflow. That is a scrollbar on a page with nothing to scroll
+   to. The floor gives it room; the clip guarantees it. */
+.rm-emptyfield {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  min-height: 440px;
+}
+.rm-emptyfield::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(720px, 116%);
+  aspect-ratio: 1 / 0.6;
+  transform: translate(-50%, -50%);
+  z-index: -1;
+  pointer-events: none;
+  background-image: var(--grid-lines);
+  background-size: var(--grid-cell) var(--grid-cell);
+  opacity: 0.5;
+  -webkit-mask-image: radial-gradient(closest-side at 50% 50%, #000, transparent);
+  mask-image: radial-gradient(closest-side at 50% 50%, #000, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .rm-emptyfield::before { opacity: 0.3; }
 }
 
 @keyframes rm-spin { to { transform: rotate(360deg); } }
@@ -255,10 +330,8 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   inset: 0;
   z-index: -2;
   pointer-events: none;
-  background-image:
-    linear-gradient(to right, var(--border) 1px, transparent 1px),
-    linear-gradient(to bottom, var(--border) 1px, transparent 1px);
-  background-size: 46px 46px;
+  background-image: var(--grid-lines);
+  background-size: var(--grid-cell) var(--grid-cell);
   opacity: 0.4;
   -webkit-mask-image: radial-gradient(closest-side at 50% 42%, #000, transparent);
   mask-image: radial-gradient(closest-side at 50% 42%, #000, transparent);
@@ -598,6 +671,9 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   /* Two-column form rows (tile editor, settings) stack rather than crush.
      !important because the columns are declared inline. */
   .rm-col-2 { grid-template-columns: 1fr !important; }
+  /* The empty room's floor is sized for the pool at full width; at this width
+     the pool is smaller, and 440px of it would be most of a phone screen. */
+  .rm-emptyfield { min-height: 340px; }
 }
 
 /* The hover-gated `.rm-tile-meta` wrapper is gone: it held the connection and
@@ -615,9 +691,10 @@ code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background-image:
-    linear-gradient(to right, var(--border) 1px, transparent 1px),
-    linear-gradient(to bottom, var(--border) 1px, transparent 1px);
+  /* The shared motif, but deliberately not `--grid-cell`: the size and offset
+     are set inline, because here the grid is a measurement rather than a
+     texture and has to land on the dashboard's own cells. */
+  background-image: var(--grid-lines);
   opacity: 0;
   animation: rm-guide-in .25s ease forwards;
 }

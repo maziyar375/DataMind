@@ -280,12 +280,18 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
       {cards === null ? (
         <IndexSkeleton />
       ) : cards.length === 0 ? (
-        <EmptyState
-          icon={<Icon.Grid size={20} />}
-          title="No dashboards yet"
-          body="A dashboard is a grid of saved queries. Create one, then add a tile by asking a question in plain language or writing the SQL yourself."
-          action={<PrimaryButton onClick={() => setCreating(true)}>New dashboard</PrimaryButton>}
-        />
+        // A first run, so it gets the grid motif: at zero cards the toolbar is
+        // hidden too, and the page is one invitation on an open surface. The
+        // "Nothing matches" state below deliberately does not — it comes and
+        // goes on a keystroke.
+        <div className="rm-emptyfield">
+          <EmptyState
+            icon={<Icon.Grid size={20} />}
+            title="No dashboards yet"
+            body="A dashboard is a grid of saved queries. Create one, then add a tile by asking a question in plain language or writing the SQL yourself."
+            action={<PrimaryButton onClick={() => setCreating(true)}>New dashboard</PrimaryButton>}
+          />
+        </div>
       ) : visible.length === 0 ? (
         // A filter that hides everything must say so, and offer the way back.
         <EmptyState

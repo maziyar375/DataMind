@@ -357,7 +357,10 @@ export default function DataSourcesPage() {
         {!editing ? (
           // Centred in the pane rather than pinned to the top of it — see the
           // same note on the LLM providers page.
-          <div style={{ flex: 1, display: 'grid', placeItems: 'center' }}>
+          <div
+            className="rm-emptyfield"
+            style={{ flex: 1, display: 'grid', placeItems: 'center' }}
+          >
             <EmptyState
               icon={<Icon.Database size={20} />}
               title="Connect a database"

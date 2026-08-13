@@ -140,16 +140,18 @@ export function ReportRunHistory({
           {runs === null ? (
             <HistorySkeleton />
           ) : runs.length === 0 ? (
-            <EmptyState
-              icon={<Icon.List size={20} />}
-              title="No generations yet"
-              body={
-                'A report keeps every document it has produced. Generate this one from '
-                + 'its outline and each run is kept here, readable months later exactly '
-                + 'as it was written.'
-              }
-              action={<GhostButton onClick={onBack}>Back to the outline</GhostButton>}
-            />
+            <div className="rm-emptyfield">
+              <EmptyState
+                icon={<Icon.List size={20} />}
+                title="No generations yet"
+                body={
+                  'A report keeps every document it has produced. Generate this one from '
+                  + 'its outline and each run is kept here, readable months later exactly '
+                  + 'as it was written.'
+                }
+                action={<GhostButton onClick={onBack}>Back to the outline</GhostButton>}
+              />
+            </div>
           ) : (
             <>
               <p

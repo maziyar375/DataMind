@@ -329,12 +329,16 @@ function ReportsIndex({
       {cards === null ? (
         <IndexSkeleton />
       ) : cards.length === 0 ? (
-        <EmptyState
-          icon={<Icon.Doc size={20} />}
-          title="No reports yet"
-          body="Describe what you need in plain language — “an analysis of the last three months of sales” — and a report proposes its own structure. Approve it, and every section is written from your database."
-          action={<PrimaryButton onClick={() => setCreating(true)}>New report</PrimaryButton>}
-        />
+        // The grid motif, on the same terms as the dashboards index: a first
+        // run with the toolbar hidden, and nothing else on the surface.
+        <div className="rm-emptyfield">
+          <EmptyState
+            icon={<Icon.Doc size={20} />}
+            title="No reports yet"
+            body="Describe what you need in plain language — “an analysis of the last three months of sales” — and a report proposes its own structure. Approve it, and every section is written from your database."
+            action={<PrimaryButton onClick={() => setCreating(true)}>New report</PrimaryButton>}
+          />
+        </div>
       ) : visible.length === 0 ? (
         <EmptyState
           icon={<Icon.Search size={20} />}

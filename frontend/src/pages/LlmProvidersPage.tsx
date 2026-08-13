@@ -266,7 +266,10 @@ export default function LlmProvidersPage() {
           // record open the pane has nothing else in it, and an invitation
           // hanging from the ceiling of an empty room reads as a page that
           // failed to load.
-          <div style={{ flex: 1, display: 'grid', placeItems: 'center' }}>
+          <div
+            className="rm-emptyfield"
+            style={{ flex: 1, display: 'grid', placeItems: 'center' }}
+          >
             <EmptyState
               icon={<Icon.Sparkle size={20} />}
               title="Connect a model"
