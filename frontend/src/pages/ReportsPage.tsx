@@ -34,12 +34,21 @@ const WIDE_ENOUGH = ['SAMPLE', 'FULL']
 
 type SortKey = 'updated' | 'created' | 'name'
 type StatusFilter = 'ACTIVE' | 'ARCHIVED' | 'ALL'
+type ViewMode = 'grid' | 'list'
 
 const SORTS: { value: SortKey; label: string }[] = [
   { value: 'updated', label: 'Recently updated' },
   { value: 'created', label: 'Recently created' },
   { value: 'name', label: 'Name (A–Z)' },
 ]
+
+/**
+ * Its own key, deliberately not shared with the dashboards index. The two
+ * indexes hold different things — a dozen dashboards you recognise by shape,
+ * a list of documents you recognise by name — and someone who scans one as a
+ * list has said nothing about how they want to read the other.
+ */
+const VIEW_KEY = 'raymand.reports.view'
 
 function sortCards(cards: ReportSummary[], key: SortKey): ReportSummary[] {
   const at = (value: string) => new Date(value).getTime()
@@ -147,6 +156,14 @@ function ReportsIndex({
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<SortKey>('updated')
   const [status, setStatus] = useState<StatusFilter>('ACTIVE')
+  // Read once at mount and written on every change, the same as the dashboards
+  // index: a layout choice that reset on reload would be a control nobody
+  // touches twice. An unrecognised stored value falls back to cards.
+  const [view, setView] = useState<ViewMode>(
+    () => (localStorage.getItem(VIEW_KEY) === 'list' ? 'list' : 'grid'),
+  )
+
+  useEffect(() => localStorage.setItem(VIEW_KEY, view), [view])
 
   const load = useCallback(async () => {
     try {
@@ -242,6 +259,22 @@ function ReportsIndex({
   const activeCount = (cards ?? []).length - archivedCount
   const filtering = query.trim().length > 0 || status !== 'ACTIVE'
 
+  /**
+   * A card and a row are the same report with the same five actions, so the
+   * wiring is written once. Switching layout must not be able to change what a
+   * menu item does — that is the kind of drift a second copy invites.
+   */
+  const rowProps = useCallback(
+    (card: ReportSummary) => ({
+      report: card,
+      onOpen: () => onOpen(card.id),
+      onRename: () => setRenaming(card),
+      onArchive: () => void toggleArchive(card),
+      onDelete: () => void remove(card),
+    }),
+    [onOpen, toggleArchive, remove],
+  )
+
   return (
     <div className="rm-dash-index rm-page-pad" style={{ flex: 1, overflowY: 'auto' }}>
       <header
@@ -322,6 +355,15 @@ function ReportsIndex({
                 </option>
               ))}
             </select>
+            <Segmented
+              ariaLabel="Layout"
+              value={view}
+              onChange={setView}
+              options={[
+                { value: 'grid', label: <Icon.Grid size={14} />, title: 'Cards' },
+                { value: 'list', label: <Icon.List size={14} />, title: 'List' },
+              ]}
+            />
           </div>
         </div>
       )}
@@ -361,7 +403,7 @@ function ReportsIndex({
             )
           }
         />
-      ) : (
+      ) : view === 'grid' ? (
         <div
           style={{
             display: 'grid',
@@ -370,14 +412,13 @@ function ReportsIndex({
           }}
         >
           {visible.map((card) => (
-            <ReportCard
-              key={card.id}
-              report={card}
-              onOpen={() => onOpen(card.id)}
-              onRename={() => setRenaming(card)}
-              onArchive={() => void toggleArchive(card)}
-              onDelete={() => void remove(card)}
-            />
+            <ReportCard key={card.id} {...rowProps(card)} />
+          ))}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {visible.map((card) => (
+            <ReportRow key={card.id} {...rowProps(card)} />
           ))}
         </div>
       )}
@@ -583,6 +624,149 @@ function ReportCard({
         <span aria-hidden style={{ opacity: 0.4 }}>·</span>
         <span>updated {relativeTime(report.updated_at)}</span>
       </div>
+    </div>
+  )
+}
+
+/**
+ * The same report as one line, for an index read by name rather than by shape.
+ *
+ * It mirrors `DashboardRow` down to the class names, which is the point: the
+ * two indexes are peers, and a list that looked different on each page would
+ * make them read as different kinds of thing. What a row drops against a card
+ * is the description clamp and the outline chip — a line has room for the name
+ * and the facts, and everything dropped is still on the card.
+ */
+function ReportRow({
+  report, onOpen, onRename, onArchive, onDelete,
+}: {
+  report: ReportSummary
+  onOpen: () => void
+  onRename: () => void
+  onArchive: () => void
+  onDelete: () => void
+}) {
+  const hue = cardHue(report.id)
+  const archived = report.status === 'ARCHIVED'
+
+  return (
+    <div
+      className="rm-dash-row"
+      style={{
+        position: 'relative',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 13,
+        padding: '11px 14px',
+        background: 'var(--panel)',
+        borderRadius: 11,
+        opacity: archived ? 0.66 : 1,
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          display: 'grid',
+          placeItems: 'center',
+          width: 30,
+          height: 30,
+          flexShrink: 0,
+          borderRadius: 9,
+          ...glyphTint(hue),
+        }}
+      >
+        <Icon.Doc size={14} />
+      </span>
+
+      <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+          <button
+            className="rm-dash-card-link"
+            onClick={onOpen}
+            dir="auto"
+            title={report.name}
+            style={{
+              minWidth: 0,
+              textAlign: 'left',
+              background: 'transparent',
+              border: 'none',
+              padding: 0,
+              cursor: 'pointer',
+              color: 'var(--text-strong)',
+              fontSize: 13.5,
+              fontWeight: 600,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {report.name}
+          </button>
+          {archived && <Chip tone="amber">Archived</Chip>}
+          {/* Unfinished is worth a badge even here: a report with no outline
+              has nothing to generate, and that is the one fact a scan of the
+              list should not have to open a card to learn. */}
+          {report.section_count === 0 && <Chip tone="neutral">No outline yet</Chip>}
+        </div>
+        {report.description && (
+          <span
+            dir="auto"
+            style={{
+              fontSize: 12,
+              color: 'var(--text-dim)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {report.description}
+          </span>
+        )}
+      </div>
+
+      <div
+        className="rm-dash-row-meta"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 7,
+          flexShrink: 0,
+          fontSize: 11.5,
+          color: 'var(--text-faint)',
+        }}
+      >
+        {report.section_count > 0 && (
+          <>
+            <span>
+              {report.section_count} {report.section_count === 1 ? 'section' : 'sections'}
+            </span>
+            <span aria-hidden style={{ opacity: 0.4 }}>·</span>
+          </>
+        )}
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 5,
+            minWidth: 0,
+            maxWidth: 180,
+          }}
+        >
+          <Icon.Database size={12} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {report.connection_name ?? 'Connection removed'}
+          </span>
+        </span>
+        <span aria-hidden style={{ opacity: 0.4 }}>·</span>
+        <span>updated {relativeTime(report.updated_at)}</span>
+      </div>
+
+      <ReportMenu
+        report={report}
+        onRename={onRename}
+        onArchive={onArchive}
+        onDelete={onDelete}
+      />
     </div>
   )
 }
