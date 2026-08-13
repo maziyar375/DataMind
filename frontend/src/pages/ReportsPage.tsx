@@ -395,6 +395,11 @@ function ReportsIndex({
             // nothing at all, and the create dialog just asked for the request
             // the structure is proposed from — sending the user back to a card
             // to find their way in would be one step for no reason.
+            //
+            // It stops there, and does *not* propose on arrival: the landing
+            // screen is where how many sections to ask for and which model
+            // writes them are chosen, and skipping past it spends the call on
+            // the defaults before the user has seen either control.
             onOpen(report.id)
           }}
         />
@@ -773,9 +778,19 @@ function CreateDialog({
 
   const connection = choices?.connections.find((c) => c.id === connectionId) ?? null
 
+  // What is stopping this being created, in the order the fields are read. Held
+  // as a value rather than checked on submit: a button that looks pressable and
+  // answers with an error is a worse way to say "this is required" than a
+  // button that says what it is waiting for.
+  const missing = !name.trim()
+    ? 'a name'
+    : !connectionId
+      ? 'a database'
+      : null
+
   async function submit() {
-    if (!name.trim()) return setError('A report needs a name.')
-    if (!connectionId) return setError('Choose the database this report reads from.')
+    if (missing) return
+    if (!connectionId) return
     setSaving(true)
     setError(null)
     try {
@@ -803,8 +818,17 @@ function CreateDialog({
       onClose={onClose}
       footer={
         <>
+          {/* What the button is waiting for, beside the button. */}
+          {choices && missing && (
+            <span style={{ marginRight: 'auto', fontSize: 12, color: 'var(--text-faint)' }}>
+              Needs {missing}.
+            </span>
+          )}
           <GhostButton onClick={onClose}>Cancel</GhostButton>
-          <PrimaryButton onClick={() => void submit()} disabled={saving || !choices}>
+          <PrimaryButton
+            onClick={() => void submit()}
+            disabled={saving || !choices || missing !== null}
+          >
             {saving ? 'Creating…' : 'Create report'}
           </PrimaryButton>
         </>

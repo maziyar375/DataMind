@@ -73,7 +73,8 @@ make db-repair # recreate the empty PGDATA runtime dirs the studio drive strips
 
 Frontend, from `frontend/`: `npm run dev`, `npm run build` (`tsc -b && vite
 build`), `npm run typecheck` (`tsc --noEmit`), `npm run lint`, `npm test` (all
-five DOM-free logic suites: schedule, format, palette, report document, print).
+six DOM-free logic suites: schedule, format, palette, report document, report
+readiness, print).
 
 The **eval harness is not in `make test`** — it calls a real provider and costs
 money. `python -m app.eval.runner --suite sales_v1` from `backend/`, or
@@ -185,8 +186,11 @@ frontend/src/
                             report.tsx (the outline editor + the document
                             viewer), report-history.tsx, report-document.ts
                             (merging a run into a document — `npm run
-                            test:report`), report-print.ts (the print handoff:
-                            fonts, and redrawing charts at page width —
+                            test:report`), report-readiness.ts (what generating
+                            an outline now would produce — what the Generate
+                            preflight says, `npm run test:readiness`),
+                            report-print.ts (the print handoff: fonts, and
+                            redrawing charts at page width —
                             `npm run test:print`)
   pages/                    Login, Chat, DataSources, LlmProviders, Users,
                             Dashboards, Reports

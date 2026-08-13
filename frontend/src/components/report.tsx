@@ -11,10 +11,12 @@
  *
  *  - **The question is the unit, not the SQL.** A block is one plain-language
  *    question that becomes one query and one chart, and in v1 that question is
- *    what the user edits. Editing it drops the stored statement — the SQL
- *    answered the *previous* question — so the chip returns to "Not checked"
- *    on its own rather than the page pretending otherwise. (The SQL editor is
- *    Phase 11.)
+ *    what the user edits. Editing it always drops the *verdict* — the stored
+ *    statement answered the previous question — so the chip returns to "Not
+ *    checked" on its own rather than the page pretending otherwise. What
+ *    happens to the statement itself depends on who wrote it: a model draft is
+ *    dropped with the verdict, a hand-written one is kept, and the row says
+ *    which, because a kept statement is one the run will still execute.
  *  - **Feasibility is mechanical, and it is the guard's answer, not ours.**
  *    `POST .../check` gives back `FEASIBLE | EMPTY | INFEASIBLE` and, when it
  *    refuses, the guard's own sentence. That sentence is rendered verbatim: a
@@ -25,7 +27,17 @@
  *    reads better than a job with a progress bar, and it needs no extra table
  *    — the reason `api/v1/reports.py` makes the route synchronous and per
  *    block. It can be stopped, because a user who sees the first two answers
- *    is often done reading.
+ *    is often done reading. It walks only the blocks a check would *fill*:
+ *    running it over a block whose SQL somebody wrote by hand would replace
+ *    that SQL, and a bulk button must not be the thing that does that.
+ *  - **Generate says what it is about to produce.** The last click is the
+ *    expensive one — minutes of worker time and a model call per section — and
+ *    it used to be a button that either ran or sat greyed out with its reason
+ *    in a `title`. It is now never disabled: a clean outline generates on the
+ *    first click, and an outline with holes in it opens `GeneratePreflight`,
+ *    which names each hole as the thing it becomes in the finished document and
+ *    offers the one action that fixes most of them. `report-readiness.ts` is
+ *    where that judgement lives, tested, because guessing it wrong costs a run.
  *
  * Every free-text field is `dir="auto"`: a report is written in Persian as
  * often as English, and the two mix inside one heading.
@@ -51,6 +63,8 @@ import {
 // One vocabulary for a run's status across the two screens that show one.
 import { RUN_TONE } from './report-history'
 import { printReport } from './report-print'
+import { preflightOf, readinessOf } from './report-readiness'
+import type { Preflight, PreflightProblem, ReadinessState } from './report-readiness'
 import { VegaChart } from './VegaChart'
 import {
   Chip, CopyButton, DangerButton, EmptyState, ErrorNote, GhostButton, Icon, InlineEdit,
@@ -245,6 +259,20 @@ export function ReportOutlineEditor({
   // "History 7" is an invitation and "History" is a menu item.
   const [runCount, setRunCount] = useState(0)
   const [starting, setStarting] = useState(false)
+  // What Generate found wrong, while the dialog about it is open. Held rather
+  // than recomputed on render: the dialog has to keep describing the outline
+  // the user pressed the button on, even as the sweep it started changes it.
+  const [preflight, setPreflight] = useState<Preflight | null>(null)
+  /**
+   * Questions that *were* checked and are not any more, because an edit
+   * invalidated them.
+   *
+   * The API cannot tell these apart from a question nobody has ever checked —
+   * both are `UNCHECKED` — but the user can, and the difference is the whole
+   * point: one is work not started, the other is work undone by something they
+   * just did. Ids only, and they live and die with the page.
+   */
+  const [invalidated, setInvalidated] = useState<Set<string>>(() => new Set())
   const stopSweep = useRef(false)
 
   useEffect(() => {
@@ -313,6 +341,45 @@ export function ReportOutlineEditor({
     if (report) notify.current?.(report)
   }, [report])
 
+  /**
+   * The outline as it is *now*, readable from a function that has been awaiting.
+   *
+   * The sweep runs for a minute and lands a row at a time; the code that
+   * decides what to do when it finishes closed over `report` before any of them
+   * arrived. Reading state through a ref is the honest fix — the alternative is
+   * threading every answer back up through the loop's return value, which is
+   * the same information travelling twice.
+   */
+  const latest = useRef(report)
+  useEffect(() => {
+    latest.current = report
+  }, [report])
+
+  /**
+   * Every block write this page has made, in order, so a reader can wait for
+   * them.
+   *
+   * There is one sequence where that matters and it is the one everybody
+   * performs: reword a question, then reach straight for Generate. `InlineEdit`
+   * commits on blur and blur lands *before* the click, so at the moment the
+   * button's handler runs, the PATCH that is about to reset that question's
+   * verdict is in flight and nothing on the page knows it yet. Without this the
+   * preflight would describe the outline of a second ago, call it clean, and
+   * spend the run — producing exactly the hole it exists to prevent.
+   *
+   * Both callbacks are `run`, so one failed write does not stall the chain
+   * behind it.
+   */
+  const writes = useRef<Promise<unknown>>(Promise.resolve())
+  const sequence = useCallback(<T,>(run: () => Promise<T>): Promise<T> => {
+    const next = writes.current.then(run, run)
+    writes.current = next.then(
+      () => undefined,
+      () => undefined,
+    )
+    return next
+  }, [])
+
   const patchSections = useCallback(
     (change: (sections: ReportSection[]) => ReportSection[]) =>
       setReport((current) =>
@@ -345,10 +412,58 @@ export function ReportOutlineEditor({
 
   /** 202, then straight to the viewer — the run is minutes, not a request. */
   async function generate() {
+    setPreflight(null)
     setStarting(true)
     const run = await guard(() => api.startRun(reportId))
     setStarting(false)
     if (run) onOpenRun(run.id)
+  }
+
+  /**
+   * The last click, and the only one that costs minutes.
+   *
+   * A clean outline generates on the first press: a confirmation over work
+   * there is nothing to say about is the kind of ceremony that teaches people
+   * to click through dialogs without reading them. An outline with holes in it
+   * opens one, because the alternative — the button greying itself out with the
+   * reason in a `title` — leaves a user who is on a touchscreen, or reading
+   * with a keyboard, looking at a control that will not say what is wrong.
+   */
+  const arming = useRef(false)
+  async function attemptGenerate() {
+    if (arming.current) return
+    arming.current = true
+    try {
+      // The edit that was committed on the way to this button — see `sequence`.
+      await writes.current
+      // And one turn more, because `latest` follows `report` from an effect and
+      // React runs effects after the commit that write just scheduled.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+      const found = preflightOf(latest.current?.sections ?? [])
+      if (found.clean) return void generate()
+      setPreflight(found)
+    } finally {
+      arming.current = false
+    }
+  }
+
+  /**
+   * Check what a sweep can check, and then generate if that was all of it.
+   *
+   * The dialog's own button, and the reason it is the primary one: "eleven
+   * questions are ready and one was never checked" is not a decision anybody
+   * wants to make, it is a chore they want done. If the sweep uncovers
+   * something new — a question the guard refuses — the dialog comes back
+   * describing that instead of generating over it.
+   */
+  async function checkThenGenerate(pending: ReportBlock[]) {
+    setPreflight(null)
+    await checkAll(pending)
+    // Read after the sweep, not before: every verdict landed while this was
+    // awaiting, and `latest` is how they are seen.
+    const after = preflightOf(latest.current?.sections ?? [])
+    if (after.clean) return void generate()
+    setPreflight(after)
   }
 
   /**
@@ -390,13 +505,13 @@ export function ReportOutlineEditor({
     if (!next) return
     setReport(next)
     setPreviews({})
+    // Nothing on the page came from the outline that just went away.
+    setInvalidated(new Set())
 
-    // Read off the response rather than the `unchecked` memo: that memo is
-    // derived from state this function has only just set, and would still be
-    // describing the outline this one replaced.
-    const pending = next.sections
-      .flatMap((section) => section.blocks)
-      .filter((block) => block.feasibility_status === 'UNCHECKED')
+    // Read off the response rather than the `now` memo: that memo is derived
+    // from state this function has only just set, and would still be describing
+    // the outline this one replaced.
+    const pending = preflightOf(next.sections).sweepable
     if (pending.length === 0) return
 
     // A beat before the sweep, for two reasons that happen to want the same
@@ -463,9 +578,27 @@ export function ReportOutlineEditor({
     }
   }
 
-  async function patchBlock(blockId: string, payload: Record<string, unknown>) {
-    const next = await guard(() => api.updateBlock(reportId, blockId, payload))
-    if (next) putBlock(next)
+  // Sequenced, because Generate waits on this queue. See `sequence`.
+  function patchBlock(blockId: string, payload: Record<string, unknown>) {
+    return sequence(async () => {
+      const before = latest.current?.sections
+        .flatMap((section) => section.blocks)
+        .find((block) => block.id === blockId)
+      const next = await guard(() => api.updateBlock(reportId, blockId, payload))
+      if (!next) return
+      putBlock(next)
+      // The API resets the verdict when a change makes the stored statement
+      // answer the previous question, and it does that quietly — the row simply
+      // says "Not checked" again. Remembering that *this* row was checked a
+      // second ago is what lets it say something more useful than that.
+      if (
+        before
+        && before.feasibility_status !== 'UNCHECKED'
+        && next.feasibility_status === 'UNCHECKED'
+      ) {
+        setInvalidated((current) => new Set(current).add(blockId))
+      }
+    })
   }
 
   async function removeBlock(sectionId: string, blockId: string) {
@@ -516,6 +649,14 @@ export function ReportOutlineEditor({
         const answer = await guard(ask)
         if (answer) {
           putBlock(answer.block)
+          // Whatever it says, this row has now been looked at since its last
+          // edit, so it stops being one of the ones an edit left behind.
+          setInvalidated((current) => {
+            if (!current.has(blockId)) return current
+            const next = new Set(current)
+            next.delete(blockId)
+            return next
+          })
           setPreviews((current) => ({
             ...current,
             [blockId]: answer.preview
@@ -552,7 +693,15 @@ export function ReportOutlineEditor({
     [record, reportId],
   )
 
-  /** Every block that has never been near the guard, one at a time. */
+  /**
+   * Every block a check would *fill*, one at a time.
+   *
+   * The caller passes `preflight.sweepable`, never "everything unchecked": a
+   * block whose SQL somebody wrote by hand is unchecked again the moment its
+   * question is reworded, and checking it asks the model for a new statement
+   * over the top of theirs. One button that quietly does that to four blocks is
+   * the kind of thing a person never forgives a tool for.
+   */
   async function checkAll(pending: ReportBlock[]) {
     stopSweep.current = false
     for (const [index, block] of pending.entries()) {
@@ -576,10 +725,9 @@ export function ReportOutlineEditor({
 
   const sections = report?.sections ?? []
   const state = useMemo(() => readinessOf(sections), [sections])
-  const unchecked = useMemo(
-    () => sections.flatMap((s) => s.blocks).filter((b) => b.feasibility_status === 'UNCHECKED'),
-    [sections],
-  )
+  // The live judgement, for the panel and the header. The dialog reads the
+  // frozen copy in `preflight` instead — see the note on that state.
+  const now = useMemo(() => preflightOf(sections), [sections])
 
   if (!report) {
     return <EditorSkeleton onBack={onBack} error={error} />
@@ -627,14 +775,14 @@ export function ReportOutlineEditor({
               <Icon.Sparkle size={13} /> Propose again
             </GhostButton>
           )}
-          {unchecked.length > 0 && (
+          {now.sweepable.length > 0 && (
             <GhostButton
-              onClick={() => void checkAll(unchecked)}
+              onClick={() => void checkAll(now.sweepable)}
               disabled={busy}
               style={toolbarBtn}
             >
               <Icon.Check size={13} />
-              {`Check ${unchecked.length} question${unchecked.length === 1 ? '' : 's'}`}
+              {`Check ${now.sweepable.length} question${now.sweepable.length === 1 ? '' : 's'}`}
             </GhostButton>
           )}
           {/* A report already generated has documents to go back to, and the
@@ -661,13 +809,20 @@ export function ReportOutlineEditor({
               <span style={{ opacity: 0.6 }}>{runCount}</span>
             </GhostButton>
           )}
-          {/* Enabled only when the outline can actually produce a document, and
-              the reason it cannot travels on the tooltip — a disabled control
-              that will not say why is how a user concludes it is broken. */}
+          {/* Never disabled for the state of the outline — only for work
+              already in flight. A greyed-out control with its reason in a
+              `title` is unreadable on a touchscreen, unreachable from a
+              keyboard, and is how a user concludes the product is broken; the
+              dialog this opens says the same thing where it can be read, and
+              offers to fix it. */}
           <PrimaryButton
-            onClick={() => void generate()}
-            disabled={busy || starting || !state.runnable}
-            title={state.blocked ?? 'Generate this report from the outline below.'}
+            onClick={() => void attemptGenerate()}
+            disabled={busy || starting}
+            title={
+              now.clean
+                ? 'Generate this report from the outline below.'
+                : 'Check what this will produce before it runs.'
+            }
             style={{ padding: '8px 14px' }}
           >
             <Icon.Play size={12} /> {starting ? 'Starting…' : 'Generate'}
@@ -696,9 +851,19 @@ export function ReportOutlineEditor({
 
           {/* The status panel leads, because it is the answer to the question a
               user opens this page with — how far along is this, and what is the
-              next thing to do. */}
-          {!sweep && !proposing && (
-            <OutlineStatus report={report} state={state} sections={sections} />
+              next thing to do. It stays up through the sweep, where its counts
+              are the *most* useful they ever are: they move, one verdict at a
+              time, and the minute the sweep takes is the minute a user most
+              wants to know how much of it is left. Hidden only while a proposal
+              is in flight, because then it describes an outline that is about
+              to be replaced. */}
+          {!proposing && (
+            <OutlineStatus
+              report={report}
+              state={state}
+              preflight={now}
+              sections={sections}
+            />
           )}
 
           <RequestCard
@@ -799,6 +964,7 @@ export function ReportOutlineEditor({
                 count={sections.length}
                 busy={busy}
                 checking={checking}
+                invalidated={invalidated}
                 previews={previews}
                 onHeading={(heading) => void patchSection(section.id, { heading })}
                 onIntent={(intent) => void patchSection(section.id, { intent })}
@@ -877,6 +1043,143 @@ export function ReportOutlineEditor({
           </div>
         </Modal>
       )}
+
+      {preflight && (
+        <GeneratePreflight
+          preflight={preflight}
+          sections={sections.length}
+          model={models.find((m) => m.id === report.llm_config_id)?.name ?? null}
+          onClose={() => setPreflight(null)}
+          onCheck={() => void checkThenGenerate(preflight.sweepable)}
+          onGenerate={() => void generate()}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── the last click ────────────────────────────────────────────────────────
+/**
+ * What generating right now would produce, said before it is spent.
+ *
+ * A generation is minutes of worker time and a model call per section, and
+ * everything wrong with an outline is *legible before it starts* — which is
+ * what made the old arrangement hard to defend: the button either ran, or sat
+ * greyed out with its objection in a `title` attribute, and the states in
+ * between produced a finished document with an error message where a chart
+ * should be.
+ *
+ * Three rules hold this together:
+ *
+ *  - **A clean outline never sees this.** Confirming work there is nothing to
+ *    say about is how people learn to click past dialogs without reading them.
+ *  - **Every line names a consequence, not a state.** "3 questions have never
+ *    been checked" is a fact about the editor; "they arrive in the document as
+ *    an error message where their figure should be" is the reason to care.
+ *  - **The primary action is the fix, not the acceptance.** Where a sweep can
+ *    resolve what is wrong, that is the default button and it generates when it
+ *    is done. Generating anyway stays available — a document with one known
+ *    hole is often exactly what somebody wants at five o'clock — but it is
+ *    never what the dialog nudges towards.
+ */
+function GeneratePreflight({
+  preflight, sections, model, onClose, onCheck, onGenerate,
+}: {
+  preflight: Preflight
+  sections: number
+  model: string | null
+  onClose: () => void
+  onCheck: () => void
+  onGenerate: () => void
+}) {
+  const { problems, sweepable, canGenerate } = preflight
+  const fixable = sweepable.length
+
+  return (
+    <Modal
+      title="Generate this report?"
+      subtitle={
+        canGenerate
+          ? `${sections} section${sections === 1 ? '' : 's'} written`
+            + `${model ? ` by ${model}` : ''}, one model call each — a few minutes.`
+          : 'Nothing here can be run yet.'
+      }
+      width={560}
+      onClose={onClose}
+      footer={
+        <>
+          <GhostButton onClick={onClose}>Cancel</GhostButton>
+          {/* Offered whenever the API would accept the run, and worded as the
+              choice it is. Secondary when there is a fix to press instead. */}
+          {canGenerate
+            && (fixable > 0 ? (
+              <GhostButton onClick={onGenerate}>Generate anyway</GhostButton>
+            ) : (
+              <PrimaryButton onClick={onGenerate}>Generate anyway</PrimaryButton>
+            ))}
+          {fixable > 0 && (
+            <PrimaryButton onClick={onCheck}>
+              <Icon.Check size={12} />
+              {`Check ${fixable} and generate`}
+            </PrimaryButton>
+          )}
+        </>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {problems.map((problem) => (
+          <PreflightRow key={problem.kind} problem={problem} />
+        ))}
+
+        {fixable > 0 && (
+          <p style={{ margin: '2px 0 0', fontSize: 11.5, lineHeight: 1.55, color: 'var(--text-faint)' }}>
+            Checking is one model call per question and can be stopped. Questions whose SQL you
+            wrote yourself are never checked in bulk — that would replace it.
+          </p>
+        )}
+      </div>
+    </Modal>
+  )
+}
+
+/** One thing that will be wrong with the document, and what it will look like. */
+function PreflightRow({ problem }: { problem: PreflightProblem }) {
+  const red = problem.tone === 'red'
+  return (
+    <div
+      style={{
+        display: 'flex',
+        gap: 9,
+        padding: '10px 12px',
+        borderRadius: 10,
+        background: red ? 'var(--red-bg)' : 'var(--amber-bg)',
+        border: `1px solid ${red ? 'var(--red-border)' : 'var(--amber-border)'}`,
+      }}
+    >
+      <span
+        aria-hidden
+        style={{ display: 'flex', paddingTop: 1, flexShrink: 0, color: red ? 'var(--red)' : 'var(--amber)' }}
+      >
+        <Icon.Alert size={13} />
+      </span>
+      <span style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+        <strong style={{ fontSize: 12.5, fontWeight: 650, color: 'var(--text-strong)' }}>
+          {problem.title}
+        </strong>
+        <span style={{ fontSize: 12, lineHeight: 1.55, color: 'var(--text2)' }}>
+          {problem.detail}
+        </span>
+        {/* The guard's own sentence, exactly as it wrote it — the same rule the
+            block row follows, and for the same reason. */}
+        {problem.hint && (
+          <span
+            dir="auto"
+            style={{ fontSize: 11.5, lineHeight: 1.5, color: 'var(--text-dim)', fontStyle: 'italic' }}
+          >
+            “{problem.hint}”
+          </span>
+        )}
+      </span>
     </div>
   )
 }
@@ -1066,45 +1369,9 @@ function RequestCard({
 }
 
 // ── readiness ─────────────────────────────────────────────────────────────
-interface ReadinessState {
-  blocks: number
-  ready: number
-  empty: number
-  infeasible: number
-  unchecked: number
-  /** Why the outline cannot be generated, or null when it can. */
-  blocked: string | null
-  runnable: boolean
-}
-
-function readinessOf(sections: ReportSection[]): ReadinessState {
-  const blocks = sections.flatMap((section) => section.blocks)
-  const count = (status: ReportFeasibility) =>
-    blocks.filter((block) => block.feasibility_status === status).length
-  const infeasible = blocks.filter((block) => block.feasibility_status === 'INFEASIBLE')
-  const unchecked = count('UNCHECKED')
-  const withSql = blocks.filter((block) => block.sql.trim() !== '').length
-
-  let blocked: string | null = null
-  if (infeasible.length > 0) {
-    // The count, and the first reason — verbatim, as the guard wrote it.
-    blocked =
-      `${infeasible.length} question${infeasible.length === 1 ? '' : 's'} cannot be produced. `
-      + `First: ${infeasible[0].feasibility_reason ?? 'no reason was given.'}`
-  } else if (withSql === 0) {
-    blocked = 'No question has a query yet — check them first.'
-  }
-
-  return {
-    blocks: blocks.length,
-    ready: count('FEASIBLE'),
-    empty: count('EMPTY'),
-    infeasible: infeasible.length,
-    unchecked,
-    blocked,
-    runnable: blocked === null,
-  }
-}
+// `readinessOf` and `preflightOf` moved to `report-readiness.ts`: they are the
+// two pure judgements on this page, one of them decides whether a generation is
+// worth starting, and both are worth a test suite that no bundler has to run.
 
 /**
  * Where the report is in the four things building one actually involves.
@@ -1121,10 +1388,12 @@ function readinessOf(sections: ReportSection[]): ReadinessState {
 type StepState = 'done' | 'current' | 'todo'
 
 function OutlineStatus({
-  report, state, sections,
+  report, state, preflight, sections,
 }: {
   report: Report
   state: ReadinessState
+  /** What generating now would produce — the same judgement the button makes. */
+  preflight: Preflight
   sections: ReportSection[]
 }) {
   const checked = state.ready + state.empty
@@ -1157,7 +1426,13 @@ function OutlineStatus({
     },
     {
       label: 'Generate',
-      caption: state.runnable ? 'ready to run' : 'not ready yet',
+      // The button's own answer, not a second one derived differently: "ready"
+      // here has to mean the click that follows will not open a dialog.
+      caption: preflight.clean
+        ? 'ready to run'
+        : preflight.canGenerate
+          ? `${preflight.problems.length} thing${preflight.problems.length === 1 ? '' : 's'} to know`
+          : 'nothing to run yet',
       done: false,
     },
   ]
@@ -1243,7 +1518,7 @@ function OutlineStatus({
               color: 'var(--text-dim)',
             }}
           >
-            {advice(state)}
+            {advice(preflight)}
           </span>
         </div>
       )}
@@ -1254,27 +1529,18 @@ function OutlineStatus({
 /**
  * The one sentence that says what to do next, and why it matters.
  *
- * Each of these is a real failure someone would otherwise meet inside a
- * finished document: an unchecked question becomes an error message in the
- * report, and an empty result becomes a section that says so plainly — which is
- * correct, and worth knowing before you spend the generation on it.
+ * The most severe thing the preflight found, in the words the preflight dialog
+ * will use for it if the user presses Generate anyway. Deliberately the same
+ * sentence in both places: a panel that describes the outline one way and a
+ * dialog that describes it another reads as two opinions rather than one.
  */
-function advice(state: ReadinessState): string {
-  if (state.blocks === 0) {
-    return 'This outline has headings but no questions. A section with nothing under it '
-      + 'has no results to be written from.'
+function advice(preflight: Preflight): string {
+  const first = preflight.problems[0]
+  if (!first) {
+    return 'Every question has a validated query. Generating writes a new document and '
+      + 'leaves earlier ones untouched.'
   }
-  if (state.infeasible > 0) return state.blocked ?? ''
-  if (state.unchecked > 0) {
-    return 'A question that has never been near the guard carries no query, so it would '
-      + 'arrive in the finished document as an error message. Check it first.'
-  }
-  if (state.empty > 0) {
-    return 'Some questions return no rows for now. A section whose results are all empty '
-      + 'says so plainly instead of inventing numbers.'
-  }
-  return 'Every question has a validated query. Generating writes a new document and '
-    + 'leaves earlier ones untouched.'
+  return `${first.title} ${first.detail}`
 }
 
 function Step({
@@ -1350,7 +1616,7 @@ function Step({
 
 // ── one section ───────────────────────────────────────────────────────────
 function SectionCard({
-  section, index, count, busy, checking, previews,
+  section, index, count, busy, checking, invalidated, previews,
   onHeading, onIntent, onRemove, onMove,
   onAddBlock, onBlock, onRemoveBlock, onMoveBlock, onCheck, onSaveSql,
 }: {
@@ -1359,6 +1625,8 @@ function SectionCard({
   count: number
   busy: boolean
   checking: string[]
+  /** Blocks an edit un-checked since the page opened. See the editor's state. */
+  invalidated: Set<string>
   previews: Record<string, string>
   onHeading: (heading: string) => void
   onIntent: (intent: string) => void
@@ -1506,6 +1774,7 @@ function SectionCard({
               count={section.blocks.length}
               busy={busy}
               checking={checking.includes(block.id)}
+              invalidated={invalidated.has(block.id)}
               preview={previews[block.id]}
               onChange={(payload) => onBlock(block.id, payload)}
               onRemove={() => onRemoveBlock(block.id)}
@@ -1567,7 +1836,7 @@ function SectionCard({
  * write.
  */
 function BlockRow({
-  block, index, count, busy, checking, preview, onChange, onRemove, onMove, onCheck,
+  block, index, count, busy, checking, invalidated, preview, onChange, onRemove, onMove, onCheck,
   onSaveSql,
 }: {
   block: ReportBlock
@@ -1575,6 +1844,8 @@ function BlockRow({
   count: number
   busy: boolean
   checking: boolean
+  /** Whether an edit on this page un-checked this row. */
+  invalidated: boolean
   preview?: string
   onChange: (payload: Record<string, unknown>) => void
   onRemove: () => void
@@ -1583,12 +1854,25 @@ function BlockRow({
   onSaveSql: (sql: string) => Promise<ReportBlockCheck | null>
 }) {
   const [showSql, setShowSql] = useState(false)
-  const verdict = FEASIBILITY[block.feasibility_status]
   const unchecked = block.feasibility_status === 'UNCHECKED'
   // A statement somebody typed. It survives a reworded question — the API
   // keeps it and only drops the verdict — so the check button here would
   // *replace* it rather than fill a gap, and has to say so.
   const ownSql = block.sql !== '' && block.sql_origin !== 'GENERATED'
+  /**
+   * The chip, and the two things "Not checked" was being asked to mean at once.
+   *
+   * An edit resets the verdict, so a row the user checked a minute ago goes
+   * back to looking exactly like one nobody has ever touched — and the worse
+   * half of that is silent: a hand-written statement is *kept* through a
+   * reword, so unless the row says so, the run answers the previous question
+   * under the new heading and nothing on this page ever mentioned it.
+   */
+  const verdict = !unchecked || !invalidated
+    ? FEASIBILITY[block.feasibility_status]
+    : ownSql
+      ? { label: 'Answers the previous wording', tone: 'amber' as ChipTone, rail: 'var(--amber)' }
+      : { label: 'Edited — needs checking', tone: 'amber' as ChipTone, rail: 'var(--amber)' }
 
   return (
     <div
