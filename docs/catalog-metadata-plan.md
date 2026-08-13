@@ -1,13 +1,18 @@
 # Catalog metadata (comments & descriptions) — design and implementation plan
 
-> **Status: Phases 0, 1 and 2 landed; 3–6 proposed.** Every code reference below
-> is to code that exists *today*; the behaviour described in §4–§6 is what the
-> remaining phases in §7 are meant to build. The ledger at the end (§10) records
-> what actually landed. Until a phase is ticked there, assume it does not exist.
+> **Status: Phases 0, 1, 2 and 3 landed; 4–6 proposed.** Every code reference
+> below is to code that exists *today*; the behaviour described in §4 and §6 is
+> what the remaining phases in §7 are meant to build. The ledger at the end
+> (§10) records what actually landed. Until a phase is ticked there, assume it
+> does not exist.
 >
-> **Nothing reaches a model yet.** Phases 1 and 2 capture, store and display the
-> comments; §4's rendering rules are Phase 4. A prompt today is byte-identical
-> to one from before this document existed.
+> **A comment now reaches a model — during semantic generation only.** Phase 3
+> feeds the catalog descriptions to the generator and promotes them into the
+> document (§5). A **run** prompt is still byte-identical to one from before this
+> document existed *unless a layer has been generated since*, because the seeded
+> descriptions travel out through the semantic block that already exists — which
+> is §5.2's whole point. §4's rendering rules, which put a raw DDL comment in
+> front of a run, are still Phase 4.
 >
 > **§1's SQL has been executed** against all four engines (§9 has the banners);
 > where a query needed correcting, the correction is inline and marked
@@ -834,20 +839,26 @@ path was driven end to end against the running stack: comments applied to the
 `GET …/schema`. The migration was applied, downgraded and re-applied against the
 live app database, whose three existing snapshots all read back as `{}`.
 
-### Phase 3 — Feed the semantic layer
+### Phase 3 — Feed the semantic layer — ☑ done
 
-- [ ] `_ddl()` renders table and column comments.
-- [ ] `_overview` receives database + schema comments.
-- [ ] Prompt rules added to `TABLE_SYSTEM` / `OVERVIEW_SYSTEM`; **`SEMANTIC_PROMPT_VERSION` → `s3`**.
-- [ ] Seeding per §5.2, `provenance.source = "derived"`.
-- [ ] Tests in `test_semantic_generator.py`: a commented snapshot + a fake
+- [x] `_ddl()` renders table and column comments — with one refinement recorded
+      in §10: a *neighbour* table carries its own comment but not its columns'.
+- [x] `_overview` receives database + schema comments, via a new
+      `catalog_meta` argument to `generate_document` that `semantic_service`
+      reads off the snapshot row.
+- [x] Prompt rules added to `TABLE_SYSTEM` / `OVERVIEW_SYSTEM`; **`SEMANTIC_PROMPT_VERSION` → `s3`**.
+- [x] Seeding per §5.2, `provenance.source = "derived"`.
+- [x] Tests in `test_semantic_generator.py`: a commented snapshot + a fake
       gateway that returns *nothing* for a table still yields an entity carrying
       the DDL description; `merge_documents` still preserves an edited one.
-- [ ] `test_semantic_budget.py` still passes — generation must not widen
+- [x] `test_semantic_budget.py` still passes — generation must not widen
       disclosure.
 
 **Done when:** generating a layer on a commented fixture produces descriptions
-that quote the DBA, and regeneration still preserves edits.
+that quote the DBA, and regeneration still preserves edits. ✅ — 1390 tests
+green, all seven import-linter contracts kept (`app.semantic` stays
+self-contained: it reads the `comment` keys the connectors already cleaned and
+imports nothing new).
 
 ### Phase 4 — Feed the run
 
@@ -986,8 +997,8 @@ Minimum engine version each read needs, if a customer runs something older:
 | 0 | Prove the catalog reads on all four engines | ☑ **done** | 2026-08-13 | All four run, each twice (owner + read-only). Three queries needed correcting — see below. **Oracle 19c not reachable**, so only 23ai is verified. |
 | 1 | Capture — port objects, `comments.py`, four connectors | ☑ **done** | 2026-08-13 | Verified through the real connectors against real servers of all four engines, as the read-only role. |
 | 2 | Persist — migration, `catalog_meta`, DTOs, UI | ☑ **done** | 2026-08-13 | Migration `0012`, applied and round-tripped against the live app database. Driven end to end through the real API against the commented `sales` demo. Still nothing reaching a model — that is Phase 4. |
-| 3 | Semantic-layer generation reads and seeds comments | ☐ not started | | |
-| 4 | Run-time rendering + the layer-wins suppression rule | ☐ not started | | **Nothing reaches a model yet.** Phase 1 only captures. |
+| 3 | Semantic-layer generation reads and seeds comments | ☑ **done** | 2026-08-13 | `SEMANTIC_PROMPT_VERSION` **s2 → s3**. The first phase where a comment reaches a model — generation only. Verified against fakes, not a provider; the honest end-to-end check is Phase 6's eval. |
+| 4 | Run-time rendering + the layer-wins suppression rule | ☐ not started | | **No raw comment reaches a run prompt yet** — but a *seeded* one does, through the semantic block, once a layer is regenerated under s3. See the note below on `_render_entity`. |
 | 5 | Per-engine edges (Oracle first) | ☐ not started | | The annotations query is now proven and corrected (§1.5), so this is smaller than it was. |
 | 6 | Verification, eval, doc updates | ☐ not started | | `make guard` and `make lint` were run against the Phase 1 connector changes and are green; the eval comparison and the doc updates are still outstanding. |
 
@@ -1033,6 +1044,10 @@ and an Oracle read-only user with **no `SELECT_CATALOG_ROLE`** — only
 | `frontend/src/api/types.ts` | 2 | `comment?` on `SchemaColumn`/`SchemaTable`, new `SchemaCatalogMeta`, `catalog_meta?` on `SchemaSnapshot`. Optional on the wire types because a pre-0012 snapshot has no such key. |
 | `frontend/src/pages/DataSourcesPage.tsx` | 2 | Table description under each card header, column description in the expanded row, the database description above the list, and an "N descriptions" chip whose tooltip gives the breakdown. Search matches descriptions as well as names. Every description is `dir="auto"`. |
 | `backend/tests/unit/test_schema_catalog_api.py` | 2 | New, 13 tests. The `catalog_meta()` document and its counts, the sync/read round trip through a real FastAPI app, and the no-comments case reading back as `{}`. |
+| `backend/app/semantic/prompts.py` | 3 | `SEMANTIC_PROMPT_VERSION` **s2 → s3**; one rule each in `TABLE_SYSTEM` and `OVERVIEW_SYSTEM` saying what a quoted string is; `OVERVIEW_USER` gains a `{catalog}` slot that renders to nothing when there is nothing to say. |
+| `backend/app/semantic/generator.py` | 3 | `_ddl` renders the table comment after the row count and the column comment after the hints; new `_catalog_block` for the overview pass; `generate_document` takes `catalog_meta`; `business_context` falls back to the database comment; new `_seed_from_catalog` promotes a comment into the document as `provenance.source = "derived"`. |
+| `backend/app/services/semantic_service.py` | 3 | `_snapshot` carries `catalog_meta` off the snapshot row (`{}` on a pre-0012 row); `execute_job` passes it to the generator. |
+| `backend/tests/unit/test_semantic_generator.py` | 3 | 11 new tests. What reaches each prompt, the closed-policy case, seeding and its gap-only rule, the fallback for `business_context`, and `merge_documents` over an edited seeded description. `ScriptedGateway` now records the prompts it was sent, so the assertions are about what a model would actually have read. |
 
 ### Decisions changed while executing
 
@@ -1048,4 +1063,10 @@ this is the record.
 | 2026-08-13 | §2.2 | **Stored `catalog_meta` omits empty keys; the DTO fills them in.** §2.2 shows all three keys always present, which would write `{"counts": {"tables": 0, "columns": 0}}` for the overwhelmingly common case of a database with no comments — a stored row that is *not* the `'{}'` the migration defaults to, so a re-synced connection would stop matching one that was never re-synced, for no gain. Storage therefore omits what is empty and an uncommented snapshot stores exactly `{}`. The **wire** shape is the opposite: `SchemaCatalogMeta` defaults every field, so a client reads `counts.columns` without guarding. Storage optimises for "indistinguishable from before the feature"; the DTO optimises for "no null checks in the browser", and they are allowed to differ because one is a schema and the other is a document. |
 | 2026-08-13 | §2.2 | **The document is built by `SchemaSnapshot.catalog_meta()`, not at the call site.** It is the same argument `ColumnInfo.as_dict()`'s own docstring makes — a serialisation written where it is used gets copied the second time it is needed and the copies stop agreeing — and it keeps the counts fold out of `app/api/`, which is HTTP shape only. |
 | 2026-08-13 | §7, Phase 2 | **The schema browser searches descriptions, not just names.** One line in the existing filter. A description is most useful for exactly the search a name cannot serve — nobody names a table `cancellations`, but a DBA wrote the word in a comment — and a list that displays the sentence while refusing to match on it invites a search that silently finds nothing. |
+| 2026-08-13 | §5.1 | **A neighbour table carries its own comment but not its columns'.** `_ddl` renders the described table and up to six FK neighbours, and §5.1 said only "add the column comment after the existing bits". Applied to neighbours that is six tables × forty columns × up to 240 stored chars — tens of thousands of characters of prose per call, on every one of forty-odd calls, about tables the model is not being asked to describe. A neighbour is rendered so a cross-table metric can *name a real column*, so it keeps its names, types and keys, and it keeps its one-line table comment (cheap, and it says what the neighbour is). `_ddl` grew a `column_comments` flag; the described table is unchanged. |
+| 2026-08-13 | §5.1 | **Table comments were not added to the overview pass.** §5.1 scopes `_overview` to the database and schema comments and that is what landed. The temptation is real — a comment per table would be the richest input `business_context` could get — but it is 200 tables × up to 400 chars against a prompt whose own system message says "you are NOT given column detail", and the per-table pass is where that detail is supposed to land. Reconsider only with an eval number behind it. |
+| 2026-08-13 | §5.2 | **`business_context` also falls back when the overview pass *fails*.** §5.2 says "empty and a database comment exists → use it", and a provider failure returns an empty `_Overview` — so the fallback covers the case the plan did not name, which is the one where it matters most: a failed orientation call used to leave the whole layer with no business context at all. |
+| 2026-08-13 | §5.2 | **`source = "derived"` marks the entry, not the field.** An entity whose label and grain the model wrote but whose *description* came from the catalog reads as `derived`, because provenance is per entry and there is nowhere finer to put it. That is the plan's literal instruction and it is the right way round: the description is what the editor shows and what a reader judges the entry by. `provenance.edited` is untouched, which is the only part `merge_documents` reads. |
+| 2026-08-13 | §4.4 | **The generator applies no render cap.** The §4.4 caps (200/120 per comment, 2,500 per block) belong to the run block and to Phase 4. Generation sends one table per call with its own comments and nothing else's, so the stored caps (400/240, `comments.py`) are the only bound it needs — and truncating the DBA's sentence *again* before the one call whose entire job is to read it would be paying for the feature twice. |
+| 2026-08-13 | §7, Phase 4 | **`_render_entity` does not render `description` — noted for Phase 4.** Found while checking what Phase 3 changes about a run prompt. A seeded *column* description reaches a run through `_render_column`; a seeded *table* description reaches nothing, so an entity whose only content is its seeded description still renders as `""` and `covered_keys` will correctly report that table as uncovered — the DDL table comment is then rendered by §4.2's fallback. The two rules agree, by accident rather than design, and Phase 4 must not "fix" one of them without re-reading the other. |
 | 2026-08-13 | §7, Phase 2 | **Descriptions render `dir="auto"`, like every other free-text field.** A comment is prose written by whoever owns the database, so it can be Persian, and a Persian sentence laid out left-to-right reads with its clauses in the wrong order. Confirmed end to end: a comment containing ZWNJ (`سفارش‌ها`) survived Phase 1's cleaning, JSONB storage and JSON serialisation with the joiner intact. |

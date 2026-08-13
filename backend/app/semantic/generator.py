@@ -255,6 +255,7 @@ async def generate_document(
     gateway: LLMGateway,
     llm: ResolvedLLM,
     budget: HintBudget,
+    catalog_meta: dict[str, Any] | None = None,
     only_tables: list[str] | None = None,
     concurrency: int = DEFAULT_CONCURRENCY,
     on_progress: ProgressFn | None = None,
@@ -266,10 +267,15 @@ async def generate_document(
     schema too big to describe in one sitting, and for re-describing a table
     whose meaning changed). `cancelled` is polled between tables so a user
     who changes their mind is not billed for the remainder.
+
+    `catalog_meta` is `schema_snapshots.catalog_meta` — the database and schema
+    descriptions the sync picked up. Table and column comments need no
+    parameter: they ride inside `tables`, where the connectors put them.
     """
     index = build_index(tables, dialect)
     stats = GenerationStats()
     doc = SemanticDocument()
+    catalog = catalog_meta or {}
 
     wanted = (
         [t for t in tables if _qualified(t) in {n.lower() for n in only_tables}]
@@ -284,8 +290,18 @@ async def generate_document(
 
     # ── pass 1: orientation ──────────────────────────────────────────────
     await report("Reading the shape of the schema", 0)
-    overview = await _overview(gateway, llm, tables, relationships, dialect, stats)
-    doc.business_context = overview.business_context.strip()
+    overview = await _overview(
+        gateway, llm, tables, relationships, dialect, stats, catalog
+    )
+    # Seeded, not overridden: the model read the catalog description and was
+    # asked to prefer it, so what it wrote is that sentence plus what the table
+    # names add. The raw comment is the floor — including when the overview pass
+    # failed outright, which is the case that used to leave a whole layer with
+    # no business context at all.
+    doc.business_context = (
+        overview.business_context.strip()
+        or str(catalog.get("database_comment") or "").strip()
+    )
     doc.default_exclusions = overview.default_exclusions.strip()
     doc.time = TimeSemantics(
         fiscal_year_start_month=(
@@ -368,6 +384,7 @@ async def _overview(
     relationships: list[dict[str, Any]],
     dialect: str,
     stats: GenerationStats,
+    catalog_meta: dict[str, Any],
 ) -> _Overview:
     table_lines = "\n".join(
         f"- {_qualified(t)}"
@@ -388,6 +405,7 @@ async def _overview(
                     role="user",
                     content=OVERVIEW_USER.format(
                         dialect=dialect,
+                        catalog=_catalog_block(catalog_meta),
                         tables=table_lines or "(none)",
                         relationships=fk_lines or "(none)",
                     ),
@@ -426,7 +444,11 @@ async def _describe_table(
                     table=qualified,
                     table_ddl=_ddl(table, budget),
                     neighbours=(
-                        "\n".join(_ddl(n, budget) for n in neighbours) or "(none)"
+                        "\n".join(
+                            _ddl(n, budget, column_comments=False)
+                            for n in neighbours
+                        )
+                        or "(none)"
                     ),
                 ),
             ),
@@ -571,7 +593,7 @@ def _to_entity(
     if time_column.lower() not in known:
         time_column = ""
 
-    return SemanticEntity(
+    entity = SemanticEntity(
         table=qualified,
         label=draft.label.strip(),
         description=draft.description.strip(),
@@ -583,19 +605,81 @@ def _to_entity(
         metrics=metrics,
         provenance=Provenance(source="llm"),
     )
+    _seed_from_catalog(entity, table)
+    return entity
+
+
+def _seed_from_catalog(entity: SemanticEntity, table: dict[str, Any]) -> None:
+    """Fill the gaps the model left with the catalog's own descriptions.
+
+    Prompting alone is not enough. It leaves the DBA's sentence invisible in the
+    editor and dependent on the model echoing it, and a model that skipped a
+    column — or a table it could say nothing about — drops the one piece of
+    business-accurate documentation that already existed. Promoting the comment
+    into the document is what makes the run-time suppression rule sound rather
+    than lossy: nothing is lost by rendering the layer instead of the raw
+    comment, because the layer is where the comment went.
+
+    Gaps only. A description the model wrote is a description of *this* schema
+    written with the comment in front of it; overwriting it with the raw comment
+    would trade a considered sentence for its own input.
+
+    `source = "derived"` rather than `"human"` — it is the value already used
+    for facts read off the catalog rather than invented (`SemanticJoin`), and it
+    leaves `provenance.edited` meaning exactly what it means today, *a person
+    touched this in our UI*, so `merge_documents` and REPLACE keep working.
+    """
+    table_comment = str(table.get("comment") or "").strip()
+    if table_comment and not entity.description:
+        entity.description = table_comment
+        entity.provenance = Provenance(source="derived")
+
+    described = {c.name.lower(): c for c in entity.columns}
+    for column in table.get("columns", []):
+        comment = str(column.get("comment") or "").strip()
+        name = str(column.get("name") or "").strip()
+        if not comment or not name:
+            continue
+        existing = described.get(name.lower())
+        if existing is None:
+            # A column the model did not mention at all. The prompt tells it to
+            # skip the self-evident ones — but a DBA who wrote a sentence about
+            # this column had already decided it was not one of those.
+            entity.columns.append(
+                SemanticColumn(
+                    name=name,
+                    description=comment,
+                    provenance=Provenance(source="derived"),
+                )
+            )
+        elif not existing.description:
+            existing.description = comment
+            existing.provenance = Provenance(source="derived")
 
 
 # ── prompt rendering ─────────────────────────────────────────────────────
-def _ddl(table: dict[str, Any], budget: HintBudget) -> str:
+def _ddl(
+    table: dict[str, Any], budget: HintBudget, *, column_comments: bool = True
+) -> str:
     """One table as the model sees it: names, types, keys, and gated hints.
 
     Deliberately the same information the generate prompt gets, so a semantic
     layer can never be built from data the disclosure policy would not have
-    shown the model anyway.
+    shown the model anyway. Catalog comments keep that invariant rather than
+    bending it: a comment is DDL a human wrote, it does not change when a row
+    changes, and it travels with structure under every policy — so it is
+    exactly as available to the run prompt as it is here.
+
+    `column_comments` is off for the neighbour tables. A neighbour is rendered
+    so a cross-table metric can name a real column, not so the model can read
+    about it, and six neighbours' worth of column prose is the difference
+    between a prompt and a document.
     """
     lines = [f"{_qualified(table)}"]
     if budget.row_counts and table.get("approx_row_count"):
         lines[0] += f"  (~{table['approx_row_count']:,} rows)"
+    if table.get("comment"):
+        lines[0] += f' "{table["comment"]}"'
     for column in table.get("columns", []):
         bits = [f"  {column['name']} {column.get('data_type', '')}".rstrip()]
         if column.get("is_primary_key"):
@@ -612,8 +696,36 @@ def _ddl(table: dict[str, Any], budget: HintBudget) -> str:
             bits.append(f"{column['distinct_count']} distinct")
         if budget.temporal_range and column.get("min_value") and column.get("max_value"):
             bits.append(f"{column['min_value']}…{column['max_value']}")
+        if column_comments and column.get("comment"):
+            bits.append(f'"{column["comment"]}"')
         lines.append(" ".join(bits))
     return "\n".join(lines)
+
+
+def _catalog_block(catalog_meta: dict[str, Any]) -> str:
+    """What the catalog says one level above a table, for the overview pass.
+
+    Empty when the database carries neither — which is MySQL and Oracle always
+    (neither engine has a database or schema comment at all), and every other
+    database whose owner never wrote one. The overview prompt then reads exactly
+    as it did before, minus its new rule.
+    """
+    lines: list[str] = []
+    database = str(catalog_meta.get("database_comment") or "").strip()
+    if database:
+        lines.append(f"About this database (from the database catalog): {database}")
+    schemas = catalog_meta.get("schema_comments") or {}
+    if isinstance(schemas, dict) and schemas:
+        described = [
+            f"- {name}: {str(text).strip()}"
+            for name, text in schemas.items()
+            if str(text).strip()
+        ]
+        if described:
+            lines.append(
+                "Schemas (from the database catalog):\n" + "\n".join(described)
+            )
+    return "\n" + "\n\n".join(lines) + "\n" if lines else ""
 
 
 def _neighbour_map(

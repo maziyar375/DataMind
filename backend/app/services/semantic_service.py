@@ -271,6 +271,7 @@ class SemanticService:
                 gateway=gateway,
                 llm=llm,
                 budget=budget,
+                catalog_meta=snapshot["catalog_meta"],
                 only_tables=only_tables or None,
                 on_progress=lambda p: self._progress(job_id, p),
                 cancelled=cancelled.is_set,
@@ -434,13 +435,18 @@ class SemanticService:
         if row is None:
             return {
                 "tables": [], "relationships": [],
-                "dialect": "postgres", "version": 0,
+                "dialect": "postgres", "version": 0, "catalog_meta": {},
             }
         return {
             "tables": row.tables,
             "relationships": row.relationships,
             "dialect": row.dialect,
             "version": row.version,
+            # Database and schema descriptions, for the overview pass. A
+            # pre-0012 snapshot reads back as `{}`, which is the same absence a
+            # database with no comments produces — nothing downstream may tell
+            # the two apart, and nothing downstream needs to.
+            "catalog_meta": row.catalog_meta or {},
         }
 
 
