@@ -235,6 +235,11 @@ class SchemaColumn(BaseModel):
     is_primary_key: bool = False
     is_foreign_key: bool = False
     references: str | None = None
+    # The description the database's own catalog carries. Absent on a snapshot
+    # taken before comments were captured, and absent on any object nobody
+    # documented — so `None`, not `""`, and the UI shows nothing rather than an
+    # empty quotation.
+    comment: str | None = None
 
 
 class SchemaTable(BaseModel):
@@ -242,8 +247,30 @@ class SchemaTable(BaseModel):
     name: str
     columns: list[SchemaColumn] = Field(default_factory=list)
     approx_row_count: int | None = None
+    comment: str | None = None
 
     model_config = ConfigDict(populate_by_name=True)
+
+
+class SchemaCatalogCounts(BaseModel):
+    """How many descriptions the last sync actually found."""
+
+    tables: int = 0
+    columns: int = 0
+
+
+class SchemaCatalogMeta(BaseModel):
+    """Catalog description one level above a table, plus what was picked up.
+
+    Every field is optional because only PostgreSQL and SQL Server carry a
+    database or schema description at all — MySQL has none outside MariaDB and
+    Oracle has neither — so a client must treat all of this as absent by
+    default rather than as empty.
+    """
+
+    database_comment: str | None = None
+    schema_comments: dict[str, str] = Field(default_factory=dict)
+    counts: SchemaCatalogCounts = Field(default_factory=SchemaCatalogCounts)
 
 
 class SchemaRelationship(BaseModel):
@@ -259,6 +286,7 @@ class SchemaRead(BaseModel):
     synced_at: datetime | None = None
     tables: list[SchemaTable] = Field(default_factory=list)
     relationships: list[SchemaRelationship] = Field(default_factory=list)
+    catalog_meta: SchemaCatalogMeta = Field(default_factory=SchemaCatalogMeta)
 
 
 # ── semantic layer ───────────────────────────────────────────────────────

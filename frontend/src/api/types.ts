@@ -70,6 +70,11 @@ export interface SchemaColumn {
   is_primary_key: boolean
   is_foreign_key: boolean
   references: string | null
+  // What the database's own catalog says this column is — `COMMENT ON`, MySQL's
+  // COLUMN_COMMENT, an MS_Description property, Oracle's ALL_COL_COMMENTS.
+  // Optional because a snapshot taken before comments were captured has no such
+  // key at all, which is not the same as a column nobody documented.
+  comment?: string | null
 }
 
 export interface SchemaTable {
@@ -77,6 +82,7 @@ export interface SchemaTable {
   name: string
   columns: SchemaColumn[]
   approx_row_count: number | null
+  comment?: string | null
 }
 
 export interface SchemaRelationship {
@@ -86,12 +92,22 @@ export interface SchemaRelationship {
   to_column: string
 }
 
+/** Catalog description above the table level, and what the last sync found. */
+export interface SchemaCatalogMeta {
+  // Only PostgreSQL and SQL Server carry either of these; MySQL has none
+  // outside MariaDB and Oracle has neither.
+  database_comment?: string | null
+  schema_comments?: Record<string, string>
+  counts?: { tables: number; columns: number }
+}
+
 export interface SchemaSnapshot {
   dialect: string
   version: number
   synced_at: string | null
   tables: SchemaTable[]
   relationships: SchemaRelationship[]
+  catalog_meta?: SchemaCatalogMeta
 }
 
 // ── semantic layer ─────────────────────────────────────────────────────────

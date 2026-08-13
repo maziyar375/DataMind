@@ -1,9 +1,13 @@
 # Catalog metadata (comments & descriptions) — design and implementation plan
 
-> **Status: Phases 0 and 1 landed; 2–6 proposed.** Every code reference below
+> **Status: Phases 0, 1 and 2 landed; 3–6 proposed.** Every code reference below
 > is to code that exists *today*; the behaviour described in §4–§6 is what the
 > remaining phases in §7 are meant to build. The ledger at the end (§10) records
 > what actually landed. Until a phase is ticked there, assume it does not exist.
+>
+> **Nothing reaches a model yet.** Phases 1 and 2 capture, store and display the
+> comments; §4's rendering rules are Phase 4. A prompt today is byte-identical
+> to one from before this document existed.
 >
 > **§1's SQL has been executed** against all four engines (§9 has the banners);
 > where a query needed correcting, the correction is inline and marked
@@ -807,21 +811,28 @@ green, `test_a_snapshot_with_no_comments_is_byte_identical_to_the_old_format`
 is the assertion, and every engine was additionally driven end to end through
 its real connector against a real server as the read-only role.
 
-### Phase 2 — Persist and expose
+### Phase 2 — Persist and expose — ☑ done
 
-- [ ] Alembic migration: `schema_snapshots.catalog_meta` JSONB not-null default
+- [x] Alembic migration: `schema_snapshots.catalog_meta` JSONB not-null default
       `'{}'`.
-- [ ] `sync_schema` ([connections.py:211-271](../backend/app/api/v1/connections.py#L211-L271))
-      writes it, including `counts`.
-- [ ] `SchemaRead` / `SchemaTable` / `SchemaColumn` DTOs carry `comment`;
+- [x] `sync_schema` ([connections.py:211-271](../backend/app/api/v1/connections.py#L211-L271))
+      writes it, including `counts` — via `SchemaSnapshot.catalog_meta()`, which
+      is where the shape is decided; see §10.
+- [x] `SchemaRead` / `SchemaTable` / `SchemaColumn` DTOs carry `comment`;
       `SchemaRead` carries `catalog_meta`.
-- [ ] `frontend/src/api/types.ts` + the schema browser in
+- [x] `frontend/src/api/types.ts` + the schema browser in
       `DataSourcesPage.tsx` show comments, and the sync result reports
       "picked up N table and M column descriptions".
-- [ ] Tests: round-trip through the API; `test_openapi_has_no_secrets.py` still
+- [x] Tests: round-trip through the API; `test_openapi_has_no_secrets.py` still
       passes (it walks every DTO).
 
-**Done when:** a synced Postgres connection shows its comments in the UI.
+**Done when:** a synced Postgres connection shows its comments in the UI. ✅ —
+1379 backend tests green, all seven import-linter contracts kept, and the whole
+path was driven end to end against the running stack: comments applied to the
+`sales` demo database, `POST …/schema/sync` through the real API, `counts`
+`{tables: 2, columns: 4}` stored on the row and read back identically by
+`GET …/schema`. The migration was applied, downgraded and re-applied against the
+live app database, whose three existing snapshots all read back as `{}`.
 
 ### Phase 3 — Feed the semantic layer
 
@@ -974,7 +985,7 @@ Minimum engine version each read needs, if a customer runs something older:
 | --- | --- | --- | --- | --- |
 | 0 | Prove the catalog reads on all four engines | ☑ **done** | 2026-08-13 | All four run, each twice (owner + read-only). Three queries needed correcting — see below. **Oracle 19c not reachable**, so only 23ai is verified. |
 | 1 | Capture — port objects, `comments.py`, four connectors | ☑ **done** | 2026-08-13 | Verified through the real connectors against real servers of all four engines, as the read-only role. |
-| 2 | Persist — migration, `catalog_meta`, DTOs, UI | ☐ not started | | Nothing captured in Phase 1 is stored yet: `sync_schema` writes `tables` (so table and column comments **do** persist inside it) but `database_comment`/`schema_comments` are dropped on the floor until `catalog_meta` exists. |
+| 2 | Persist — migration, `catalog_meta`, DTOs, UI | ☑ **done** | 2026-08-13 | Migration `0012`, applied and round-tripped against the live app database. Driven end to end through the real API against the commented `sales` demo. Still nothing reaching a model — that is Phase 4. |
 | 3 | Semantic-layer generation reads and seeds comments | ☐ not started | | |
 | 4 | Run-time rendering + the layer-wins suppression rule | ☐ not started | | **Nothing reaches a model yet.** Phase 1 only captures. |
 | 5 | Per-engine edges (Oracle first) | ☐ not started | | The annotations query is now proven and corrected (§1.5), so this is smaller than it was. |
@@ -1014,6 +1025,14 @@ and an Oracle read-only user with **no `SELECT_CATALOG_ROLE`** — only
 | `backend/app/infra/connectors/mssql.py` | 1 | Four `MS_Description` queries with the added allowlist filter; `business_schemas`. |
 | `backend/app/infra/connectors/oracle.py` | 1 | Table + column comment queries from the `ALL_*` views; `business_schemas` — the engine that made the filter necessary. |
 | `backend/tests/unit/test_catalog_comments.py` | 1 | New, 81 tests. The cleaning contract, each engine's real row shapes, the system-schema sets, and the byte-identical serialisation guarantee. |
+| `backend/app/infra/db/migrations/versions/0012_catalog_meta.py` | 2 | New. `schema_snapshots.catalog_meta` JSONB, not-null, server default `'{}'`. No backfill — the comments live on the customer's server, so the honest way to populate an existing snapshot is to re-sync it. |
+| `backend/app/infra/db/models.py` | 2 | `SchemaSnapshotRow.catalog_meta`. |
+| `backend/app/domain/ports/database.py` | 2 | `SchemaSnapshot.catalog_meta()` — builds the stored document, including the `counts` fold. |
+| `backend/app/api/v1/connections.py` | 2 | `sync_schema` stores `catalog_meta()`; `_to_schema_read` carries it out. |
+| `backend/app/api/schemas.py` | 2 | `comment` on `SchemaColumn` and `SchemaTable`; new `SchemaCatalogMeta` / `SchemaCatalogCounts`; `catalog_meta` on `SchemaRead`. |
+| `frontend/src/api/types.ts` | 2 | `comment?` on `SchemaColumn`/`SchemaTable`, new `SchemaCatalogMeta`, `catalog_meta?` on `SchemaSnapshot`. Optional on the wire types because a pre-0012 snapshot has no such key. |
+| `frontend/src/pages/DataSourcesPage.tsx` | 2 | Table description under each card header, column description in the expanded row, the database description above the list, and an "N descriptions" chip whose tooltip gives the breakdown. Search matches descriptions as well as names. Every description is `dir="auto"`. |
+| `backend/tests/unit/test_schema_catalog_api.py` | 2 | New, 13 tests. The `catalog_meta()` document and its counts, the sync/read round trip through a real FastAPI app, and the no-comments case reading back as `{}`. |
 
 ### Decisions changed while executing
 
@@ -1026,3 +1045,7 @@ this is the record.
 | 2026-08-13 | §6.1.1 | **`SYSTEM_SCHEMAS` filtering never empties the allowlist.** "Applied at introspection, before anything else runs" would make an empty snapshot out of a connection whose allowlist is *only* system schemas — and an empty snapshot answers no question at all, because the guard resolves every name against it. Two ways that happens in practice: somebody points DataMind at `SYS` on purpose, or connects to Oracle *as* `SYSTEM`, where the allowlist defaults to the connecting user's own schema. `business_schemas` therefore returns the filtered list **or the original if filtering left nothing**. |
 | 2026-08-13 | §6.1.1 | **`C##` is not a system prefix on Oracle.** A common user in a multitenant setup can legitimately own business tables, and dropping a schema somebody allowlisted on purpose is worse than carrying one they did not. `APEX_*`, `ORDS_*` and `FLOWS_*` are still filtered. |
 | 2026-08-13 | §7, Phase 0 | **A shell driver for the containers was not written.** The probe takes connection flags and the four containers were driven by hand; the exact images and roles are in §9 so the run is reproducible without another script to maintain. |
+| 2026-08-13 | §2.2 | **Stored `catalog_meta` omits empty keys; the DTO fills them in.** §2.2 shows all three keys always present, which would write `{"counts": {"tables": 0, "columns": 0}}` for the overwhelmingly common case of a database with no comments — a stored row that is *not* the `'{}'` the migration defaults to, so a re-synced connection would stop matching one that was never re-synced, for no gain. Storage therefore omits what is empty and an uncommented snapshot stores exactly `{}`. The **wire** shape is the opposite: `SchemaCatalogMeta` defaults every field, so a client reads `counts.columns` without guarding. Storage optimises for "indistinguishable from before the feature"; the DTO optimises for "no null checks in the browser", and they are allowed to differ because one is a schema and the other is a document. |
+| 2026-08-13 | §2.2 | **The document is built by `SchemaSnapshot.catalog_meta()`, not at the call site.** It is the same argument `ColumnInfo.as_dict()`'s own docstring makes — a serialisation written where it is used gets copied the second time it is needed and the copies stop agreeing — and it keeps the counts fold out of `app/api/`, which is HTTP shape only. |
+| 2026-08-13 | §7, Phase 2 | **The schema browser searches descriptions, not just names.** One line in the existing filter. A description is most useful for exactly the search a name cannot serve — nobody names a table `cancellations`, but a DBA wrote the word in a comment — and a list that displays the sentence while refusing to match on it invites a search that silently finds nothing. |
+| 2026-08-13 | §7, Phase 2 | **Descriptions render `dir="auto"`, like every other free-text field.** A comment is prose written by whoever owns the database, so it can be Persian, and a Persian sentence laid out left-to-right reads with its clauses in the wrong order. Confirmed end to end: a comment containing ZWNJ (`سفارش‌ها`) survived Phase 1's cleaning, JSONB storage and JSON serialisation with the joiner intact. |

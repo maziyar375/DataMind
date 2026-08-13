@@ -257,12 +257,28 @@ export default function DataSourcesPage() {
     if (!schema) return []
     const needle = search.trim().toLowerCase()
     if (!needle) return schema.tables
+    // Descriptions are searched alongside names because that is the search a
+    // description makes possible: nobody names a table `cancellations`, but a
+    // DBA wrote the word in a comment, and a list that shows the sentence but
+    // will not match on it invites the search that silently finds nothing.
     return schema.tables.filter(
       (table) =>
         table.name.toLowerCase().includes(needle) ||
-        table.columns.some((c) => c.name.toLowerCase().includes(needle)),
+        (table.comment ?? '').toLowerCase().includes(needle) ||
+        table.columns.some(
+          (c) =>
+            c.name.toLowerCase().includes(needle) ||
+            (c.comment ?? '').toLowerCase().includes(needle),
+        ),
     )
   }, [schema, search])
+
+  // Table and column descriptions the last sync read out of the catalog. The
+  // counts are stored beside the snapshot rather than derived here so this
+  // stays one field read instead of a walk over every column on every render.
+  const describedCount =
+    (schema?.catalog_meta?.counts?.tables ?? 0) +
+    (schema?.catalog_meta?.counts?.columns ?? 0)
 
   const editing = creating || !!selected
 
@@ -668,6 +684,24 @@ export default function DataSourcesPage() {
                     <span style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
                       <Chip tone="green">{schema.tables.length} tables</Chip>
                       <Chip>{schema.relationships.length} relationships</Chip>
+                      {/* The confirmation that somebody's documentation is
+                          actually being read. Absent rather than "0" when a
+                          database carries no comments: a zero here reads as a
+                          failure, and having none is the normal case. */}
+                      {describedCount > 0 && (
+                        // The breakdown rides on a wrapper rather than on the
+                        // Chip: `Chip` takes a deliberately narrow set of props
+                        // and one caller wanting a tooltip is not a reason to
+                        // widen a primitive every page uses.
+                        <span
+                          title={`${schema.catalog_meta?.counts?.tables ?? 0} table and ${
+                            schema.catalog_meta?.counts?.columns ?? 0
+                          } column descriptions read from the database's own catalog`}
+                          style={{ display: 'flex' }}
+                        >
+                          <Chip>{describedCount} descriptions</Chip>
+                        </span>
+                      )}
                     </span>
                   )}
                 </div>
@@ -686,6 +720,28 @@ export default function DataSourcesPage() {
                   />
                 ) : (
                   <>
+                    {/* What the database says it is, in its own words. Only
+                        PostgreSQL and SQL Server carry this at all — MySQL has
+                        none outside MariaDB and Oracle has neither — so it is
+                        absent far more often than not, and nothing below it
+                        depends on it being there. */}
+                    {schema.catalog_meta?.database_comment && (
+                      <div
+                        dir="auto"
+                        style={{
+                          padding: '10px 13px',
+                          borderRadius: 9,
+                          background: 'var(--panel-alt)',
+                          border: '1px solid var(--border)',
+                          fontSize: 12.5,
+                          lineHeight: 1.55,
+                          color: 'var(--text2)',
+                        }}
+                      >
+                        {schema.catalog_meta.database_comment}
+                      </div>
+                    )}
+
                     {/* The index pages' own toolbar, at the width of this pane:
                         the shared segmented control and the shared search field,
                         rather than the local copies of both that used to live
@@ -817,6 +873,32 @@ function TableCard({
         </span>
       </button>
 
+      {/* Shown collapsed, because "which of these 42 tables did I mean?" is the
+          question the description answers and the collapsed list is where it is
+          asked. One line, clipped — the full text is the `title`, and the whole
+          sentence is in the semantic layer editor if it matters. `dir="auto"`
+          for the same reason every free-text field in this app has it: a
+          Persian comment laid out left-to-right reads with its clauses in the
+          wrong order. */}
+      {table.comment && (
+        <div
+          dir="auto"
+          title={table.comment}
+          style={{
+            padding: '0 14px 10px 37px',
+            marginTop: -4,
+            fontSize: 11.5,
+            lineHeight: 1.45,
+            color: 'var(--text-dim)',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {table.comment}
+        </div>
+      )}
+
       {open && (
         <div style={{ borderTop: '1px solid var(--border)' }}>
           {table.columns.map((column) => (
@@ -839,7 +921,34 @@ function TableCard({
               <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
                 {column.data_type}
               </span>
-              <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+              {column.comment && (
+                <span
+                  dir="auto"
+                  title={column.comment}
+                  style={{
+                    fontSize: 11.5,
+                    color: 'var(--text-dim)',
+                    // `minWidth: 0` or the flex item refuses to shrink below its
+                    // content and pushes the key chips off the row instead of
+                    // clipping itself.
+                    minWidth: 0,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {column.comment}
+                </span>
+              )}
+              <span
+                style={{
+                  marginLeft: 'auto',
+                  display: 'flex',
+                  gap: 6,
+                  flexShrink: 0,
+                  paddingLeft: 8,
+                }}
+              >
                 {column.is_primary_key && <Chip tone="accent">PK</Chip>}
                 {column.is_foreign_key && (
                   <Chip tone="green">FK → {column.references?.split('.').slice(-2, -1)}</Chip>

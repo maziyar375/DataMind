@@ -263,6 +263,10 @@ async def sync_schema(
             for r in snapshot.relationships
         ],
         table_count=len(snapshot.tables),
+        # Table and column comments already ride inside `tables`. This carries
+        # the two the snapshot document has no room for — the database and
+        # schema descriptions — plus the counts of what the sync picked up.
+        catalog_meta=snapshot.catalog_meta(),
     )
     db.add(row)
     connection.last_synced_at = utcnow()
@@ -293,4 +297,5 @@ def _to_schema_read(row: SchemaSnapshotRow) -> SchemaRead:
         synced_at=row.created_at,
         tables=row.tables,
         relationships=row.relationships,
+        catalog_meta=row.catalog_meta or {},
     )

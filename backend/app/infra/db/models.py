@@ -21,6 +21,7 @@ from sqlalchemy import (
     UniqueConstraint,
     false,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID  # noqa: N811
@@ -152,6 +153,16 @@ class SchemaSnapshotRow(Base):
     tables: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
     relationships: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
     table_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Catalog descriptions one level above a table, plus the counts of what the
+    # sync picked up. Table and column comments are not here — they ride inside
+    # `tables`, where they are already part of the snapshot document every
+    # consumer reads. `{}` rather than NULL so a pre-0012 snapshot reads back as
+    # "nothing captured" without a guard at each call site. Not `metadata`: that
+    # name is taken on a declarative class.
+    catalog_meta: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

@@ -124,6 +124,40 @@ class SchemaSnapshot:
     database_comment: str | None = None
     schema_comments: dict[str, str] = field(default_factory=dict)
 
+    def catalog_meta(self) -> dict[str, Any]:
+        """The `schema_snapshots.catalog_meta` document for this snapshot.
+
+        Here rather than at the call site for the reason `as_dict` gives above:
+        a serialisation written where it is used gets copied the second time it
+        is needed, and the copies stop agreeing. This one has two callers
+        already — the sync route that stores it and the test that round-trips
+        it.
+
+        `counts` is the part that is not simply carried through. It is
+        denormalised on purpose so that the sync response and the schema
+        browser can say "picked up 143 column descriptions" without walking the
+        whole `tables` document — the confirmation a user needs that the
+        descriptions their DBA wrote are actually being read.
+
+        Empty keys are omitted on the same rule the comments themselves follow:
+        a snapshot from a database with no comments must serialise to something
+        indistinguishable from a snapshot taken before the field existed. With
+        nothing captured anywhere this returns `{}`, which is exactly the column
+        default every pre-0012 row already holds.
+        """
+        tables_with = sum(1 for t in self.tables if t.comment)
+        columns_with = sum(
+            1 for t in self.tables for c in t.columns if c.comment
+        )
+        out: dict[str, Any] = {}
+        if self.database_comment:
+            out["database_comment"] = self.database_comment
+        if self.schema_comments:
+            out["schema_comments"] = dict(self.schema_comments)
+        if tables_with or columns_with:
+            out["counts"] = {"tables": tables_with, "columns": columns_with}
+        return out
+
 
 @dataclass(frozen=True, slots=True)
 class ResultColumn:
