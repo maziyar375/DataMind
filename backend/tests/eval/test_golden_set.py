@@ -32,6 +32,9 @@ import pytest
 
 SUITES = Path(__file__).resolve().parents[2] / "app" / "eval" / "suites"
 VERIFY_FILE = Path(__file__).resolve().parent / "sales_v1_verify.json"
+FIXTURES_DIR = Path(__file__).resolve().parents[2] / "fixtures"
+SEED_FILE = FIXTURES_DIR / "sales_seed.sql"
+COMMENTS_FILE = FIXTURES_DIR / "sales_comments.sql"
 DSN = os.environ.get(
     "SALES_FIXTURE_DSN", "postgresql://postgres:postgres@localhost:5433/sales"
 )
@@ -143,6 +146,81 @@ def test_negative_set_never_expects_sql(negative: dict[str, Any]) -> None:
     cats = [r["category"] for r in recs]
     assert cats.count("unanswerable") == 2
     assert "metadata" in cats and "chitchat" in cats and "write_request" in cats
+
+
+# ── the comments overlay (static; the commented arm of the A/B) ──────────────
+#
+# `sales_comments.sql` is loaded on top of the seed by `--comments`. A misspelt
+# object name in it aborts the fixture load, which is a forty-minute paid run
+# that dies at the first step — so the names are checked here, for free.
+
+
+def _seed_columns() -> dict[str, set[str]]:
+    """table -> its declared columns, parsed out of the seed's CREATE TABLEs."""
+    sql = SEED_FILE.read_text()
+    out: dict[str, set[str]] = {}
+    for m in re.finditer(r"CREATE TABLE (\w+)\s*\((.*?)\n\);", sql, re.S):
+        body = re.sub(r"--[^\n]*", "", m.group(2))
+        cols = set()
+        for line in body.split("\n"):
+            line = line.strip()
+            first = line.split(" ")[0].strip(",")
+            if first and first.upper() not in {"PRIMARY", "UNIQUE", "FOREIGN", "CHECK", "CONSTRAINT"}:
+                cols.add(first.lower())
+        out[m.group(1).lower()] = cols
+    return out
+
+
+def _overlay() -> str:
+    return COMMENTS_FILE.read_text()
+
+
+def test_the_comments_overlay_names_only_real_objects() -> None:
+    sql, cols = _overlay(), _seed_columns()
+    for table in re.findall(r"COMMENT ON TABLE (\w+) IS", sql):
+        assert table.lower() in FIXTURE_TABLES, f"comment on unknown table {table}"
+    for table, col in re.findall(r"COMMENT ON COLUMN (\w+)\.(\w+) IS", sql):
+        assert table.lower() in cols, f"comment on unknown table {table}"
+        assert col.lower() in cols[table.lower()], f"comment on unknown column {table}.{col}"
+
+
+def test_the_comments_overlay_covers_enough_of_the_schema() -> None:
+    """The plan asks for ~15 tables and ~40 columns — enough that retrieval can
+    hardly select a table the DBA never documented, which would measure the
+    fixture rather than the feature."""
+    sql = _overlay()
+    assert len(re.findall(r"COMMENT ON TABLE ", sql)) >= 15
+    assert len(re.findall(r"COMMENT ON COLUMN ", sql)) >= 40
+    assert "COMMENT ON DATABASE sales IS" in sql      # seeds `business_context`
+    assert "COMMENT ON SCHEMA public IS" in sql
+
+
+def test_the_two_planted_comments_are_still_planted() -> None:
+    """One stale and one wrong, on purpose (see the overlay's header and §10 of
+    docs/catalog-metadata-plan.md). A future reader who "fixes" either of them
+    quietly turns the A/B into a measurement against perfect documentation,
+    which no real catalog is — so the plants are asserted, not just commented."""
+    sql = _overlay()
+    stale = re.search(r"COMMENT ON COLUMN customers\.segment IS\s*'([^']*)'", sql)
+    assert stale and "Reseller" in stale.group(1), (
+        "the stale plant is gone: customers.segment must still list the retired "
+        "Reseller tier, which the seed no longer writes"
+    )
+    wrong = re.search(r"COMMENT ON COLUMN orders\.subtotal IS\s*'([^']*)'", sql)
+    assert wrong and "actually paid" in wrong.group(1), (
+        "the wrong plant is gone: orders.subtotal must still claim to be what "
+        "the customer paid, which is orders.total_amount"
+    )
+
+
+def test_no_comment_exceeds_the_stored_caps() -> None:
+    """`clean_comment` truncates past 400 (table) / 240 (column) chars. A fixture
+    comment that needs truncating measures the truncator, not the feature."""
+    sql = _overlay()
+    for body in re.findall(r"COMMENT ON TABLE \w+ IS\s*'((?:[^']|'')*)'", sql):
+        assert len(body.replace("''", "'")) <= 400
+    for body in re.findall(r"COMMENT ON COLUMN \w+\.\w+ IS\s*'((?:[^']|'')*)'", sql):
+        assert len(body.replace("''", "'")) <= 240
 
 
 # ── live checks (need the fixture) ──────────────────────────────────────────

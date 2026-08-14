@@ -10,6 +10,10 @@
 -- tables wide enough (audit columns, address blocks, legacy cruft — the width a
 -- real ERP carries) that the estimate clears 24k, so retrieval must actually
 -- select a subset and the bridge-table questions below can genuinely fail.
+--   [2026-08-14] That last clause has expired: `_RETRIEVE_BUDGET_CHARS` moved
+--   24k -> 50k and this fixture estimates 26,480, so retrieve now sends the
+--   whole snapshot and recall is 1.0 by construction. The width still buys
+--   realism; it no longer buys an exercised retriever. docs/eval.md §1.
 --
 -- DELIBERATE MESSINESS (each item exists so a specific eval question bites):
 --   * Legacy unhelpful columns:  products.flg_2, products.cust_ref,

@@ -614,6 +614,23 @@ The things worth knowing before you touch it:
   declared `enum`/`set`, or a *singleton* histogram; SQL Server: a histogram
   whose `rows_sampled` equals `rows`), and where none of that holds, the
   bounded `SELECT DISTINCT … LIMIT n+1` probe is exact or silent.
+  **Catalog comments are optional in exactly the same way, and go through
+  `connectors/comments.py`** — `clean_comment` / `is_noise` / `SYSTEM_SCHEMAS`,
+  the sibling of `hints.py`. Read whatever the engine calls a description
+  (`COMMENT ON` on PG/MySQL/Oracle, `MS_Description` extended properties on SQL
+  Server), for tables, columns, and the database or schema if it has either, and
+  fold it into `ColumnInfo.comment` / `TableInfo.comment` /
+  `SchemaSnapshot.database_comment` / `.schema_comments`. Three rules, and they
+  are not style: **wrap every read in `contextlib.suppress`** like the stats
+  reads — a comment is an accuracy aid, never a correctness dependency, and a
+  role that cannot read the catalog must still get a snapshot; **clean at
+  capture, never at render**, so every consumer inherits one hygiene; and
+  **filter the allowlist through `business_schemas`**, which drops the engine's
+  own dictionary schemas but never empties the list. A comment reaches a prompt
+  under *every* disclosure policy (it is DDL a person wrote, not data — see
+  [docs/security.md](docs/security.md) §2.4), so it must be one line, capped, and
+  cleaned. Verify on a read-only role: this is the read most likely to need a
+  privilege you cannot ask a customer for.
 - **A new API route:** router in `api/v1/`, DTO in `schemas.py`, business logic
   in a `services/*` function that owns the transaction. Literal paths (e.g.
   `/test`) must be declared **above** `/{id}` routes.

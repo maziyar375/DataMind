@@ -1,6 +1,6 @@
 # Documentation index
 
-Eleven documents, ~6k lines. This page exists so you don't have to open
+Twelve documents, ~7k lines. This page exists so you don't have to open
 `architecture.md` (1,500 lines) to answer a question about charts.
 
 The three `pipeline*.md` files are one set: [pipeline.md](pipeline.md) holds the
@@ -31,12 +31,14 @@ chat run **and** the map of all three pipelines (§0), with
 | Retrieval, prompts, anything you want to prove helped | [eval.md](eval.md) | The golden set, the metrics, and the CI gate |
 | Orchestration — moving the pipeline onto LangGraph | [langgraph-migration.md](langgraph-migration.md) | Which surfaces move and which don't, the phases, and the checklist |
 | Claiming, cancelling, SSE fan-out, the reconciler | [cross-replica.md](cross-replica.md) | What stops being true with more than one API process, and the seven fixes |
+| A connector's catalog reads, or what a DDL comment does to a prompt | [catalog-metadata-plan.md](catalog-metadata-plan.md) | Each engine's comment SQL as actually executed, the layer-wins suppression rule, and the per-engine hazards |
 
 ## Historical
 
 | Doc | Status |
 | --- | --- |
 | [reports-plan.md](reports-plan.md) | **Superseded.** The phase-by-phase plan for Reports, kept as the record of what was intended. [reports.md](reports.md) describes what was built — where they disagree, reports.md is right. |
+| [catalog-metadata-plan.md](catalog-metadata-plan.md) | **Live, and still the reference.** Unlike `reports-plan.md` this one was never superseded by a companion: it is both the plan and the only description of catalog comments, so §10's ledger and "decisions changed while executing" are the record of what actually shipped. Read §1 for the per-engine SQL and §4 for what reaches the model. |
 
 ## Not documentation
 

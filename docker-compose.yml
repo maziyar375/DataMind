@@ -39,6 +39,12 @@ services:
     ports: ["5433:5432"]
     volumes:
       - ./backend/fixtures/sales_seed.sql:/docker-entrypoint-initdb.d/01_seed.sql:ro
+      # The catalog descriptions, as a second init script rather than part of
+      # the seed: the eval needs a commented and an uncommented arm of the same
+      # fixture (docs/catalog-metadata-plan.md §7 Phase 6), and the demo is the
+      # commented one — a developer should see the schema browser and the run
+      # prompt carrying a DBA's sentences, which is the whole feature.
+      - ./backend/fixtures/sales_comments.sql:/docker-entrypoint-initdb.d/02_comments.sql:ro
       - raymand_sales:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d sales"]

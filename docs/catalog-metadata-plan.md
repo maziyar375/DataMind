@@ -1,9 +1,17 @@
 # Catalog metadata (comments & descriptions) — design and implementation plan
 
-> **Status: Phases 0–5 landed; 6 proposed.** Every code reference below is
-> to code that exists *today*; the behaviour described in §6 is what the
-> remaining phases in §7 are meant to build. The ledger at the end (§10) records
-> what actually landed. Until a phase is ticked there, assume it does not exist.
+> **Status: all six phases landed.** Every code reference below is to code that
+> exists *today*. The ledger at the end (§10) records what actually landed.
+> Until a phase is ticked there, assume it does not exist.
+>
+> **The feature is verified, and deliberately not measured.** It does what §4
+> says, on all four engines, with tests and real servers behind every claim.
+> What nobody has shown is that it makes answers *better*. The A/B that would
+> show it is built and one flag away (`--comments`, §7 Phase 6) and was **held**:
+> the metric it was wanted for, retrieval recall, cannot move — `retrieve`
+> selects on names and never reads a comment, and on the eval fixture it sends
+> the whole snapshot anyway. Do not write "comments improved accuracy" anywhere
+> until a run says so.
 >
 > **Comments reach the model.** Phase 3 feeds them to the semantic generator and
 > seeds the document from them (§5); Phase 4 renders them into the run prompt
@@ -1021,27 +1029,52 @@ and where.
 
 ### Phase 6 — Verify and measure
 
-- [ ] `make guard` — the hostile corpus is unaffected, but run it; connectors
-      changed.
-- [ ] `make lint` — import-linter contracts hold (`app.semantic` stays
+- [x] `make guard` — the hostile corpus is unaffected, but run it; connectors
+      changed. ✅ 44 green.
+- [x] `make lint` — import-linter contracts hold (`app.semantic` stays
       self-contained; `comments.py` imports nothing from `app.api`/`app.services`).
-- [ ] `make fixtures` still rebuilds clean.
+      ✅ ruff clean, seven contracts kept.
+- [x] `make fixtures` still rebuilds clean — ✅ all three dialects (42 tables,
+      599 columns, budget 26,480) plus the new comments overlay, read back as
+      `analytics_ro`. **And it now actually rebuilds the demo**, which it had
+      stopped doing silently; see §10.
 - [x] §9 carries an **Oracle** row with a real banner and the roles it was read
       under, and the "not verified" caveat is gone *(Phase 5 — `Oracle Database
       18c Express Edition Release 18.0.0.0.0`, `version_full` 18.4.0.0.0, read
       as the owner and as a user with no roles at all)*. The feature is verified
       on all four engines; say **which Oracle**, since 19c itself was never
       reachable and is untested.
-- [ ] Add a **commented variant** of the sales fixture (`COMMENT ON` on ~15
+- [x] Add a **commented variant** of the sales fixture (`COMMENT ON` on ~15
       tables and ~40 columns, plus deliberately one stale and one wrong comment)
-      and run the eval suite against commented vs uncommented on one model. This
-      is the only honest way to claim the feature helped — [eval.md](eval.md).
-      Costs real money; get sign-off first.
-- [ ] [security.md](security.md): a paragraph on comments as untrusted text
-      reaching the provider (§3.2).
-- [ ] [CLAUDE.md](../CLAUDE.md): "Adding a new target database" gains a comments
-      bullet next to the hints bullet.
-- [ ] [docs/README.md](README.md): index this file.
+      — ✅ `backend/fixtures/sales_comments.sql`: 21 tables, 42 columns, the
+      database and the schema. The two plants are `customers.segment` (stale:
+      lists a `Reseller` segment the seed no longer writes) and `orders.subtotal`
+      (wrong: claims to be what the customer paid, which is `total_amount`).
+      Both are asserted by a test so a cleanup cannot quietly remove the hard
+      half of the measurement. Loaded by `--comments`, by `make fixtures`, and
+      by the Compose demo.
+- [ ] ~~Run the eval suite against **commented vs uncommented on one model**~~ —
+      **deliberately not run, on 2026-08-14, and the reason is itself the
+      result.** Sign-off was given and then withdrawn once two structural facts
+      came out of building the harness (§10 has the full row):
+      **comments cannot move retrieval recall** — `retrieve` selects on table
+      and column *names* and never reads a comment, and `table_chars` does not
+      count one — and **this suite no longer exercises retrieval at all**, since
+      `_RETRIEVE_BUDGET_CHARS` was raised 24k → 50k while the fixture estimates
+      26,480, so `FULL_SNAPSHOT` fires on every question and recall is 1.0 by
+      construction. Recall was the metric the run was wanted for, and it is
+      invariant twice over, so the run would have bought an execution-accuracy
+      delta and nothing else. The harness stays ready (`--comments`, one flag)
+      for whenever there is a question it can answer.
+- [x] [security.md](security.md): a paragraph on comments as untrusted text
+      reaching the provider (§3.2). ✅ — it became §2.4 there, plus a row in
+      §3.1's ladder and a correction to §2.1's definition of the schema block.
+- [x] [CLAUDE.md](../CLAUDE.md): "Adding a new target database" gains a comments
+      bullet next to the hints bullet. ✅
+- [x] [docs/README.md](README.md): index this file. ✅ — in "By what you are
+      touching" and in "Historical", the latter saying it is *not* superseded:
+      unlike `reports-plan.md` there is no companion doc, so this file is the
+      reference.
 
 ---
 
@@ -1066,12 +1099,21 @@ and where.
       fork of an engine and not the engine *(Phase 5)*
 - [x] System schemas are excluded on all four engines *(Phase 1)*
 - [x] `make test`, `make guard`, `make lint` green; `npm run typecheck`,
-      `npm run build`, `npm test` green *(Phases 4 and 5)*
+      `npm run build`, `npm test` green *(Phases 4 and 5; re-run in Phase 6 —
+      1,436 backend tests, 44 guard, seven contracts)*
+- [x] The docs a reader would look in say so: [security.md](security.md) §2.4,
+      [CLAUDE.md](../CLAUDE.md)'s "Adding a new target database",
+      [eval.md](eval.md)'s commented arm, and [docs/README.md](README.md)'s index
+      *(Phase 6)*
 
-Still open, both Phase 6: the eval comparison that would justify claiming the
-feature *helped*, and the doc updates ([security.md](security.md),
-[docs/README.md](README.md)). [CLAUDE.md](../CLAUDE.md) gained its Phase 5
-gotchas; the "Adding a new target database" comments bullet is still Phase 6's.
+**The feature is *verified* and not *measured*, and that is now a decision
+rather than an omission.** It does what §4 says, on four engines, with tests and
+real servers behind every claim; nobody has shown it makes answers better. The
+A/B that would show it is built and one flag away, and was held on 2026-08-14
+because the metric it was wanted for — retrieval recall — **cannot move**: the
+retrieve node selects on names and never reads a comment, and on this fixture it
+sends the whole snapshot anyway. Nothing here may be written up as "comments
+improved accuracy" until a run says so.
 
 ---
 
@@ -1258,7 +1300,7 @@ Minimum engine version each read needs, if a customer runs something older:
 | 3 | Semantic-layer generation reads and seeds comments | ☑ **done** | 2026-08-13 | `SEMANTIC_PROMPT_VERSION` **s2 → s3**. The first phase where a comment reaches a model — generation only. Verified against fakes, not a provider; the honest end-to-end check is Phase 6's eval. |
 | 4 | Run-time rendering + the layer-wins suppression rule | ☑ **done** | 2026-08-13 | Migration `0013`, applied, downgraded and re-applied against the live app database. Verified end to end on the commented `sales` demo through the real sync API. `PROMPT_VERSION` does **not** move: a snapshot with no comments, and a connection with the switch off, render byte-identically to before. |
 | 5 | Per-engine edges, verified on **Oracle 18c XE 18.4.0.0.0** | ☑ **done** | 2026-08-14 | Rescoped twice on 2026-08-14: the 23ai annotations read is **dropped** (§1.5), and the "must be 19c" requirement was **relaxed to a near release, named** — no 19c image pulls without an Oracle account, and 18c is 19c's own 12.2 family one patchset back (§9). All four code items landed (`SEMANTIC_PROMPT_VERSION` **s3 → s4**), and every Oracle claim was observed on a real 18c server: both reads under a user with no roles at all, the view filter, `ORA-00942` for the 23ai view, the system-schema denylist, the identifier-case hazard, a full API sync (`counts {tables: 3, columns: 7}`), a generated layer (`s4`, 8 metrics, 0 issues) and a chat run whose SQL used `STATUS = 'P'` — knowable only from a DDL comment — and answered correctly. MariaDB verified on both forks. 1421 backend tests green, `make guard` 44 green, seven import-linter contracts kept, frontend typecheck/build green, nine suites green. **19c itself untested and no phase owns it.** |
-| 6 | Verification, eval, doc updates | ☐ not started | | `make guard` and `make lint` are green and §9's Oracle row is filled in (Phase 5, on 18c XE); what remains is the **eval comparison** that would justify claiming the feature helped, the commented fixture variant it needs, and the [security.md](security.md) / [docs/README.md](README.md) updates. |
+| 6 | Verification, eval, doc updates | ☑ **done — eval deliberately held** | 2026-08-14 | Every check and every doc landed: `make guard` 44 green, `make lint` seven contracts kept, `make test` 1,436 green, `make fixtures` clean on all three dialects **plus** the new comments overlay — and `make fixtures` now genuinely rebuilds the demo, which it had silently stopped doing (see the decisions table). New: `backend/fixtures/sales_comments.sql` (21 tables, 42 columns, the database and the schema, two deliberate plants), the `--comments` arm of the runner, four static tests over the overlay, and [security.md](security.md) §2.4 / [CLAUDE.md](../CLAUDE.md) / [eval.md](eval.md) / [docs/README.md](README.md). The commented arm was proved end to end **without a provider**: the real connector reads `catalog_meta.counts {tables: 21, columns: 42}` off the rebuilt demo as `analytics_ro`, and `RetrievedContext.render` emits the legend, the `About this database:` line and the per-table/per-column comments. **The paid A/B was held rather than run**, on the owner's call, once the harness showed recall cannot move (the decisions table has it). The feature is verified and not measured, deliberately. |
 
 ### What Phase 0 found
 
@@ -1326,6 +1368,16 @@ and an Oracle read-only user with **no `SELECT_CATALOG_ROLE`** — only
 | `frontend/src/components/semantic.tsx` | 5 | The re-key note, rendered *instead of* the "schema has been re-synced" note when it fires. |
 | `frontend/package.json` | 5 | `test:drift`, added to the `test` chain. |
 | `CLAUDE.md` | 5 | Two gotchas: MariaDB-only `SCHEMA_COMMENT` next to the existing MySQL/MariaDB timeout split, and Oracle identifier case with its ORA-00904 failure mode — both reproduced on real servers before being written down. |
+| `backend/fixtures/sales_comments.sql` | 6 | New. The commented arm of the eval fixture: 21 table and 42 column descriptions, the database's and the schema's. An overlay loaded *on top of* `sales_seed.sql`, never merged into it — the uncommented arm has to stay the fixture every earlier run measured. Its header names the two deliberate plants. |
+| `backend/app/eval/dataset.py` | 6 | `FixtureSpec.comments_path`, set for `sales_pg`. |
+| `backend/app/eval/runner.py` | 6 | `spin_fixture(..., comments=)` loads the overlay; `--comments` also sets `NodeDeps.include_db_comments` through `run_suite` / `evaluate_record` / `evaluate_negative`; `snapshot_to_dict` now carries `catalog_meta` (`{}` without the overlay, so the uncommented arm is unchanged); the arm is written onto the scorecard as `metrics.catalog_comments` and into the report title. |
+| `backend/tests/eval/test_golden_set.py` | 6 | 4 new static tests: the overlay names only real tables and columns (a typo would otherwise be found by a paid run dying at step one), it covers ≥15 tables and ≥40 columns, no comment exceeds the stored caps, and **both plants are still planted**. |
+| `backend/fixtures/rebuild_fixtures.sh` | 6 | Loads the overlay after the PG seed and reads the descriptions back **as `analytics_ro`**; fixes the demo rebuild (below) and then proves it by counting the descriptions the init scripts wrote. |
+| `docker-compose.yml` | 6 | The demo `sales` database mounts the overlay as a second init script, so a developer's demo shows what the feature does. |
+| `docs/security.md` | 6 | New §2.4 — catalog descriptions as a class of content reaching a provider: why they travel under every policy, why the sensitive-name floor is deliberately not extended to them, the per-connection switch, and the four things that bound a comment as untrusted text. Plus a `NONE`-through-`FULL` row in §3.1 and a corrected definition of "the schema block" in §2.1. |
+| `docs/eval.md` | 6 | "The commented arm" — the two commands, why it is an overlay rather than a second fixture, and the two plants. |
+| `CLAUDE.md` | 6 | "Adding a new target database" gains the comments bullet beside the hints one: `comments.py`, the three rules (suppress every read, clean at capture, filter through `business_schemas`), and that a comment travels under every disclosure policy. |
+| `docs/README.md` | 6 | This file, indexed twice: by what you are touching, and in "Historical" as the one plan that is *not* superseded. |
 | `backend/tests/unit/test_semantic_generator.py` | 3 | 11 new tests. What reaches each prompt, the closed-policy case, seeding and its gap-only rule, the fallback for `business_context`, and `merge_documents` over an edited seeded description. `ScriptedGateway` now records the prompts it was sent, so the assertions are about what a model would actually have read. |
 
 ### Decisions changed while executing
@@ -1360,5 +1412,10 @@ this is the record.
 | 2026-08-14 | §1.3, §6.2 | **A MariaDB schema comment on the connected database becomes `database_comment`, not a `schema_comment`.** §6.2 says a MySQL schema *is* the database, which leaves the read ambiguous: `SCHEMATA.SCHEMA_COMMENT` is literally a schema comment, and the database it describes is the one we are connected to. It is filed as the database comment because that is the field that seeds `business_context` and renders as "About this database" — a schema comment reaches only the overview prompt. Another allowlisted database's comment stays a schema comment, because that is how its name appears in a qualified table name. Verified both ways on MariaDB 10.11.18 (§9). |
 | 2026-08-14 | §6.1.3 | **The identifier-case hazard is worse than "a metric will fail at execution".** §6.1.3 describes a metric written `hr.orders` failing against a quoted `"Orders"`. Writing the tests found the sharper failure: `build_index` keys on the folded name, so `ORDERS` and `"Orders"` **occupy the same key and the later one wins**. The survivor's columns resolve and the other table's stop — so a metric over a column of the perfectly ordinary `HR.ORDERS` is rejected in the editor as "not a column of that table", with nothing on screen explaining why. Still not fixed in this phase, and now written down in [CLAUDE.md](../CLAUDE.md) as well as here. |
 | 2026-08-14 | §7 Phase 5, §9 | **Oracle is verified on 18c XE, and "it must be 19c" is withdrawn.** The rescope earlier the same day made 19c the sign-off target; four hours later that proved impossible without an Oracle account, and the owner relaxed it: **a near release verifies the feature so long as the doc says which one.** Two things keep that honest rather than convenient. First, 18c is not an arbitrary near release — **18c is 12.2.0.2 and 19c is 12.2.0.3**, two patchsets of one family, so its data dictionary *is* 19c's; 21c pulls just as freely and was still refused, because it is a separate codebase and would buy back the "proven where nobody runs it" that dropping 23ai was meant to end. Lineage, not recency, is the criterion. Second, the version is named in the §7 heading, the §9 table, the §9 narrative and this row, and the 19c row is left visibly untested — a verification that does not say which server it ran on is not one. What the run bought: seven claims moved from inferred to observed, including the one the feature rested on (a user with `CREATE SESSION`, one `GRANT SELECT` and **no roles at all** reading exactly that table's comments) and the only one that shows the feature *works* (a chat run whose SQL used `STATUS = 'P'`, a code meaning that exists nowhere but the column comment). |
+| 2026-08-14 | §7 Phase 6 | **The commented fixture is an overlay, not a second fixture.** The obvious shape — a `sales_pg_commented` entry in `dataset.FIXTURES` — cannot work: a record's `connection_fixture` is a field of the frozen golden set, so switching arms would mean editing the suite, which [eval.md](eval.md) forbids in the one rule the whole exercise rests on. `sales_comments.sql` is therefore loaded *on top of* the seed by a `--comments` flag, and the seed stays comment-free so the uncommented arm is byte-for-byte the fixture every earlier run measured. The arm is recorded on the scorecard (`metrics.catalog_comments`), because two `eval_runs` rows differing only in it are otherwise indistinguishable — the same argument `SEMANTIC_PROMPT_VERSION` exists for. |
+| 2026-08-14 | §7 Phase 6 | **`make fixtures` had stopped rebuilding the demo, and said it had.** Found because the overlay did not appear in the demo after a clean run. The script dropped `$(basename "$ROOT")_raymand_sales`, but Compose **lower-cases** the project name it derives from the directory, so a checkout named `DataMind` owns `datamind_raymand_sales` — and `|| true` turned the mismatch into a silent no-op. Postgres runs its init scripts only on an empty data directory, so the demo kept its old volume, skipped the seed entirely, and the script printed `ok: Compose 'sales' demo re-seeding from the new schema`. It now asks Docker which volume the service actually owns, **fails** if the volume survives, and then counts the descriptions back out of the rebuilt database — a rebuild that is not verified is the thing that just went wrong. Pre-existing and unrelated to comments; fixed here because Phase 6's own checklist item is "`make fixtures` still rebuilds clean", and it did not. |
+| 2026-08-14 | §7 Phase 6 | **The eval A/B was held, because recall is invariant to comments by construction — twice over.** Phase 6's headline item was "run the suite commented vs uncommented"; the run was signed off and then held, on the owner's call, once building the harness surfaced two facts. **First: a comment cannot change what is retrieved.** `retrieve` matches the question against table and column *names* ([nodes/__init__.py](../backend/app/pipeline/nodes/__init__.py)), expands by foreign key, and only then does `RetrievedContext.render` attach comments — and `table_chars` ([metadata.py:113](../backend/app/pipeline/metadata.py#L113)) is `60 + 40*ncols`, so a comment does not even weigh on the budget. The only way this feature could move recall is to make retrieval read comment text, which is a different feature. **Second: this suite stopped exercising retrieval at all.** `_RETRIEVE_BUDGET_CHARS` was raised **24k → 50k** at some point after the fixture was built to exceed 24k; the fixture estimates **26,480**, so `FULL_SNAPSHOT` fires on every question, every one of the 42 tables is always in context, and recall is **1.0 by construction** in both arms. The committed baseline's `retrieval_recall: 0.864` was measured under the old ceiling and is not reproducible today. Recall was the metric the run was wanted for, so it would have spent real money to report 1.00 in both arms, leaving an execution-accuracy delta as the only signal. Held is therefore the honest outcome, not the lazy one, and it is a sharper result than the number would have been: **the plan's own success criterion for this feature was unmeasurable as specified.** [eval.md](eval.md) §1 carried the stale budget claim and now says what is true. |
+| 2026-08-14 | §4.4 | **The 2,500-char block cap binds on a well-documented schema, and drops the columns that happen to sort last.** Measured on the commented fixture through the real connector, at `NONE`, with no semantic layer: a 4-table retrieval renders 14 of 17 available column comments, a 5-table one 13 of 19. Table comments always survive — they are spent first, exactly as §4.4 says. What is lost is the tail of the *last* tables' columns, and the order is the snapshot's, not usefulness: the three dropped on the revenue retrieval include **`orders.total_amount`**, whose comment is the one that says which column revenue means. So the commented arm of the eval will be measuring roughly three quarters of the documentation it was given, on the multi-table questions. Deliberately **not** changed before the run: raising the cap or reordering the spend on a hunch would be tuning the feature to the fixture, and the measurement is what should decide it. Recorded here so the number is read with this in view — and so that "raise `_COMMENT_CHARS_BLOCK`" or "spend by table before column within each table" is a hypothesis with a baseline, if the run says the comments helped where they landed. |
+| 2026-08-14 | §7 Phase 6 | **The Compose demo mounts the overlay.** Nothing in the plan asked for it, and the demo is where a developer forms their idea of what the feature does — it had been showing an uncommented schema browser since the volume was last recreated, which quietly wiped the comments Phases 2 and 4 applied by hand. A second init script makes the demo the commented arm permanently, and costs the eval nothing: that arm spins its own container from the same two files. |
 | 2026-08-14 | §6.1.4 | **The re-key detection is engine-neutral; only the explanation is Oracle's.** §6.1.4 frames it as an Oracle problem, and Oracle is where it happens by accident — a schema is a user, so editing the connection's username re-keys everything. But the same all-invalid, disjoint-schemas shape is reachable on every engine by editing the allowlist, and a detector that checked the dialect first would stay silent in exactly the case a Postgres user is equally lost. So `rekeyDrift` asks only about the names, and `explainRekey` names the username on Oracle and the allowlist elsewhere. It fires only when **every** entity is invalid and not one schema name is shared: anything less is ordinary drift, which the existing note already covers, and a message this specific has to be right or it teaches the user to ignore the next one. Checked against the live 42-entity layer, which correctly produces nothing. |
 | 2026-08-13 | §7, Phase 2 | **Descriptions render `dir="auto"`, like every other free-text field.** A comment is prose written by whoever owns the database, so it can be Persian, and a Persian sentence laid out left-to-right reads with its clauses in the wrong order. Confirmed end to end: a comment containing ZWNJ (`سفارش‌ها`) survived Phase 1's cleaning, JSONB storage and JSON serialisation with the joiner intact. |

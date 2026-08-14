@@ -38,9 +38,57 @@ seed to load:
 | --- | --- | --- |
 | `sales_pg` | postgres | `backend/fixtures/sales_seed.sql` (the 42-table commerce schema) |
 
-The schema is deliberately wide enough that the snapshot **exceeds the retrieve
-node's budget** — so retrieval is genuinely exercised rather than trivially
-correct.
+The schema is deliberately wide — 42 tables, 599 columns — because it was built
+to **exceed the retrieve node's budget**, so that retrieval was genuinely
+exercised rather than trivially correct.
+
+> **That is no longer true, and the metric it protects is currently blind.**
+> `_RETRIEVE_BUDGET_CHARS` was raised **24,000 → 50,000** (`pipeline/nodes`, for
+> a good reason of its own: the exact-name fallback misses `order_items` for a
+> user who typed "order items"). The fixture's estimate — `sum(60 + 40*ncols)`,
+> printed by `make fixtures` — is **26,480**, which now sits *under* the ceiling.
+> So `retrieve` takes the `FULL_SNAPSHOT` branch on every question in this
+> suite, all 42 tables reach the generator, and **retrieval recall is 1.0 by
+> construction**. The baseline's `retrieval_recall: 0.864` was measured under
+> the old ceiling and cannot be reproduced today.
+>
+> Nothing here is broken — the pipeline is behaving as designed and the answers
+> are, if anything, better for it. What is broken is the *measurement*: recall
+> and full-hit rate report a constant, and the fixture's width no longer buys
+> what its header says it buys. Fixing it means widening the fixture past 50k or
+> making the eval run at a lower ceiling; both are real decisions, and neither
+> belongs to whoever notices this next in a hurry. Found on 2026-08-14 while
+> building the commented arm below — see
+> [catalog-metadata-plan.md](catalog-metadata-plan.md) §10.
+
+### The commented arm
+
+`--comments` loads a second file on top of the seed —
+`backend/fixtures/sales_comments.sql`, 21 table and 42 column descriptions plus
+the database's own — and turns on `include_db_comments`, so the run prompt
+carries them under the rules in
+[catalog-metadata-plan.md](catalog-metadata-plan.md) §4. Without the flag the
+fixture is byte-for-byte the one every earlier run measured, which is what makes
+the two comparable at all:
+
+```bash
+python -m app.eval.runner --suite sales_v1                # uncommented arm
+python -m app.eval.runner --suite sales_v1 --comments     # commented arm
+```
+
+It is an overlay rather than a second `FIXTURES` entry for one reason: a
+record's `connection_fixture` is part of the frozen suite, so a second fixture
+would mean editing the golden set to switch arms — the one thing §2 forbids.
+The arm is recorded on the scorecard (`metrics.catalog_comments`), so two
+`eval_runs` rows that differ only in this can be told apart afterwards.
+
+**Two of the fixture's comments are deliberately untrue** — `customers.segment`
+is stale (it lists a segment the seed no longer writes) and `orders.subtotal` is
+flatly wrong (it claims to be the amount the customer paid, which is
+`total_amount`). Real catalogs rot, and a feature measured only against perfect
+documentation is not measured. `tests/eval/test_golden_set.py` asserts both are
+still there, so a well-meaning cleanup cannot quietly remove the hard half of
+the test.
 
 ---
 
@@ -126,6 +174,8 @@ are listed in the order of importance the design fixed:
 2. **Retrieval recall @ k** and **full-hit rate** — did `retrieve` surface every
    expected table? This is the diagnostic that decides *what to fix*: a wrong
    answer with full recall is an interpretation problem, not a retrieval one.
+   **Read §1's note before quoting either**: on the current fixture and ceiling
+   they are pinned at 1.0 and measure nothing.
 3. **Rates** — parse, validation pass, execution success, and
    **policy violations by rule**, plus the subset raised on a *repair* attempt
    rather than a first draft (a repair prompt carries the feedback and the
@@ -176,6 +226,7 @@ python -m app.eval.runner --suite sales_v1 --limit 5     # smoke test
 python -m app.eval.runner --suite sales_v1 --tag join    # one slice
 python -m app.eval.runner --suite sales_v1_negative      # the routing set
 python -m app.eval.runner --suite sales_v1 --json        # machine-readable
+python -m app.eval.runner --suite sales_v1 --comments    # with catalog comments
 ```
 
 **Behind a rate-limiting provider, use the wrapper instead:**
@@ -287,7 +338,8 @@ this suite without deleting a layer someone spent time on.
 - **A new fixture / dialect:** add a `FixtureSpec` to `dataset.FIXTURES` with its
   image and seed path. The dialect mirrors already exist
   (`sales_seed_mysql.sql`, `sales_seed_mssql.sql`), so a MySQL or SQL Server
-  suite is a registry entry plus records, not new machinery.
+  suite is a registry entry plus records, not new machinery. A `comments_path`
+  is optional and is what `--comments` loads.
 - **Correcting a gold:** only on demonstrable defect, and the entry in
   `suites/CHANGELOG.md` is not optional.
 - **Never** edit a question because a model keeps getting it wrong. That is the
