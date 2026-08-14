@@ -1,6 +1,7 @@
 # Catalog metadata (comments & descriptions) — design and implementation plan
 
-> **Status: Phases 0–4 landed; 5 and 6 proposed.** Every code reference below is
+> **Status: Phases 0–4 landed; Phase 5's code landed and its Oracle 19c
+> verification is blocked; 6 proposed.** Every code reference below is
 > to code that exists *today*; the behaviour described in §6 is what the
 > remaining phases in §7 are meant to build. The ledger at the end (§10) records
 > what actually landed. Until a phase is ticked there, assume it does not exist.
@@ -16,6 +17,14 @@
 > **§1's SQL has been executed** against all four engines (§9 has the banners);
 > where a query needed correcting, the correction is inline and marked
 > **[corrected in Phase 0]**.
+>
+> **Oracle is to be verified on 19c, not 23ai.** 23ai Free was the container
+> Phase 0 could start quickly; 19c is the release customers run, so Phase 5 owns
+> re-verifying the Oracle reads there, and the 23ai-only annotations read is a
+> **non-goal** (§1.5). That verification has **not happened**: there is no route
+> to a 19c image without an Oracle account, so §9's 19c row is still empty and
+> this feature is proven on three engines — four counting MariaDB — and a
+> preview release of the fourth.
 
 Companion to [pipeline.md](pipeline.md) (the AI run), [security.md](security.md)
 (what reaches a provider), [CODEBASE.md](CODEBASE.md) (the code tour) and the
@@ -61,7 +70,7 @@ in §9 — and every ❌ was confirmed as an error or an absent column, not assu
 | **PostgreSQL** | ✅ `col_description` | ✅ `obj_description` | ✅ `obj_description(…,'pg_namespace')` | ✅ `shobj_description` | ❌ (only inside comment prose) |
 | **MySQL** | ✅ `COLUMN_COMMENT` | ✅ `TABLE_COMMENT` | ❌ *(MariaDB 10.5+ only)* | ❌ | ✅ **`enum`/`set` type** (already read as hints) |
 | **SQL Server** | ✅ `MS_Description` ext. prop. | ✅ `MS_Description` ext. prop. | ✅ class 3 | ✅ class 0 | ❌ |
-| **Oracle** | ✅ `ALL_COL_COMMENTS` | ✅ `ALL_TAB_COMMENTS` | ❌ | ❌ | ⚠️ 23ai annotations only |
+| **Oracle** | ✅ `ALL_COL_COMMENTS` | ✅ `ALL_TAB_COMMENTS` | ❌ | ❌ | ❌ *(23ai-only annotations — deliberately not read, §1.5)* |
 
 Two consequences worth reading twice:
 
@@ -69,10 +78,12 @@ Two consequences worth reading twice:
    is the natural seed for `SemanticDocument.business_context`, so on MySQL and
    Oracle that field stays fully generated. Do not build a design that depends
    on it.
-2. **No engine stores "what this code value means" as structured metadata**
-   (Oracle 23ai annotations excepted). Code meanings live *inside* the comment
-   prose, so `SemanticColumn.value_meanings` stays a model-extraction job — the
-   comment just makes it accurate instead of guessed.
+2. **No engine stores "what this code value means" as structured metadata** on a
+   version this product targets. Oracle 23ai annotations are the sole exception
+   and are **not read** — see §1.5 for why a 23ai-only read is not worth
+   shipping. Code meanings live *inside* the comment prose, so
+   `SemanticColumn.value_meanings` stays a model-extraction job — the comment
+   just makes it accurate instead of guessed.
 
 ### 1.2 PostgreSQL
 
@@ -189,6 +200,11 @@ Notes:
   the MySQL connector is pointed at MariaDB (it already carries MariaDB-aware
   code around `max_execution_time`), attempt it inside `contextlib.suppress`
   and accept nothing when it fails. Never make it a hard requirement.
+  **[implemented in Phase 5]** — and the comment on the *connected* database
+  becomes `database_comment` rather than a `schema_comment`, since on this
+  engine they are the same object and the former is the field that seeds
+  `business_context` (§10). Verified on MariaDB 10.11.18 and on MySQL 8.0.46,
+  where the suppression is what runs.
 - MySQL is also the only engine that carries **true code meanings in the type
   system** (`enum('pending','shipped')`), and the hint pipeline already treats a
   declared `enum`/`set` as a provably complete domain
@@ -302,8 +318,9 @@ Notes:
   name*, not a catalogue, so it is not a label either.
 - **Oracle 23ai annotations** are the one place any engine stores structured
   key/value metadata on a column — the natural home for a real `value_meanings`
-  map. **[corrected in Phase 0]** `ALL_ANNOTATIONS_USAGE` has **no `OWNER`
-  column**; its eight are `OBJECT_NAME`, `OBJECT_TYPE`, `COLUMN_NAME`,
+  map — and they are **dropped from this plan** (see the verdict at the end of
+  this bullet). **[corrected in Phase 0]** `ALL_ANNOTATIONS_USAGE` has **no
+  `OWNER` column**; its eight are `OBJECT_NAME`, `OBJECT_TYPE`, `COLUMN_NAME`,
   `DOMAIN_NAME`, `DOMAIN_OWNER`, `ANNOTATION_OWNER`, `ANNOTATION_NAME`,
   `ANNOTATION_VALUE`. So `WHERE owner IN (…)` fails with **`ORA-00904`, not
   `ORA-00942`** — and unfiltered the view returns ~100 rows of Oracle's *own*
@@ -321,11 +338,29 @@ Notes:
 
   That version was run against a real annotation
   (`ALTER TABLE orders MODIFY (status ANNOTATIONS (meaning 'P=pending, …'))`)
-  and returned exactly it. Still **optional, version-gated, Phase 5** — it is
-  23ai-only and absent from 19c — and still wrapped in
-  `contextlib.suppress(Exception)` exactly as the histogram read already is
-  ([oracle.py:342-347](../backend/app/infra/connectors/oracle.py#L342-L347)),
-  which now has to catch two different ORA codes rather than the one.
+  and returned exactly it.
+
+  **Verdict: not read, and no phase owns it.** The query works; that is not the
+  question. `ALL_ANNOTATIONS_USAGE` first exists in 23ai, and the Oracle
+  installations this product meets are overwhelmingly **19c** — the long-term
+  support release, whose Premier Support runs to **31 Dec 2029** and Extended
+  Support to **31 Dec 2032**, and the one every "we run Oracle" customer means.
+  Shipping it would mean
+  writing a read, a version gate and a second `ORA-` branch for a view that is
+  absent on the version we are actually judged on, and then *verifying* the
+  feature on 23ai Free because that is the container that is easy to start —
+  proving the code works where nobody runs it while the version everybody runs
+  stays untested. The annotations query stays recorded here (Phase 0 proved it,
+  and that knowledge should not be lost) as a **non-goal**: revisit it when a
+  customer on 23ai asks, at which point it is an afternoon's work against a
+  concrete database. Every Oracle-specific item that *is* in the plan is
+  verified on 19c instead — §7, Phase 5.
+
+  The suppression story is unchanged and simpler for it:
+  `ALL_TAB_COMMENTS`/`ALL_COL_COMMENTS` predate 19c by decades and are already
+  wrapped in `contextlib.suppress(Exception)` exactly as the histogram read is
+  ([oracle.py:342-347](../backend/app/infra/connectors/oracle.py#L342-L347)) —
+  one ORA code to reason about, not two.
 
 ---
 
@@ -783,7 +818,9 @@ The SQL in §1 was written from each engine's documented catalog views and had
       `make fixtures`.
 - [x] **Oracle: stand up a container for the first time in this repo**
       (`gvenzl/oracle-free:23-slim`). ~~and verify against 19c too if one is
-      reachable~~ — **no 19c was reachable; that gap is recorded in §9.**
+      reachable~~ — **no 19c was reachable; that gap is recorded in §9 and is
+      now Phase 5's first item**, since 19c is the release the feature is
+      judged on.
 - [x] Confirm each query returns rows **as a read-only role**, not just as the
       owner. This is the failure mode that has bitten this codebase before.
 - [x] Record the exact server version string per engine into §9.
@@ -886,19 +923,77 @@ retrieval with the real 42-entity layer, `orders`' table comment and
 layer's `business_context` rather than the DDL one, and the switch off renders
 the pre-feature block exactly.
 
-### Phase 5 — Per-engine edges
+### Phase 5 — Per-engine edges, verified on Oracle 19c
 
-- [ ] Oracle: dialect-conditional "a schema is a user" line in the overview
-      prompt.
-- [ ] Oracle: clearer UI message when a re-sync re-keys every entity (§6.1.4).
-- [ ] Oracle: test asserting current behaviour for a quoted mixed-case
-      identifier, and a note in [CLAUDE.md](../CLAUDE.md)'s gotchas.
-- [ ] MySQL: MariaDB `SCHEMATA.SCHEMA_COMMENT` attempt, suppressed on failure.
-- [ ] *(optional)* Oracle 23ai `ALL_ANNOTATIONS_USAGE` → `value_meanings`,
-      version-gated and suppressed on `ORA-00942`.
+**The target is 19c, not 23ai.** Phase 0 stood up `gvenzl/oracle-free:23-slim`
+because it starts in ninety seconds and no other Oracle container existed in
+this repository — a fine way to prove the *SQL*, and the wrong thing to prove a
+*feature* on. 19c is the release customers run: the LTS one, Premier Support to
+31 Dec 2029 and Extended Support to 31 Dec 2032 — it will outlive most of what
+is in this repository. Every claim this phase makes is about Oracle behaviour,
+so every one of them is checked where it will be used.
 
-**Done when:** an Oracle connection produces a layer that reads about the
-business, not about Oracle.
+Standing up 19c is the one genuinely awkward step, so do it first, and record in
+§9 which route worked, the banner it printed and the wall-clock start-up cost —
+so the next person budgets for it instead of rediscovering it.
+
+- [ ] **Stand up Oracle 19c.** — **blocked, 2026-08-14: there is no route to a
+      19c image from this machine that does not need an Oracle account.**
+      Re-confirmed rather than assumed:
+      `docker manifest inspect container-registry.oracle.com/database/enterprise:19.3.0.0`
+      returns `unauthorized: Auth failed`, and `gvenzl/oracle-xe` publishes
+      11/18/21 only, because **Oracle XE never shipped a 19c edition**. Both
+      remaining routes start with a login the sandbox does not have:
+      1. Accept the terms once on container-registry.oracle.com with a free
+         Oracle account, `docker login container-registry.oracle.com`, then pull
+         `database/enterprise:19.3.0.0`. Slow (~7 GB) and slow to open the
+         database the first time; it is real 19c.
+      2. Build from [oracle/docker-images](https://github.com/oracle/docker-images)
+         — `buildContainerImage.sh -v 19.3.0 -e` over the 19.3.0 LINUX.X64 zip
+         from OTN, which is the same Oracle SSO behind a different door.
+
+      What is *not* blocked: Docker, disk (349 GB free) and the probe script are
+      all ready, so this is one `docker login` away from running end to end.
+- [ ] **Re-run `catalog_probe.py --seed --ro-user` against 19c**, both as the
+      owning schema and as the `CREATE SESSION` + one-`GRANT SELECT` user with
+      **no `SELECT_CATALOG_ROLE`**. This is a re-verification of Phase 1's two
+      reads, not new work — and it is the whole reason the phase exists: §9's
+      Oracle row currently proves them on a release almost nobody runs.
+- [ ] **Drive a real connection end to end on 19c** — sync, `catalog_meta`
+      counts, semantic generation, one chat run with the comments rendered —
+      the same path Phases 2 and 4 were signed off on for the other three
+      engines.
+- [x] Oracle: dialect-conditional "a schema is a user" line in the overview
+      prompt — `overview_system(dialect)` in `app/semantic/prompts.py`, spliced
+      ahead of the output schema. **`SEMANTIC_PROMPT_VERSION` s3 → s4**; see §10.
+- [x] Oracle: clearer UI message when a re-sync re-keys every entity (§6.1.4) —
+      `frontend/src/components/semantic-drift.ts`, engine-neutral detection and
+      an Oracle-specific explanation.
+- [x] Oracle: test asserting current behaviour for a quoted mixed-case
+      identifier, and a note in [CLAUDE.md](../CLAUDE.md)'s gotchas — four tests
+      in `test_semantic_validate.py`, and the hazard turned out to be sharper
+      than §6.1.3 described (see §10). ~~Assert it **against 19c**~~ — the
+      *tests* assert our folding, which is engine-free; what still needs 19c is
+      the Oracle-side fact they rest on, that a quoted mixed-case table can only
+      be referenced quoted. Carried to the blocked items above.
+- [x] MySQL: MariaDB `SCHEMATA.SCHEMA_COMMENT` attempt, suppressed on failure —
+      and **verified on both engines**: error 1054 suppressed on MySQL 8.0.46
+      with the snapshot intact and `catalog_meta` exactly `{}`, real comments
+      read on MariaDB 10.11.18 as owner and as `analytics_ro` alike. §9 has the
+      row.
+- [ ] ~~*(optional)* Oracle 23ai `ALL_ANNOTATIONS_USAGE` → `value_meanings`~~ —
+      **dropped, §1.5.** 23ai-only, absent from every 19c installation, and
+      verifiable only on the release we are explicitly no longer treating as the
+      target. The proven query is kept in §1.5 as a non-goal.
+
+**Done when:** an Oracle **19c** connection syncs its comments under a plain
+read-only user and produces a layer that reads about the business, not about
+Oracle — and §9's Oracle 19c row is filled in from a real banner. **Not yet
+true.** Everything this phase could build without that container is built,
+tested and — for MySQL/MariaDB — verified against real servers; the three Oracle
+items that need the container are the whole of what is left, and until they are
+done the feature is verified on three engines and a preview release of the
+fourth. Say that, not "all four".
 
 ### Phase 6 — Verify and measure
 
@@ -907,6 +1002,10 @@ business, not about Oracle.
 - [ ] `make lint` — import-linter contracts hold (`app.semantic` stays
       self-contained; `comments.py` imports nothing from `app.api`/`app.services`).
 - [ ] `make fixtures` still rebuilds clean.
+- [ ] §9 carries an **Oracle 19c** row with a real banner and the roles it was
+      read under, and the "19c not verified" caveat is gone. Until that row is
+      filled in, the feature is verified on three engines and a preview release
+      of the fourth — say that, rather than "all four".
 - [ ] Add a **commented variant** of the sales fixture (`COMMENT ON` on ~15
       tables and ~40 columns, plus deliberately one stale and one wrong comment)
       and run the eval suite against commented vs uncommented on one model. This
@@ -934,13 +1033,19 @@ business, not about Oracle.
 - [x] A connector whose comment query fails still returns a full snapshot
       *(Phase 1 — every read is individually suppressed)*
 - [x] A read-only role gets comments on all four engines *(Phases 0 and 1)*
+- [ ] …and on the Oracle release customers actually run — **19c**, not 23ai
+      Free *(Phase 5 — blocked on an Oracle account, §7)*
+- [x] …and on MariaDB, whose schema comment is the one read that exists on a
+      fork of an engine and not the engine *(Phase 5)*
 - [x] System schemas are excluded on all four engines *(Phase 1)*
 - [x] `make test`, `make guard`, `make lint` green; `npm run typecheck`,
-      `npm run build`, `npm test` green *(Phase 4)*
+      `npm run build`, `npm test` green *(Phases 4 and 5)*
 
-Still open, and both belong to Phase 6: the eval comparison that would justify
-claiming the feature *helped*, and the doc updates ([security.md](security.md),
-[CLAUDE.md](../CLAUDE.md), [docs/README.md](README.md)).
+Still open: the Oracle 19c verification above (Phase 5), and — both Phase 6 —
+the eval comparison that would justify claiming the feature *helped*, and the
+doc updates ([security.md](security.md), [docs/README.md](README.md)).
+[CLAUDE.md](../CLAUDE.md) gained its Phase 5 gotchas; the "Adding a new target
+database" comments bullet is still Phase 6's.
 
 ---
 
@@ -953,8 +1058,10 @@ the owner and once as a read-only role — and the two agreed on all four engine
 | --- | --- | --- | :---: | --- |
 | PostgreSQL | **16** | `postgres:16-alpine` | ☑ | `PostgreSQL 16.14 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit` |
 | MySQL | **8.0** | `mysql:8.0` | ☑ | `8.0.46` |
+| MariaDB *(Phase 5)* | **10.11 LTS** | `mariadb:10.11` | ☑ | `10.11.18-MariaDB-ubu2204` |
 | SQL Server | **2022** | `mcr.microsoft.com/mssql/server:2022-latest` | ☑ | `Microsoft SQL Server 2022 (RTM-CU26) (KB5093420) - 16.0.4265.3 (X64)` |
-| Oracle | **23ai Free** (floor: 19c) | `gvenzl/oracle-free:23-slim` | ☑ | `Oracle AI Database 26ai Free Release 23.26.2.0.0 - Develop, Learn, and Run for Free` |
+| Oracle *(target)* | **19c** | `container-registry.oracle.com/database/enterprise:19.3.0.0` (login required) | ☐ **Phase 5, blocked** | — |
+| Oracle *(dev convenience)* | 23ai Free | `gvenzl/oracle-free:23-slim` | ☑ | `Oracle AI Database 26ai Free Release 23.26.2.0.0 - Develop, Learn, and Run for Free` |
 
 The read-only roles each read was checked under, since that is the question the
 table exists to answer:
@@ -963,14 +1070,42 @@ table exists to answer:
 | --- | --- | --- |
 | PostgreSQL | `analytics_ro` | `CONNECT`, `USAGE ON SCHEMA public`, `SELECT ON ALL TABLES`, `CREATE` revoked |
 | MySQL | `analytics_ro` | `GRANT SELECT ON sales.*` |
+| MariaDB | `analytics_ro` | `GRANT SELECT ON sales.*` — identical rows to root, including `SCHEMA_COMMENT` |
 | SQL Server | `analytics_ro` | `db_datareader` |
 | Oracle | `plain_ro` | `CREATE SESSION` + `SELECT` on **one table**, no `SELECT_CATALOG_ROLE` |
 
-**Oracle 19c was not reachable and is therefore not verified.** The two reads
-Phase 1 depends on (`ALL_TAB_COMMENTS`, `ALL_COL_COMMENTS`) have existed since
-long before 19c and are wrapped in `contextlib.suppress` regardless; the only
-19c-specific claim left untested is *which* ORA code the annotations read raises
-there, and that read is Phase 5 and optional.
+**MariaDB is a Phase 5 addition and the one row read through the connector
+rather than the probe.** `information_schema.SCHEMATA.SCHEMA_COMMENT` is the
+only catalog read in this feature that exists on one fork of an engine and not
+the other, so both were driven: on **MySQL 8.0.46** the read is
+`ERROR 1054 (42S22) Unknown column 'schema_comment'`, suppressed, and
+`MySqlConnector.introspect` returns its full 16-table snapshot with
+`catalog_meta` exactly `{}` — byte-identical to pre-feature. On **MariaDB
+10.11.18**, `ALTER DATABASE sales COMMENT '…'` came back through the same code
+path as `database_comment`, with a second commented database landing in
+`schema_comments`, and `analytics_ro` (`GRANT SELECT ON sales.*`) read exactly
+what root read.
+
+**Oracle 19c is the version that matters, and it is not verified yet — Phase 5
+owns it.** 23ai Free was what Phase 0 could start in ninety seconds; 19c is what
+customers run. The two reads Phase 1 depends on (`ALL_TAB_COMMENTS`,
+`ALL_COL_COMMENTS`) have existed since long before 19c and are wrapped in
+`contextlib.suppress` regardless, so the risk is low — but "low risk" and
+"verified" are different words and this table exists to hold the second one.
+
+Getting a 19c container is the one non-obvious part, and both easy answers are
+wrong: `container-registry.oracle.com/database/enterprise:19.3.0.0` returns
+**401** to an anonymous pull (accept the terms once with a free Oracle account,
+then `docker login container-registry.oracle.com`), and `gvenzl/oracle-xe`
+publishes **11/18/21 only** — there was never an XE 19c, which is exactly why
+Phase 0 reached for 23ai Free. The fallback is building from
+[oracle/docker-images](https://github.com/oracle/docker-images)
+(`buildContainerImage.sh -v 19.3.0 -e`). Phase 5 records which route worked,
+the banner and the start-up cost, so this paragraph can be deleted.
+
+Nothing is checked against 21c: it is a desupported innovation release, so it is
+neither the widely-run version nor the new one, and verifying there would buy the
+same "proven where nobody runs it" that dropping 23ai was meant to end.
 
 Re-run any of it with
 [`backend/scripts/catalog_probe.py`](../backend/scripts/catalog_probe.py) —
@@ -993,10 +1128,10 @@ Minimum engine version each read needs, if a customer runs something older:
 | `obj_description` / `col_description` | PostgreSQL 8.x+ (any supported) |
 | `shobj_description(…,'pg_database')` | PostgreSQL 8.2+ |
 | `TABLE_COMMENT` / `COLUMN_COMMENT` | MySQL 5.x+ (any supported) |
-| `SCHEMATA.SCHEMA_COMMENT` | **MariaDB 10.5+ only** — never MySQL |
+| `SCHEMATA.SCHEMA_COMMENT` | **MariaDB 10.5+ only** — never MySQL (read on 10.11.18; error 1054 on 8.0.46) |
 | `sys.extended_properties` | SQL Server 2005+ |
-| `ALL_TAB_COMMENTS` / `ALL_COL_COMMENTS` | Oracle — any supported version |
-| `ALL_ANNOTATIONS_USAGE` | **Oracle 23ai only** |
+| `ALL_TAB_COMMENTS` / `ALL_COL_COMMENTS` | Oracle — any supported version, 19c included |
+| ~~`ALL_ANNOTATIONS_USAGE`~~ | **Oracle 23ai only — not read; dropped in §1.5** |
 
 ---
 
@@ -1014,8 +1149,8 @@ Minimum engine version each read needs, if a customer runs something older:
 | 2 | Persist — migration, `catalog_meta`, DTOs, UI | ☑ **done** | 2026-08-13 | Migration `0012`, applied and round-tripped against the live app database. Driven end to end through the real API against the commented `sales` demo. Still nothing reaching a model — that is Phase 4. |
 | 3 | Semantic-layer generation reads and seeds comments | ☑ **done** | 2026-08-13 | `SEMANTIC_PROMPT_VERSION` **s2 → s3**. The first phase where a comment reaches a model — generation only. Verified against fakes, not a provider; the honest end-to-end check is Phase 6's eval. |
 | 4 | Run-time rendering + the layer-wins suppression rule | ☑ **done** | 2026-08-13 | Migration `0013`, applied, downgraded and re-applied against the live app database. Verified end to end on the commented `sales` demo through the real sync API. `PROMPT_VERSION` does **not** move: a snapshot with no comments, and a connection with the switch off, render byte-identically to before. |
-| 5 | Per-engine edges (Oracle first) | ☐ not started | | The annotations query is now proven and corrected (§1.5), so this is smaller than it was. |
-| 6 | Verification, eval, doc updates | ☐ not started | | `make guard` and `make lint` were run against the Phase 1 connector changes and are green; the eval comparison and the doc updates are still outstanding. |
+| 5 | Per-engine edges, verified on **Oracle 19c** | ◧ **partial — blocked** | 2026-08-14 | Rescoped 2026-08-14: the 23ai annotations read is **dropped** (§1.5) and the phase now owns standing up a 19c container and re-verifying Phase 1's two Oracle reads plus a full end-to-end sync there. **All four code items landed** (`SEMANTIC_PROMPT_VERSION` **s3 → s4**), 1421 backend tests green, `make guard` 44 green, seven import-linter contracts kept, frontend typecheck/build green and nine test suites green. The MariaDB item is verified on real servers of both forks (§9). **The three 19c items are blocked on an Oracle account**: the image 401s anonymously and XE never shipped 19c, so nothing here can proceed without a `docker login`. |
+| 6 | Verification, eval, doc updates | ☐ not started | | `make guard` and `make lint` were run against the Phase 1 connector changes and are green; the eval comparison, §9's Oracle 19c row and the doc updates are still outstanding. |
 
 ### What Phase 0 found
 
@@ -1073,6 +1208,16 @@ and an Oracle read-only user with **no `SELECT_CATALOG_ROLE`** — only
 | `backend/app/api/schemas.py`, `backend/app/api/v1/connections.py` | 4 | The switch on create, update and read. |
 | `frontend/src/api/types.ts`, `frontend/src/pages/DataSourcesPage.tsx` | 4 | `include_db_comments` on `Connection`, and a "Schema descriptions" toggle under Safety & limits whose hint says where the descriptions come from and that they ignore the result-sharing setting. |
 | `backend/tests/unit/test_comment_render.py` | 4 | New, 23 tests. The byte-identity guarantees, the per-entity suppression rule in all four combinations, the caps and the spend order, the untrusted-text properties, `covered_keys` on its own, and the METADATA fallback. |
+| `backend/app/semantic/prompts.py` | 5 | `overview_system(dialect)` — the base prompt split into intro/keys so the Oracle note splices *before* the output schema; `OVERVIEW_SYSTEM` kept as `overview_system("")` and asserted byte-identical to its s3 self. **`SEMANTIC_PROMPT_VERSION` s3 → s4.** |
+| `backend/app/semantic/generator.py` | 5 | `_overview` sends `overview_system(dialect)` instead of the constant. One line; the table and glossary passes are untouched. |
+| `backend/app/infra/connectors/mysql.py` | 5 | `_SCHEMA_COMMENT_SQL` (MariaDB 10.5+), attempted under `contextlib.suppress` like every other optional read; the connected database's own schema comment becomes `database_comment` and any other allowlisted database's stays a `schema_comment`. |
+| `backend/tests/unit/test_semantic_generator.py` | 5 | 3 new tests: Oracle reads the note ahead of the output schema, the other three dialects read the prompt byte for byte, and the per-table pass is untouched by it. |
+| `backend/tests/unit/test_semantic_validate.py` | 5 | 4 new tests under "Oracle identifier case" — the folding that works, the collision that does not, and which side of it wins. Current behaviour, hazard included; not a fix. |
+| `backend/tests/unit/test_catalog_comments.py` | 5 | The MariaDB `SCHEMA_COMMENT` row shape (bytes, and an empty comment dropped). |
+| `frontend/src/components/semantic-drift.ts` + `.test.ts` | 5 | New, 14 tests (`npm run test:drift`, the ninth DOM-free suite). `rekeyDrift` detects an all-or-nothing re-key engine-neutrally; `explainRekey` names the Oracle username as the cause and the allowlist elsewhere. |
+| `frontend/src/components/semantic.tsx` | 5 | The re-key note, rendered *instead of* the "schema has been re-synced" note when it fires. |
+| `frontend/package.json` | 5 | `test:drift`, added to the `test` chain. |
+| `CLAUDE.md` | 5 | Two gotchas: MariaDB-only `SCHEMA_COMMENT` next to the existing MySQL/MariaDB timeout split, and Oracle identifier case with its ORA-00904 failure mode. |
 | `backend/tests/unit/test_semantic_generator.py` | 3 | 11 new tests. What reaches each prompt, the closed-policy case, seeding and its gap-only rule, the fallback for `business_context`, and `merge_documents` over an edited seeded description. `ScriptedGateway` now records the prompts it was sent, so the assertions are about what a model would actually have read. |
 
 ### Decisions changed while executing
@@ -1101,4 +1246,10 @@ this is the record.
 | 2026-08-13 | §5.2 | **`source = "derived"` marks the entry, not the field.** An entity whose label and grain the model wrote but whose *description* came from the catalog reads as `derived`, because provenance is per entry and there is nowhere finer to put it. That is the plan's literal instruction and it is the right way round: the description is what the editor shows and what a reader judges the entry by. `provenance.edited` is untouched, which is the only part `merge_documents` reads. |
 | 2026-08-13 | §4.4 | **The generator applies no render cap.** The §4.4 caps (200/120 per comment, 2,500 per block) belong to the run block and to Phase 4. Generation sends one table per call with its own comments and nothing else's, so the stored caps (400/240, `comments.py`) are the only bound it needs — and truncating the DBA's sentence *again* before the one call whose entire job is to read it would be paying for the feature twice. |
 | 2026-08-13 | §7, Phase 4 | **`_render_entity` does not render `description` — noted for Phase 4.** Found while checking what Phase 3 changes about a run prompt. A seeded *column* description reaches a run through `_render_column`; a seeded *table* description reaches nothing, so an entity whose only content is its seeded description still renders as `""` and `covered_keys` will correctly report that table as uncovered — the DDL table comment is then rendered by §4.2's fallback. The two rules agree, by accident rather than design, and Phase 4 must not "fix" one of them without re-reading the other. |
+| 2026-08-14 | §1.5, §7 Phase 5, §9 | **Oracle is verified on 19c, and the 23ai annotations read is dropped.** The plan had it backwards: the one Oracle-specific read that needed a version gate was the 23ai-only one, and the only Oracle container in play was 23ai Free — so the feature was heading for a sign-off on a release almost no customer runs, carrying code for a view most of them do not have. 19c is the release that matters (LTS; Premier Support to 31 Dec 2029, Extended to 31 Dec 2032 — Oracle's own [Lifetime Support Policy](https://www.oracle.com/us/assets/lifetime-support-technology-069183.pdf); what "we run Oracle" means in practice). `ALL_ANNOTATIONS_USAGE` is now a recorded non-goal — the proven query stays in §1.5 for whoever needs it — and Phase 5 gains the 19c container, a re-run of `catalog_probe.py` under the no-`SELECT_CATALOG_ROLE` user, and one end-to-end sync there. The setup cost is real and is written down rather than discovered: no anonymous 19c image exists (`database/enterprise:19.3.0.0` 401s without a login; XE never shipped 19c, which is what pushed Phase 0 to 23ai Free in the first place). 21c is deliberately not a target — a desupported innovation release is neither the widely-run version nor the new one. |
+| 2026-08-14 | §5.1, §6.1.2 | **The Oracle note bumps `SEMANTIC_PROMPT_VERSION` to `s4`.** §6.1.2 asks for "one dialect-conditional line, no new abstraction" and says nothing about the version, and Phase 4's precedent was *not* to bump — but Phase 4 changed no prompt template, only what a template rendered from data. This changes the text of a prompt: on Oracle. Two Oracle layers generated a day apart would otherwise both read `s3` while having been written from different instructions, which is the one thing the version exists to prevent. A false "new version" on the three dialects whose prompt is unchanged is the cheaper error, and `test_every_other_dialect_reads_the_prompt_byte_for_byte` keeps that claim honest. |
+| 2026-08-14 | §6.1.2 | **The note is spliced into the system prompt, not added to the user prompt.** `OVERVIEW_USER` already has a `{catalog}` slot that renders to nothing, and a second empty slot beside it would have added a blank line to every non-Oracle prompt — byte-identity lost for three engines to say one thing to the fourth. It is a rule, so it goes where the rules are, ahead of "Return JSON with these keys:" rather than stranded after the output schema. |
+| 2026-08-14 | §1.3, §6.2 | **A MariaDB schema comment on the connected database becomes `database_comment`, not a `schema_comment`.** §6.2 says a MySQL schema *is* the database, which leaves the read ambiguous: `SCHEMATA.SCHEMA_COMMENT` is literally a schema comment, and the database it describes is the one we are connected to. It is filed as the database comment because that is the field that seeds `business_context` and renders as "About this database" — a schema comment reaches only the overview prompt. Another allowlisted database's comment stays a schema comment, because that is how its name appears in a qualified table name. Verified both ways on MariaDB 10.11.18 (§9). |
+| 2026-08-14 | §6.1.3 | **The identifier-case hazard is worse than "a metric will fail at execution".** §6.1.3 describes a metric written `hr.orders` failing against a quoted `"Orders"`. Writing the tests found the sharper failure: `build_index` keys on the folded name, so `ORDERS` and `"Orders"` **occupy the same key and the later one wins**. The survivor's columns resolve and the other table's stop — so a metric over a column of the perfectly ordinary `HR.ORDERS` is rejected in the editor as "not a column of that table", with nothing on screen explaining why. Still not fixed in this phase, and now written down in [CLAUDE.md](../CLAUDE.md) as well as here. |
+| 2026-08-14 | §6.1.4 | **The re-key detection is engine-neutral; only the explanation is Oracle's.** §6.1.4 frames it as an Oracle problem, and Oracle is where it happens by accident — a schema is a user, so editing the connection's username re-keys everything. But the same all-invalid, disjoint-schemas shape is reachable on every engine by editing the allowlist, and a detector that checked the dialect first would stay silent in exactly the case a Postgres user is equally lost. So `rekeyDrift` asks only about the names, and `explainRekey` names the username on Oracle and the allowlist elsewhere. It fires only when **every** entity is invalid and not one schema name is shared: anything less is ordinary drift, which the existing note already covers, and a message this specific has to be right or it teaches the user to ignore the next one. Checked against the live 42-entity layer, which correctly produces nothing. |
 | 2026-08-13 | §7, Phase 2 | **Descriptions render `dir="auto"`, like every other free-text field.** A comment is prose written by whoever owns the database, so it can be Persian, and a Persian sentence laid out left-to-right reads with its clauses in the wrong order. Confirmed end to end: a comment containing ZWNJ (`سفارش‌ها`) survived Phase 1's cleaning, JSONB storage and JSON serialisation with the joiner intact. |

@@ -567,7 +567,19 @@ The things worth knowing before you touch it:
   privilege-filtered and silently drops PKs/FKs (this is why the FK graph view
   once looked empty).
 - **MySQL vs MariaDB:** use `SET SESSION max_execution_time` and match timeouts
-  on error code **3024**; `SET STATEMENT ... FOR` is MariaDB-only.
+  on error code **3024**; `SET STATEMENT ... FOR` is MariaDB-only. Same split
+  for schema comments: `information_schema.SCHEMATA.SCHEMA_COMMENT` is MariaDB
+  10.5+ and is error **1054** on every MySQL, so the read is attempted and
+  suppressed, never required.
+- **Oracle identifier case:** the catalog stores unquoted names upper-cased
+  (`HR.EMPLOYEES`) and `build_index`/`_qualified` lower-case every key, which is
+  correct because unquoted Oracle SQL is case-insensitive. It breaks on one
+  input: a table created as `CREATE TABLE "Orders"` is stored `Orders`, can only
+  be referenced `"Orders"`, and folds onto the same key as a plain `ORDERS`
+  beside it — the later one wins and the other's columns stop resolving. A
+  metric written over it validates and then fails at execution with ORA-00904.
+  Known and deliberately unfixed; `test_semantic_validate.py`'s "Oracle
+  identifier case" block asserts the behaviour as it stands.
 - **Remote host / Vite:** `server.allowedHosts: true` and the same-origin
   `/api/v1` proxy are deliberate — see README "Running on a remote host".
 - **Data model note:** ORM entities live in `infra/db/models.py`;

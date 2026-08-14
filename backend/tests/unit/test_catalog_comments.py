@@ -223,6 +223,16 @@ def test_mysqls_storage_chatter_never_becomes_a_table_comment() -> None:
     assert folded[("sales", "customers")] == "Buyers."
 
 
+def test_mariadb_schema_comment_rows_fold() -> None:
+    """`SCHEMATA.SCHEMA_COMMENT` exists on MariaDB 10.5+ and on no MySQL — the
+    read is error 1054 there, which is why the connector attempts it under
+    `contextlib.suppress` rather than requiring it. Bytes again, like every
+    other aiomysql row."""
+    assert fold_schema_comments(
+        [(b"sales", b"Order-to-cash for the EU storefront."), (b"ops", b"")]
+    ) == {"sales": "Order-to-cash for the EU storefront."}
+
+
 def test_mssql_rows_fold() -> None:
     """`sys.extended_properties.value` is `sql_variant`, cast to nvarchar in
     the query — so it arrives as a string like any other."""

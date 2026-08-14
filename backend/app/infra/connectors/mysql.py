@@ -49,6 +49,7 @@ from app.domain.value_objects import (
 from app.infra.connectors.comments import (
     business_schemas,
     fold_column_comments,
+    fold_schema_comments,
     fold_table_comments,
 )
 from app.infra.connectors.hints import (
@@ -249,6 +250,20 @@ WHERE c.table_schema IN ({placeholders})
   AND c.column_comment <> ''
 """
 
+# MariaDB only, and attempted rather than required. `information_schema.SCHEMATA`
+# has no comment column in MySQL — `SELECT schema_comment` is error **1054,
+# unknown column**, on 8.0 and 8.4 alike (verified on 8.0.46) — while MariaDB
+# 10.5+ added `SCHEMA_COMMENT` for `COMMENT ON SCHEMA`. The connector already
+# carries MariaDB-aware code around `max_execution_time`, so this is one more
+# fork of the same shape: try it, suppress the failure, accept nothing. It must
+# never become a hard requirement.
+_SCHEMA_COMMENT_SQL = """
+SELECT s.schema_name, s.schema_comment
+FROM information_schema.schemata s
+WHERE s.schema_name IN ({placeholders})
+  AND s.schema_comment <> ''
+"""
+
 
 class MySqlConnector:
     dialect = "mysql"
@@ -433,6 +448,7 @@ class MySqlConnector:
             # like the reads above — documentation never fails a sync.
             table_comment_rows: list[Any] = []
             column_comment_rows: list[Any] = []
+            schema_comment_rows: list[Any] = []
             with contextlib.suppress(Exception):
                 await cur.execute(
                     _TABLE_COMMENT_SQL.format(placeholders=marks), schemas
@@ -443,6 +459,15 @@ class MySqlConnector:
                     _COLUMN_COMMENT_SQL.format(placeholders=marks), schemas
                 )
                 column_comment_rows = list(await cur.fetchall())
+            # MariaDB only; on MySQL this is error 1054 every time and the
+            # suppression is the whole point. Kept last of the reads so that a
+            # failure no version of MySQL can avoid is also the last thing this
+            # cursor is asked to do.
+            with contextlib.suppress(Exception):
+                await cur.execute(
+                    _SCHEMA_COMMENT_SQL.format(placeholders=marks), schemas
+                )
+                schema_comment_rows = list(await cur.fetchall())
 
         pks = {(r[0], r[1], r[2]) for r in pk_rows}
         fks = {
@@ -466,6 +491,14 @@ class MySqlConnector:
 
         table_comments = fold_table_comments(table_comment_rows)
         column_comments = fold_column_comments(column_comment_rows)
+        # A MySQL schema *is* a database, so a comment on the one we connected
+        # to is the database's own description — the field that seeds
+        # `business_context` and renders as "About this database". Another
+        # allowlisted database's comment stays a schema comment, because that is
+        # how its name appears in a qualified table name. Both are empty on
+        # MySQL, which has neither.
+        schema_comments = fold_schema_comments(schema_comment_rows)
+        database_comment = schema_comments.pop(self._database, None)
 
         grouped: dict[tuple[str, str], list[ColumnInfo]] = {}
         for schema, table, column, data_type, nullable, _pos, _column_type in col_rows:
@@ -505,6 +538,8 @@ class MySqlConnector:
             tables=tables,
             relationships=relationships,
             server_version=f"MySQL {version}" if version else None,
+            database_comment=database_comment,
+            schema_comments=schema_comments,
         )
 
     # ── execution ────────────────────────────────────────────────────────

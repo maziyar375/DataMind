@@ -282,3 +282,81 @@ def test_an_untouched_exclusion_rule_is_replaced_by_the_generation() -> None:
         ),
     )
     assert merged.default_exclusions == "Rows where deleted_at is not null."
+
+
+# ── Oracle identifier case ───────────────────────────────────────────────
+# These four assert **current behaviour, hazard included**, and are deliberately
+# not a fix (docs/catalog-metadata-plan.md §6.1.3). `build_index` lower-cases
+# every key, which is right for Oracle almost all of the time: unquoted SQL is
+# case-insensitive there and the catalog stores `HR.EMPLOYEES` upper-cased, so
+# folding is what lets a document written in lower case bind at all.
+#
+# It breaks on exactly one input — a table created with a *quoted* mixed-case
+# identifier, `CREATE TABLE "Orders"`, which Oracle stores as `Orders` and can
+# only be referenced as `"Orders"`. Folded, it occupies the same key as a plain
+# `ORDERS` beside it. The hazard predates this feature; the tests exist so that
+# whoever fixes it finds out here rather than from a customer's ORA-00904.
+ORACLE_TABLES = [
+    {
+        "schema": "HR",
+        "name": "ORDERS",
+        "columns": [{"name": "TOTAL", "data_type": "NUMBER"}],
+    },
+    {
+        "schema": "HR",
+        "name": "Orders",  # CREATE TABLE "Orders" — a different table
+        "columns": [{"name": "AMOUNT", "data_type": "NUMBER"}],
+    },
+]
+
+
+def test_an_upper_cased_oracle_snapshot_binds_a_lower_cased_document() -> None:
+    """The part that works, and the reason folding is there at all."""
+    index = build_index(
+        [{"schema": "HR", "name": "EMPLOYEES",
+          "columns": [{"name": "SALARY", "data_type": "NUMBER"}]}],
+        "oracle",
+    )
+    doc = SemanticDocument(
+        entities=[
+            SemanticEntity(
+                table="hr.employees",
+                metrics=[
+                    SemanticMetric(name="payroll", expression="SUM(hr.employees.salary)")
+                ],
+            )
+        ]
+    )
+    bound = validate_document(doc, index)
+    assert bound.entities[0].valid
+    assert bound.entities[0].metrics[0].valid
+
+
+def test_a_quoted_mixed_case_oracle_table_shares_one_index_key() -> None:
+    index = build_index(ORACLE_TABLES, "oracle")
+    assert list(index.tables) == ["hr.orders"]
+
+
+def test_the_later_table_wins_the_key_and_hides_the_other_s_columns() -> None:
+    """`HR.ORDERS.TOTAL` exists in the database and is rejected here."""
+    index = build_index(ORACLE_TABLES, "oracle")
+    assert check_expression(
+        "SUM(hr.orders.total)", entity_table="hr.orders", index=index
+    ) == (False, "`orders.total` is not a column of that table.")
+    # …while the quoted table's column resolves, and the SQL that would be
+    # written from it, `hr.orders.amount`, means `HR.ORDERS` to Oracle — the
+    # table that has no such column. Valid here, ORA-00904 there.
+    valid, _ = check_expression(
+        "SUM(hr.orders.amount)", entity_table="hr.orders", index=index
+    )
+    assert valid
+
+
+def test_a_quoted_name_written_into_a_document_is_flagged_not_rescued() -> None:
+    """The one case that surfaces: quotes survive into the key and miss it."""
+    index = build_index(ORACLE_TABLES, "oracle")
+    bound = validate_document(
+        SemanticDocument(entities=[SemanticEntity(table='HR."Orders"')]), index
+    )
+    assert not bound.entities[0].valid
+    assert "snapshot" in bound.entities[0].issue

@@ -657,6 +657,70 @@ async def test_regenerating_still_preserves_an_edited_seeded_description() -> No
     assert kept.provenance.edited is True
 
 
+# ── the one dialect-conditional line ─────────────────────────────────────
+def _overview_system(gateway: ScriptedGateway) -> str:
+    return next(system for name, system, _ in gateway.seen if name == "_Overview")
+
+
+@pytest.mark.asyncio
+async def test_oracle_is_told_that_a_schema_is_a_user() -> None:
+    """Otherwise `business_context` comes back describing `SCOTT` as though it
+    were a department — the owner is an account, and every later answer reads
+    that sentence."""
+    gateway = ScriptedGateway(lambda table: {"grain": "one row"})
+    await generate_document(
+        tables=TABLES,
+        relationships=RELATIONSHIPS,
+        dialect="oracle",
+        gateway=gateway,
+        llm=LLM,
+        budget=SAMPLE,
+    )
+
+    system = _overview_system(gateway)
+    assert "On Oracle a schema is a database user" in system
+    # Ahead of the output schema, where a rule belongs.
+    assert system.index("On Oracle") < system.index("Return JSON with these keys:")
+
+
+@pytest.mark.asyncio
+async def test_every_other_dialect_reads_the_prompt_byte_for_byte() -> None:
+    """The property that keeps this a note rather than a fork of the prompt."""
+    from app.semantic.prompts import OVERVIEW_SYSTEM
+
+    for dialect in ("postgres", "mysql", "mssql"):
+        gateway = ScriptedGateway(lambda table: {"grain": "one row"})
+        await generate_document(
+            tables=TABLES,
+            relationships=RELATIONSHIPS,
+            dialect=dialect,
+            gateway=gateway,
+            llm=LLM,
+            budget=SAMPLE,
+        )
+        assert _overview_system(gateway) == OVERVIEW_SYSTEM
+
+
+@pytest.mark.asyncio
+async def test_the_table_pass_is_untouched_by_the_oracle_note() -> None:
+    """One line, one prompt. The per-table pass says nothing about owners, and
+    the orientation note it receives is the overview's job to get right."""
+    from app.semantic.prompts import TABLE_SYSTEM
+
+    gateway = ScriptedGateway(lambda table: {"grain": "one row"})
+    await generate_document(
+        tables=TABLES,
+        relationships=RELATIONSHIPS,
+        dialect="oracle",
+        gateway=gateway,
+        llm=LLM,
+        budget=SAMPLE,
+    )
+
+    systems = {system for name, system, _ in gateway.seen if name == "_TableDraft"}
+    assert systems == {TABLE_SYSTEM}
+
+
 @pytest.mark.asyncio
 async def test_the_overview_pass_can_set_the_exclusion_rule() -> None:
     doc, _ = await _run(

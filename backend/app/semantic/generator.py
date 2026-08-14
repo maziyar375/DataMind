@@ -61,10 +61,10 @@ from app.semantic.models import (
 from app.semantic.prompts import (
     GLOSSARY_SYSTEM,
     GLOSSARY_USER,
-    OVERVIEW_SYSTEM,
     OVERVIEW_USER,
     TABLE_SYSTEM,
     TABLE_USER,
+    overview_system,
 )
 from app.semantic.validate import SchemaIndex, build_index, check_expression, derive_joins
 
@@ -400,7 +400,7 @@ async def _overview(
         return await gateway.structured(
             llm,
             [
-                ChatMessage(role="system", content=OVERVIEW_SYSTEM),
+                ChatMessage(role="system", content=overview_system(dialect)),
                 ChatMessage(
                     role="user",
                     content=OVERVIEW_USER.format(

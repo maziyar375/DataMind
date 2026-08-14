@@ -36,6 +36,7 @@ import {
 } from './ui'
 import type { ChipTone } from './ui'
 import { DetailBody, FieldRow } from './settings'
+import { explainRekey, rekeyDrift } from './semantic-drift'
 
 const ACTIVE = ['QUEUED', 'RUNNING']
 
@@ -264,6 +265,13 @@ export function SemanticLayerTab({
     [layer],
   )
 
+  // Forty red rows with one cause deserve one sentence, not forty. Only fires
+  // when the layer as a whole was re-keyed — see `semantic-drift.ts`.
+  const rekey = useMemo(
+    () => (doc && layer ? rekeyDrift(doc.entities, layer.tables) : null),
+    [doc, layer],
+  )
+
   if (loading) {
     return (
       <Shell>
@@ -303,13 +311,20 @@ export function SemanticLayerTab({
           }}
         />
 
-        {layer?.stale && !running && (
+        {/* The re-key note replaces the stale one rather than joining it: it
+            says everything the stale note says and then names the cause, and
+            two amber notes above the same red list read as two problems. */}
+        {rekey && !running ? (
+          <Note tone="amber">
+            {explainRekey(rekey, layer?.schema_dialect ?? '')}
+          </Note>
+        ) : layer?.stale && !running ? (
           <Note tone="amber">
             The schema has been re-synced since this layer was written. Anything
             that no longer matches is flagged below, and is already being kept
             out of the model's prompt.
           </Note>
-        )}
+        ) : null}
 
         {!empty && (
           <>
