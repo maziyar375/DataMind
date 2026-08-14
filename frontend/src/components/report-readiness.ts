@@ -216,6 +216,37 @@ export function preflightOf(sections: ReportSection[]): Preflight {
 }
 
 /**
+ * Why nothing can be generated from this report at all, or `null`.
+ *
+ * Distinct from everything above, and the distinction is the whole reason this
+ * is a separate function. `preflightOf` describes an outline that is *fixable*
+ * — check these questions, fill that section — which is why the Generate button
+ * stays live and opens a dialog that offers the fix. This describes a report
+ * that cannot be generated no matter what the user does in the editor, because
+ * the database it was built against no longer exists. There is no fix to offer,
+ * so the controls are disabled rather than lying about what a click will do —
+ * and the reason is rendered in the page, not only in a `title`, because a
+ * greyed control whose explanation lives in a tooltip is unreadable on a
+ * touchscreen and unreachable from a keyboard.
+ *
+ * Every past run stays readable; only new ones are refused. That is the same
+ * answer `report_service` gives on all four of its write paths, and saying it
+ * here first turns a 422 into a sentence the user reads before clicking.
+ */
+export function generationBlockedBy(report: {
+  connection_id: string | null
+  connection_name: string | null
+}): string | null {
+  if (report.connection_id !== null) return null
+  const which = report.connection_name ? ` (${report.connection_name})` : ''
+  return (
+    `The database this report was built against${which} has been deleted, so ` +
+    'it cannot be generated or checked again. Every run it already produced ' +
+    'stays readable.'
+  )
+}
+
+/**
  * Whether this block would be executed by a run.
  *
  * The worker's own test, character for character: `if block.sql.strip()`. A

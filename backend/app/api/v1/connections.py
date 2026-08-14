@@ -171,6 +171,13 @@ async def update_connection(
 async def delete_connection(connection_id: UUID, ctx: CtxDep, db: DbDep) -> None:
     connection = await _owned(db, connection_id, ctx)
     await db.delete(connection)
+    # Flush inside the request, exactly as `update_connection` does. `get_db`
+    # commits *after* the handler returns, by which point the 204 has been
+    # written — so a constraint that refuses the delete would otherwise be
+    # reported to the user as success and to the log as a stack trace. This is
+    # not hypothetical: `runs` blocked every connection that had ever answered a
+    # question until migration 0014.
+    await db.flush()
 
 
 @router.post("/{connection_id}/test", response_model=ConnectionTestResult)

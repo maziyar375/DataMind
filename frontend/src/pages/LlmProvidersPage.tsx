@@ -195,7 +195,15 @@ export default function LlmProvidersPage() {
 
   async function remove() {
     if (!selected) return
-    await api.remove(selected.id)
+    // Same reason as the data-source delete: a rejection here reached nobody,
+    // so a refused delete was indistinguishable from one that did nothing.
+    try {
+      await api.remove(selected.id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not delete this configuration.')
+      return
+    }
+    setError(null)
     const items = await refresh()
     setSelectedId(items[0]?.id ?? null)
   }

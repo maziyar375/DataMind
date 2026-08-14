@@ -14,7 +14,7 @@
  * interface used to call anything, and which produces the previous question's
  * numbers under the new heading.
  */
-import { preflightOf, readinessOf } from './report-readiness.ts'
+import { generationBlockedBy, preflightOf, readinessOf } from './report-readiness.ts'
 import type { ReportBlock, ReportSection } from '../api/types.ts'
 
 let failures = 0
@@ -222,6 +222,26 @@ check('sweepable keeps outline order, because the sweep scrolls down the page',
     section('s2', [unchecked('b3'), unchecked('b4')]),
   ]).sweepable.map((b) => b.id),
   ['b1', 'b3', 'b4'])
+
+// ── a report whose database has been deleted ──────────────────────────────
+// The only state in this module that is not fixable from the editor. Every
+// other problem it reports has a next action; this one has none, which is why
+// it is the single case where the controls are disabled rather than left live
+// to open a dialog. Past runs are unaffected and must stay readable.
+check('a live connection blocks nothing',
+  generationBlockedBy({ connection_id: 'c1', connection_name: 'sales' }), null)
+
+const gone = generationBlockedBy({ connection_id: null, connection_name: 'sales' })
+check('a deleted connection blocks generation', gone !== null, true)
+check('it names the database, so the user knows which one to look for',
+  (gone ?? '').includes('(sales)'), true)
+check('it says the past is safe, because that is the first worry',
+  /stays readable/.test(gone ?? ''), true)
+
+check('a forgotten name still produces a usable sentence',
+  generationBlockedBy({ connection_id: null, connection_name: null })?.startsWith(
+    'The database this report was built against has been deleted',
+  ), true)
 
 if (failures > 0) {
   // A thrown error is the non-zero exit; `process` would need Node's types.

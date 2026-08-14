@@ -319,11 +319,18 @@ class Run(Base, TimestampMixin):
     )
     # Denormalised so ownership scoping is a single-index lookup on the hot path.
     owner_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
-    connection_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("database_connections.id"), nullable=False
+    # Nullable and SET NULL, like every other reference to these two tables: a
+    # run is the record of a question that was answered, and deleting the
+    # connection it used must not delete the transcript. `model_snapshot` still
+    # carries the connection and model *names*, so the turn stays explainable
+    # after the parent is gone. Set at creation and never null on a live run —
+    # see `_prepare` in run_service, which fails the run rather than executing
+    # against a connection that has since been deleted.
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("database_connections.id", ondelete="SET NULL")
     )
-    llm_config_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("llm_configs.id"), nullable=False
+    llm_config_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("llm_configs.id", ondelete="SET NULL")
     )
     model_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     prompt_version: Mapped[str] = mapped_column(String(20), default="v1")

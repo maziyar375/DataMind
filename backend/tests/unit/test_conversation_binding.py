@@ -10,6 +10,16 @@ FULL connection returned, by a path that consults neither policy.
 The SPA already locks the connection picker once the transcript is non-empty.
 This closes the API route around it, while leaving the switch free on a thread
 where nothing has been said yet.
+
+**Migration 0014 gave `None` a second meaning.** Before it, a connection could
+not be deleted once any run had used it, so a null default meant "nothing chosen
+yet" and adopting whatever arrived was the kind reading. Now
+`conversations.default_connection_id` is released by `ON DELETE SET NULL` when
+the database is deleted, so a null default on a thread that has *already spoken*
+means its database is gone — and adopting a replacement would continue one
+database's conversation against another, which is precisely what the pin exists
+to stop, arriving through the back door. The transcript stays readable; it
+cannot be added to. `transcript_empty` is what tells the two apart.
 """
 from __future__ import annotations
 
@@ -60,13 +70,31 @@ def test_the_same_connection_is_always_fine() -> None:
     assert conversation.default_connection_id == connection
 
 
-def test_an_unbound_conversation_adopts_rather_than_refuses() -> None:
-    """A thread with no default recorded — an older row, or one created before
-    a connection was picked — has nothing to contradict, and refusing would
-    make it permanently unusable."""
+def test_a_conversation_that_has_said_nothing_yet_adopts_rather_than_refuses() -> None:
+    """A thread with no default and no transcript has nothing to contradict,
+    and refusing would make it permanently unusable."""
     conversation = FakeConversation(None)
     connection = uuid4()
 
-    _bind_connection(conversation, connection, transcript_empty=False)
+    _bind_connection(conversation, connection, transcript_empty=True)
 
     assert conversation.default_connection_id == connection
+
+
+def test_a_conversation_whose_database_was_deleted_cannot_be_continued() -> None:
+    """The case that replaced the old "unbound rows adopt" rule.
+
+    Asked for directly: a chat whose database has been deleted was still
+    answering, because the null left by `ON DELETE SET NULL` read as "never
+    bound" and the next message re-bound the thread to whatever the picker
+    offered. Nothing leaked — `_recent_turns` drops turns it cannot attribute to
+    the connection now asking — but the thread carried on as though its database
+    were still there, which is not something a user can be expected to notice.
+    """
+    conversation = FakeConversation(None)
+
+    with pytest.raises(ValidationError) as raised:
+        _bind_connection(conversation, uuid4(), transcript_empty=False)
+
+    assert "deleted" in str(raised.value)
+    assert conversation.default_connection_id is None  # not adopted on the way out

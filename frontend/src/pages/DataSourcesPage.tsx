@@ -247,9 +247,20 @@ export default function DataSourcesPage() {
 
   async function remove() {
     if (!selected) return
-    await api.remove(selected.id)
+    // A rejected delete used to reach nobody: the promise threw into a click
+    // handler, the list never refreshed, and the row simply stayed — which
+    // looks identical to a delete that silently did nothing, and is exactly how
+    // the `runs` constraint went unnoticed until a user reported "it doesn't
+    // delete". Whatever the reason, say it.
+    try {
+      await api.remove(selected.id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not delete this connection.')
+      return
+    }
     setSelectedId(null)
     setSchema(null)
+    setError(null)
     const items = await api.list()
     setList(items)
     if (items.length > 0) setSelectedId(items[0].id)

@@ -63,7 +63,7 @@ import {
 // One vocabulary for a run's status across the two screens that show one.
 import { RUN_TONE } from './report-history'
 import { printReport } from './report-print'
-import { preflightOf, readinessOf } from './report-readiness'
+import { generationBlockedBy, preflightOf, readinessOf } from './report-readiness'
 import type { Preflight, PreflightProblem, ReadinessState } from './report-readiness'
 import { VegaChart } from './VegaChart'
 import {
@@ -734,6 +734,10 @@ export function ReportOutlineEditor({
   }
 
   const busy = proposing || sweep !== null
+  // Not "busy" — unfixable. Everything that writes to this report needs the
+  // database it was built against, and that database is gone; only reading is
+  // still possible. See `generationBlockedBy`.
+  const blocked = generationBlockedBy(report)
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
@@ -768,9 +772,12 @@ export function ReportOutlineEditor({
           {sections.length > 0 && (
             <GhostButton
               onClick={() => setConfirmPropose(true)}
-              disabled={busy}
+              disabled={busy || blocked !== null}
               style={toolbarBtn}
-              title="Ask the model for a fresh structure. This replaces the outline below."
+              title={
+                blocked ??
+                'Ask the model for a fresh structure. This replaces the outline below.'
+              }
             >
               <Icon.Sparkle size={13} /> Propose again
             </GhostButton>
@@ -778,8 +785,9 @@ export function ReportOutlineEditor({
           {now.sweepable.length > 0 && (
             <GhostButton
               onClick={() => void checkAll(now.sweepable)}
-              disabled={busy}
+              disabled={busy || blocked !== null}
               style={toolbarBtn}
+              title={blocked ?? undefined}
             >
               <Icon.Check size={13} />
               {`Check ${now.sweepable.length} question${now.sweepable.length === 1 ? '' : 's'}`}
@@ -809,19 +817,27 @@ export function ReportOutlineEditor({
               <span style={{ opacity: 0.6 }}>{runCount}</span>
             </GhostButton>
           )}
-          {/* Never disabled for the state of the outline — only for work
+          {/* Never disabled for the state of the *outline* — only for work
               already in flight. A greyed-out control with its reason in a
               `title` is unreadable on a touchscreen, unreachable from a
               keyboard, and is how a user concludes the product is broken; the
               dialog this opens says the same thing where it can be read, and
-              offers to fix it. */}
+              offers to fix it.
+
+              A deleted database is the one exception, and it is the exception
+              because that rationale inverts: there is no fix to offer and no
+              dialog worth opening, so a live button could only produce a 422
+              the user did not ask for. The reason is already on the page as an
+              amber note below — the readable half of the rule is kept, and only
+              the "never disabled" half gives way. */}
           <PrimaryButton
             onClick={() => void attemptGenerate()}
-            disabled={busy || starting}
+            disabled={busy || starting || blocked !== null}
             title={
-              now.clean
+              blocked ??
+              (now.clean
                 ? 'Generate this report from the outline below.'
-                : 'Check what this will produce before it runs.'
+                : 'Check what this will produce before it runs.')
             }
             style={{ padding: '8px 14px' }}
           >
@@ -842,12 +858,10 @@ export function ReportOutlineEditor({
         >
           {error && <ErrorNote>{error}</ErrorNote>}
 
-          {report.connection_id === null && (
-            <Note tone="amber">
-              This report’s database connection has been removed, so its outline cannot be
-              checked and it cannot be generated. Past runs stay readable.
-            </Note>
-          )}
+          {/* The readable half of the disabled-control rule: every greyed
+              button in this page has its reason here, in one sentence, in the
+              flow of the document rather than behind a hover. */}
+          {blocked && <Note tone="amber">{blocked}</Note>}
 
           {/* The status panel leads, because it is the answer to the question a
               user opens this page with — how far along is this, and what is the
@@ -948,7 +962,7 @@ export function ReportOutlineEditor({
                     sections={sectionTarget}
                     onSections={setSectionTarget}
                     model={models.find((m) => m.id === report.llm_config_id) ?? null}
-                    disabled={!report.prompt.trim()}
+                    disabled={!report.prompt.trim() || blocked !== null}
                     onPropose={() => void propose(sectionTarget)}
                     onAddSection={() => void addSection()}
                   />
@@ -963,6 +977,7 @@ export function ReportOutlineEditor({
                 index={index}
                 count={sections.length}
                 busy={busy}
+                blocked={blocked}
                 checking={checking}
                 invalidated={invalidated}
                 previews={previews}
@@ -1616,7 +1631,7 @@ function Step({
 
 // ── one section ───────────────────────────────────────────────────────────
 function SectionCard({
-  section, index, count, busy, checking, invalidated, previews,
+  section, index, count, busy, blocked, checking, invalidated, previews,
   onHeading, onIntent, onRemove, onMove,
   onAddBlock, onBlock, onRemoveBlock, onMoveBlock, onCheck, onSaveSql,
 }: {
@@ -1624,6 +1639,9 @@ function SectionCard({
   index: number
   count: number
   busy: boolean
+  /** Why checking is impossible, or null. Separate from `busy` on purpose: it
+   *  stops the model calls without freezing the text a user can still edit. */
+  blocked: string | null
   checking: string[]
   /** Blocks an edit un-checked since the page opened. See the editor's state. */
   invalidated: Set<string>
@@ -1773,6 +1791,7 @@ function SectionCard({
               index={blockIndex}
               count={section.blocks.length}
               busy={busy}
+              blocked={blocked}
               checking={checking.includes(block.id)}
               invalidated={invalidated.has(block.id)}
               preview={previews[block.id]}
@@ -1836,13 +1855,15 @@ function SectionCard({
  * write.
  */
 function BlockRow({
-  block, index, count, busy, checking, invalidated, preview, onChange, onRemove, onMove, onCheck,
-  onSaveSql,
+  block, index, count, busy, blocked, checking, invalidated, preview, onChange, onRemove,
+  onMove, onCheck, onSaveSql,
 }: {
   block: ReportBlock
   index: number
   count: number
   busy: boolean
+  /** Why this row cannot be checked, or null. See `SectionCard`. */
+  blocked: string | null
   checking: boolean
   /** Whether an edit on this page un-checked this row. */
   invalidated: boolean
@@ -2030,13 +2051,16 @@ function BlockRow({
           <button
             type="button"
             onClick={onCheck}
-            disabled={busy || checking}
-            className={`rm-check${unchecked && !checking && !ownSql ? ' is-wanted' : ''}`}
+            disabled={busy || checking || blocked !== null}
+            className={
+              `rm-check${unchecked && !checking && !ownSql && !blocked ? ' is-wanted' : ''}`
+            }
             style={{ marginInlineStart: 0, padding: '4px 10px', fontSize: 11.5 }}
             title={
-              ownSql
+              blocked ??
+              (ownSql
                 ? 'Asks the model for a new statement from the question, replacing the one you wrote.'
-                : 'Turns the question into a query and checks it against your schema.'
+                : 'Turns the question into a query and checks it against your schema.')
             }
           >
             {checking ? <Spinner size={11} /> : <Icon.Check size={11} />}

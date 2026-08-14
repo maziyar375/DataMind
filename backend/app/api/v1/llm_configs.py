@@ -168,6 +168,11 @@ async def update_config(
 async def delete_config(config_id: UUID, ctx: CtxDep, db: DbDep) -> None:
     row = await _owned(db, config_id, ctx)
     await db.delete(row)
+    # Inside the request, so a constraint that refuses this is an error the
+    # caller sees rather than a 204 followed by a stack trace in the log —
+    # `get_db` commits after the response is already written. See the note in
+    # `connections.delete_connection`; `runs` blocked both until 0014.
+    await db.flush()
 
 
 @router.post("/{config_id}/test", response_model=TestResult)

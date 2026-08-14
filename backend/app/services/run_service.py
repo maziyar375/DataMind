@@ -76,6 +76,18 @@ log = get_logger(__name__)
 # reason: a trimmed real sentence beats a paraphrase nothing verified.
 _QUESTION_CHARS = 300
 
+# Said by both paths into a released conversation — the one that names a
+# connection explicitly and the one that relies on the conversation's own — so a
+# user gets the same sentence whichever the SPA sends. Dashboards and reports
+# already answer this case in their own words ("This tile's database connection
+# is unavailable", "This report's connection was removed"); chat was the one
+# surface that quietly carried on instead.
+_RELEASED = (
+    "The database this conversation used has been deleted. Its history stays "
+    "readable, but it cannot be continued — start a new conversation to ask "
+    "against another database."
+)
+
 
 class RunService:
     def __init__(self, db: AsyncSession, settings: Settings) -> None:
@@ -100,18 +112,26 @@ class RunService:
         if conversation is None or conversation.owner_id != owner_id:
             raise NotFoundError("Conversation not found.")
 
+        # Read before the connection is resolved, because whether this thread
+        # has said anything decides what a missing connection *means*: nothing
+        # chosen yet, or the one it was using deleted underneath it.
+        next_seq = await self._next_message_seq(conversation_id)
+        transcript_empty = next_seq == 1
+
         conn_id = connection_id or conversation.default_connection_id
         llm_id = llm_config_id or conversation.default_llm_config_id
         if conn_id is None:
-            raise NotFoundError("This conversation has no database connection.")
+            raise NotFoundError(
+                _RELEASED if not transcript_empty
+                else "This conversation has no database connection."
+            )
         if llm_id is None:
             raise NotFoundError("This conversation has no model configured.")
 
         connection = await self._owned(DatabaseConnection, conn_id, owner_id)
         llm_config = await self._owned(LlmConfig, llm_id, owner_id)
 
-        next_seq = await self._next_message_seq(conversation_id)
-        _bind_connection(conversation, connection.id, transcript_empty=next_seq == 1)
+        _bind_connection(conversation, connection.id, transcript_empty=transcript_empty)
 
         user_message = Message(
             id=uuid.uuid4(),
@@ -246,9 +266,38 @@ class RunService:
             "connection": run.model_snapshot.get("connection_name"),
         })
 
-        connection = await self._db.get(DatabaseConnection, run.connection_id)
-        llm_config = await self._db.get(LlmConfig, run.llm_config_id)
-        assert connection is not None and llm_config is not None
+        # Both are `SET NULL`, so a connection or an LLM config deleted between
+        # this run being queued and being claimed leaves the pointer empty. That
+        # is a narrow race — the row is normally written and executed within the
+        # same second — but an `assert` would surface it as a bare crash, and
+        # the run has to end in a terminal state either way.
+        connection = (
+            await self._db.get(DatabaseConnection, run.connection_id)
+            if run.connection_id
+            else None
+        )
+        llm_config = (
+            await self._db.get(LlmConfig, run.llm_config_id)
+            if run.llm_config_id
+            else None
+        )
+        if connection is None or llm_config is None:
+            missing = "data source" if connection is None else "model"
+            run.status = RunStatus.FAILED
+            run.error_code = "E_NOT_FOUND"
+            run.error_message = f"The {missing} this run was using has been deleted."
+            run.finished_at = utcnow()
+            await self._db.commit()
+            # The same terminal event every other ending emits, so the SPA needs
+            # no new case and the SSE stream still closes.
+            await self._emit(run_id, "RUN_FINISHED", {
+                "status": run.status,
+                "error_code": run.error_code,
+                "repair_count": run.repair_count,
+                "total_latency_ms": run.total_latency_ms,
+            })
+            await event_bus.close_run(run_id)
+            return
 
         snapshot = await latest_snapshot(self._db, connection.id)
         # Loaded once per run, not per attempt: a repair regenerates against
@@ -926,6 +975,16 @@ def _bind_connection(
     connection it is switched to rather than leaving the default stale.
     """
     if conversation.default_connection_id is None:
+        # `None` means one of two things, and the transcript says which.
+        # Nothing asked yet: the thread has not chosen a database, so it adopts
+        # this one. Something asked: the database it *had* was deleted, and
+        # `ON DELETE SET NULL` released this column (migration 0014). Adopting
+        # a replacement there would silently continue one database's
+        # conversation against another — the exact thing the pin below exists
+        # to prevent, arriving through the back door. The transcript stays
+        # readable; it just cannot be added to.
+        if not transcript_empty:
+            raise ValidationError(_RELEASED, conversation_id=str(conversation.id))
         conversation.default_connection_id = connection_id
         return
     if conversation.default_connection_id == connection_id:
