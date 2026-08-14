@@ -326,6 +326,20 @@ long-vs-wide result shapes. That is precisely the class the semantic layer
 addresses, and `connections.semantic_layer_enabled` exists so it can be A/B'd on
 this suite without deleting a layer someone spent time on.
 
+**Catalog comments did not move execution accuracy** (2026-08-14, DeepSeek V4
+Flash): **40.0% without, 36.0% with**, over 50 questions each — two questions in
+a run that flipped twelve, so the honest reading is *no measurable effect at this
+sample size*, and the result is not comparable to the V4 Pro baseline. Recall was
+**1.000 in both arms**, which was predicted rather than discovered: `retrieve`
+selects on names and never reads a comment, and this fixture no longer clears the
+budget (§1). Two things the run did establish: neither of the fixture's
+deliberately false comments was ever believed, and parse, guard-pass,
+execution-success and policy-violation rates all improved. Both are in
+[`reports/sales_v1_catalog_comments_2026-08-14.md`](../backend/app/eval/reports/sales_v1_catalog_comments_2026-08-14.md),
+which also throws out two of its own apparent gains after checking them — worth
+reading as an example of the standard: an A/B whose author wanted a win, did not
+get one, and said so.
+
 ---
 
 ## 7. Adding to the suite

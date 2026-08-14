@@ -213,6 +213,25 @@ def test_the_two_planted_comments_are_still_planted() -> None:
     )
 
 
+def test_no_comment_carries_a_double_quote() -> None:
+    """The renderer wraps a comment in "quotes" and does not escape what is
+    inside, so an inner double quote makes the boundary ambiguous to a reader and
+    to the model — and the legend line's whole job is that those quotes mark
+    where the DBA's prose starts and stops. Found by reading a rendered block:
+    three of this fixture's comments had one. Containment does not rest on this
+    (the newline strip is what stops a forged section header), so it is a rule
+    for our own fixture rather than a new step in `clean_comment` — escaping at
+    render would change the bytes of every prompt for a hazard no engine's
+    catalog makes likely."""
+    sql = _overlay()
+    bodies = re.findall(
+        r"COMMENT ON (?:TABLE|COLUMN|DATABASE|SCHEMA) \S+ IS\s*'((?:[^']|'')*)'", sql
+    )
+    assert bodies, "no comments parsed — the regex or the file changed shape"
+    for body in bodies:
+        assert '"' not in body, f"inner double quote in: {body[:80]}…"
+
+
 def test_no_comment_exceeds_the_stored_caps() -> None:
     """`clean_comment` truncates past 400 (table) / 240 (column) chars. A fixture
     comment that needs truncating measures the truncator, not the feature."""

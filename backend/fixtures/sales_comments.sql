@@ -63,9 +63,9 @@ COMMENT ON SCHEMA public IS
 -- ══════════════════════════════════════════════════════════════════════════
 
 COMMENT ON TABLE orders IS
-  'One row per checkout, at any stage of its life. Not every order is revenue: cancelled and returned orders stay here with their money on them, so anything that means "what we actually sold" has to filter on status.';
+  'One row per checkout, at any stage of its life. Not every order is revenue: cancelled and returned orders stay here with their money on them, so anything that means genuine sales has to filter on status.';
 COMMENT ON COLUMN orders.status IS
-  'completed = fulfilled and paid; shipped = in transit; pending = unfulfilled; cancelled = called off; returned = refunded';
+  'completed = fulfilled and paid; shipped = in transit; pending = not yet fulfilled; cancelled = called off; returned = refunded.';
 COMMENT ON COLUMN orders.channel IS
   'How the order reached us: web (the storefront), phone (taken by a rep), partner (a reseller''s system). Web orders have no employee_id.';
 COMMENT ON COLUMN orders.total_amount IS
@@ -99,7 +99,7 @@ COMMENT ON COLUMN payments.amount IS
 COMMENT ON COLUMN payments.status IS
   'Settlement state of the capture. Everything in this database is captured; authorised-only and failed attempts live in the gateway, not here.';
 COMMENT ON COLUMN payments.paid_at IS
-  'When the money was captured, up to three days after the order was placed. Use orders.order_date for "when did we sell it".';
+  'When the money was captured, up to three days after the order was placed. Use orders.order_date for when the sale happened.';
 
 COMMENT ON TABLE returns IS
   'One row per returned order line. A return is approved or rejected; only approved ones produce a refund, so joining returns to refunds without checking status overstates what we paid back.';
@@ -148,7 +148,7 @@ COMMENT ON COLUMN customers.credit_limit IS
   'Ceiling on unpaid invoices for this account, in USD. A commercial term, not a spending total — it says nothing about what the customer has bought.';
 
 COMMENT ON TABLE products IS
-  'The sellable catalogue, current and retired. discontinued means we have stopped selling it; active is the softer "not on the storefront right now". Both stay in the table because old orders point at them.';
+  'The sellable catalogue, current and retired. discontinued means we have stopped selling it for good; active is the softer not-on-the-storefront-right-now. Both stay in the table because old orders point at them.';
 COMMENT ON COLUMN products.price IS
   'Current list price in USD, before any promotion. What an order line was actually sold at is order_items.unit_price.';
 COMMENT ON COLUMN products.cost IS
