@@ -42,6 +42,35 @@ The schema is deliberately wide enough that the snapshot **exceeds the retrieve
 node's budget** — so retrieval is genuinely exercised rather than trivially
 correct.
 
+### The commented arm
+
+`--comments` loads a second file on top of the seed —
+`backend/fixtures/sales_comments.sql`, 21 table and 42 column descriptions plus
+the database's own — and turns on `include_db_comments`, so the run prompt
+carries them under the rules in
+[catalog-metadata-plan.md](catalog-metadata-plan.md) §4. Without the flag the
+fixture is byte-for-byte the one every earlier run measured, which is what makes
+the two comparable at all:
+
+```bash
+python -m app.eval.runner --suite sales_v1                # uncommented arm
+python -m app.eval.runner --suite sales_v1 --comments     # commented arm
+```
+
+It is an overlay rather than a second `FIXTURES` entry for one reason: a
+record's `connection_fixture` is part of the frozen suite, so a second fixture
+would mean editing the golden set to switch arms — the one thing §2 forbids.
+The arm is recorded on the scorecard (`metrics.catalog_comments`), so two
+`eval_runs` rows that differ only in this can be told apart afterwards.
+
+**Two of the fixture's comments are deliberately untrue** — `customers.segment`
+is stale (it lists a segment the seed no longer writes) and `orders.subtotal` is
+flatly wrong (it claims to be the amount the customer paid, which is
+`total_amount`). Real catalogs rot, and a feature measured only against perfect
+documentation is not measured. `tests/eval/test_golden_set.py` asserts both are
+still there, so a well-meaning cleanup cannot quietly remove the hard half of
+the test.
+
 ---
 
 ## 2. The golden set
@@ -176,6 +205,7 @@ python -m app.eval.runner --suite sales_v1 --limit 5     # smoke test
 python -m app.eval.runner --suite sales_v1 --tag join    # one slice
 python -m app.eval.runner --suite sales_v1_negative      # the routing set
 python -m app.eval.runner --suite sales_v1 --json        # machine-readable
+python -m app.eval.runner --suite sales_v1 --comments    # with catalog comments
 ```
 
 **Behind a rate-limiting provider, use the wrapper instead:**
@@ -275,6 +305,17 @@ long-vs-wide result shapes. That is precisely the class the semantic layer
 addresses, and `connections.semantic_layer_enabled` exists so it can be A/B'd on
 this suite without deleting a layer someone spent time on.
 
+**Catalog comments did not move execution accuracy** (2026-08-14, DeepSeek V4
+Flash): 40.0% without, 36.0% with, over 50 questions — a two-question gap in a
+run that flipped twelve, so the honest reading is *no measurable effect at this
+sample size*. The same run found that neither of the fixture's two deliberately
+false comments was believed, and that parse, guard-pass, execution-success and
+policy-violation rates all improved. Both facts are in
+[`reports/sales_v1_catalog_comments_2026-08-14.md`](../backend/app/eval/reports/sales_v1_catalog_comments_2026-08-14.md),
+which also throws out two of its own apparent gains after checking them. It is
+worth reading as an example of the standard: an A/B whose author wanted a win,
+did not get one, and said so.
+
 ---
 
 ## 7. Adding to the suite
@@ -287,7 +328,8 @@ this suite without deleting a layer someone spent time on.
 - **A new fixture / dialect:** add a `FixtureSpec` to `dataset.FIXTURES` with its
   image and seed path. The dialect mirrors already exist
   (`sales_seed_mysql.sql`, `sales_seed_mssql.sql`), so a MySQL or SQL Server
-  suite is a registry entry plus records, not new machinery.
+  suite is a registry entry plus records, not new machinery. A `comments_path`
+  is optional and is what `--comments` loads.
 - **Correcting a gold:** only on demonstrable defect, and the entry in
   `suites/CHANGELOG.md` is not optional.
 - **Never** edit a question because a model keeps getting it wrong. That is the

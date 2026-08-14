@@ -11,6 +11,10 @@
 #     sends the entire snapshot and retrieval is never exercised).
 # It prints the table count, column total, budget estimate and load time for each.
 #
+# PostgreSQL additionally loads `sales_comments.sql` — the COMMENT ON overlay
+# that is the commented arm of the eval A/B — and reads the descriptions back
+# as `analytics_ro`, so a typo in it is found here rather than in a paid run.
+#
 # Then, unless SKIP_DEMO=1, it rebuilds the running Compose Postgres `sales`
 # demo from a clean volume so the app sees the new schema (that DB is designed
 # to be re-seeded from its init script — see docker-compose.yml).
@@ -25,6 +29,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PG_SEED="$HERE/sales_seed.sql"
+PG_COMMENTS="$HERE/sales_comments.sql"
 MY_SEED="$HERE/sales_seed_mysql.sql"
 MS_SEED="$HERE/sales_seed_mssql.sql"
 
@@ -64,6 +69,27 @@ verify_pg() {
   docker exec "$c" psql -U analytics_ro -d sales -c "SELECT 1 FROM orders LIMIT 1" >/dev/null 2>&1 \
     || fail "analytics_ro cannot read"
   report pg "$tables" "$cols" "$budget" "$secs"
+  verify_pg_comments "$c"
+}
+
+# The COMMENT ON overlay: it loads on top of the seed, and the catalog gives
+# back what it wrote. Checked here because the only other thing that loads it is
+# a paid eval run, where a misspelt object name is discovered forty minutes and
+# real money in. Read as `analytics_ro`, since that is the role a customer's
+# connection uses and pg_description carries no privilege filter of its own.
+verify_pg_comments() {
+  local c=$1
+  docker cp "$PG_COMMENTS" "$c:/comments.sql" >/dev/null
+  docker exec "$c" psql -U postgres -d sales -q -v ON_ERROR_STOP=1 -f /comments.sql >/dev/null 2>/tmp/dmfx_pgc.err \
+    || { cat /tmp/dmfx_pgc.err >&2; fail "the sales_comments.sql overlay did not load cleanly"; }
+  read -r ctables ccols cdb < <(docker exec "$c" psql -U analytics_ro -d sales -t -A -F' ' -c \
+    "SELECT (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace AND n.nspname='public' WHERE c.relkind='r' AND obj_description(c.oid,'pg_class') IS NOT NULL),
+            (SELECT count(*) FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace AND n.nspname='public' WHERE a.attnum>0 AND NOT a.attisdropped AND c.relkind='r' AND col_description(c.oid,a.attnum) IS NOT NULL),
+            (SELECT count(*) FROM pg_database d WHERE d.datname=current_database() AND shobj_description(d.oid,'pg_database') IS NOT NULL);")
+  [ "${ctables:-0}" -ge 15 ] || fail "pg comments: only ${ctables:-0} tables described (want >= 15)"
+  [ "${ccols:-0}"   -ge 40 ] || fail "pg comments: only ${ccols:-0} columns described (want >= 40)"
+  [ "${cdb:-0}"     -eq 1  ] || fail "pg comments: the database description is missing"
+  ok "pg comments: $ctables tables, $ccols columns + the database, read back as analytics_ro"
 }
 
 # ── MySQL ───────────────────────────────────────────────────────────────────
@@ -132,13 +158,45 @@ if [ "${SKIP_DEMO:-0}" != "1" ] && [ "$ONLY" = "all" ]; then
   if command -v docker >/dev/null && [ -f "$ROOT/docker-compose.yml" ]; then
     echo "${YEL}==> Rebuilding the Compose 'sales' demo from clean${NC}"
     ( cd "$ROOT"
+      # Ask Docker which volume the service actually owns, rather than deriving
+      # it. `$(basename "$ROOT")_raymand_sales` was wrong for the same reason it
+      # looked right: Compose LOWER-CASES the project name it takes from the
+      # directory, so a checkout named `DataMind` owns `datamind_raymand_sales`
+      # — and the `|| true` turned that into a silent no-op. The demo then kept
+      # its old volume, skipped every init script (Postgres runs them only on an
+      # empty data directory), and the line below announced a rebuild that had
+      # not happened. Derived name kept only as the fallback for when no
+      # container exists yet.
+      cid="$(docker compose ps -aq sales 2>/dev/null | head -1)"
+      vol=""
+      [ -n "$cid" ] && vol="$(docker inspect -f \
+        '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}' \
+        "$cid" 2>/dev/null || true)"
+      [ -n "$vol" ] || vol="$(printf '%s' "${COMPOSE_PROJECT_NAME:-$(basename "$ROOT")}" \
+        | tr '[:upper:]' '[:lower:]')_raymand_sales"
       docker compose rm -sf sales >/dev/null 2>&1 || true
-      # The demo db is intentionally ephemeral; drop its volume so the init
-      # script re-seeds the new schema on next start.
-      docker volume rm "$(basename "$ROOT")_raymand_sales" >/dev/null 2>&1 || true
+      docker volume rm "$vol" >/dev/null 2>&1 || true
+      if docker volume inspect "$vol" >/dev/null 2>&1; then
+        fail "could not drop the demo volume '$vol'; the demo would keep its old schema"
+      fi
       docker compose up -d sales >/dev/null
     )
-    ok "Compose 'sales' demo re-seeding from the new schema"
+    # And prove it: the init scripts only run on an empty volume, so counting
+    # the descriptions back is what says the rebuild happened at all.
+    printf '    waiting for the demo to re-seed '
+    demo_ok=0
+    for _ in $(seq 1 60); do
+      if docker compose -f "$ROOT/docker-compose.yml" exec -T sales \
+           psql -U postgres -d sales -t -A -c \
+           "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace AND n.nspname='public' WHERE c.relkind='r' AND obj_description(c.oid,'pg_class') IS NOT NULL" \
+           2>/dev/null | tr -d '[:space:]' | grep -qE '^([1-9][0-9]+)$'; then
+        demo_ok=1; break
+      fi
+      printf '.'; sleep 2
+    done
+    printf '\n'
+    [ "$demo_ok" = 1 ] || fail "the demo came back without its catalog descriptions"
+    ok "Compose 'sales' demo re-seeded from the new schema, descriptions included"
   else
     echo "${YEL}(skipping demo rebuild: docker compose / compose file not found)${NC}"
   fi

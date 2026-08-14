@@ -80,6 +80,10 @@ def snapshot_to_dict(snapshot: SchemaSnapshot) -> dict[str, Any]:
     """Same shape `connections.sync` stores and `run_service` feeds the pipeline."""
     return {
         "dialect": snapshot.dialect,
+        # `{}` on a fixture with no comments, exactly as the column defaults for
+        # a snapshot taken before 0012 — so carrying it always costs the
+        # uncommented arm nothing and keeps this the shape the request path has.
+        "catalog_meta": snapshot.catalog_meta(),
         "tables": [t.as_dict() for t in snapshot.tables],
         "relationships": [
             {
@@ -150,6 +154,7 @@ async def evaluate_record(
     settings: Settings,
     model_name: str,
     with_cost: bool = True,
+    include_db_comments: bool = False,
 ) -> RecordOutcome:
     o = RecordOutcome(
         record_id=record.id, tags=record.tags, difficulty=record.difficulty,
@@ -177,6 +182,7 @@ async def evaluate_record(
     deps = NodeDeps(
         llm_gateway=gateway, llm=llm, connector=connector, snapshot=snapshot,
         history=[], policy=policy, emit=emit,
+        include_db_comments=include_db_comments,
     )
     pipeline = AnalyticsPipeline(on_step=on_step)
 
@@ -299,12 +305,14 @@ async def run_suite(
     model_name: str,
     with_cost: bool = True,
     progress: bool = False,
+    include_db_comments: bool = False,
 ) -> list[RecordOutcome]:
     outcomes: list[RecordOutcome] = []
     for i, record in enumerate(records, 1):
         outcome = await evaluate_record(
             record, gateway=gateway, llm=llm, connector=connector, snapshot=snapshot,
             policy=policy, settings=settings, model_name=model_name, with_cost=with_cost,
+            include_db_comments=include_db_comments,
         )
         outcomes.append(outcome)
         if progress:
@@ -329,6 +337,7 @@ async def evaluate_negative(
     snapshot: dict[str, Any],
     policy: GuardPolicy,
     settings: Settings,
+    include_db_comments: bool = False,
 ) -> RecordOutcome:
     o = RecordOutcome(record_id=record.id, tags=[record.category], difficulty="n/a")
 
@@ -349,6 +358,7 @@ async def evaluate_negative(
     deps = NodeDeps(
         llm_gateway=gateway, llm=llm, connector=connector, snapshot=snapshot,
         history=[], policy=policy, emit=emit,
+        include_db_comments=include_db_comments,
     )
     try:
         state = await AnalyticsPipeline(on_step=on_step).run(state, deps)
@@ -415,11 +425,18 @@ def aggregate_negatives(outcomes: list[RecordOutcome]) -> dict[str, Any]:
 
 
 @asynccontextmanager
-async def spin_fixture(spec: FixtureSpec) -> AsyncIterator[dict[str, Any]]:
+async def spin_fixture(
+    spec: FixtureSpec, *, comments: bool = False
+) -> AsyncIterator[dict[str, Any]]:
     """Boot a throwaway container, load the seed, yield read-only connection params.
 
     testcontainers is a dev-only dependency, imported lazily so importing this
     module never requires it.
+
+    `comments=True` additionally loads the fixture's `COMMENT ON` overlay, which
+    is the commented arm of the catalog-comments A/B. The overlay is a separate
+    file rather than part of the seed so the uncommented arm stays the fixture
+    every previous run measured — see `FixtureSpec.comments_path`.
     """
     if spec.dialect != "postgres":
         raise NotImplementedError(f"eval fixture for {spec.dialect} not wired yet")
@@ -440,6 +457,10 @@ async def spin_fixture(spec: FixtureSpec) -> AsyncIterator[dict[str, Any]]:
         )
         try:
             await admin.execute(seed_sql)
+            if comments:
+                if spec.comments_path is None:
+                    raise ValueError(f"fixture {spec.name} has no comments overlay")
+                await admin.execute(spec.comments_path.read_text())
         finally:
             await admin.close()
         # Hand back the read-only role the seed created — the same posture prod uses.
@@ -615,8 +636,9 @@ async def _amain(args: argparse.Namespace) -> int:
     gateway = LiteLLMGateway.from_settings(settings)
 
     started_at = utcnow()
-    print(f"Spinning fixture {spec.name} ({spec.image}) …", file=sys.stderr)
-    async with spin_fixture(spec) as params:
+    arm = "with catalog comments" if args.comments else "no catalog comments"
+    print(f"Spinning fixture {spec.name} ({spec.image}, {arm}) …", file=sys.stderr)
+    async with spin_fixture(spec, comments=args.comments) as params:
         connector = build_connector(kind=spec.dialect, **params)
         try:
             snap = snapshot_to_dict(
@@ -639,24 +661,34 @@ async def _amain(args: argparse.Namespace) -> int:
                     await evaluate_negative(
                         r, gateway=gateway, llm=llm, connector=connector,
                         snapshot=snap, policy=policy, settings=settings,
+                        include_db_comments=args.comments,
                     )
                     for r in records
                 ]
                 outcomes = neg_outcomes
                 report_dict = aggregate_negatives(neg_outcomes)
-                rendered = json.dumps(report_dict, indent=2)
             else:
                 outcomes = await run_suite(
                     records, gateway=gateway, llm=llm, connector=connector, snapshot=snap,
                     policy=policy, settings=settings, model_name=model_name, progress=True,
+                    include_db_comments=args.comments,
                 )
                 report = metrics.aggregate(outcomes)
                 report_dict = metrics.report_to_dict(report)
+            # Which arm this was, recorded on the scorecard rather than only in
+            # the shell that launched it. Two runs of one suite on one model
+            # differing only in this are otherwise indistinguishable in
+            # `eval_runs`, which is the whole comparison Phase 6 exists to make.
+            report_dict["catalog_comments"] = bool(args.comments)
+            report_dict["catalog_meta"] = snap.get("catalog_meta") or {}
+            if negative:
+                rendered = json.dumps(report_dict, indent=2)
+            else:
                 rendered = (
                     json.dumps(report_dict, indent=2)
                     if args.json
                     else metrics.format_report(
-                        report, title=f"{suite.suite} {suite.version} · {model_name}"
+                        report, title=f"{suite.suite} {suite.version} · {model_name} · {arm}"
                     )
                 )
         finally:
@@ -772,6 +804,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--limit", type=int, default=None, help="run only the first N records")
     parser.add_argument("--tag", default=None, help="run only records carrying this tag")
     parser.add_argument("--json", action="store_true", help="emit the report as JSON")
+    parser.add_argument(
+        "--comments", action="store_true",
+        help="load the fixture's COMMENT ON overlay and render catalog comments "
+        "into the prompt (the commented arm of the A/B; off is byte-identical "
+        "to every run before the feature)",
+    )
     # CI gates (all optional; absent = report only, never fail).
     parser.add_argument(
         "--fail-under", type=float, default=None,

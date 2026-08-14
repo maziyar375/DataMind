@@ -91,6 +91,13 @@ class FixtureSpec:
     seed_path: Path              # SQL file loaded into the fresh container
     database: str = "sales"
     schema_allowlist: tuple[str, ...] = ("public",)
+    # An OVERLAY of `COMMENT ON` statements, loaded after `seed_path` when the
+    # runner is asked for the commented arm (`--comments`). A second fixture
+    # entry would have been the obvious shape and is the wrong one: a record's
+    # `connection_fixture` is part of the frozen golden set, so switching arms
+    # would mean editing the suite — the one thing docs/eval.md forbids. The
+    # arms are therefore the same fixture loaded two ways.
+    comments_path: Path | None = None
 
 
 _FIXTURES_ROOT = Path(__file__).resolve().parents[2] / "fixtures"
@@ -101,6 +108,7 @@ FIXTURES: dict[str, FixtureSpec] = {
         dialect="postgres",
         image="postgres:16-alpine",
         seed_path=_FIXTURES_ROOT / "sales_seed.sql",
+        comments_path=_FIXTURES_ROOT / "sales_comments.sql",
     ),
 }
 
