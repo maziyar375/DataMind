@@ -60,6 +60,8 @@ plus a **React + Vite** SPA. No microservices, no broker, no vector DB.
 make secrets   # write .env with a fresh AES key + JWT secret (run once)
 make up        # build & start db, sales fixture, api, web
 make down      # stop everything
+make targets   # opt-in Oracle + SQL Server demo databases (~2GB RAM each)
+make targets-down
 make logs      # follow api logs
 
 make test      # full backend suite (cd backend && pytest -q)
@@ -87,8 +89,17 @@ touched `sqlguard/` or a connector) for backend. Several past bugs only surfaced
 end-to-end via the API, not in the UI — actually exercise the path you changed.
 
 **Ports:** web `5173`, api `8000` (`/docs` for OpenAPI), app db `5432`, demo
-`sales` db `5433`. On a remote host, expose **only 5173**; the SPA calls the
+`sales` db `5433`, Sakila `3307`; behind `make targets`, Oracle `1521` and SQL
+Server `1433`. On a remote host, expose **only 5173**; the SPA calls the
 same-origin `/api/v1` and Vite proxies it to `api:8000`.
+
+**All four engines have a demo database**, so a connector change can be driven
+against a real server without testcontainers: `sales`/`sakila` start with the
+stack, `oracle`/`mssql` are behind the `targets` profile. SQL Server loads the
+same 42-table `sales` mirror as Postgres; Oracle loads a small four-table schema
+in `backend/fixtures/oracle/` whose **`COMMENT ON` metadata is the point** —
+it is the fixture that exercises catalog comments end to end, and its
+`analytics_ro` deliberately holds no roles at all, not even `CONNECT`.
 
 ---
 

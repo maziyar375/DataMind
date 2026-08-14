@@ -56,8 +56,38 @@ your browser. From the host the same databases are on ports `5433` and `3307`.
 **Test** it — before or after saving — and you should see **read-only role
 confirmed**. Then sync the schema and ask something like *"What was total
 revenue last month?"* (sales) or *"Which film category earns the most?"*
-(Sakila). SQL Server and Oracle connections are configured the same way, only
-the engine and port differ.
+(Sakila).
+
+#### The other two engines
+
+DataMind targets four, and the remaining two ship too — behind a profile,
+because each wants ~2 GB of RAM and most sessions never touch them:
+
+```bash
+make targets       # Oracle + SQL Server, alongside the running stack
+make targets-down  # stop them again
+```
+
+| Field    | Oracle demo    | SQL Server demo |
+| -------- | -------------- | --------------- |
+| Engine   | `Oracle`       | `SQL Server`    |
+| Host     | `oracle`       | `mssql`         |
+| Port     | `1521`         | `1433`          |
+| Database | `XEPDB1`       | `sales`         |
+| Schemas  | `SALES`        | `dbo`           |
+| User     | `analytics_ro` | `analytics_ro`  |
+| Password | `analytics_ro` | `analytics_ro`  |
+
+From the host they are on `1521` and `1433`. On Oracle, `Database` is a
+**service name**, not a catalogue — that is how Oracle is addressed, and the
+schema is the owning user (`SALES`).
+
+SQL Server gets the same 42-table `sales` model as the Postgres demo, so the
+two are directly comparable. Oracle gets a smaller four-table schema whose
+point is its **`COMMENT ON` metadata** — ask *"how much revenue did we make from
+paid orders?"* and the generated SQL will filter `STATUS = 'P'`, a code meaning
+that exists nowhere but the column comment. Sync it, then look at Semantic layer
+to see the DBA's sentences promoted into the document.
 
 ### Running on a remote host
 

@@ -66,6 +66,101 @@ services:
       retries: 30
       start_period: 30s
 
+  # ── The other two engines, behind profiles ──────────────────────────────
+  # Postgres and MySQL start with the stack because they are small and are what
+  # the demo and the eval use. Oracle and SQL Server are ~2 GB of RAM each and
+  # most sessions never touch them, so they are opt-in:
+  #
+  #   docker compose --profile targets up -d      # both, alongside the stack
+  #   docker compose up -d oracle                 # just one; naming a service
+  #                                               # enables its profile
+  #
+  # Neither is wired into `api`'s depends_on for the same reason: the app must
+  # start without them.
+
+  # The only Oracle target in this repository. Its schema is small and its
+  # comments are the point — see backend/fixtures/oracle/. 18c XE is the release
+  # the catalog-comment feature was verified on and the newest Oracle that pulls
+  # without an Oracle account (docs/catalog-metadata-plan.md §9); the connector
+  # itself is version-agnostic.
+  #
+  # No volume, deliberately, exactly like sales and sakila: a fresh container
+  # re-runs the init scripts, and the image ships a prebuilt database so that
+  # costs ~40 s rather than the many minutes a from-scratch CREATE DATABASE onto
+  # an empty volume would.
+  oracle:
+    image: gvenzl/oracle-xe:18
+    profiles: ["oracle", "targets"]
+    environment:
+      ORACLE_PASSWORD: oracle          # SYS and SYSTEM
+      APP_USER: sales                  # owns the demo schema
+      APP_USER_PASSWORD: sales
+    ports: ["1521:1521"]
+    volumes:
+      - ./backend/fixtures/oracle:/container-entrypoint-initdb.d:ro
+    healthcheck:
+      # Ships with the image, and checks the PDB rather than the instance —
+      # XEPDB1 is what a connection's `database_name` (a *service* name on
+      # Oracle) actually points at.
+      test: ["CMD", "healthcheck.sh", "XEPDB1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+
+  # SQL Server, loaded with the 42-table `sales` mirror the eval and
+  # `make fixtures` already use — so this one *is* comparable to the Postgres
+  # demo, unlike the Oracle schema above.
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    profiles: ["mssql", "targets"]
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Str0ng_Passw0rd!}
+      MSSQL_PID: Developer
+    ports: ["1433:1433"]
+    healthcheck:
+      # The tools path moved between image generations, so probe both — the same
+      # thing backend/fixtures/rebuild_fixtures.sh does.
+      test: ["CMD-SHELL", "for b in /opt/mssql-tools18/bin /opt/mssql-tools/bin; do [ -x $$b/sqlcmd ] && exec $$b/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -N -Q 'SELECT 1'; done; exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+
+  # SQL Server has no `docker-entrypoint-initdb.d`, so the seed is a one-shot
+  # sidecar rather than a mount. It reuses the server image because sqlcmd is
+  # already in it — no second image to pull — runs once and exits, and **skips
+  # if `sales` already exists**: the seed drops and recreates the database, so
+  # running it on every `up` would quietly destroy whatever you had. Delete the
+  # container's database (or the container) to force a reseed.
+  mssql-seed:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    profiles: ["mssql", "targets"]
+    depends_on:
+      mssql: {condition: service_healthy}
+    environment:
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Str0ng_Passw0rd!}
+    volumes:
+      - ./backend/fixtures/sales_seed_mssql.sql:/seed.sql:ro
+    restart: "no"
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -euo pipefail
+        for b in /opt/mssql-tools18/bin /opt/mssql-tools/bin; do
+          [ -x "$$b/sqlcmd" ] && SQLCMD="$$b/sqlcmd"
+        done
+        : "$${SQLCMD:?sqlcmd not found in the mssql image}"
+        state=$$("$$SQLCMD" -S mssql -U sa -P "$$MSSQL_SA_PASSWORD" -C -N -h -1 -W \
+          -Q "SET NOCOUNT ON; SELECT CASE WHEN DB_ID('sales') IS NULL THEN 'SEED' ELSE 'SKIP' END" | tr -d '\r')
+        case "$$state" in
+          *SEED*) echo "seeding sales (42 tables)…"
+                  "$$SQLCMD" -S mssql -U sa -P "$$MSSQL_SA_PASSWORD" -C -N -b -i /seed.sql
+                  echo "sales seeded; read-only login analytics_ro is ready" ;;
+          *)      echo "sales already exists - leaving it alone" ;;
+        esac
+
   api:
     build: ./backend
     depends_on:
