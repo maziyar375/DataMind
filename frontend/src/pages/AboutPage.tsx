@@ -18,6 +18,12 @@
  * extensions below — and fall back to an initial in a tinted circle when
  * there is no such file, the same bargain `Logo` makes with `/brand.png`. A
  * broken-image glyph beside a person's name is worse than their initial.
+ *
+ * The look is in `styles.css` under "creators" and is written twice, once per
+ * theme, for reasons stated there. Only two things need saying here: the page
+ * brings its own ambient instead of borrowing the login screen's, so it is
+ * one page in both places; and the card highlight follows the pointer through
+ * a CSS variable this file writes directly to the DOM — see `trackPointer`.
  */
 import { useState } from 'react'
 import { GlyphBadge, Icon, identityHue, initialOf } from '../components/ui'
@@ -60,7 +66,7 @@ export default function AboutPage({ onBack }: { onBack?: () => void }) {
   const standalone = onBack != null
   return (
     <div
-      className={standalone ? 'rm-auth' : undefined}
+      className="rm-about-page"
       style={{
         flex: 1,
         minWidth: 0,
@@ -90,8 +96,15 @@ export default function AboutPage({ onBack }: { onBack?: () => void }) {
         </header>
 
         <div className="rm-about-team">
-          {TEAM.map((person) => (
-            <PersonCard key={person.email} person={person} />
+          {TEAM.map((person, index) => (
+            <PersonCard
+              key={person.email}
+              person={person}
+              // The heading rises first and the cards follow it in order, so
+              // the page assembles rather than appearing. `both` on the
+              // animation holds the opening frame until each card's turn.
+              delay={0.08 + index * 0.09}
+            />
           ))}
         </div>
       </div>
@@ -99,9 +112,29 @@ export default function AboutPage({ onBack }: { onBack?: () => void }) {
   )
 }
 
-function PersonCard({ person }: { person: Person }) {
+/**
+ * Where the pointer is, in the card's own coordinates.
+ *
+ * Written straight onto the element as custom properties rather than held in
+ * state: this fires on every pointer move, and a re-render per frame to move
+ * a background gradient is the kind of thing that makes a page feel worse the
+ * more it is decorated. React never learns about it, and never needs to — the
+ * value is read by CSS and by nothing else.
+ */
+function trackPointer(event: React.PointerEvent<HTMLElement>) {
+  const card = event.currentTarget
+  const box = card.getBoundingClientRect()
+  card.style.setProperty('--mx', `${event.clientX - box.left}px`)
+  card.style.setProperty('--my', `${event.clientY - box.top}px`)
+}
+
+function PersonCard({ person, delay }: { person: Person; delay: number }) {
   return (
-    <article className="rm-about-card">
+    <article
+      className="rm-about-card"
+      onPointerMove={trackPointer}
+      style={{ animationDelay: `${delay}s` }}
+    >
       <Portrait name={person.name} slug={person.slug} />
       <div className="rm-about-name">{person.name}</div>
       <div className="rm-about-links">
