@@ -39,7 +39,9 @@ same, the dialect is the connector's problem.
 
 **Three ways to use the same guarded query path:**
 
-- **Chat** answers one question and moves on.
+- **Chat** is a conversation — ask as many questions as you want, and a
+  follow-up carrying no subject of its own (*"and by month?"*) is understood
+  from the turns before it. Each answer is about right now.
 - **Dashboards** watch numbers that are always current — a grid of saved
   queries, each on its own connection and its own refresh rate.
 - **Reports** are a document. Describe what you need, approve the outline a
