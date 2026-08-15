@@ -11,6 +11,7 @@ services:
     # /var/lib/docker, which is ephemeral here: a Studio stop wipes it and with
     # it every chat and connection. A path inside the studio drive survives.
     #
+    #
     # The entrypoint shim recreates the empty runtime dirs Postgres needs but
     # that the studio drive drops across restarts (it does not preserve empty
     # directories), which would otherwise make the server fail to start with
