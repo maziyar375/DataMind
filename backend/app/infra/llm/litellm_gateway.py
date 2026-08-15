@@ -139,6 +139,10 @@ class LiteLLMGateway:
     # ── request shaping ──────────────────────────────────────────────────
     def _kwargs(self, llm: ResolvedLLM, messages: Sequence[ChatMessage]) -> dict[str, Any]:
         model = llm.model
+        # "Custom" is no longer offered when creating a config, but a row stored
+        # before it was removed still resolves through here and still needs the
+        # prefix — the read model types `provider` as a plain `str` precisely so
+        # such a row keeps working. Do not narrow this to the creatable set.
         needs_openai_prefix = (
             llm.provider in {"OpenAI-compatible", "Custom"} and "/" not in model
         )

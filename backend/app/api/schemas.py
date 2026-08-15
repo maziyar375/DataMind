@@ -86,7 +86,7 @@ class UserInviteResponse(BaseModel):
 # ── llm configs ──────────────────────────────────────────────────────────
 class LlmConfigCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
-    provider: Literal["OpenAI-compatible", "Anthropic", "Custom"]
+    provider: Literal["OpenAI-compatible", "Anthropic"]
     base_url: str | None = None
     model: str = Field(min_length=1, max_length=200)
     api_key: SecretStr | None = None
@@ -96,7 +96,7 @@ class LlmConfigCreate(BaseModel):
 
 class LlmConfigUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
-    provider: Literal["OpenAI-compatible", "Anthropic", "Custom"] | None = None
+    provider: Literal["OpenAI-compatible", "Anthropic"] | None = None
     base_url: str | None = None
     model: str | None = None
     api_key: SecretStr | None = None
@@ -134,7 +134,7 @@ class LlmConfigTestRequest(BaseModel):
     """
 
     config_id: UUID | None = None
-    provider: Literal["OpenAI-compatible", "Anthropic", "Custom"]
+    provider: Literal["OpenAI-compatible", "Anthropic"]
     base_url: str | None = None
     model: str = Field(min_length=1, max_length=200)
     api_key: SecretStr | None = None

@@ -177,8 +177,9 @@ export const DATABASE_TYPES: {
   },
 ]
 
+// Also the source of the provider picker's options — the page maps over these
+// keys — so removing an entry removes the choice.
 export const PROVIDER_URLS: Record<string, string> = {
   'OpenAI-compatible': 'https://api.openai.com/v1',
   Anthropic: 'https://api.anthropic.com',
-  Custom: 'https://your-endpoint.example.com/v1',
 }

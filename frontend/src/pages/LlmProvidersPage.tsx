@@ -31,7 +31,6 @@ const BLANK = {
 const PROVIDER_HUES: Record<string, number> = {
   'OpenAI-compatible': 160,
   Anthropic: 25,
-  Custom: 250,
 }
 
 function providerHue(provider: string): number {
@@ -379,7 +378,7 @@ export default function LlmProvidersPage() {
                 <Field
                   label="Model"
                   hint={
-                    draft.provider === 'OpenAI-compatible' || draft.provider === 'Custom'
+                    draft.provider === 'OpenAI-compatible'
                       ? 'If the model name contains a slash (e.g. lightning-ai/gemma-4-31B-it), prefix it with openai/ — openai/lightning-ai/gemma-4-31B-it — or it will not route correctly.'
                       : undefined
                   }
