@@ -155,8 +155,11 @@ If hot reload does not fire on your host's bind mounts, start with
 
 ### Chat
 
-Ask a question, watch the run happen. The pipeline is ten nodes with one
-bounded repair loop:
+Ask a question, watch the run happen — five to sixty seconds, four model calls
+in the usual case and a fifth if there is a chart to plan. The written answer is
+two or three sentences, because the table and the chart beside it are the rest
+of it. The thread is pinned to one database and one model, picked before the
+first message. The pipeline is ten nodes with one bounded repair loop:
 
 ```
 route → retrieve → describe → clarify → generate → validate → execute →
@@ -197,11 +200,18 @@ draft back) or by typing it yourself — neither path is privileged, and someone
 with no LLM provider configured can still build a whole dashboard.
 
 The interesting part is that this is a **second entry point into guarded
-execution**, and it gets no exemption: stored SQL is re-validated against the
-connection's current snapshot on every single refresh, ownership is re-checked
-at execution, and a tile may only *lower* the connection's row cap and timeout,
-never raise them. A broken tile is a value, not an exception — it never fails
-the dashboard.
+execution**, and it gets no exemption: the guard runs at preview, at save, and
+at every single refresh, re-validating stored SQL against the connection's
+*current* snapshot rather than trusting that it passed when it was saved — a
+re-sync that dropped a table fails the tile closed instead of returning an empty
+result that looks like "no data". Ownership is re-checked at execution, and a
+tile may only *lower* the connection's row cap and timeout, never raise them. A
+broken tile is a value, not an exception — it never fails the dashboard.
+
+**Nothing calls a model at refresh time**, which is the most load-bearing "no"
+in the product: two calls when a tile is drafted (its SQL, then its chart), zero
+per refresh, forever. A dashboard keeps working after the provider key is
+revoked.
 
 A dashboard also **exports to a file and imports from one**, so a board built
 against one database can be rebuilt against another. The file holds the layout
@@ -212,19 +222,33 @@ typed. **[docs/dashboards.md](docs/dashboards.md)**.
 
 ### Reports
 
-Describe what you need, approve the outline a model proposes, and get prose,
-tables and charts generated section by section from your own data. Each
-question becomes one guarded query, written by the model or by hand. Time
-windows resolve in the SQL itself (`CURRENT_DATE - INTERVAL '3 months'`), so
-the same report re-run in six months describes *then* rather than *now*.
+Chat answers now and a dashboard is always current; **a report is a document** —
+a structure a human approved, prose written over real results, and a snapshot of
+a moment that stays readable after the data has moved on. It shares no table and
+no code path with Dashboards; deleting one would leave the other working.
 
-No model is asked to do arithmetic: the headline numbers and the figures a
-paragraph needs are computed exactly from the rows, and a separate pure check
-flags any figure the rows do not support. Runs are kept, so a document stays
-readable after the data has moved on, and a regeneration never overwrites one —
-your edits and the model's prose live in separate columns. Persian and English,
-with the language derived from the request rather than asked for. Prints to PDF
-from the browser. **[docs/reports.md](docs/reports.md)**.
+Six steps. **Create**: pick the connection (pinned for the life of the report),
+a model (changeable whenever), and how many sections to ask for — 2 to 8, a
+starting point rather than a contract. **Outline**: one model call proposes the
+headings and the questions under them, and you edit, reorder, add, or remove.
+**Check**: each question becomes SQL and is run against the real schema, coming
+back feasible, feasible-but-empty, or infeasible with the guard's own reason —
+or you write the statement yourself, which is not a lesser path. **Generate**:
+sections appear as they finish, and a failed one is retried alone rather than
+costing the run. **Refine**: any paragraph, any chart. **Keep**: print to PDF,
+and re-run it months later against fresh data.
+
+The approval gate is the thing nothing else in the product has — no model call
+is spent writing a document until a person has approved its plan. The rest are
+guarantees about the finished text. Time windows resolve in the SQL itself
+(`CURRENT_DATE - INTERVAL '3 months'`), so a re-run in six months describes
+*then* rather than *now*. No model is asked to do arithmetic: the headline
+numbers and the figures a paragraph needs are computed exactly from the rows,
+and a separate pure check flags any figure the rows do not support. Runs are
+kept, and a regeneration never overwrites one — your edits and the model's prose
+live in separate columns. Persian and English, with the language read off the
+request rather than asked for, so a Persian request cannot produce an English
+document. **[docs/reports.md](docs/reports.md)**.
 
 ### The semantic layer
 
