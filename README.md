@@ -194,6 +194,10 @@ If hot reload does not fire on your host's bind mounts, start with
 
 ### Chat
 
+<p align="center">
+  <img src="docs/screenshots/chat.png" alt="Chat: a question in plain language answered with prose, the generated SQL, a result table and a chart" width="900">
+</p>
+
 Ask a question, watch the run happen — five to sixty seconds, four model calls
 in the usual case and a fifth if there is a chart to plan. The written answer is
 two or three sentences, because the table and the chart beside it are the rest
@@ -232,6 +236,10 @@ Chart decisions: **[docs/charts.md](docs/charts.md)**.
 
 ### Dashboards
 
+<p align="center">
+  <img src="docs/screenshots/dashboard.png" alt="Dashboard: a grid of tiles — charts, tables and big numbers — each on its own connection and refresh rate" width="900">
+</p>
+
 A grid of tiles, each a saved query bound to **its own connection** and **its
 own refresh rate**, drawn as a chart, a table, a big number, or plain text.
 A tile's SQL is written either by asking in plain language (you get an editable
@@ -260,6 +268,10 @@ the way in, and every statement in it faces the guard exactly like one you
 typed. **[docs/dashboards.md](docs/dashboards.md)**.
 
 ### Reports
+
+<p align="center">
+  <img src="docs/screenshots/report.png" alt="Report: a generated document with headings, prose written over real results, tables and numbered figures" width="900">
+</p>
 
 Chat answers now and a dashboard is always current; **a report is a document** —
 a structure a human approved, prose written over real results, and a snapshot of
