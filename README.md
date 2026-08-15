@@ -60,9 +60,6 @@ same, the dialect is the connector's problem.
   over your own data — with every headline figure computed from the rows rather
   than by a model. Printable, and re-runnable months later against fresh data.
 
-A single modular-monolith FastAPI application backed by one PostgreSQL
-database, plus a React SPA. No microservices, no message broker, no vector
-database in this release.
 
 ## Two things are never left to the model
 
