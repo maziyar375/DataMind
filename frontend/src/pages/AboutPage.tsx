@@ -85,8 +85,8 @@ export default function AboutPage({ onBack }: { onBack?: () => void }) {
         )}
 
         <header className="rm-about-hero">
-          <span className="rm-about-eyebrow">The team</span>
-          <h1>Built by two developers</h1>
+          <h1>Meet the creators</h1>
+          <p>The two people who built this application.</p>
         </header>
 
         <div className="rm-about-team">

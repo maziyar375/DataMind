@@ -2256,15 +2256,6 @@ code, pre, .mono {
 .rm-about-back:hover { color: var(--text-strong); border-color: var(--accent); }
 
 .rm-about-hero { text-align: center; }
-.rm-about-eyebrow {
-  display: block;
-  margin-bottom: 12px;
-  font-size: 11.5px;
-  font-weight: 600;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--accent);
-}
 /* The one piece of type on the page with any weight to it. A gradient in the
    brand's own violet→magenta→blue, clipped to the glyphs — the same three
    hues as the mark, so the heading belongs to this product without having to
@@ -2285,6 +2276,14 @@ code, pre, .mono {
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
+}
+/* One line, and it exists to answer "creators of what?" — so it is set as a
+   caption to the heading rather than a paragraph under it. */
+.rm-about-hero p {
+  margin: 14px 0 0;
+  font-size: 14.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
 }
 
 .rm-about-team {
@@ -2412,4 +2411,36 @@ code, pre, .mono {
 .rm-auth-about:hover {
   color: var(--text-strong);
   text-decoration-color: var(--accent);
+}
+
+/* The rail's last line: who wrote this. Sized and coloured to sit below the
+   account block rather than beside the nav items — it is a credit, and a
+   credit that competes with Chat for attention is misplaced. `is-on` recolours
+   it instead of giving it the nav row's accent rail, because it is not one. */
+.rm-sidebar-about {
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  padding: 4px 8px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--text-faint);
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color .15s ease;
+}
+.rm-sidebar-about:hover { color: var(--text2); }
+.rm-sidebar-about.is-on { color: var(--accent); }
+/* The word carries it at full width; the glyph is the 66px rail's stand-in,
+   where `.rm-sidebar-text` is hidden along with every other label. */
+.rm-sidebar-about-icon { display: none; }
+@media (max-width: 860px) {
+  .rm-sidebar-about-icon { display: inline-flex; }
+  .rm-sidebar-about { padding: 6px; }
 }

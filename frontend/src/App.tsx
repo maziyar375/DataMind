@@ -142,11 +142,13 @@ export default function App() {
  * ("which half is this in?") on every glance at a list short enough to read
  * whole.
  *
- * About is the one destination deliberately *not* in that list. The list is
- * the work, in the order it is done; About is a fact about the product, which
- * is what the footer group already holds — the theme, the account, the way
- * out. It is still drawn as a `NavButton` so it lights up like any other open
- * page, because "where am I" must not be answered two different ways.
+ * Creators is the one destination deliberately *not* in that list, and not
+ * drawn like one either. The list is the work, in the order it is done; who
+ * built the thing is a credit, and a credit given the same weight as Chat
+ * reads as a sixth place to work. So it is the last line in the rail, in the
+ * footer group's own quieter register — the theme, the account, the way out —
+ * and it marks itself when open with colour alone rather than the accent rail
+ * a nav row gets.
  *
  * What the rail does carry is state made visible — the open page keeps an
  * accent rail and an accent glyph, matching the selected row of the settings
@@ -212,13 +214,6 @@ function Sidebar({
       </div>
 
       <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <NavButton
-          active={view === 'about'}
-          icon={<Icon.Info />}
-          label="About"
-          onClick={() => onNavigate('about')}
-        />
-
         {/* Drawn as the two things you can pick rather than as a track with a
             knob: a switch labelled "Dark" never says whether that is the state
             or the offer. Collapsed to the icon of the *other* theme on the
@@ -305,6 +300,26 @@ function Sidebar({
             <Icon.Logout size={14} />
           </button>
         </div>
+
+        {/* The last line in the rail, and deliberately the quietest thing in
+            it: a colophon, not a destination. It was briefly a full nav row
+            up in the list, which read as a sixth place to work — the credit
+            for who wrote the thing should be findable, not offered. On the
+            66px rail the word is hidden with every other label and the glyph
+            stands in for it, which is why both are rendered. */}
+        <button
+          type="button"
+          onClick={() => onNavigate('about')}
+          aria-current={view === 'about' ? 'page' : undefined}
+          aria-label="Creators"
+          title="Creators"
+          className={`rm-sidebar-about${view === 'about' ? ' is-on' : ''}`}
+        >
+          <span className="rm-sidebar-text">Creators</span>
+          <span className="rm-sidebar-about-icon" aria-hidden>
+            <Icon.Info size={14} />
+          </span>
+        </button>
       </div>
     </nav>
   )

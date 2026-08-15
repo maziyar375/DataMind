@@ -185,7 +185,7 @@ export default function LoginPage({
               onClick={onAbout}
               className="rm-auth-about"
             >
-              About DataMind
+              Meet the creators
             </button>
           )}
         </div>
