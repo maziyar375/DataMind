@@ -143,10 +143,10 @@ films, actors, rentals, payments):
 
 Those are the addresses **on the compose network** — the API dials them, not
 your browser. From the host the same databases are on ports `5433` and `3307`.
-Oracle and SQL Server demo databases ship too, behind a profile because each
-wants ~2 GB of RAM (`make targets`); their connection details, and running the
-two processes without Docker, are in
-[docs/CODEBASE.md](docs/CODEBASE.md) §1 and §7.
+**SQL Server and Oracle are supported all the same**, and their connectors are
+tested — the stack simply ships no demo server for them, so point a data source
+at one of your own. Running the two processes without Docker is in
+[docs/CODEBASE.md](docs/CODEBASE.md) §7.
 
 **3. Sync the schema.** **Sync schema** on the connection reads its tables,
 columns, and primary and foreign keys into a stored snapshot. This step is not

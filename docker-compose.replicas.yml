@@ -15,11 +15,11 @@
 #
 # It also does not add databases, and should not: this is an **overlay**, not a
 # stack. Both files are passed to `-f`, so every service in docker-compose.yml —
-# the app db, `sales`, `sakila`, and `oracle`/`mssql` under the `targets`
-# profile — is already here. Declaring them again would define them twice.
-# `docker compose -f docker-compose.yml -f docker-compose.replicas.yml
-# --profile targets config --services` prints the whole list if you want to see
-# it. Only `api` and `web` are overridden below, plus the one new service.
+# the app db, `sales` and `sakila` — is already here. Declaring them again would
+# define them twice. `docker compose -f docker-compose.yml
+# -f docker-compose.replicas.yml config --services` prints the whole list if you
+# want to see it. Only `api` and `web` are overridden below, plus the one new
+# service.
 services:
   api:
     # No fixed host port: two containers cannot both own 8000. `lb` below is

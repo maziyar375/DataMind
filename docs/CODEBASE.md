@@ -77,7 +77,7 @@ consequence of where the risk is — see §7.
 
 ### Infrastructure
 
-**Docker Compose.** Five services start with the stack, two more are opt-in:
+**Docker Compose.** Five services, all of which start with the stack:
 
 | Service | Image / build | Host port | Role |
 | --- | --- | --- | --- |
@@ -86,36 +86,20 @@ consequence of where the risk is — see §7.
 | `sakila` | mysql:8.0 | 3307 | the second demo target — the classic Sakila sample |
 | `api` | `./backend` | 8000 | runs migrations then Uvicorn |
 | `web` | `./frontend` | 5173 | Vite dev server, proxies `/api` → `api:8000` |
-| `oracle` | gvenzl/oracle-xe:18 | 1521 | **profile `targets`** — a four-table schema whose `COMMENT ON` metadata is the point |
-| `mssql` (+ `mssql-seed`) | mssql/server:2022 | 1433 | **profile `targets`** — the same 42-table `sales` mirror as Postgres |
 
 The separate target instances exist on purpose: the whole point is that
 DataMind reaches customer data *over a connector with a read-only role*, not by
-sharing a database. Oracle and SQL Server sit behind a profile because each
-wants ~2 GB of RAM and most sessions never touch them (`make targets`, and
-`make targets-down` to stop them again).
+sharing a database.
 
-Adding the opt-in two as data sources inside the app — these are the addresses
-**on the compose network**, which is what the API dials, not your browser:
-
-| Field    | Oracle demo    | SQL Server demo |
-| -------- | -------------- | --------------- |
-| Engine   | `Oracle`       | `SQL Server`    |
-| Host     | `oracle`       | `mssql`         |
-| Port     | `1521`         | `1433`          |
-| Database | `XEPDB1`       | `sales`         |
-| Schemas  | `SALES`        | `dbo`           |
-| User     | `analytics_ro` | `analytics_ro`  |
-| Password | `analytics_ro` | `analytics_ro`  |
-
-On Oracle, `Database` is a **service name**, not a catalogue — that is how
-Oracle is addressed, and the schema is the owning user (`SALES`). SQL Server
-gets the same 42-table `sales` model as the Postgres demo, so the two are
-directly comparable. Oracle's smaller four-table schema is the **`COMMENT ON`
-fixture**: ask *"how much revenue did we make from paid orders?"* and the
-generated SQL will filter `STATUS = 'P'`, a code meaning that exists nowhere but
-the column comment. Sync it, then look at Semantic layer to see the DBA's
-sentences promoted into the document.
+**Oracle and SQL Server have no demo service.** Both were compose services
+behind a `targets` profile and were removed — ~2 GB of RAM each for something
+most sessions never started. Nothing about the *support* changed: both
+connectors ship, both are covered by the guard corpus, and both remain
+selectable engines. What changed is that verifying a connector change against a
+live server now means supplying one — the seeds are still in
+`backend/fixtures/` (`oracle/` and `sales_seed_mssql.sql`), and
+`fixtures/rebuild_fixtures.sh` already starts its own throwaway containers, so
+it is unaffected.
 
 `docker-compose.replicas.yml` overlays a second `api` behind nginx — see
 [cross-replica.md](cross-replica.md).
@@ -456,7 +440,6 @@ Every claim above names the module that enforces it, and its limits, in
 make secrets && make up          # fresh keys, then the whole stack
 # open http://localhost:5173 — sign in with ADMIN_EMAIL / ADMIN_PASSWORD
 
-make targets   # the opt-in Oracle + SQL Server demo databases (~2GB RAM each)
 make test      # backend suite        make guard    # hostile SQL corpus (hard gate)
 make lint      # ruff + import-linter make migrate  # alembic upgrade head
 make fmt       # ruff format          make fixtures # rebuild + verify the fixtures

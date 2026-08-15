@@ -1,11 +1,9 @@
-.PHONY: help secrets up down targets targets-down logs test guard lint fmt migrate fixtures db-repair
+.PHONY: help secrets up down logs test guard lint fmt migrate fixtures db-repair
 
 help:
 	@echo "make secrets   Generate .env with fresh keys"
 	@echo "make up        Start the full stack"
 	@echo "make down      Stop everything"
-	@echo "make targets   Start the Oracle + SQL Server demo databases (opt-in, ~2GB each)"
-	@echo "make targets-down  Stop them again"
 	@echo "make test      Run the backend test suite"
 	@echo "make guard     Run the hostile SQL corpus only"
 	@echo "make lint      Ruff + architecture contracts"
@@ -29,16 +27,6 @@ up:
 
 down:
 	docker compose down
-
-# The Oracle and SQL Server demo targets. Behind a profile rather than in `up`
-# because they want ~2 GB of RAM each and most sessions never touch them. The
-# SQL Server seeder is a one-shot that skips if `sales` already exists, so this
-# is safe to re-run. Addresses are in README.md.
-targets:
-	docker compose --profile targets up -d oracle mssql mssql-seed
-
-targets-down:
-	docker compose --profile targets stop oracle mssql
 
 logs:
 	docker compose logs -f api
