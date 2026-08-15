@@ -1,9 +1,33 @@
-# DataMind
+<p align="center">
+  <img src="frontend/public/brand.png" alt="DataMind" width="140" height="140">
+</p>
 
-Conversational BI. Ask a question in plain language, get a written answer, a
-table, and a chart — with the generated SQL visible and auditable. Point it at
-**PostgreSQL, MySQL, SQL Server, or Oracle**; the question is the same, the
-dialect is the connector's problem.
+<h1 align="center">DataMind</h1>
+
+<p align="center">
+  Conversational BI. Ask a question in plain language, get a written answer, a
+  table, and a chart — with the generated SQL visible and auditable.
+</p>
+
+<p align="center">
+  <a href="https://github.com/maziyar375/DataMind/actions/workflows/ci.yml"><img src="https://github.com/maziyar375/DataMind/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white" alt="Python 3.12">
+  <img src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white" alt="FastAPI">
+  <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black" alt="React 18">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"></a>
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#what-works-today">Features</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="docs/README.md">Docs</a>
+</p>
+
+---
+
+Point DataMind at **PostgreSQL, MySQL, SQL Server, or Oracle**; the question is
+the same, the dialect is the connector's problem.
 
 Three ways to use the same guarded query path:
 
