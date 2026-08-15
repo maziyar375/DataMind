@@ -247,7 +247,11 @@ frontend/src/
                             redrawing charts at page width —
                             `npm run test:print`)
   pages/                    Login, Chat, DataSources, LlmProviders, Users,
-                            Dashboards, Reports
+                            Dashboards, Reports, About (who built it — the one
+                            page reachable from both sides of the sign-in wall:
+                            the rail's footer group when signed in, a link on
+                            the login screen when not; portraits come from
+                            public/team/ and fall back to an initial)
 ```
 
 ---

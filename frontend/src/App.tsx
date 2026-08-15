@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { auth, getAccessToken, onAuthChange } from './api/client'
 import type { User } from './api/types'
 import { Icon, Logo, initialOf } from './components/ui'
+import AboutPage from './pages/AboutPage'
 import ChatPage from './pages/ChatPage'
 import DashboardsPage from './pages/DashboardsPage'
 import DataSourcesPage from './pages/DataSourcesPage'
@@ -11,12 +12,18 @@ import ReportsPage from './pages/ReportsPage'
 import UsersPage from './pages/UsersPage'
 import { applyTheme, type ThemeName } from './theme/tokens'
 
-export type View = 'chat' | 'dashboards' | 'reports' | 'connections' | 'settings' | 'users'
+export type View =
+  | 'chat' | 'dashboards' | 'reports' | 'connections' | 'settings' | 'users' | 'about'
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null)
   const [booting, setBooting] = useState(true)
   const [view, setView] = useState<View>('chat')
+  // The one signed-out destination other than the form itself. It is local
+  // state rather than a route because the signed-out shell has no router: the
+  // whole product is one view swap deep, and About is not worth being the
+  // exception that introduces a second mechanism.
+  const [aboutSignedOut, setAboutSignedOut] = useState(false)
   const [theme, setTheme] = useState<ThemeName>(
     () => (localStorage.getItem('raymand.theme') as ThemeName) || 'dark',
   )
@@ -58,6 +65,7 @@ export default function App() {
     await auth.logout()
     setUser(null)
     setView('chat')
+    setAboutSignedOut(false)
   }, [])
 
   if (booting) {
@@ -81,7 +89,9 @@ export default function App() {
   }
 
   if (!user) {
-    return <LoginPage onSignedIn={setUser} />
+    return aboutSignedOut
+      ? <AboutPage onBack={() => setAboutSignedOut(false)} />
+      : <LoginPage onSignedIn={setUser} onAbout={() => setAboutSignedOut(true)} />
   }
 
   return (
@@ -116,6 +126,7 @@ export default function App() {
           {view === 'connections' && <DataSourcesPage />}
           {view === 'settings' && <LlmProvidersPage />}
           {view === 'users' && <UsersPage currentUser={user} />}
+          {view === 'about' && <AboutPage />}
         </div>
       </div>
     </div>
@@ -130,6 +141,12 @@ export default function App() {
  * captions over six items are furniture, and the split invited a decision
  * ("which half is this in?") on every glance at a list short enough to read
  * whole.
+ *
+ * About is the one destination deliberately *not* in that list. The list is
+ * the work, in the order it is done; About is a fact about the product, which
+ * is what the footer group already holds — the theme, the account, the way
+ * out. It is still drawn as a `NavButton` so it lights up like any other open
+ * page, because "where am I" must not be answered two different ways.
  *
  * What the rail does carry is state made visible — the open page keeps an
  * accent rail and an accent glyph, matching the selected row of the settings
@@ -195,6 +212,13 @@ function Sidebar({
       </div>
 
       <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <NavButton
+          active={view === 'about'}
+          icon={<Icon.Info />}
+          label="About"
+          onClick={() => onNavigate('about')}
+        />
+
         {/* Drawn as the two things you can pick rather than as a track with a
             knob: a switch labelled "Dark" never says whether that is the state
             or the offer. Collapsed to the icon of the *other* theme on the

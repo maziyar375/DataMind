@@ -3,7 +3,13 @@ import { ApiError, auth } from '../api/client'
 import type { User } from '../api/types'
 import { ErrorNote, Icon, Logo, Spinner, TextInput } from '../components/ui'
 
-export default function LoginPage({ onSignedIn }: { onSignedIn: (user: User) => void }) {
+export default function LoginPage({
+  onSignedIn, onAbout,
+}: {
+  onSignedIn: (user: User) => void
+  /** The signed-out way to About — this screen is the only one there is. */
+  onAbout?: () => void
+}) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -156,15 +162,32 @@ export default function LoginPage({ onSignedIn }: { onSignedIn: (user: User) => 
           </button>
         </form>
 
+        {/* The tagline and the one link off this screen share a line: the
+            sentence says what the product does, and "Who made it?" is the
+            question it provokes. A separate footer block for one link would
+            weigh more than the link does. */}
         <div
           style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 8,
             textAlign: 'center',
             fontSize: 12,
             color: 'var(--text-faint)',
             letterSpacing: '0.01em',
           }}
         >
-          Ask in plain language — get an answer, a table, and auditable SQL.
+          <span>Ask in plain language — get an answer, a table, and auditable SQL.</span>
+          {onAbout && (
+            <button
+              type="button"
+              onClick={onAbout}
+              className="rm-auth-about"
+            >
+              About DataMind
+            </button>
+          )}
         </div>
       </div>
     </div>

@@ -2212,3 +2212,236 @@ code, pre, .mono {
   border-radius: 9px;
 }
 
+/* ── about ────────────────────────────────────────────────────────────────
+   A reading page, which is a shape the product otherwise has none of: every
+   other screen is a workspace, sized to a viewport and scrolled inside its
+   own panes. So the rules here are the ones prose needs and a workspace does
+   not — a measure narrow enough to read (the hero caps at 62ch, well under
+   the page width), generous leading, and headings that separate sections
+   rather than label controls.
+
+   It also has to hold up twice: inside the shell, and full-screen over the
+   signed-out neon field where there is no rail to sit beside. Everything is
+   centred with `margin-inline: auto` rather than positioned against a left
+   edge, so the same markup is correct in both. */
+.rm-about {
+  max-width: 900px;
+  margin-inline: auto;
+  padding-bottom: 56px;
+}
+
+.rm-about-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 22px;
+  padding: 7px 12px 7px 9px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-dim);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: color .15s ease, border-color .15s ease;
+}
+.rm-about-back:hover { color: var(--text-strong); border-color: var(--accent); }
+
+.rm-about-hero { max-width: 62ch; margin: 6px 0 40px; }
+.rm-about-hero h1 {
+  margin: 0 0 16px;
+  font-size: 32px;
+  line-height: 1.22;
+  font-weight: 700;
+  letter-spacing: -0.028em;
+  color: var(--text-strong);
+}
+.rm-about-hero p {
+  margin: 0 0 12px;
+  font-size: 15px;
+  line-height: 1.68;
+  color: var(--text-dim);
+}
+.rm-about-hero strong { color: var(--text2); font-weight: 600; }
+
+/* A section heading, not a page title: small, quiet, and set above the thing
+   it names rather than competing with it. */
+.rm-about-h2 {
+  margin: 0 0 16px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.rm-about-team {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin-bottom: 44px;
+}
+
+/* Centred, because a portrait is the card's subject and a left-aligned photo
+   over centred text (or the reverse) reads as two cards stacked. */
+.rm-about-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 4px;
+  padding: 28px 22px 22px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  transition: border-color .15s ease, transform .15s ease;
+}
+.rm-about-card:hover {
+  border-color: var(--accent-border);
+  transform: translateY(-2px);
+}
+
+/* The ring is drawn with a box-shadow rather than a border so it sits outside
+   the 112px box: a border would eat into the face. */
+.rm-about-portrait {
+  width: 112px;
+  height: 112px;
+  border-radius: 50%;
+  margin-bottom: 14px;
+  box-shadow: 0 0 0 3px var(--panel), 0 0 0 4px var(--accent-border);
+}
+.rm-about-photo {
+  display: block;
+  object-fit: cover;
+  /* Studio portraits are shot with headroom; pulling the crop up keeps the
+     eyes near the circle's optical centre instead of the chin. */
+  object-position: 50% 22%;
+  background: var(--panel-alt);
+}
+
+.rm-about-name {
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  color: var(--text-strong);
+}
+.rm-about-role {
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.rm-about-blurb {
+  margin: 10px 0 16px;
+  font-size: 13px;
+  line-height: 1.62;
+  color: var(--text-dim);
+  max-width: 34ch;
+}
+
+.rm-about-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: auto;
+}
+/* An address can be long; `max-width: 100%` plus the break keeps it inside
+   the card on a narrow screen instead of widening the grid column. */
+.rm-about-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 6px 11px;
+  font-size: 12px;
+  color: var(--text-dim);
+  text-decoration: none;
+  background: var(--panel-alt);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow-wrap: anywhere;
+  transition: color .15s ease, border-color .15s ease;
+}
+.rm-about-link:hover { color: var(--accent); border-color: var(--accent-border); }
+
+.rm-about-principles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+.rm-about-principle {
+  display: flex;
+  gap: 11px;
+  padding: 16px 16px 18px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 13px;
+}
+.rm-about-principle-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+  color: var(--accent);
+}
+.rm-about-principle-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-strong);
+  margin-bottom: 5px;
+}
+.rm-about-principle p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+.rm-about-foot {
+  margin-top: 40px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+/* One column each, and in this order: the three principles are three short
+   independent notes and stack fine at 900px, while the two portrait cards
+   only need to stack once the column is too narrow for a 112px circle beside
+   its own text. */
+@media (max-width: 900px) {
+  .rm-about-principles { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 620px) {
+  .rm-about-team { grid-template-columns: minmax(0, 1fr); }
+  .rm-about-hero h1 { font-size: 26px; }
+}
+
+/* The one link off the sign-in screen. A button, because it swaps a view
+   rather than fetching a document — styled as a link so it reads as the
+   quiet aside it is, not as a second thing to press instead of Sign in. */
+.rm-auth-about {
+  padding: 2px 4px;
+  font: inherit;
+  font-weight: 500;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+  border-radius: 5px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--border-strong);
+  cursor: pointer;
+  transition: color .15s ease, text-decoration-color .15s ease;
+}
+.rm-auth-about:hover {
+  color: var(--text-strong);
+  text-decoration-color: var(--accent);
+}
