@@ -2474,16 +2474,38 @@ code, pre, .mono {
   position: absolute;
   inset: 0;
   border-radius: 50%;
+  /* One hue family — indigo through violet and back — and deliberately not a
+     wider sweep. An earlier version ran violet → rose → amber → blue, which
+     is four families and most of the wheel: at 6px wide, curved, and turning,
+     that stops reading as "the brand's gradient" and starts reading as a
+     spectrum, which is a flag and not a design decision. The fix is not fewer
+     colours but a narrower arc: hues 255–305 only, with the *lightness*
+     carrying the movement instead of the hue. That still gives a ring with a
+     bright pass and a deep one — the metallic look this was after — while
+     staying inside the two hues the mark and the accent already use. */
   background: conic-gradient(
-    from 0deg,
-    oklch(0.66 0.22 300),
-    oklch(0.68 0.24 350),
-    oklch(0.8 0.16 80),
-    oklch(0.66 0.2 255),
-    oklch(0.66 0.22 300)
+    from 210deg,
+    oklch(0.52 0.17 285),
+    oklch(0.76 0.19 300) 26%,
+    oklch(0.6 0.2 262) 52%,
+    oklch(0.48 0.15 278) 78%,
+    oklch(0.52 0.17 285)
   );
   animation: rm-spin 9s linear infinite;
   animation-play-state: paused;
+}
+/* On paper the whole ring drops a step: the bright pass at 0.76 is a blown
+   highlight against a 0.975 ground, and the deep one has to darken with it or
+   the ring loses its shape. */
+:root[data-theme='light'] .rm-about-portrait::before {
+  background: conic-gradient(
+    from 210deg,
+    oklch(0.44 0.19 292),
+    oklch(0.62 0.22 305) 26%,
+    oklch(0.5 0.22 268) 52%,
+    oklch(0.4 0.17 285) 78%,
+    oklch(0.44 0.19 292)
+  );
 }
 .rm-about-card:hover .rm-about-portrait::before,
 .rm-about-card:focus-within .rm-about-portrait::before { animation-play-state: running; }
