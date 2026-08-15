@@ -24,7 +24,6 @@ import { GlyphBadge, Icon, identityHue, initialOf } from '../components/ui'
 
 type Person = {
   name: string
-  role: string
   /** The basename of the portrait in `public/team/`, extension aside. */
   slug: string
   email: string
@@ -34,14 +33,12 @@ type Person = {
 const TEAM: Person[] = [
   {
     name: 'Maziyar Azami',
-    role: 'Developer',
     slug: 'maziyar',
     email: 'maziyar.azami.b@gmail.com',
     linkedin: 'https://www.linkedin.com/in/maziyar-azami-aab545246',
   },
   {
     name: 'Bardia Azami',
-    role: 'Developer',
     slug: 'bardia',
     email: 'Bard.azami@gmail.com',
     linkedin: 'https://www.linkedin.com/in/bardia-azami-a24579258',
@@ -107,7 +104,6 @@ function PersonCard({ person }: { person: Person }) {
     <article className="rm-about-card">
       <Portrait name={person.name} slug={person.slug} />
       <div className="rm-about-name">{person.name}</div>
-      <div className="rm-about-role">{person.role}</div>
       <div className="rm-about-links">
         {/* The address is the label. A "Contact" button hides the one fact
             someone came to this card for, and cannot be copied by eye. */}

@@ -2352,15 +2352,6 @@ code, pre, .mono {
   letter-spacing: -0.018em;
   color: var(--text-strong);
 }
-.rm-about-role {
-  margin-top: 4px;
-  font-size: 11.5px;
-  font-weight: 500;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--text-faint);
-}
-
 .rm-about-links {
   display: flex;
   flex-direction: column;
@@ -2368,7 +2359,7 @@ code, pre, .mono {
   gap: 8px;
   width: 100%;
   max-width: 280px;
-  margin-top: 22px;
+  margin-top: 20px;
 }
 /* An address can be longer than the card is wide, so it breaks rather than
    widening the grid column it sits in. */
