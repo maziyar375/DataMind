@@ -11,11 +11,22 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/maziyar375/DataMind/actions/workflows/ci.yml"><img src="https://github.com/maziyar375/DataMind/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white" alt="Python 3.12">
+  <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python 3.12">
   <img src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white" alt="FastAPI">
+  <img src="https://img.shields.io/badge/LangGraph-1C3C3C" alt="LangGraph">
+  <img src="https://img.shields.io/badge/LiteLLM-4B5563" alt="LiteLLM">
+  <img src="https://img.shields.io/badge/SQLGlot-334155" alt="SQLGlot">
+  <img src="https://img.shields.io/badge/SQLAlchemy%202.0-D71F00?logo=sqlalchemy&logoColor=white" alt="SQLAlchemy 2.0">
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black" alt="React 18">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License"></a>
+  <img src="https://img.shields.io/badge/TypeScript-5.6-3178C6?logo=typescript&logoColor=white" alt="TypeScript 5.6">
+  <img src="https://img.shields.io/badge/Vite-5.4-646CFF?logo=vite&logoColor=white" alt="Vite 5.4">
+  <img src="https://img.shields.io/badge/Vega--Lite-E8912D" alt="Vega-Lite">
+  <img src="https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL">
+  <img src="https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white" alt="Docker">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue" alt="MIT License"></a>
 </p>
 
 <p align="center">
