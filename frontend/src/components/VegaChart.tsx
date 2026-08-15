@@ -103,11 +103,39 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
   const ref = useRef<HTMLDivElement>(null)
   const [failed, setFailed] = useState(false)
   // Vega draws asynchronously, so the box exists a beat before the plot does.
-  // Fading the first drawing in covers that beat; once it is up it stays up,
-  // and a redraw (theme, picker, print) replaces the SVG in place rather than
-  // blinking the frame.
+  // The first drawing therefore lands in one frame, at full height, under
+  // whatever is already on screen — the answer and the table shift down as it
+  // arrives. That is the "sudden" part, and a fade alone does not cover it: an
+  // opacity ramp over a box that grew 40px → 340px instantly is a chart
+  // materialising in a hole that opened for it.
+  //
+  // So the box grows into the drawing instead (`rm-chart-frame`, below): while
+  // it is empty it is collapsed and colourless, and the drawing's arrival
+  // unfolds it to the height the plot turned out to need while the plot fades
+  // in. One motion, in the same 6px/240ms register as `rm-artifact-in` in
+  // `styles.css` — a chart is a bigger surface than a chip, so it is given a
+  // little longer, and no more.
+  //
+  // Once it is up it stays up: a redraw (theme, picker, print) replaces the SVG
+  // in place rather than blinking the frame.
   const [drawn, setDrawn] = useState(false)
+  // The entrance is a first-drawing affordance and nothing else. Once it has
+  // played, every style it introduces is dropped and the box is exactly the box
+  // it was before this existed — which matters for the one case the collapsing
+  // wrapper has to clip while it plays: a categorical chart drawn wider than
+  // its container, whose sideways scroll is the whole point of that width.
+  const [settled, setSettled] = useState(false)
   const theme = useThemeName()
+
+  useEffect(() => {
+    if (!drawn || settled) return
+    // Comfortably past the longest transition below. A timer rather than
+    // `transitionend`, which never fires where `grid-template-rows` is not
+    // animatable (Safari < 16) — and that would leave a wide chart clipped for
+    // good, trading a 300ms entrance for a permanent bug.
+    const timer = window.setTimeout(() => setSettled(true), 460)
+    return () => window.clearTimeout(timer)
+  }, [drawn, settled])
 
   // Layout depends only on the spec's shape, so compute it once and share it
   // between the render (container sizing) and the embed effect.
@@ -484,6 +512,17 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
   // rule around the plot reads as a box in a box on paper — so print keeps the
   // box, whose padding and border the printer measured to work out the chart's
   // page width, and takes only its line.
+
+  // Fill mode is exempt from the unfold: the box there is the dashboard tile
+  // the user sized, so nothing jumps when the plot lands, and the height *is*
+  // the measurement Vega takes off the container — collapsing it would have it
+  // draw a chart zero pixels tall.
+  const entering = !fill && !settled
+  // Before the first drawing the frame is present but not visible. An empty
+  // bordered strip announcing a chart that has not arrived is the same pop one
+  // box further out.
+  const veiled = entering && !drawn
+
   return (
     <div
       className={frameless ? undefined : 'rm-chart-frame'}
@@ -496,9 +535,18 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
         height: fill ? '100%' : undefined,
         marginTop: frameless ? 0 : 6,
         padding: frameless ? 0 : '8px 10px',
-        border: frameless ? 'none' : '1px solid var(--border)',
+        border: frameless
+          ? 'none'
+          : `1px solid ${veiled ? 'transparent' : 'var(--border)'}`,
         borderRadius: frameless ? 0 : 10,
-        background: frameless ? 'transparent' : 'var(--panel)',
+        background: frameless || veiled ? 'transparent' : 'var(--panel)',
+        // The frame's own half of the entrance: its line and panel arrive with
+        // the drawing rather than ahead of it. Dropped once settled, so a theme
+        // flip — which changes both of these tokens — repaints instantly, the
+        // way every other panel in the product does.
+        transition: entering
+          ? 'border-color .26s ease, background-color .26s ease'
+          : undefined,
         // Fill mode clips instead of scrolling: the chart is fitted to this
         // box, and a scrollbar triggered by a pixel of overshoot would change
         // the box's size and start a fit/unfit oscillation. Two exemptions
@@ -514,16 +562,42 @@ export function VegaChart({ spec, frameless = false, fill = false }: {
         maxHeight: layout.growsDown ? 'min(70vh, 640px)' : undefined,
       }}
     >
+      {/* The unfold. A grid row animated `0fr → 1fr` is the one way to grow a
+          box to a height nobody knows in advance — and nobody here does: it is
+          whatever Vega worked out from the spec, the axes and the legend.
+
+          It sits *inside* the frame rather than on it because the frame is the
+          scroll container: a `max-height` on a grid container makes an `fr` row
+          resolve against that instead of against its content, which would
+          flatten a hundred-bar horizontal chart into 640px rather than letting
+          it scroll. Once settled the wrapper leaves the layout entirely
+          (`display: contents`), so the box model is the one the rest of this
+          file's sizing was written against. */}
       <div
-        ref={ref}
-        style={{
-          width: '100%',
-          minHeight: 40,
-          height: fill && !layout.growsDown ? '100%' : undefined,
-          opacity: drawn ? 1 : 0,
-          transition: 'opacity .22s ease',
-        }}
-      />
+        style={
+          entering
+            ? {
+                display: 'grid',
+                gridTemplateRows: drawn ? '1fr' : '0fr',
+                transition: 'grid-template-rows .32s cubic-bezier(0.22, 0.68, 0.32, 1)',
+              }
+            : { display: 'contents' }
+        }
+      >
+        <div
+          ref={ref}
+          style={{
+            width: '100%',
+            // A grid item has to be allowed to be shorter than its content, and
+            // to hide the part of it the row has not revealed yet.
+            minHeight: entering ? 0 : 40,
+            overflow: entering ? 'hidden' : undefined,
+            height: fill && !layout.growsDown ? '100%' : undefined,
+            opacity: drawn ? 1 : 0,
+            transition: 'opacity .3s ease',
+          }}
+        />
+      </div>
     </div>
   )
 }
