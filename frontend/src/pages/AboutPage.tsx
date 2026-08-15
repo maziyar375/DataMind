@@ -14,10 +14,10 @@
  * way home; absent, the rail is already on screen and a second back
  * affordance would be furniture.
  *
- * The portraits are read from `/team/*.jpg` and fall back to an initial in a
- * tinted circle if the file is missing — the same bargain `Logo` makes with
- * `/brand.png`. A broken-image glyph beside a person's name is worse than
- * their initial.
+ * The portraits are read from `public/team/<slug>.<ext>` — any of the four
+ * extensions below — and fall back to an initial in a tinted circle when
+ * there is no such file, the same bargain `Logo` makes with `/brand.png`. A
+ * broken-image glyph beside a person's name is worse than their initial.
  */
 import { useState } from 'react'
 import { GlyphBadge, Icon, identityHue, initialOf } from '../components/ui'
@@ -25,7 +25,8 @@ import { GlyphBadge, Icon, identityHue, initialOf } from '../components/ui'
 type Person = {
   name: string
   role: string
-  photo: string
+  /** The basename of the portrait in `public/team/`, extension aside. */
+  slug: string
   email: string
   linkedin: string
 }
@@ -34,18 +35,29 @@ const TEAM: Person[] = [
   {
     name: 'Maziyar Azami',
     role: 'Developer',
-    photo: '/team/maziyar.jpg',
+    slug: 'maziyar',
     email: 'maziyar.azami.b@gmail.com',
     linkedin: 'https://www.linkedin.com/in/maziyar-azami-aab545246',
   },
   {
     name: 'Bardia Azami',
     role: 'Developer',
-    photo: '/team/bardia.jpg',
+    slug: 'bardia',
     email: 'Bard.azami@gmail.com',
     linkedin: 'https://www.linkedin.com/in/bardia-azami-a24579258',
   },
 ]
+
+/**
+ * Tried in order until one decodes, so dropping a portrait into
+ * `public/team/` never means also editing this file to match its extension.
+ *
+ * A missing static asset is not a 404 here — the dev server and the SPA
+ * fallback both answer an unknown path with `index.html` — so the signal that
+ * a candidate is wrong is the decode failing, not the request. Which is the
+ * same `onError` either way, and why this is a list rather than a fetch.
+ */
+const PHOTO_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp']
 
 export default function AboutPage({ onBack }: { onBack?: () => void }) {
   const standalone = onBack != null
@@ -93,7 +105,7 @@ export default function AboutPage({ onBack }: { onBack?: () => void }) {
 function PersonCard({ person }: { person: Person }) {
   return (
     <article className="rm-about-card">
-      <Portrait name={person.name} src={person.photo} />
+      <Portrait name={person.name} slug={person.slug} />
       <div className="rm-about-name">{person.name}</div>
       <div className="rm-about-role">{person.role}</div>
       <div className="rm-about-links">
@@ -117,11 +129,12 @@ function PersonCard({ person }: { person: Person }) {
   )
 }
 
-function Portrait({ name, src }: { name: string; src: string }) {
-  const [failed, setFailed] = useState(false)
+function Portrait({ name, slug }: { name: string; slug: string }) {
+  const [attempt, setAttempt] = useState(0)
+  const extension = PHOTO_EXTENSIONS[attempt]
   return (
     <div className="rm-about-portrait">
-      {failed ? (
+      {extension == null ? (
         // Sized and rounded to match the photo exactly, so a missing file
         // changes what the card shows and not how it is laid out.
         <GlyphBadge hue={identityHue(name)} size={128} radius={64}>
@@ -129,12 +142,15 @@ function Portrait({ name, src }: { name: string; src: string }) {
         </GlyphBadge>
       ) : (
         <img
-          src={src}
+          // Keyed on the candidate so a failed one is unmounted rather than
+          // re-pointed: without this the browser keeps the broken element's
+          // error state and only the first extension is ever tried.
+          key={extension}
+          src={`/team/${slug}.${extension}`}
           alt={name}
           width={128}
           height={128}
-          loading="lazy"
-          onError={() => setFailed(true)}
+          onError={() => setAttempt((current) => current + 1)}
           className="rm-about-photo"
         />
       )}
