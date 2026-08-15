@@ -55,24 +55,41 @@ Stated plainly so nobody assumes otherwise:
 
 ## 2. Every place data leaves for a model provider
 
-There are **twelve use cases**, across fourteen call sites, and no others. The
+There are **twelve use cases**, across thirteen call sites, and no others. The
 dependency rule forbids importing `litellm` outside `app/infra/llm/`, and CI
 greps for violations, so this list cannot silently grow.
 
 | # | Use case | Trigger | Call site |
 |---|----------|---------|-----------|
-| 1 | Route the question | every run | `pipeline/nodes/__init__.py:112` |
-| 2 | Describe the schema | a run classified METADATA | `pipeline/nodes/__init__.py:425` |
-| 3 | Ask a clarifying question | every run, if enabled | `pipeline/nodes/__init__.py:495` |
-| 4 | Generate SQL | every run | `pipeline/nodes/__init__.py:630` |
-| 5 | Write the answer | every run | `pipeline/nodes/__init__.py:863` |
-| 6 | Choose a chart | every run, if chartable; **every tile draft**, if chartable | `pipeline/nodes/__init__.py:947` |
-| 7 | Suggest follow-up questions | SPA opens a thread | `services/run_service.py:893` |
-| 8 | Draft SQL for a tile or a report block | user asks for a tile, or checks a block | `services/sql_draft_service.py` |
-| 9 | Generate a semantic layer | user clicks Generate | `semantic/generator.py:383,417,452` |
-| 10 | Propose a report outline | user proposes an outline | `reports/outline.py:203` |
-| 11 | Write a report section | once per section, per generation; **also a per-section retry** | `workers/report.py:742` |
-| 12 | Write the executive summary | once per generation | `workers/report.py:823` |
+| 1 | Route the question | every run | `pipeline/nodes/__init__.py` — `route()`:123 |
+| 2 | Describe the schema | a run classified METADATA | `pipeline/nodes/__init__.py` — `describe()`:438 |
+| 3 | Ask a clarifying question | every run, if enabled | `pipeline/nodes/__init__.py` — `clarify()`:517 |
+| 4 | Generate SQL | every run | `pipeline/nodes/__init__.py` — `generate()`:655 |
+| 5 | Write the answer | every run | `pipeline/nodes/__init__.py` — `present()`:888 |
+| 6 | Choose a chart | every run, if chartable; **every tile draft**, if chartable | `pipeline/nodes/__init__.py` — `propose_chart_intent()`:967 |
+| 7 | Suggest follow-up questions | SPA opens a thread | `services/run_service.py` — `suggest_followups()`:943 |
+| 8 | Draft SQL for a tile or a report block | user asks for a tile, or checks a block | `services/sql_draft_service.py` — **no call site of its own**: it re-enters #4 (and #1 for a report block, #6 for a tile) with a different `NodeDeps` |
+| 9 | Generate a semantic layer | user clicks Generate | `semantic/generator.py` — `_overview()`:400, `_describe_table()`:435, `_glossary()`:474 |
+| 10 | Propose a report outline | user proposes an outline | `reports/outline.py` — `propose()`:203 |
+| 11 | Write a report section | once per section, per generation; **also a per-section retry** | `workers/report.py` — `_narrate()`:742 |
+| 12 | Write the executive summary | once per generation | `workers/report.py` — `_summarise()`:823 |
+
+**Thirteen and not fourteen** because #8 is a use case without a call site: a
+draft reuses the *node* that would have made the call anyway, which is the whole
+point of §0.3 in [pipeline.md](pipeline.md) — a tile's statement is written
+against the same prompt, the same guard and the same budget as a chat answer.
+An earlier count of fourteen counted `sql_draft_service.py` as a site because it
+*constructs* the gateway there; constructing one sends nothing.
+
+**The function name is the reference; the line number is a convenience.** These
+numbers have now drifted twice, both times because a refactor moved a function
+nobody changed — so read the name first and treat the number as a hint about
+where to start scrolling. The list is verifiable in one command, which is the
+check that actually matters:
+
+```bash
+grep -rn --include='*.py' 'llm_gateway\.\|gateway\.complete\|gateway\.structured\|gateway\.stream' backend/app
+```
 
 One model interaction sends **no customer data at all**: the capability probe
 in `api/v1/llm_configs.py`, a fixed test prompt.
@@ -450,11 +467,20 @@ Fifteen distinct rejection codes, each a separate check in
 | `E_TOO_MANY_JOINS` | More than `max_joins` (default 10) |
 | `E_SUBQUERY_TOO_DEEP` | Deeper than `max_subquery_depth` (default 4) |
 
-**Allowlists, not denylists.** `ALLOWED_NODES` enumerates the **117**
-expression types permitted anywhere in the tree; `ALLOWED_FUNCTIONS` enumerates
-the **71** function names permitted inside `exp.Anonymous` — which is how
-SQLGlot represents any function it does not model. Without that second list,
-allowing `Anonymous` would allow `pg_read_file()`.
+**Allowlists, not denylists.** `ALLOWED_NODES` enumerates the **116** distinct
+expression types permitted anywhere in the tree (120 entries are written out;
+four — `exp.Where`, `exp.Cast`, `exp.DataType`, `exp.DataTypeParam` — are listed
+twice under different headings, which the `frozenset` collapses);
+`ALLOWED_FUNCTIONS` enumerates the **71** function names permitted inside
+`exp.Anonymous` — which is how SQLGlot represents any function it does not
+model. Without that second list, allowing `Anonymous` would allow
+`pg_read_file()`.
+
+Both are one command away, and neither should be quoted from memory:
+
+```bash
+cd backend && python3 -c "from app.sqlguard import policy as p; print(len(p.ALLOWED_NODES), len(p.ALLOWED_FUNCTIONS))"
+```
 
 A denylist of forbidden substrings runs *as well*, covering the classics:
 

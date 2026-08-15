@@ -4,14 +4,19 @@ Read this before touching the code. It is the map, not the territory: it tells
 you where things live, what must not break, and how to run and test — so you
 can make a change without reading the whole codebase first.
 
-For the "why", see [docs/architecture.md](docs/architecture.md) (the full
-proposal) and [docs/CODEBASE.md](docs/CODEBASE.md) (a code-grounded tour of the
-stack). For what reaches a model provider and what stops harmful SQL, see
-[docs/security.md](docs/security.md) — read it before changing `sqlguard/`,
-`disclosure.py`, `HintBudget`, or adding an LLM call site. For how to prove a
-change helped, see [docs/eval.md](docs/eval.md).
-[docs/README.md](docs/README.md) indexes the rest. For users, see
+Every section below has a fuller document behind it; this file is the part you
+must not skip, and the `>` note at the top of each section says where the rest
+lives. [docs/README.md](docs/README.md) indexes all fifteen. For users, see
 [README.md](README.md).
+
+The four you will reach for most:
+
+| | |
+|---|---|
+| [docs/CODEBASE.md](docs/CODEBASE.md) | a code-grounded tour of the whole stack — start here if the map below is not enough |
+| [docs/security.md](docs/security.md) | **read before** changing `sqlguard/`, `disclosure.py`, `HintBudget`, or adding an LLM call site |
+| [docs/pipeline.md](docs/pipeline.md) | **read before** changing a node; §0 maps all three pipelines |
+| [docs/architecture.md](docs/architecture.md) | the "why" — a pre-build proposal, so read its status banner first |
 
 ---
 
@@ -39,10 +44,21 @@ plus a **React + Vite** SPA. No microservices, no broker, no vector DB.
 - **Backend:** Python 3.12, FastAPI, SQLAlchemy 2.0 async + asyncpg, Alembic,
   Pydantic v2 / pydantic-settings, structlog.
 - **SQL safety:** SQLGlot (parse + AST allowlist, dialect-aware).
-- **LLM:** LiteLLM — *only* behind the `LLMGateway` port (`app/infra/llm/`).
+- **LLM provider access:** LiteLLM — *only* behind the `LLMGateway` port
+  (`app/infra/llm/litellm_gateway.py`, the one module allowed to import it).
 - **Run orchestration:** LangGraph — *only* inside `app/pipeline/` and
   `app/workers/`. Same bargain as LiteLLM: an import-linter contract and a CI
   grep hold the boundary.
+
+> **These two are different layers and neither replaced the other.** LiteLLM is
+> the *provider adapter* — it turns `ChatMessage[]` into a call to OpenAI,
+> Anthropic, Ollama or vLLM, and that is all it does. LangGraph is the
+> *orchestrator* — it decides which node runs next. LangGraph was adopted in the
+> migration ([docs/langgraph-migration.md](docs/langgraph-migration.md));
+> LiteLLM was never touched by it and is still the only way a prompt leaves the
+> process. **LangChain is not a dependency**: the one `langchain_core` import is
+> `RunnableConfig`, a type LangGraph pulls in, used in `pipeline/graph.py` and
+> `workers/report_graph.py` and nowhere else.
 - **Crypto/auth:** argon2-cffi (Argon2id), PyJWT, `cryptography` (AES-256-GCM).
 - **Target DB drivers:** asyncpg (Postgres), aiomysql (MySQL), oracledb *thin*
   (Oracle), pymssql (SQL Server). All ship wheels — no system DB client needed.
@@ -75,8 +91,8 @@ make db-repair # recreate the empty PGDATA runtime dirs the studio drive strips
 
 Frontend, from `frontend/`: `npm run dev`, `npm run build` (`tsc -b && vite
 build`), `npm run typecheck` (`tsc --noEmit`), `npm run lint`, `npm test` (all
-eight DOM-free logic suites: schedule, format, dashboard document, palette,
-chat format, report document, report readiness, print).
+nine DOM-free logic suites: schedule, format, dashboard document, palette,
+chat format, report document, report readiness, print, semantic drift).
 
 The **eval harness is not in `make test`** — it calls a real provider and costs
 money. `python -m app.eval.runner --suite sales_v1` from `backend/`, or
@@ -176,11 +192,22 @@ backend/           ← these are SIBLINGS of app/, not inside it
   fixtures/       sales_seed.sql (Postgres demo/eval DB) + sales_seed_mysql.sql
                   and sales_seed_mssql.sql dialect mirrors + rebuild_fixtures.sh
                   (`make fixtures`); each a wide, deliberately-messy 42-table
-                  commerce schema with a read-only role, sized so retrieval is
-                  actually exercised (snapshot exceeds the retrieve budget).
-                  mysql/ holds the Sakila seed for the second demo DB
+                  commerce schema with a read-only role, built to *exceed* the
+                  retrieve budget — which it no longer does: the budget was
+                  raised 24k → 50k and the fixture estimates 26,480, so the
+                  eval now runs entirely on FULL_SNAPSHOT and recall is 1.0 by
+                  construction (docs/eval.md §1 — read it before quoting a
+                  recall number). sales_comments.sql is the eval's commented
+                  arm; mysql/ holds the Sakila seed and oracle/ the four-table
+                  COMMENT ON fixture, one per extra demo DB
   scripts/        eval_run.sh (rate-limit-tolerant eval wrapper) +
-                  eval_seed_llm_config.py (used by the nightly workflow)
+                  eval_seed_llm_config.py (used by the nightly workflow) +
+                  catalog_probe.py (what an engine will actually tell you about
+                  its own comments, from a read-only role)
+
+scripts/           repo root, not backend/: nginx-replicas.conf (the two-replica
+                  balancer), pg-ensure-runtime-dirs.sh (`make db-repair`'s
+                  in-container half), seed_demo_dashboard.py
 
 frontend/src/
   main.tsx, App.tsx        entry + router/layout
@@ -194,7 +221,11 @@ frontend/src/
                             bullets — read at display time into spans, never
                             into markup; `npm run test:chat`),
                             settings.tsx, semantic.tsx (the layer
-                            editor), dashboard.tsx (grid + tile shell + the
+                            editor), semantic-drift.ts (an all-or-nothing
+                            re-key told apart from ordinary drift —
+                            engine-neutral detection, Oracle-specific
+                            explanation; `npm run test:drift`),
+                            dashboard.tsx (grid + tile shell + the
                             one-tick refresh scheduler), dashboard-schedule.ts
                             (the due-tile rule, DOM-free, + its .test.ts —
                             `npm run test:schedule`), table-format.ts (how a
@@ -292,6 +323,77 @@ litellm` outside `app/infra/llm/`**, and **never `import langgraph` outside
    applies at capture under every policy, including FULL, because the schema
    block is sent on every question while a result is only sent for the query
    the user asked for.
+
+---
+
+## Three pipelines, one set of nodes
+
+There are **three** pipelines in this product, and only one of them is a state
+machine. Know which you are in before you go looking for an executor that does
+not exist. [docs/pipeline.md](docs/pipeline.md) §0 is the full map.
+
+| | **Chat** | **Dashboard** | **Report** |
+|---|---|---|---|
+| Orchestrator | `AnalyticsPipeline` — a compiled LangGraph | a service function + `asyncio.gather` | `ReportRunExecutor` + `report_graph.py` |
+| Shape | streamed (SSE), 5–60s | request/response, sub-second on a cache hit | queued (**202**) + polled, minutes |
+| Model runs | **at ask time**, every time | **at authoring time only** | at authoring *and* generation time |
+| SQL comes from | `generate`, fresh per question | `dashboard_tiles.sql`, stored | `report_blocks.sql`, stored |
+| Guard entry | the `validate` node | `execute_saved_sql` | `execute_saved_sql` |
+| Result values → model | `present`, per policy | **never** | `narrate`, per policy (`NONE`/`AGGREGATE` refused) |
+| Failure posture | the run fails | a per-tile `ERROR` **value** | per section; run status is **derived** |
+
+**The guard has four entry points and none is privileged:** the `validate` node,
+`execute_saved_sql` (tiles *and* report blocks), tile save, and dashboard
+import. The hostile corpus is replayed through each
+(`test_sqlguard_hostile.py`, `test_query_service.py`, `test_report_guard.py`,
+`test_dashboard_transfer.py`).
+
+**`retrieve` → `generate` → `validate` is written down once.** It is one
+compiled region — `_add_repair_region` in `pipeline/graph.py` — built by both
+`CHAT_GRAPH` and `DRAFT_GRAPH`, so a stored statement anywhere in the product
+was written against the same schema block, the same semantic layer, the same
+`_SQL_RULES` and the same guard as a chat answer. `sql_draft_service.draft_sql`
+is the caller for both a dashboard tile and a report block. **Do not grow a
+second executor over these nodes** — one existed, its `deadline_at` was enforced
+on the chat path and inert on the draft path, and nobody noticed until Phase 2
+deleted it.
+
+Its three opt-ins are deliberately **not** uniform, each decided by where its
+answer lands:
+
+| Flag | On for | Off for | Because |
+|---|---|---|---|
+| `classify` | report blocks | tiles | a block's answer is stored and read months later; a tile's preview is in front of the person who asked |
+| `compose_chart` | tiles | report blocks | the tile editor has a chart-type picker a suggestion can pre-select; the block editor has none and would discard the answer unread |
+| `tile_type` | tiles **and** report blocks | chat | both store a statement that will be drawn as a big number; chat declares no destination |
+
+A draft also inherits **no** history (`[]`), **no** events (`_no_emit`), **no**
+persistence, and a shorter deadline of its own (`DRAFT_DEADLINE_SECONDS`).
+
+### The five failure postures
+
+Every error path in every pipeline is one of five. Naming them is worth more
+than any individual handler, because *"what should this do when it breaks?"* is
+answered by asking which posture the step belongs to.
+
+| Posture | Means | Where |
+|---|---|---|
+| **Fail closed** | the refusal *is* the answer | the guard, name resolution, an unsynced connection, `disclose*` defaulting to the narrowest policy, reports refusing `NONE`/`AGGREGATE` |
+| **Fail open** | the feature is dropped, the work continues | `route`, `clarify`, `inspect`, `chart`, the semantic layer, follow-up suggestions |
+| **Fail backwards** | something computed replaces something generated | `describe` → `answer_metadata`, `present` → the fallback sentence, `plan_chart` → the shape heuristic |
+| **Fail as a value** | the failure is data, stored or returned, not raised | `TileResult(status="ERROR")`, `ReportBlockResult(FAILED)`, `feasibility_status = INFEASIBLE` |
+| **Fail the run** | stop, record, tell the user | `E_LLM`, a guard rejection out of budget, `E_TIMEOUT`, `E_NODE_FAILED`, `E_PIPELINE_LOOP`, `E_ORPHANED` |
+
+Two rules keep them honest:
+
+- **A step that has already produced correct data may not lose it to a
+  presentation failure.** `TEXT_RESET` exists for this (deltas are already on
+  the live bus *and* durably stored for replay, so discarding a buffer is not
+  enough); `_restore_superseded` exists for this; caching a failed tile result
+  exists for this.
+- **A fail-open step may never widen anything.** `route` failing open to
+  ANALYTICAL cannot skip the guard; `clarify` failing open cannot bypass
+  disclosure; a missing policy argument always renders the *narrowest* block.
 
 ---
 
@@ -492,6 +594,110 @@ shapes. That is the class this addresses.
 
 ---
 
+## Dashboards
+
+> Full reference — the six rules `execute_saved_sql` obeys, the data model, the
+> scheduler, the tile editor, and export/import:
+> **[docs/dashboards.md](docs/dashboards.md)**. Authoring vs refresh step by
+> step, with every error code:
+> **[docs/pipeline-dashboard.md](docs/pipeline-dashboard.md)**.
+
+A grid of tiles, each a saved query bound to **its own connection** and **its
+own refresh rate**, drawn as a chart, a table, a big number, or plain text.
+Three tables (`0005`, `0006`).
+
+The one thing that makes this hard, and everything else is CRUD:
+
+- **A tile is the second entry point into guarded execution**, and it gets no
+  exemption. `services/query_service.py::execute_saved_sql` re-validates stored
+  SQL against the connection's **current** snapshot on *every* execution — not
+  because it passed when it was saved. A re-sync that dropped a table fails the
+  tile closed with `E_SCHEMA_CHANGED` rather than returning an empty result that
+  looks like "no data". `tests/unit/test_query_service.py` replays the hostile
+  corpus through a tile; that test is what proves dashboards opened no bypass.
+- **`dashboard_tiles.sql` is hostile input by definition** — the user types into
+  it directly. `sql_origin` (`GENERATED | GENERATED_EDITED | HANDWRITTEN`) is
+  provenance only; the guard cannot tell them apart and must not try.
+- **A tile failure is a *value*, not an exception.** One broken tile must never
+  fail the dashboard response. Error codes the UI branches on: `E_SCHEMA_CHANGED`,
+  `E_NO_SNAPSHOT`, `E_FORBIDDEN`, `E_CONNECTION_REMOVED`, `E_QUERY_FAILED`,
+  `E_INTERNAL`, else the guard's own `rule_id` verbatim.
+- **Nothing calls a model at refresh time.** That is the most load-bearing "no"
+  in the product: a dashboard keeps working after the provider key is revoked.
+  A model runs at *authoring* time only — two calls per drafted tile (SQL, then
+  chart), **zero** per refresh.
+- **Containment is the connection's, not the tile's.** A tile override may only
+  *lower* `max_rows` and `statement_timeout_ms`, never raise them.
+- **Batching reads before it fans out.** `execute_many` groups tiles by
+  connection, builds one connector per connection under
+  `MAX_CONCURRENT_TILES = 4`, and does **every database read in sequence before
+  the tiles fan out** — an `AsyncSession` is not safe for concurrent use.
+- **The cache is in Postgres** (`dashboard_tile_cache`), not in-process, because
+  an in-process cache goes stale per worker. `result_fingerprint` hashes
+  `(connection_id, sql, max_rows, chart_config)` — **not the SQL alone**, so a
+  tile switched from pie to line does not keep serving the pie until its
+  interval elapses. `table_config` is deliberately **excluded**: renaming a
+  column header must not send a query to the customer's database. **Failures are
+  cached too**, or a broken tile re-runs on every tick of every open browser.
+- **One `setInterval(1000)` per open dashboard, not one timer per tile.** Each
+  tick computes which tiles are due and fires **one** `POST /data {tile_ids}`.
+  It pauses on `document.hidden` and on return refreshes what went overdue
+  **once**, not once per missed interval. The due rule is DOM-free in
+  `dashboard-schedule.ts` — a forgotten background tab that polls forever is how
+  this feature becomes the reason someone's production database is slow.
+- **Import is a fourth door to the guard.** `sql` in a `.json` file is typed as
+  easily as `sql` in a textarea, so every tile in a document goes through
+  `_validated_tile_fields` — the same call the save path makes — and **every
+  tile is validated before anything is created**, so a refused import leaves no
+  half-built dashboard.
+
+Not built, on purpose: filters (`QueryExecutor.execute` takes no bind
+parameters — **never** by string interpolation), sharing, and "add to dashboard"
+from a chat run.
+
+---
+
+## Charts
+
+> Full reference — the eight types, every veto and repair, the constants and
+> their reasoning, the colour work: **[docs/charts.md](docs/charts.md)**.
+
+`backend/app/charts/` is one module: `profile_result` → `unchartable_reason` →
+[model proposes `ChartIntent`] → `plan_chart` → `compile_vega_lite`, plus
+`plan_kpi` for a big number. Every surface — chat, tile, report — decides its
+picture with the same planner.
+
+Four rules, and breaking any of them is quiet:
+
+1. **The model proposes; the platform decides.** A `ChartIntent` is a
+   *suggestion*. `plan_chart` vetoes what the data cannot support, repairs what
+   is salvageable, and falls back to a shape heuristic when the model errors or
+   returns garbage.
+2. **The veto runs *before* the model call.** `unchartable_reason` is pure
+   arithmetic over the profile, so a hopeless result costs zero tokens — and the
+   step trail shows a fact about the data instead of "the model declined".
+3. **Prompt/type parity.** A chart type is not "added" when the compiler draws
+   it. It is added when `CHART_SYSTEM` describes when to pick it *and*
+   `ResultProfile.describe()` carries the facts that rule is stated in terms of.
+   Any change to `ChartType`, `_fit`, or a threshold constant is unfinished
+   until both are updated. **A bullet describing behaviour the code no longer
+   has is a bug in the prompt.**
+4. **`chart_type: "none"` does not mean "draw nothing".** `validate_intent`
+   refuses it, so `plan_chart` falls through to the heuristic and draws whatever
+   the shape suggests — the model's reading discarded without a word. The
+   picker's *Table only* sets `tile_type = TABLE` instead.
+
+`PROMPT_VERSION` does **not** move for chart-prompt changes — the eval scores
+generated SQL, and nothing on the SQL-producing path changes. Same convention as
+`CLARIFY_SYSTEM` and `DESCRIBE_SYSTEM`.
+
+The palette in `VegaChart.tsx` is **measured, not chosen** (OKLab ΔE, Machado
+CVD simulation, contrast per mode) and `palette.test.ts` re-checks it. There is
+no free hex picker because one would destroy all of that silently; adding a
+second palette means re-running the validator **in both themes** first.
+
+---
+
 ## Reports
 
 > Full reference — the data model, the two roads to a block's SQL, the
@@ -564,10 +770,88 @@ The things worth knowing before you touch it:
 
 ---
 
+## Proving a change helped — the eval harness
+
+> Full reference — the golden set, every metric, the CI gate, and how to read a
+> result honestly: **[docs/eval.md](docs/eval.md)**.
+
+`app/eval/` runs the **real** pipeline — same `AnalyticsPipeline`, same
+`NodeDeps`, same `GuardPolicy`, same connector as the HTTP path — against a
+fresh fixture database in a throwaway container. It calls a real provider, so it
+**costs real money and is not in `make test`**. An import-linter contract keeps
+`app.eval` off the request path entirely.
+
+```bash
+cd backend
+python -m app.eval.runner --suite sales_v1 --llm-config <uuid>
+python -m app.eval.runner --suite sales_v1 --comments   # the catalog-comment arm
+python -m app.eval.runner --suite sales_v1_negative     # must route, execute nothing
+scripts/eval_run.sh --suite sales_v1 ...                # behind a rate-limiting provider
+```
+
+Four rules that matter more than any number it prints:
+
+1. **The golden set is frozen.** Questions are *never* edited to make a score go
+   up. `gold_sql` is corrected **only when demonstrably wrong**, and every
+   correction is logged in `suites/CHANGELOG.md` with the evidence. Prompts and
+   retrieval may be tuned freely; the gold answers may not. **An eval you are
+   allowed to edit measures your willingness to edit it.**
+2. **Golds are checked against something other than themselves.** Each record
+   has a structurally different twin in `tests/eval/sales_v1_verify.json`, and
+   `test_golden_set.py` asserts the two agree on the fixture. Adding a question
+   means adding its twin.
+3. **The baseline file is model-specific.** `sales_v1.baseline.json` records
+   0.36 measured on **DeepSeek V4 Pro at temperature 0.2 under `PROMPT_VERSION`
+   v2**. Against a different model or different settings it is meaningless —
+   read its `_README` before quoting it, and never put two numbers from
+   different models in one sentence.
+4. **Retrieval recall currently measures nothing.** `_RETRIEVE_BUDGET_CHARS` was
+   raised 24k → 50k and the fixture estimates 26,480, so `retrieve` takes
+   `FULL_SNAPSHOT` on every question and recall is **1.0 by construction**. Do
+   not compare a post-50k recall figure to a pre-50k one. Fixing it means
+   widening the fixture or running the eval at a lower ceiling — a real
+   decision, not a chore.
+
+An exhausted retry scores `OUTCOME_ERROR`, which is **indistinguishable in the
+report from the model getting the question wrong** — which is why the wrapper
+exists and why it raises `RUN_DEADLINE_SECONDS` alongside the backoff. Widening
+the retries without moving the deadline achieves nothing.
+
+Two prompt changes have been measured to *lower* accuracy, and both are recorded
+where someone would otherwise repeat them: a "getting the answer right" block in
+`GENERATE_SYSTEM` (36% → 26%), and making `C_NULLABLE_INNER_JOIN` retry-eligible
+(0 wins / 4 losses). **More instruction is not better here.**
+
+---
+
 ## Gotchas learned the hard way
 
 - **FK insert order:** `runs` references `messages`. Add the user message and
   **`await db.flush()` before** adding the run, or you get a FK violation.
+- **A DELETE that cannot commit still returns 204.** `get_db` commits in
+  FastAPI's dependency teardown, *after* the handler returned — so a
+  `ForeignKeyViolationError` lands in the log while the success lands in the
+  browser. This is how "deleting a data source does nothing" shipped. **Any
+  route whose write can be refused by the database must `await db.flush()`
+  inside the handler**, so the refusal becomes an error the caller sees. Same
+  root cause as the read-after-write race in
+  [docs/dashboards.md](docs/dashboards.md) "Known issue".
+- **Every reference to `database_connections` and `llm_configs` is `SET NULL`,
+  and `runs` was the last to get there** (migration `0014`). A run is the record
+  of a question that was asked and answered; `model_snapshot` already carries
+  the connection and model *names*, so a past answer stays explainable after its
+  source is gone. Never CASCADE these two — deleting history to satisfy a
+  constraint is the wrong trade. **`runs.owner_id` is deliberately untouched**:
+  it is denormalised for ownership scoping, and a row whose owner is NULL is a
+  row no ownership filter matches.
+- **`SET NULL` gave `default_connection_id` a second meaning.** Null used to mean
+  "nothing chosen yet"; it now also means "the connection was deleted". A thread
+  in the second state must **refuse** a new message rather than silently re-bind
+  to whatever the picker offers — `test_conversation_binding.py` was rewritten
+  rather than deleted when that changed. Every surface downstream of a released
+  connection has to say so: chat refuses, Reports disable Generate/Check with a
+  sentence in the page, Dashboards already answered it with
+  `E_CONNECTION_REMOVED` and a preserved layout.
 - **`updated_at` onupdate + async:** after a PATCH, `await db.refresh(obj)`
   before `model_validate`, or the expired attribute triggers `MissingGreenlet`.
 - **Frozen dataclasses have no `__dict__`:** the port value objects are

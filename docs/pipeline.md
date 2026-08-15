@@ -15,9 +15,11 @@ run in full. The other two have files of their own, written to the same shape:
 | **Report** | an outline, a statement per block, then a written document | [pipeline-report.md](pipeline-report.md) |
 
 Code: [`backend/app/pipeline/`](../backend/app/pipeline/) —
-`pipeline.py` (the executor), `nodes/__init__.py` (all ten nodes),
-`state.py` (typed state), `contracts.py` (the node signature),
-`prompts/` (versioned prompts), `checks.py`, `disclosure.py`, `metadata.py`.
+`graph.py` (the compiled LangGraph, `ORDER`, and the node adapter),
+`pipeline.py` (the `AnalyticsPipeline` facade over it — a re-export since the
+port), `nodes/__init__.py` (all ten nodes), `state.py` (typed state),
+`contracts.py` (the node signature), `prompts/` (versioned prompts),
+`checks.py`, `disclosure.py`, `metadata.py`.
 
 ---
 
@@ -139,8 +141,10 @@ enforced on the chat path and inert on the draft path until someone noticed.
 | 11 | report summary | `complete` | `REPORT_SUMMARY_SYSTEM` / `_USER` | once per generation |
 | — | capability probe | `complete` | fixed test prompt | saving an LLM config — **sends no customer data** |
 
-[security.md §2](security.md) analyses what each one *sends*; note that its
-table predates Reports and is missing #9–#11 (§7, gap 10).
+[security.md §2](security.md) analyses what each one *sends*. The two tables
+are numbered differently — this one is ordered by where the call lives, that one
+by use case, and it splits the semantic layer's three prompts apart — but they
+cover the same set, and **a new call site has to be added to both** (§7, gap 10).
 
 **Nothing calls a model at dashboard refresh time.** That is the single most
 load-bearing "no" in the product: a dashboard keeps working after the provider
@@ -233,9 +237,11 @@ see [langgraph-migration.md](langgraph-migration.md) Phase 3.
   chart    (data veto → model → plan_chart → Vega-Lite)
 ```
 
-`ORDER` in [pipeline.py:25-43](../backend/app/pipeline/pipeline.py#L25-L43) is
-the single source of truth for sequence. Nodes never decide what runs next
-beyond an optional `goto`.
+`ORDER` in [graph.py:91-110](../backend/app/pipeline/graph.py#L91-L110) is the
+single source of truth for sequence. Nodes never decide what runs next beyond an
+optional `goto`. (It moved there with the LangGraph port — `pipeline.py` is now
+a 21-line re-export that keeps `from app.pipeline.pipeline import ORDER`
+working for `run_service`, `app.eval.runner` and `tests/unit/test_clarify.py`.)
 
 ### Node summary
 
@@ -728,7 +734,9 @@ already persisted, so any failure here just means no chart.
 
 ## 4. Control flow rules
 
-Every rule lives in [pipeline.py](../backend/app/pipeline/pipeline.py).
+Every rule lives in [graph.py](../backend/app/pipeline/graph.py) — in `_adapt`,
+the wrapper that turns a node function into a graph node and keeps the old
+executor's duties.
 
 **Node return values** — `NodeResult(status, detail, goto)`:
 
@@ -1027,6 +1035,16 @@ optional, and [langgraph-migration.md](langgraph-migration.md) argues it is
 10. ~~**[security.md §2](security.md) predates Reports.**~~ **Fixed
     2026-08-12.** That table listed "nine use cases across eleven call sites"
     and was missing the outline, section-prose and summary calls; it now lists
-    twelve across fourteen, with [§2.3](security.md) covering what reports send
-    and why the summary is given no data at all. §0.4 above and that table are
-    the two places a new LLM call site has to be added — keep them in step.
+    twelve use cases across thirteen call sites, with [§2.3](security.md)
+    covering what reports send and why the summary is given no data at all.
+    §0.4 above and that table are the two places a new LLM call site has to be
+    added — keep them in step.
+
+    **Its line numbers drift, and the count was one too high.** Re-verified
+    2026-08-15: **every** line reference in that table had moved — all six in
+    `nodes/__init__.py`, the one in `run_service.py`, and all three in
+    `semantic/generator.py` — and the site count included
+    `sql_draft_service.py`, which constructs a gateway but never calls one, a
+    draft re-entering `generate` instead. Both are fixed, and the table now
+    leads with the *function* name so the next refactor costs a stale hint
+    rather than a wrong reference.

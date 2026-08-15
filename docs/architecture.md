@@ -1,6 +1,36 @@
 # DataMind — Conversational BI Platform
 ## Production Architecture Proposal (MVP → Enterprise)
 
+> **Status: the proposal, kept as written.** This document was produced *before*
+> the build and argues the shape of the system — which is why it is still the
+> right place to ask "why is it like this?" and "what was deferred, on what
+> trigger?". It is **not** a description of the code as it stands, and it is not
+> maintained as one. Where a section shows an interface, a table or an endpoint,
+> read it as *what was proposed*, and check the code or
+> [CODEBASE.md](CODEBASE.md) for what exists.
+>
+> Four things have moved decisively since:
+>
+> - **LangGraph was adopted** (§1's first row, §13.3). The chat pipeline and the
+>   report worker are compiled graphs — see
+>   [langgraph-migration.md](langgraph-migration.md).
+> - **Dashboards, Reports and the semantic layer were built**, and none of them
+>   exists here. See [dashboards.md](dashboards.md), [reports.md](reports.md),
+>   and the semantic-layer section of [../CLAUDE.md](../CLAUDE.md).
+> - **Multiple API replicas are supported** — §17 deferred the shared queue and
+>   named the trigger; the trigger fired. See
+>   [cross-replica.md](cross-replica.md).
+> - **The pipeline is ten nodes and §5's diagram is nine**, differently ordered
+>   and partly renamed: `retrieve` precedes `clarify`, `describe` was added,
+>   `analyze` shipped as `inspect` and `answer` as `present`.
+>   [pipeline.md](pipeline.md) is the node-by-node reference.
+>
+> The example sections — **§26 endpoints, §27 models, §28 protocols, §29
+> directory layout, §30 deployment** — are the most divergent and should be
+> treated as historical throughout. §29 and §30 in particular name files
+> (`deploy/docker-compose.yml`, `docker-compose.dev.yml`, `tests/api/`,
+> `tests/pipeline/`) that were never created under those names.
+
 ---
 
 ## 1. Executive Summary

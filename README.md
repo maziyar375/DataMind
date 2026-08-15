@@ -362,20 +362,39 @@ Ports and adapters exist at exactly four places, because these are the four
 things most likely to be replaced: **LLM**, **target database**, **secrets**,
 and **run execution**.
 
-### Deferred on purpose
+**LangGraph was deferred, and has since been adopted.** The bet the
+architecture doc made — that nodes built LangGraph-shaped from the start would
+make adoption a wiring change rather than a rewrite — paid: the chat pipeline
+and the report worker are compiled graphs, the repair region is one subgraph
+with two callers, and the ten node functions were not modified. Two phases were
+then argued and **declined on measurement**: checkpointing (88 KB of state per
+node, 97% of it the schema block, for a run of 5–60 seconds) and durable
+clarification. [docs/langgraph-migration.md](docs/langgraph-migration.md) has
+both arguments and the gates.
+
+### Still deferred on purpose
 
 | Deferred | Why | Trigger to revisit |
 | --- | --- | --- |
-| LangGraph | The graph is linear with one bounded retry loop. Nodes are already LangGraph-shaped, so adopting it is wiring, not a rewrite. | Durable interrupts, parallel fan-out, or resume-after-crash mid-graph |
-| Celery + Redis | A run is 5–60 seconds. Durability comes from the `runs` table plus a heartbeat; Celery would add a deployment unit and make SSE fan-out harder. | p95 run > ~5 min, runs must survive rolling deploys, or multiple API replicas share a queue |
+| Celery + Redis | A run is 5–60 seconds. Durability comes from the `runs` table plus a heartbeat; Celery would add a deployment unit and make SSE fan-out harder. | p95 run > ~5 min, or runs must survive rolling deploys |
+| Sharing a dashboard or report | User B would read data pulled with user A's credentials, against a connection B does not own. That is an authorization model, not a UI feature. | There is a real answer for "who may read through this connection" |
+| Dashboard filters | `QueryExecutor.execute` takes no bind parameters. Filters need the port extended across all four connectors — **never** by string interpolation. | Someone extends the port |
+| Rolling conversation summaries, scheduled report generation | Neither is load-bearing yet; the history tail and a manual re-run cover the cases. | A thread outgrows the last-six-messages window |
 
-LiteLLM is kept, but strictly behind `LLMGateway`. CI greps to prove it:
+More than one API replica *is* supported — see
+[docs/cross-replica.md](docs/cross-replica.md) for the three rules that make it
+work.
+
+LiteLLM is kept, but strictly behind `LLMGateway`, and LangGraph is confined to
+`app/pipeline/` and `app/workers/`. CI greps to prove both:
 
 ```bash
-grep -rn "import litellm" app/ | grep -v infra/llm/   # must be empty
+grep -rn "import litellm" app/ | grep -v infra/llm/                      # must be empty
+grep -rnE "^\s*(import|from)\s+(langgraph|langchain_core)\b" app/ \
+  | grep -vE "^app/(pipeline|workers)/"                                  # must be empty
 ```
 
-That one line decides whether the abstraction is real or decorative.
+Those two lines decide whether the abstractions are real or decorative.
 
 ---
 
@@ -400,9 +419,9 @@ backend/
                 identity
     workers/    in-process executor, reconciler, semantic and report jobs
   tests/        unit, integration, eval
-  fixtures/     the 42-table sales schema in three dialects, the Sakila seed,
-                and rebuild_fixtures.sh
-  scripts/      eval_run.sh and its LLM-config seeder
+  fixtures/     the 42-table sales schema in three dialects, the Sakila and
+                Oracle seeds, the eval's comment overlay, rebuild_fixtures.sh
+  scripts/      eval_run.sh, its LLM-config seeder, and catalog_probe.py
 frontend/
   src/
     theme/      design tokens taken verbatim from the design concept
@@ -450,8 +469,9 @@ From `frontend/`:
 npm run typecheck   # tsc --noEmit
 npm run build       # tsc -b && vite build
 npm run lint        # eslint
-npm test            # the DOM-free logic modules (schedule, format, palette,
-                    # report document, print)
+npm test            # the nine DOM-free logic modules: schedule, format,
+                    # dashboard document, palette, chat format, report
+                    # document, report readiness, print, semantic drift
 ```
 
 The offline eval harness is separate and costs real tokens — see
@@ -486,17 +506,23 @@ never touches data.
 
 ## Documentation
 
+Fifteen documents. [docs/README.md](docs/README.md) is the index and classifies
+all of them; this is the short version.
+
 | Doc | Read it when |
 | --- | --- |
 | [CLAUDE.md](CLAUDE.md) | You are about to change code — the map, the invariants, the gotchas |
 | [docs/CODEBASE.md](docs/CODEBASE.md) | You want a code-grounded tour of the whole stack |
 | [docs/architecture.md](docs/architecture.md) | You want the *why*, including what was deferred and on what trigger |
 | [docs/security.md](docs/security.md) | You are touching `sqlguard/`, disclosure, or adding an LLM call site |
-| [docs/pipeline.md](docs/pipeline.md) | You are changing a node |
+| [docs/pipeline.md](docs/pipeline.md) | You are changing a node — and §0 maps all three pipelines |
+| [docs/pipeline-dashboard.md](docs/pipeline-dashboard.md) · [docs/pipeline-report.md](docs/pipeline-report.md) | You are changing how a tile or a report gets its SQL |
 | [docs/charts.md](docs/charts.md) | You are changing what gets drawn |
 | [docs/dashboards.md](docs/dashboards.md) | You are changing tiles or saved-SQL execution |
 | [docs/reports.md](docs/reports.md) | You are changing the document |
 | [docs/eval.md](docs/eval.md) | You want to measure whether a change helped |
+| [docs/cross-replica.md](docs/cross-replica.md) | You are running more than one API process |
+| [docs/langgraph-migration.md](docs/langgraph-migration.md) · [docs/catalog-metadata-plan.md](docs/catalog-metadata-plan.md) · [docs/reports-plan.md](docs/reports-plan.md) | Plans and records — the narrative of a piece of work, with a dated ledger of what changed while it was executed |
 
 ---
 
