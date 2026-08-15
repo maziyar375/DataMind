@@ -110,12 +110,27 @@ Then open <http://localhost:5173> and sign in with the bootstrap admin
 (`admin@raymand.local` / `raymand` by default — change `ADMIN_PASSWORD` in
 `.env` before doing anything real; the API logs a loud warning if you don't).
 
-Two demo databases ship with the stack, so you can exercise the app against
-two engines. Add a data source pointing at either fixture — a **PostgreSQL**
-sales model (42 tables: orders, order_items, payments, shipments, returns,
-inventory, employees…, deliberately messy and wide enough that table retrieval
-is genuinely exercised) or the classic **MySQL** "Sakila" sample (16 tables,
-~46k rows of films, actors, rentals, payments):
+### The first five minutes
+
+A fresh install knows nothing about your data and has no model to think with, so
+there are four things to set up before the first question. In order:
+
+**1. Add a model provider.** *LLM providers* → add one, with its API key and
+model name, and **Test** it before saving — the probe is a real capability
+check, not a ping. Anything that reads a question in plain language needs this:
+chat, the outline of a report, a tile you'd rather describe than write.
+
+**2. Add a database.** *Data sources* → pick the engine, fill in the address and
+a **read-only** account. **Test** it — before or after saving — and you should
+see **read-only role confirmed**; the connector proves the account cannot write
+by attempting a write inside a transaction it rolls back.
+
+Two demo databases ship with the stack, so you can exercise the app against two
+engines without pointing it at anything real — a **PostgreSQL** sales model (42
+tables: orders, order_items, payments, shipments, returns, inventory,
+employees…, deliberately messy and wide enough that table retrieval is genuinely
+exercised) or the classic **MySQL** "Sakila" sample (16 tables, ~46k rows of
+films, actors, rentals, payments):
 
 | Field    | PostgreSQL demo | MySQL demo     |
 | -------- | --------------- | -------------- |
@@ -128,16 +143,32 @@ is genuinely exercised) or the classic **MySQL** "Sakila" sample (16 tables,
 
 Those are the addresses **on the compose network** — the API dials them, not
 your browser. From the host the same databases are on ports `5433` and `3307`.
-
-**Test** it — before or after saving — and you should see **read-only role
-confirmed**. Then sync the schema and ask something like *"What was total
-revenue last month?"* (sales) or *"Which film category earns the most?"*
-(Sakila).
-
 Oracle and SQL Server demo databases ship too, behind a profile because each
-wants ~2 GB of RAM: `make targets`. Their connection details, and running the
+wants ~2 GB of RAM (`make targets`); their connection details, and running the
 two processes without Docker, are in
 [docs/CODEBASE.md](docs/CODEBASE.md) §1 and §7.
+
+**3. Sync the schema.** **Sync schema** on the connection reads its tables,
+columns, and primary and foreign keys into a stored snapshot. This step is not
+optional and not a convenience: every generated statement is resolved against
+that snapshot, so **a connection that has never been synced can be queried for
+nothing at all**. Re-sync whenever the database changes shape.
+
+**4. Generate the semantic layer.** *Data sources → Semantic layer →* **Generate
+with AI**. The snapshot says what *exists*; the layer says what it **means** —
+the business name and grain of each table, metrics bound to exact SQL, what
+"last month" means here, which rows shouldn't count unless asked for. It runs a
+model call per table and takes minutes, so it is queued and polled rather than
+streamed, and you can edit anything it writes.
+
+This one is genuinely optional — with no layer the product behaves exactly as it
+did before the feature existed — but it is the step that moves answers from
+plausible to right, because the failures it addresses are interpretation, not
+retrieval. Skip it on the demo if you're only looking around.
+
+Then **Chat**, and ask something like *"What was total revenue last month?"*
+(sales) or *"Which film category earns the most?"* (Sakila). Dashboards and
+Reports draw on the same connection once it is synced.
 
 ### Running on a remote host
 
