@@ -5,8 +5,9 @@
 <h1 align="center">DataMind</h1>
 
 <p align="center">
-  Conversational BI. Ask a question in plain language, get a written answer, a
-  table, and a chart — with the generated SQL visible and auditable.
+  <strong>Business intelligence for the people who have the questions, not the SQL.</strong><br>
+  Ask in plain language — get a written answer, a table, a chart, or a whole report.<br>
+  Every query is checked before it runs, and you decide how much of your data ever reaches the model.
 </p>
 
 <p align="center">
@@ -20,25 +21,63 @@
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
   <a href="#what-works-today">Features</a> ·
+  <a href="#two-things-are-never-left-to-the-model">Security</a> ·
   <a href="#architecture">Architecture</a> ·
   <a href="docs/README.md">Docs</a>
 </p>
 
 ---
 
-Point DataMind at **PostgreSQL, MySQL, SQL Server, or Oracle**; the question is
-the same, the dialect is the connector's problem.
+The people who most need an answer from the database are usually the ones who
+cannot write the query for it — no joins to work out, no dialect to learn, no
+analyst to wait three days for. DataMind takes the question as you'd say it out
+loud and answers it. The generated SQL is shown every time, so whoever *can*
+read it is able to check it.
 
-Three ways to use the same guarded query path:
+Point it at **PostgreSQL, MySQL, SQL Server, or Oracle**; the question is the
+same, the dialect is the connector's problem.
+
+**Three ways to use the same guarded query path:**
 
 - **Chat** answers one question and moves on.
-- **Dashboards** watch numbers that are always current.
-- **Reports** are a document — a structure you approved, prose written over
-  real results, printable, and re-runnable months later against fresh data.
+- **Dashboards** watch numbers that are always current — a grid of saved
+  queries, each on its own connection and its own refresh rate.
+- **Reports** are a document. Describe what you need, approve the outline a
+  model proposes, and get prose, tables and charts written section by section
+  over your own data — with every headline figure computed from the rows rather
+  than by a model. Printable, and re-runnable months later against fresh data.
 
 A single modular-monolith FastAPI application backed by one PostgreSQL
 database, plus a React SPA. No microservices, no message broker, no vector
 database in this release.
+
+## Two things are never left to the model
+
+A tool that writes SQL against your production database and posts your business
+data to a model provider has exactly two ways to hurt you. Neither is handled by
+asking the model nicely.
+
+- **Every statement is checked before it runs.** The model only *proposes*
+  SQL — it never executes anything. Each statement is parsed into an AST and
+  walked against an allowlist, with every table and column resolved against the
+  connection's real schema; an unrecognised construct is a **rejection, not a
+  warning**, so the failure mode is a refusal rather than a bypass. Underneath
+  that, execution is read-only in the database's own terms, with a row cap and a
+  statement timeout. Every way into that guard — a chat question, a dashboard
+  tile, a report block, an imported dashboard — is treated identically; none is
+  privileged, and a hostile-query corpus is replayed through each on every build.
+- **You decide what leaves your database.** Each connection declares how much of
+  a query result may reach the model provider — `NONE`, `AGGREGATE`, `SAMPLE`,
+  or `FULL` — and the policy in force is shown in the chat header **at the
+  moment you ask**, not buried in a settings page. It governs all three channels
+  a value could escape through: the results, the per-column hints in the schema
+  block, and the conversation history. Credentials are separate: encrypted with
+  AES-256-GCM and never returned by any endpoint, in any form.
+
+The full argument for both — every point where data reaches a provider and what
+each one sends — is in
+[**The three things that are not simplified**](#the-three-things-that-are-not-simplified)
+below and in [docs/security.md](docs/security.md).
 
 ---
 
@@ -47,8 +86,8 @@ database in this release.
 You need Docker and Docker Compose.
 
 ```bash
-git clone https://github.com/<you>/datamind.git
-cd datamind
+git clone https://github.com/maziyar375/DataMind.git
+cd DataMind
 
 make secrets      # writes .env with a fresh AES key and JWT secret
 make up           # builds and starts db, both demo databases, api, and web
