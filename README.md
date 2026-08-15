@@ -74,10 +74,10 @@ asking the model nicely.
   block, and the conversation history. Credentials are separate: encrypted with
   AES-256-GCM and never returned by any endpoint, in any form.
 
-The full argument for both — every point where data reaches a provider and what
-each one sends — is in
-[**The three things that are not simplified**](#the-three-things-that-are-not-simplified)
-below and in [docs/security.md](docs/security.md).
+The full argument for both — every point where data reaches a provider and
+exactly what each one sends, the disclosure ladder, the guard's rejection codes,
+and a pre-production checklist — is in
+[**docs/security.md**](docs/security.md).
 
 ---
 
@@ -326,82 +326,6 @@ reasoning.
 
 ---
 
-## The three things that are not simplified
-
-The architecture doc argues that most of this system should be as boring as
-possible, and names three places where that does not apply.
-
-> For the full picture — every point where data reaches a model provider and
-> exactly what each one sends, the disclosure ladder, the SQL guard's rejection
-> codes, and a pre-production checklist — see
-> **[docs/security.md](docs/security.md)**.
-
-### 1. SQL validation is AST-based and fails closed
-
-The model proposes SQL; it never executes anything. Every statement is parsed
-with SQLGlot and walked against an allowlist of expression types. An unknown
-node type is a **rejection**, not a warning — so a new SQLGlot release adding
-an expression class causes a false rejection, never a bypass.
-
-Table and column names are resolved against the connection's stored schema
-snapshot. A connection that has never been synced can be queried for nothing
-at all.
-
-The hostile corpus in `backend/tests/unit/test_sqlguard_hostile.py` is the
-build's hard gate: statement chaining, DDL, writes, system catalogs,
-`pg_read_file`, `xp_cmdshell`, `INTO OUTFILE`, union smuggling, comment
-evasion. Zero bypasses, or CI fails.
-
-```bash
-make guard
-```
-
-There are **three** entry points to the guard — the pipeline, a dashboard tile,
-and a report block — and the corpus is replayed through all three
-(`test_sqlguard_hostile.py`, `test_query_service.py`, `test_report_guard.py`).
-Provenance (`GENERATED | GENERATED_EDITED | HANDWRITTEN`) is recorded but is
-**never a trust signal**; the guard cannot tell them apart and must not try.
-
-Containment sits underneath correctness, in each engine's own terms: a
-`READ ONLY` transaction on PostgreSQL, MySQL, and Oracle; the read-only role
-plus a query timeout on SQL Server, which has no such transaction mode. Every
-engine adds a statement timeout and a row cap, and each connector verifies the
-role genuinely cannot write by attempting one, inside a transaction it always
-rolls back.
-
-### 2. Credentials are encrypted with a binding context
-
-`SecretBox` uses AES-256-GCM with the row identity as additional
-authenticated data. Moving an encrypted blob from one connection to another
-produces a decryption failure rather than a silently working credential.
-
-No read model has a password or `api_key` field. A test asserts this against
-the generated schemas so it cannot regress.
-
-### 3. Disclosure is an explicit, visible policy
-
-Each connection declares how much of a query result may reach the model
-provider: `NONE`, `AGGREGATE`, `SAMPLE`, or `FULL`. The chat header shows which
-policy is in force **at the moment you ask**, not in documentation you have to
-go find.
-
-The policy governs three things, and all three filter at *render* time rather
-than at write time — so tightening a policy takes effect on the next question,
-with no re-sync and no leak from the existing transcript:
-
-1. the query **result** sent to the model,
-2. the per-column **content hints** in the schema block,
-3. the **conversation history** — an earlier answer is prose the model wrote
-   *from* result rows, so replaying it is a disclosure. Under `NONE` and
-   `AGGREGATE` that prose is withheld while its SQL survives, which is what a
-   follow-up actually builds on.
-
-A conversation is pinned to one connection so history can never cross policies,
-and reports refuse `NONE`/`AGGREGATE` outright — prose written from no values
-beside charts drawn from real ones is a document that disagrees with itself.
-
----
-
 ## Architecture
 
 ```
@@ -424,6 +348,10 @@ force at narration time and hand them down.
 Ports and adapters exist at exactly four places, because these are the four
 things most likely to be replaced: **LLM**, **target database**, **secrets**,
 and **run execution**.
+
+Those seven names are directories. For the tree — what is in each one, down to
+the module — see [docs/CODEBASE.md](docs/CODEBASE.md) §3, or the code map in
+[CLAUDE.md](CLAUDE.md) if you are about to change something.
 
 **LangGraph was deferred, and has since been adopted.** The bet the
 architecture doc made — that nodes built LangGraph-shaped from the start would
@@ -458,61 +386,6 @@ grep -rnE "^\s*(import|from)\s+(langgraph|langchain_core)\b" app/ \
 ```
 
 Those two lines decide whether the abstractions are real or decorative.
-
----
-
-## Repository layout
-
-```
-backend/
-  app/
-    api/        routers, DTOs, deps, RFC 7807 error mapping
-    core/       config, logging with redaction, errors, context, clock
-    domain/     value objects and ports (Protocols) — no framework imports
-    services/   use cases, saved-SQL execution, disclosure policy, bootstrap
-    pipeline/   typed RunState, the ten nodes, executor, versioned prompts,
-                the schema-question answer, the disclosure gate, free checks
-    sqlguard/   policy, validator, rewriter — self-contained, dialect-aware
-    semantic/   what the schema means: the document, its generator, its render
-    reports/    outline, language, facts, narration, the numeric check — pure
-    charts/     result profile → shape fit → Vega-Lite
-    eval/       the offline harness: dataset, suites, runner, metrics, reports
-    infra/      SQLAlchemy + Alembic, crypto, repositories,
-                connectors (postgres/mysql/mssql/oracle), LiteLLM, events,
-                identity
-    workers/    in-process executor, reconciler, semantic and report jobs
-  tests/        unit, integration, eval
-  fixtures/     the 42-table sales schema in three dialects, the Sakila and
-                Oracle seeds, the eval's comment overlay, rebuild_fixtures.sh
-  scripts/      eval_run.sh, its LLM-config seeder, and catalog_probe.py
-frontend/
-  src/
-    theme/      design tokens taken verbatim from the design concept
-    api/        typed client, SSE streaming with polling fallback
-    components/ UI primitives, chat, dashboards, tile editor, the semantic
-                layer editor, reports, the Vega renderer and chart picker,
-                plus DOM-free logic modules with their own node tests
-    pages/      login, chat, data sources, LLM providers, users, dashboards,
-                reports
-docs/           see docs/README.md for what to read when
-```
-
-`backend/tests/` and `backend/fixtures/` are siblings of `app/`, not inside it.
-
----
-
-## Frontend notes
-
-The architecture doc says "MUI SPA", but the design concept is not MUI — it is
-a custom system built on oklch CSS variables with its own visual language.
-Reproducing it through MUI would have meant fighting MUI's defaults to arrive
-back at the same place, so the SPA uses the design tokens directly with a
-small component kit.
-
-Every colour reads from a CSS variable defined in `src/theme/tokens.ts`, and
-those values are copied verbatim from the design concept
-(`docs/assets/ui-design-concept.html`) rather than re-derived. Both the dark
-and light palettes are included.
 
 ---
 

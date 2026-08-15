@@ -9,7 +9,7 @@
 > read it as *what was proposed*, and check the code or
 > [CODEBASE.md](CODEBASE.md) for what exists.
 >
-> Four things have moved decisively since:
+> Five things have moved decisively since:
 >
 > - **LangGraph was adopted** (§1's first row, §13.3). The chat pipeline and the
 >   report worker are compiled graphs — see
@@ -24,6 +24,16 @@
 >   and partly renamed: `retrieve` precedes `clarify`, `describe` was added,
 >   `analyze` shipped as `inspect` and `answer` as `present`.
 >   [pipeline.md](pipeline.md) is the node-by-node reference.
+> - **The SPA is not MUI**, wherever this document says it is — the architecture
+>   diagram, the directory tree, and the chart-renderer trade-off all assume it.
+>   The design concept it was built to is a custom system on oklch
+>   CSS variables with its own visual language; reproducing that through MUI
+>   would have meant fighting MUI's defaults to arrive back at the same place,
+>   so the SPA uses the design tokens directly with a small component kit. Every
+>   colour reads from a CSS variable in `frontend/src/theme/tokens.ts`, copied
+>   verbatim from `assets/ui-design-concept.html` rather than re-derived, in both
+>   the dark and light palettes. There is **no component library** — see
+>   [CODEBASE.md](CODEBASE.md) §1.
 >
 > The example sections — **§26 endpoints, §27 models, §28 protocols, §29
 > directory layout, §30 deployment** — are the most divergent and should be
