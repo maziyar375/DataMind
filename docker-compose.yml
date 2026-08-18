@@ -71,6 +71,31 @@ services:
       retries: 30
       start_period: 30s
 
+  # The DEMO target database. `sales` is the eval fixture — 42 tables that are
+  # messy on purpose — which makes it the wrong thing to drive a demo against.
+  # `aurora` is the opposite artifact: 12 clean tables whose cardinalities are
+  # tuned to the chart budgets in app/charts/__init__.py, so the obvious
+  # question produces the chart you wanted. See backend/fixtures/demo_seed.sql.
+  aurora:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: aurora
+    ports: ["5434:5432"]
+    volumes:
+      - ./backend/fixtures/demo_seed.sql:/docker-entrypoint-initdb.d/01_seed.sql:ro
+      # Catalog descriptions as a second init script, matching the `sales`
+      # layout. Here they are not an A/B arm but a straight accuracy win: the
+      # run prompt carries them into SQL generation.
+      - ./backend/fixtures/demo_comments.sql:/docker-entrypoint-initdb.d/02_comments.sql:ro
+      - raymand_aurora:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d aurora"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   # Oracle and SQL Server demo targets used to live here, behind a `targets`
   # profile. They were removed: ~2 GB of RAM each for services most sessions
   # never started. The *connectors* are untouched and all four engines remain
@@ -92,6 +117,12 @@ services:
       CORS_ORIGINS: '["http://localhost:5173"]'
       ENVIRONMENT: local
       DEBUG: "true"
+      # Headroom for slow hosted models. A chat run makes several sequential
+      # LLM calls (route, generate, answer, chart intent); against a flash
+      # model over OpenRouter the whole run lands at 45-140s, which overruns
+      # the 120s default and fails questions that were about to succeed.
+      RUN_DEADLINE_SECONDS: "${RUN_DEADLINE_SECONDS:-300}"
+      LLM_REQUEST_TIMEOUT_SECONDS: "${LLM_REQUEST_TIMEOUT_SECONDS:-120}"
     ports: ["8000:8000"]
     command: >
       sh -c "alembic upgrade head &&
@@ -121,3 +152,4 @@ volumes:
   # purpose: they re-seed from their init scripts on every fresh start.
   raymand_sales:
   raymand_sakila:
+  raymand_aurora:
