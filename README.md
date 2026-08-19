@@ -100,7 +100,7 @@ git clone https://github.com/maziyar375/DataMind.git
 cd DataMind
 
 make secrets      # writes .env with a fresh AES key and JWT secret
-make up           # builds and starts db, both demo databases, api, and web
+docker compose up -d   # starts db, both demo databases, api, and web in the background
 ```
 
 Then open <http://localhost:5173> and sign in with the bootstrap admin
