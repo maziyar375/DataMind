@@ -99,13 +99,17 @@ You need Docker and Docker Compose.
 git clone https://github.com/maziyar375/DataMind.git
 cd DataMind
 
-make secrets      # writes .env with a fresh AES key and JWT secret
-docker compose up -d   # starts db, both demo databases, api, and web in the background
+make secrets           # copies .env.example to .env, then writes a fresh AES key and JWT secret
+docker compose up -d   # starts db, the three demo databases, api, and web in the background
 ```
 
-Then open <http://localhost:5173> and sign in with the bootstrap admin
-(`admin@raymand.local` / `raymand` by default — change `ADMIN_PASSWORD` in
-`.env` before doing anything real; the API logs a loud warning if you don't).
+Then open <http://localhost:5173> and sign in with the bootstrap admin. **The
+credentials are whatever `ADMIN_EMAIL` / `ADMIN_PASSWORD` say in your `.env`** —
+`make secrets` seeds them from `.env.example` as `admin@raymand.com` /
+`raymand`. (The API's own fallback, used only when `.env` sets nothing, is
+`admin@raymand.local`; read your `.env` rather than trusting either address
+here.) Change `ADMIN_PASSWORD` before doing anything real — the API logs a loud
+warning if you don't.
 
 ### The first five minutes
 
@@ -122,27 +126,49 @@ a **read-only** account. **Test** it — before or after saving — and you shou
 see **read-only role confirmed**; the connector proves the account cannot write
 by attempting a write inside a transaction it rolls back.
 
-Two demo databases ship with the stack, so you can exercise the app against two
-engines without pointing it at anything real — a **PostgreSQL** sales model (42
-tables: orders, order_items, payments, shipments, returns, inventory,
-employees…, deliberately messy and wide enough that table retrieval is genuinely
-exercised) or the classic **MySQL** "Sakila" sample (16 tables, ~46k rows of
-films, actors, rentals, payments):
+**Three demo databases ship with the stack**, so you can exercise the app
+against two engines without pointing it at anything real. They are not
+interchangeable — each was built for a different job:
 
-| Field    | PostgreSQL demo | MySQL demo     |
-| -------- | --------------- | -------------- |
-| Engine   | `PostgreSQL`    | `MySQL`        |
-| Host     | `sales`         | `sakila`       |
-| Port     | `5432`          | `3306`         |
-| Database | `sales`         | `sakila`       |
-| User     | `analytics_ro`  | `analytics_ro` |
-| Password | `analytics_ro`  | `analytics_ro` |
+| Field                | `aurora` — **start here** | `sales` — the eval fixture | `sakila` — the MySQL one |
+| -------------------- | ------------------------- | -------------------------- | ------------------------ |
+| Engine               | `PostgreSQL`              | `PostgreSQL`               | `MySQL`                  |
+| Host                 | `aurora`                  | `sales`                    | `sakila`                 |
+| Port                 | `5432`                    | `5432`                     | `3306`                   |
+| Database             | `aurora`                  | `sales`                    | `sakila`                 |
+| User                 | `analytics_ro`            | `analytics_ro`             | `analytics_ro`           |
+| Password             | `analytics_ro`            | `analytics_ro`             | `analytics_ro`           |
+| *(from your host)*   | `localhost:5434`          | `localhost:5433`           | `localhost:3307`         |
+
+Fill the form with the first six rows. **The last row is not for the form** —
+it is where the same databases sit on your own machine, if you want to open one
+in a SQL client.
+
+- **`aurora`** is a specialty coffee chain over 24 months of trading — 13 clean
+  tables, one obvious join path per question, no legacy columns and no
+  soft-delete trap to remember. Its row counts are **tuned to the chart budgets**
+  in `app/charts/`, so the obvious question produces the chart you wanted rather
+  than one the platform has to trim: six product categories against a six-slice
+  pie ceiling, four channels and four loyalty tiers inside the eight-series
+  colour limit, eighteen stores against a twenty-five-mark bar. Its tables and
+  columns carry `COMMENT ON` descriptions, which reach the prompt. **This is the
+  one to point a first connection at.**
+- **`sales`** is the *eval* fixture and is messy **on purpose** — 42 tables with
+  near-duplicate names, legacy cruft columns, soft-delete traps and a stale
+  rollup that gives wrong answers, wide enough that table retrieval is genuinely
+  exercised. That makes it the right thing to measure against and the wrong
+  thing to demo against.
+- **`sakila`** is the classic MySQL sample: 16 tables, ~46k rows of films,
+  actors, rentals and payments — there so the app can be driven against a
+  second engine.
 
 Those are the addresses **on the compose network** — the API dials them, not
-your browser. From the host the same databases are on ports `5433` and `3307`.
+your browser, which is why `localhost` would be wrong in the form.
+
 **SQL Server and Oracle are supported all the same**, and their connectors are
-tested — the stack simply ships no demo server for them, so point a data source
-at one of your own. Running the two processes without Docker is in
+tested — the stack simply ships no demo server for them (they cost ~2 GB of RAM
+each and were removed), so point a data source at one of your own. Their seeds
+are still in `backend/fixtures/`. Running the two processes without Docker is in
 [docs/CODEBASE.md](docs/CODEBASE.md) §7.
 
 **3. Sync the schema.** **Sync schema** on the connection reads its tables,
@@ -163,9 +189,19 @@ did before the feature existed — but it is the step that moves answers from
 plausible to right, because the failures it addresses are interpretation, not
 retrieval. Skip it on the demo if you're only looking around.
 
-Then **Chat**, and ask something like *"What was total revenue last month?"*
-(sales) or *"Which film category earns the most?"* (Sakila). Dashboards and
+Then **Chat**, and ask something like *"Revenue by store, last 12 months"* or
+*"What's the category mix?"* (aurora), *"What was total revenue last month?"*
+(sales), or *"Which film category earns the most?"* (Sakila). Dashboards and
 Reports draw on the same connection once it is synced.
+
+There is also a script that builds a whole demo board for you — 29 tiles over
+the `sales` fixture, covering every chart family the platform draws — by talking
+to the running API, so every tile faces the guard exactly like one you typed:
+
+```bash
+python scripts/seed_demo_dashboard.py            # create it
+python scripts/seed_demo_dashboard.py --check    # and run every tile
+```
 
 ### Running on a remote host
 
@@ -230,6 +266,16 @@ inspect → present → chart
 
 Each step persists and streams over SSE, so the UI shows a live step trail
 rather than a spinner. Replay from `Last-Event-ID`, with a polling fallback.
+
+Once the answer is there you can **redraw its chart as a different type** from a
+picker beside it. That costs no model call and — importantly — **re-runs no
+query**: it draws the rows the run already returned, because the rows a chart is
+drawn from must be the rows the prose above it was written from. The picker only
+offers types the data can actually carry, and a pick the planner refuses comes
+back with its reason rather than being compiled into something misleading.
+
+Answered turns also suggest follow-up questions, scoped to the tables the thread
+has been asking about.
 
 Node-by-node reference: **[docs/pipeline.md](docs/pipeline.md)**.
 Chart decisions: **[docs/charts.md](docs/charts.md)**.
@@ -323,8 +369,8 @@ generation reads the same schema block a run reads, under the same budget.
 - Email + password auth: Argon2id, short-lived JWT access tokens, rotating
   refresh tokens in an HttpOnly cookie, with reuse detection
 - User management: invite with a one-time password, edit a user's name, email,
-  and role (including promote/demote admin), and an admin **set-password** that
-  revokes the user's live sessions
+  and role (including promote/demote admin), delete a user, and an admin
+  **set-password** that revokes the user's live sessions
 - AES-256-GCM credential encryption, bound to the owning row so a ciphertext
   copied between rows fails to decrypt
 - Four target-database connectors — **PostgreSQL, MySQL, SQL Server, and
@@ -333,7 +379,9 @@ generation reads the same schema block a run reads, under the same budget.
 - Connection testing that works **before a connection is saved** as well as
   after, so credentials can be checked without persisting a broken row
 - Model configuration CRUD with a real capability probe, likewise testable
-  before saving
+  before saving. Two provider kinds are creatable — **OpenAI-compatible** (which
+  covers OpenAI itself and anything speaking its API: OpenRouter, Ollama, vLLM,
+  a local gateway) and **Anthropic**
 - In-process run executor with heartbeats and a stale-run reconciler, so no run
   is left stuck when a process dies
 - An offline eval harness with a nightly CI run — **[docs/eval.md](docs/eval.md)**
@@ -341,10 +389,12 @@ generation reads the same schema block a run reads, under the same budget.
 ### Frontend
 
 Chat with the live step trail, the "Generated SQL" panel, result tables and
-charts, and metadata chips. Each conversation is pinned to one database and
-model, chosen in the header — which also shows the disclosure policy in force —
-and locked once the first message is sent. Copy buttons, conversation rename
-and delete, and right-to-left support for Persian and other RTL scripts.
+charts, a chart-type picker that redraws an answer's chart without re-querying,
+and metadata chips. Each conversation is pinned to one database and model,
+chosen in the header — which also shows the disclosure policy in force — and
+locked once the first message is sent. Copy buttons, conversation rename and
+delete, suggested follow-up questions, and right-to-left support for Persian and
+other RTL scripts.
 
 Data sources with an engine picker, a table list, an FK graph view, and the
 semantic-layer editor (metric expressions validated live by the *same parser*
@@ -355,7 +405,10 @@ whole board as a file. Reports get three
 screens of their own: an outline editor that walks Describe → Structure → Check
 → Generate with the guard's verdict on every question, a viewer that watches
 the document write itself and lets any paragraph or chart be refined
-afterwards, and the run history a regeneration adds to. Dark and light themes.
+afterwards, and the run history a regeneration adds to. An About page, the one
+screen reachable from both sides of the sign-in wall. Dark and light themes,
+built on a custom design system of oklch CSS variables — there is **no component
+library**.
 
 **Not built yet:** rolling conversation summaries, sharing a dashboard or a
 report with another user, and scheduled report generation. Each is deferred
@@ -387,8 +440,13 @@ Ports and adapters exist at exactly four places, because these are the four
 things most likely to be replaced: **LLM**, **target database**, **secrets**,
 and **run execution**.
 
-Those seven names are directories. For the tree — what is in each one, down to
-the module — see [docs/CODEBASE.md](docs/CODEBASE.md) §3, or the code map in
+Those seven names are directories. Four more sit outside the ladder because
+they depend on nothing in it: `sqlguard/` (the parser and the allowlist),
+`charts/` (profile → fit → Vega-Lite), `workers/` (the run executor, the
+reconciler and the report graph) and `eval/`, which one of the seven
+import-linter contracts keeps off the request path entirely. For the tree —
+what is in each one, down to the module — see
+[docs/CODEBASE.md](docs/CODEBASE.md) §3, or the code map in
 [CLAUDE.md](CLAUDE.md) if you are about to change something.
 
 **LangGraph was deferred, and has since been adopted.** The bet the
@@ -430,7 +488,7 @@ Those two lines decide whether the abstractions are real or decorative.
 ## Testing
 
 ```bash
-make test      # full backend suite
+make test      # full backend suite — 1,426 tests, ~3 minutes
 make guard     # the hostile SQL corpus alone — the hard gate
 make lint      # ruff + import-linter contracts
 make fmt       # ruff format
@@ -442,11 +500,20 @@ From `frontend/`:
 ```bash
 npm run typecheck   # tsc --noEmit
 npm run build       # tsc -b && vite build
-npm run lint        # eslint
 npm test            # the nine DOM-free logic modules: schedule, format,
                     # dashboard document, palette, chat format, report
                     # document, report readiness, print, semantic drift
 ```
+
+Typecheck plus build is the real frontend gate. There is a `npm run lint`
+script, but **eslint is not a declared devDependency and the repo carries no
+eslint config**, so it fails wherever you run it; CI does not run it either.
+
+CI (`.github/workflows/ci.yml`) runs ruff, the import-linter contracts, both
+boundary greps, the hostile corpus and the full backend suite, plus `tsc
+--noEmit` and `vite build` on the frontend. Two things it does **not** gate:
+`npm test`, and mypy — which runs with `|| true` while strict mode is adopted
+module by module. Worth knowing before trusting a green tick.
 
 The offline eval harness is separate and costs real tokens — see
 [docs/eval.md](docs/eval.md).
@@ -455,21 +522,34 @@ The offline eval harness is separate and costs real tokens — see
 
 ## Configuration
 
-| Variable | Purpose |
-| --- | --- |
-| `SECRET_BOX_KEY` | 32-byte urlsafe-base64 key for credential encryption |
-| `JWT_SECRET` | Access-token signing secret |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Bootstrap admin, applied idempotently at startup |
-| `DATABASE_URL` | Application database |
-| `MAX_CONCURRENT_RUNS` | Executor concurrency limit |
-| `RUN_DEADLINE_SECONDS` | Hard per-run time budget |
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `SECRET_BOX_KEY` | 32-byte urlsafe-base64 key for credential encryption | — (`make secrets`) |
+| `JWT_SECRET` | Access-token signing secret | — (`make secrets`) |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | Bootstrap admin, applied idempotently at startup | `admin@raymand.com` / `raymand` from `.env.example` |
+| `DATABASE_URL` | Application database | the compose `db` service |
+| `CORS_ORIGINS` | JSON array of allowed browser origins | `["http://localhost:5173"]` |
+| `MAX_CONCURRENT_RUNS` | Executor concurrency limit | `8` |
+| `RUN_DEADLINE_SECONDS` | Hard per-run time budget | `120` in code, raised to `300` by compose |
+| `LLM_REQUEST_TIMEOUT_SECONDS` | Per-provider-call timeout | `60` in code, raised to `120` by compose |
+| `VITE_POLL` | Set to `1` if hot reload misses your bind mounts | `0` |
+
+The two compose overrides are headroom for slow hosted models: a chat run makes
+four or five sequential provider calls, and against a flash model over a hosted
+gateway the whole run can land at 45–140s, overrunning the code default and
+failing questions that were about to succeed.
 
 `make secrets` generates the two cryptographic values for you. Losing
 `SECRET_BOX_KEY` means every stored credential must be re-entered.
 
 > **Naming note:** the product is *DataMind*, but the Python package is still
-> `raymand`, as are the compose project and the bootstrap admin
-> (`admin@raymand.local`). Renaming is a deliberate separate task.
+> `raymand` (import `app.*`), as are the compose project and the app database.
+> Renaming is a deliberate separate task. The bootstrap admin address is caught
+> in the middle of it and is **inconsistent in the repo today**: the API and
+> `docker-compose.yml` both fall back to `admin@raymand.local`, while
+> `.env.example` — which `make secrets` copies to `.env`, and which compose then
+> reads in preference to its own fallback — sets `admin@raymand.com`. Follow the
+> quick start and you get the `.com` address. Check your `.env`.
 
 If the app database ever fails to start with *"could not open directory
 'pg_notify'"* — the Lightning Studio drive drops empty directories across

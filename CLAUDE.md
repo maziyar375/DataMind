@@ -33,9 +33,18 @@ A single modular-monolith **FastAPI** backend on one PostgreSQL app database,
 plus a **React + Vite** SPA. No microservices, no broker, no vector DB.
 
 > **Naming gotcha:** the product is *DataMind*, but the Python package is still
-> `raymand` (import `app.*`), the compose project is `raymand`, and the
-> bootstrap admin is `admin@raymand.local`. Renaming the package is a separate,
-> deliberate task — don't do it incidentally.
+> `raymand` (import `app.*`), and so are the compose project and the app
+> database. Renaming the package is a separate, deliberate task — don't do it
+> incidentally.
+>
+> The bootstrap admin address is **inconsistent in the repo today**, and it is
+> the kind of thing that costs someone twenty minutes: `core/config.py` and
+> `docker-compose.yml` both fall back to `admin@raymand.local`, while
+> `.env.example` — copied to `.env` by `make secrets`, and read by compose in
+> preference to its own fallback — sets `admin@raymand.com`, as does
+> `scripts/seed_demo_dashboard.py`. Anyone who followed the quick start signs in
+> as `admin@raymand.com`. Reconcile it deliberately or read `.env`; don't assume
+> either address.
 
 ---
 
@@ -56,25 +65,39 @@ plus a **React + Vite** SPA. No microservices, no broker, no vector DB.
 > *orchestrator* — it decides which node runs next. LangGraph was adopted in the
 > migration ([docs/langgraph-migration.md](docs/langgraph-migration.md));
 > LiteLLM was never touched by it and is still the only way a prompt leaves the
-> process. **LangChain is not a dependency**: the one `langchain_core` import is
+> process.
+>
+> **The UI offers exactly two creatable provider kinds**, and they are the keys
+> of `PROVIDER_URLS` in `frontend/src/theme/tokens.ts`: `OpenAI-compatible`
+> (which covers everything speaking that API — OpenRouter, Ollama, vLLM, a local
+> gateway — and gets an `openai/` model prefix added in the gateway when the
+> model name carries no `/`) and `Anthropic`. A legacy `"Custom"` value is still
+> handled in `litellm_gateway.py` for rows created before it was dropped, but
+> nothing creates one now. Removing a key from that map removes the choice. **LangChain is not a dependency**: the one `langchain_core` import is
 > `RunnableConfig`, a type LangGraph pulls in, used in `pipeline/graph.py` and
 > `workers/report_graph.py` and nowhere else.
 - **Crypto/auth:** argon2-cffi (Argon2id), PyJWT, `cryptography` (AES-256-GCM).
 - **Target DB drivers:** asyncpg (Postgres), aiomysql (MySQL), oracledb *thin*
   (Oracle), pymssql (SQL Server). All ship wheels — no system DB client needed.
 - **Frontend:** React 18 + TypeScript 5.6, Vite 5.4, react-router-dom 6,
-  Vega-Lite (`vega`/`vega-lite`/`vega-embed`) for charts. Custom design system
-  on oklch CSS variables — **no component library**.
-- **Dev/CI:** pytest + pytest-asyncio, ruff, mypy (strict), **import-linter**
-  (enforces the layer rule), Docker Compose.
+  Vega-Lite (`vega`/`vega-lite`/`vega-embed`) for charts, `react-grid-layout`
+  for the dashboard grid. That is the whole dependency list — the design system
+  is custom, on oklch CSS variables, with **no component library**.
+- **Dev/CI:** pytest + pytest-asyncio, ruff, mypy, **import-linter** (seven
+  contracts; enforces the layer rule), Docker Compose. mypy is configured
+  `strict` but runs `|| true` in CI — strict mode is being adopted module by
+  module, so a green tick is not a type-clean tree. The frontend job runs
+  `tsc --noEmit` and `vite build` only: **`npm test` is not in CI**, and
+  `npm run lint` is a dead script (eslint is not a devDependency and there is no
+  eslint config — it fails everywhere).
 
 ---
 
 ## Commands
 
 ```bash
-make secrets   # write .env with a fresh AES key + JWT secret (run once)
-make up        # build & start db, sales fixture, api, web
+make secrets   # copy .env.example to .env, then write a fresh AES key + JWT secret (run once)
+make up        # build & start everything, in the FOREGROUND (docker compose up --build)
 make down      # stop everything
 make logs      # follow api logs
 
@@ -87,10 +110,16 @@ make fixtures  # rebuild + verify the sales fixtures (PG/MySQL/MSSQL) from clean
 make db-repair # recreate the empty PGDATA runtime dirs the studio drive strips
 ```
 
+`make up` starts the app db, **all three** demo databases, the api and the web
+container, and it does not detach — `docker compose up -d` is the backgrounded
+form the README's quick start uses.
+
 Frontend, from `frontend/`: `npm run dev`, `npm run build` (`tsc -b && vite
-build`), `npm run typecheck` (`tsc --noEmit`), `npm run lint`, `npm test` (all
-nine DOM-free logic suites: schedule, format, dashboard document, palette,
-chat format, report document, report readiness, print, semantic drift).
+build`), `npm run typecheck` (`tsc --noEmit`), `npm test` (all nine DOM-free
+logic suites: schedule, format, dashboard document, palette, chat format, report
+document, report readiness, print, semantic drift). **`npm run lint` does not
+work** — the script exists but eslint is neither a devDependency nor
+configured. Typecheck plus build plus `npm test` is the real gate.
 
 The **eval harness is not in `make test`** — it calls a real provider and costs
 money. `python -m app.eval.runner --suite sales_v1` from `backend/`, or
@@ -99,20 +128,68 @@ money. `python -m app.eval.runner --suite sales_v1` from `backend/`, or
 
 **Verification loop before you claim done:** `npm run typecheck` + `npm run
 build` + `npm test` for frontend changes; `make test` (and `make guard` if you
-touched `sqlguard/` or a connector) for backend. Several past bugs only surfaced
+touched `sqlguard/` or a connector) for backend. The backend suite is 1,426
+tests plus 11 skips and takes ~3 minutes. Several past bugs only surfaced
 end-to-end via the API, not in the UI — actually exercise the path you changed.
 
-**Ports:** web `5173`, api `8000` (`/docs` for OpenAPI), app db `5432`, demo
-`sales` db `5433`, Sakila `3307`. On a remote host, expose **only 5173**; the
-SPA calls the same-origin `/api/v1` and Vite proxies it to `api:8000`.
+Four environment facts that read like "the tooling is missing" but aren't:
 
-**Only two engines have a demo database now** — `sales` (PostgreSQL) and
-`sakila` (MySQL), both starting with the stack. The Oracle and SQL Server
-compose services were **removed** (~2 GB of RAM each, rarely started), so a
-change to `infra/connectors/oracle.py` or `mssql.py` **cannot be driven against
-a live server from `make up`** — bring your own, or start one by hand. Their
-seeds survive in `backend/fixtures/`: `sales_seed_mssql.sql` is the same
-42-table mirror as Postgres, and `oracle/` is the small four-table schema whose
+- **node is not on `PATH`** in this environment — it is under
+  `~/.nvm/versions/node/*/bin`. Export it and `npm ci` in `frontend/` (fast, the
+  cache is warm), and all three frontend commands work. `frontend/node_modules`
+  is gitignored, so installing on the host costs nothing.
+- **…unless the compose stack has been up**, in which case host `npm ci` fails
+  `EACCES`: the web container leaves `frontend/node_modules` behind as an empty
+  root-owned mount point. Don't chase the permissions — run
+  `docker exec datamind-web-1 sh -lc 'cd /app && npm run typecheck && npm run
+  build && npm test'` against the same bind-mounted source instead.
+- **pytest works as-is**; `alembic` is not installed in that env, and
+  `core/config.py` reads `.env` **relative to the cwd**, so running alembic or
+  uvicorn from `backend/` needs a copy of the root `.env` there.
+- **`.data/db` is a real local database** with real dashboards and connections
+  in it. Clean up anything an end-to-end script creates.
+
+**Ports:** web `5173`, api `8000` (`/docs` for OpenAPI), app db `5432`, demo
+`sales` db `5433`, Sakila `3307`, demo `aurora` db `5434`. On a remote host,
+expose **only 5173**; the SPA calls the same-origin `/api/v1` and Vite proxies
+it to `api:8000`.
+
+### The three demo databases
+
+All three start with the stack, across **two** engines. They are not
+interchangeable and picking the wrong one wastes an afternoon:
+
+| | engine | host port | tables | what it is for |
+|---|---|---|---|---|
+| `aurora` | PostgreSQL | `5434` | 13 | **the demo.** Clean, one obvious join path per question, `COMMENT ON` throughout |
+| `sales` | PostgreSQL | `5433` | 42 | **the eval fixture.** Messy on purpose |
+| `sakila` | MySQL | `3307` | 16 | the second engine |
+
+- **`aurora`** (`backend/fixtures/demo_seed.sql` + `demo_comments.sql`) is a
+  coffee chain over 24 months. Its cardinalities are **tuned to the constants in
+  `app/charts/__init__.py`** — `product_categories` = 6 = `MAX_PIE_SLICES`,
+  `channels` and `loyalty_tiers` = 4 ≤ `MAX_SERIES`, `stores` = 18, above
+  `HORIZONTAL_BAR_FROM` and below `MAX_CATEGORY_MARKS` — so the obvious question
+  yields an untrimmed chart. **If you change a chart budget, that tuning is a
+  thing you can break**, and the seed's header comment is where the reasoning
+  lives. Its schema estimate is ~6k against the 50k retrieve budget, so the
+  whole snapshot always reaches the generator. `orders` is the single source of
+  truth and `daily_store_metrics` is derived from it by aggregation, so asking
+  the same question two ways reconciles — deliberately the opposite of `sales`'s
+  `sales_daily_rollup` trap. (The seed header says "12 tables"; there are 13.)
+- **`sales`** is the eval fixture and its messiness is the point — near-duplicate
+  names, legacy cruft columns, soft-delete traps, a stale rollup that gives wrong
+  answers. Do not "clean it up": an eval that never fails measures nothing.
+  `sales_comments.sql` is the commented arm of the catalog-comments A/B.
+- Only `db` and `sales` are in the api service's `depends_on`; `sakila` and
+  `aurora` start alongside but the api does not wait on them.
+
+**No engine but those two has a demo server.** The Oracle and SQL Server compose
+services were **removed** (~2 GB of RAM each, rarely started), so a change to
+`infra/connectors/oracle.py` or `mssql.py` **cannot be driven against a live
+server from `make up`** — bring your own, or start one by hand. Their seeds
+survive in `backend/fixtures/`: `sales_seed_mssql.sql` is the same 42-table
+mirror as Postgres, and `oracle/` is the small four-table schema whose
 **`COMMENT ON` metadata is the point** — the fixture that exercises catalog
 comments end to end, whose `analytics_ro` deliberately holds no roles at all,
 not even `CONNECT`. `make fixtures` is unaffected: `rebuild_fixtures.sh` starts
@@ -146,7 +223,9 @@ backend/app/
                   LangGraph + the node adapter), pipeline.py (the
                   AnalyticsPipeline facade over it),
                   nodes/ (route→retrieve→describe→clarify→generate→validate→
-                  execute→inspect→present→chart), contracts.py (the node signature),
+                  execute→inspect→present→chart — all ten are functions in the
+                  single file nodes/__init__.py, ~1,070 lines; there is no
+                  module per node), contracts.py (the node signature),
                   metadata.py (which tables a schema question is about, and the
                   rendered fallback answer),
                   prompts/, disclosure.py (result gate), checks.py (free result checks)
@@ -163,7 +242,9 @@ backend/app/
                   *disclosed* results), checks.py (the numeric consistency check
                   — pure, token-free, Persian and Latin numerals), prompts.py
                   (REPORT_PROMPT_VERSION) — self-contained, below the pipeline
-  charts/         ChartIntent → result profile → shape fit → Vega-Lite
+  charts/         ChartIntent → result profile → shape fit → Vega-Lite. One file
+                  (__init__.py), like pipeline/prompts/ — the budget constants
+                  live at its top and `aurora` is seeded against them
   eval/           the offline harness — runs the REAL pipeline against a
                   testcontainers fixture: dataset.py (record schema + fixture
                   registry), runner.py (CLI + scorecard to eval_runs/
@@ -190,17 +271,21 @@ backend/app/
 backend/           ← these are SIBLINGS of app/, not inside it
   tests/          unit (incl. test_sqlguard_hostile.py) + integration + eval
                   (test_golden_set.py and the dual-form verify artifact)
-  fixtures/       sales_seed.sql (Postgres demo/eval DB) + sales_seed_mysql.sql
-                  and sales_seed_mssql.sql dialect mirrors + rebuild_fixtures.sh
-                  (`make fixtures`); each a wide, deliberately-messy 42-table
-                  commerce schema with a read-only role, built to *exceed* the
-                  retrieve budget — which it no longer does: the budget was
-                  raised 24k → 50k and the fixture estimates 26,480, so the
-                  eval now runs entirely on FULL_SNAPSHOT and recall is 1.0 by
-                  construction (docs/eval.md §1 — read it before quoting a
-                  recall number). sales_comments.sql is the eval's commented
-                  arm; mysql/ holds the Sakila seed and oracle/ the four-table
-                  COMMENT ON fixture, one per extra demo DB
+  fixtures/       sales_seed.sql (the Postgres EVAL fixture) +
+                  sales_seed_mysql.sql and sales_seed_mssql.sql dialect mirrors
+                  + rebuild_fixtures.sh (`make fixtures`); each a wide,
+                  deliberately-messy 42-table commerce schema with a read-only
+                  role, built to *exceed* the retrieve budget — which it no
+                  longer does: the budget was raised 24k → 50k and the fixture
+                  estimates 26,480, so the eval now runs entirely on
+                  FULL_SNAPSHOT and recall is 1.0 by construction (docs/eval.md
+                  §1 — read it before quoting a recall number).
+                  sales_comments.sql is the eval's commented arm.
+                  demo_seed.sql + demo_comments.sql are `aurora`, the DEMO
+                  fixture — a different artifact for a different job, tuned to
+                  the chart budgets (see "The three demo databases" above).
+                  mysql/ holds the Sakila seed and oracle/ the four-table
+                  COMMENT ON fixture
   scripts/        eval_run.sh (rate-limit-tolerant eval wrapper) +
                   eval_seed_llm_config.py (used by the nightly workflow) +
                   catalog_probe.py (what an engine will actually tell you about
@@ -208,14 +293,22 @@ backend/           ← these are SIBLINGS of app/, not inside it
 
 scripts/           repo root, not backend/: nginx-replicas.conf (the two-replica
                   balancer), pg-ensure-runtime-dirs.sh (`make db-repair`'s
-                  in-container half), seed_demo_dashboard.py
+                  in-container half), seed_demo_dashboard.py — builds the
+                  29-tile demo board over `sales` by talking to the running
+                  API rather than the database, so every tile it creates went
+                  through sqlguard exactly as a typed one would (`--check` runs
+                  them all; credentials from ADMIN_EMAIL/ADMIN_PASSWORD)
 
 frontend/src/
   main.tsx, App.tsx        entry + router/layout
-  theme/tokens.ts          design tokens (oklch), DATABASE_TYPES, dark+light palettes
+  theme/tokens.ts          design tokens (oklch), DATABASE_TYPES, PROVIDER_URLS
+                           (the provider picker's options), dark+light palettes
   api/client.ts, types.ts  typed client, SSE streaming + polling fallback
   components/               ui.tsx (primitives, icons, Logo, ResultTable),
-                            VegaChart.tsx (the renderer), chart-picker.tsx,
+                            VegaChart.tsx (the renderer), chart-picker.tsx
+                            (shared by chat, report and tile-editor — in chat it
+                            drives POST /runs/{id}/chart, which redraws the
+                            run's stored TABLE artifact and never re-queries),
                             palette.ts (+ .test.ts — `npm run test:palette`),
                             chat.tsx, chat-format.ts (the three markdown
                             constructs a model writes anyway — bold, `code`,
@@ -587,11 +680,37 @@ shapes. That is the class this addresses.
   `connections.semantic_layer_enabled` false, `RetrievedContext.render` emits
   **byte-identical** output to before the feature existed — verified by a test.
   That switch is how you A/B a layer against the bare schema on the eval suite
-  without deleting it. `PROMPT_VERSION` moved to **v4** because a v3 and a v4
-  run are otherwise indistinguishable from the outside.
+  without deleting it. `PROMPT_VERSION` moved when it shipped, because two runs
+  either side of it are otherwise indistinguishable from the outside.
 - **It widens no disclosure.** Generation reads the same schema block a run
   reads, under the same `HintBudget`, and column `value_meanings` are filtered
   to values already in the snapshot — the model cannot invent a key to leak.
+- **KNOWN BUG, unfixed: past ~5 tables the layer reaches the model as almost
+  nothing.** `render_semantic` (`app/semantic/render.py`) assembles the block in
+  sections and, over its 8k `DEFAULT_MAX_CHARS` cap, pops whole sections off the
+  back. Every table description is **one** section, so the trim is
+  all-or-nothing: it is dropped entire, and what survives is `business_context`
+  plus the time conventions. Measured against the two demo connections, with
+  every entity `valid` and the switch on:
+
+  | connection | entities | block reaching the model | tables described |
+  |---|---|---|---|
+  | `sales` | 42 | 545 chars | **0** |
+  | `aurora` | 13 | 606 chars | **0** |
+
+  There is a cliff at six retrieved tables — five render, six render nothing —
+  and since both fixtures sit far under the 50k retrieve budget they always take
+  `FULL_SNAPSHOT` and pass every table, so they are always past it. **The
+  business names, grain and metrics therefore reach the generator on no question
+  at all**, which reads from outside exactly like the feature being off. It is
+  partly masked by the layer-wins-per-entity rule: `covered_keys` reports
+  nothing covered, so the DDL `COMMENT ON` text renders instead, and on a
+  database with good comments the answers still look informed. On one without
+  them, nothing is left. Fixing it means fitting the section line by line to the
+  remaining room instead of popping it; the existing trim test uses one table
+  and `max_chars=250` and only asserts the output is short, which is why this
+  was never caught. Any fix changes what the generator sees on every question
+  with a layer, so it moves `PROMPT_VERSION` and invalidates the baseline.
 - **Editing** lives in Data sources → Semantic layer
   (`frontend/src/components/semantic.tsx`). Metric expressions are validated
   live by `POST .../semantic/check`, which is the *same parser* the save path
@@ -807,9 +926,12 @@ Four rules that matter more than any number it prints:
    means adding its twin.
 3. **The baseline file is model-specific.** `sales_v1.baseline.json` records
    0.36 measured on **DeepSeek V4 Pro at temperature 0.2 under `PROMPT_VERSION`
-   v2**. Against a different model or different settings it is meaningless —
-   read its `_README` before quoting it, and never put two numbers from
-   different models in one sentence.
+   v2**, on 2026-07-26. Against a different model or different settings it is
+   meaningless — read its `_README` before quoting it, and never put two numbers
+   from different models in one sentence. That `v2` is genuine: the constant
+   really was v2 that day. It is **v7 now**, and every row written since claims
+   v2 anyway — see the drift note under "Adding things → Prompt changes" before
+   you read a version field on any later run as evidence of anything.
 4. **Retrieval recall currently measures nothing.** `_RETRIEVE_BUDGET_CHARS` was
    raised 24k → 50k and the fixture estimates 26,480, so `retrieve` takes
    `FULL_SNAPSHOT` on every question and recall is **1.0 by construction**. Do
@@ -930,6 +1052,25 @@ where someone would otherwise repeat them: a "getting the answer right" block in
   the pipeline — the pipeline reads a layer, a report reads a node, and
   neither a layer nor a node knows anything about the thing above it.
 
+  **The three constants as they stand: `PROMPT_VERSION` = `"v7"`,
+  `SEMANTIC_PROMPT_VERSION` = `"s4"`, `REPORT_PROMPT_VERSION` = `"r4"`.** Move
+  the one whose prompts you changed — and note that "prompts" means everything
+  the model ends up reading, not only wording: a change to how much of the
+  schema block survives moves it too. Chart, clarify and describe prompt changes
+  move **none** of them, by convention — the eval scores generated SQL, and
+  nothing on the SQL-producing path changed.
+
+  **`runs.prompt_version` lies, and this is a known bug.** `run_service` stamps
+  it from `settings.prompt_version` (`core/config.py`), a *separate* string
+  whose default is still `"v2"` and which nobody updates from the
+  `PROMPT_VERSION` constant. The two agreed until 2026-07-26 and have diverged
+  ever since, so every run and every eval row written since then claims `v2`
+  while the prompts are at v7. Record the constant by hand in any eval write-up,
+  or a comparison across phases is meaningless. `docs/pipeline.md` §7 records the
+  drift; the eval reports under `app/eval/reports/` each note it in their own
+  header. Fixing it properly means reading the constant at the call site — but
+  that reclassifies every historical row, so decide it deliberately.
+
 ---
 
 ## Git / environment notes
@@ -937,6 +1078,12 @@ where someone would otherwise repeat them: a "getting the answer right" block in
 - This sandbox has **no GitHub auth** — `git push` will fail; the user pushes
   from their own terminal. Commit locally; don't attempt to push.
 - Commit or branch only when asked. Config keys: `SECRET_BOX_KEY`, `JWT_SECRET`,
-  `ADMIN_EMAIL`/`ADMIN_PASSWORD`, `DATABASE_URL`, `MAX_CONCURRENT_RUNS`,
-  `RUN_DEADLINE_SECONDS`. Losing `SECRET_BOX_KEY` means re-entering every stored
+  `ADMIN_EMAIL`/`ADMIN_PASSWORD`, `DATABASE_URL`, `CORS_ORIGINS`,
+  `MAX_CONCURRENT_RUNS`, `RUN_DEADLINE_SECONDS`,
+  `LLM_REQUEST_TIMEOUT_SECONDS`. The last two default to 120 and 60 in
+  `core/config.py` and are raised to 300 and 120 by `docker-compose.yml`, which
+  is headroom for slow hosted models — a chat run makes four or five sequential
+  provider calls. Losing `SECRET_BOX_KEY` means re-entering every stored
   credential.
+- `.env` is gitignored; `.env.example` is the tracked template `make secrets`
+  copies from. Editing `.env.example` changes what every fresh clone gets.
