@@ -5,6 +5,8 @@
 > code; Part 2 is desk research on four competing products; Parts 3–5 are the
 > argument. Read the status banner convention from
 > [architecture.md](architecture.md) — this is that kind of document.
+>
+> Persian edition: [mvp2-plan.fa.md](mvp2-plan.fa.md).
 
 ---
 
