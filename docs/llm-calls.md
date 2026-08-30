@@ -8,7 +8,7 @@
 > dumped from the live constants in `app/pipeline/prompts/__init__.py`,
 > `app/reports/prompts.py` and `app/semantic/prompts.py`, so what you read here
 > is byte-for-byte what leaves the process. Prompt versions at time of writing:
-> pipeline **v7**, reports **r4**,
+> pipeline **v8**, reports **r4**,
 > semantic **s4**.
 >
 > Companion documents: [security.md §2](security.md) owns the *inventory* of
@@ -1592,7 +1592,7 @@ drifted before, both times because a refactor moved a function nobody changed.
 
 | Constant | Value | Moves when |
 |---|---|---|
-| `PROMPT_VERSION` | `v7` | the **rendered SQL-producing prompt** changes. Recorded on every run |
+| `PROMPT_VERSION` | `v8` | the **rendered SQL-producing prompt** changes — including how much of the schema or semantic block survives its cap, which is what moved v7 → v8. Recorded on every run |
 | `REPORT_PROMPT_VERSION` | `r4` | any report prompt changes. Recorded on every report run |
 | `SEMANTIC_PROMPT_VERSION` | `s4` | any semantic prompt changes. Recorded on the document |
 
