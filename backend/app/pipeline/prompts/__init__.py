@@ -11,7 +11,28 @@ from app.charts import (
     MIN_HISTOGRAM_ROWS,
 )
 
-PROMPT_VERSION = "v7"
+PROMPT_VERSION = "v8"
+# v8: the semantic layer actually reaches the model. No wording here changed —
+# what changed is `app/semantic/render.py`, which the generate prompt renders
+# inline, and it changed on every question asked against a connection with more
+# than about five described tables.
+#
+# The block was assembled in sections and, over its 8,000-char cap, dropped
+# whole sections off the back. Every table description was *one* section, so
+# past the cliff the layer arrived as `business_context` plus the time
+# conventions and nothing else: 42 entities in, 545 chars out, zero tables
+# described. The section is now fitted line by line — every table's grain and
+# business name first, then metrics, then column meanings, round-robin so a
+# wide table cannot spend the budget the other forty needed.
+#
+# The version moves for the same reason it moved when the layer shipped: two
+# runs either side of this are otherwise indistinguishable from the outside,
+# and the difference between them is whether the connection's semantic layer
+# was in the prompt at all. It does **not** invalidate the recorded `sales_v1`
+# baselines — those ran with `NodeDeps.semantic` unset, so their bytes are
+# untouched — but it does mean the layer's A/B has never yet been run against a
+# prompt that contained the layer.
+#
 # v7: two changes, both about the *envelope* the SQL arrives in rather than the
 # SQL itself. Together they turn "did not return valid SqlProposal JSON" from a
 # routine failure on a wide schema into one I could not reproduce.

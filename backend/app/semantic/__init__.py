@@ -10,6 +10,7 @@ against a dict snapshot and a fake gateway.
     generate_document                 build one with a model, table by table
     render_semantic                   the block the generator prompt receives
     covered_keys                      which tables/columns that block speaks about
+    render_with_coverage              both at once, from one fit under the cap
 """
 from __future__ import annotations
 
@@ -31,7 +32,12 @@ from app.semantic.models import (
     TimeSemantics,
 )
 from app.semantic.prompts import SEMANTIC_PROMPT_VERSION
-from app.semantic.render import DEFAULT_MAX_CHARS, covered_keys, render_semantic
+from app.semantic.render import (
+    DEFAULT_MAX_CHARS,
+    covered_keys,
+    render_semantic,
+    render_with_coverage,
+)
 from app.semantic.validate import (
     SchemaIndex,
     build_index,
@@ -66,5 +72,6 @@ __all__ = [
     "generate_document",
     "merge_documents",
     "render_semantic",
+    "render_with_coverage",
     "validate_document",
 ]

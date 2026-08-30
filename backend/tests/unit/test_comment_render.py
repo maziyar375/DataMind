@@ -425,6 +425,38 @@ def test_a_section_trimmed_for_budget_is_not_covered() -> None:
     ) == (set(), set())
 
 
+def test_a_column_the_layer_could_not_afford_keeps_its_comment() -> None:
+    """The payoff of fitting the layer line by line instead of dropping it
+    whole. A partial entity is now normal — the table is described, one of its
+    columns did not fit under the cap — and the comment has to fill exactly the
+    gap the layer left, no wider and no narrower."""
+    doc = SemanticDocument(
+        entities=[
+            SemanticEntity(
+                table="sales.orders",
+                grain="one row per customer order",
+                columns=[
+                    SemanticColumn(name="status", description="fulfilment state"),
+                    # Longer than the whole cap, so it can never be afforded.
+                    SemanticColumn(name="order_date", description="x" * 9_000),
+                ],
+            )
+        ]
+    )
+    assert covered_keys(doc, tables=["sales.orders"], budget=SAMPLE) == (
+        {"sales.orders"}, {"sales.orders.status"}
+    )
+
+    quoted = _quoted(
+        RetrievedContext(
+            dialect="postgres", tables=_tables(), semantic=doc.model_dump(mode="json")
+        ).render("SAMPLE")
+    )
+    assert "checkout time, UTC" in quoted                     # the layer went quiet
+    assert "fulfilment state; 'cancelled' still bills" not in quoted
+    assert "One row per checkout. Cancelled orders are kept." not in quoted
+
+
 def test_a_column_gated_by_the_disclosure_policy_is_not_covered() -> None:
     """`value_meanings` are keyed by real column values and are withheld under
     NONE. A column whose entry is *only* value meanings therefore says nothing

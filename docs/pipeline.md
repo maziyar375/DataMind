@@ -383,6 +383,14 @@ Two independent gates apply here:
   the pre-feature prompt, which is what keeps the eval baseline comparable and
   gives you the A/B switch (`connections.semantic_layer_enabled`).
 
+  Over its 8,000-char cap the block is **fitted line by line**, in three tiers
+  filled round-robin across the tables: every table's grain and business name
+  first, then metrics, then column meanings. It used to drop whole sections off
+  the back instead, and since the table descriptions were one section, a layer
+  of more than about five tables reached the model as its `business_context`
+  alone — see the entry in [CLAUDE.md](../CLAUDE.md#the-semantic-layer). Fixed
+  2026-08-30 at `PROMPT_VERSION` v8.
+
 ### 3. `describe` — the schema question, answered from the schema
 
 **Prompt:** `DESCRIBE_SYSTEM` (schema block + census + history) +
@@ -820,7 +828,7 @@ scrolls away. The step trail keeps whatever succeeded before it.
 
 ## 5. Prompt versioning
 
-`PROMPT_VERSION` (currently **v7**) is recorded on every run.
+`PROMPT_VERSION` (currently **v8**) is recorded on every run.
 [prompts/__init__.py](../backend/app/pipeline/prompts/__init__.py) is the only
 place run prompts live — except the semantic-layer *generation* prompts, which
 live in `app/semantic/prompts.py` under `SEMANTIC_PROMPT_VERSION`, because
@@ -833,7 +841,7 @@ the pipeline cannot be versioned by it:
 
 | Constant | Lives in | Recorded on | Covers |
 |---|---|---|---|
-| `PROMPT_VERSION` = **v7** | `app/pipeline/prompts/` | `runs.prompt_version` | route, describe, clarify, generate/review/repair, answer, chart |
+| `PROMPT_VERSION` = **v8** | `app/pipeline/prompts/` | `runs.prompt_version` | route, describe, clarify, generate/review/repair, answer, chart |
 | `SEMANTIC_PROMPT_VERSION` | `app/semantic/prompts.py` | the generated layer | overview, per-table, glossary |
 | `REPORT_PROMPT_VERSION` = **r4** | `app/reports/prompts.py` | `report_runs.prompt_version` | outline, section prose, executive summary |
 
@@ -855,8 +863,11 @@ replaced another would be found only by reading a prompt nobody prints.
 **Move `PROMPT_VERSION` when the bytes the SQL-producing path sends change.**
 That's why v3 → v4 for the semantic block, v4 → v5 for the shared rules and
 history on repairs, v5 → v6 for `ROUTE_SYSTEM_WITH_HISTORY` plus the disclosure
-filter over the history, and v6 → v7 for the runaway-reply fix (§3.5) — and why
-clarify, caveats, chart and `DESCRIBE_SYSTEM` changes *don't* move it, since
+filter over the history, v6 → v7 for the runaway-reply fix (§3.5), and v7 → v8
+for the semantic block's trim — no wording changed there, but the bytes that
+reach the model on a connection with a layer did, which is the rule as written
+— and why clarify, caveats, chart and `DESCRIBE_SYSTEM` changes *don't* move it,
+since
 the eval scores generated SQL and none of those touch it. `DESCRIBE_SYSTEM` is
 the clearest case of the rule: the question it answers never produces SQL at
 all, so no suite question is measured through it.

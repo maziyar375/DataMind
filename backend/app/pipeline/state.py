@@ -234,26 +234,24 @@ class RetrievedContext(BaseModel):
     def _semantic(self, budget: HintBudget) -> tuple[str, set[str], set[str]]:
         """The layer block, plus what it turned out to speak about.
 
-        Both at once because the second is read off the first: the caller has to
-        know which tables the block described *after* scoping and trimming, not
-        which ones the document mentions. Deliberately last in the block: the
-        structure is what the model must not get wrong, and it stays where it
-        has always been. Import is local so `app.pipeline` does not pay for
-        `app.semantic` on a run whose connection has no layer.
+        Both at once because coverage *is* the render: the caller has to know
+        which tables the block described after scoping and fitting under the
+        cap, not which ones the document mentions, and one call answers both
+        from one fit. Deliberately last in the block: the structure is what the
+        model must not get wrong, and it stays where it has always been. Import
+        is local so `app.pipeline` does not pay for `app.semantic` on a run
+        whose connection has no layer.
         """
         if not self.semantic:
             return "", set(), set()
-        from app.semantic import SemanticDocument, covered_keys, render_semantic
+        from app.semantic import SemanticDocument, render_with_coverage
 
         try:
             doc = SemanticDocument.model_validate(self.semantic)
         except ValueError:
             return "", set(), set()
         names = [f"{t['schema']}.{t['name']}" for t in self.tables]
-        return (
-            render_semantic(doc, tables=names, budget=budget),
-            *covered_keys(doc, tables=names, budget=budget),
-        )
+        return render_with_coverage(doc, tables=names, budget=budget)
 
     def _comments(
         self,

@@ -685,32 +685,42 @@ shapes. That is the class this addresses.
 - **It widens no disclosure.** Generation reads the same schema block a run
   reads, under the same `HintBudget`, and column `value_meanings` are filtered
   to values already in the snapshot — the model cannot invent a key to leak.
-- **KNOWN BUG, unfixed: past ~5 tables the layer reaches the model as almost
-  nothing.** `render_semantic` (`app/semantic/render.py`) assembles the block in
-  sections and, over its 8k `DEFAULT_MAX_CHARS` cap, pops whole sections off the
-  back. Every table description is **one** section, so the trim is
-  all-or-nothing: it is dropped entire, and what survives is `business_context`
-  plus the time conventions. Measured against the two demo connections, with
-  every entity `valid` and the switch on:
+- **The cap is an allocation, not a truncation** (`app/semantic/render.py`).
+  Over the 8k `DEFAULT_MAX_CHARS` cap the block is fitted **line by line**, in
+  three tiers, each filled **round-robin** across the retrieved tables:
+  1. every table's head line — business name, grain, role, date column,
+     synonyms;
+  2. metrics, one per table per pass — the lines that change the SQL;
+  3. column meanings, one per table per pass.
 
-  | connection | entities | block reaching the model | tables described |
-  |---|---|---|---|
-  | `sales` | 42 | 545 chars | **0** |
-  | `aurora` | 13 | 606 chars | **0** |
+  Round-robin because relevance is unknown here: under `FULL_SNAPSHOT` the
+  retrieved order is catalog order, so a table with sixty described columns must
+  not spend the budget forty others needed. A line that does not fit is skipped,
+  never cut in half — half a metric is where the `WHERE` clause lived. The
+  section behind the tables (join cautions, then glossary) is fitted the same
+  way rather than dropped whole.
 
-  There is a cliff at six retrieved tables — five render, six render nothing —
-  and since both fixtures sit far under the 50k retrieve budget they always take
-  `FULL_SNAPSHOT` and pass every table, so they are always past it. **The
-  business names, grain and metrics therefore reach the generator on no question
-  at all**, which reads from outside exactly like the feature being off. It is
-  partly masked by the layer-wins-per-entity rule: `covered_keys` reports
-  nothing covered, so the DDL `COMMENT ON` text renders instead, and on a
-  database with good comments the answers still look informed. On one without
-  them, nothing is left. Fixing it means fitting the section line by line to the
-  remaining room instead of popping it; the existing trim test uses one table
-  and `max_chars=250` and only asserts the output is short, which is why this
-  was never caught. Any fix changes what the generator sees on every question
-  with a layer, so it moves `PROMPT_VERSION` and invalidates the baseline.
+  *This replaced a real bug, fixed 2026-08-30.* The block used to be assembled
+  in sections and pop whole sections off the back, and every table description
+  was **one** section: past a cliff at six retrieved tables the layer arrived as
+  `business_context` plus the time conventions and nothing else — `sales` (42
+  entities) rendered 545 chars describing **0** tables, `aurora` (13) rendered
+  606 describing **0**. Both fixtures sit far under the 50k retrieve budget, so
+  they always take `FULL_SNAPSHOT`, pass every table, and were always past the
+  cliff: the business names, grain and metrics reached the generator on no
+  question at all. It was masked by the layer-wins-per-entity rule — coverage
+  reported nothing covered, so the DDL `COMMENT ON` text rendered instead and a
+  well-commented database still looked informed. The old trim test used one
+  table and `max_chars=250` and only asserted the output was short, which is why
+  it was never caught; `tests/unit/test_semantic_render.py` now fits 42 tables
+  under the real cap. `PROMPT_VERSION` moved v7 → v8: this changes what the
+  generator sees on every question asked against a connection with a layer.
+- **Coverage is a projection of the render, not a second opinion.**
+  `render_with_coverage` returns the block and the tables/columns it speaks
+  about from one fit; `render_semantic` and `covered_keys` are its two halves.
+  It has to be one call now that entities render *partially* — a table
+  described with three of its six columns is normal, and the other three still
+  need their DDL comments.
 - **Editing** lives in Data sources → Semantic layer
   (`frontend/src/components/semantic.tsx`). Metric expressions are validated
   live by `POST .../semantic/check`, which is the *same parser* the save path
@@ -1052,7 +1062,7 @@ where someone would otherwise repeat them: a "getting the answer right" block in
   the pipeline — the pipeline reads a layer, a report reads a node, and
   neither a layer nor a node knows anything about the thing above it.
 
-  **The three constants as they stand: `PROMPT_VERSION` = `"v7"`,
+  **The three constants as they stand: `PROMPT_VERSION` = `"v8"`,
   `SEMANTIC_PROMPT_VERSION` = `"s4"`, `REPORT_PROMPT_VERSION` = `"r4"`.** Move
   the one whose prompts you changed — and note that "prompts" means everything
   the model ends up reading, not only wording: a change to how much of the

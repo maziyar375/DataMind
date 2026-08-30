@@ -9,13 +9,16 @@ from __future__ import annotations
 from app.domain.value_objects import DisclosurePolicy, HintBudget
 from app.pipeline.state import RetrievedContext
 from app.semantic import (
+    GlossaryTerm,
     SemanticColumn,
     SemanticDocument,
     SemanticEntity,
     SemanticJoin,
     SemanticMetric,
     TimeSemantics,
+    covered_keys,
     render_semantic,
+    render_with_coverage,
 )
 
 SAMPLE = HintBudget.from_policy(DisclosurePolicy.SAMPLE)
@@ -149,6 +152,142 @@ def test_block_is_clipped_to_the_budget() -> None:
     doc.business_context = "x" * 200
     out = render_semantic(doc, tables=["sales.orders"], budget=SAMPLE, max_chars=250)
     assert len(out) <= 250
+
+
+# ── what survives the cap ────────────────────────────────────────────────
+# Regression tests for the bug that made the layer inert: the table
+# descriptions were one section, so the first trim dropped every one of them
+# and a 42-table layer reached the model as its `business_context` alone.
+def _wide(n: int) -> SemanticDocument:
+    """`n` described tables, each far too detailed to all fit under the cap."""
+    return SemanticDocument(
+        business_context="A retail order book.",
+        entities=[
+            SemanticEntity(
+                table=f"sales.t{i:02d}",
+                label=f"Table {i}",
+                grain="one row per customer order",
+                role="fact",
+                default_time_column="ordered_at",
+                columns=[
+                    SemanticColumn(
+                        name=f"col{j}",
+                        # Unique per table, so a coverage key can be matched
+                        # against the one line that would have carried it.
+                        description=f"the fulfilment state of a t{i:02d} line",
+                    )
+                    for j in range(6)
+                ],
+                metrics=[
+                    SemanticMetric(
+                        name=f"revenue{i}",
+                        expression=f"SUM(sales.t{i:02d}.total)",
+                        filters=[f"sales.t{i:02d}.status <> 'CANCELLED'"],
+                    )
+                ],
+            )
+            for i in range(n)
+        ],
+    )
+
+
+def _tables(n: int) -> list[str]:
+    return [f"sales.t{i:02d}" for i in range(n)]
+
+
+def test_every_table_is_still_described_when_the_block_is_over_budget() -> None:
+    """The bug: past ~5 tables the whole section was popped and the model was
+    told nothing about any of them."""
+    block = render_semantic(_wide(42), tables=_tables(42), budget=SAMPLE)
+
+    assert len(block) <= 8_000
+    for i in range(42):
+        assert f"- sales.t{i:02d}" in block
+        assert block.count(f"- sales.t{i:02d}") == 1
+    assert "one row per customer order" in block
+
+
+def test_there_is_no_cliff_between_five_tables_and_six() -> None:
+    """Five rendered and six rendered nothing. Every step must now be monotone
+    in what it says about tables."""
+    described = [
+        len(covered_keys(_wide(n), tables=_tables(n), budget=SAMPLE)[0])
+        for n in range(1, 13)
+    ]
+    assert described == list(range(1, 13))
+
+
+def test_the_cap_is_spent_on_grain_before_detail() -> None:
+    """Tiers, not document order: naming all 42 tables beats fully describing
+    six of them, because a table the model cannot name it cannot pick."""
+    block = render_semantic(_wide(42), tables=_tables(42), budget=SAMPLE)
+    assert block.count("one row per customer order") == 42     # tier 1, whole
+    assert block.count("the fulfilment state") < 42 * 6        # tier 3, cut
+
+
+def test_metrics_outrank_column_meanings() -> None:
+    """A metric changes the SQL; a column description changes the reading of
+    it. Every metric is funded before the column tier is finished."""
+    block = render_semantic(_wide(42), tables=_tables(42), budget=SAMPLE)
+    assert block.count("metric revenue") == 42
+    assert block.count("the fulfilment state") < 42 * 6
+
+
+def test_detail_is_shared_out_rather_than_spent_front_to_back() -> None:
+    """One wide table must not eat the room the other tables needed."""
+    doc = _wide(12)
+    doc.entities[0].columns = [
+        SemanticColumn(name=f"wide{j}", description="a column on the first table")
+        for j in range(200)
+    ]
+    block = render_semantic(doc, tables=_tables(12), budget=SAMPLE)
+
+    assert block.count("a column on the first table") < 200
+    assert "metric revenue11" in block                  # the last table still funded
+
+
+def test_a_line_is_never_cut_in_half() -> None:
+    """Half a metric definition is worse than none — the `WHERE` clause is
+    where 'cancelled orders are not revenue' lives."""
+    block = render_semantic(_wide(42), tables=_tables(42), budget=SAMPLE)
+    for line in block.splitlines():
+        if line.lstrip().startswith("metric "):
+            assert line.rstrip().endswith(".")
+        if line.startswith("- sales."):
+            assert line.rstrip().endswith(".")
+
+
+def test_coverage_is_exactly_what_the_block_said() -> None:
+    """The rule the DDL comments depend on. A column whose line did not fit was
+    never described, so its comment is still the only sentence about it — and a
+    column whose line *did* fit must not be described twice in different words.
+    Partial entities are what make this sharp: coverage cannot be re-derived
+    from the document, only read off the fit."""
+    doc = _wide(42)
+    block, tables, columns = render_with_coverage(
+        doc, tables=_tables(42), budget=SAMPLE
+    )
+    assert tables == {f"sales.t{i:02d}" for i in range(42)}
+    assert 0 < len(columns) < 42 * 6                  # some detail was cut
+
+    for i in range(42):
+        for j in range(6):
+            line = f"    col{j}: the fulfilment state of a t{i:02d} line."
+            assert (f"sales.t{i:02d}.col{j}" in columns) == (line in block)
+
+
+def test_joins_and_glossary_are_fitted_too() -> None:
+    """They sit behind the tables, but 'behind' means 'gets what is left', not
+    'is deleted' — the same rule the table section now follows."""
+    doc = _doc()
+    doc.glossary = [
+        GlossaryTerm(term=f"term{i}", meaning="x" * 400) for i in range(20)
+    ]
+    block = render_semantic(doc, tables=["sales.orders"], budget=SAMPLE)
+
+    assert len(block) <= 8_000
+    assert "Business terms:" in block
+    assert 0 < block.count("- term") < 20
 
 
 def _time_line() -> str:

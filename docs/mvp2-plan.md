@@ -1,10 +1,14 @@
 # MVP2 — where MVP1 is weak, and what to build next
 
 > **Status:** research and proposal, written 2026-08-27 against `main` at
-> `354a87e` (tagged `v0.0.5`). Nothing here is built. Part 1 is grounded in the
-> code; Part 2 is desk research on four competing products; Parts 3–5 are the
-> argument. Read the status banner convention from
-> [architecture.md](architecture.md) — this is that kind of document.
+> `354a87e` (tagged `v0.0.5`). Part 1 is grounded in the code; Part 2 is desk
+> research on four competing products; Parts 3–5 are the argument. Read the
+> status banner convention from [architecture.md](architecture.md) — this is
+> that kind of document.
+>
+> **Update 2026-08-30 — one item is now built.** [A6](#a6-fix-the-semantic-layer-render--s--done-2026-08-30),
+> the render bug that made the semantic layer inert, is fixed; §1.3 records what
+> changed and what did not. Everything else here is still proposal.
 >
 > Persian edition: [mvp2-plan.fa.md](mvp2-plan.fa.md).
 
@@ -45,9 +49,10 @@ instructions attached. None of them bet on a better prompt.
 DataMind already has the two hardest pieces of that machine: a **semantic
 layer** with a real editor and validation, and an **eval harness that runs the
 real pipeline**. Both are one step away from being the learning loop, and
-neither is wired to it. The semantic layer is a per-connection document a
-person edits by hand and — because of the render bug in §1.3 — **does not
-currently reach the model at all** on either demo connection. The eval is a
+neither is wired to it. The semantic layer is a per-connection document a person
+edits by hand; until 2026-08-30 the render bug in §1.3 meant it **did not reach
+the model at all** on either demo connection, and now that it does, it is still
+a document a person edits by hand and nothing writes back into. The eval is a
 developer CLI that costs money and is not in `make test`, so no user has ever
 seen a score.
 
@@ -63,7 +68,7 @@ building, and none of it matters if the answers are wrong.
 |---|---|---|---|
 | 1 | No learning loop — a correction cannot become knowledge | **Critical** | [1.1](#11-the-system-cannot-learn-and-that-is-the-whole-ballgame) |
 | 2 | Retrieval is a placeholder and does not scale past the demo | **Critical** | [1.2](#12-retrieval-is-a-placeholder-with-a-hard-ceiling) |
-| 3 | The semantic layer does not reach the model | **Critical** | [1.3](#13-the-semantic-layer-is-shipped-and-inert) |
+| 3 | The semantic layer is a blob, not a model *(render bug fixed 2026-08-30)* | **High** | [1.3](#13-the-semantic-layer-is-a-blob-not-a-model) |
 | 4 | One question = one SQL statement; there is no *analysis* | **High** | [1.4](#14-one-question-one-query-there-is-no-analysis) |
 | 5 | Single-player: no sharing, no teams, no audit trail | **High** | [1.5](#15-single-player-by-construction) |
 | 6 | Linear chat only; exploration and publishing are disconnected | **High** | [1.6](#16-the-interaction-model-is-a-transcript) |
@@ -123,8 +128,8 @@ better here**." That road is closed, and no other road is open.
 day one*. Every competitor's pitch is "it gets better as your team uses it."
 DataMind's honest pitch today is "it is exactly as good in month twelve as it
 was in hour one." An organisation that invests three weeks of an analyst's time
-curating a semantic layer gets a one-time step change and then a flat line —
-and, per §1.3, currently not even that.
+curating a semantic layer gets a one-time step change and then a flat line.
+Until 2026-08-30, per §1.3, not even that.
 
 ### The shape of the fix
 
@@ -218,37 +223,66 @@ Three separable pieces, in order of value:
 
 ---
 
-## 1.3 The semantic layer is shipped, and inert
+## 1.3 The semantic layer is a blob, not a model
 
-### The bug
+> **Fixed 2026-08-30.** The render bug below is repaired — this is [A6](#a6-fix-the-semantic-layer-render--s--done-2026-08-30),
+> the one item of this plan that is built. The design ceilings under it are not,
+> and they are why this section still ranks.
 
-CLAUDE.md documents this as **KNOWN BUG, unfixed**, and its severity is
-under-stated by the placement rather than the wording. `app/semantic/render.py`
-assembles the block in sections and, over its 8,000-char `DEFAULT_MAX_CHARS`
-cap, **pops whole sections off the back**. Every table description is *one*
-section, so the trim is all-or-nothing. Measured on the two demo connections
-with every entity `valid` and the switch on:
+### The bug, and what it now does instead
+
+`app/semantic/render.py` assembled the block in sections and, over its
+8,000-char `DEFAULT_MAX_CHARS` cap, **popped whole sections off the back**.
+Every table description was *one* section, so the trim was all-or-nothing.
+Measured on the two demo connections with every entity `valid` and the switch
+on:
 
 | connection | entities | block reaching the model | tables described |
 |---|---|---|---|
 | `sales` | 42 | 545 chars | **0** |
 | `aurora` | 13 | 606 chars | **0** |
 
-There is a cliff at six retrieved tables — five render, six render nothing. Both
-fixtures sit far under the 50k retrieve budget so they always take
-`FULL_SNAPSHOT` and always pass every table, hence always past the cliff.
+There was a cliff at six retrieved tables — five rendered, six rendered nothing.
+Both fixtures sit far under the 50k retrieve budget so they always take
+`FULL_SNAPSHOT` and always pass every table, hence were always past the cliff.
+**The business names, the grain, and the metrics reached the generator on no
+question at all**, which from outside is indistinguishable from the feature
+being switched off. It was partially masked by the layer-wins-per-entity rule:
+coverage reported nothing covered, so the DDL `COMMENT ON` text rendered
+instead — on `aurora`, which has good comments, answers still looked informed;
+on a customer database without them, which is most of them, nothing was left.
+Why it was never caught: the trim test used **one table** with `max_chars=250`
+and only asserted the output was short.
 
-**The business names, the grain, and the metrics reach the generator on no
-question at all.** From outside, the flagship differentiator is
-indistinguishable from the feature being switched off.
+**What replaced it.** The cap is now spent as an allocation rather than a
+truncation. The block is fitted **line by line**, in three tiers, each filled
+**round-robin** across the retrieved tables:
 
-It is partially masked by the layer-wins-per-entity rule: `covered_keys` reports
-nothing covered, so the DDL `COMMENT ON` text renders instead. On `aurora`,
-which has good comments, answers still look informed. On a customer database
-without comments — which is most of them — nothing is left.
+1. every table's head line — business name, grain, role, date column, synonyms;
+2. metrics, one table at a time per pass — the lines that change the SQL rather
+   than the reading of it;
+3. column meanings, one table at a time per pass.
 
-Why it was never caught: the existing trim test uses **one table** with
-`max_chars=250` and only asserts the output is short.
+Round-robin because relevance is unknown at this point: under `FULL_SNAPSHOT`
+the retrieved order *is* catalog order, so filling in document order would spend
+the whole cap on tables 1–6 — the same failure wearing a smaller hat. A line
+that does not fit is skipped rather than cut, because half a metric definition
+is where the `WHERE` clause lived, and the sections behind the tables (join
+cautions, then glossary) are fitted the same way instead of being deleted. On
+the 42-entity shape: **42 of 42 tables described, every metric funded, column
+detail the only thing cut** — against 0 tables before.
+
+One consequence worth naming: entities now render *partially*, so coverage
+could no longer be a substring test over the block. `render_with_coverage`
+returns the block and what it covers from one fit, and a column whose line did
+not fit keeps its DDL comment — the two halves compose instead of overlapping.
+
+`PROMPT_VERSION` moved v7 → v8. It does **not** invalidate the recorded
+`sales_v1` baselines, because those ran with `NodeDeps.semantic` unset and their
+bytes are untouched — but it does mean the layer's A/B has never yet been run
+against a prompt that actually contained the layer. That measurement is now
+possible for the first time, and it is the day-zero number MVP2 should be judged
+from.
 
 ### The design ceilings underneath the bug
 
@@ -273,12 +307,16 @@ Even repaired, the layer has limits that matter for MVP2:
   the *generate* prompt (when they render at all), not used to *find* tables —
   which is where a synonym would do the most good, per §1.2.
 
-### Why this is critical
+### Why this still ranks
 
 The semantic layer is the answer to "why is DataMind better than piping a schema
-into an LLM". Right now that answer does not survive contact with the code. Fix
-the render, then treat the layer as the durable knowledge store the learning
-loop in §1.1 writes into.
+into an LLM". Until 2026-08-30 that answer did not survive contact with the
+code; now it reaches the model, and what is left is the harder half. A layer
+that renders correctly is a *starting* position, not a moat: it is still one
+hand-edited blob per connection, its metrics are still advisory, and nothing in
+the product writes into it. Treat it as the durable knowledge store the learning
+loop in §1.1 writes into — that is what turns a one-time curation exercise into
+something that compounds.
 
 ---
 
@@ -595,7 +633,7 @@ Two further consistency problems worth naming because both cost real time:
 
 - **`runs.prompt_version` lies.** `run_service` stamps it from
   `settings.prompt_version` (default `"v2"`), a *separate* string nobody updates
-  from the `PROMPT_VERSION` constant (now `"v7"`). They diverged on 2026-07-26.
+  from the `PROMPT_VERSION` constant (now `"v8"`). They diverged on 2026-07-26.
   **Every run and every eval row written since then claims v2.** Any comparison
   across phases is meaningless without hand-annotation. Fixing it reclassifies
   historical rows, which is why it needs a deliberate decision — but shipping
@@ -902,7 +940,7 @@ language. The 2026 framing across the industry is consistent — the shift from
 | Capability | DataMind | Data Formulator | Wren AI | Genie | Power BI |
 |---|:--:|:--:|:--:|:--:|:--:|
 | **Accuracy & trust** | | | | | |
-| Semantic layer / metrics | ◐ *(inert, §1.3)* | ○ | ● MDL | ● measures/filters | ● model + AI instr. |
+| Semantic layer / metrics | ◐ *(a blob, advisory, §1.3)* | ○ | ● MDL | ● measures/filters | ● model + AI instr. |
 | Verified/example Q→SQL pairs | ○ | ○ | ● `queries.yml` | ● | ◐ |
 | "Trusted / verified" badge on an answer | ○ | ○ | ◐ | ● | ● approved-for-Copilot |
 | Free-text instructions | ◐ *(layer only)* | ○ | ● `instructions.md` | ● | ● |
@@ -1045,25 +1083,32 @@ It also gives the connection owner a *reason* to open the semantic-layer editor.
 *From: Genie column synonyms; Wren `instructions.md`.*
 
 The semantic layer already holds a glossary and business names. Today they
-render into the *generate* prompt (when they render — §1.3). Also index them for
+render into the *generate* prompt and nowhere else. Also index them for
 `retrieve`, so "churn" finds `subscription_events` because someone wrote that
 down once.
 
 *Why it fits:* it is the cheapest fix for §1.2's core failure, it makes the
 semantic layer pay off in a second place, and it needs no new data model.
 
-### A6. Fix the semantic layer render · **S** · ⚠️ blocking
+### A6. Fix the semantic layer render · **S** · done 2026-08-30
 *Not a new feature — the precondition for Theme A having any effect.*
 
-`render_semantic` must fit sections **line by line** to the remaining budget
-instead of popping whole sections. The existing trim test (one table,
-`max_chars=250`, asserts only "short") must be replaced with one that asserts
-*which* content survives at realistic table counts.
+`render_semantic` now fits the block **line by line** to the remaining budget
+instead of popping whole sections, in three priority tiers filled round-robin
+across the retrieved tables (grain → metrics → column meanings). The old trim
+test (one table, `max_chars=250`, asserted only "short") is replaced by tests
+that assert *which* content survives at 42 tables under the real cap, and by one
+that pins coverage to what the block actually said — entities render partially
+now, so `render_with_coverage` returns the block and its coverage from one fit.
+See §1.3 for the measurements and [CLAUDE.md](../CLAUDE.md#the-semantic-layer)
+for the rule.
 
-*Note:* this changes what the generator sees on every question with a layer, so
-it moves `PROMPT_VERSION` and invalidates the baseline. **That is the point.**
-Take a fresh baseline immediately after, and treat it as MVP2's day-zero
-measurement.
+*Still outstanding:* `PROMPT_VERSION` moved v7 → v8, which is the point — **take
+the fresh baseline**. The recorded `sales_v1` runs are not invalidated (they ran
+with the layer off, so their bytes are untouched), but the layer's A/B has never
+been run against a prompt containing the layer. That is MVP2's day-zero
+measurement and it does not exist yet; the runner still needs a way to pass
+`NodeDeps.semantic` before it can be taken.
 
 ## Theme B — Fix retrieval
 *Serves §1.2. Theme A's pairs and synonyms are useless if the right tables never reach the prompt.*
@@ -1326,7 +1371,7 @@ mostly not MVP2**.
 
 | # | Item | § | Size |
 |---|---|---|:--:|
-| 1 | **Fix the semantic layer render** | A6 | S |
+| 1 | ~~**Fix the semantic layer render**~~ — **done 2026-08-30** | A6 | S |
 | 2 | **Fix `runs.prompt_version`** — before any measurement | §1.10 | S |
 | 3 | **Un-blind the eval's recall** | B1 | S |
 | 4 | **Verified question→SQL pairs**, retrieved as few-shot | A1 | M |

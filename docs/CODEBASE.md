@@ -221,7 +221,7 @@ linear with **five non-chain edges**: three repairs *back* into `generate` (from
 hard ceiling of 24 transitions and a per-run deadline bound it. `describe`
 answers a schema question from the schema block plus the semantic layer and
 halts before any SQL is written. `prompts/` holds versioned prompt templates
-(`PROMPT_VERSION`, currently **v7**); `disclosure.py` is the result gate;
+(`PROMPT_VERSION`, currently **v8**); `disclosure.py` is the result gate;
 `checks.py` is `inspect`'s token-free structural checks; `metadata.py` decides
 which tables a schema question is about. A node crash is caught and recorded as
 a *run failure*, never a bare 500.
@@ -244,8 +244,10 @@ replayed through the other two entry points as well
 `models.py` (the document), `validate.py` (bind it to a snapshot, parse metric
 SQL with SQLGlot), `generator.py` (build one with a model — a whole-schema
 overview, then one call per table four concurrently, then a glossary),
-`render.py` (the prompt block, scoped to the retrieved tables and capped at
-`DEFAULT_MAX_CHARS = 8_000`), `prompts.py` (`SEMANTIC_PROMPT_VERSION`).
+`render.py` (the prompt block, scoped to the retrieved tables and fitted line
+by line to `DEFAULT_MAX_CHARS = 8_000` — grain for every table first, then
+metrics, then column meanings, round-robin), `prompts.py`
+(`SEMANTIC_PROMPT_VERSION`).
 Self-contained like `sqlguard`.
 
 ### `backend/app/reports` — the written document
