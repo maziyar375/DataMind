@@ -13,6 +13,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -352,6 +353,14 @@ class Run(Base, TimestampMixin):
     # not necessarily the replica the cancel arrived at — so the ask is written
     # here and the owner reads it on its next heartbeat.
     cancel_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    # "Answer this without consulting the knowledge store." Set by *Generate a
+    # fresh answer instead*, which is the one control that makes a Verified
+    # badge safe to show: a reader who does not believe the match has a way
+    # out that costs one click. Durable rather than in-memory because the run
+    # may be claimed by a different replica than the one that created it.
+    skip_templates: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false()
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -1033,6 +1042,56 @@ class KnowledgeTemplateRow(Base, TimestampMixin):
     #: days is a maintenance cost with no return.
     hit_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_hit_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class KnowledgeTemplateHit(Base):
+    """Every match attempt that reached a verdict, so the loop can be counted.
+
+    Written once per run that consulted the store, whatever the outcome —
+    including the outcomes that are *not* a hit. That is the point: the
+    interesting numbers are the refusals.
+
+    `outcome` is the whole instrument:
+
+    * `SHORT_CIRCUIT` — answered from the template. The **hit rate**.
+    * `FEW_SHOT` — offered to the generator as an example (Phase 5).
+    * `REJECTED_UNBOUND` — matched, but a parameter would not bind. The
+      **unbound rate**, which is how we learn which grammars to add next.
+    * `REJECTED_STALE` — matched, but the SQL no longer passes the guard.
+    * `OVERRIDDEN_BY_USER` — somebody read a Verified answer and asked for a
+      fresh one anyway. **The honest measure of whether the short-circuit is
+      trusted**, and the number the threshold is tuned from. No vendor in the
+      research publishes its equivalent.
+
+    `template_id` is `SET NULL` rather than `CASCADE`: a template that was
+    archived and then deleted must not erase the record that it once answered
+    questions, because that record is the evidence for whether teaching helped.
+    """
+
+    __tablename__ = "knowledge_template_hits"
+    __table_args__ = (
+        Index("ix_template_hits_template", "template_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    template_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_templates.id", ondelete="SET NULL")
+    )
+    matcher: Mapped[str] = mapped_column(String(20), nullable=False, default="LEXICAL")
+    score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    outcome: Mapped[str] = mapped_column(String(30), nullable=False)
+    #: What the binder filled each slot with. Shown on the badge — *"did it
+    #: think July or June?"* is the next question a suspicious reader has, and
+    #: this is the only place the answer exists.
+    bound_params: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class AuditLog(Base):

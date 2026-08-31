@@ -25,9 +25,17 @@ what argued for it).
 **The real pipeline.** Not a reimplementation of it, not a prompt harness that
 calls the model directly. `runner.py` builds the same `AnalyticsPipeline`, the
 same `NodeDeps`, the same `GuardPolicy`, and the same connector the HTTP request
-path builds, then walks every question through `route → retrieve → generate →
-validate → execute → …`. A guard rule that would reject a query in production
-rejects it here, and it costs the run a point.
+path builds, then walks every question through `route → match → retrieve →
+generate → validate → execute → …`. A guard rule that would reject a query in
+production rejects it here, and it costs the run a point.
+
+> **`match` is always SKIPPED here.** The runner builds `NodeDeps` with no
+> matcher, so the knowledge store is never consulted and every number on this
+> suite measures the *generated* path — which is the only honest way to measure
+> it. A run that answered a golden question from a template stored for that
+> question would score 1.0 and mean nothing. Phase 5 of
+> [learning-loop-plan.md](learning-loop-plan.md) adds a `--templates on|off`
+> arm, and it is an arm precisely so both numbers exist side by side.
 
 The target database is a **fresh container** spun from a fixture seed via
 testcontainers — never a stored connection, never a database someone has been

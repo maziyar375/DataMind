@@ -115,6 +115,7 @@ export function applyTheme(name: ThemeName): void {
 /** The pipeline steps, in the order the backend runs them. */
 export const NODE_META: Record<string, { label: string; detail: string }> = {
   route: { label: 'Route', detail: 'Classifying question type…' },
+  match: { label: 'Match', detail: 'Looking for a saved question…' },
   clarify: { label: 'Clarify', detail: 'Checking for ambiguity…' },
   retrieve: { label: 'Retrieve', detail: 'Searching schema for relevant tables…' },
   describe: { label: 'Describe', detail: 'Answering from the schema and semantic layer…' },

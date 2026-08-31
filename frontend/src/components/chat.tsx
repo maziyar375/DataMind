@@ -16,7 +16,7 @@ import { runs } from '../api/client'
 import { formatAnswer } from './chat-format'
 import type {
   Artifact, ChartOption, ClarificationSpec, GeneratedQuery, KpiSpec, RunDetail,
-  RunStep, TableArtifactSpec,
+  RunKnowledge, RunStep, TableArtifactSpec,
 } from '../api/types'
 import { ChartGlyph, ChartTypePicker } from './chart-picker'
 import { Chip, CopyButton, Dot, dirOf, Icon, Kpi, ResultTable, Spinner } from './ui'
@@ -759,8 +759,115 @@ function AnswerText({ text }: { text: string }) {
  * identity between renders, which is why `ChatPage` holds it in a `useCallback`
  * rather than writing an arrow in the JSX.
  */
+/**
+ * The most consequential twenty pixels in the feature.
+ *
+ * Three tiers, and **the most important decision here is that "Generated" is
+ * not a warning.** It is the default path, it is most answers, and dressing it
+ * in amber would train every reader to ignore amber within a week. Verified
+ * *earns* a chip; Generated gets an honest sentence. Presence versus absence
+ * carries the hierarchy — not a traffic light.
+ *
+ * Two things ride on a Verified badge and neither is optional:
+ *
+ *  - **the matched question**, which is the reader's only defence against a
+ *    confident wrong match, and costs one line;
+ *  - **the bound parameters**, which answer the next question a suspicious
+ *    reader has — *did it think July or June?* Power BI shows the matched
+ *    trigger phrase; showing the bindings as well is a small addition nobody
+ *    else makes.
+ *
+ * And the way out. A reader who does not believe the match gets *Generate a
+ * fresh answer instead*, one click, which is what makes showing the badge safe
+ * at all — and what makes the override rate a measured number rather than an
+ * anecdote.
+ *
+ * The badge never animates. A badge that draws attention to itself is a badge
+ * nobody trusts.
+ */
+function AnswerBadge({
+  knowledge, onRegenerate,
+}: {
+  knowledge: RunKnowledge
+  /** Absent while the run is still streaming, or once already overridden. */
+  onRegenerate?: () => void
+}) {
+  if (knowledge.tier === 'GENERATED') {
+    return (
+      <div style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
+        Generated against the bare schema.
+      </div>
+    )
+  }
+
+  if (knowledge.tier === 'GROUNDED') {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Chip tone="accent">◆ Grounded</Chip>
+        <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
+          every table it used is described in your semantic layer
+        </span>
+      </div>
+    )
+  }
+
+  const bindings = Object.entries(knowledge.bound_params)
+  return (
+    <div
+      style={{
+        display: 'flex', flexDirection: 'column', gap: 5,
+        padding: '9px 12px', borderRadius: 9,
+        border: '1px solid var(--green-border)', background: 'var(--green-bg)',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ color: 'var(--green)', fontSize: 12, fontWeight: 700 }}>
+          ✓ Verified
+        </span>
+        <span style={{ fontSize: 11.5, color: 'var(--text-dim)' }}>
+          answered from a saved question
+        </span>
+      </div>
+      {knowledge.question && (
+        <div
+          dir={dirOf(knowledge.question)}
+          style={{ fontSize: 12, color: 'var(--text)' }}
+        >
+          &ldquo;{knowledge.question}&rdquo;
+          {bindings.length > 0 && (
+            <span style={{ color: 'var(--text-faint)' }}>
+              {'  ·  '}
+              {bindings.map(([name, value]) => `${name}=${value}`).join(', ')}
+            </span>
+          )}
+        </div>
+      )}
+      {onRegenerate && !knowledge.overridden && (
+        <div style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
+          Not what you asked?{' '}
+          <button
+            type="button"
+            onClick={onRegenerate}
+            style={{
+              background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+              font: 'inherit', color: 'var(--accent)', textDecoration: 'underline',
+            }}
+          >
+            Generate a fresh answer instead
+          </button>
+        </div>
+      )}
+      {knowledge.overridden && (
+        <div style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
+          You asked for a fresh answer to this one.
+        </div>
+      )}
+    </div>
+  )
+}
+
 export const AssistantTurn = memo(function AssistantTurn({
-  text, run, streaming, steps, onPickOption, optionsDisabled,
+  text, run, streaming, steps, onPickOption, optionsDisabled, onRegenerate,
 }: {
   text: string
   run: RunDetail | null
@@ -773,6 +880,8 @@ export const AssistantTurn = memo(function AssistantTurn({
   steps?: RunStep[]
   onPickOption?: (text: string) => void
   optionsDisabled?: boolean
+  /** Records the override, then re-asks the same question without the store. */
+  onRegenerate?: (run: RunDetail) => void
 }) {
   const table = run?.artifacts.find((a) => a.kind === 'TABLE')
   const spec = table?.spec as TableArtifactSpec | undefined
@@ -791,6 +900,17 @@ export const AssistantTurn = memo(function AssistantTurn({
         streaming={streaming}
         totalMs={run?.total_latency_ms}
       />
+
+      {/* Above the answer, not below it: what a reader most needs to know
+          about a sentence is whether to believe it, and that has to arrive
+          before the sentence does. Never while streaming — a badge that
+          appeared and then changed tier mid-answer would be worse than none. */}
+      {!streaming && run && (
+        <AnswerBadge
+          knowledge={run.knowledge}
+          onRegenerate={onRegenerate ? () => onRegenerate(run) : undefined}
+        />
+      )}
 
       {/* Nothing written yet: the panel's header is already saying which node
           is working, and an empty paragraph with a caret in it under that just

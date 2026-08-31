@@ -19,7 +19,7 @@ import uuid
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,6 +30,7 @@ from app.core.logging import get_logger
 from app.domain.value_objects import DatabaseKind
 from app.infra.db.models import (
     DatabaseConnection,
+    KnowledgeTemplateHit,
     KnowledgeTemplateRow,
     SchemaSnapshotRow,
 )
@@ -48,6 +49,12 @@ from app.knowledge import (
     propose_params,
     slots,
     validate_template,
+)
+from app.knowledge.matcher import (
+    SHORTLIST_FLOOR,
+    LexicalMatcher,
+    TemplateMatcher,
+    trigrams,
 )
 
 log = get_logger(__name__)
@@ -386,3 +393,113 @@ class KnowledgeService:
             "dialect": row.dialect,
             "version": row.version,
         }
+
+
+# ── the read path (Phase 2) ──────────────────────────────────────────────
+#: How many rows the shortlist may return before scoring. A connection with a
+#: healthy store has tens of templates; this is the ceiling that keeps a
+#: pathological one from turning every question into a table scan's worth of
+#: Python.
+SHORTLIST_LIMIT = 200
+
+_TRGM_AVAILABLE: bool | None = None
+
+
+async def has_trigram(db: AsyncSession) -> bool:
+    """Whether `pg_trgm` is installed, asked once per process.
+
+    Cached because the answer cannot change without a migration, and because
+    this sits on the ask path: a catalog lookup per question would be a cost
+    paid forever to learn something that was decided at deploy time.
+    """
+    global _TRGM_AVAILABLE
+    if _TRGM_AVAILABLE is None:
+        try:
+            found = await db.execute(
+                text("SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'")
+            )
+            _TRGM_AVAILABLE = found.scalar_one_or_none() is not None
+        except Exception:
+            _TRGM_AVAILABLE = False
+        if not _TRGM_AVAILABLE:
+            # Said once, loudly enough to find in a log and quietly enough not
+            # to be an error: the loop still works, it just scores in Python.
+            log.warning("pg_trgm_absent_matching_in_python")
+    return _TRGM_AVAILABLE
+
+
+def build_matcher(db: AsyncSession) -> TemplateMatcher:
+    """The connection's matcher: lexical today, embedding in Phase 7 (D3).
+
+    The row source is what keeps `app.knowledge` free of sqlalchemy. It uses
+    the trigram index to **narrow**; the score that decides is always computed
+    in the matcher, so a deployment without `pg_trgm` gets the same verdicts at
+    a higher cost rather than a different feature.
+    """
+
+    async def rows(
+        connection_id: UUID, normalized: str, limit: int
+    ) -> list[KnowledgeTemplate]:
+        statement = select(KnowledgeTemplateRow).where(
+            KnowledgeTemplateRow.connection_id == connection_id,
+            # §1.3, in the query that builds the candidate set rather than in a
+            # comment: a held-out question answered from its own stored SQL
+            # measures nothing, and a stale one answers with SQL the schema no
+            # longer supports.
+            KnowledgeTemplateRow.status == str(TemplateStatus.ACTIVE),
+            KnowledgeTemplateRow.role == str(TemplateRole.RETRIEVABLE),
+        )
+        if await has_trigram(db):
+            similarity = func.similarity(
+                KnowledgeTemplateRow.question_normalized, normalized
+            )
+            statement = statement.where(similarity >= SHORTLIST_FLOOR).order_by(
+                similarity.desc()
+            )
+        statement = statement.limit(SHORTLIST_LIMIT)
+
+        result = await db.execute(statement)
+        found = [KnowledgeService.to_model(row) for row in result.scalars().all()]
+        if not await has_trigram(db):
+            # No index to narrow with, so narrow here: a template that shares
+            # no trigram with the question cannot score above zero, and
+            # dropping it before the sort keeps a large store cheap.
+            asked = trigrams(normalized)
+            found = [t for t in found if asked & trigrams(t.question_normalized)]
+        return found[:SHORTLIST_LIMIT]
+
+    return LexicalMatcher(rows)
+
+
+async def record_hit(
+    db: AsyncSession,
+    *,
+    run_id: UUID,
+    template_id: UUID | None,
+    outcome: str,
+    matcher: str = "LEXICAL",
+    score: float = 0.0,
+    bound_params: dict[str, Any] | None = None,
+) -> KnowledgeTemplateHit:
+    """One row per verdict, and the counters that go with a real hit.
+
+    `hit_count` and `last_hit_at` move only on `SHORT_CIRCUIT`: they are what
+    §4.7 prunes on, and a template that matched but could not bind has not
+    earned its keep — it has told us the binder needs work.
+    """
+    row = KnowledgeTemplateHit(
+        id=uuid.uuid4(),
+        run_id=run_id,
+        template_id=template_id,
+        matcher=matcher,
+        score=score,
+        outcome=outcome,
+        bound_params=bound_params or {},
+    )
+    db.add(row)
+    if outcome == "SHORT_CIRCUIT" and template_id is not None:
+        template = await db.get(KnowledgeTemplateRow, template_id)
+        if template is not None:
+            template.hit_count = (template.hit_count or 0) + 1
+            template.last_hit_at = utcnow()
+    return row

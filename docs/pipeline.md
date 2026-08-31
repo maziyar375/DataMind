@@ -17,7 +17,7 @@ run in full. The other two have files of their own, written to the same shape:
 Code: [`backend/app/pipeline/`](../backend/app/pipeline/) —
 `graph.py` (the compiled LangGraph, `ORDER`, and the node adapter),
 `pipeline.py` (the `AnalyticsPipeline` facade over it — a re-export since the
-port), `nodes/__init__.py` (all ten nodes), `state.py` (typed state),
+port), `nodes/__init__.py` (all eleven nodes), `state.py` (typed state),
 `contracts.py` (the node signature), `prompts/` (versioned prompts),
 `checks.py`, `disclosure.py`, `metadata.py`.
 
@@ -30,12 +30,12 @@ port), `nodes/__init__.py` (all ten nodes), `state.py` (typed state),
 | | **Chat** | **Dashboard** | **Report** |
 |---|---|---|---|
 | Entry | `POST /conversations/{id}/messages` | `POST /sql/drafts` → tile save → `POST /dashboards/{id}/data` | `POST /reports/{id}/outline` → `.../blocks/{id}/check` → `POST /reports/{id}/runs` |
-| Orchestrator | `AnalyticsPipeline` — a 10-node state machine | none: a service function + `asyncio.gather` | `ReportRunExecutor` + a linear worker body |
+| Orchestrator | `AnalyticsPipeline` — an 11-node state machine | none: a service function + `asyncio.gather` | `ReportRunExecutor` + a linear worker body |
 | Shape | streamed (SSE), 5–60s | request/response, sub-second on a cache hit | queued (**202**) + polled, minutes |
 | Model runs | **at ask time**, every time | **at authoring time only** | at authoring time *and* at generation time |
 | Typical calls | 4 (+1 for a chart) | 2 per drafted tile (SQL, then chart), **0** per refresh | 1 outline + 1 per block + 1 per section + 1 summary |
 | SQL comes from | `generate`, fresh per question | `dashboard_tiles.sql`, stored | `report_blocks.sql`, stored |
-| Guard entry point | `validate` node | `execute_saved_sql` | `execute_saved_sql` |
+| Guard entry point | `validate` node (a taught question lands there too) | `execute_saved_sql` | `execute_saved_sql` |
 | Result values → model? | `present`, per policy | **never** | `narrate`, per policy (and `NONE`/`AGGREGATE` are refused outright) |
 | Repair loop | 1, shared by guard/DB/checks | 1, at draft time only | 1, at block-check time only |
 | Failure posture | the run fails, with an error artifact | a per-tile `ERROR` **value** | per section; the run's status is **derived** |
@@ -87,7 +87,7 @@ product was written against the same schema block, the same semantic layer, the
 same `_SQL_RULES` and the same guard as a chat answer:
 
 ```
-chat:    route → retrieve → describe → clarify → generate → validate → execute → inspect → present → chart
+chat:    route → match → retrieve → describe → clarify → generate → validate → execute → inspect → present → chart
 draft:  [route] → retrieve →                     generate → validate            (then a 50-row preview)
                                                      └── one repair ──┘          └─ [propose_chart_intent] ─┘
 ```
@@ -208,6 +208,11 @@ see [langgraph-migration.md](langgraph-migration.md) Phase 3.
   route ──────────────────────────► ┤   (history, once there is one)
                                     │ ANALYTICAL / METADATA
                                     ▼
+  match ──── a taught question ───────────────┐  (no LLM — trigram + a
+      │      bound and still guard-valid      │   deterministic binder)
+      │                                       │
+      │ miss / unbound / stale / not analytical│
+      ▼                                       │
   retrieve  (no LLM — schema block + semantic layer + history)
       │
       ▼
@@ -219,10 +224,12 @@ see [langgraph-migration.md](langgraph-migration.md) Phase 3.
       │                                    run ends NEEDS_CLARIFICATION)
       │ answerable / skipped / failed-open
       ▼
-  generate ◄──────────────────────────────────┐
-      │                                       │
-      ▼                                       │ goto generate
-  validate ── guard rejected ─────────────────┤  (budget permitting)
+  generate ◄──────────────────────────────────┼─┐
+      │                                       │ │
+      ▼                                       │ │ goto generate
+  validate ◄──────────────────────────────────┘ │  (the short-circuit lands
+      │                                         │   here — same guard, same
+      │  ── guard rejected ─────────────────────┤   rewriter, no exemption)
       │ VALID                                 │
       ▼                                       │
   execute  ── db error ───────────────────────┤
@@ -248,21 +255,27 @@ working for `run_service`, `app.eval.runner` and `tests/unit/test_clarify.py`.)
 | # | node | LLM? | can HALT | can `goto` | writes |
 |---|---|:--:|:--:|:--:|---|
 | 1 | `route` | ✅ `complete` | ✅ | – | `intent`, `answer`, **tokens** |
-| 2 | `retrieve` | ❌ | – | – | `context` |
-| 3 | `describe` | ✅ `stream` | ✅ always | – | `answer` |
-| 4 | `clarify` | ✅ `structured` | ✅ | – | `clarification`, `answer` |
-| 5 | `generate` | ✅ `structured` | – | – | `attempts[]` |
-| 6 | `validate` | ❌ | – | ✅ `generate`/`present` | `attempt.report`, `.rewritten_sql` |
-| 7 | `execute` | ❌ | – | ✅ `generate`/`present` | `execution` |
-| 8 | `inspect` | ❌ | – | ✅ `generate` | `attempt.findings` |
-| 9 | `present` | ✅ `stream` | – | – | `disclosed`, `answer` |
-| 10 | `chart` | ✅ `structured` | – | – | `chart` |
+| 2 | `match` | ❌ | – | ✅ `validate` | `matched_template_id`, `match_*`, `attempts[0]` |
+| 3 | `retrieve` | ❌ | – | – | `context` |
+| 4 | `describe` | ✅ `stream` | ✅ always | – | `answer` |
+| 5 | `clarify` | ✅ `structured` | ✅ | – | `clarification`, `answer` |
+| 6 | `generate` | ✅ `structured` | – | – | `attempts[]` |
+| 7 | `validate` | ❌ | – | ✅ `generate`/`present` | `attempt.report`, `.rewritten_sql` |
+| 8 | `execute` | ❌ | – | ✅ `generate`/`present` | `execution` |
+| 9 | `inspect` | ❌ | – | ✅ `generate` | `attempt.findings` |
+| 10 | `present` | ✅ `stream` | – | – | `disclosed`, `answer` |
+| 11 | `chart` | ✅ `structured` | – | – | `chart` |
 
 **Typical successful run = 4 model calls** (route, clarify, generate, present)
-**+ 1 if a chart survives the veto.** Four of the ten nodes cost nothing, and a
-fifth — `describe` — is skipped outright unless the question is about the
+**+ 1 if a chart survives the veto.** Five of the eleven nodes cost nothing, and
+a sixth — `describe` — is skipped outright unless the question is about the
 schema, in which case it is the *last* node to run: a METADATA run is exactly
-route → retrieve → describe, two model calls and no database access at all.
+route → match (skipped) → retrieve → describe, two model calls and no database
+access at all.
+
+**A short-circuited run costs one model call** — `route` — plus `present`,
+because the answer still has to be written from the rows. `match`, `validate`
+and `execute` are all free, so a taught question returns in database time.
 
 ---
 
@@ -308,7 +321,54 @@ connection's disclosure policy like every other prompt — see §3.9.
 
 **Only node that records tokens** — see §7.
 
-### 2. `retrieve` — build everything the generator is allowed to see
+### 2. `match` — has somebody already answered this?
+
+> Phase 2 of [learning-loop-plan.md](learning-loop-plan.md). **The first node
+> that can change an answer — and it does so without changing a byte of the
+> prompt.** `PROMPT_VERSION` is still `v8`; if it moved, something in this node
+> was built wrong.
+
+No model call. `LexicalMatcher` normalises the question with the same function
+the store used for its own, scores it with trigram similarity, and returns the
+best candidates. The exclusions are in the query that builds the candidate set,
+not in a comment: `BENCHMARK_ONLY`, `HELD_OUT`, `STALE`, `CONFLICTED` and
+`ARCHIVED` templates never match, because a held-out question answered from its
+own stored SQL measures nothing and a stale one answers with SQL the schema no
+longer supports.
+
+**Two thresholds, not one.** `SHORT_CIRCUIT_THRESHOLD` (0.85) decides whether
+to answer; `FEW_SHOT_THRESHOLD` (0.45) is Phase 5's and is unused here. A
+near-miss is not a hit: the cost of a miss is today's behaviour, and the cost of
+a false hit is a confident wrong answer.
+
+**Binding is deterministic and has a veto.** `bind.py` fills each declared slot
+from the question — a small date grammar over the phrases people actually type,
+a value the parameter's own comment lists, a single numeral. **Any parameter
+that will not bind cancels the short-circuit** and the run falls through to
+generation, logged as `REJECTED_UNBOUND`. That log is how the next grammar gets
+chosen.
+
+**The hit hands over to `validate`.** The bound statement becomes
+`attempts[0].raw_sql` and the node returns `goto="validate"` — the guard's own
+entry point, which already feeds `execute`. So a stored template is
+re-validated against the *current* snapshot, rewritten, and row-capped exactly
+as generated SQL is. **A stored template gets no exemption**, and there is no
+new execution code anywhere in this phase.
+
+**A stale template fails as a value.** If the bound SQL no longer passes the
+guard, the run does not fail and the row is not deleted: `REJECTED_STALE` is
+logged and the question is answered the ordinary way.
+
+Four ways it declines and one way it accepts, all recorded on
+`knowledge_template_hits` — including `OVERRIDDEN_BY_USER`, written when a
+reader presses *Generate a fresh answer instead*, which is the honest measure of
+whether the short-circuit is trusted.
+
+`NodeDeps.matcher = None` is the pre-feature path exactly: SKIPPED, nothing
+read, nothing logged, and a byte-identical prompt. The draft graph and the eval
+runner both take it.
+
+### 3. `retrieve` — build everything the generator is allowed to see
 
 **No LLM call.** Cost: zero tokens, sub-millisecond.
 
@@ -391,7 +451,7 @@ Two independent gates apply here:
   alone — see the entry in [CLAUDE.md](../CLAUDE.md#the-semantic-layer). Fixed
   2026-08-30 at `PROMPT_VERSION` v8.
 
-### 3. `describe` — the schema question, answered from the schema
+### 4. `describe` — the schema question, answered from the schema
 
 **Prompt:** `DESCRIBE_SYSTEM` (schema block + census + history) +
 `DESCRIBE_USER` (question) → `stream()`. **Runs only when `intent ==
@@ -456,7 +516,7 @@ gated and a question about the schema cannot be answered without it.
 `CLARIFY_SYSTEM` and the chart prompts (§5): nothing on the SQL-producing path
 changed, and a METADATA question produces no SQL for the eval to score.
 
-### 4. `clarify` — ask once, instead of answering a question nobody asked
+### 5. `clarify` — ask once, instead of answering a question nobody asked
 
 **Prompt:** `CLARIFY_SYSTEM` (schema block + history) + `CLARIFY_USER`
 (question) → `structured(ClarificationProposal)`.
@@ -514,7 +574,7 @@ that prompt losing 10 points of execution accuracy to an unrelated addition, so
 when a question is answerable the generator sees exactly what it saw before
 clarify existed.
 
-### 5. `generate` — the only node that writes SQL
+### 6. `generate` — the only node that writes SQL
 
 `structured(SqlProposal)` → `{sql, reasoning}`. **Three different
 prompts depending on why we're here:**
@@ -579,7 +639,7 @@ asked for, turning a correct answer into a wrong one.
 > 36% → 26% and parse 98% → 88% on the small model — the extra instructions
 > crowded out the schema. More is not better here.
 
-### 6. `validate` — the hard gate, fails closed
+### 7. `validate` — the hard gate, fails closed
 
 **No LLM call.** `guard(raw_sql, policy)` =
 `SqlValidator.validate` (SQLGlot parse → AST walked against an **allowlist**,
@@ -593,7 +653,7 @@ warning**. An unsynced connection can query nothing.
    earlier working result back and `goto present`;
 3. else `FAILED` with the first error's `rule_id`.
 
-### 7. `execute` — read-only, capped, timed out
+### 8. `execute` — read-only, capped, timed out
 
 **No LLM call.**
 1. `connector.explain(sql)` → `rows_scanned_estimate` (for the step trail).
@@ -603,7 +663,7 @@ warning**. An unsynced connection can query nothing.
    `E_QUERY_FAILED`.
 4. Success → `state.execution`, emit `QUERY_COMPLETED`.
 
-### 8. `inspect` — "it ran, and it's wrong"
+### 9. `inspect` — "it ran, and it's wrong"
 
 The repair loop already covers two failure modes: *the guard said no* and *the
 database said no*. Both mean no result exists. This covers the third and most
@@ -642,7 +702,7 @@ or run. **A check can never turn a working answer into a failed run.**
 carries an always-false `is_archived` on 35 of its 42 tables, which would
 otherwise fire on nearly every query.
 
-### 9. `present` — the disclosure gate, then narration
+### 10. `present` — the disclosure gate, then narration
 
 1. `disclose(execution, policy)` — the **one place** result data is filtered:
 
@@ -716,7 +776,7 @@ the transcript is non-empty (the SPA already locks the picker there; this
 closes the API route around it), and `_recent_history` additionally drops any
 turn it cannot attribute to a run on *this* connection.
 
-### 10. `chart` — the data gets a veto before the model gets a vote
+### 11. `chart` — the data gets a veto before the model gets a vote
 
 Best-effort and fail-open (the opposite of the guard): the answer and table are
 already persisted, so any failure here just means no chart.

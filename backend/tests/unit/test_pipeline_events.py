@@ -14,7 +14,7 @@ nodes. Each run below pins one of those control flows.
 
 | run | what it pins |
 |---|---|
-| analytical, clean | the ten-node order, `describe`/`clarify` writing SKIPPED rows, and the KPI branch that runs *before* any model call |
+| analytical, clean | the eleven-node order, `match`/`describe`/`clarify` writing SKIPPED rows, and the KPI branch that runs *before* any model call |
 | METADATA | the only path that ends at `describe` — the halt an "obvious" conditional-edge improvement would silently delete |
 | failed check-driven retry | `inspect → generate`, then `_restore_superseded` jumping forward to `present` and skipping `execute`/`inspect` |
 | guard rejection | `validate → generate`, and the `ARTIFACT_CREATED {"kind": "CHART"}` end of the `chart` node |
@@ -289,15 +289,21 @@ def event(event_type: str, tag: str) -> tuple[Any, str, str, str | None]:
     return (None, event_type, tag, None)
 
 
-# The four nodes every run walks before any SQL exists. `describe` and
+# The five nodes every run walks before any SQL exists. `match`, `describe` and
 # `clarify` are SKIPPED here and that is the point: a skipped node still writes
 # a `run_steps` row and still emits its event pair, which is exactly what a
 # conditional edge routing *around* it would stop doing.
+#
+# `match` is SKIPPED because these runs build `NodeDeps` with no matcher — the
+# pre-feature path, and the one the draft graph and the eval harness take. A
+# connection whose knowledge store is empty behaves identically, since an empty
+# store simply never matches.
 PREAMBLE = [
     started(1, "route"), finished(1, "route"),
-    started(2, "retrieve"), finished(2, "retrieve"),
-    started(3, "describe"), finished(3, "describe", StepStatus.SKIPPED),
-    started(4, "clarify"), finished(4, "clarify", StepStatus.SKIPPED),
+    started(2, "match"), finished(2, "match", StepStatus.SKIPPED),
+    started(3, "retrieve"), finished(3, "retrieve"),
+    started(4, "describe"), finished(4, "describe", StepStatus.SKIPPED),
+    started(5, "clarify"), finished(5, "clarify", StepStatus.SKIPPED),
 ]
 
 
@@ -326,7 +332,7 @@ async def drive(
 
 # ── run 1: analytical, clean, one row ────────────────────────────────────
 @pytest.mark.asyncio
-async def test_a_clean_analytical_run_emits_the_ten_node_trail() -> None:
+async def test_a_clean_analytical_run_emits_the_eleven_node_trail() -> None:
     """The happy path, and the KPI branch that costs no tokens.
 
     A single-row result is the shape a big number is *made* of, so the `chart`
@@ -339,45 +345,51 @@ async def test_a_clean_analytical_run_emits_the_ten_node_trail() -> None:
     recorder, state = await drive(gateway, ScriptedConnector([ONE_ROW]))
 
     assert trail(recorder) == PREAMBLE + [
-        started(5, "generate"),
+        started(6, "generate"),
         event("SQL_GENERATED", "attempt 1"),
-        finished(5, "generate"),
-        started(6, "validate"),
+        finished(6, "generate"),
+        started(7, "validate"),
         event("SQL_VALIDATED", "attempt 1"),
-        finished(6, "validate"),
-        started(7, "execute"),
+        finished(7, "validate"),
+        started(8, "execute"),
         event("QUERY_COMPLETED", "1 rows"),
-        finished(7, "execute"),
-        started(8, "inspect"), finished(8, "inspect"),
-        started(9, "present"),
+        finished(8, "execute"),
+        started(9, "inspect"), finished(9, "inspect"),
+        started(10, "present"),
         event("TEXT_DELTA", "Revenue was $1.24M."),
-        finished(9, "present"),
-        started(10, "chart"),
+        finished(10, "present"),
+        started(11, "chart"),
         event("ARTIFACT_CREATED", "KPI"),
-        finished(10, "chart"),
+        finished(11, "chart"),
     ]
     assert rows(recorder) == [
         (1, "route", StepStatus.DONE),
-        (2, "retrieve", StepStatus.DONE),
-        (3, "describe", StepStatus.SKIPPED),
-        (4, "clarify", StepStatus.SKIPPED),
-        (5, "generate", StepStatus.DONE),
-        (6, "validate", StepStatus.DONE),
-        (7, "execute", StepStatus.DONE),
-        (8, "inspect", StepStatus.DONE),
-        (9, "present", StepStatus.DONE),
-        (10, "chart", StepStatus.DONE),
+        (2, "match", StepStatus.SKIPPED),
+        (3, "retrieve", StepStatus.DONE),
+        (4, "describe", StepStatus.SKIPPED),
+        (5, "clarify", StepStatus.SKIPPED),
+        (6, "generate", StepStatus.DONE),
+        (7, "validate", StepStatus.DONE),
+        (8, "execute", StepStatus.DONE),
+        (9, "inspect", StepStatus.DONE),
+        (10, "present", StepStatus.DONE),
+        (11, "chart", StepStatus.DONE),
     ]
     # Each row is written twice — RUNNING as the node starts, then its
     # terminal status. That is what makes the trail live rather than a summary
     # printed at the end, so both calls are part of the contract.
-    assert calls(recorder)[:4] == [
+    assert calls(recorder)[:6] == [
         (1, "route", StepStatus.RUNNING),
         (1, "route", StepStatus.DONE),
-        (2, "retrieve", StepStatus.RUNNING),
-        (2, "retrieve", StepStatus.DONE),
+        # `match` with no matcher in the deps: SKIPPED, and it still writes
+        # both rows. A node that skipped *silently* would be an edge routing
+        # around it, which is the thing this file exists to refuse.
+        (2, "match", StepStatus.RUNNING),
+        (2, "match", StepStatus.SKIPPED),
+        (3, "retrieve", StepStatus.RUNNING),
+        (3, "retrieve", StepStatus.DONE),
     ]
-    assert len(calls(recorder)) == 20
+    assert len(calls(recorder)) == 22
 
     assert gateway.chart_asks == 0
     assert state.kpi is not None and state.chart is None
@@ -401,16 +413,18 @@ async def test_a_metadata_question_halts_at_describe() -> None:
 
     assert trail(recorder) == [
         started(1, "route"), finished(1, "route"),
-        started(2, "retrieve"), finished(2, "retrieve"),
-        started(3, "describe"),
+        started(2, "match"), finished(2, "match", StepStatus.SKIPPED),
+        started(3, "retrieve"), finished(3, "retrieve"),
+        started(4, "describe"),
         event("TEXT_DELTA", "You have two tables."),
-        finished(3, "describe"),
+        finished(4, "describe"),
     ]
     assert rows(recorder) == [
         (1, "route", StepStatus.DONE),
-        (2, "retrieve", StepStatus.DONE),
+        (2, "match", StepStatus.SKIPPED),
+        (3, "retrieve", StepStatus.DONE),
         # HALT is a completed step, not a failed one.
-        (3, "describe", StepStatus.DONE),
+        (4, "describe", StepStatus.DONE),
     ]
     assert state.answer == "You have two tables."
     assert state.attempts == [] and state.error is None
@@ -434,46 +448,47 @@ async def test_a_failed_check_retry_restores_forward_into_present() -> None:
     )
 
     assert trail(recorder) == PREAMBLE + [
-        started(5, "generate"),
+        started(6, "generate"),
         event("SQL_GENERATED", "attempt 1"),
-        finished(5, "generate"),
-        started(6, "validate"),
+        finished(6, "generate"),
+        started(7, "validate"),
         event("SQL_VALIDATED", "attempt 1"),
-        finished(6, "validate"),
-        started(7, "execute"),
+        finished(7, "validate"),
+        started(8, "execute"),
         event("QUERY_COMPLETED", "0 rows"),
-        finished(7, "execute"),
-        started(8, "inspect"),
+        finished(8, "execute"),
+        started(9, "inspect"),
         event("RESULT_CHECKED", "C_EMPTY_RESULT"),
-        finished(8, "inspect"),
+        finished(9, "inspect"),
         # The repair edge back into generate.
-        started(9, "generate"),
+        started(10, "generate"),
         event("SQL_GENERATED", "attempt 2"),
-        finished(9, "generate"),
-        started(10, "validate"),
+        finished(10, "generate"),
+        started(11, "validate"),
         event("SQL_REJECTED", "attempt 2"),
         # DONE, not FAILED: the restore is a successful step that redirects.
-        finished(10, "validate"),
+        finished(11, "validate"),
         # …and straight into present. No execute, no inspect.
-        started(11, "present"),
+        started(12, "present"),
         event("TEXT_DELTA", "Revenue was $1.24M."),
-        finished(11, "present"),
-        started(12, "chart"),
-        finished(12, "chart", StepStatus.SKIPPED),
+        finished(12, "present"),
+        started(13, "chart"),
+        finished(13, "chart", StepStatus.SKIPPED),
     ]
     assert rows(recorder) == [
         (1, "route", StepStatus.DONE),
-        (2, "retrieve", StepStatus.DONE),
-        (3, "describe", StepStatus.SKIPPED),
-        (4, "clarify", StepStatus.SKIPPED),
-        (5, "generate", StepStatus.DONE),
-        (6, "validate", StepStatus.DONE),
-        (7, "execute", StepStatus.DONE),
-        (8, "inspect", StepStatus.DONE),
-        (9, "generate", StepStatus.DONE),
-        (10, "validate", StepStatus.DONE),
-        (11, "present", StepStatus.DONE),
-        (12, "chart", StepStatus.SKIPPED),
+        (2, "match", StepStatus.SKIPPED),
+        (3, "retrieve", StepStatus.DONE),
+        (4, "describe", StepStatus.SKIPPED),
+        (5, "clarify", StepStatus.SKIPPED),
+        (6, "generate", StepStatus.DONE),
+        (7, "validate", StepStatus.DONE),
+        (8, "execute", StepStatus.DONE),
+        (9, "inspect", StepStatus.DONE),
+        (10, "generate", StepStatus.DONE),
+        (11, "validate", StepStatus.DONE),
+        (12, "present", StepStatus.DONE),
+        (13, "chart", StepStatus.SKIPPED),
     ]
     # The whole point of the restore: a failed check retry costs the user
     # nothing. The earlier result is back, and the run did not fail.
@@ -506,31 +521,31 @@ async def test_a_rejected_statement_repairs_and_charts() -> None:
     )
 
     assert trail(recorder) == PREAMBLE + [
-        started(5, "generate"),
+        started(6, "generate"),
         event("SQL_GENERATED", "attempt 1"),
-        finished(5, "generate"),
-        started(6, "validate"),
+        finished(6, "generate"),
+        started(7, "validate"),
         event("SQL_REJECTED", "attempt 1"),
-        finished(6, "validate"),
-        started(7, "generate"),
+        finished(7, "validate"),
+        started(8, "generate"),
         event("SQL_GENERATED", "attempt 2"),
-        finished(7, "generate"),
-        started(8, "validate"),
+        finished(8, "generate"),
+        started(9, "validate"),
         event("SQL_VALIDATED", "attempt 2"),
-        finished(8, "validate"),
-        started(9, "execute"),
+        finished(9, "validate"),
+        started(10, "execute"),
         event("QUERY_COMPLETED", "3 rows"),
-        finished(9, "execute"),
-        started(10, "inspect"), finished(10, "inspect"),
-        started(11, "present"),
+        finished(10, "execute"),
+        started(11, "inspect"), finished(11, "inspect"),
+        started(12, "present"),
         event("TEXT_DELTA", "Revenue was $1.24M."),
-        finished(11, "present"),
-        started(12, "chart"),
+        finished(12, "present"),
+        started(13, "chart"),
         event("ARTIFACT_CREATED", "CHART"),
-        finished(12, "chart"),
+        finished(13, "chart"),
     ]
     assert [name for _seq, name, _status in rows(recorder)] == [
-        "route", "retrieve", "describe", "clarify",
+        "route", "match", "retrieve", "describe", "clarify",
         "generate", "validate", "generate", "validate",
         "execute", "inspect", "present", "chart",
     ]
@@ -558,43 +573,43 @@ async def test_a_database_error_repairs_and_then_restores_from_execute() -> None
     )
 
     assert trail(recorder) == PREAMBLE + [
-        started(5, "generate"),
+        started(6, "generate"),
         event("SQL_GENERATED", "attempt 1"),
-        finished(5, "generate"),
-        started(6, "validate"),
+        finished(6, "generate"),
+        started(7, "validate"),
         event("SQL_VALIDATED", "attempt 1"),
-        finished(6, "validate"),
+        finished(7, "validate"),
         # The database refuses; the repair edge out of execute.
-        started(7, "execute"), finished(7, "execute"),
-        started(8, "generate"),
+        started(8, "execute"), finished(8, "execute"),
+        started(9, "generate"),
         event("SQL_GENERATED", "attempt 2"),
-        finished(8, "generate"),
-        started(9, "validate"),
+        finished(9, "generate"),
+        started(10, "validate"),
         event("SQL_VALIDATED", "attempt 2"),
-        finished(9, "validate"),
-        started(10, "execute"),
+        finished(10, "validate"),
+        started(11, "execute"),
         event("QUERY_COMPLETED", "0 rows"),
-        finished(10, "execute"),
-        started(11, "inspect"),
+        finished(11, "execute"),
+        started(12, "inspect"),
         event("RESULT_CHECKED", "C_EMPTY_RESULT"),
-        finished(11, "inspect"),
-        started(12, "generate"),
+        finished(12, "inspect"),
+        started(13, "generate"),
         event("SQL_GENERATED", "attempt 3"),
-        finished(12, "generate"),
-        started(13, "validate"),
+        finished(13, "generate"),
+        started(14, "validate"),
         event("SQL_VALIDATED", "attempt 3"),
-        finished(13, "validate"),
+        finished(14, "validate"),
         # Refused again, with no repair budget left — so the restore fires
         # here, one node later than it does in run 3.
-        started(14, "execute"), finished(14, "execute"),
-        started(15, "present"),
+        started(15, "execute"), finished(15, "execute"),
+        started(16, "present"),
         event("TEXT_DELTA", "Revenue was $1.24M."),
-        finished(15, "present"),
-        started(16, "chart"),
-        finished(16, "chart", StepStatus.SKIPPED),
+        finished(16, "present"),
+        started(17, "chart"),
+        finished(17, "chart", StepStatus.SKIPPED),
     ]
     assert [name for _seq, name, _status in rows(recorder)] == [
-        "route", "retrieve", "describe", "clarify",
+        "route", "match", "retrieve", "describe", "clarify",
         "generate", "validate", "execute",
         "generate", "validate", "execute", "inspect",
         "generate", "validate", "execute",
@@ -621,10 +636,10 @@ async def test_a_node_crash_is_a_failed_step_and_not_an_exception() -> None:
     recorder, state = await drive(gateway, Exploding([]))
 
     assert trail(recorder)[-2:] == [
-        started(7, "execute"),
-        finished(7, "execute", StepStatus.FAILED),
+        started(8, "execute"),
+        finished(8, "execute", StepStatus.FAILED),
     ]
-    assert rows(recorder)[-1] == (7, "execute", StepStatus.FAILED)
+    assert rows(recorder)[-1] == (8, "execute", StepStatus.FAILED)
     assert state.error is not None
     assert state.error.code == "E_NODE_FAILED"
     assert state.answer is None
@@ -648,9 +663,14 @@ async def test_a_run_that_will_not_converge_is_stopped_not_raised() -> None:
     )
 
     assert len(rows(recorder)) == 25
-    assert [name for _seq, name, _status in rows(recorder)][4:] == [
+    # Five preamble nodes now, so the cycle gets twenty executions rather than
+    # twenty-one: the ceiling counts *node executions*, and `match` spends one
+    # of them on every run. That is the honest consequence of adding a node to
+    # the chain, and it is recorded here rather than absorbed by loosening the
+    # assertion — a repair budget this large is a runaway either way.
+    assert [name for _seq, name, _status in rows(recorder)][5:] == [
         "generate", "validate"
-    ] * 10 + ["generate"]
+    ] * 10
     assert state.error is not None
     assert state.error.code == "E_PIPELINE_LOOP"
 

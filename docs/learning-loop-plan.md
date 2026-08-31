@@ -10,9 +10,10 @@
 > **Four decisions were taken before writing this** (§0.2). They are recorded
 > here rather than re-argued: everything below assumes them.
 >
-> **27 of 86 items, verified against the tree on 2026-08-31.** Phase 0 has
-> landed except its three baseline runs, which need a provider key; Phase 1 is
-> complete and the store ships inert.
+> **39 of 86 items, verified against the tree on 2026-08-31.** Phase 0 has
+> landed except its three baseline runs, which need a provider key; Phases 1
+> and 2 are complete — the store is built, filled by hand, and read on the ask
+> path, and `PROMPT_VERSION` has not moved.
 > [§13](#13-progress-ledger--what-is-done-what-is-not) is the
 > ledger: what is already in the codebase and load-bearing (§13.1), then a
 > checkbox per deliverable per phase, each with the check that proves its state.
@@ -1531,10 +1532,10 @@ it is not, no amount of Phase 5 will help.
 > reading the code, not by memory; every ❌ was confirmed absent the same way.
 > The verification note beside each item is what to re-run to check it again.
 >
-> **Status: 27 of 86 plan items complete.** Phase 0's instruments are built
-> (its three measurements are not — see §13.2, and they gate Phase 5 only) and
-> **Phase 1 has landed in full**: the store, the curation surface, and the
-> guard's fifth entry point. What is done besides that is the *foundation* the
+> **Status: 39 of 86 plan items complete.** Phase 0's instruments are built
+> (its three measurements are not — see §13.2, and they gate Phase 5 only), and
+> **Phases 1 and 2 have landed in full**: the store, the curation surface, the
+> guard's fifth entry point, the short-circuit and the badge. What is done besides that is the *foundation* the
 > plan leans on (§13.1) — which is substantial, and is why the research put the
 > loop at "60% built and not wired up".
 >
@@ -1635,23 +1636,45 @@ replayed through the new door. **No chat answer behaves differently.**
 >   never matches, which would reach the curator as silence rather than as an
 >   error.
 
-### 13.4 Phase 2 — Match, short-circuit, badge · **0 / 12** ❌ not started
+### 13.4 Phase 2 — Match, short-circuit, badge · **12 / 12** ✅ landed
 
-- [ ] `app/knowledge/matcher.py` — the `TemplateMatcher` Protocol
-- [ ] `LexicalMatcher` on `pg_trgm`, with the graceful `LIKE` fallback if the extension is absent
-- [ ] `SHORT_CIRCUIT_THRESHOLD` (start 0.85) and `FEW_SHOT_THRESHOLD`, tuned from the override rate
-- [ ] `app/knowledge/bind.py` — the date grammar, string and numeric binding
-- [ ] The cancel-on-unbound rule, logged as `REJECTED_UNBOUND`
-- [ ] `RunState.matched_template_id` / `match_score` / `match_kind` — **confirmed absent:** `grep -rn matched_template backend/app/pipeline` returns nothing
-- [ ] The `MATCH` node in `nodes/__init__.py`
-- [ ] `MATCH` wired into `graph.py` with both conditional exits (hit → `VALIDATE`, miss → `RETRIEVE`)
-- [ ] `knowledge_template_hits` model + migration
-- [ ] The three-tier badge in `chat.tsx`, with the matched question **and the bound parameters** shown
-- [ ] *Generate a fresh answer instead* → writes `OVERRIDDEN_BY_USER`
-- [ ] Tests: `test_knowledge_match.py`, `test_knowledge_bind.py`, the stale-template-falls-through test, and the **byte-identical prompt on a miss** assertion in `test_pipeline_graph.py`
+- [x] `app/knowledge/matcher.py` — the `TemplateMatcher` Protocol, `Candidate`, and `best()` (which returns nothing for a near-miss, because "close" is not a category an answer can be in)
+- [x] `LexicalMatcher`, given a *row source* so the package stays free of sqlalchemy. **`pg_trgm` is an index, not the verdict**: the query narrows with the GIN index where it exists, and `trigram_similarity` — Postgres' own algorithm reimplemented — always scores. One path, so a deployment without the extension gets the same verdicts more slowly rather than a different feature
+- [x] `SHORT_CIRCUIT_THRESHOLD` = 0.85 and `FEW_SHOT_THRESHOLD` = 0.45, with the tuning signal named in the docstring
+- [x] `app/knowledge/bind.py` — the date grammar (`last month`, `in July`, `Q3`, `2026`, `last 12 months`, ISO dates and pairs, `yesterday`), string binding from the parameter's own declared values, single-numeral binding, and `bind_sql` substituting **on the tree**
+- [x] The cancel-on-unbound rule, logged as `REJECTED_UNBOUND` — with the slots that *did* bind still reported, so the log names what to teach the binder next
+- [x] `RunState.matched_template_id` / `match_score` / `match_kind`, plus `match_outcome`, `bound_params` and `matched_question` (the badge needs the last two, and they must be what *this run* matched)
+- [x] The `match` node in `nodes/__init__.py`, and `StepName.MATCH`
+- [x] `MATCH` wired into `graph.py` with both exits — the graph is now the chain plus exactly **six** jumps
+- [x] `knowledge_template_hits` model + migration `0016`, plus `runs.skip_templates`
+- [x] The three-tier badge in `chat.tsx`, with the matched question **and the bound parameters** shown, and *Generated* deliberately carrying no chip
+- [x] *Generate a fresh answer instead* → `POST /runs/{id}/override` writes `OVERRIDDEN_BY_USER`, then the question is re-asked with `skip_templates`
+- [x] Tests: `test_knowledge_match.py` (29), `test_knowledge_bind.py` (42), `test_knowledge_short_circuit.py` (15 — including the stale-template-falls-through case and a hostile-table template refused on the read path), and the **byte-identical prompt on a miss** assertion in `test_pipeline_graph.py`
 
 > `PROMPT_VERSION` **must still read `v8`** when this phase ships. If it moved,
 > something in this phase was built wrong.
+>
+> **It reads `v8`,** and `test_pipeline_graph.py` asserts it.
+>
+> Two things landed differently from the sketch, both recorded rather than
+> quietly absorbed:
+>
+> * **The template's declared values are masked out of the question before
+>   scoring.** Without it the plan's own worked example scores **0.83** against
+>   its own pattern — under the threshold — because `EMEA` is not detectably a
+>   literal from the outside, and lowering the threshold to 0.83 to compensate
+>   would let genuinely different questions in. The masking uses only what the
+>   *curator* declared (`one of: EMEA, NA, APAC`), so it can remove a
+>   difference the template called a value and can never invent a match.
+> * **The `LIKE` fallback is a faithful trigram instead.** The plan asked for a
+>   degraded "LIKE-and-token comparison" when `pg_trgm` is absent. Reimplementing
+>   `similarity()` exactly costs about thirty lines and means the thresholds mean
+>   one thing everywhere, rather than one thing on a managed database and another
+>   on a laptop.
+>
+> One consequence worth knowing: the pipeline's hard ceiling is 25 **node
+> executions**, and `match` spends one of them on every run, so a runaway repair
+> loop now stops one `generate` earlier. `test_pipeline_events.py` records it.
 
 ### 13.5 Phase 3 — Capture: feedback, queue, backlog · **0 / 9** ❌ not started
 
@@ -1734,7 +1757,7 @@ Docs land in the same commit as the code, per this repo's convention.
 | Foundation (pre-existing) | 14 | 16 | ✅ two are `⚠️ present but unwired` |
 | 0 · Fix the ruler | 5 | 6 | ⚠️ **still blocking Phase 5** — the three runs are unmade |
 | 1 · Store + curation surface | 22 | 22 | ✅ |
-| 2 · Match, short-circuit, badge | 0 | 12 | ❌ |
+| 2 · Match, short-circuit, badge | 12 | 12 | ✅ |
 | 3 · Capture | 0 | 9 | ❌ |
 | 4 · Store health | 0 | 7 | ❌ |
 | 5 · Few-shot | 0 | 7 | ❌ |
@@ -1742,7 +1765,7 @@ Docs land in the same commit as the code, per this repo's convention.
 | 7 · Embeddings | 0 | 5 | ❌ |
 | 8 · Permissions | 0 | 4 | ❌ |
 | Docs | 0 | 7 | ❌ |
-| **Plan total** | **27** | **86** | |
+| **Plan total** | **39** | **86** | |
 
 ### 13.13 Change log
 
@@ -1752,5 +1775,6 @@ over anything else in the document.
 | Date | What landed | Boxes ticked |
 |---|---|---|
 | 2026-08-31 | This plan written; the tree audited to establish the starting position | — (0 of 86) |
+| 2026-08-31 | **Phase 2 — match, short-circuit, badge.** `app/knowledge/matcher.py` (the Protocol, `LexicalMatcher` over an injected row source, `trigram_similarity` as Postgres' own algorithm, and the declared-value masking without which the plan's worked example scores 0.83) and `bind.py` (the date grammar and the cancel-on-unbound rule, substituting on the tree). The `match` node between `route` and `retrieve`, wired with both exits — a hit lands on `validate`, so a stored template reuses the guard, the rewriter and the row cap and gets no exemption; a miss writes nothing. `knowledge_template_hits` + migration `0016` + `runs.skip_templates`; every verdict logged, `OVERRIDDEN_BY_USER` included. The three-tier badge in `chat.tsx` with the matched question *and* the bound parameters, and *Generate a fresh answer instead* wired through `POST /runs/{id}/override`. 86 new backend tests. Docs: pipeline.md §2/§3 (the node, the graph, the eleven-node table), CLAUDE.md. **`PROMPT_VERSION` is still `v8`, and a test asserts it.** | 39 of 86 (§13.4, all 12) |
 | 2026-08-31 | **Phase 1 — the store and the curation surface.** `app/knowledge/` (models, normalize, params, validate) with an eighth import-linter contract; `knowledge_templates` + migration `0015` (`pg_trgm` inside a SAVEPOINT, so a role that may not create extensions still migrates); `knowledge_service.py`; `/connections/{id}/knowledge/*` with `can_curate` on every write and `is_admin` nowhere; the Knowledge tab, its DOM-free half and its 60-check suite. Five test files, 216 backend tests — the hostile corpus replayed through the fifth door on save, on use, and with a slot spliced in. Docs: CLAUDE.md (the guard's *five* entry points, a Knowledge templates section, the code map, the eighth contract), security.md §3.2/§3.3/§4.5 (the disclosure rung and the fifth door), docs/README.md (the three unindexed docs indexed together). **The store is inert: `PROMPT_VERSION` is still v8, nothing in `app/pipeline/` imports `app.knowledge`, and no chat answer behaves differently.** | 27 of 86 (§13.3, all 22) |
 | 2026-08-31 | **Phase 0 instruments.** `runs.prompt_version` records the prompt module's constant (+ `tests/unit/test_prompt_version.py`); the eval runner gained `--retrieve-budget` and `--semantic on\|off`, both off by default and both recorded on the scorecard; `backend/fixtures/sales_semantic.json` added as the layer-on arm's input; both decisions logged in `suites/CHANGELOG.md`. Docs: eval.md §1/§4/§6, CLAUDE.md, pipeline.md §5. **The three baseline runs were not made — no provider key in this environment.** | 5 of 86 (§13.2 boxes 1–5) |

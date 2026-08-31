@@ -84,6 +84,10 @@ class RunStatus(StrEnum):
 
 class StepName(StrEnum):
     ROUTE = "route"
+    # Between `route` and `retrieve`: "has somebody already answered this?".
+    # A hit jumps straight to `validate`; a miss changes nothing, which is what
+    # keeps the generated path's prompt byte-identical.
+    MATCH = "match"
     CLARIFY = "clarify"
     RETRIEVE = "retrieve"
     DESCRIBE = "describe"

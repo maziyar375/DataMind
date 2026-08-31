@@ -61,6 +61,7 @@ from app.pipeline.nodes import NodeDeps, _describe_schema, _render_history
 from app.pipeline.pipeline import AnalyticsPipeline
 from app.pipeline.prompts import PROMPT_VERSION
 from app.pipeline.state import RunState
+from app.services.knowledge_service import build_matcher, record_hit
 from app.services.query_service import (
     bind_connector,
     latest_snapshot,
@@ -124,6 +125,7 @@ class RunService:
         content: str,
         connection_id: UUID | None,
         llm_config_id: UUID | None,
+        skip_templates: bool = False,
     ) -> Run:
         conversation = await self._db.get(Conversation, conversation_id)
         if conversation is None or conversation.owner_id != owner_id:
@@ -183,6 +185,10 @@ class RunService:
                 "llm_config_name": llm_config.name,
             },
             prompt_version=self._prompt_version(),
+            # Set by *Generate a fresh answer instead*. Durable rather than
+            # in-memory because the replica that executes this run is not
+            # necessarily the one that created it.
+            skip_templates=skip_templates,
             status=RunStatus.QUEUED,
         )
         self._db.add(run)
@@ -349,6 +355,12 @@ class RunService:
             semantic=(semantic.model_dump(mode="json") if semantic else None),
             clarify_enabled=connection.clarify_enabled and pending is None,
             include_db_comments=connection.include_db_comments,
+            # The knowledge store. Always built — an empty store simply never
+            # matches, and the `match` node's miss path writes nothing and
+            # alters no prompt — except when the reader has asked for a fresh
+            # answer, where consulting it again would ignore them.
+            matcher=build_matcher(self._db),
+            templates_enabled=not run.skip_templates,
         )
 
         pipeline = AnalyticsPipeline(
@@ -406,6 +418,22 @@ class RunService:
             # and the results already paid for are still written, because a
             # cancelled run is a stopped run and not an erased one.
             run.status = status_now
+
+        # The match verdict, before anything else this run produced. Written
+        # here rather than in the node because a node never touches
+        # persistence — and written for a *rejection* as readily as for a hit,
+        # since the refusals are the numbers that say which grammars to teach
+        # the binder next and how fast the store is rotting.
+        if state.match_outcome:
+            await record_hit(
+                self._db,
+                run_id=run.id,
+                template_id=state.matched_template_id,
+                outcome=state.match_outcome,
+                matcher=state.match_kind or "LEXICAL",
+                score=state.match_score,
+                bound_params=state.bound_params,
+            )
 
         for attempt in state.attempts:
             gq = GeneratedQuery(

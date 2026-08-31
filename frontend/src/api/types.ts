@@ -407,6 +407,27 @@ export interface GeneratedQuery {
   referenced_tables: string[]
 }
 
+/**
+ * What the answer's badge says, and the evidence behind it.
+ *
+ * `question` and `bound_params` are not decoration. The matched question is
+ * the reader's only defence against a confident wrong match, and the bindings
+ * answer the next thing a suspicious reader wants to know — *did it think July
+ * or June?*
+ */
+export interface RunKnowledge {
+  tier: 'VERIFIED' | 'GROUNDED' | 'GENERATED'
+  template_id: string | null
+  /** The matched template's question, shown verbatim. */
+  question: string
+  /** `{ region: 'EMEA', from_date: '2026-01-01' }`. */
+  bound_params: Record<string, string>
+  score: number
+  matcher: string
+  /** True once somebody asked for a fresh answer instead of this one. */
+  overridden: boolean
+}
+
 export interface RunDetail {
   id: string
   conversation_id: string
@@ -420,6 +441,7 @@ export interface RunDetail {
   steps: RunStep[]
   artifacts: Artifact[]
   queries: GeneratedQuery[]
+  knowledge: RunKnowledge
 }
 
 export interface MessageWithRun {

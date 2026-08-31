@@ -1,10 +1,10 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   conversations, connections as connectionsApi, llmConfigs,
-  isRunInFlight, streamRun,
+  isRunInFlight, runs, streamRun,
 } from '../api/client'
 import type {
-  Connection, ConversationSummary, LlmConfig, MessageWithRun, RunStep,
+  Connection, ConversationSummary, LlmConfig, MessageWithRun, RunDetail, RunStep,
 } from '../api/types'
 import {
   AssistantTurn, RunErrorCard, UserBubble,
@@ -38,6 +38,14 @@ export default function ChatPage() {
   const [conversationList, setConversationList] = useState<ConversationSummary[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [messages, setMessages] = useState<MessageWithRun[]>([])
+  // Read by `regenerate`, which is given a stable identity so a transcript of
+  // memoised turns does not re-render on every streamed token. It needs the
+  // *current* transcript to find the question behind an answer, and a
+  // dependency array would defeat the point.
+  const messagesRef = useRef<MessageWithRun[]>([])
+  useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
   const [connections, setConnections] = useState<Connection[]>([])
   const [models, setModels] = useState<LlmConfig[]>([])
   const [connectionId, setConnectionId] = useState<string>('')
@@ -381,7 +389,7 @@ export default function ChatPage() {
 
   // ── send ────────────────────────────────────────────────────────────────
   /** `override` lets a suggestion chip send without waiting for a state tick. */
-  async function send(override?: string) {
+  async function send(override?: string, options?: { skipTemplates?: boolean }) {
     const content = (override ?? draft).trim()
     if (!content || activeRunId) return
 
@@ -424,6 +432,7 @@ export default function ChatPage() {
         content,
         connection_id: connectionId,
         llm_config_id: modelId,
+        skip_templates: options?.skipTemplates,
       })
       attachStream(accepted.run_id, conversationId)
     } catch (err) {
@@ -442,6 +451,42 @@ export default function ChatPage() {
   })
   const pickOption = useCallback((text: string) => {
     void sendRef.current(text)
+  }, [])
+
+  /**
+   * *Generate a fresh answer instead.*
+   *
+   * Two steps, and the order matters. The override is recorded **first**, so
+   * the measurement survives a reader who then closes the tab — and the
+   * override rate is the honest number for whether the short-circuit is
+   * trusted, which is what its threshold gets tuned from. Only then is the
+   * question re-asked, with the store switched off for that run.
+   *
+   * A failed recording does not block the re-ask: the reader asked for an
+   * answer, not for bookkeeping.
+   */
+  const regenerate = useCallback((run: RunDetail) => {
+    const asked = messagesRef.current.find(
+      (m) => m.role === 'ASSISTANT' && m.run?.id === run.id,
+    )
+    const index = asked ? messagesRef.current.indexOf(asked) : -1
+    const question = index > 0 ? messagesRef.current[index - 1].content : null
+
+    void (async () => {
+      try {
+        const knowledge = await runs.override(run.id)
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.run?.id === run.id && m.run
+              ? { ...m, run: { ...m.run, knowledge } }
+              : m,
+          ),
+        )
+      } catch {
+        /* the reader asked for an answer, not for bookkeeping */
+      }
+      if (question) await sendRef.current(question, { skipTemplates: true })
+    })()
   }, [])
 
   // A new chat starts empty and unbound: no database, no model, nothing
@@ -638,6 +683,7 @@ export default function ChatPage() {
                     // message, so the chips send exactly what typing would.
                     onPickOption={pickOption}
                     optionsDisabled={Boolean(activeRunId)}
+                    onRegenerate={regenerate}
                   />
                 )
               })}

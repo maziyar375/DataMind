@@ -391,6 +391,29 @@ class RunState(BaseModel):
     deadline_at: datetime
 
     intent: Literal["ANALYTICAL", "METADATA", "CHITCHAT", "UNSUPPORTED"] | None = None
+    # ── the knowledge match (Phase 2) ────────────────────────────────────
+    # Set by the `match` node and read by three consumers: the badge on the
+    # answer, the `knowledge_template_hits` row `run_service` writes, and the
+    # step trail's detail line. All four fields stay at their defaults on a
+    # run that never consulted the store, which is what makes a connection
+    # with no templates behave exactly as it did before this phase.
+    matched_template_id: UUID | None = None
+    match_score: float = 0.0
+    match_kind: Literal["LEXICAL", "EMBEDDING", ""] = ""
+    # SHORT_CIRCUIT | REJECTED_UNBOUND | REJECTED_STALE, or "" for "the store
+    # was not consulted, or nothing came close enough to have a verdict about".
+    # A rejection is recorded as carefully as a hit: the refusals are the
+    # numbers that say which grammars to add and how fast the store is rotting.
+    match_outcome: str = ""
+    #: What the binder filled each slot with — `{"region": "EMEA"}`. Shown on
+    #: the badge, because *"did it think July or June?"* is the next question a
+    #: suspicious reader has.
+    bound_params: dict[str, Any] = Field(default_factory=dict)
+    #: The matched template's question, shown verbatim on the badge. Carried on
+    #: the state rather than re-read later so the badge shows what *this run*
+    #: matched, even if the template has since been edited.
+    matched_question: str = ""
+
     clarification: ClarificationRequest | None = None
     context: RetrievedContext | None = None
     attempts: list[SqlAttempt] = Field(default_factory=list)

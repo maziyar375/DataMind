@@ -1283,6 +1283,10 @@ class MessageCreate(BaseModel):
     content: str = Field(min_length=1, max_length=8000)
     connection_id: UUID | None = None
     llm_config_id: UUID | None = None
+    # "Answer this without consulting the knowledge store." What *Generate a
+    # fresh answer instead* sends after recording the override — the one
+    # control that makes a Verified badge safe to show.
+    skip_templates: bool = False
 
 
 class RunStepRead(BaseModel):
@@ -1311,6 +1315,32 @@ class GeneratedQueryRead(BaseModel):
     referenced_tables: list[str]
 
 
+class RunKnowledge(BaseModel):
+    """What the answer's badge says, and the evidence behind it.
+
+    Three tiers, and the most consequential decision here is that **Generated
+    is not a warning**. It is the default path, it is most answers, and
+    dressing it in amber would train every reader to ignore amber within a
+    week. Verified *earns* a chip; Generated gets an honest sentence.
+
+    `question` and `bound_params` are not optional decoration. The matched
+    question is the reader's only defence against a confident wrong match, and
+    the bindings answer the next thing a suspicious reader wants to know —
+    *did it think July or June?*
+    """
+
+    tier: Literal["VERIFIED", "GROUNDED", "GENERATED"] = "GENERATED"
+    template_id: UUID | None = None
+    #: The matched template's question, shown verbatim.
+    question: str = ""
+    #: `{"region": "EMEA", "year": "2026-01-01"}`.
+    bound_params: dict[str, str] = Field(default_factory=dict)
+    score: float = 0.0
+    matcher: str = ""
+    #: True once somebody asked for a fresh answer instead of this one.
+    overridden: bool = False
+
+
 class RunRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
@@ -1325,6 +1355,7 @@ class RunRead(BaseModel):
     steps: list[RunStepRead] = Field(default_factory=list)
     artifacts: list[ArtifactRead] = Field(default_factory=list)
     queries: list[GeneratedQueryRead] = Field(default_factory=list)
+    knowledge: RunKnowledge = Field(default_factory=lambda: RunKnowledge())
 
 
 class MessageRead(BaseModel):

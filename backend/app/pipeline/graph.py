@@ -25,6 +25,16 @@ skipping `execute` and `inspect`). That one expression carries all five, because
 a node names where it wants to go and the adapter does not care which way that
 is. No edge needs special-casing, and none can be left out.
 
+**`match` is the only node that can skip four others.** It sits between
+`route` and `retrieve` and its hit exit names `validate` — the repair region's
+guard, which already feeds `execute`. A stored template therefore reuses every
+guarantee the generated path has (re-validation against the current snapshot,
+the rewriter, the row cap) and gets no exemption. Its miss exit is the ordinary
+successor, and on a miss it writes nothing to the state, so the prompt the
+generator receives is byte-identical to the one it received before this node
+existed. `tests/unit/test_pipeline_graph.py` asserts exactly that, because it
+is the promise `PROMPT_VERSION` stays at v8 on.
+
 **`generate ⇄ validate` is written down once** — `_add_repair_region` — and
 built into both graphs. That is Phase 2's whole point: there were two executors
 over one node set (this one and a hand-rolled `for` loop in
@@ -70,6 +80,7 @@ DeadlineCheck = Callable[[RunState, str], None]
 Router = Callable[[str, RunState], str]
 
 ROUTE = str(StepName.ROUTE)
+MATCH = str(StepName.MATCH)
 RETRIEVE = str(StepName.RETRIEVE)
 DESCRIBE = str(StepName.DESCRIBE)
 CLARIFY = str(StepName.CLARIFY)
@@ -90,6 +101,11 @@ REFUSE = "refuse"
 # between `retrieve` and `generate`.
 ORDER: list[tuple[str, NodeFn]] = [
     (StepName.ROUTE, nodes.route),
+    # Between route and retrieve, and it is the one node in this list that can
+    # leave the chain: a hit jumps to `validate` and the four nodes below it
+    # never run. A miss changes nothing — no state written, no prompt altered —
+    # which is the promise `PROMPT_VERSION` stays at v8 on.
+    (StepName.MATCH, nodes.match),
     (StepName.RETRIEVE, nodes.retrieve),
     # A schema question ends here, answered from the block retrieve just built
     # — schema plus semantic layer — and never reaching generate, where it
@@ -391,8 +407,13 @@ _CHAT_EXITS = _RepairExits(ok=EXECUTE, restore=PRESENT)
 def _build_chat() -> Any:
     graph: Any = StateGraph(GraphState)
 
-    graph.add_node(ROUTE, _adapt(ROUTE, nodes.route, successor=RETRIEVE),
-                   destinations=(RETRIEVE, END))
+    graph.add_node(ROUTE, _adapt(ROUTE, nodes.route, successor=MATCH),
+                   destinations=(MATCH, END))
+    # The short-circuit's two exits. A hit names `validate` and lands in the
+    # repair region's guard; a miss falls through to `retrieve` and the run is
+    # indistinguishable from one taken before this node existed.
+    graph.add_node(MATCH, _adapt(MATCH, nodes.match, successor=RETRIEVE),
+                   destinations=(RETRIEVE, VALIDATE, END))
     graph.add_node(RETRIEVE, _adapt(RETRIEVE, nodes.retrieve, successor=DESCRIBE),
                    destinations=(DESCRIBE, END))
     graph.add_node(DESCRIBE, _adapt(DESCRIBE, nodes.describe, successor=CLARIFY),

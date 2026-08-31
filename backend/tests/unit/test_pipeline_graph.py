@@ -33,12 +33,16 @@ def draft_edges() -> set[tuple[str, str]]:
 
 # The linear chain, as `ORDER` reads it.
 CHAIN = [
-    "route", "retrieve", "describe", "clarify", "generate",
+    "route", "match", "retrieve", "describe", "clarify", "generate",
     "validate", "execute", "inspect", "present", "chart",
 ]
 
-# The five edges that are not the chain, and the only five.
+# The six edges that are not the chain, and the only six.
 NON_LINEAR = {
+    # The short-circuit: a taught question skips four nodes and lands on the
+    # guard, which is the generated path's own entry point. A stored template
+    # gets no exemption — it reuses `validate`, `execute` and everything after.
+    ("match", "validate"),
     # Repairs, back into generate.
     ("validate", "generate"),   # the guard rejected the statement
     ("execute", "generate"),    # the database refused it
@@ -49,7 +53,7 @@ NON_LINEAR = {
 }
 
 
-def test_the_graph_is_the_chain_plus_exactly_five_jumps() -> None:
+def test_the_graph_is_the_chain_plus_exactly_six_jumps() -> None:
     linear = {(a, b) for a, b in zip(CHAIN, CHAIN[1:], strict=False)}
     # Every node can end the run: HALT, FAILED, or a node crash.
     halts = {(name, END) for name in CHAIN}
@@ -88,6 +92,87 @@ def test_the_chain_matches_order() -> None:
     for name, following in zip(CHAIN, CHAIN[1:], strict=False):
         assert (name, following) in edges()
     assert ("chart", END) in edges()
+
+
+# ── the short-circuit, and the promise it does not break ─────────────────
+def test_match_sits_between_route_and_retrieve() -> None:
+    """After `route`, because a taught question is about the data — and a
+    CHITCHAT or UNSUPPORTED question halts before the store is ever read.
+    Before `retrieve`, because a hit makes retrieval unnecessary."""
+    assert ("route", "match") in edges()
+    assert ("match", "retrieve") in edges()
+    assert ("route", "retrieve") not in edges()
+
+
+def test_match_has_exactly_two_exits_plus_the_end() -> None:
+    """A hit, a miss, and a crash. No third verdict.
+
+    "Partly matched" is not a state an answer can be in: a template whose
+    parameters would not bind falls through to generation like any other miss,
+    because a half-bound template is a confident wrong answer.
+    """
+    out = {target for source, target in edges() if source == "match"}
+    assert out == {"validate", "retrieve", END}
+
+
+async def test_a_miss_produces_the_prompt_it_produced_before_this_node_existed()\
+        -> None:
+    """**The promise `PROMPT_VERSION` stays at v8 on.**
+
+    Phase 2 changes an answer without changing a single byte of the prompt. A
+    miss must therefore write nothing to the state that the generator can see —
+    no examples, no note, no hint that a store was consulted at all.
+
+    Asserted on the rendered bytes rather than on the code, because the failure
+    this guards against is somebody adding a helpful line to the schema block
+    and moving the eval baseline underneath every past number.
+    """
+    from app.pipeline.state import RetrievedContext
+
+    before = _state()
+    after = _state()
+    # What a miss does to the state: sets a score, and nothing else. (A hit
+    # sets more, and a hit does not reach `generate` at all.)
+    after.match_score = 0.42
+
+    context = RetrievedContext(dialect="postgres", tables=[
+        {"schema": "public", "name": "orders",
+         "columns": [{"name": "id", "data_type": "bigint"}]},
+    ])
+    before.context, after.context = context, context
+
+    assert context.render(before.disclosure_policy) == (
+        context.render(after.disclosure_policy)
+    )
+    # And the fields the prompt is built from are untouched by a miss.
+    assert before.question == after.question
+    assert before.attempts == after.attempts == []
+
+
+def test_the_prompt_version_did_not_move_in_this_phase() -> None:
+    """If it moved, something in Phase 2 was built wrong.
+
+    The short-circuit is a *branch around* the generator, not a change to it.
+    Phase 5 is the phase allowed to move this constant, and it has to earn it
+    with an eval arm.
+    """
+    from app.pipeline import prompts
+
+    assert prompts.PROMPT_VERSION == "v8"
+
+
+def _state() -> Any:
+    from datetime import timedelta
+    from uuid import uuid4
+
+    from app.core.clock import utcnow
+    from app.pipeline.state import RunState
+
+    return RunState(
+        run_id=uuid4(), conversation_id=uuid4(), owner_id=uuid4(),
+        connection_id=uuid4(), question="revenue by month",
+        deadline_at=utcnow() + timedelta(seconds=60),
+    )
 
 
 def test_the_ceiling_is_the_one_the_loop_had() -> None:

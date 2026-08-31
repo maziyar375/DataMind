@@ -24,22 +24,27 @@ from app.api.schemas import (
     MessageAccepted,
     MessageCreate,
     MessageRead,
+    RunKnowledge,
     RunRead,
     RunStepRead,
     SuggestionsRead,
 )
-from app.core.errors import NotFoundError
+from app.core.errors import NotFoundError, ValidationError
 from app.domain.value_objects import RunStatus
 from app.infra.db.models import (
     Artifact,
     Conversation,
     GeneratedQuery,
+    KnowledgeTemplateHit,
+    KnowledgeTemplateRow,
     Message,
     Run,
     RunEventRow,
     RunStep,
+    SemanticLayerRow,
 )
 from app.infra.events.bus import event_bus
+from app.services.knowledge_service import record_hit
 from app.services.run_service import RunService
 
 router = APIRouter(tags=["conversations"])
@@ -213,6 +218,7 @@ async def post_message(
         content=payload.content,
         connection_id=payload.connection_id,
         llm_config_id=payload.llm_config_id,
+        skip_templates=payload.skip_templates,
     )
     await db.commit()
 
@@ -268,7 +274,75 @@ async def _hydrate_run(db, run: Run) -> RunRead:
     data.steps = [RunStepRead.model_validate(s) for s in steps.scalars()]
     data.artifacts = [ArtifactRead.model_validate(a) for a in artifacts.scalars()]
     data.queries = [GeneratedQueryRead.model_validate(q) for q in queries.scalars()]
+    data.knowledge = await _knowledge(db, run, data.queries)
     return data
+
+
+async def _knowledge(db, run: Run, queries: list[GeneratedQueryRead]) -> RunKnowledge:
+    """Which of the three tiers this answer earned, and the evidence for it.
+
+    Computed on read rather than stamped on the run row, for the reason every
+    other derived thing in this codebase is: the semantic layer moves, and an
+    answer's *Grounded* claim is a statement about what is described now.
+
+    The order matters. **Verified** is a fact about this run — it was answered
+    from a template — and outranks everything. **Grounded** is a fact about the
+    tables it touched. **Generated** is the default and carries no chip at all:
+    the moment ordinary answers wear a warning, the badge system is noise.
+    """
+    hits = await db.execute(
+        select(KnowledgeTemplateHit)
+        .where(KnowledgeTemplateHit.run_id == run.id)
+        .order_by(KnowledgeTemplateHit.created_at)
+    )
+    rows = list(hits.scalars())
+    short_circuit = next((h for h in rows if h.outcome == "SHORT_CIRCUIT"), None)
+    overridden = any(h.outcome == "OVERRIDDEN_BY_USER" for h in rows)
+
+    if short_circuit is not None:
+        question = ""
+        if short_circuit.template_id is not None:
+            template = await db.get(KnowledgeTemplateRow, short_circuit.template_id)
+            question = template.question if template else ""
+        return RunKnowledge(
+            tier="VERIFIED",
+            template_id=short_circuit.template_id,
+            question=question,
+            bound_params={
+                k: str(v) for k, v in (short_circuit.bound_params or {}).items()
+            },
+            score=short_circuit.score,
+            matcher=short_circuit.matcher,
+            overridden=overridden,
+        )
+
+    touched = {t.lower() for q in queries for t in (q.referenced_tables or [])}
+    if touched and run.connection_id is not None and await _all_described(
+        db, run.connection_id, touched
+    ):
+        return RunKnowledge(tier="GROUNDED", overridden=overridden)
+    return RunKnowledge(tier="GENERATED", overridden=overridden)
+
+
+async def _all_described(db, connection_id: UUID, tables: set[str]) -> bool:
+    """Whether the semantic layer has an entry for every table the SQL touched.
+
+    All of them, not most: *"every table it used is described in your semantic
+    layer"* is what the chip says, and a chip that is true four times out of
+    five is worse than no chip.
+    """
+    result = await db.execute(
+        select(SemanticLayerRow).where(SemanticLayerRow.connection_id == connection_id)
+    )
+    layer = result.scalar_one_or_none()
+    if layer is None or not layer.document:
+        return False
+    described = {
+        str(entity.get("table", "")).lower()
+        for entity in (layer.document.get("entities") or [])
+        if entity.get("valid", True)
+    }
+    return bool(described) and tables <= described
 
 
 @router.get("/runs/{run_id}", response_model=RunRead)
@@ -286,6 +360,58 @@ async def get_run_sql(run_id: UUID, ctx: CtxDep, db: DbDep) -> list[GeneratedQue
         .order_by(GeneratedQuery.attempt_no)
     )
     return [GeneratedQueryRead.model_validate(q) for q in result.scalars()]
+
+
+@router.post("/runs/{run_id}/override", response_model=RunKnowledge)
+async def override_run(run_id: UUID, ctx: CtxDep, db: DbDep) -> RunKnowledge:
+    """*Generate a fresh answer instead.* Records the rejection; asks nothing.
+
+    Two calls rather than one, deliberately: this records that a reader did not
+    believe a verified answer, and the client then re-asks the question with
+    `skip_templates`. Splitting them means the *measurement* survives even if
+    the reader closes the tab instead of re-asking — and that measurement is
+    the point. `OVERRIDDEN_BY_USER` is the honest number for whether the
+    short-circuit is trusted, and it is what the threshold is tuned from.
+
+    Idempotent: pressing it twice records one rejection, because a reader
+    clicking again is impatience, not a second opinion.
+    """
+    run = await _owned_run(db, run_id, ctx)
+    existing = await db.execute(
+        select(KnowledgeTemplateHit).where(
+            KnowledgeTemplateHit.run_id == run.id,
+            KnowledgeTemplateHit.outcome == "OVERRIDDEN_BY_USER",
+        )
+    )
+    if existing.scalars().first() is None:
+        hit = await db.execute(
+            select(KnowledgeTemplateHit).where(
+                KnowledgeTemplateHit.run_id == run.id,
+                KnowledgeTemplateHit.outcome == "SHORT_CIRCUIT",
+            )
+        )
+        answered = hit.scalars().first()
+        if answered is None:
+            raise ValidationError("This answer did not come from a saved question.")
+        await record_hit(
+            db,
+            run_id=run.id,
+            template_id=answered.template_id,
+            outcome="OVERRIDDEN_BY_USER",
+            matcher=answered.matcher,
+            score=answered.score,
+            bound_params=answered.bound_params,
+        )
+        await db.flush()
+
+    queries = await db.execute(
+        select(GeneratedQuery)
+        .where(GeneratedQuery.run_id == run.id)
+        .order_by(GeneratedQuery.attempt_no)
+    )
+    return await _knowledge(
+        db, run, [GeneratedQueryRead.model_validate(q) for q in queries.scalars()]
+    )
 
 
 @router.post("/runs/{run_id}/cancel", status_code=status.HTTP_202_ACCEPTED)

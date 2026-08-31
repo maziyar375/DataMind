@@ -349,7 +349,7 @@ async def test_the_draft_path_guards_with_the_connections_own_policy() -> None:
 
 # ── the chat side is untouched by the extraction ─────────────────────────
 @pytest.mark.asyncio
-async def test_the_chat_run_still_walks_all_ten_nodes() -> None:
+async def test_the_chat_run_still_walks_every_node() -> None:
     """The region did not swallow anything. `tests/unit/test_pipeline_events.py`
     asserts the full trail; this is the one-line version, here so a failure in
     this file says whether the extraction or the draft broke."""
@@ -360,6 +360,9 @@ async def test_the_chat_run_still_walks_all_ten_nodes() -> None:
     await AnalyticsPipeline(on_step=recorder.on_step).run(state, deps)
 
     assert [name for _seq, name, _status in rows(recorder)] == [
-        "route", "retrieve", "describe", "clarify", "generate",
+        # `match` sits between `route` and `retrieve` from Phase 2 of the
+        # learning loop, and is SKIPPED here because these deps carry no
+        # matcher — the pre-feature path, which has to stay free.
+        "route", "match", "retrieve", "describe", "clarify", "generate",
         "validate", "execute", "inspect", "present", "chart",
     ]

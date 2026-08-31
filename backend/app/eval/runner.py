@@ -186,6 +186,12 @@ async def evaluate_record(
         history=[], policy=policy, emit=emit,
         include_db_comments=include_db_comments,
         semantic=semantic,
+        # `matcher` stays None, deliberately and permanently on this path: the
+        # `match` node reports SKIPPED and every number on this suite measures
+        # the *generated* path. A run that answered a golden question from a
+        # template stored for that question would score 1.0 and mean nothing.
+        # Phase 5's `--templates on|off` arm is how the store gets measured,
+        # and it is an arm so both numbers exist side by side.
     )
     pipeline = AnalyticsPipeline(on_step=on_step)
 

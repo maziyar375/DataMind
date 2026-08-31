@@ -14,7 +14,8 @@ import type {
   LlmConfig, MessageWithRun, ProblemDetail, Report, ReportBlock,
   ReportBlockCheck, ReportChart, ReportRun, ReportRunDetail, ReportSection,
   ReportSectionResult,
-  ReportSummary, RunDetail, RunEvent, SchemaSnapshot, SemanticDocument, SemanticJob,
+  ReportSummary, RunDetail, RunEvent, RunKnowledge, SchemaSnapshot,
+  SemanticDocument, SemanticJob,
   SemanticLayer, SqlDraft, TemplateCheckResult, TemplateParam,
   TilePosition, TileResult, TileType, TestResult, User,
 } from './types'
@@ -313,8 +314,17 @@ export const conversations = {
     patch<ConversationSummary>(`/conversations/${id}`, payload),
   remove: (id: string) => del(`/conversations/${id}`),
   messages: (id: string) => get<MessageWithRun[]>(`/conversations/${id}/messages`),
-  send: (id: string, payload: { content: string; connection_id?: string; llm_config_id?: string }) =>
-    post<{ run_id: string; message_id: string }>(`/conversations/${id}/messages`, payload),
+  send: (
+    id: string,
+    payload: {
+      content: string
+      connection_id?: string
+      llm_config_id?: string
+      // "Answer this without consulting the knowledge store." Sent by
+      // *Generate a fresh answer instead*, after the override is recorded.
+      skip_templates?: boolean
+    },
+  ) => post<{ run_id: string; message_id: string }>(`/conversations/${id}/messages`, payload),
   suggestions: (id: string) =>
     get<{ suggestions: string[] }>(`/conversations/${id}/suggestions`),
 }
@@ -499,6 +509,11 @@ export function isRunInFlight(status: string): boolean {
 export const runs = {
   get: (id: string) => get<RunDetail>(`/runs/${id}`),
   cancel: (id: string) => post<{ cancelled: boolean }>(`/runs/${id}/cancel`),
+  // Records that a reader did not believe a verified answer. Split from
+  // re-asking on purpose: the *measurement* has to survive a reader who closes
+  // the tab instead of re-asking, and that measurement — the override rate —
+  // is what the short-circuit threshold is tuned from.
+  override: (id: string) => post<RunKnowledge>(`/runs/${id}/override`),
   artifact: (id: string) => get<{ id: string; kind: string; spec: ArtifactSpec }>(`/artifacts/${id}`),
   poll: (id: string, after: number) =>
     get<RunEvent[]>(`/runs/${id}/events/poll?after=${after}`),

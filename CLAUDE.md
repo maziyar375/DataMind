@@ -224,10 +224,12 @@ backend/app/
   pipeline/       the AI run: state.py (typed RunState), graph.py (the compiled
                   LangGraph + the node adapter), pipeline.py (the
                   AnalyticsPipeline facade over it),
-                  nodes/ (route→retrieve→describe→clarify→generate→validate→
-                  execute→inspect→present→chart — all ten are functions in the
-                  single file nodes/__init__.py, ~1,070 lines; there is no
-                  module per node), contracts.py (the node signature),
+                  nodes/ (route→match→retrieve→describe→clarify→generate→
+                  validate→execute→inspect→present→chart — all eleven are
+                  functions in the single file nodes/__init__.py; there is no
+                  module per node. `match` is the short-circuit: a taught
+                  question skips four nodes and lands on the guard),
+                  contracts.py (the node signature),
                   metadata.py (which tables a schema question is about, and the
                   rendered fallback answer),
                   prompts/, disclosure.py (result gate), checks.py (free result checks)
@@ -806,6 +808,48 @@ edited in Data sources → Knowledge.
   `semantic` and `reports` — no fastapi, sqlalchemy, litellm, `app.infra` or
   `app.services`. It *may* import `app.sqlguard`: validating a template **is**
   calling the guard, and that is the point.
+
+**Answering from the store — the `match` node (Phase 2).** Between `route` and
+`retrieve`, no model call, and it changes an answer **without changing a byte of
+the prompt** — `PROMPT_VERSION` is still `v8`.
+
+- **Two thresholds, not one.** `SHORT_CIRCUIT_THRESHOLD` (0.85) answers;
+  `FEW_SHOT_THRESHOLD` is Phase 5's. A near-miss is not a hit: a miss costs
+  today's behaviour, a false hit costs a confident wrong answer. The threshold
+  is tuned from the **override rate**, not from taste.
+- **`pg_trgm` is an index, not the verdict.** The row source narrows with the
+  GIN index where the extension exists; the score is always computed by
+  `trigram_similarity`, Postgres' own algorithm reimplemented. One scoring
+  path, so a deployment without the extension gets the same verdicts more
+  slowly rather than a different feature.
+- **The template's declared values are masked out of the question before
+  scoring.** Without it the canonical example — a `{region}` pattern against a
+  question naming EMEA — scores 0.83 and never fires, and lowering the
+  threshold to compensate would let real differences in. Masking can only
+  remove a difference the *curator* declared to be a value.
+- **Binding has a veto.** `bind.py` fills each slot from the question — a small
+  date grammar, a value the parameter's comment lists, a single numeral — and
+  **any slot that will not bind cancels the hit**, logged as
+  `REJECTED_UNBOUND`. A half-bound template is a confident wrong answer, and
+  the log is how the next grammar gets chosen. Substitution is on the tree:
+  there is no rendering in which a bound value becomes SQL.
+- **A hit lands on `validate`**, the guard's own entry point, so it is
+  re-validated against the current snapshot, rewritten and row-capped like
+  generated SQL. There is no new execution code in this phase.
+- **A stale template fails as a value**: `REJECTED_STALE`, the run falls
+  through to generation, the row is not deleted and the run does not fail.
+- **`NodeDeps.matcher = None` is the pre-feature path exactly** — SKIPPED,
+  nothing read, byte-identical prompt. The draft graph and the eval runner both
+  take it.
+- **Every verdict is logged** to `knowledge_template_hits`, including
+  `OVERRIDDEN_BY_USER` — written when a reader presses *Generate a fresh answer
+  instead*. That is the honest measure of whether the short-circuit is trusted,
+  and no vendor in the research publishes its equivalent.
+- **The badge is three tiers and "Generated" is not a warning.** Verified earns
+  a green chip **plus the matched question and the bound parameters** — the
+  reader's only defence against a confident wrong match. Grounded is a quiet
+  accent chip. Generated gets one honest sentence in faint text, because it is
+  most answers and dressing it in amber would train everyone to ignore amber.
 
 ---
 

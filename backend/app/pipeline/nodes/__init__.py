@@ -10,11 +10,14 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from app.core.clock import utcnow
 from app.core.errors import ConnectorError, LLMError
 from app.core.logging import get_logger
 from app.domain.ports.database import DatabaseConnector
 from app.domain.ports.llm import ChatMessage, LLMGateway, ResolvedLLM
 from app.domain.value_objects import DisclosurePolicy, HintBudget
+from app.knowledge.bind import bind_params, bind_sql
+from app.knowledge.matcher import TemplateMatcher, best
 from app.pipeline.checks import Finding
 from app.pipeline.contracts import ClarificationProposal, SqlProposal
 from app.pipeline.disclosure import disclose_history
@@ -82,6 +85,16 @@ class NodeDeps:
     # reason `clarify_enabled` does — a `NodeDeps` built without the connection
     # in hand renders what it always rendered.
     include_db_comments: bool = False
+    # The knowledge matcher, or None. **None is the pre-feature behaviour
+    # exactly**: `match` reports SKIPPED, nothing is read, and the prompt the
+    # generator receives is byte-identical to the one it received before this
+    # node existed — which is why `PROMPT_VERSION` does not move in Phase 2.
+    # The draft graph and the eval runner both leave it None.
+    matcher: TemplateMatcher | None = None
+    # Whether this run may consult the store at all. False when the reader
+    # pressed *Generate a fresh answer instead* on a verified answer: that is
+    # the one control that makes a Verified badge safe to show.
+    templates_enabled: bool = True
     # Extra constraints appended to every SQL-producing prompt, for callers
     # whose SQL has to satisfy something a chat question does not. Today that
     # is exactly one caller: a report block, whose statement is saved and
@@ -165,6 +178,96 @@ async def route(state: RunState, deps: NodeDeps) -> NodeResult:
     # queries information_schema, which the guard always rejects as a system
     # table — the run would fail before an answer could exist.
     return NodeResult(detail=f"Classified {state.intent} in {elapsed}ms")
+
+
+# ── match ────────────────────────────────────────────────────────────────
+async def match(state: RunState, deps: NodeDeps) -> NodeResult:
+    """Has somebody already answered this question? — the short-circuit.
+
+    The first node that can change an answer, and it does it **without
+    changing a single byte of the prompt**. On a hit it fills
+    `state.attempts` with the bound statement and hands over to `validate`,
+    which is the guard's own entry point for the pipeline and already feeds
+    `execute`. So a stored template reuses every guarantee the generated path
+    has — re-validation against the *current* snapshot, the rewriter, the row
+    cap — and gets **no exemption**. On a miss it changes nothing at all and
+    the run continues to `retrieve` exactly as it always did.
+
+    Four ways this node declines, and each is recorded rather than swallowed:
+
+    * **no matcher, or templates disabled** — SKIPPED, no verdict, nothing
+      logged. This is the pre-feature path and it has to be free.
+    * **nothing close enough** — a miss. A near-miss is not a hit: the cost of
+      a miss is today's behaviour and the cost of a false hit is a confident
+      wrong answer.
+    * **a parameter would not bind** — `REJECTED_UNBOUND`. Logged, because
+      that log is how we learn which date phrasings to teach the binder next.
+      A half-bound template is the failure class this product exists to avoid.
+    * **the SQL no longer passes the guard** — `REJECTED_STALE`. The schema
+      moved underneath a template that was legal when it was written. The run
+      does **not** fail and the row is **not** deleted: it falls through to
+      generation, and Phase 4's worker is what marks the row. *Fail as a
+      value.*
+
+    Validating here and again in `validate` is not waste. This one decides
+    *whether the template is still usable*; that one produces *the statement to
+    run*, with the row cap applied. Same function, two questions.
+    """
+    if deps.matcher is None or not deps.templates_enabled:
+        return NodeResult(status="SKIPPED", detail="No knowledge store consulted")
+    if state.intent != "ANALYTICAL":
+        # METADATA is answered from the schema block by `describe`; a taught
+        # question is about the data, not about the shape of it.
+        return NodeResult(status="SKIPPED", detail=f"Not analytical ({state.intent})")
+
+    try:
+        candidates = await deps.matcher.match(state.question, state.connection_id)
+    except Exception:
+        # A matcher failure must never fail a run. The question is answerable
+        # without the store — that is what the store being an accelerator,
+        # rather than a dependency, means.
+        log.warning("template_match_failed", run_id=str(state.run_id))
+        return NodeResult(status="SKIPPED", detail="Knowledge store unavailable")
+
+    hit = best(candidates)
+    if hit is None:
+        near = candidates[0].score if candidates else 0.0
+        return NodeResult(detail=f"No template matched (best {near:.2f})")
+
+    template = hit.template
+    state.match_score = hit.score
+    state.match_kind = hit.matcher
+
+    binding = bind_params(state.question, template.params, now=utcnow())
+    if not binding.bound:
+        state.match_outcome = "REJECTED_UNBOUND"
+        state.matched_template_id = template.id
+        return NodeResult(
+            detail=f"Matched, but {', '.join(binding.missing)} would not bind"
+        )
+
+    bound_sql = bind_sql(template.sql, binding.values, dialect=deps.policy.dialect)
+    report, _ = guard(bound_sql or "", deps.policy) if bound_sql else (None, None)
+    if report is None or report.status != "VALID":
+        state.match_outcome = "REJECTED_STALE"
+        state.matched_template_id = template.id
+        reason = report.errors[0].message if report and report.errors else "unparseable"
+        return NodeResult(detail=f"Matched, but the template is stale: {reason}")
+
+    state.matched_template_id = template.id
+    state.matched_question = template.question
+    state.bound_params = {k: str(v) for k, v in binding.values.items()}
+    state.match_outcome = "SHORT_CIRCUIT"
+    state.attempts.append(
+        SqlAttempt(attempt_no=1, raw_sql=bound_sql, report=ValidationReport())
+    )
+    await deps.emit(
+        "SQL_GENERATED", {"attempt_no": 1, "sql": bound_sql}
+    )
+    return NodeResult(
+        goto="validate",
+        detail=f"Answered from a saved question ({hit.score:.2f})",
+    )
 
 
 def _tables_from_history(
