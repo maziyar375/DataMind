@@ -1,0 +1,722 @@
+{
+  "_README": "The `sales` fixture's SEMANTIC LAYER — the layer-on arm of the eval A/B (`--semantic on`). Written by hand, never generated, so the arm is deterministic and costs no tokens to set up. THE AUTHORING RULE, and the only thing that keeps this arm honest: every claim here is the structured form of a fact already stated in sales_seed.sql or sales_comments.sql. Nothing was written by reading app/eval/suites/sales_v1.json — a layer authored against the gold answers measures the author, not the feature. The two deliberate plants in the comments overlay (customers.segment stale, orders.subtotal wrong) are carried here in their TRUE form: this layer is human-curated and reviewed, which is exactly the difference between it and a DDL comment that rotted. `joins` is empty on purpose — app.semantic.derive_joins reads cardinality and fan-out off the catalog at load time, which is what the product does too, so the fan-out cautions in the rendered block are derived from the fixture rather than typed here. The runner binds this document to the live snapshot with validate_document() and REFUSES TO RUN if any entry is invalid: a half-resolving layer is a measurement of nothing.",
+  "document_version": 1,
+  "business_context": "Order-to-cash for the online storefront: catalogue, customers, orders, fulfilment and returns. Loaded nightly from the ERP; the current day is always partial until the 03:00 UTC run.",
+  "default_exclusions": "closed customer accounts (customers.is_deleted = true), and the deprecated public.product table, whose six rows are a 2019 migration leftover.",
+  "time": {
+    "fiscal_year_start_month": 1,
+    "week_starts_on": "monday",
+    "timezone": "UTC",
+    "relative_windows": "calendar",
+    "notes": "the nightly load lands at 03:00 UTC, so today is always partial",
+    "provenance": {"source": "human", "edited": true, "reviewed": true}
+  },
+  "entities": [
+    {
+      "table": "public.orders",
+      "label": "Orders",
+      "description": "One row per checkout, at any stage of its life. Cancelled and returned orders keep their money on them.",
+      "synonyms": ["sales", "purchases"],
+      "grain": "one row per customer order",
+      "role": "fact",
+      "default_time_column": "order_date",
+      "provenance": {"source": "human", "edited": true, "reviewed": true},
+      "columns": [
+        {
+          "name": "status",
+          "label": "Order status",
+          "description": "Where the order got to. Not every order is a sale",
+          "role": "dimension",
+          "value_meanings": {
+            "completed": "fulfilled and paid",
+            "shipped": "in transit",
+            "pending": "not yet fulfilled",
+            "cancelled": "called off",
+            "returned": "refunded"
+          }
+        },
+        {
+          "name": "channel",
+          "label": "Sales channel",
+          "description": "web is the storefront, phone is taken by a rep, partner is a reseller's system",
+          "role": "dimension"
+        },
+        {
+          "name": "total_amount",
+          "label": "Order total",
+          "description": "What the customer was billed: subtotal less discount, plus tax and shipping. This is the revenue figure for an order",
+          "role": "measure",
+          "unit": "USD"
+        },
+        {
+          "name": "subtotal",
+          "label": "Goods value",
+          "description": "The value of the lines before discount, tax and shipping. Not what the customer paid — that is total_amount",
+          "role": "measure",
+          "unit": "USD"
+        },
+        {
+          "name": "order_date",
+          "label": "Order date",
+          "description": "The calendar day the order was placed; placed_at is the same event with a timestamp",
+          "role": "time"
+        },
+        {
+          "name": "employee_id",
+          "label": "Rep",
+          "description": "The rep who booked it, NULL for web orders — an inner join here drops the storefront",
+          "role": "key"
+        },
+        {
+          "name": "cust_ref",
+          "label": "Legacy reference",
+          "description": "Reference from the OMS retired in 2022. Sparse and not a key — never join on it",
+          "role": "attribute"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "revenue",
+          "label": "Revenue",
+          "description": "what the customer was billed, tax and shipping included",
+          "synonyms": ["sales", "turnover", "gross revenue"],
+          "expression": "SUM(orders.total_amount)",
+          "unit": "USD"
+        },
+        {
+          "name": "order_count",
+          "label": "Orders",
+          "description": "counted DISTINCT so a join to the lines cannot inflate it",
+          "synonyms": ["number of orders", "how many orders"],
+          "expression": "COUNT(DISTINCT orders.id)"
+        },
+        {
+          "name": "average_order_value",
+          "label": "Average order value",
+          "synonyms": ["AOV", "basket size"],
+          "expression": "AVG(orders.total_amount)",
+          "additive": "non_additive",
+          "unit": "USD"
+        },
+        {
+          "name": "discount_given",
+          "label": "Discount given",
+          "description": "money taken off by promotions and coupons together",
+          "expression": "SUM(orders.discount_total)",
+          "unit": "USD"
+        }
+      ]
+    },
+    {
+      "table": "public.order_items",
+      "label": "Order lines",
+      "description": "The bridge between the catalogue and revenue: anything about products, brands, suppliers or tags reaches orders only through here.",
+      "synonyms": ["line items", "order lines"],
+      "grain": "one row per product line on an order",
+      "role": "bridge",
+      "provenance": {"source": "human", "edited": true, "reviewed": true},
+      "columns": [
+        {
+          "name": "line_total",
+          "label": "Line value",
+          "description": "quantity x unit_price after the line's discount. Summed over an order this gives its subtotal, not its total_amount",
+          "role": "measure",
+          "unit": "USD"
+        },
+        {
+          "name": "unit_price",
+          "label": "Unit price",
+          "description": "the price at the time of sale, which can differ from products.price today",
+          "role": "measure",
+          "unit": "USD"
+        },
+        {
+          "name": "discount",
+          "label": "Line discount",
+          "description": "percent off this line, already reflected in line_total — do not subtract it twice",
+          "role": "measure",
+          "unit": "percent"
+        },
+        {
+          "name": "variant_id",
+          "label": "Variant",
+          "description": "the colour/size variant sold, NULL on lines sold at product level",
+          "role": "key"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "line_revenue",
+          "label": "Line revenue",
+          "description": "the goods value of the lines; an order's tax and shipping are not in here",
+          "synonyms": ["product revenue", "revenue by product"],
+          "expression": "SUM(order_items.line_total)",
+          "unit": "USD"
+        },
+        {
+          "name": "units_sold",
+          "label": "Units sold",
+          "synonyms": ["quantity sold", "volume"],
+          "expression": "SUM(order_items.quantity)",
+          "unit": "units"
+        }
+      ]
+    },
+    {
+      "table": "public.payments",
+      "label": "Payments",
+      "description": "Money received against an order. Only fulfilled orders have one.",
+      "grain": "one row per capture against an order",
+      "role": "fact",
+      "default_time_column": "paid_at",
+      "provenance": {"source": "human", "edited": true, "reviewed": true},
+      "columns": [
+        {
+          "name": "amount",
+          "label": "Amount captured",
+          "description": "in the order's currency. One payment per order — instalments were never migrated",
+          "role": "measure",
+          "unit": "USD"
+        },
+        {
+          "name": "paid_at",
+          "label": "Captured at",
+          "description": "up to three days after the order was placed; use orders.order_date for when the sale happened",
+          "role": "time"
+        },
+        {
+          "name": "status",
+          "label": "Settlement state",
+          "description": "everything here is captured; authorised-only and failed attempts live in the gateway",
+          "role": "dimension"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "amount_captured",
+          "label": "Amount captured",
+          "description": "cash received, which is not the same as revenue booked",
+          "expression": "SUM(payments.amount)",
+          "unit": "USD"
+        }
+      ]
+    },
+    {
+      "table": "public.returns",
+      "label": "Returns",
+      "description": "One row per returned order line. Only approved returns produce a refund.",
+      "grain": "one row per returned order line",
+      "role": "fact",
+      "default_time_column": "returned_at",
+      "provenance": {"source": "human", "edited": true, "reviewed": true},
+      "columns": [
+        {
+          "name": "status",
+          "label": "Return status",
+          "description": "approved or rejected; only approved ones are refunded",
+          "role": "dimension"
+        },
+        {
+          "name": "refund_amount",
+          "label": "Credited",
+          "description": "what was credited for the returned units, before any restocking fee",
+          "role": "measure",
+          "unit": "USD"
+        },
+        {
+          "name": "reason",
+          "label": "Reason",
+          "description": "free text from a fixed list — treat it as a label, not a code",
+          "role": "dimension"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "returned_units",
+          "label": "Units returned",
+          "expression": "SUM(returns.quantity)",
+          "filters": ["returns.status = 'approved'"],
+          "unit": "units"
+        },
+        {
+          "name": "credited_amount",
+          "label": "Credited",
+          "description": "what an approved return was worth; refunds.amount is what actually left the account",
+          "expression": "SUM(returns.refund_amount)",
+          "filters": ["returns.status = 'approved'"],
+          "unit": "USD"
+        }
+      ]
+    },
+    {
+      "table": "public.refunds",
+      "label": "Refunds",
+      "description": "Money sent back for an approved return.",
+      "grain": "one row per refund paid out",
+      "role": "fact",
+      "default_time_column": "processed_at",
+      "provenance": {"source": "human", "edited": true, "reviewed": true},
+      "columns": [
+        {
+          "name": "payment_id",
+          "label": "Original capture",
+          "description": "NULL for store-credit refunds, which are tied to no capture",
+          "role": "key"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "refunded",
+          "label": "Refunded",
+          "description": "money that actually left the account",
+          "expression": "SUM(refunds.amount)",
+          "unit": "USD"
+        }
+      ]
+    },
+    {
+      "table": "public.shipments",
+      "label": "Shipments",
+      "description": "One dispatch from a warehouse. An order can ship in several consignments.",
+      "grain": "one row per consignment",
+      "role": "fact",
+      "default_time_column": "shipped_at",
+      "provenance": {"source": "human", "edited": true, "reviewed": true},
+      "columns": [
+        {
+          "name": "delivered_at",
+          "label": "Delivered at",
+          "description": "NULL while the consignment is still in transit",
+          "role": "time"
+        },
+        {
+          "name": "status",
+          "label": "Shipment status",
+          "description": "delivered once the carrier confirmed, in_transit until then",
+          "role": "dimension"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "shipment_count",
+          "label": "Shipments",
+          "description": "consignments, not orders — an order can ship more than once",
+          "expression": "COUNT(DISTINCT shipments.id)"
+        }
+      ]
+    },
+    {
+      "table": "public.reviews",
+      "label": "Product reviews",
+      "grain": "one row per customer review of a product",
+      "role": "fact",
+      "default_time_column": "created_at",
+      "provenance": {"source": "human", "edited": true, "reviewed": true},
+      "columns": [
+        {
+          "name": "rating",
+          "label": "Stars",
+          "description": "1 to 5, whole numbers; 1 is the worst",
+          "role": "measure",
+          "unit": "stars"
+        },
+        {
+          "name": "is_hidden",
+          "label": "Hidden by moderation",
+          "description": "true for reviews moderation pulled; they stay in the table",
+          "role": "dimension"
+        },
+        {
+          "name": "customer_id",
+          "label": "Author",
+          "description": "NULL when the review was left anonymously",
+          "role": "key"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "average_rating",
+          "label": "Average rating",
+          "description": "moderated-out reviews are not part of a public average",
+          "synonyms": ["star rating", "customer rating"],
+          "expression": "AVG(reviews.rating)",
+          "filters": ["reviews.is_hidden = false"],
+          "additive": "non_additive",
+          "unit": "stars"
+        }
+      ]
+    },
+    {
+      "table": "public.support_tickets",
+      "label": "Support tickets",
+      "description": "Not every contact is about an order.",
+      "grain": "one row per customer contact",
+      "role": "fact",
+      "default_time_column": "opened_at",
+      "provenance": {"source": "human", "edited": true, "reviewed": true},
+      "columns": [
+        {
+          "name": "status",
+          "label": "Ticket status",
+          "description": "open and pending are still with us; resolved and closed are finished, and only those carry closed_at",
+          "role": "dimension"
+        },
+        {
+          "name": "order_id",
+          "label": "Order",
+          "description": "NULL for pre-sales and account questions",
+          "role": "key"
+        }
+      ],
+      "metrics": []
+    },
+    {
+      "table": "public.customers",
+      "label": "Customers",
+      "description": "Rows are never deleted; is_deleted marks a closed account.",
+      "synonyms": ["accounts", "buyers"],
+      "grain": "one row per customer account",
+      "role": "dimension",
+      "default_time_column": "signed_up_at",
+      "provenance": {"source": "human", "edited": true, "reviewed": true},
+      "columns": [
+        {
+          "name": "is_deleted",
+          "label": "Account closed",
+          "description": "soft delete — about 8% of the table, kept for the order history hanging off it",
+          "role": "dimension"
+        },
+        {
+          "name": "segment",
+          "label": "Commercial segment",
+          "description": "how the account is managed",
+          "role": "dimension",
+          "value_meanings": {
+            "SMB": "small and medium business",
+            "Mid-Market": "mid-market",
+            "Enterprise": "enterprise"
+          }
+        },
+        {
+          "name": "last_order_at",
+          "label": "Last order",
+          "description": "refreshed by the nightly load; NULL for accounts that never ordered",
+          "role": "time"
+        },
+        {
+          "name": "credit_limit",
+          "label": "Credit limit",
+          "description": "a commercial term — it says nothing about what the customer has bought",
+          "role": "measure",
+          "unit": "USD"
+        },
+        {
+          "name": "referred_by_id",
+          "label": "Referred by",
+          "description": "the existing customer who referred this one; self-referencing and mostly NULL",
+          "role": "key"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "customer_count",
+          "label": "Customers",
+          "description": "open accounts",
+          "expression": "COUNT(DISTINCT customers.id)",
+          "filters": ["customers.is_deleted = false"]
+        }
+      ]
+    },
+    {
+      "table": "public.products",
+      "label": "Products",
+      "description": "The sellable catalogue, current and retired.",
+      "synonyms": ["catalogue", "items", "SKUs"],
+      "grain": "one row per sellable product",
+      "role": "dimension",
+      "provenance": {"source": "human", "edited": true, "reviewed": true},
+      "columns": [
+        {
+          "name": "price",
+          "label": "List price",
+          "description": "current list price before any promotion; what a line actually sold at is order_items.unit_price",
+          "role": "measure",
+          "unit": "USD"
+        },
+        {
+          "name": "cost",
+          "label": "Unit cost",
+          "description": "what we pay our supplier per unit; margin is price - cost. NULL where we never bought directly",
+          "role": "measure",
+          "unit": "USD"
+        },
+        {
+          "name": "category",
+          "label": "Legacy category label",
+          "description": "denormalised text kept for the old reporting stack and not maintained. category_id is the real relationship",
+          "role": "attribute"
+        },
+        {
+          "name": "discontinued",
+          "label": "Withdrawn",
+          "description": "true once withdrawn from sale for good; withdrawn products keep their order history",
+          "role": "dimension"
+        },
+        {
+          "name": "flg_2",
+          "label": "Legacy flag",
+          "description": "meaning lost; never filter on it",
+          "role": "attribute"
+        }
+      ],
+      "metrics": []
+    },
+    {
+      "table": "public.product",
+      "label": "Product (deprecated)",
+      "description": "The 2019 migration leftover. The live catalogue is public.products.",
+      "grain": "six stale rows from the 2019 migration — the live catalogue is public.products, and nothing here belongs in an answer",
+      "role": "lookup",
+      "provenance": {"source": "human", "edited": true, "reviewed": true},
+      "columns": [],
+      "metrics": []
+    },
+    {
+      "table": "public.employees",
+      "label": "Employees",
+      "description": "Sales staff, past and present.",
+      "synonyms": ["staff", "reps"],
+      "grain": "one row per member of sales staff",
+      "role": "dimension",
+      "default_time_column": "hired_at",
+      "provenance": {"source": "human", "edited": true, "reviewed": true},
+      "columns": [
+        {
+          "name": "terminated_at",
+          "label": "Left on",
+          "description": "set once they have left; NULL for current staff",
+          "role": "time"
+        },
+        {
+          "name": "salary",
+          "label": "Base salary",
+          "description": "annual base excluding commission. Confidential — aggregate it, do not list it per person",
+          "role": "measure",
+          "unit": "USD"
+        },
+        {
+          "name": "commission_pct",
+          "label": "Commission rate",
+          "description": "on booked revenue; 0 for staff not on a commission plan",
+          "role": "measure",
+          "unit": "percent"
+        },
+        {
+          "name": "manager_id",
+          "label": "Manager",
+          "description": "self-referencing; NULL for the six people at the top",
+          "role": "key"
+        }
+      ],
+      "metrics": []
+    },
+    {
+      "table": "public.regions",
+      "label": "Sales territories",
+      "description": "How the business slices the world. A region groups a country but is not one.",
+      "synonyms": ["territories", "areas"],
+      "grain": "one row per sales territory",
+      "role": "dimension",
+      "provenance": {"source": "human", "edited": true, "reviewed": true},
+      "columns": [
+        {
+          "name": "country_id",
+          "label": "Country",
+          "description": "NULL for legacy territories such as Unassigned",
+          "role": "key"
+        }
+      ],
+      "metrics": []
+    },
+    {
+      "table": "public.inventory",
+      "label": "Stock on hand",
+      "description": "A snapshot of now, overwritten by the warehouse feed.",
+      "synonyms": ["stock"],
+      "grain": "one row per product per warehouse, with no history — it cannot answer a question about a past date",
+      "role": "fact",
+      "provenance": {"source": "human", "edited": true, "reviewed": true},
+      "columns": [
+        {
+          "name": "quantity",
+          "label": "Units on hand",
+          "description": "physically on the shelf, including units already allocated to an unshipped order",
+          "role": "measure",
+          "unit": "units"
+        },
+        {
+          "name": "reorder_level",
+          "label": "Reorder level",
+          "description": "the level at which purchasing is prompted; a threshold, not a target",
+          "role": "measure",
+          "unit": "units"
+        }
+      ],
+      "metrics": [
+        {
+          "name": "units_on_hand",
+          "label": "Units on hand",
+          "expression": "SUM(inventory.quantity)",
+          "additive": "semi_additive",
+          "unit": "units"
+        }
+      ]
+    },
+    {
+      "table": "public.suppliers",
+      "label": "Suppliers",
+      "description": "Companies we buy from.",
+      "grain": "one row per supplier",
+      "role": "dimension",
+      "provenance": {"source": "human", "edited": true, "reviewed": true},
+      "columns": [
+        {
+          "name": "lead_time_days",
+          "label": "Lead time",
+          "description": "contracted working days from purchase order to delivery; product_suppliers overrides it per product",
+          "role": "measure",
+          "unit": "days"
+        },
+        {
+          "name": "rating",
+          "label": "Supplier score",
+          "description": "internal, 1 to 5, reviewed quarterly. Not a customer-facing rating",
+          "role": "measure"
+        }
+      ],
+      "metrics": []
+    },
+    {
+      "table": "public.promotions",
+      "label": "Promotions",
+      "description": "Marketing campaigns. A promotion reaches an order through order_promotions or through a coupon; the two paths overlap.",
+      "synonyms": ["campaigns", "offers"],
+      "grain": "one row per marketing campaign",
+      "role": "dimension",
+      "provenance": {"source": "human", "edited": true, "reviewed": true},
+      "columns": [
+        {
+          "name": "discount_pct",
+          "label": "Headline discount",
+          "description": "for percent-type promotions only; ignored for bogo and fixed",
+          "role": "measure",
+          "unit": "percent"
+        }
+      ],
+      "metrics": []
+    },
+    {
+      "table": "public.order_promotions",
+      "label": "Promotions applied",
+      "grain": "one row per promotion applied to an order — an order can carry several",
+      "role": "bridge",
+      "provenance": {"source": "human", "edited": true, "reviewed": true},
+      "columns": [
+        {
+          "name": "discount_amount",
+          "label": "Attributed discount",
+          "description": "the part of the order's discount_total this promotion accounts for",
+          "role": "measure",
+          "unit": "USD"
+        }
+      ],
+      "metrics": []
+    },
+    {
+      "table": "public.product_suppliers",
+      "label": "Product sourcing",
+      "grain": "one row per product per supplier — most products have two, so joining it to order lines multiplies revenue",
+      "role": "bridge",
+      "provenance": {"source": "human", "edited": true, "reviewed": true},
+      "columns": [],
+      "metrics": []
+    },
+    {
+      "table": "public.product_tags",
+      "label": "Merchandising tags",
+      "grain": "one row per tag on a product — a product carries about four, so a per-tag total counts one sale once per tag",
+      "role": "bridge",
+      "provenance": {"source": "human", "edited": true, "reviewed": true},
+      "columns": [],
+      "metrics": []
+    },
+    {
+      "table": "public.employee_teams",
+      "label": "Team membership",
+      "grain": "one row per rep per team — some reps sit in two, so revenue by team will not add up to company revenue",
+      "role": "bridge",
+      "provenance": {"source": "human", "edited": true, "reviewed": true},
+      "columns": [],
+      "metrics": []
+    },
+    {
+      "table": "public.sales_daily_rollup",
+      "label": "Daily sales rollup",
+      "description": "Convenient and dangerous: rebuilt nightly for the trailing 90 days only.",
+      "grain": "one row per region per day, for the TRAILING 90 DAYS ONLY — anything reaching further back must be answered from orders and order_items",
+      "role": "fact",
+      "default_time_column": "day",
+      "provenance": {"source": "human", "edited": true, "reviewed": true},
+      "columns": [
+        {
+          "name": "gross_revenue",
+          "label": "Gross revenue",
+          "description": "sum of order_items.line_total for that region and day; refunds are not netted off",
+          "role": "measure",
+          "unit": "USD"
+        },
+        {
+          "name": "refunds_total",
+          "label": "Refunds",
+          "description": "not populated by the current job — read it as zero, not as no refunds",
+          "role": "measure",
+          "unit": "USD"
+        }
+      ],
+      "metrics": []
+    }
+  ],
+  "joins": [],
+  "glossary": [
+    {
+      "term": "revenue",
+      "meaning": "orders.total_amount summed — what customers were billed. Line-level questions use order_items.line_total, which excludes tax and shipping",
+      "maps_to": ["revenue", "line_revenue"],
+      "provenance": {"source": "human", "edited": true, "reviewed": true}
+    },
+    {
+      "term": "AOV",
+      "meaning": "average order value, AVG(orders.total_amount)",
+      "maps_to": ["average_order_value"],
+      "provenance": {"source": "human", "edited": true, "reviewed": true}
+    },
+    {
+      "term": "units",
+      "meaning": "order_items.quantity, never a count of order lines",
+      "maps_to": ["units_sold"],
+      "provenance": {"source": "human", "edited": true, "reviewed": true}
+    },
+    {
+      "term": "fulfilled",
+      "meaning": "an order that reached completed, shipped or returned — the states that have a payment against them",
+      "maps_to": ["public.orders"],
+      "provenance": {"source": "human", "edited": true, "reviewed": true}
+    },
+    {
+      "term": "net revenue",
+      "meaning": "revenue less refunds.amount over the same period; nothing in the schema stores it",
+      "maps_to": ["revenue", "refunded"],
+      "provenance": {"source": "human", "edited": true, "reviewed": true}
+    }
+  ]
+}

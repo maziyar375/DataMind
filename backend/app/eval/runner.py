@@ -60,6 +60,7 @@ from app.infra.crypto.aesgcm_box import AesGcmSecretBox
 from app.infra.db.models import EvalResult, EvalRun, LlmConfig
 from app.infra.db.session import dispose_engine, get_sessionmaker
 from app.infra.llm.litellm_gateway import LiteLLMGateway, estimate_cost_usd
+from app.pipeline import nodes
 from app.pipeline.nodes import NodeDeps
 from app.pipeline.pipeline import AnalyticsPipeline
 from app.pipeline.prompts import PROMPT_VERSION
@@ -155,6 +156,7 @@ async def evaluate_record(
     model_name: str,
     with_cost: bool = True,
     include_db_comments: bool = False,
+    semantic: dict[str, Any] | None = None,
 ) -> RecordOutcome:
     o = RecordOutcome(
         record_id=record.id, tags=record.tags, difficulty=record.difficulty,
@@ -183,6 +185,7 @@ async def evaluate_record(
         llm_gateway=gateway, llm=llm, connector=connector, snapshot=snapshot,
         history=[], policy=policy, emit=emit,
         include_db_comments=include_db_comments,
+        semantic=semantic,
     )
     pipeline = AnalyticsPipeline(on_step=on_step)
 
@@ -306,13 +309,14 @@ async def run_suite(
     with_cost: bool = True,
     progress: bool = False,
     include_db_comments: bool = False,
+    semantic: dict[str, Any] | None = None,
 ) -> list[RecordOutcome]:
     outcomes: list[RecordOutcome] = []
     for i, record in enumerate(records, 1):
         outcome = await evaluate_record(
             record, gateway=gateway, llm=llm, connector=connector, snapshot=snapshot,
             policy=policy, settings=settings, model_name=model_name, with_cost=with_cost,
-            include_db_comments=include_db_comments,
+            include_db_comments=include_db_comments, semantic=semantic,
         )
         outcomes.append(outcome)
         if progress:
@@ -338,6 +342,7 @@ async def evaluate_negative(
     policy: GuardPolicy,
     settings: Settings,
     include_db_comments: bool = False,
+    semantic: dict[str, Any] | None = None,
 ) -> RecordOutcome:
     o = RecordOutcome(record_id=record.id, tags=[record.category], difficulty="n/a")
 
@@ -359,6 +364,7 @@ async def evaluate_negative(
         llm_gateway=gateway, llm=llm, connector=connector, snapshot=snapshot,
         history=[], policy=policy, emit=emit,
         include_db_comments=include_db_comments,
+        semantic=semantic,
     )
     try:
         state = await AnalyticsPipeline(on_step=on_step).run(state, deps)
@@ -419,6 +425,58 @@ def aggregate_negatives(outcomes: list[RecordOutcome]) -> dict[str, Any]:
         "by_category": by_cat,
         "outcome_counts": dict(Counter(o.outcome for o in outcomes)),
     }
+
+
+# ── the semantic arm ─────────────────────────────────────────────────────────
+
+
+def load_semantic(spec: FixtureSpec, snapshot: dict[str, Any]) -> dict[str, Any]:
+    """The fixture's checked-in semantic layer, bound to the snapshot in hand.
+
+    The same three steps `semantic_service` performs for a real connection, in
+    the same order, so the arm measures the layer the product would render and
+    not a hand-shaped variant of it: validate every entry against the schema,
+    derive the joins off the catalog, hand the pipeline a plain dict.
+
+    **A layer with a broken entry aborts the run.** An entity that no longer
+    resolves is silently dropped by the renderer, so a drifted document would
+    quietly produce a layer-on arm that is layer-on for some questions and
+    layer-off for others — a number nobody could interpret and everybody would
+    quote. Better to refuse and say which entry.
+    """
+    from app.semantic import (
+        SemanticDocument,
+        build_index,
+        derive_joins,
+        validate_document,
+    )
+
+    if spec.semantic_path is None:
+        raise ValueError(f"fixture {spec.name} has no semantic layer to load")
+
+    raw = json.loads(spec.semantic_path.read_text())
+    index = build_index(snapshot["tables"], snapshot["dialect"])
+    doc = validate_document(SemanticDocument.model_validate(raw), index)
+    # Empty in the file, derived here — cardinality and fan-out are read off the
+    # catalog, which is where the product reads them from too.
+    doc.joins = derive_joins(snapshot.get("relationships", []), index)
+
+    broken = [
+        f"{e.table}: {e.issue}" for e in doc.entities if not e.valid
+    ] + [
+        f"{e.table}.{c.name}: {c.issue}"
+        for e in doc.entities for c in e.columns if not c.valid
+    ] + [
+        f"{e.table} metric {m.name}: {m.issue}"
+        for e in doc.entities for m in e.metrics if not m.valid
+    ]
+    if broken:
+        raise ValueError(
+            f"{spec.semantic_path.name} no longer binds to the {spec.name} "
+            "schema, so the layer-on arm would be layer-on for only part of "
+            "the suite:\n  " + "\n  ".join(broken)
+        )
+    return doc.model_dump(mode="json")
 
 
 # ── fixture lifecycle (testcontainers) ───────────────────────────────────────
@@ -635,8 +693,22 @@ async def _amain(args: argparse.Namespace) -> int:
     spec = dataset.fixture_for(records[0].connection_fixture)
     gateway = LiteLLMGateway.from_settings(settings)
 
+    # Lowering the retrieve budget is a RUNNER decision, never a code edit: the
+    # ceiling that ships is the one the request path must run at, and an eval
+    # that quietly measured a different one would be measuring nothing anyone
+    # uses. It is a module constant so a caller can lower it (the same seam
+    # `tests/eval/test_runner.py` uses) and the effective value is recorded on
+    # the scorecard below, because a recall figure is meaningless without it.
+    if args.retrieve_budget is not None:
+        nodes._RETRIEVE_BUDGET_CHARS = args.retrieve_budget
+    budget_chars = nodes._RETRIEVE_BUDGET_CHARS
+
     started_at = utcnow()
-    arm = "with catalog comments" if args.comments else "no catalog comments"
+    arm = ", ".join([
+        "with catalog comments" if args.comments else "no catalog comments",
+        "semantic layer on" if args.semantic == "on" else "semantic layer off",
+        f"retrieve budget {budget_chars:,}",
+    ])
     print(f"Spinning fixture {spec.name} ({spec.image}, {arm}) …", file=sys.stderr)
     async with spin_fixture(spec, comments=args.comments) as params:
         connector = build_connector(kind=spec.dialect, **params)
@@ -652,6 +724,10 @@ async def _amain(args: argparse.Namespace) -> int:
             policy = build_policy(
                 snap, DatabaseKind(spec.dialect).sqlglot_dialect, settings.default_max_rows
             )
+            # After introspection because the document is bound to the snapshot
+            # it will be rendered against — the same order the request path
+            # takes, and the only order in which drift is detectable.
+            semantic = load_semantic(spec, snap) if args.semantic == "on" else None
             print(
                 f"Running {len(records)} question(s) through the real pipeline …",
                 file=sys.stderr,
@@ -661,7 +737,7 @@ async def _amain(args: argparse.Namespace) -> int:
                     await evaluate_negative(
                         r, gateway=gateway, llm=llm, connector=connector,
                         snapshot=snap, policy=policy, settings=settings,
-                        include_db_comments=args.comments,
+                        include_db_comments=args.comments, semantic=semantic,
                     )
                     for r in records
                 ]
@@ -671,7 +747,7 @@ async def _amain(args: argparse.Namespace) -> int:
                 outcomes = await run_suite(
                     records, gateway=gateway, llm=llm, connector=connector, snapshot=snap,
                     policy=policy, settings=settings, model_name=model_name, progress=True,
-                    include_db_comments=args.comments,
+                    include_db_comments=args.comments, semantic=semantic,
                 )
                 report = metrics.aggregate(outcomes)
                 report_dict = metrics.report_to_dict(report)
@@ -681,6 +757,12 @@ async def _amain(args: argparse.Namespace) -> int:
             # `eval_runs`, which is the whole comparison Phase 6 exists to make.
             report_dict["catalog_comments"] = bool(args.comments)
             report_dict["catalog_meta"] = snap.get("catalog_meta") or {}
+            report_dict["semantic_layer"] = semantic is not None
+            # Recorded because retrieval recall cannot be read without it: at a
+            # budget above the fixture's ~26.5k chars every question takes
+            # FULL_SNAPSHOT and recall is 1.0 by construction, which is not the
+            # same statement as "retrieval worked".
+            report_dict["retrieve_budget_chars"] = budget_chars
             if negative:
                 rendered = json.dumps(report_dict, indent=2)
             else:
@@ -792,7 +874,12 @@ def _apply_gates(report: dict[str, Any], args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The CLI, split out so the arms can be asserted on without a container.
+
+    What a test pins here is the default: every arm is **off**, so a bare
+    `--suite sales_v1` is the run every earlier number was measured on.
+    """
     parser = argparse.ArgumentParser(prog="app.eval.runner", description=__doc__)
     parser.add_argument("--suite", required=True, help="suite name, e.g. sales_v1")
     parser.add_argument(
@@ -809,6 +896,20 @@ def main(argv: list[str] | None = None) -> int:
         help="load the fixture's COMMENT ON overlay and render catalog comments "
         "into the prompt (the commented arm of the A/B; off is byte-identical "
         "to every run before the feature)",
+    )
+    parser.add_argument(
+        "--semantic", choices=("on", "off"), default="off",
+        help="render the fixture's semantic layer into the prompt (the layer-on "
+        "arm; off is byte-identical to every run before the layer existed)",
+    )
+    parser.add_argument(
+        "--retrieve-budget", type=int, default=None, metavar="CHARS",
+        help="lower the retrieve node's budget for this run (default: the "
+        f"shipped {nodes._RETRIEVE_BUDGET_CHARS:,}). The sales fixture estimates "
+        "~26,500 chars, so at the shipped ceiling every question takes "
+        "FULL_SNAPSHOT and retrieval recall is 1.0 by construction; pass "
+        "something under it to measure a recall that can miss. Recorded on the "
+        "scorecard.",
     )
     # CI gates (all optional; absent = report only, never fail).
     parser.add_argument(
@@ -827,7 +928,11 @@ def main(argv: list[str] | None = None) -> int:
         "--max-regression", type=float, default=0.02,
         help="max allowed drop from the baseline before failing (default 0.02)",
     )
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     return asyncio.run(_amain(args))
 
 

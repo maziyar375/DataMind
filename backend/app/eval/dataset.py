@@ -98,6 +98,13 @@ class FixtureSpec:
     # would mean editing the suite — the one thing docs/eval.md forbids. The
     # arms are therefore the same fixture loaded two ways.
     comments_path: Path | None = None
+    # The fixture's hand-written semantic layer, loaded when the runner is asked
+    # for the layer-on arm (`--semantic on`). A file rather than a generated
+    # document for the same reason the golden set is a file: an arm whose input
+    # is regenerated per run measures the generator, not the layer. It is bound
+    # to the live snapshot by `runner.load_semantic`, which refuses to run the
+    # arm if any entry no longer resolves.
+    semantic_path: Path | None = None
 
 
 _FIXTURES_ROOT = Path(__file__).resolve().parents[2] / "fixtures"
@@ -109,6 +116,7 @@ FIXTURES: dict[str, FixtureSpec] = {
         image="postgres:16-alpine",
         seed_path=_FIXTURES_ROOT / "sales_seed.sql",
         comments_path=_FIXTURES_ROOT / "sales_comments.sql",
+        semantic_path=_FIXTURES_ROOT / "sales_semantic.json",
     ),
 }
 

@@ -59,6 +59,7 @@ from app.infra.events.listener import notify_run_event
 from app.infra.llm.litellm_gateway import LiteLLMGateway
 from app.pipeline.nodes import NodeDeps, _describe_schema, _render_history
 from app.pipeline.pipeline import AnalyticsPipeline
+from app.pipeline.prompts import PROMPT_VERSION
 from app.pipeline.state import RunState
 from app.services.query_service import (
     bind_connector,
@@ -97,6 +98,22 @@ class RunService:
             settings.secret_box_key.get_secret_value(),
             settings.secret_box_key_version,
         )
+
+    def _prompt_version(self) -> str:
+        """The version a run records: the constant that renders its prompts.
+
+        `runs.prompt_version` exists so a change in wording never silently
+        invalidates a historical comparison, which it can only do if it names
+        the prompt the run actually used. It used to be written from
+        `settings.prompt_version` — a default that said "v2" long after the
+        module had reached v8, so **every** run in the database claimed a
+        version none of them had run, and any number sliced by it was fiction.
+
+        `settings.prompt_version` survives as an override for an experiment
+        that wants its runs filed under a label of its own; empty (the
+        shipped default) means "record what rendered it".
+        """
+        return (self._settings.prompt_version or "").strip() or PROMPT_VERSION
 
     # ── creation ─────────────────────────────────────────────────────────
     async def create_run(
@@ -165,7 +182,7 @@ class RunService:
                 "connection_name": connection.name,
                 "llm_config_name": llm_config.name,
             },
-            prompt_version=self._settings.prompt_version,
+            prompt_version=self._prompt_version(),
             status=RunStatus.QUEUED,
         )
         self._db.add(run)
@@ -339,6 +356,12 @@ class RunService:
                 run_id, seq, name, status, detail, ms
             )
         )
+
+        # Re-stamped here rather than trusted from `create_run`, because this
+        # is the process that renders the bytes. A run queued by one replica
+        # and claimed by another after a deploy would otherwise be filed under
+        # the version of the prompt module that never touched it.
+        run.prompt_version = self._prompt_version()
 
         try:
             state = await pipeline.run(state, deps)

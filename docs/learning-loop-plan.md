@@ -10,8 +10,9 @@
 > **Four decisions were taken before writing this** (§0.2). They are recorded
 > here rather than re-argued: everything below assumes them.
 >
-> **Nothing here is built yet — 0 of 86 items, verified against the tree on
-> 2026-08-31.** [§13](#13-progress-ledger--what-is-done-what-is-not) is the
+> **5 of 86 items, verified against the tree on 2026-08-31.** Phase 0 has
+> landed except its three baseline runs, which need a provider key.
+> [§13](#13-progress-ledger--what-is-done-what-is-not) is the
 > ledger: what is already in the codebase and load-bearing (§13.1), then a
 > checkbox per deliverable per phase, each with the check that proves its state.
 > Tick a box in the commit that lands the work, never ahead of it.
@@ -1529,7 +1530,8 @@ it is not, no amount of Phase 5 will help.
 > reading the code, not by memory; every ❌ was confirmed absent the same way.
 > The verification note beside each item is what to re-run to check it again.
 >
-> **Status: 0 of 86 plan items complete. No phase has started.** What is done is
+> **Status: 5 of 86 plan items complete** (Phase 0, everything but the three
+> measurements themselves — see §13.2). What is done besides that is
 > the *foundation* the plan leans on (§13.1) — which is substantial, and is why
 > the research put the loop at "60% built and not wired up".
 >
@@ -1563,17 +1565,18 @@ one, and because the plan would be much larger if any were missing.
 | ⚠️ | **`audit_logs` table exists — and nothing writes to it.** Phase 8 turns it on | `grep -rn AuditLog backend/app` returns only the model |
 | ⚠️ | **`eval_runs` / `eval_results` exist — written only by the dev CLI.** Phase 6 deliberately does *not* reuse them | [eval/runner.py:494](../backend/app/eval/runner.py#L494) |
 
-### 13.2 Phase 0 — Fix the ruler · **0 / 6** ❌ not started
+### 13.2 Phase 0 — Fix the ruler · **5 / 6** ⚠️ instruments built, the three runs not made
 
-- [ ] `runs.prompt_version` records the constant that rendered the prompt, not `settings.prompt_version` — **confirmed broken:** [config.py:77](../backend/app/core/config.py#L77) is `"v2"`, [prompts/__init__.py:14](../backend/app/pipeline/prompts/__init__.py#L14) is `"v8"`, [run_service.py:168](../backend/app/services/run_service.py#L168) writes the former
-- [ ] A test that fails on today's code and asserts the run row equals `prompts.PROMPT_VERSION`
-- [ ] The eval runner can lower `_RETRIEVE_BUDGET_CHARS` from the command line — **confirmed absent:** the runner has `--suite --llm-config --limit --tag --json --comments --fail-under --require-zero-policy-violations --baseline-file --max-regression`, and no budget flag; the constant is hardcoded at [nodes/__init__.py:260](../backend/app/pipeline/nodes/__init__.py#L260)
-- [ ] The budget decision recorded in `app/eval/suites/CHANGELOG.md`
-- [ ] A `--semantic on|off` arm — **confirmed absent:** `grep -n semantic app/eval/runner.py` returns nothing; the runner has no way to pass `NodeDeps.semantic`
-- [ ] The three Phase 0 baselines written into [eval.md](eval.md): accuracy layer-off, accuracy layer-on, recall at a budget that can miss
+- [x] `runs.prompt_version` records the constant that rendered the prompt, not `settings.prompt_version` — `RunService._prompt_version()` returns `prompts.PROMPT_VERSION` unless the setting overrides it, and `execute_run` re-stamps the row in the process that renders the bytes; `core/config.py` now defaults the setting to `None`
+- [x] A test that fails on today's code and asserts the run row equals `prompts.PROMPT_VERSION` — `tests/unit/test_prompt_version.py`, six tests; four of them fail against `HEAD~` (verified by stashing the two source files and re-running)
+- [x] The eval runner can lower `_RETRIEVE_BUDGET_CHARS` from the command line — `--retrieve-budget CHARS`, recorded on the scorecard as `retrieve_budget_chars`; `tests/eval/test_runner.py` pins that recall is 1.0 at the shipped ceiling and misses beneath it
+- [x] The budget decision recorded in `app/eval/suites/CHANGELOG.md` — with the reason the fixture was *not* widened instead, and the comparability trap stated once
+- [x] A `--semantic on|off` arm — plus the thing it needs to switch on: `backend/fixtures/sales_semantic.json` (21 entities, 14 metrics), bound to the live snapshot by `runner.load_semantic`, which aborts the run rather than render a half-binding layer
+- [ ] The three Phase 0 baselines written into [eval.md](eval.md): accuracy layer-off, accuracy layer-on, recall at a budget that can miss — **the table is in [eval.md §6](eval.md) with the three commands and empty cells.** Each run calls a real provider and needs an `llm_configs` row with a working key; there is none in this environment, so the numbers are not on paper and this box stays open
 
 > **This is the gate on everything else.** Phase 5 is not allowed to start until
-> the last box here is ticked.
+> the last box here is ticked — and it is the *numbers* that tick it, not the
+> instruments that produce them.
 
 ### 13.3 Phase 1 — The store and the curation surface · **0 / 22** ❌ not started
 
@@ -1709,7 +1712,7 @@ Docs land in the same commit as the code, per this repo's convention.
 | Phase | Done | Total | Status |
 |---|:--:|:--:|---|
 | Foundation (pre-existing) | 14 | 16 | ✅ two are `⚠️ present but unwired` |
-| 0 · Fix the ruler | 0 | 6 | ❌ **blocking** |
+| 0 · Fix the ruler | 5 | 6 | ⚠️ **still blocking** — the three runs are unmade |
 | 1 · Store + curation surface | 0 | 22 | ❌ |
 | 2 · Match, short-circuit, badge | 0 | 12 | ❌ |
 | 3 · Capture | 0 | 9 | ❌ |
@@ -1719,7 +1722,7 @@ Docs land in the same commit as the code, per this repo's convention.
 | 7 · Embeddings | 0 | 5 | ❌ |
 | 8 · Permissions | 0 | 4 | ❌ |
 | Docs | 0 | 7 | ❌ |
-| **Plan total** | **0** | **86** | |
+| **Plan total** | **5** | **86** | |
 
 ### 13.13 Change log
 
@@ -1729,3 +1732,4 @@ over anything else in the document.
 | Date | What landed | Boxes ticked |
 |---|---|---|
 | 2026-08-31 | This plan written; the tree audited to establish the starting position | — (0 of 86) |
+| 2026-08-31 | **Phase 0 instruments.** `runs.prompt_version` records the prompt module's constant (+ `tests/unit/test_prompt_version.py`); the eval runner gained `--retrieve-budget` and `--semantic on\|off`, both off by default and both recorded on the scorecard; `backend/fixtures/sales_semantic.json` added as the layer-on arm's input; both decisions logged in `suites/CHANGELOG.md`. Docs: eval.md §1/§4/§6, CLAUDE.md, pipeline.md §5. **The three baseline runs were not made — no provider key in this environment.** | 5 of 86 (§13.2 boxes 1–5) |

@@ -42,24 +42,57 @@ The schema is deliberately wide — 42 tables, 599 columns — because it was bu
 to **exceed the retrieve node's budget**, so that retrieval was genuinely
 exercised rather than trivially correct.
 
-> **That is no longer true, and the metric it protects is currently blind.**
-> `_RETRIEVE_BUDGET_CHARS` was raised **24,000 → 50,000** (`pipeline/nodes`, for
-> a good reason of its own: the exact-name fallback misses `order_items` for a
-> user who typed "order items"). The fixture's estimate — `sum(60 + 40*ncols)`,
-> printed by `make fixtures` — is **26,480**, which now sits *under* the ceiling.
-> So `retrieve` takes the `FULL_SNAPSHOT` branch on every question in this
-> suite, all 42 tables reach the generator, and **retrieval recall is 1.0 by
-> construction**. The baseline's `retrieval_recall: 0.864` was measured under
-> the old ceiling and cannot be reproduced today.
+> **At the shipped ceiling that is no longer true, and recall reports a
+> constant.** `_RETRIEVE_BUDGET_CHARS` was raised **24,000 → 50,000**
+> (`pipeline/nodes`, for a good reason of its own: the exact-name fallback
+> misses `order_items` for a user who typed "order items"). The fixture's
+> estimate — `sum(60 + 40*ncols)`, printed by `make fixtures` — is **26,480**,
+> which sits *under* the ceiling. So `retrieve` takes the `FULL_SNAPSHOT` branch
+> on every question in this suite, all 42 tables reach the generator, and
+> **retrieval recall is 1.0 by construction**. The baseline's
+> `retrieval_recall: 0.864` was measured under the old ceiling.
 >
-> Nothing here is broken — the pipeline is behaving as designed and the answers
-> are, if anything, better for it. What is broken is the *measurement*: recall
-> and full-hit rate report a constant, and the fixture's width no longer buys
-> what its header says it buys. Fixing it means widening the fixture past 50k or
-> making the eval run at a lower ceiling; both are real decisions, and neither
-> belongs to whoever notices this next in a hurry. Found on 2026-08-14 while
-> building the commented arm below — see
+> **The decision taken (2026-08-31, Phase 0 of
+> [learning-loop-plan.md](learning-loop-plan.md)): the eval can be run at a lower
+> ceiling, and the fixture was left alone.** `--retrieve-budget CHARS` lowers it
+> for one run — a runner flag, never a code edit, because the ceiling that ships
+> is the one the request path must run at. Widening the fixture instead would
+> have moved every other number on the suite at the same time. Absent the flag a
+> run is byte-identical to every run before it, and the effective value is
+> recorded on the scorecard as `retrieve_budget_chars`, because **a recall
+> figure cannot be read without it** — see
+> [`suites/CHANGELOG.md`](../backend/app/eval/suites/CHANGELOG.md), and never
+> put a lowered-budget recall in the same sentence as a full-snapshot one.
+> Originally found on 2026-08-14 while building the commented arm below — see
 > [catalog-metadata-plan.md](catalog-metadata-plan.md) §10.
+
+### The semantic-layer arm
+
+`--semantic on` renders the fixture's own semantic layer —
+`backend/fixtures/sales_semantic.json`, 21 entities and 14 metrics — into every
+SQL prompt, exactly as a connection with a layer would. `runner.load_semantic`
+binds it to the snapshot the run introspected (`validate_document`, then
+`derive_joins` off the catalog, the same two steps `semantic_service` performs)
+and **aborts the run if any entry no longer resolves**: a half-binding document
+would make the arm layer-on for some questions and layer-off for others.
+
+```bash
+python -m app.eval.runner --suite sales_v1                    # layer off
+python -m app.eval.runner --suite sales_v1 --semantic on      # layer on
+```
+
+It is a checked-in file rather than a generated document because an arm whose
+input is regenerated per run measures the generator. **Every claim in it is the
+structured form of a fact already in `sales_seed.sql` or `sales_comments.sql`,
+and it was not written by reading the golden set** — a layer authored against
+the gold answers measures its author. Two of those restated facts add a
+predicate a question did not ask for (closed customer accounts are excluded by
+default; `average_rating` excludes moderated-out reviews), so if a gold answer
+disagrees with the fixture's own documentation, the layer-on arm loses that
+point. That is a finding about the layer, not a licence to edit the gold set.
+
+The arm is recorded on the scorecard as `semantic_layer`, so two `eval_runs`
+rows that differ only in this can be told apart afterwards.
 
 ### The commented arm
 
@@ -227,7 +260,14 @@ python -m app.eval.runner --suite sales_v1 --tag join    # one slice
 python -m app.eval.runner --suite sales_v1_negative      # the routing set
 python -m app.eval.runner --suite sales_v1 --json        # machine-readable
 python -m app.eval.runner --suite sales_v1 --comments    # with catalog comments
+python -m app.eval.runner --suite sales_v1 --semantic on # with the semantic layer
+python -m app.eval.runner --suite sales_v1 --retrieve-budget 12000   # recall can miss
 ```
+
+**Every arm is off by default**, which is what keeps a bare `--suite sales_v1`
+the run every earlier number was measured on. Three of them are recorded on the
+scorecard — `catalog_comments`, `semantic_layer`, `retrieve_budget_chars` — so a
+report can be attributed afterwards rather than remembered.
 
 **Behind a rate-limiting provider, use the wrapper instead:**
 
@@ -315,6 +355,34 @@ actually ran.
 That is the habit this doc is asking for. The harness produces a number; whether
 the number *means* anything is still a judgement, and it belongs in the write-up
 rather than in the tool output.
+
+### The Phase 0 baselines — the ruler, before anything is measured with it
+
+[learning-loop-plan.md §3.1](learning-loop-plan.md#31-phase-0--fix-the-ruler)
+blocks its Phase 5 on three numbers being on paper here. The instruments exist
+as of 2026-08-31; **the three runs have not been made** — each calls a real
+provider and needs an `llm_configs` row with a working key. Fill this table from
+the runs, not from memory, and record the `eval_run` UUID beside each.
+
+| # | Arm | Command | Execution accuracy | Retrieval recall | `eval_run` |
+|---|---|---|---|---|---|
+| 1 | v8, layer **off** | `--suite sales_v1` | *not yet run* | 1.0 by construction | — |
+| 2 | v8, layer **on** | `--suite sales_v1 --semantic on` | *not yet run* | 1.0 by construction | — |
+| 3 | recall at a budget that can miss | `--suite sales_v1 --retrieve-budget 12000` | *not yet run* | *not yet run* | — |
+
+Three rules for whoever runs them:
+
+- **Same model, same temperature, all three**, and name it in the row. Two
+  numbers from different models do not belong in one sentence (§5).
+- **Rows 1 and 2 differ in one thing.** No `--comments`, no budget flag: the
+  layer is the only variable, which is the whole point of the pair.
+- **Row 3's accuracy is not comparable to rows 1 and 2.** A question whose
+  tables retrieval no longer selects is a question the model cannot answer; the
+  number that matters in that row is recall, and the accuracy beside it is
+  context for it.
+
+Until row 3 exists, no claim that a change improved retrieval is falsifiable on
+this suite, and the plan's Phase 5 (few-shot injection) is not allowed to start.
 
 ### What the eval has actually settled
 

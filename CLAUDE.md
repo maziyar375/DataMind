@@ -275,12 +275,15 @@ backend/           ← these are SIBLINGS of app/, not inside it
                   sales_seed_mysql.sql and sales_seed_mssql.sql dialect mirrors
                   + rebuild_fixtures.sh (`make fixtures`); each a wide,
                   deliberately-messy 42-table commerce schema with a read-only
-                  role, built to *exceed* the retrieve budget — which it no
-                  longer does: the budget was raised 24k → 50k and the fixture
-                  estimates 26,480, so the eval now runs entirely on
-                  FULL_SNAPSHOT and recall is 1.0 by construction (docs/eval.md
-                  §1 — read it before quoting a recall number).
-                  sales_comments.sql is the eval's commented arm.
+                  role, built to *exceed* the retrieve budget — which at the
+                  shipped ceiling it no longer does: the budget was raised
+                  24k → 50k and the fixture estimates 26,480, so a default run
+                  is entirely FULL_SNAPSHOT and recall is 1.0 by construction.
+                  `--retrieve-budget CHARS` lowers the ceiling for one run,
+                  which is how recall is measured now (docs/eval.md §1 — read it
+                  before quoting a recall number).
+                  sales_comments.sql is the eval's commented arm and
+                  sales_semantic.json its semantic-layer arm.
                   demo_seed.sql + demo_comments.sql are `aurora`, the DEMO
                   fixture — a different artifact for a different job, tuned to
                   the chart budgets (see "The three demo databases" above).
@@ -939,15 +942,18 @@ Four rules that matter more than any number it prints:
    v2**, on 2026-07-26. Against a different model or different settings it is
    meaningless — read its `_README` before quoting it, and never put two numbers
    from different models in one sentence. That `v2` is genuine: the constant
-   really was v2 that day. It is **v7 now**, and every row written since claims
-   v2 anyway — see the drift note under "Adding things → Prompt changes" before
-   you read a version field on any later run as evidence of anything.
-4. **Retrieval recall currently measures nothing.** `_RETRIEVE_BUDGET_CHARS` was
-   raised 24k → 50k and the fixture estimates 26,480, so `retrieve` takes
-   `FULL_SNAPSHOT` on every question and recall is **1.0 by construction**. Do
-   not compare a post-50k recall figure to a pre-50k one. Fixing it means
-   widening the fixture or running the eval at a lower ceiling — a real
-   decision, not a chore.
+   really was v2 that day. It is **v8 now**. Rows written between 2026-07-26 and
+   2026-08-31 claim `v2` whatever they ran, because `runs.prompt_version` was
+   stamped from a config default that had drifted — fixed in Phase 0 (see
+   "Adding things → Prompt changes"), but **no historical row was rewritten**,
+   so a version field on a run from that window is still not evidence.
+4. **Retrieval recall is 1.0 by construction at the shipped ceiling — lower it
+   to measure it.** `_RETRIEVE_BUDGET_CHARS` was raised 24k → 50k and the
+   fixture estimates 26,480, so a default run takes `FULL_SNAPSHOT` on every
+   question. `--retrieve-budget CHARS` lowers it for one run (a runner flag, not
+   a code edit — the shipped ceiling is the one the request path must use), and
+   the effective value is recorded on the scorecard as `retrieve_budget_chars`.
+   Never compare a lowered-budget recall figure to a full-snapshot one.
 
 An exhausted retry scores `OUTCOME_ERROR`, which is **indistinguishable in the
 report from the model getting the question wrong** — which is why the wrapper
@@ -1070,16 +1076,22 @@ where someone would otherwise repeat them: a "getting the answer right" block in
   move **none** of them, by convention — the eval scores generated SQL, and
   nothing on the SQL-producing path changed.
 
-  **`runs.prompt_version` lies, and this is a known bug.** `run_service` stamps
-  it from `settings.prompt_version` (`core/config.py`), a *separate* string
-  whose default is still `"v2"` and which nobody updates from the
-  `PROMPT_VERSION` constant. The two agreed until 2026-07-26 and have diverged
-  ever since, so every run and every eval row written since then claims `v2`
-  while the prompts are at v7. Record the constant by hand in any eval write-up,
-  or a comparison across phases is meaningless. `docs/pipeline.md` §7 records the
-  drift; the eval reports under `app/eval/reports/` each note it in their own
-  header. Fixing it properly means reading the constant at the call site — but
-  that reclassifies every historical row, so decide it deliberately.
+  **`runs.prompt_version` used to lie, and rows from that window still do.**
+  `run_service` stamped it from `settings.prompt_version` (`core/config.py`), a
+  *separate* string whose default said `"v2"` while the constant moved to v8, so
+  every run written between 2026-07-26 and 2026-08-31 claims a version it never
+  ran. **Fixed 2026-08-31** (Phase 0 of `docs/learning-loop-plan.md`): a run now
+  records `prompts.PROMPT_VERSION` — resolved by `RunService._prompt_version`,
+  stamped at creation and again by the process that renders the prompt, so a run
+  queued by one replica and claimed by another after a deploy is filed under the
+  module that actually rendered it. `settings.prompt_version` survives as an
+  **override** for an experiment and is empty by default;
+  `tests/unit/test_prompt_version.py` is the guard.
+
+  **Historical rows were deliberately not rewritten** — a backfill would invent
+  a version for a run nobody can re-render. Treat any `prompt_version` on a run
+  from that window as unknown, not as v2; `docs/pipeline.md` §7 and the eval
+  reports under `app/eval/reports/` record the drift where it happened.
 
 ---
 

@@ -74,7 +74,15 @@ class Settings(BaseSettings):
     llm_max_retries: int = 4
     llm_retry_base_delay_seconds: float = 2.0
     llm_retry_max_delay_seconds: float = 30.0
-    prompt_version: str = "v2"
+    # An OVERRIDE, and empty by default. What a run records is the version of
+    # the prompt module that rendered it (`app.pipeline.prompts.PROMPT_VERSION`,
+    # resolved by `RunService._prompt_version`) — this setting only exists so an
+    # experiment can file its runs under a label of its own.
+    #
+    # It used to be the value itself, hardcoded to "v2" while the module moved
+    # to v8, so every run in the database claimed a version it had never run.
+    # The eval runner has always recorded the constant and ignores this.
+    prompt_version: str | None = None
     # Default model for `python -m app.eval.runner` when --llm-config is omitted,
     # so the suite runs in one command (falls back to the sole config if unset).
     eval_llm_config_id: str | None = None

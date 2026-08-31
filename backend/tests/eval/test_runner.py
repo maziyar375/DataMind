@@ -46,6 +46,9 @@ class FakeGateway:
         self.route = route
         self.plan = plan or {}
         self._calls: dict[str, int] = {}
+        # Every SQL-producing prompt this gateway was sent, so a test can ask
+        # what actually reached the model rather than what was configured.
+        self.prompts: list[str] = []
 
     def _question(self, messages: Sequence[ChatMessage]) -> str | None:
         blob = "\n".join(m.content for m in messages)
@@ -59,6 +62,7 @@ class FakeGateway:
 
     async def structured(self, llm: ResolvedLLM, messages: Sequence[ChatMessage], schema: type) -> Any:
         if schema is SqlProposal:
+            self.prompts.append("\n".join(m.content for m in messages))
             q = self._question(messages)
             sqls = self.plan.get(q or "", ["SELECT 1"])
             i = self._calls.get(q or "", 0)
@@ -114,12 +118,13 @@ def _record(rid: str) -> dataset.GoldRecord:
 
 
 async def _eval(
-    record: dataset.GoldRecord, gateway: Any, env: dict[str, Any]
+    record: dataset.GoldRecord, gateway: Any, env: dict[str, Any],
+    *, semantic: dict[str, Any] | None = None,
 ) -> metrics.RecordOutcome:
     return await runner.evaluate_record(
         record, gateway=gateway, llm=LLM, connector=env["connector"],
         snapshot=env["snapshot"], policy=env["policy"], settings=SETTINGS,
-        model_name="fake-model", with_cost=False,
+        model_name="fake-model", with_cost=False, semantic=semantic,
     )
 
 
@@ -281,3 +286,80 @@ async def test_negative_routing_scored_without_sql() -> None:
         )
     # An analytical mis-route that runs SQL is the worst case: a leak.
     assert wrong.outcome == "SQL_LEAK"
+
+
+# ── the arms (Phase 0 of docs/learning-loop-plan.md: "fix the ruler") ────────
+#
+# Both are OFF by default, and that is the load-bearing property: every number
+# recorded before they existed was measured with the layer absent and the
+# shipped retrieve ceiling, so a bare `--suite sales_v1` has to stay that run.
+
+
+def test_every_arm_is_off_unless_asked_for() -> None:
+    args = runner.build_parser().parse_args(["--suite", "sales_v1"])
+    assert args.semantic == "off"
+    assert args.retrieve_budget is None
+    assert args.comments is False
+
+
+def test_the_arms_parse() -> None:
+    args = runner.build_parser().parse_args(
+        ["--suite", "sales_v1", "--semantic", "on", "--retrieve-budget", "12000"]
+    )
+    assert args.semantic == "on" and args.retrieve_budget == 12_000
+
+
+def test_the_fixture_ships_a_semantic_layer_to_switch_on() -> None:
+    """P0.3 needs something to put in `NodeDeps.semantic`. A file, not a
+    generated document: an arm whose input is regenerated per run measures the
+    generator."""
+    spec = dataset.fixture_for("sales_pg")
+    assert spec.semantic_path is not None and spec.semantic_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_the_layer_binds_to_the_fixture_schema_with_no_broken_entries() -> None:
+    """`load_semantic` refuses a document that no longer resolves, so this
+    passing *is* the assertion that the shipped layer is whole. Without it the
+    layer-on arm would be layer-on for some questions and layer-off for others,
+    and nobody reading the number could tell."""
+    async with _env() as env:
+        doc = runner.load_semantic(dataset.fixture_for("sales_pg"), env["snapshot"])
+    assert doc["entities"] and any(e["metrics"] for e in doc["entities"])
+    # Derived from the catalog at load time, exactly as the product does it.
+    assert doc["joins"] and all(j["on"] for j in doc["joins"])
+
+
+@pytest.mark.asyncio
+async def test_the_layer_reaches_the_prompt_only_in_the_layer_on_arm() -> None:
+    """The A/B is only an A/B if the off arm is the prompt that was measured
+    before the layer existed."""
+    rec = _record("sales-001")
+    async with _env() as env:
+        semantic = runner.load_semantic(dataset.fixture_for("sales_pg"), env["snapshot"])
+
+        off = FakeGateway(plan={rec.question: [rec.gold_sql]})
+        await _eval(rec, off, env)
+        on = FakeGateway(plan={rec.question: [rec.gold_sql]})
+        await _eval(rec, on, env, semantic=semantic)
+
+    assert off.prompts and on.prompts
+    assert "What these tables mean" not in off.prompts[0]
+    assert "What these tables mean" in on.prompts[0]
+    assert "metric revenue = SUM(orders.total_amount)" in on.prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_a_lowered_budget_is_what_makes_recall_measurable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The two halves of P0.2 in one place: at the shipped ceiling the fixture
+    fits whole and recall is 1.0 by construction; under it, retrieval selects
+    and recall can miss. `--retrieve-budget` lowers exactly this constant."""
+    rec = _record("sales-018")
+    async with _env() as env:
+        full = await _eval(rec, FakeGateway(plan={rec.question: [rec.gold_sql]}), env)
+        monkeypatch.setattr(nodes, "_RETRIEVE_BUDGET_CHARS", 1_000)
+        lowered = await _eval(rec, FakeGateway(plan={rec.question: [rec.gold_sql]}), env)
+    assert full.retrieval_recall == 1.0
+    assert lowered.retrieval_recall < 1.0

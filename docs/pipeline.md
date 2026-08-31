@@ -886,12 +886,17 @@ first row: **v6 does not move the baseline**, and a v5 score is still
 comparable. That is a property of the eval, not a general guarantee — a
 multi-turn suite would need re-measuring.
 
-> **Recorded version drift, pre-existing:** `runs.prompt_version` comes from
-> `settings.prompt_version` ([config.py](../backend/app/core/config.py), default
-> `"v2"`), not from the `PROMPT_VERSION` constant the prompts actually carry.
-> Unless `PROMPT_VERSION` is also set in the environment, every run is recorded
-> under the wrong version. Worth fixing before the next eval round; not part of
-> the v6 change.
+> **Recorded version drift — fixed 2026-08-31, and the old rows were left
+> alone.** `runs.prompt_version` used to come from `settings.prompt_version`
+> ([config.py](../backend/app/core/config.py), whose default said `"v2"`) rather
+> than from the `PROMPT_VERSION` constant the prompts actually carry, so every
+> run written between 2026-07-26 and 2026-08-31 is recorded under a version it
+> did not run. It now records the constant, resolved by
+> `RunService._prompt_version` and re-stamped by the process that renders the
+> prompt; the setting is an override for an experiment and is empty by default
+> (Phase 0 of [learning-loop-plan.md](learning-loop-plan.md)). **No historical
+> row was rewritten** — a backfill would invent a version for a run nobody can
+> re-render — so a `prompt_version` from that window means "unknown", not "v2".
 
 ---
 
