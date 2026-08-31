@@ -128,8 +128,13 @@ money. `python -m app.eval.runner --suite sales_v1` from `backend/`, or
 
 **Verification loop before you claim done:** `npm run typecheck` + `npm run
 build` + `npm test` for frontend changes; `make test` (and `make guard` if you
-touched `sqlguard/` or a connector) for backend. The backend suite is 1,426
-tests plus 11 skips and takes ~3 minutes. Several past bugs only surfaced
+touched `sqlguard/` or a connector) for backend. The backend suite is ~1,790
+tests plus 14 skips and takes well under a minute. (It used to take three,
+because an unhandled exception inside an API test was logged through
+structlog's **rich** console renderer, which walks every frame's locals — one
+of which is a SQLAlchemy `Select`. `tests/conftest.py` now forces JSON logs;
+a single failing API test used to cost over a minute of rendering and made the
+suite look hung.) Several past bugs only surfaced
 end-to-end via the API, not in the UI — actually exercise the path you changed.
 
 Four environment facts that read like "the tooling is missing" but aren't:
@@ -850,6 +855,38 @@ the prompt** — `PROMPT_VERSION` is still `v8`.
   reader's only defence against a confident wrong match. Grounded is a quiet
   accent chip. Generated gets one honest sentence in faint text, because it is
   most answers and dressing it in amber would train everyone to ignore amber.
+
+**Capture — feedback, the queue and the backlog (Phase 3).** Ships no accuracy.
+Ships the reason anyone curates.
+
+- **`POST /runs/{id}/feedback` is open to any signed-in user**, deliberately —
+  it does **not** ask `can_curate`, while resolving a flag does. The person
+  best placed to notice a wrong answer is the person who asked the question,
+  and they are usually not the person allowed to fix it; gating the *report* on
+  the right to *repair* loses exactly the reports worth having.
+- **Three verdicts, not two.** `CORRECT` / `WRONG` / `NEEDS_REVIEW`, because
+  "this is wrong" and "please look at this" are different asks. A `CORRECT`
+  arrives already `RESOLVED`, by the person who gave it — otherwise the tab
+  would carry a number no curator could ever clear.
+- **`answer_feedback.became_template` is the loop closing.** One nullable FK,
+  surfaced back to the flagger on their own answer. Without it the phase has
+  shipped a suggestion box, and people learn their thumbs-down goes nowhere.
+- **A dismissal takes a reason**, shown back to the flagger: a dismissal with
+  no note is indistinguishable from being ignored.
+- **The backlog is five ranked sources** (`app/knowledge/backlog.py`, pure):
+  flagged, backfill, traffic, failed, and **words the retrieval did not
+  recognise** — Power BI's *Review questions*, nearly free here because the
+  semantic layer already holds the vocabulary. Everything already taught is
+  excluded, so the list shrinks as it is worked.
+- **The backfill reads what is already there.** `dashboard_tiles` and
+  `report_blocks` with `sql_origin IN ('GENERATED_EDITED','HANDWRITTEN')` are
+  verified question→SQL pairs that exist right now and are read by nothing.
+  They arrive as **proposals**, never approved templates, and a
+  `GENERATED_EDITED` one is `MODEL_DERIVED`.
+- **The curator decides the shape, not a router.** A correction is
+  question-shaped (a template), definition-shaped (the semantic layer), or
+  neither (dismiss with a reason) — three radios, §1.5's rule as an
+  interaction.
 
 ---
 

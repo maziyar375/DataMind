@@ -13,6 +13,8 @@ from sqlalchemy import func, select
 
 from app.api.deps import CtxDep, DbDep, SettingsDep
 from app.api.schemas import (
+    AnswerFeedbackRead,
+    AnswerFeedbackWrite,
     ArtifactRead,
     ChartOptionRead,
     ChartRedrawRead,
@@ -32,6 +34,7 @@ from app.api.schemas import (
 from app.core.errors import NotFoundError, ValidationError
 from app.domain.value_objects import RunStatus
 from app.infra.db.models import (
+    AnswerFeedback,
     Artifact,
     Conversation,
     GeneratedQuery,
@@ -44,7 +47,7 @@ from app.infra.db.models import (
     SemanticLayerRow,
 )
 from app.infra.events.bus import event_bus
-from app.services.knowledge_service import record_hit
+from app.services.knowledge_service import FeedbackService, record_hit
 from app.services.run_service import RunService
 
 router = APIRouter(tags=["conversations"])
@@ -295,6 +298,13 @@ async def _knowledge(db, run: Run, queries: list[GeneratedQueryRead]) -> RunKnow
         .where(KnowledgeTemplateHit.run_id == run.id)
         .order_by(KnowledgeTemplateHit.created_at)
     )
+    mine = await db.execute(
+        select(AnswerFeedback).where(
+            AnswerFeedback.run_id == run.id, AnswerFeedback.user_id == run.owner_id
+        )
+    )
+    feedback = mine.scalar_one_or_none()
+    given = AnswerFeedbackRead.model_validate(feedback) if feedback else None
     rows = list(hits.scalars())
     short_circuit = next((h for h in rows if h.outcome == "SHORT_CIRCUIT"), None)
     overridden = any(h.outcome == "OVERRIDDEN_BY_USER" for h in rows)
@@ -314,14 +324,15 @@ async def _knowledge(db, run: Run, queries: list[GeneratedQueryRead]) -> RunKnow
             score=short_circuit.score,
             matcher=short_circuit.matcher,
             overridden=overridden,
+            feedback=given,
         )
 
     touched = {t.lower() for q in queries for t in (q.referenced_tables or [])}
     if touched and run.connection_id is not None and await _all_described(
         db, run.connection_id, touched
     ):
-        return RunKnowledge(tier="GROUNDED", overridden=overridden)
-    return RunKnowledge(tier="GENERATED", overridden=overridden)
+        return RunKnowledge(tier="GROUNDED", overridden=overridden, feedback=given)
+    return RunKnowledge(tier="GENERATED", overridden=overridden, feedback=given)
 
 
 async def _all_described(db, connection_id: UUID, tables: set[str]) -> bool:
@@ -360,6 +371,30 @@ async def get_run_sql(run_id: UUID, ctx: CtxDep, db: DbDep) -> list[GeneratedQue
         .order_by(GeneratedQuery.attempt_no)
     )
     return [GeneratedQueryRead.model_validate(q) for q in result.scalars()]
+
+
+@router.post("/runs/{run_id}/feedback", response_model=AnswerFeedbackRead)
+async def leave_feedback(
+    run_id: UUID,
+    payload: AnswerFeedbackWrite,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+) -> AnswerFeedbackRead:
+    """Was this right? — open to **any** signed-in user.
+
+    Not gated by `can_curate`, deliberately. The person best placed to notice a
+    wrong answer is the person who asked the question, and they are usually not
+    the person allowed to fix it. Gating the report on the right to repair
+    would lose exactly the reports worth having.
+
+    One verdict per person per answer; pressing again is a change of mind.
+    """
+    run = await _owned_run(db, run_id, ctx)
+    row = await FeedbackService(db, settings).record(
+        run, user_id=ctx.user_id, verdict=payload.verdict, comment=payload.comment
+    )
+    return AnswerFeedbackRead.model_validate(row)
 
 
 @router.post("/runs/{run_id}/override", response_model=RunKnowledge)

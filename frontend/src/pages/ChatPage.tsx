@@ -9,6 +9,7 @@ import type {
 import {
   AssistantTurn, RunErrorCard, UserBubble,
 } from '../components/chat'
+import { TemplateEditor } from '../components/knowledge'
 import {
   DisclosureBadge, ErrorNote, GlyphBadge, Icon, PrimaryButton, SearchField, Spinner,
   dirOf, engineHue,
@@ -46,6 +47,11 @@ export default function ChatPage() {
   useEffect(() => {
     messagesRef.current = messages
   }, [messages])
+  // The answer a reader asked to teach, if any: the question they typed and
+  // the statement it produced, handed straight to the Knowledge tab's editor.
+  const [teaching, setTeaching] = useState<{ question: string; sql: string } | null>(
+    null,
+  )
   const [connections, setConnections] = useState<Connection[]>([])
   const [models, setModels] = useState<LlmConfig[]>([])
   const [connectionId, setConnectionId] = useState<string>('')
@@ -465,12 +471,55 @@ export default function ChatPage() {
    * A failed recording does not block the re-ask: the reader asked for an
    * answer, not for bookkeeping.
    */
-  const regenerate = useCallback((run: RunDetail) => {
-    const asked = messagesRef.current.find(
+  /**
+   * *Was this right?* — recorded, then reflected back in place.
+   *
+   * The answer's own `knowledge.feedback` is updated locally rather than by
+   * refetching the transcript: the reader pressed a button and the
+   * acknowledgement has to land immediately, and a round trip through the
+   * whole conversation to redraw one footer line would be the slowest possible
+   * way to say "thanks".
+   */
+  const leaveFeedback = useCallback(
+    async (run: RunDetail, verdict: string, comment: string) => {
+      const given = await runs.feedback(run.id, { verdict, comment })
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.run?.id === run.id && m.run
+            ? { ...m, run: { ...m.run, knowledge: { ...m.run.knowledge, feedback: given } } }
+            : m,
+        ),
+      )
+    },
+    [],
+  )
+
+  /** The question behind an answer, from the turn just before it. */
+  const askedFor = useCallback((run: RunDetail): string => {
+    const answer = messagesRef.current.find(
       (m) => m.role === 'ASSISTANT' && m.run?.id === run.id,
     )
-    const index = asked ? messagesRef.current.indexOf(asked) : -1
-    const question = index > 0 ? messagesRef.current[index - 1].content : null
+    const index = answer ? messagesRef.current.indexOf(answer) : -1
+    return index > 0 ? (messagesRef.current[index - 1].content ?? '') : ''
+  }, [])
+
+  /**
+   * *Save as a template.* One click from an answer that worked to the
+   * knowledge that keeps it working.
+   *
+   * The editor opens prefilled with the question the reader typed and the
+   * statement they just watched succeed, which is the whole reason this lives
+   * on the answer rather than on the Knowledge tab: the SQL is the one they
+   * saw work, and they know it did.
+   */
+  const teach = useCallback((run: RunDetail) => {
+    const sql = run.queries.at(-1)?.raw_sql ?? ''
+    if (!sql) return
+    setTeaching({ question: askedFor(run), sql })
+  }, [askedFor])
+
+  const regenerate = useCallback((run: RunDetail) => {
+    const question = askedFor(run)
 
     void (async () => {
       try {
@@ -487,7 +536,7 @@ export default function ChatPage() {
       }
       if (question) await sendRef.current(question, { skipTemplates: true })
     })()
-  }, [])
+  }, [askedFor])
 
   // A new chat starts empty and unbound: no database, no model, nothing
   // persisted. The conversation row is created lazily on the first send (see
@@ -565,6 +614,7 @@ export default function ChatPage() {
   // chosen, a brand-new chat cannot send.
   const locked = messages.length > 0
   const ready = Boolean(connectionId && modelId)
+  const teachConnection = connections.find((c) => c.id === connectionId) ?? null
   // The last turn asked the user something rather than answering. A normal
   // state, not a failure: the thread is simply mid-exchange.
   const awaitingAnswer = messages.at(-1)?.run?.status === 'NEEDS_CLARIFICATION'
@@ -684,6 +734,8 @@ export default function ChatPage() {
                     onPickOption={pickOption}
                     optionsDisabled={Boolean(activeRunId)}
                     onRegenerate={regenerate}
+                    onFeedback={leaveFeedback}
+                    onSaveAsTemplate={teach}
                   />
                 )
               })}
@@ -752,6 +804,21 @@ export default function ChatPage() {
           ready={ready}
         />
       </div>
+
+      {/* The same editor the Knowledge tab uses, opened from an answer.
+          Reused rather than reimplemented: the parameter proposals, the guard
+          verdict and the disclosure rule for a statement's literals all have
+          to be identical, and two editors would be two chances to get one of
+          them wrong. */}
+      {teaching && teachConnection && (
+        <TemplateEditor
+          connection={teachConnection}
+          template={null}
+          prefill={{ ...teaching, source: 'CHAT_CONFIRMED' }}
+          onClose={() => setTeaching(null)}
+          onSaved={() => setTeaching(null)}
+        />
+      )}
     </div>
   )
 }

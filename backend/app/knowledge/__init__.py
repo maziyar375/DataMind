@@ -21,6 +21,15 @@ Phase 2 adds `matcher.py` and `bind.py` beside these; Phase 6 adds
 """
 from __future__ import annotations
 
+from app.knowledge.backlog import (
+    RANK,
+    STOPWORDS,
+    Suggestion,
+    SuggestionKind,
+    build_vocabulary,
+    rank_suggestions,
+    unknown_words,
+)
 from app.knowledge.models import (
     KnowledgeTemplate,
     LiteralProvenance,
@@ -58,6 +67,8 @@ from app.knowledge.validate import (
 
 __all__ = [
     "DEFAULT_SUGGESTED",
+    "RANK",
+    "STOPWORDS",
     "DRIFT_RULES",
     "MASK",
     "ColumnFacts",
@@ -66,11 +77,14 @@ __all__ = [
     "ParamProposal",
     "ParamType",
     "SchemaFacts",
+    "Suggestion",
+    "SuggestionKind",
     "TemplateParam",
     "TemplateRole",
     "TemplateSource",
     "TemplateStatus",
     "TemplateVerdict",
+    "build_vocabulary",
     "column_type",
     "may_render_literals",
     "declared_placeholders",
@@ -80,7 +94,9 @@ __all__ = [
     "placeholder",
     "policy_from_tables",
     "propose_params",
+    "rank_suggestions",
     "slots",
+    "unknown_words",
     "validate_sql",
     "validate_template",
 ]

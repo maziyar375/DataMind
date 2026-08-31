@@ -433,6 +433,13 @@ text came from:
 | `HUMAN_AUTHORED` | typed in the editor, or a chat answer whose SQL the curator **corrected** | always |
 | `MODEL_DERIVED` | mined from a dashboard tile or report block, or confirmed from a generated answer **without** editing it | only when `HintBudget.value_lists` is true |
 
+The editor decides which of the two applies by comparing what was saved with
+what was offered: a statement the curator changed carries their literals, and
+one they only confirmed still carries the model's. The Phase 3 backfill over
+`dashboard_tiles` and `report_blocks` marks every `GENERATED_EDITED` row
+`MODEL_DERIVED` for the same reason — the *join* was corrected by a person, the
+*literals* were not.
+
 The awkward case is real and the table handles it: a person edits a generated
 statement's join but leaves `region = 'EMEA'` as the model wrote it. That is
 `MODEL_DERIVED`, because a tightening must take effect on the next question —

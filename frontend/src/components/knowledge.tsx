@@ -34,7 +34,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { knowledge as api } from '../api/client'
 import type {
-  Connection, KnowledgeTemplate, ParamProposal, TemplateCheckResult, TemplateParam,
+  Connection, KnowledgeTemplate, ParamProposal, Review, Suggestion,
+  TemplateCheckResult, TemplateParam,
 } from '../api/types'
 import {
   Chip, DangerButton, EmptyState, ErrorNote, Field, GhostButton, Icon, Modal,
@@ -43,10 +44,11 @@ import {
 import type { ChipTone } from './ui'
 import { DetailBody } from './settings'
 import {
-  markLiterals, matches, previewQuestion, questionParts, readiness, roleLabel,
-  rowSubtitle, sections, statusOf,
+  CORRECTION_SHAPES, markLiterals, matches, previewQuestion, questionParts,
+  readiness, resolveReadiness, roleLabel, rowSubtitle, sections, statusOf,
+  suggestionView,
 } from './knowledge-template'
-import type { TemplateRow } from './knowledge-template'
+import type { CorrectionShape, TemplateRow } from './knowledge-template'
 
 /** How long the editor waits after a keystroke before asking the server.
  *  Long enough not to check every character, short enough that the verdict
@@ -83,6 +85,18 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [editing, setEditing] = useState<KnowledgeTemplate | 'new' | null>(null)
   const [showArchive, setShowArchive] = useState(false)
+  const [reviews, setReviews] = useState<Review[]>([])
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([])
+  // A question and a statement to open the editor with, from a flag or a
+  // backlog row. Held beside `editing` rather than folded into it, because the
+  // editor is also opened with nothing at all.
+  const [prefill, setPrefill] = useState<
+    { question: string; sql: string; source?: string } | null
+  >(null)
+  // The flag this editor session is answering, so saving the template resolves
+  // it — which is how the person who raised it finds out.
+  const [resolving, setResolving] = useState<string | null>(null)
+  const [openReview, setOpenReview] = useState<Review | null>(null)
 
   const refresh = useCallback(async () => {
     const body = await api.list(connection.id, true)
@@ -90,6 +104,15 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
     setStaleIds(body.stale_ids)
     setCanCurate(body.can_curate)
     setSynced(body.schema_synced)
+    // The queue and the backlog load beside the store, not after it: they are
+    // three readings of one screen, and loading them in sequence would make
+    // the sections appear one at a time under the reader's cursor.
+    const [queue, backlog] = await Promise.all([
+      api.reviews(connection.id).catch(() => [] as Review[]),
+      api.suggestions(connection.id).catch(() => [] as Suggestion[]),
+    ])
+    setReviews(queue)
+    setSuggestions(backlog)
     return body
   }, [connection.id])
 
@@ -181,6 +204,75 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
         />
       )}
 
+      {reviews.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <SectionHeading>Needs you · {reviews.length}</SectionHeading>
+          {reviews.map((review) => (
+            <ReviewRow
+              key={review.id}
+              review={review}
+              selected={openReview?.id === review.id}
+              onSelect={() =>
+                setOpenReview(openReview?.id === review.id ? null : review)
+              }
+            />
+          ))}
+        </div>
+      )}
+
+      {openReview && (
+        <ReviewPane
+          review={openReview}
+          canCurate={canCurate}
+          onTeach={() => {
+            setPrefill({
+              question: openReview.question,
+              sql: openReview.sql,
+              source: 'CHAT_CONFIRMED',
+            })
+            setResolving(openReview.id)
+            setEditing('new')
+            setOpenReview(null)
+          }}
+          onDismiss={async (note) => {
+            try {
+              await api.resolve(connection.id, openReview.id, {
+                dismiss: true,
+                note,
+              })
+              setOpenReview(null)
+              await refresh()
+            } catch (err) {
+              setError(messageOf(err))
+            }
+          }}
+          onClose={() => setOpenReview(null)}
+        />
+      )}
+
+      {suggestions.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <SectionHeading>Suggested · {suggestions.length}</SectionHeading>
+          {suggestions
+            .filter((s) => s.kind !== 'FLAGGED')
+            .map((item, i) => (
+              <SuggestionRowView
+                key={`${item.kind}-${item.origin_id || i}`}
+                item={item}
+                canCurate={canCurate && synced}
+                onTeach={() => {
+                  setPrefill({
+                    question: item.question,
+                    sql: item.sql,
+                    source: item.source || 'MANUAL',
+                  })
+                  setEditing('new')
+                }}
+              />
+            ))}
+        </div>
+      )}
+
       <SectionList
         title="Needs you"
         rows={split.needsYou}
@@ -231,12 +323,25 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
       )}
 
       {editing && (
-        <Editor
+        <TemplateEditor
           connection={connection}
-          template={editing === 'new' ? null : editing}
-          onClose={() => setEditing(null)}
-          onSaved={async () => {
+          template={typeof editing === 'string' ? null : editing}
+          prefill={prefill ?? undefined}
+          onClose={() => {
             setEditing(null)
+            setPrefill(null)
+          }}
+          onSaved={async (saved) => {
+            setEditing(null)
+            setPrefill(null)
+            // A template saved from a flag resolves that flag, which is how
+            // the person who raised it finds out their flag became knowledge.
+            if (resolving) {
+              await api
+                .resolve(connection.id, resolving, { template_id: saved.id })
+                .catch(() => undefined)
+              setResolving(null)
+            }
             await refresh().catch(() => undefined)
           }}
         />
@@ -263,6 +368,253 @@ function FirstRun({ canCurate }: { canCurate: boolean }) {
           : 'Nothing has been taught here yet.'
       }
     />
+  )
+}
+
+function SectionHeading({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        fontSize: 11, fontWeight: 700, letterSpacing: 0.6,
+        textTransform: 'uppercase', color: 'var(--text-faint)',
+      }}
+    >
+      {children}
+    </div>
+  )
+}
+
+/** One flag, in the same anatomy every other row uses. */
+function ReviewRow({
+  review, selected, onSelect,
+}: {
+  review: Review
+  selected: boolean
+  onSelect: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-current={selected}
+      style={{
+        display: 'flex', gap: 10, alignItems: 'flex-start', width: '100%',
+        textAlign: 'start', padding: '10px 12px', borderRadius: 10,
+        cursor: 'pointer', background: selected ? 'var(--panel-alt)' : 'var(--panel)',
+        border: `1px solid ${selected ? 'var(--border-strong)' : 'var(--border)'}`,
+      }}
+    >
+      <span aria-hidden style={{ color: 'var(--amber)', fontSize: 13, lineHeight: '20px' }}>
+        ⚠
+      </span>
+      <span style={{ flex: 1, minWidth: 0 }}>
+        <span
+          dir={dirOf(review.question)}
+          style={{ display: 'block', fontSize: 13, color: 'var(--text-strong)' }}
+        >
+          {review.question || 'A flagged answer'}
+        </span>
+        <span
+          style={{
+            display: 'flex', gap: 12, marginTop: 3, fontSize: 11,
+            color: 'var(--text-faint)', justifyContent: 'space-between',
+          }}
+        >
+          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis',
+                         whiteSpace: 'nowrap' }}>
+            {review.comment || 'No comment left'}
+          </span>
+          <span style={{ color: 'var(--amber)', flexShrink: 0 }}>
+            {review.verdict === 'NEEDS_REVIEW' ? 'Review asked' : 'Flagged'}
+            {review.flagged_by ? ` by ${review.flagged_by}` : ''}
+          </span>
+        </span>
+      </span>
+      <span className="rm-sr-only">Needs you</span>
+    </button>
+  )
+}
+
+/**
+ * A flag, opened.
+ *
+ * The radio group is §1.5's rule made into an interaction: the curator decides
+ * whether a correction is *question-shaped* (it becomes a template) or
+ * *definition-shaped* (it belongs in the semantic layer), and the product does
+ * not guess. A router that guessed would be wrong often enough to teach people
+ * to distrust the whole queue.
+ */
+function ReviewPane({
+  review, canCurate, onTeach, onDismiss, onClose,
+}: {
+  review: Review
+  canCurate: boolean
+  onTeach: () => void
+  onDismiss: (note: string) => void
+  onClose: () => void
+}) {
+  const [shape, setShape] = useState<CorrectionShape>('template')
+  const [note, setNote] = useState('')
+  const ready = resolveReadiness(shape, note, false)
+
+  return (
+    <div
+      style={{
+        border: '1px solid var(--amber-border, var(--border-strong))',
+        borderRadius: 12, background: 'var(--panel)', overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex', gap: 10, alignItems: 'flex-start', padding: '12px 16px',
+          borderBottom: '1px solid var(--border)', background: 'var(--amber-bg)',
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 12, color: 'var(--amber)' }}>
+            Flagged {relativeTime(review.created_at)}
+            {review.flagged_by ? ` by ${review.flagged_by}` : ''}
+            {review.comment ? ` · “${review.comment}”` : ''}
+          </div>
+          <div
+            dir={dirOf(review.question)}
+            style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-strong)',
+                     marginTop: 3 }}
+          >
+            {review.question}
+          </div>
+        </div>
+        <button type="button" aria-label="Close" className="rm-icon-btn" onClick={onClose}>
+          <Icon.Close size={13} />
+        </button>
+      </div>
+
+      <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div>
+          <Label>What it answered</Label>
+          <pre style={{ ...CODE, margin: 0, padding: 12, borderRadius: 8 }}>
+            {review.sql || '(no statement recorded)'}
+          </pre>
+        </div>
+
+        {canCurate ? (
+          <>
+            <div>
+              <Label>This correction is</Label>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {CORRECTION_SHAPES.map((option) => (
+                  <label
+                    key={option.value}
+                    style={{ display: 'flex', gap: 8, alignItems: 'baseline',
+                             fontSize: 12.5 }}
+                  >
+                    <input
+                      type="radio"
+                      name={`shape-${review.id}`}
+                      checked={shape === option.value}
+                      onChange={() => setShape(option.value)}
+                    />
+                    <span style={{ color: 'var(--text)' }}>{option.label}</span>
+                    <span style={{ color: 'var(--text-faint)' }}>→ {option.detail}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {shape === 'dismiss' && (
+              <TextArea
+                value={note}
+                dir={dirOf(note)}
+                placeholder="Why? The person who flagged this will see the reason."
+                onChange={(e) => setNote(e.target.value)}
+              />
+            )}
+            {shape === 'definition' && (
+              <div style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+                Definitions live in the Semantic layer tab — a grain statement, a
+                metric, or a glossary term. Fix it there, then dismiss this with a
+                note saying so.
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              {shape === 'template' && (
+                <PrimaryButton onClick={onTeach}>
+                  <Icon.Sparkle size={13} />
+                  Correct the SQL and save
+                </PrimaryButton>
+              )}
+              {shape !== 'template' && (
+                <PrimaryButton
+                  onClick={() => onDismiss(note)}
+                  disabled={!ready.ready}
+                  title={ready.issue || undefined}
+                >
+                  Dismiss and resolve
+                </PrimaryButton>
+              )}
+            </div>
+            {ready.issue && (
+              <div style={{ fontSize: 12, color: 'var(--amber)' }}>{ready.issue}</div>
+            )}
+          </>
+        ) : (
+          <div style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+            Only administrators can resolve flags on this connection.
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * One backlog row.
+ *
+ * A suggestion is `○` — not yet knowledge — and never `⚠`, because nothing
+ * here is broken. A backlog that looked like a fault list would train people
+ * to dread opening the tab.
+ */
+function SuggestionRowView({
+  item, canCurate, onTeach,
+}: {
+  item: Suggestion
+  canCurate: boolean
+  onTeach: () => void
+}) {
+  const view = suggestionView({
+    kind: item.kind, question: item.question, count: item.count,
+    reason: item.reason, sql: item.sql, words: item.words,
+  })
+  const actionable = Boolean(view.action) && canCurate
+
+  return (
+    <div
+      style={{
+        display: 'flex', gap: 10, alignItems: 'flex-start',
+        padding: '10px 12px', borderRadius: 10, background: 'var(--panel)',
+        border: '1px solid var(--border)',
+      }}
+    >
+      <span aria-hidden style={{ color: 'var(--text-faint)', fontSize: 13,
+                                 lineHeight: '20px' }}>
+        {view.glyph}
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          dir={dirOf(item.question)}
+          style={{ fontSize: 13, color: 'var(--text-strong)' }}
+        >
+          “{item.question}”
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 3 }}>
+          {item.reason}
+        </div>
+      </div>
+      {actionable && (
+        <GhostButton onClick={onTeach}>{view.action} →</GhostButton>
+      )}
+    </div>
   )
 }
 
@@ -506,16 +858,25 @@ function Detail({
  * what the question would match, the literals marked in the statement itself,
  * and the refused proposal shown unticked with its reason rather than hidden.
  */
-function Editor({
-  connection, template, onClose, onSaved,
+export function TemplateEditor({
+  connection, template, prefill, onClose, onSaved,
 }: {
   connection: Connection
   template: KnowledgeTemplate | null
+  /**
+   * A question and a statement to start from, when the editor is opened from
+   * somewhere other than the Knowledge tab — a chat answer that worked, or a
+   * backlog row. `source` decides whether the literals are the model's or a
+   * person's, which is a disclosure question and not a cosmetic one.
+   */
+  prefill?: { question: string; sql: string; source?: string }
   onClose: () => void
-  onSaved: () => void
+  onSaved: (template: KnowledgeTemplate) => void
 }) {
-  const [question, setQuestion] = useState(template?.question ?? '')
-  const [sql, setSql] = useState(template?.sql ?? '')
+  const [question, setQuestion] = useState(
+    template?.question ?? prefill?.question ?? '',
+  )
+  const [sql, setSql] = useState(template?.sql ?? prefill?.sql ?? '')
   const [note, setNote] = useState(template?.note ?? '')
   const [benchmark, setBenchmark] = useState(template?.role === 'BENCHMARK_ONLY')
   const [accepted, setAccepted] = useState<string[]>(
@@ -586,10 +947,20 @@ function Editor({
         role: benchmark
           ? ('BENCHMARK_ONLY' as const)
           : ('RETRIEVABLE' as const),
+        // If the curator edited the statement they were shown, the literals
+        // are now theirs and travel with structure; if they only confirmed it,
+        // they are still the model's and are gated like sample values.
+        // `docs/security.md`.
+        source: prefill
+          ? sql.trim() === prefill.sql.trim()
+            ? prefill.source ?? 'CHAT_CONFIRMED'
+            : 'CHAT_CORRECTED'
+          : 'MANUAL',
       }
-      if (template) await api.update(connection.id, template.id, payload)
-      else await api.create(connection.id, payload)
-      onSaved()
+      const saved = template
+        ? await api.update(connection.id, template.id, payload)
+        : await api.create(connection.id, payload)
+      onSaved(saved)
     } catch (err) {
       setError(messageOf(err))
     } finally {
@@ -603,7 +974,9 @@ function Editor({
       subtitle={
         template
           ? undefined
-          : 'Write it the way someone would ask it, then paste the SQL that answers it.'
+          : prefill
+            ? 'From an answer you just saw work — check the question, then save it.'
+            : 'Write it the way someone would ask it, then paste the SQL that answers it.'
       }
       width={720}
       onClose={onClose}

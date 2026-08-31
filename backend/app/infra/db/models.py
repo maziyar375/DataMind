@@ -1094,6 +1094,65 @@ class KnowledgeTemplateHit(Base):
     )
 
 
+class AnswerFeedback(Base):
+    """What somebody thought of an answer, and what happened to that thought.
+
+    Three verdicts, not two. Genie's *Yes / Fix it / Request review* split
+    exists because "this is wrong" and "please look at this" are different
+    asks: one is a correction the flagger could make themselves, the other is a
+    question they cannot answer. Collapsing them loses the second.
+
+    **`became_template` is the loop closing, as one nullable FK.** It is what
+    lets the UI tell the person who flagged an answer *what happened to their
+    flag* — and a feedback control with no visible payoff is worse than none,
+    because people learn their thumbs-down goes nowhere and stop. Ship this
+    phase without that link and it has shipped a suggestion box.
+
+    `UNIQUE (run_id, user_id)`: one verdict per person per answer. A second
+    press is a change of mind, not a second vote.
+    """
+
+    __tablename__ = "answer_feedback"
+    __table_args__ = (
+        UniqueConstraint("run_id", "user_id", name="uq_answer_feedback_run_user"),
+        Index("ix_answer_feedback_connection_state", "connection_id", "state"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Denormalised so the review queue is one indexed lookup rather than a join
+    # through `runs` — and so a flag survives a conversation being deleted.
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("database_connections.id", ondelete="CASCADE")
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    #: CORRECT | WRONG | NEEDS_REVIEW
+    verdict: Mapped[str] = mapped_column(String(20), nullable=False)
+    comment: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: OPEN | RESOLVED | DISMISSED. A `CORRECT` verdict arrives RESOLVED —
+    #: confirming an answer *is* a resolution, by the person who confirmed it —
+    #: which keeps "OPEN means a human is needed" true, and that is what the
+    #: tab's count is allowed to show.
+    state: Mapped[str] = mapped_column(String(20), nullable=False, default="OPEN")
+    resolved_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: Why the curator dismissed it, shown back to the person who flagged it.
+    #: A dismissal with no reason is indistinguishable from being ignored.
+    resolution_note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    became_template: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_templates.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     __table_args__ = (

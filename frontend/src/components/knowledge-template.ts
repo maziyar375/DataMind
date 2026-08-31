@@ -365,3 +365,92 @@ export function matches(row: TemplateRow, query: string): boolean {
     row.params.some((p) => p.name.toLowerCase().includes(needle))
   )
 }
+
+
+// ── the backlog and the queue (Phase 3) ───────────────────────────────────
+export interface SuggestionRow {
+  kind: 'FLAGGED' | 'BACKFILL' | 'TRAFFIC' | 'FAILED' | 'UNKNOWN_WORDS'
+  question: string
+  count: number
+  reason: string
+  sql: string
+  words: string[]
+}
+
+/**
+ * How a suggestion presents itself in the list.
+ *
+ * Every row in every section has the same anatomy — glyph, question, what it
+ * touches, why you are looking at it — which is what makes four sections read
+ * as one list rather than four widgets. A suggestion is `○`: **not yet
+ * knowledge**, and never `⚠`, because nothing here is broken. A backlog that
+ * looked like a fault list would train people to dread opening the tab.
+ */
+export function suggestionView(row: SuggestionRow): {
+  glyph: Glyph
+  tone: Tone
+  action: string
+} {
+  if (row.kind === 'FLAGGED') {
+    // The one suggestion that *is* work somebody is waiting on.
+    return { glyph: '⚠', tone: 'amber', action: 'Review' }
+  }
+  if (row.kind === 'UNKNOWN_WORDS') {
+    // It names a word, not a question. "Teach this" would be the wrong verb:
+    // the fix is often a synonym in the semantic layer, not a template.
+    return { glyph: '○', tone: 'faint', action: '' }
+  }
+  return { glyph: '○', tone: 'faint', action: 'Teach this' }
+}
+
+/** The section a suggestion belongs in. Flags are work; the rest is a queue. */
+export function suggestionSection(row: SuggestionRow): 'needsYou' | 'suggested' {
+  return row.kind === 'FLAGGED' ? 'needsYou' : 'suggested'
+}
+
+/**
+ * What a curator has to decide about a correction, as three exclusive options.
+ *
+ * §1.5's rule made into an interaction: the curator decides whether a
+ * correction is *question-shaped* or *definition-shaped*, and the product does
+ * not guess. A router that guessed would be wrong often enough to teach people
+ * to distrust the whole queue — and the two homes are genuinely different, one
+ * being a template and the other the semantic layer.
+ */
+export const CORRECTION_SHAPES = [
+  {
+    value: 'template',
+    label: 'a question people ask',
+    detail: 'save as a template',
+  },
+  {
+    value: 'definition',
+    label: 'a definition',
+    detail: 'add to the semantic layer',
+  },
+  { value: 'dismiss', label: 'neither', detail: 'dismiss with a reason' },
+] as const
+
+export type CorrectionShape = (typeof CORRECTION_SHAPES)[number]['value']
+
+/** Whether *Save and resolve* may be pressed yet, and why not if not. */
+export function resolveReadiness(
+  shape: CorrectionShape,
+  note: string,
+  templateSaved: boolean,
+): Readiness {
+  if (shape === 'dismiss') {
+    // A dismissal with no reason is indistinguishable, from the flagger's
+    // side, from being ignored — so the reason is required, not encouraged.
+    return note.trim()
+      ? { ready: true, issue: '' }
+      : {
+          ready: false,
+          issue: 'Say why — the person who flagged this will see the reason.',
+        }
+  }
+  if (shape === 'template' && !templateSaved) {
+    return { ready: false, issue: 'Save the template first.' }
+  }
+  return { ready: true, issue: '' }
+}

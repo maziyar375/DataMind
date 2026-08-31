@@ -8,14 +8,15 @@
  */
 
 import type {
+  AnswerFeedback,
   ArtifactSpec, ChartRedraw, Connection, ConversationSummary, Dashboard, DashboardDocument,
   DashboardImportResult, DashboardSummary,
   DashboardTile, KnowledgeTemplate, KnowledgeTemplateList,
   LlmConfig, MessageWithRun, ProblemDetail, Report, ReportBlock,
   ReportBlockCheck, ReportChart, ReportRun, ReportRunDetail, ReportSection,
   ReportSectionResult,
-  ReportSummary, RunDetail, RunEvent, RunKnowledge, SchemaSnapshot,
-  SemanticDocument, SemanticJob,
+  ReportSummary, Review, RunDetail, RunEvent, RunKnowledge, SchemaSnapshot,
+  SemanticDocument, SemanticJob, Suggestion,
   SemanticLayer, SqlDraft, TemplateCheckResult, TemplateParam,
   TilePosition, TileResult, TileType, TestResult, User,
 } from './types'
@@ -243,6 +244,24 @@ export const semantic = {
 // proposes the parameters in the same round trip because both come from one
 // parse.
 export const knowledge = {
+  // The curator's queue and the ranked backlog. Both read-only and both open
+  // to anyone who can read the connection: seeing what people reported, and
+  // what nothing here answers, is not a privilege.
+  reviews: (connectionId: string, state = 'OPEN') =>
+    get<Review[]>(
+      `/connections/${connectionId}/knowledge/reviews?state=${state}`,
+    ),
+  resolve: (
+    connectionId: string,
+    feedbackId: string,
+    payload: { template_id?: string; note?: string; dismiss?: boolean },
+  ) =>
+    post<AnswerFeedback>(
+      `/connections/${connectionId}/knowledge/reviews/${feedbackId}/resolve`,
+      payload,
+    ),
+  suggestions: (connectionId: string) =>
+    get<Suggestion[]>(`/connections/${connectionId}/knowledge/suggestions`),
   list: (connectionId: string, includeArchived = false) =>
     get<KnowledgeTemplateList>(
       `/connections/${connectionId}/knowledge/templates` +
@@ -514,6 +533,11 @@ export const runs = {
   // the tab instead of re-asking, and that measurement — the override rate —
   // is what the short-circuit threshold is tuned from.
   override: (id: string) => post<RunKnowledge>(`/runs/${id}/override`),
+  // *Was this right?* — open to any signed-in user, on purpose. The person
+  // best placed to notice a wrong answer is the person who asked, and they are
+  // usually not the person allowed to fix it.
+  feedback: (id: string, payload: { verdict: string; comment?: string }) =>
+    post<AnswerFeedback>(`/runs/${id}/feedback`, payload),
   artifact: (id: string) => get<{ id: string; kind: string; spec: ArtifactSpec }>(`/artifacts/${id}`),
   poll: (id: string, after: number) =>
     get<RunEvent[]>(`/runs/${id}/events/poll?after=${after}`),

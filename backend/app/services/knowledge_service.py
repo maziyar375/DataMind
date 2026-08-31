@@ -16,6 +16,7 @@ things are worth knowing before changing this file:
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 from typing import Any
 from uuid import UUID
 
@@ -29,15 +30,26 @@ from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.core.logging import get_logger
 from app.domain.value_objects import DatabaseKind
 from app.infra.db.models import (
+    AnswerFeedback,
+    DashboardTile,
     DatabaseConnection,
+    GeneratedQuery,
     KnowledgeTemplateHit,
     KnowledgeTemplateRow,
+    Message,
+    Report,
+    ReportBlock,
+    ReportSection,
+    Run,
     SchemaSnapshotRow,
+    SemanticLayerRow,
 )
 from app.knowledge import (
     KnowledgeTemplate,
     LiteralProvenance,
     ParamProposal,
+    Suggestion,
+    SuggestionKind,
     TemplateParam,
     TemplateRole,
     TemplateSource,
@@ -49,6 +61,16 @@ from app.knowledge import (
     propose_params,
     slots,
     validate_template,
+)
+from app.knowledge.backlog import (
+    backfill_reason,
+    build_vocabulary,
+    failed_reason,
+    flagged_reason,
+    rank_suggestions,
+    traffic_reason,
+    unknown_reason,
+    unknown_words,
 )
 from app.knowledge.matcher import (
     SHORTLIST_FLOOR,
@@ -503,3 +525,413 @@ async def record_hit(
             template.hit_count = (template.hit_count or 0) + 1
             template.last_hit_at = utcnow()
     return row
+
+
+# ── capture (Phase 3) ────────────────────────────────────────────────────
+#: How far back the backlog looks. A month, because "asked 9× this month" is a
+#: sentence a curator can act on and "asked 9× ever" is not.
+BACKLOG_WINDOW_DAYS = 30
+
+#: How many normalised questions the aggregation considers. The backlog is
+#: meant to be finite; a list that scrolls is one nobody finishes.
+BACKLOG_CANDIDATES = 200
+
+OPEN = "OPEN"
+RESOLVED = "RESOLVED"
+DISMISSED = "DISMISSED"
+
+CORRECT = "CORRECT"
+WRONG = "WRONG"
+NEEDS_REVIEW = "NEEDS_REVIEW"
+
+#: A tile or block whose SQL a person wrote or corrected. These are verified
+#: question→SQL pairs that **exist right now and are read by nothing** — the
+#: cheapest knowledge in the product.
+CORRECTED_ORIGINS = ("GENERATED_EDITED", "HANDWRITTEN")
+
+
+class FeedbackService:
+    """Feedback on an answer, the review queue, and the backlog.
+
+    Separate from `KnowledgeService` because it is a different job with a
+    different audience: that one is a curator's editor, this one is what turns
+    "somebody was unhappy" into "here is the next thing to teach". They share
+    the store and nothing else.
+    """
+
+    def __init__(self, db: AsyncSession, settings: Settings) -> None:
+        self._db = db
+        self._settings = settings
+
+    # ── feedback on an answer ────────────────────────────────────────────
+    async def record(
+        self,
+        run: Any,
+        *,
+        user_id: UUID,
+        verdict: str,
+        comment: str = "",
+    ) -> AnswerFeedback:
+        """One verdict per person per answer; a second press is a change of mind.
+
+        A `CORRECT` verdict arrives already `RESOLVED`, by the person who gave
+        it. Confirming an answer *is* a resolution, and treating it as open
+        work would put a permanent number on the tab that no curator could ever
+        clear — which is how a badge stops being a signal.
+        """
+        if verdict not in (CORRECT, WRONG, NEEDS_REVIEW):
+            raise ValidationError("That is not a verdict this system records.")
+
+        existing = await self._db.execute(
+            select(AnswerFeedback).where(
+                AnswerFeedback.run_id == run.id,
+                AnswerFeedback.user_id == user_id,
+            )
+        )
+        row = existing.scalar_one_or_none()
+        if row is None:
+            row = AnswerFeedback(
+                id=uuid.uuid4(),
+                run_id=run.id,
+                connection_id=run.connection_id,
+                user_id=user_id,
+                # Spelled out rather than left to the column defaults: the row
+                # is serialised back to the caller before the transaction
+                # commits, and a `None` where the read model promises a string
+                # is a 500 the reader would see as "your feedback failed"
+                # after it had been recorded.
+                comment="",
+                state=OPEN,
+                resolution_note="",
+            )
+            self._db.add(row)
+
+        row.verdict = verdict
+        row.comment = (comment or "").strip()[:MAX_NOTE_CHARS]
+        if verdict == CORRECT:
+            row.state = RESOLVED
+            row.resolved_by = user_id
+            row.resolved_at = utcnow()
+            row.resolution_note = ""
+        else:
+            # A change of mind reopens it: the curator's earlier "resolved"
+            # answered a different flag.
+            row.state = OPEN
+            row.resolved_by = None
+            row.resolved_at = None
+            row.became_template = None
+        await self._db.flush()
+        return row
+
+    async def for_run(self, run_id: UUID, user_id: UUID) -> AnswerFeedback | None:
+        """This reader's own verdict on this answer, if they gave one.
+
+        Their own, not anyone else's: the footer shows what *you* said, and
+        showing a colleague's verdict there would be an opinion presented as a
+        fact about the answer.
+        """
+        result = await self._db.execute(
+            select(AnswerFeedback).where(
+                AnswerFeedback.run_id == run_id, AnswerFeedback.user_id == user_id
+            )
+        )
+        return result.scalar_one_or_none()
+
+    # ── the review queue ─────────────────────────────────────────────────
+    async def reviews(
+        self, connection: DatabaseConnection, *, state: str = OPEN
+    ) -> list[tuple[AnswerFeedback, Run, str, str]]:
+        """Every flag on this connection, newest first, with its evidence.
+
+        Each row carries the question that was asked and the SQL that answered
+        it, because the curator's actual job here is *comparing two
+        statements* — and a queue that made them click through to find the
+        first one would not get used.
+        """
+        result = await self._db.execute(
+            select(AnswerFeedback)
+            .where(
+                AnswerFeedback.connection_id == connection.id,
+                AnswerFeedback.state == state,
+                AnswerFeedback.verdict != CORRECT,
+            )
+            .order_by(AnswerFeedback.created_at.desc())
+            .limit(BACKLOG_CANDIDATES)
+        )
+        rows = list(result.scalars().all())
+
+        out: list[tuple[AnswerFeedback, Run, str, str]] = []
+        for row in rows:
+            run = await self._db.get(Run, row.run_id)
+            if run is None:
+                continue
+            question, sql = await self._asked(run)
+            out.append((row, run, question, sql))
+        return out
+
+    async def resolve(
+        self,
+        connection: DatabaseConnection,
+        feedback_id: UUID,
+        *,
+        actor_id: UUID,
+        template_id: UUID | None = None,
+        note: str = "",
+        dismiss: bool = False,
+    ) -> AnswerFeedback:
+        """Close a flag, and record what happened to it.
+
+        `became_template` is the loop closing. It is what lets the product tell
+        the person who flagged an answer that their flag became knowledge —
+        and a feedback control with no visible payoff is worse than none,
+        because people learn their thumbs-down goes nowhere and stop.
+
+        A dismissal takes a reason for the same reason: a dismissal with no
+        note is indistinguishable from being ignored.
+        """
+        row = await self._db.get(AnswerFeedback, feedback_id)
+        if row is None or row.connection_id != connection.id:
+            raise NotFoundError("That flag is not on this connection.")
+        if dismiss and not note.strip():
+            raise ValidationError(
+                "Say why you are dismissing this — the person who flagged it will "
+                "see the reason."
+            )
+
+        row.state = DISMISSED if dismiss else RESOLVED
+        row.resolved_by = actor_id
+        row.resolved_at = utcnow()
+        row.resolution_note = note.strip()[:MAX_NOTE_CHARS]
+        row.became_template = template_id
+        await self._db.flush()
+        return row
+
+    # ── the backlog ──────────────────────────────────────────────────────
+    async def suggestions(
+        self, connection: DatabaseConnection, *, limit: int = 30
+    ) -> list[Suggestion]:
+        """A finite, ranked list of what to teach next.
+
+        Five sources, and the ranking is `app.knowledge.backlog`'s — the
+        reasoning lives there, and this method is only the aggregation the
+        reasoning cannot do without a database.
+
+        Everything already taught is excluded by normalised question, so the
+        backlog shrinks as it is worked. A backlog that does not shrink is a
+        report, not a queue.
+        """
+        taught = await self._taught(connection.id)
+        items: list[Suggestion] = []
+        items += await self._flagged(connection, taught)
+        items += await self._backfill(connection, taught)
+        traffic, unknown = await self._from_traffic(connection, taught)
+        items += traffic
+        items += unknown
+        return rank_suggestions(items, limit=limit)
+
+    async def _taught(self, connection_id: UUID) -> set[str]:
+        result = await self._db.execute(
+            select(KnowledgeTemplateRow.question_normalized).where(
+                KnowledgeTemplateRow.connection_id == connection_id,
+                KnowledgeTemplateRow.status != str(TemplateStatus.ARCHIVED),
+            )
+        )
+        return {value for (value,) in result.all()}
+
+    async def _flagged(
+        self, connection: DatabaseConnection, taught: set[str]
+    ) -> list[Suggestion]:
+        out: list[Suggestion] = []
+        for row, run, question, sql in await self.reviews(connection):
+            if not question or normalize_question(question) in taught:
+                continue
+            out.append(Suggestion(
+                kind=SuggestionKind.FLAGGED,
+                question=question,
+                count=1,
+                reason=flagged_reason(row.comment),
+                sql=sql,
+                # A flagged answer's SQL was written by a model. If a curator
+                # edits it in the editor before saving, the endpoint records
+                # `CHAT_CORRECTED` and the literals become theirs.
+                source=str(TemplateSource.CHAT_CONFIRMED),
+                model_derived=True,
+                origin_id=str(run.id),
+            ))
+        return out
+
+    async def _backfill(
+        self, connection: DatabaseConnection, taught: set[str]
+    ) -> list[Suggestion]:
+        """Verified pairs that already exist in the database and nothing reads.
+
+        `dashboard_tiles` and `report_blocks` both carry a plain-language
+        question, a statement, and `sql_origin`. A `GENERATED_EDITED` or
+        `HANDWRITTEN` one is a question a person answered correctly, by hand,
+        and then never told the system about.
+
+        They arrive as **proposals**, never as approved templates, and a
+        `GENERATED_EDITED` one is `MODEL_DERIVED`: a human edited a statement
+        whose *literals* the model chose (`docs/security.md`).
+        """
+        out: list[Suggestion] = []
+
+        tiles = await self._db.execute(
+            select(DashboardTile).where(
+                DashboardTile.connection_id == connection.id,
+                DashboardTile.sql_origin.in_(CORRECTED_ORIGINS),
+                DashboardTile.question.isnot(None),
+                DashboardTile.sql != "",
+            ).limit(BACKLOG_CANDIDATES)
+        )
+        for tile in tiles.scalars():
+            question = (tile.question or "").strip()
+            if not question or normalize_question(question) in taught:
+                continue
+            out.append(Suggestion(
+                kind=SuggestionKind.BACKFILL,
+                question=question,
+                reason=backfill_reason("TILE"),
+                sql=tile.sql,
+                source=str(TemplateSource.TILE),
+                model_derived=tile.sql_origin == "GENERATED_EDITED",
+                origin_id=str(tile.id),
+            ))
+
+        blocks = await self._db.execute(
+            select(ReportBlock)
+            .join(ReportSection, ReportBlock.section_id == ReportSection.id)
+            .join(Report, ReportSection.report_id == Report.id)
+            .where(
+                Report.connection_id == connection.id,
+                ReportBlock.sql_origin.in_(CORRECTED_ORIGINS),
+                ReportBlock.question != "",
+                ReportBlock.sql != "",
+            )
+            .limit(BACKLOG_CANDIDATES)
+        )
+        for block in blocks.scalars():
+            question = (block.question or "").strip()
+            if not question or normalize_question(question) in taught:
+                continue
+            out.append(Suggestion(
+                kind=SuggestionKind.BACKFILL,
+                question=question,
+                reason=backfill_reason("REPORT_BLOCK"),
+                sql=block.sql,
+                source=str(TemplateSource.REPORT_BLOCK),
+                model_derived=block.sql_origin == "GENERATED_EDITED",
+                origin_id=str(block.id),
+            ))
+        return out
+
+    async def _from_traffic(
+        self, connection: DatabaseConnection, taught: set[str]
+    ) -> tuple[list[Suggestion], list[Suggestion]]:
+        """Ranks 1, 3 and 4, from one pass over the month's questions.
+
+        One pass because they are three readings of the same rows, and three
+        queries would be three chances for them to disagree about which
+        questions were asked.
+        """
+        since = utcnow() - timedelta(days=BACKLOG_WINDOW_DAYS)
+        result = await self._db.execute(
+            select(Run, Message.content)
+            .join(Message, Run.user_message_id == Message.id)
+            .where(
+                Run.connection_id == connection.id,
+                Run.created_at >= since,
+                Message.content.isnot(None),
+            )
+            .order_by(Run.created_at.desc())
+            .limit(BACKLOG_CANDIDATES * 5)
+        )
+
+        matched = await self._matched_run_ids(connection.id, since)
+        grouped: dict[str, dict[str, Any]] = {}
+        for run, content in result.all():
+            question = (content or "").strip()
+            if not question:
+                continue
+            key = normalize_question(question)
+            if not key or key in taught:
+                continue
+            bucket = grouped.setdefault(
+                key,
+                {"question": question, "asked": 0, "matched": 0,
+                 "failed": 0, "repaired": 0},
+            )
+            bucket["asked"] += 1
+            bucket["matched"] += int(run.id in matched)
+            bucket["failed"] += int(bool(run.error_code))
+            bucket["repaired"] += int((run.repair_count or 0) > 0)
+
+        vocabulary = await self._vocabulary(connection)
+        traffic: list[Suggestion] = []
+        unknown: list[Suggestion] = []
+        for bucket in grouped.values():
+            question, asked = bucket["question"], bucket["asked"]
+            if bucket["failed"] or bucket["repaired"]:
+                traffic.append(Suggestion(
+                    kind=SuggestionKind.FAILED,
+                    question=question,
+                    count=asked,
+                    reason=failed_reason(bucket["failed"], bucket["repaired"]),
+                ))
+            elif not bucket["matched"]:
+                traffic.append(Suggestion(
+                    kind=SuggestionKind.TRAFFIC,
+                    question=question,
+                    count=asked,
+                    reason=traffic_reason(asked),
+                ))
+
+            words = unknown_words(question, vocabulary)
+            if words:
+                unknown.append(Suggestion(
+                    kind=SuggestionKind.UNKNOWN_WORDS,
+                    question=question,
+                    count=asked,
+                    reason=unknown_reason(words),
+                    words=words,
+                ))
+        return traffic, unknown
+
+    async def _matched_run_ids(self, connection_id: UUID, since: Any) -> set[UUID]:
+        result = await self._db.execute(
+            select(KnowledgeTemplateHit.run_id).where(
+                KnowledgeTemplateHit.outcome == "SHORT_CIRCUIT",
+                KnowledgeTemplateHit.created_at >= since,
+            )
+        )
+        return {run_id for (run_id,) in result.all()}
+
+    async def _vocabulary(self, connection: DatabaseConnection) -> set[str]:
+        """What this connection can be said to know — schema plus the layer."""
+        snapshot = await KnowledgeService(self._db, self._settings)._snapshot(
+            connection.id
+        )
+        layer = await self._db.execute(
+            select(SemanticLayerRow).where(
+                SemanticLayerRow.connection_id == connection.id
+            )
+        )
+        row = layer.scalar_one_or_none()
+        return build_vocabulary(
+            snapshot["tables"], row.document if row and row.document else None
+        )
+
+    async def _asked(self, run: Any) -> tuple[str, str]:
+        """The question behind a run, and the statement that answered it."""
+        message = await self._db.get(Message, run.user_message_id)
+        query = await self._db.execute(
+            select(GeneratedQuery)
+            .where(GeneratedQuery.run_id == run.id)
+            .order_by(GeneratedQuery.attempt_no.desc())
+            .limit(1)
+        )
+        latest = query.scalar_one_or_none()
+        return (
+            (message.content or "").strip() if message else "",
+            (latest.raw_sql if latest else "") or "",
+        )

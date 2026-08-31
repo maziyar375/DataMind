@@ -489,6 +489,92 @@ class TemplateCheckResult(BaseModel):
     question_slots: list[str] = Field(default_factory=list)
 
 
+class AnswerFeedbackWrite(BaseModel):
+    """What the answer footer sends. Three verdicts, not two.
+
+    "This is wrong" and "please look at this" are different asks: one is a
+    correction the flagger could make themselves, the other is a question they
+    cannot answer. Collapsing them loses the second.
+    """
+
+    verdict: Literal["CORRECT", "WRONG", "NEEDS_REVIEW"]
+    comment: str = ""
+
+
+class AnswerFeedbackRead(BaseModel):
+    """One verdict, and what became of it.
+
+    `became_template` is the loop closing. It is what lets the product tell the
+    person who flagged an answer that their flag became knowledge — and a
+    feedback control with no visible payoff is worse than none.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    run_id: UUID
+    verdict: str
+    comment: str = ""
+    state: str
+    resolution_note: str = ""
+    became_template: UUID | None = None
+    resolved_at: datetime | None = None
+    created_at: datetime
+
+
+class ReviewRead(BaseModel):
+    """One flag in the queue, with the evidence beside it.
+
+    The question and the SQL travel with the row because the curator's actual
+    job here is comparing two statements, and a queue that made them click
+    through to find the first one would not get used.
+    """
+
+    id: UUID
+    run_id: UUID
+    verdict: str
+    comment: str = ""
+    state: str
+    created_at: datetime
+    #: The question as it was asked, and the statement that answered it.
+    question: str = ""
+    sql: str = ""
+    #: Who raised it, for the header line. A name, never an address.
+    flagged_by: str = ""
+
+
+class ReviewResolve(BaseModel):
+    """§1.5's rule, made into an interaction.
+
+    The curator decides whether a correction is *question-shaped* (it becomes a
+    template) or *definition-shaped* (it belongs in the semantic layer) — the
+    product does not guess. `dismiss` is the third option and it takes a
+    reason, because a dismissal with no note is indistinguishable from being
+    ignored.
+    """
+
+    template_id: UUID | None = None
+    note: str = ""
+    dismiss: bool = False
+
+
+class SuggestionRead(BaseModel):
+    """One row in the backlog: what to teach, and why it is worth teaching."""
+
+    kind: Literal["FLAGGED", "BACKFILL", "TRAFFIC", "FAILED", "UNKNOWN_WORDS"]
+    question: str
+    count: int = 1
+    reason: str = ""
+    #: A statement to prefill the editor with, where one exists.
+    sql: str = ""
+    source: str = ""
+    #: Whether the literals in `sql` were a model's choice — which decides
+    #: whether they may be disclosed. `docs/security.md`.
+    model_derived: bool = False
+    origin_id: str = ""
+    words: list[str] = Field(default_factory=list)
+
+
 class KnowledgeCapabilities(BaseModel):
     """So the UI hides rather than disables.
 
@@ -1339,6 +1425,10 @@ class RunKnowledge(BaseModel):
     matcher: str = ""
     #: True once somebody asked for a fresh answer instead of this one.
     overridden: bool = False
+    #: This reader's own verdict on this answer, and what became of it. Theirs,
+    #: not anyone else's: the footer shows what *you* said, and showing a
+    #: colleague's verdict there would be an opinion presented as a fact.
+    feedback: AnswerFeedbackRead | None = None
 
 
 class RunRead(BaseModel):

@@ -10,10 +10,11 @@
 > **Four decisions were taken before writing this** (§0.2). They are recorded
 > here rather than re-argued: everything below assumes them.
 >
-> **39 of 86 items, verified against the tree on 2026-08-31.** Phase 0 has
-> landed except its three baseline runs, which need a provider key; Phases 1
-> and 2 are complete — the store is built, filled by hand, and read on the ask
-> path, and `PROMPT_VERSION` has not moved.
+> **48 of 86 items, verified against the tree on 2026-08-31.** Phase 0 has
+> landed except its three baseline runs, which need a provider key; **Phases 1,
+> 2 and 3 are complete** — the store is built, filled by hand *and* from
+> traffic, read on the ask path, and the loop closes back to the person who
+> flagged an answer. `PROMPT_VERSION` has not moved.
 > [§13](#13-progress-ledger--what-is-done-what-is-not) is the
 > ledger: what is already in the codebase and load-bearing (§13.1), then a
 > checkbox per deliverable per phase, each with the check that proves its state.
@@ -1532,10 +1533,11 @@ it is not, no amount of Phase 5 will help.
 > reading the code, not by memory; every ❌ was confirmed absent the same way.
 > The verification note beside each item is what to re-run to check it again.
 >
-> **Status: 39 of 86 plan items complete.** Phase 0's instruments are built
+> **Status: 48 of 86 plan items complete.** Phase 0's instruments are built
 > (its three measurements are not — see §13.2, and they gate Phase 5 only), and
-> **Phases 1 and 2 have landed in full**: the store, the curation surface, the
-> guard's fifth entry point, the short-circuit and the badge. What is done besides that is the *foundation* the
+> **Phases 1–3 have landed in full**: the store, the curation surface, the
+> guard's fifth entry point, the short-circuit, the badge, feedback, the review
+> queue and the ranked backlog. What is done besides that is the *foundation* the
 > plan leans on (§13.1) — which is substantial, and is why the research put the
 > loop at "60% built and not wired up".
 >
@@ -1676,19 +1678,37 @@ replayed through the new door. **No chat answer behaves differently.**
 > executions**, and `match` spends one of them on every run, so a runaway repair
 > loop now stops one `generate` earlier. `test_pipeline_events.py` records it.
 
-### 13.5 Phase 3 — Capture: feedback, queue, backlog · **0 / 9** ❌ not started
+### 13.5 Phase 3 — Capture: feedback, queue, backlog · **9 / 9** ✅ landed
 
-- [ ] `answer_feedback` model + migration — **confirmed absent**
-- [ ] `POST /runs/{id}/feedback`, open to any signed-in user
-- [ ] ✓ / ✗ / *Ask for review* in the chat answer footer, inline — no modal
-- [ ] *Save this answer as a template* → the prefilled editor
-- [ ] `GET /reviews` + `POST /reviews/{id}/resolve`
-- [ ] The review detail pane: side-by-side, with the question-shaped / definition-shaped / dismiss radio (§1.5)
-- [ ] The backfill reader over `dashboard_tiles` + `report_blocks` — proposals only, `GENERATED_EDITED` ⇒ `literal_provenance = MODEL_DERIVED`
-- [ ] `GET /suggestions` — the ranked backlog, all four rank sources including **words retrieval did not recognise**
-- [ ] `answer_feedback.became_template` surfaced back to the person who flagged it
+- [x] `answer_feedback` model + migration `0017`, with `UNIQUE (run_id, user_id)` — one verdict per person, and a second press is a change of mind
+- [x] `POST /runs/{id}/feedback`, open to any signed-in user — it does **not** ask `can_curate`, and a test asserts that it still works with the flag on while resolving a flag does not
+- [x] ✓ / ✗ / *Ask for review* in the chat answer footer, inline — one textarea expands in place, one line of acknowledgement, no modal and no toast
+- [x] *Save as a template* on an answer → the **same** `TemplateEditor` the Knowledge tab uses, prefilled with the question and the statement the reader just watched succeed. Reused rather than reimplemented: two editors would be two chances to get the disclosure rule wrong
+- [x] `GET /reviews` + `POST /reviews/{id}/resolve`, the second gated by `can_curate`
+- [x] The review detail pane: the flagged statement, and the question-shaped / definition-shaped / dismiss radio (§1.5) — a dismissal cannot be sent without a reason
+- [x] The backfill reader over `dashboard_tiles` **and** `report_blocks` — proposals only, `GENERATED_EDITED` ⇒ `MODEL_DERIVED`
+- [x] `GET /suggestions` — the ranked backlog, **five** sources: flagged, backfill, traffic, failed, and words the retrieval did not recognise. Everything already taught is excluded, so the list shrinks as it is worked
+- [x] `answer_feedback.became_template` surfaced back to the person who flagged it, on their own answer, in the footer where they pressed the button
 
 > Ship without that last box and this phase has shipped a suggestion box.
+>
+> **It is shipped.** Saving a template from a flag resolves that flag in the
+> same action, so the link cannot be forgotten by a curator in a hurry.
+>
+> Three things landed differently from the sketch:
+>
+> * **The backlog has five sources, not four.** A flag is rank 1 in the plan's
+>   own table but was not listed as a *source*; making it one means the queue
+>   and the backlog are one ranked list rather than two screens that disagree
+>   about what matters.
+> * **The vocabulary gap needed a stopword list.** Without one, `last`,
+>   `month`, `total` and `average` are "words nothing here recognises" on
+>   almost every question, and the real gaps are buried on the first day. Three
+>   groups — grammar, time, aggregation — and nothing further, because an
+>   aggressive list hides real misses.
+> * **A `CORRECT` verdict arrives already `RESOLVED`**, by the person who gave
+>   it. Treating a ✓ as open work would put a permanent number on the tab that
+>   no curator could clear, which is how a badge stops being a signal.
 
 ### 13.6 Phase 4 — Store health · **0 / 7** ❌ not started
 
@@ -1758,14 +1778,14 @@ Docs land in the same commit as the code, per this repo's convention.
 | 0 · Fix the ruler | 5 | 6 | ⚠️ **still blocking Phase 5** — the three runs are unmade |
 | 1 · Store + curation surface | 22 | 22 | ✅ |
 | 2 · Match, short-circuit, badge | 12 | 12 | ✅ |
-| 3 · Capture | 0 | 9 | ❌ |
+| 3 · Capture | 9 | 9 | ✅ |
 | 4 · Store health | 0 | 7 | ❌ |
 | 5 · Few-shot | 0 | 7 | ❌ |
 | 6 · Benchmark | 0 | 7 | ❌ |
 | 7 · Embeddings | 0 | 5 | ❌ |
 | 8 · Permissions | 0 | 4 | ❌ |
 | Docs | 0 | 7 | ❌ |
-| **Plan total** | **39** | **86** | |
+| **Plan total** | **48** | **86** | |
 
 ### 13.13 Change log
 
@@ -1775,6 +1795,7 @@ over anything else in the document.
 | Date | What landed | Boxes ticked |
 |---|---|---|
 | 2026-08-31 | This plan written; the tree audited to establish the starting position | — (0 of 86) |
+| 2026-08-31 | **Phase 3 — capture: feedback, the queue, the backlog.** `answer_feedback` + migration `0017`; `POST /runs/{id}/feedback` open to **any** signed-in user (the person who notices a wrong answer is rarely the person allowed to fix it), with three verdicts and a `CORRECT` arriving already resolved. `app/knowledge/backlog.py` — the five ranked sources and the vocabulary gap, pure and unit-tested; `FeedbackService` — the queue, the resolution, and the aggregation over `runs`, `dashboard_tiles` and `report_blocks`. `GET /reviews`, `POST /reviews/{id}/resolve` (a dismissal needs a reason), `GET /suggestions`. Frontend: the inline ✓/✗/*Ask for review* footer, *Save as a template* opening the **same** editor the Knowledge tab uses, and the queue and backlog as two more sections of the one list. **`became_template` reaches the flagger on their own answer**, and saving a template from a flag resolves it in the same action. 42 new backend tests plus 14 frontend checks. Also: `tests/conftest.py` now forces JSON logs — an unhandled exception in a route was taking **over a minute** to render through structlog's rich console renderer, which made a failing API test look like a hung suite. | 48 of 86 (§13.5, all 9) |
 | 2026-08-31 | **Phase 2 — match, short-circuit, badge.** `app/knowledge/matcher.py` (the Protocol, `LexicalMatcher` over an injected row source, `trigram_similarity` as Postgres' own algorithm, and the declared-value masking without which the plan's worked example scores 0.83) and `bind.py` (the date grammar and the cancel-on-unbound rule, substituting on the tree). The `match` node between `route` and `retrieve`, wired with both exits — a hit lands on `validate`, so a stored template reuses the guard, the rewriter and the row cap and gets no exemption; a miss writes nothing. `knowledge_template_hits` + migration `0016` + `runs.skip_templates`; every verdict logged, `OVERRIDDEN_BY_USER` included. The three-tier badge in `chat.tsx` with the matched question *and* the bound parameters, and *Generate a fresh answer instead* wired through `POST /runs/{id}/override`. 86 new backend tests. Docs: pipeline.md §2/§3 (the node, the graph, the eleven-node table), CLAUDE.md. **`PROMPT_VERSION` is still `v8`, and a test asserts it.** | 39 of 86 (§13.4, all 12) |
 | 2026-08-31 | **Phase 1 — the store and the curation surface.** `app/knowledge/` (models, normalize, params, validate) with an eighth import-linter contract; `knowledge_templates` + migration `0015` (`pg_trgm` inside a SAVEPOINT, so a role that may not create extensions still migrates); `knowledge_service.py`; `/connections/{id}/knowledge/*` with `can_curate` on every write and `is_admin` nowhere; the Knowledge tab, its DOM-free half and its 60-check suite. Five test files, 216 backend tests — the hostile corpus replayed through the fifth door on save, on use, and with a slot spliced in. Docs: CLAUDE.md (the guard's *five* entry points, a Knowledge templates section, the code map, the eighth contract), security.md §3.2/§3.3/§4.5 (the disclosure rung and the fifth door), docs/README.md (the three unindexed docs indexed together). **The store is inert: `PROMPT_VERSION` is still v8, nothing in `app/pipeline/` imports `app.knowledge`, and no chat answer behaves differently.** | 27 of 86 (§13.3, all 22) |
 | 2026-08-31 | **Phase 0 instruments.** `runs.prompt_version` records the prompt module's constant (+ `tests/unit/test_prompt_version.py`); the eval runner gained `--retrieve-budget` and `--semantic on\|off`, both off by default and both recorded on the scorecard; `backend/fixtures/sales_semantic.json` added as the layer-on arm's input; both decisions logged in `suites/CHANGELOG.md`. Docs: eval.md §1/§4/§6, CLAUDE.md, pipeline.md §5. **The three baseline runs were not made — no provider key in this environment.** | 5 of 86 (§13.2 boxes 1–5) |

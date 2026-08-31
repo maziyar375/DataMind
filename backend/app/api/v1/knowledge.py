@@ -20,16 +20,20 @@ from sqlalchemy import select
 
 from app.api.deps import CtxDep, DbDep, SettingsDep
 from app.api.schemas import (
+    AnswerFeedbackRead,
     KnowledgeCapabilities,
     KnowledgeTemplateList,
     KnowledgeTemplatePatch,
     KnowledgeTemplateRead,
     KnowledgeTemplateWrite,
+    ReviewRead,
+    ReviewResolve,
+    SuggestionRead,
     TemplateCheckRequest,
     TemplateCheckResult,
 )
 from app.core.errors import ForbiddenError, NotFoundError
-from app.infra.db.models import DatabaseConnection, SchemaSnapshotRow
+from app.infra.db.models import DatabaseConnection, SchemaSnapshotRow, User
 from app.knowledge import (
     LiteralProvenance,
     TemplateParam,
@@ -38,7 +42,7 @@ from app.knowledge import (
     TemplateStatus,
     slots,
 )
-from app.services.knowledge_service import KnowledgeService
+from app.services.knowledge_service import FeedbackService, KnowledgeService
 from app.services.policy import can_curate
 
 router = APIRouter(
@@ -228,6 +232,126 @@ async def archive_template(
     _require_curator(ctx, settings)
     row = await KnowledgeService(db, settings).archive(connection, template_id)
     return KnowledgeTemplateRead.model_validate(row)
+
+
+# ── capture: the queue and the backlog (Phase 3) ─────────────────────────
+@router.get("/reviews", response_model=list[ReviewRead])
+async def list_reviews(
+    connection_id: UUID,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    state: str = "OPEN",
+) -> list[ReviewRead]:
+    """Every flag on this connection, with the evidence beside it.
+
+    Read-only and open to any reader of the connection: seeing what people
+    reported is not a privilege, and it is often the fastest way to find out
+    that the answer you are about to trust is already disputed.
+    """
+    connection = await _owned(db, connection_id, ctx)
+    service = FeedbackService(db, settings)
+
+    out: list[ReviewRead] = []
+    for row, run, question, sql in await service.reviews(connection, state=state):
+        out.append(ReviewRead(
+            id=row.id,
+            run_id=run.id,
+            verdict=row.verdict,
+            comment=row.comment,
+            state=row.state,
+            created_at=row.created_at,
+            question=question,
+            sql=sql,
+            flagged_by=await _display_name(db, row.user_id),
+        ))
+    return out
+
+
+@router.post("/reviews/{feedback_id}/resolve", response_model=AnswerFeedbackRead)
+async def resolve_review(
+    connection_id: UUID,
+    feedback_id: UUID,
+    payload: ReviewResolve,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+) -> AnswerFeedbackRead:
+    """Close a flag, and record what happened to it.
+
+    `template_id` is the loop closing: the flag that became knowledge says so,
+    and the person who raised it is told. Ship this without that link and the
+    phase has shipped a suggestion box.
+    """
+    connection = await _owned(db, connection_id, ctx)
+    _require_curator(ctx, settings)
+
+    if payload.template_id is not None:
+        # It must be a template on *this* connection: a resolution pointing at
+        # somebody else's knowledge would tell the flagger a lie.
+        await KnowledgeService(db, settings).get(connection, payload.template_id)
+
+    row = await FeedbackService(db, settings).resolve(
+        connection,
+        feedback_id,
+        actor_id=ctx.user_id,
+        template_id=payload.template_id,
+        note=payload.note,
+        dismiss=payload.dismiss,
+    )
+    return AnswerFeedbackRead.model_validate(row)
+
+
+@router.get("/suggestions", response_model=list[SuggestionRead])
+async def list_suggestions(
+    connection_id: UUID,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    limit: int = 30,
+) -> list[SuggestionRead]:
+    """A finite, ranked list of what to teach next.
+
+    The hardest part of curation is not writing a template — it is knowing
+    which one to write. Five sources, ranked in `app.knowledge.backlog`:
+    what somebody flagged, what already exists in a corrected tile, what people
+    ask that nothing matches, what fails, and the words nothing here
+    recognises.
+
+    Everything already taught is excluded, so the list shrinks as it is worked.
+    A backlog that does not shrink is a report, not a queue.
+    """
+    connection = await _owned(db, connection_id, ctx)
+    items = await FeedbackService(db, settings).suggestions(
+        connection, limit=max(1, min(limit, 100))
+    )
+    return [
+        SuggestionRead(
+            kind=str(item.kind),  # type: ignore[arg-type]
+            question=item.question,
+            count=item.count,
+            reason=item.reason,
+            sql=item.sql,
+            source=item.source,
+            model_derived=item.model_derived,
+            origin_id=item.origin_id,
+            words=item.words,
+        )
+        for item in items
+    ]
+
+
+async def _display_name(db, user_id: UUID | None) -> str:
+    """A name, never an address.
+
+    The queue header says who raised a flag so the curator can go and ask them.
+    An email there would put a personal identifier on a screen that has no need
+    for one.
+    """
+    if user_id is None:
+        return ""
+    user = await db.get(User, user_id)
+    return (user.display_name or "") if user is not None else ""
 
 
 def _provenance(source: TemplateSource) -> LiteralProvenance:

@@ -10,10 +10,14 @@
  * total when there is nothing to do.
  */
 import {
+  CORRECTION_SHAPES,
   isUnused, markLiterals, matches, previewQuestion, questionParts, questionSlots,
-  readiness, roleLabel, rowSubtitle, sections, statusOf, tabCount, valuesOf,
+  readiness, resolveReadiness, roleLabel, rowSubtitle, sections, statusOf,
+  suggestionSection, suggestionView, tabCount, valuesOf,
 } from './knowledge-template.ts'
-import type { ProposalRow, TemplateRow, TemplateSlot } from './knowledge-template.ts'
+import type {
+  ProposalRow, SuggestionRow, TemplateRow, TemplateSlot,
+} from './knowledge-template.ts'
 
 let failures = 0
 function check(name: string, actual: unknown, expected: unknown): void {
@@ -220,6 +224,82 @@ check('search reads the question', matches(row(), 'REVENUE'), true)
 check('search reads the tables it touches', matches(row(), 'stores'), true)
 check('search reads the parameter names', matches(row(), 'region'), true)
 check('and does not match what is not there', matches(row(), 'churn'), false)
+
+// ── the backlog and the queue ─────────────────────────────────────────────
+function suggestion(over: Partial<SuggestionRow> = {}): SuggestionRow {
+  return {
+    kind: 'TRAFFIC',
+    question: 'which stores beat target last quarter',
+    count: 9,
+    reason: 'Asked 9× this month, never matched',
+    sql: '',
+    words: [],
+    ...over,
+  }
+}
+
+// A suggestion is `○` — *not yet knowledge* — and never `⚠`, because nothing
+// here is broken. A backlog that looked like a fault list would train people
+// to dread opening the tab.
+check('traffic is an offer, not a fault', suggestionView(suggestion()), {
+  glyph: '○', tone: 'faint', action: 'Teach this',
+})
+check(
+  'a corrected tile is the same offer',
+  suggestionView(suggestion({ kind: 'BACKFILL' })).action,
+  'Teach this',
+)
+// The one suggestion that *is* work somebody is waiting on.
+check('a flag is work', suggestionView(suggestion({ kind: 'FLAGGED' })), {
+  glyph: '⚠', tone: 'amber', action: 'Review',
+})
+// It names a word, not a question — and the fix is often a synonym in the
+// semantic layer, so "Teach this" would be the wrong verb.
+check(
+  'an unrecognised word offers no one-click action',
+  suggestionView(suggestion({ kind: 'UNKNOWN_WORDS', words: ['churn'] })).action,
+  '',
+)
+check(
+  'flags are work and everything else is a queue',
+  [
+    suggestionSection(suggestion({ kind: 'FLAGGED' })),
+    suggestionSection(suggestion({ kind: 'TRAFFIC' })),
+    suggestionSection(suggestion({ kind: 'UNKNOWN_WORDS' })),
+  ],
+  ['needsYou', 'suggested', 'suggested'],
+)
+
+// ── resolving a flag ──────────────────────────────────────────────────────
+// §1.5 as an interaction: question-shaped, definition-shaped, or neither. The
+// curator decides and the product does not guess.
+check(
+  'there are exactly three shapes a correction can have',
+  CORRECTION_SHAPES.map((s) => s.value),
+  ['template', 'definition', 'dismiss'],
+)
+check(
+  'a dismissal without a reason cannot be sent',
+  resolveReadiness('dismiss', '   ', false),
+  { ready: false, issue: 'Say why — the person who flagged this will see the reason.' },
+)
+check(
+  'a dismissal with a reason can',
+  resolveReadiness('dismiss', 'The rollup is right; refunds net out.', false).ready,
+  true,
+)
+check(
+  'question-shaped waits for the template to exist',
+  resolveReadiness('template', '', false),
+  { ready: false, issue: 'Save the template first.' },
+)
+check(
+  'and is ready once it does',
+  resolveReadiness('template', '', true).ready,
+  true,
+)
+// A definition goes to the semantic layer, so there is nothing to save here.
+check('definition-shaped needs nothing else', resolveReadiness('definition', '', false).ready, true)
 
 console.log(failures === 0 ? '\nall passed' : `\n${failures} failed`)
 if (failures > 0) throw new Error(`${failures} test(s) failed`)

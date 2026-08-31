@@ -19,7 +19,10 @@ import type {
   RunKnowledge, RunStep, TableArtifactSpec,
 } from '../api/types'
 import { ChartGlyph, ChartTypePicker } from './chart-picker'
-import { Chip, CopyButton, Dot, dirOf, Icon, Kpi, ResultTable, Spinner } from './ui'
+import {
+  Chip, CopyButton, Dot, GhostButton, Icon, Kpi, ResultTable, Spinner, TextArea,
+  dirOf,
+} from './ui'
 import { VegaChart } from './VegaChart'
 import { NODE_META } from '../theme/tokens'
 
@@ -866,8 +869,109 @@ function AnswerBadge({
   )
 }
 
+/**
+ * *Was this right?* — in the footer, small, and never a modal.
+ *
+ * Three verdicts, not two. Genie's *Yes / Fix it / Request review* split exists
+ * because "this is wrong" and "please look at this" are different asks: one is
+ * a correction the reader could make themselves, the other is a question they
+ * cannot answer. Collapsing them loses the second.
+ *
+ * `✗ No` and `Ask for review` expand **one textarea inline**. Both submit to a
+ * single line of acknowledgement in place: no toast, no dialog, no confetti.
+ *
+ * And once a flag becomes a template, this is where the person who raised it
+ * finds out — the one thing that keeps a feedback control from becoming a
+ * suggestion box people learn to ignore.
+ */
+function FeedbackFooter({
+  run, onSubmit,
+}: {
+  run: RunDetail
+  onSubmit: (verdict: string, comment: string) => Promise<void>
+}) {
+  const given = run.knowledge.feedback
+  const [pending, setPending] = useState<string | null>(null)
+  const [comment, setComment] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function submit(verdict: string, text = '') {
+    setBusy(true)
+    try {
+      await onSubmit(verdict, text)
+      setPending(null)
+      setComment('')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (given && !pending) {
+    return (
+      <div style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
+        {given.became_template ? (
+          <>
+            Your flag became a saved question. This will be answered from it next
+            time.
+          </>
+        ) : given.state === 'DISMISSED' ? (
+          <>Reviewed — {given.resolution_note}</>
+        ) : given.verdict === 'CORRECT' ? (
+          <>Thanks — noted as correct.</>
+        ) : (
+          <>Thanks — this is in the review queue.</>
+        )}
+      </div>
+    )
+  }
+
+  if (pending) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 520 }}>
+        <TextArea
+          autoFocus
+          value={comment}
+          placeholder={
+            pending === 'WRONG'
+              ? 'What was wrong? — optional'
+              : 'What should someone look at? — optional'
+          }
+          onChange={(e) => setComment(e.target.value)}
+          style={{ minHeight: 56, fontSize: 12.5 }}
+        />
+        {pending === 'NEEDS_REVIEW' && (
+          <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+            This goes to whoever owns the connection.
+          </span>
+        )}
+        <div style={{ display: 'flex', gap: 6 }}>
+          <GhostButton onClick={() => submit(pending, comment)} disabled={busy}>
+            {busy && <Spinner />}
+            Send
+          </GhostButton>
+          <GhostButton onClick={() => setPending(null)}>Cancel</GhostButton>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5 }}>
+      <span style={{ color: 'var(--text-faint)' }}>Was this right?</span>
+      <GhostButton onClick={() => submit('CORRECT')} disabled={busy}>
+        ✓ Yes
+      </GhostButton>
+      <GhostButton onClick={() => setPending('WRONG')}>✗ No</GhostButton>
+      <GhostButton onClick={() => setPending('NEEDS_REVIEW')}>
+        Ask for review
+      </GhostButton>
+    </div>
+  )
+}
+
 export const AssistantTurn = memo(function AssistantTurn({
   text, run, streaming, steps, onPickOption, optionsDisabled, onRegenerate,
+  onFeedback, onSaveAsTemplate,
 }: {
   text: string
   run: RunDetail | null
@@ -882,6 +986,10 @@ export const AssistantTurn = memo(function AssistantTurn({
   optionsDisabled?: boolean
   /** Records the override, then re-asks the same question without the store. */
   onRegenerate?: (run: RunDetail) => void
+  /** *Was this right?* Absent while streaming and on a failed run. */
+  onFeedback?: (run: RunDetail, verdict: string, comment: string) => Promise<void>
+  /** Opens the template editor prefilled with this answer's question and SQL. */
+  onSaveAsTemplate?: (run: RunDetail) => void
 }) {
   const table = run?.artifacts.find((a) => a.kind === 'TABLE')
   const spec = table?.spec as TableArtifactSpec | undefined
@@ -998,7 +1106,25 @@ export const AssistantTurn = memo(function AssistantTurn({
           style={{ display: 'flex', alignItems: 'center', gap: 2, marginLeft: -6 }}
         >
           <CopyButton text={text} />
+          {/* One click from an answer that worked to the knowledge that keeps
+              it working. The editor opens prefilled with the question and the
+              statement the reader just watched succeed, which is the whole
+              reason this belongs here rather than on the Knowledge tab. */}
+          {onSaveAsTemplate && run && run.queries.length > 0 && (
+            <GhostButton onClick={() => onSaveAsTemplate(run)}>
+              <Icon.Sparkle size={13} />
+              Save as a template
+            </GhostButton>
+          )}
         </div>
+      )}
+
+      {/* Beside the copy control, and never a modal. */}
+      {!streaming && run && text && onFeedback && (
+        <FeedbackFooter
+          run={run}
+          onSubmit={(verdict, comment) => onFeedback(run, verdict, comment)}
+        />
       )}
     </Turn>
   )

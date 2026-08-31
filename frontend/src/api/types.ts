@@ -426,6 +426,52 @@ export interface RunKnowledge {
   matcher: string
   /** True once somebody asked for a fresh answer instead of this one. */
   overridden: boolean
+  /** This reader's own verdict on this answer, and what became of it. */
+  feedback: AnswerFeedback | null
+}
+
+/** One verdict on an answer, and what became of it. */
+export interface AnswerFeedback {
+  id: string
+  run_id: string
+  verdict: 'CORRECT' | 'WRONG' | 'NEEDS_REVIEW'
+  comment: string
+  state: 'OPEN' | 'RESOLVED' | 'DISMISSED'
+  /** Why a curator dismissed it — shown back to the person who flagged it,
+   *  because a dismissal with no reason is indistinguishable from silence. */
+  resolution_note: string
+  /** **The loop closing.** The flag that became knowledge says so. */
+  became_template: string | null
+  resolved_at: string | null
+  created_at: string
+}
+
+/** One flag in the curator's queue, with the evidence beside it. */
+export interface Review {
+  id: string
+  run_id: string
+  verdict: 'WRONG' | 'NEEDS_REVIEW'
+  comment: string
+  state: string
+  created_at: string
+  question: string
+  sql: string
+  /** A name, never an address. */
+  flagged_by: string
+}
+
+/** One row in the backlog: what to teach, and why it is worth teaching. */
+export interface Suggestion {
+  kind: 'FLAGGED' | 'BACKFILL' | 'TRAFFIC' | 'FAILED' | 'UNKNOWN_WORDS'
+  question: string
+  count: number
+  reason: string
+  sql: string
+  source: string
+  /** Whether the literals in `sql` were a model's choice. */
+  model_derived: boolean
+  origin_id: string
+  words: string[]
 }
 
 export interface RunDetail {
