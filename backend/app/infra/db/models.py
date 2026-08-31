@@ -936,6 +936,105 @@ class ReportSectionResult(Base):
     )
 
 
+# ── knowledge templates (the learning loop) ──────────────────────────────
+class KnowledgeTemplateRow(Base, TimestampMixin):
+    """One taught question, scoped to one connection.
+
+    The learning loop's artifact: a question *pattern* with typed slots and SQL
+    with `:params`, not a literal question→SQL pair. A literal store's hit rate
+    stays near zero and retrofitting parameters onto pairs authored without
+    them means re-curating everything — see `docs/learning-loop-plan.md` §D1.
+
+    `sql` is hostile input on the same terms as `dashboard_tiles.sql`: a person
+    typed it into a textarea, so it is guarded on save *and* re-guarded against
+    the connection's current snapshot on every use. `source` records where the
+    text came from and grants nothing.
+    """
+
+    __tablename__ = "knowledge_templates"
+    __table_args__ = (
+        # The match key, not the prose. Two askings of the same question
+        # normalise to one row, which is what stops a store filling with
+        # near-duplicates nobody can choose between.
+        UniqueConstraint(
+            "connection_id", "question_normalized",
+            name="uq_knowledge_templates_question",
+        ),
+        Index(
+            "ix_knowledge_templates_conn_status",
+            "connection_id", "status", "role",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    # CASCADE, like `semantic_layers`: a template describes exactly one
+    # connection's schema and has no life without it.
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("database_connections.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+
+    question: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    question_normalized: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    sql: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: `[{name, type, comment}]` — proposed from the guard's AST at save time.
+    params: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    #: Written for the next curator, **never rendered into a prompt**. Research
+    #: measured that more prose in the prompt lowers execution accuracy; a note
+    #: that never reaches a prompt cannot. If it ever does, that moves
+    #: `PROMPT_VERSION` and goes through an eval arm like everything else.
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="MANUAL")
+    #: Whether the literals in `sql` may be shown under a restrictive
+    #: disclosure policy. A hand-authored literal travels with structure, like
+    #: a catalog comment; one a model chose is gated like a sample value.
+    #: `docs/security.md`.
+    literal_provenance: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="HUMAN_AUTHORED"
+    )
+    #: RETRIEVABLE | BENCHMARK_ONLY | HELD_OUT. A column rather than a
+    #: convention, because a convention will not survive six months — and a
+    #: held-out question answered from its own stored SQL measures nothing.
+    role: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="RETRIEVABLE"
+    )
+    #: ACTIVE | STALE | CONFLICTED | ARCHIVED. Never deleted by the system.
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
+    #: Shown verbatim in the UI — the guard's own words, or the conflict's.
+    status_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    #: The snapshot version this SQL last validated against, mirroring
+    #: `semantic_layers.schema_version`, so the UI can say "the schema has
+    #: moved on underneath this" in the drift language it already has.
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    referenced_tables: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, default=list, server_default=text("'{}'")
+    )
+    conflicts_with: Mapped[list[uuid.UUID]] = mapped_column(
+        ARRAY(PgUUID(as_uuid=True)), nullable=False, default=list,
+        server_default=text("'{}'"),
+    )
+
+    # Separate, and both SET NULL. A template mined from a tile was created by
+    # the system and verified by a person; deleting the person must not delete
+    # the knowledge.
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    verified_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: What makes pruning possible: a template nobody has matched in ninety
+    #: days is a maintenance cost with no return.
+    hit_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_hit_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     __table_args__ = (

@@ -90,7 +90,7 @@ include_external_packages = true
 [[tool.importlinter.contracts]]
 name = "Layered architecture: api -> services -> domain <- infra"
 type = "layers"
-layers = ["app.api", "app.services", "app.pipeline", "app.reports", "app.semantic", "app.domain"]
+layers = ["app.api", "app.services", "app.pipeline", "app.reports", "app.semantic", "app.knowledge", "app.domain"]
 # Services may reach into infra (adapters). infra is not a layer here, so this
 # is unconstrained anyway; keep the note but do not error if it matches nothing.
 ignore_imports = ["app.services.* -> app.infra.*"]
@@ -115,6 +115,19 @@ forbidden_modules = ["fastapi", "sqlalchemy", "litellm", "app.infra", "app.api"]
 name = "semantic is self-contained"
 type = "forbidden"
 source_modules = ["app.semantic"]
+forbidden_modules = ["fastapi", "sqlalchemy", "litellm", "app.infra", "app.api", "app.services"]
+
+[[tool.importlinter.contracts]]
+# The third package to take this contract, and the reason is the same one
+# twice over: `app.knowledge` parses SQL, normalises strings and walks a
+# snapshot dict, so it can be driven end to end against literals — and a
+# package with no idea what a session is cannot grow a query that skips the
+# guard. `app.sqlguard` is deliberately absent from the forbidden list:
+# validating a template *is* calling the guard, and the whole point of the
+# fifth entry point is that it reuses the same `guard()` the other four do.
+name = "knowledge is self-contained"
+type = "forbidden"
+source_modules = ["app.knowledge"]
 forbidden_modules = ["fastapi", "sqlalchemy", "litellm", "app.infra", "app.api", "app.services"]
 
 [[tool.importlinter.contracts]]

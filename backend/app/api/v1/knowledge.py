@@ -1,0 +1,257 @@
+"""HTTP shape for knowledge templates. No business logic — see
+`services/knowledge_service.py`.
+
+Mounted under `/connections/{connection_id}/knowledge` for the reason the
+semantic layer is: a template describes exactly one connection's schema, is
+scoped by that connection's ownership, and dies with it.
+
+**Every write asks `can_curate`. No endpoint here checks `ctx.is_admin`.** That
+is the whole of decision D4 in `docs/learning-loop-plan.md`: curation is open
+to any signed-in user today because the highest-value correction comes from the
+person who knew the answer, and one settings flag makes it admin-only later
+without touching a single call site.
+"""
+from __future__ import annotations
+
+from uuid import UUID
+
+from fastapi import APIRouter, status
+from sqlalchemy import select
+
+from app.api.deps import CtxDep, DbDep, SettingsDep
+from app.api.schemas import (
+    KnowledgeCapabilities,
+    KnowledgeTemplateList,
+    KnowledgeTemplatePatch,
+    KnowledgeTemplateRead,
+    KnowledgeTemplateWrite,
+    TemplateCheckRequest,
+    TemplateCheckResult,
+)
+from app.core.errors import ForbiddenError, NotFoundError
+from app.infra.db.models import DatabaseConnection, SchemaSnapshotRow
+from app.knowledge import (
+    LiteralProvenance,
+    TemplateParam,
+    TemplateRole,
+    TemplateSource,
+    TemplateStatus,
+    slots,
+)
+from app.services.knowledge_service import KnowledgeService
+from app.services.policy import can_curate
+
+router = APIRouter(
+    prefix="/connections/{connection_id}/knowledge", tags=["knowledge"]
+)
+
+
+async def _owned(db, connection_id: UUID, ctx) -> DatabaseConnection:
+    result = await db.execute(
+        select(DatabaseConnection).where(
+            DatabaseConnection.id == connection_id,
+            DatabaseConnection.owner_id == ctx.user_id,
+        )
+    )
+    connection = result.scalar_one_or_none()
+    if connection is None:
+        raise NotFoundError("Connection not found.")
+    return connection
+
+
+def _require_curator(ctx, settings) -> None:
+    if not can_curate(ctx, settings):
+        raise ForbiddenError(
+            "Only administrators can add templates on this connection."
+        )
+
+
+def _params(payload) -> list[TemplateParam]:
+    return [TemplateParam.model_validate(p.model_dump()) for p in payload]
+
+
+@router.get("/templates", response_model=KnowledgeTemplateList)
+async def list_templates(
+    connection_id: UUID,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    include_archived: bool = False,
+) -> KnowledgeTemplateList:
+    """Every template, with the drift the current snapshot creates.
+
+    Drift is computed on read rather than swept for, exactly as the semantic
+    layer does it: the UI shows a template that stopped working the moment a
+    re-sync creates that fact, with no migration and no background job. It is
+    **reported, not persisted** — withdrawing a template from use is a
+    behaviour change and belongs to Phase 4.
+    """
+    connection = await _owned(db, connection_id, ctx)
+    service = KnowledgeService(db, settings)
+    rows = await service.list_templates(
+        connection, include_archived=include_archived
+    )
+
+    stale: list[UUID] = []
+    for row in rows:
+        if row.status != str(TemplateStatus.ACTIVE):
+            continue
+        verdict = await service.revalidate(connection, row)
+        if not verdict.valid:
+            stale.append(row.id)
+
+    snapshot_version = max((r.schema_version for r in rows), default=0)
+    current = await _snapshot_version(db, connection_id)
+    return KnowledgeTemplateList(
+        templates=[KnowledgeTemplateRead.model_validate(r) for r in rows],
+        schema_version=current or snapshot_version,
+        schema_synced=bool(current),
+        can_curate=can_curate(ctx, settings),
+        stale_ids=stale,
+    )
+
+
+@router.get("/capabilities", response_model=KnowledgeCapabilities)
+async def capabilities(
+    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+) -> KnowledgeCapabilities:
+    """What this reader may do here, so the UI hides rather than disables."""
+    await _owned(db, connection_id, ctx)
+    return KnowledgeCapabilities(can_curate=can_curate(ctx, settings))
+
+
+@router.post("/templates/check", response_model=TemplateCheckResult)
+async def check_template(
+    connection_id: UUID,
+    payload: TemplateCheckRequest,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+) -> TemplateCheckResult:
+    """Validate the SQL and propose parameters — one round trip, one parse.
+
+    Read-only and open to any reader of the connection: it writes nothing, and
+    a curator who cannot save still benefits from seeing why a statement was
+    rejected. This is what makes the editor honest — the same parser that will
+    reject the statement at save time answers while it is still being typed.
+    """
+    connection = await _owned(db, connection_id, ctx)
+    verdict, proposals, sql, params = await KnowledgeService(db, settings).check(
+        connection,
+        sql=payload.sql,
+        question=payload.question,
+        params=_params(payload.params),
+        accept=set(payload.accept) if payload.accept is not None else None,
+    )
+    return TemplateCheckResult(
+        valid=verdict.valid,
+        issue=verdict.message,
+        issues=[i.model_dump() for i in verdict.report.errors],
+        referenced_tables=verdict.referenced_tables,
+        proposals=[p.model_dump(mode="json") for p in proposals],
+        sql=sql,
+        params=[p.model_dump(mode="json") for p in params],
+        question_slots=slots(payload.question),
+    )
+
+
+@router.post(
+    "/templates",
+    response_model=KnowledgeTemplateRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_template(
+    connection_id: UUID,
+    payload: KnowledgeTemplateWrite,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+) -> KnowledgeTemplateRead:
+    connection = await _owned(db, connection_id, ctx)
+    _require_curator(ctx, settings)
+
+    source = TemplateSource(payload.source)
+    row = await KnowledgeService(db, settings).create(
+        connection,
+        actor_id=ctx.user_id,
+        question=payload.question,
+        sql=payload.sql,
+        params=_params(payload.params),
+        note=payload.note,
+        source=source,
+        literal_provenance=_provenance(source),
+        role=TemplateRole(payload.role),
+    )
+    return KnowledgeTemplateRead.model_validate(row)
+
+
+@router.patch("/templates/{template_id}", response_model=KnowledgeTemplateRead)
+async def update_template(
+    connection_id: UUID,
+    template_id: UUID,
+    payload: KnowledgeTemplatePatch,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+) -> KnowledgeTemplateRead:
+    connection = await _owned(db, connection_id, ctx)
+    _require_curator(ctx, settings)
+
+    row = await KnowledgeService(db, settings).update(
+        connection,
+        template_id,
+        actor_id=ctx.user_id,
+        question=payload.question,
+        sql=payload.sql,
+        params=None if payload.params is None else _params(payload.params),
+        note=payload.note,
+        role=None if payload.role is None else TemplateRole(payload.role),
+        status=None if payload.status is None else TemplateStatus(payload.status),
+    )
+    return KnowledgeTemplateRead.model_validate(row)
+
+
+@router.delete("/templates/{template_id}", response_model=KnowledgeTemplateRead)
+async def archive_template(
+    connection_id: UUID,
+    template_id: UUID,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+) -> KnowledgeTemplateRead:
+    """Archives. Never hard-deletes.
+
+    A 200 with the archived row rather than a 204: the row still exists, the
+    list still shows it under the archive, and returning it says so.
+    """
+    connection = await _owned(db, connection_id, ctx)
+    _require_curator(ctx, settings)
+    row = await KnowledgeService(db, settings).archive(connection, template_id)
+    return KnowledgeTemplateRead.model_validate(row)
+
+
+def _provenance(source: TemplateSource) -> LiteralProvenance:
+    """Who chose the literals — the disclosure question (`docs/security.md`).
+
+    A statement typed or corrected in the editor carries literals a person
+    wrote. One confirmed from a generated answer without editing carries
+    literals the *model* chose, possibly from sampled values disclosed under a
+    policy that has since been tightened — so it is gated like a sample value.
+    """
+    machine = {TemplateSource.CHAT_CONFIRMED, TemplateSource.TILE,
+               TemplateSource.REPORT_BLOCK}
+    return (
+        LiteralProvenance.MODEL_DERIVED
+        if source in machine
+        else LiteralProvenance.HUMAN_AUTHORED
+    )
+
+
+async def _snapshot_version(db, connection_id: UUID) -> int:
+    result = await db.execute(
+        select(SchemaSnapshotRow.version)
+        .where(SchemaSnapshotRow.connection_id == connection_id)
+        .order_by(SchemaSnapshotRow.version.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none() or 0

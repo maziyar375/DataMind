@@ -376,6 +376,130 @@ class SemanticExpressionResult(BaseModel):
     issue: str = ""
 
 
+# ── knowledge templates ──────────────────────────────────────────────────
+# The store the learning loop fills. `TemplateParam` and `ParamProposal` are
+# `app.knowledge`'s own models, used directly rather than restated: the editor
+# needs exactly the fields the AST walk and the guard already agree on, and a
+# second declaration is the one that drifts.
+class KnowledgeTemplateRead(BaseModel):
+    """One template, as the list row and the editor see it."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    connection_id: UUID
+    question: str
+    question_normalized: str
+    sql: str
+    params: list[dict[str, Any]] = Field(default_factory=list)
+    note: str = ""
+    source: str
+    literal_provenance: str
+    role: str
+    status: str
+    status_reason: str = ""
+    schema_version: int = 0
+    referenced_tables: list[str] = Field(default_factory=list)
+    hit_count: int = 0
+    last_hit_at: datetime | None = None
+    verified_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class KnowledgeTemplateList(BaseModel):
+    """The tab's payload: the rows, plus what frames them.
+
+    `schema_version` and `can_curate` travel with the list because both change
+    what the screen may offer, and a second round trip to learn whether the
+    Save button should exist would show it and then take it away.
+    """
+
+    templates: list[KnowledgeTemplateRead] = Field(default_factory=list)
+    schema_version: int = 0
+    schema_synced: bool = False
+    can_curate: bool = True
+    #: Templates whose SQL no longer resolves against the current snapshot.
+    #: Reported, not persisted — Phase 4 is what writes `STALE`.
+    stale_ids: list[UUID] = Field(default_factory=list)
+
+
+class TemplateParamWrite(BaseModel):
+    """A declared slot, as the editor sends it."""
+
+    name: str = Field(min_length=1, max_length=60)
+    type: Literal["string", "number", "date", "datetime", "boolean"] = "string"
+    comment: str = ""
+
+
+class KnowledgeTemplateWrite(BaseModel):
+    question: str = Field(min_length=1)
+    sql: str = Field(min_length=1)
+    params: list[TemplateParamWrite] = Field(default_factory=list)
+    note: str = ""
+    source: Literal[
+        "MANUAL", "CHAT_CONFIRMED", "CHAT_CORRECTED", "TILE", "REPORT_BLOCK"
+    ] = "MANUAL"
+    # The curator's one checkbox in the editor: "use this to measure accuracy,
+    # not to answer questions". `HELD_OUT` is assigned by the system at
+    # creation in Phase 6 and is deliberately not offerable here.
+    role: Literal["RETRIEVABLE", "BENCHMARK_ONLY"] = "RETRIEVABLE"
+
+
+class KnowledgeTemplatePatch(BaseModel):
+    """Every field optional: the editor saves what the curator touched."""
+
+    question: str | None = None
+    sql: str | None = None
+    params: list[TemplateParamWrite] | None = None
+    note: str | None = None
+    role: Literal["RETRIEVABLE", "BENCHMARK_ONLY"] | None = None
+    # ACTIVE reactivates a template the curator has fixed; ARCHIVED takes one
+    # out of use. STALE and CONFLICTED are the system's verdicts and are
+    # refused here.
+    status: Literal["ACTIVE", "ARCHIVED"] | None = None
+
+
+class TemplateCheckRequest(BaseModel):
+    """What the editor sends on every pause in typing."""
+
+    sql: str = ""
+    question: str = ""
+    params: list[TemplateParamWrite] = Field(default_factory=list)
+    # The names the curator has ticked. When present the server does the
+    # substitution — on the tree, not by string replacement — and returns the
+    # parameterized SQL it would store.
+    accept: list[str] | None = None
+
+
+class TemplateCheckResult(BaseModel):
+    valid: bool = False
+    #: The guard's own first message, verbatim. Rewriting it into something
+    #: friendlier loses the reason.
+    issue: str = ""
+    issues: list[dict[str, Any]] = Field(default_factory=list)
+    referenced_tables: list[str] = Field(default_factory=list)
+    #: Every literal the AST walk found — ticked, unticked, or refused with the
+    #: reason next to it. The editor renders all three.
+    proposals: list[dict[str, Any]] = Field(default_factory=list)
+    #: The SQL as it would be stored, with the accepted literals replaced.
+    sql: str = ""
+    params: list[dict[str, Any]] = Field(default_factory=list)
+    #: `{names}` the question declares, so the editor can pair them with slots.
+    question_slots: list[str] = Field(default_factory=list)
+
+
+class KnowledgeCapabilities(BaseModel):
+    """So the UI hides rather than disables.
+
+    A disabled control the reader can never enable is an insult; the list stays
+    fully readable either way, because seeing what the system knows is not a
+    privilege.
+    """
+
+    can_curate: bool = True
+
+
 # ── SQL drafts & tile results ────────────────────────────────────────────
 # These are the dashboard's two shared shapes. `TileResultRead` is what a tile
 # returns after a refresh *and* what the editor previews with — one shape,

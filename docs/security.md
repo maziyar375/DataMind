@@ -290,7 +290,7 @@ which are derived *from the data*. Two consequences worth stating plainly:
 - A `NONE` connection now sends more than it used to — a sentence per table and
   per column, where before it sent bare `name type` triples. `NONE` is also
   where the model was most starved, so it is where this helps most.
-- **The sensitive-name floor (§3.3) is not extended to comments.** The comment
+- **The sensitive-name floor (§3.4) is not extended to comments.** The comment
   on `password_hash` reading *"argon2id, never select this"* is the one sentence
   telling the model to leave that column alone; suppressing it would remove the
   warning and keep the column name.
@@ -368,13 +368,15 @@ catalog description is DDL a person wrote, not something read out of the data,
 so it sits with the table and column names rather than with the hints. Its
 switch is `connections.include_db_comments`, not the policy.
 
-### 3.2 The policy governs three things, not one
+### 3.2 The policy governs four things, not one
 
-This is the part most easily got wrong, so it is enforced in three places:
+This is the part most easily got wrong, so it is enforced in four places:
 
 1. **`disclose()`** gates the result of the current run.
 2. **`HintBudget`** gates per-column content hints in the schema block.
 3. **`disclose_history()`** gates the **conversation**.
+4. **`may_render_literals()`** gates a knowledge template's **literals** —
+   §3.5, added with the learning loop's store.
 
 The third exists because an assistant message is prose the model wrote *from*
 result rows — *"Revenue was $1.24M across 812 orders"* — and the next turn
@@ -395,7 +397,58 @@ user's words, not the database's.
 A conversation is **pinned to one connection** (`_bind_connection`, HTTP 422 on
 a mid-thread switch) so history can never cross policies.
 
-### 3.3 The sensitive-name floor
+### 3.3 A knowledge template's literals are a disclosure
+
+A curator teaches a question by storing SQL. That SQL contains literals:
+
+```sql
+SELECT SUM(amount) FROM orders
+WHERE tier = 'ENTERPRISE' AND region = 'EMEA'
+```
+
+Rendered into a prompt — which is what Phase 5 of
+[learning-loop-plan.md](learning-loop-plan.md) does — or into a *"this is the
+saved answer"* panel, that puts **two column values** in front of the model on
+a connection whose policy may say none may go. Under `NONE` and `AGGREGATE`,
+`HintBudget.value_lists` is false and no value read from a row reaches the
+model, ever. The ladder is not bypassed by a bug here: it is bypassed because
+the template travels on a path the ladder did not cover.
+
+**The rule, and the precedent it follows.** Catalog descriptions are exempt
+from the gate (§2.4) for a stated reason — *a comment is DDL a human wrote: it
+is not read from a row, it does not change when the data changes, and it is
+exactly as much "customer data" as a column name.* A hand-authored template
+meets all three tests. A statement whose literals a **model** chose does not:
+those may have come from sampled values disclosed under a policy that has since
+been tightened.
+
+> **A template's literals travel with structure when a human wrote them, and
+> are gated like sample values when a machine did.**
+
+Enforced by the `literal_provenance` column, decided at creation from where the
+text came from:
+
+| Value | Set when | Rendered when |
+|---|---|---|
+| `HUMAN_AUTHORED` | typed in the editor, or a chat answer whose SQL the curator **corrected** | always |
+| `MODEL_DERIVED` | mined from a dashboard tile or report block, or confirmed from a generated answer **without** editing it | only when `HintBudget.value_lists` is true |
+
+The awkward case is real and the table handles it: a person edits a generated
+statement's join but leaves `region = 'EMEA'` as the model wrote it. That is
+`MODEL_DERIVED`, because a tightening must take effect on the next question —
+the existing rule, enforced at **render** time — and a store that survived the
+tightening would quietly undo it.
+
+`app/knowledge/models.py::may_render_literals` is the one function, and
+`tests/unit/test_knowledge_disclosure.py` is the proof. It reads the same
+`HintBudget.value_lists` the schema block reads, so the two cannot drift into
+disagreeing about what a value is.
+
+**Phase 1 renders no template into any prompt.** The gate landed with the store
+anyway, because the decision has to be in the tree *before* the read path
+exists — otherwise the read path inherits a gate nobody wrote.
+
+### 3.4 The sensitive-name floor
 
 Below the ladder sits a floor that applies **at every policy, including
 `FULL`**: a column whose *name* matches a sensitive token never has its values
@@ -422,7 +475,7 @@ snapshot in the first place. It is stricter than the render-time gates for a
 reason: the schema block is sent on *every* question, whereas a result is sent
 only for the query the user actually asked.
 
-### 3.4 Known residual
+### 3.5 Known residual
 
 Recorded here rather than omitted. Under `NONE`/`AGGREGATE`, kept SQL may
 contain a literal — `WHERE status = 'churned'` — that originally came from a
@@ -517,7 +570,8 @@ raise it, and asking it politely not to is not part of the design.
 `backend/tests/unit/test_sqlguard_hostile.py` is a hostile corpus covering
 statement chaining, DDL, writes, system catalogs, file reads, `xp_cmdshell`,
 `INTO OUTFILE`, union smuggling, and comment evasion. **Zero bypasses or CI
-fails.**
+fails.** The same corpus is imported and replayed through every other entry
+point, so a door added later inherits the gate rather than being trusted.
 
 ```bash
 make guard        # the hostile corpus alone
@@ -541,6 +595,23 @@ written by `/check` (a model) or by `PUT .../sql` (a person), and is
 re-validated by `execute_saved_sql` on every generation — which may be months
 later, against a schema that has moved. `tests/unit/test_report_guard.py`
 replays the hostile corpus through that path specifically.
+
+**A knowledge template is the fifth entry point**, and it is the one with the
+longest gap of all: a question taught in August is answered from stored SQL in
+February, against a schema nobody promised would hold still. It is guarded on
+save — *is this legal at all* — and re-guarded on every use — *is it still
+legal against the schema as it is now*. The second failure is a **value, not an
+error**: the template is marked `STALE`, withdrawn from matching, and the run
+falls through to ordinary generation. It is never deleted, because deleting a
+person's work to hide drift is worse than showing it, and the run never fails,
+because a taught question going stale is not the asker's problem.
+`tests/unit/test_knowledge_guard.py` replays the whole hostile corpus through
+**both** halves, and a third time with a `:slot` spliced in — the shape of
+attack this door uniquely invites.
+
+A template's `:params` are AST nodes, not holes in a string. There is no
+rendering in which a bound *value* becomes SQL: binding replaces the node and
+the result goes back through `guard()` like anything else.
 
 Hand-written SQL goes through the identical guard — there is no trusted path
 for SQL a human typed, and `sql_origin` on either table is provenance for the

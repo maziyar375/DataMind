@@ -204,8 +204,8 @@ backend/app/
   main.py         ASGI factory: lifespan (bootstrap admin, reconcile orphans,
                   start reconciler), CORS, correlation-id middleware, health.
   api/            HTTP shape ONLY — no business logic.
-    v1/           auth, users, connections, llm_configs, semantic, conversations,
-                  dashboards, drafts (SQL), reports
+    v1/           auth, users, connections, llm_configs, semantic, knowledge,
+                  conversations, dashboards, drafts (SQL), reports
     deps.py       FastAPI dependencies (current user, session, settings)
     schemas.py    Pydantic request/response DTOs (no secrets ever in reads)
     errors.py     RFC 7807 problem+json mapping
@@ -213,7 +213,9 @@ backend/app/
   domain/         entities, value_objects (enums/kinds), ports — ZERO I/O, no frameworks
     ports/        Protocols: database, llm, secrets, identity, events, run_executor
   services/       use cases + transaction boundaries: run_service,
-                  semantic_service, report_service, dashboard_service,
+                  semantic_service, knowledge_service (taught questions:
+                  guarded on save and re-guarded on read), report_service,
+                  dashboard_service,
                   dashboard_transfer (a dashboard as a portable file: no ids,
                   no results, no connection internals — and an imported
                   statement is hostile input like any other),
@@ -230,6 +232,12 @@ backend/app/
                   rendered fallback answer),
                   prompts/, disclosure.py (result gate), checks.py (free result checks)
   sqlguard/       policy, validator, rewriter — self-contained, dialect-aware
+  knowledge/      what somebody already answered: models.py (the template,
+                  the three roles, the disclosure rule), normalize.py (the match
+                  key), params.py (the AST walk that offers parameters and
+                  refuses the rest), validate.py (the guard's fifth entry
+                  point) — self-contained like sqlguard, and allowed to call
+                  the guard because that is what it is for
   semantic/       what the schema *means*: models.py (the document), validate.py
                   (bind it to a snapshot, parse metric SQL), generator.py (build
                   one with a model, one call per table), render.py (the prompt
@@ -367,6 +375,10 @@ api → services → pipeline → reports → semantic → domain ← infra
 - **`app.semantic` is self-contained** for the same reason — it is a pure
   function of a snapshot, a document and the `LLMGateway` *port*, so the whole
   generator runs in a test against a dict and a fake gateway.
+- **`app.knowledge` is self-contained** on the same terms, with one deliberate
+  exception in the forbidden list: `app.sqlguard` is *not* forbidden, because
+  validating a template is calling the guard and the fifth entry point exists
+  precisely so it reuses the same `guard()` the other four do.
 - **`app.reports` is self-contained** on the same terms, and the contract buys
   something concrete: `narrate.py` *cannot* call `disclose()`, because that
   lives in `app.pipeline` above it. So the worker has to disclose results
@@ -386,6 +398,9 @@ to be replaced: **LLM, target database, secrets, run execution.** Add adapters
 behind these ports; don't route around them. In particular: **never `import
 litellm` outside `app/infra/llm/`**, and **never `import langgraph` outside
 `app/pipeline/` and `app/workers/`** — CI greps for both.
+
+There are **eight** import-linter contracts now; `knowledge is self-contained`
+joined them with Phase 1 of the learning loop.
 
 ---
 
@@ -443,11 +458,13 @@ not exist. [docs/pipeline.md](docs/pipeline.md) §0 is the full map.
 | Result values → model | `present`, per policy | **never** | `narrate`, per policy (`NONE`/`AGGREGATE` refused) |
 | Failure posture | the run fails | a per-tile `ERROR` **value** | per section; run status is **derived** |
 
-**The guard has four entry points and none is privileged:** the `validate` node,
-`execute_saved_sql` (tiles *and* report blocks), tile save, and dashboard
-import. The hostile corpus is replayed through each
-(`test_sqlguard_hostile.py`, `test_query_service.py`, `test_report_guard.py`,
-`test_dashboard_transfer.py`).
+**The guard has five entry points and none is privileged:** the `validate` node,
+`execute_saved_sql` (tiles *and* report blocks), tile save, dashboard
+import, and **knowledge templates** (save *and* every use). The hostile corpus
+is replayed through each (`test_sqlguard_hostile.py`, `test_query_service.py`,
+`test_report_guard.py`, `test_dashboard_transfer.py`,
+`test_knowledge_guard.py`). The moment one door is special, the guarantee is
+gone.
 
 **`retrieve` → `generate` → `validate` is written down once.** It is one
 compiled region — `_add_repair_region` in `pipeline/graph.py` — built by both
@@ -728,6 +745,67 @@ shapes. That is the class this addresses.
   (`frontend/src/components/semantic.tsx`). Metric expressions are validated
   live by `POST .../semantic/check`, which is the *same parser* the save path
   uses — the editor never promises something the backend will reject.
+
+---
+
+## Knowledge templates
+
+> The store the learning loop fills, and the plan behind it:
+> **[docs/learning-loop-plan.md](docs/learning-loop-plan.md)**. Phase 1 is in
+> the tree; Phase 2 (match and short-circuit) and Phase 3 (feedback, the review
+> queue, the backlog) follow.
+
+The semantic layer says what the schema *means*. A knowledge template is the
+next thing along: **a question somebody already answered correctly**, stored so
+the system answers it the same way next time. One editable row per taught
+question in `knowledge_templates`, scoped to a connection and dying with it,
+edited in Data sources → Knowledge.
+
+- **The artifact is a parameterized question→SQL template, not a literal
+  pair.** `revenue by month for {region} in {year}` with `:region` and `:year`
+  in the SQL. A literal store's hit rate stays near zero, and retrofitting
+  parameters onto pairs authored without them means re-curating everything.
+- **The curator does not type `:params`. The AST offers them.**
+  `app/knowledge/params.py` walks the tree the guard already produced and
+  proposes a slot for every literal it can classify — a date bound, an equality
+  against a categorical column, a threshold on a measure — and **refuses** the
+  ones that are almost always part of the definition: anything inside a `<>`,
+  a `NOT IN`, a `CASE` or a `COALESCE`, a list, a pattern. A refusal is
+  *returned* with its reason and shown unticked, because showing the rejected
+  candidate teaches the rule better than hiding it. No model call: this is a
+  tree walk, and it is the one thing here no competitor can do, because none of
+  them has a guard that already parses the statement.
+- **The substitution happens on the tree, in the server.** `parameterize`
+  replaces the ticked literal node; a `str.replace` would rewrite the `'EMEA'`
+  in a `CASE` arm too. Placeholders are written `:name` in every dialect —
+  Postgres' generator spells `exp.Placeholder` as `%(name)s`, which is a
+  driver's binding syntax and not what this store agrees on.
+- **A template is guarded twice, and gets no exemption.** On save: is this
+  legal at all, against the current snapshot — a rejection shows the guard's
+  own message verbatim. On every use: is it *still* legal against the schema as
+  it is **now** — a failure marks the template `STALE`, withdraws it, and lets
+  the run fall through to generation. **Never fails the run, never silently
+  deletes the row** — a stale template *fails as a value*, and an invalid
+  human-written entry is flagged and kept, exactly as in the semantic layer.
+- **`note` is written for the next curator and never reaches a prompt.** The
+  research measured more prose in the prompt lowering execution accuracy. If it
+  ever renders, that moves `PROMPT_VERSION` and goes through an eval arm like
+  everything else.
+- **`role` decides what a template is for**: `RETRIEVABLE` (answers questions),
+  `BENCHMARK_ONLY` and `HELD_OUT` (measure accuracy). A held-out question
+  answered from its own stored SQL measures nothing, so the exclusion is a
+  column and is enforced in the query that builds the candidate set.
+- **A template's literals are a disclosure** — `may_render_literals` in
+  `app/knowledge/models.py`, and [docs/security.md](docs/security.md) for why.
+  Hand-authored literals travel with structure like a catalog comment; ones a
+  model chose are gated like sample values, at *render* time.
+- **Curation is open to any signed-in user** and gated by exactly one function,
+  `services.policy.can_curate`. `curation_admin_only` flips it; no endpoint
+  checks `ctx.is_admin` directly, and a test asserts that on the parse.
+- **`app/knowledge/` is self-contained** on the same terms as `sqlguard`,
+  `semantic` and `reports` — no fastapi, sqlalchemy, litellm, `app.infra` or
+  `app.services`. It *may* import `app.sqlguard`: validating a template **is**
+  calling the guard, and that is the point.
 
 ---
 

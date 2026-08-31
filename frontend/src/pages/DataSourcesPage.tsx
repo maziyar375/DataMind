@@ -10,6 +10,7 @@ import {
   DetailBody, DetailHeader, FieldRow, MasterColumn, MasterItem, Section,
   StatusLine, Tabs, UnsavedNote,
 } from '../components/settings'
+import { KnowledgeTab } from '../components/knowledge'
 import { SemanticLayerTab } from '../components/semantic'
 import { DATABASE_TYPES } from '../theme/tokens'
 
@@ -46,7 +47,9 @@ export default function DataSourcesPage() {
   const [password, setPassword] = useState('')
   const [creating, setCreating] = useState(false)
   const [schema, setSchema] = useState<SchemaSnapshot | null>(null)
-  const [tab, setTab] = useState<'settings' | 'schema' | 'semantic'>('settings')
+  const [tab, setTab] = useState<'settings' | 'schema' | 'semantic' | 'knowledge'>(
+    'settings',
+  )
   const [schemaView, setSchemaView] = useState<'tables' | 'graph'>('tables')
   const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -462,11 +465,19 @@ export default function DataSourcesPage() {
             {!creating && (
               <Tabs
                 value={tab}
-                onChange={(v) => setTab(v as 'settings' | 'schema' | 'semantic')}
+                onChange={(v) =>
+                  setTab(v as 'settings' | 'schema' | 'semantic' | 'knowledge')
+                }
                 items={[
                   { value: 'settings', label: 'Settings' },
                   { value: 'schema', label: 'Schema', count: schema?.tables.length },
                   { value: 'semantic', label: 'Semantic layer' },
+                  // No count here: the tab's badge is *only* the number of
+                  // things needing a human, and that is not known until the
+                  // tab has loaded. A badge that always shows a total is
+                  // decoration; one that appears when there is work is a
+                  // signal, and showing nothing is the honest third state.
+                  { value: 'knowledge', label: 'Knowledge' },
                 ]}
               />
             )}
@@ -845,6 +856,10 @@ export default function DataSourcesPage() {
                 connection={selected!}
                 onConnectionChange={patchConnection}
               />
+            )}
+
+            {!creating && tab === 'knowledge' && (
+              <KnowledgeTab key={selected!.id} connection={selected!} />
             )}
           </>
         )}

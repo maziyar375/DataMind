@@ -67,6 +67,15 @@ class Settings(BaseSettings):
     default_statement_timeout_ms: int = 30_000
     hard_row_cap: int = 100_000
 
+    # ── knowledge templates ──────────────────────────────────────────────
+    # Who may teach this system a question. False — anyone signed in — is the
+    # deliberate default while the product is single-player: the highest-value
+    # correction comes from the person who knew the answer, and they are
+    # usually not an administrator. Flipping this to true is Phase 8 of
+    # `docs/learning-loop-plan.md`; every write path already asks
+    # `services.policy.can_curate`, so the flip is this line and nothing else.
+    curation_admin_only: bool = False
+
     # ── llm ──────────────────────────────────────────────────────────────
     llm_request_timeout_seconds: int = 60
     # Transient-failure retry (rate limits / 5xx). Bounded exponential backoff;

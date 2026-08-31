@@ -6,6 +6,7 @@ from app.api.v1 import (
     conversations,
     dashboards,
     drafts,
+    knowledge,
     llm_configs,
     reports,
     semantic,
@@ -20,6 +21,10 @@ api_router.include_router(connections.router)
 # Before the connections router would also work; after is fine because the
 # paths are disjoint. Kept adjacent to `connections` since it extends it.
 api_router.include_router(semantic.router)
+# A peer of the semantic layer, extending `connections` the same way and for
+# the same reason: a template describes one connection's schema and dies with
+# it. Disjoint paths, so the mount order is free.
+api_router.include_router(knowledge.router)
 api_router.include_router(conversations.router)
 # Drafting SQL is not scoped to a connection the way the semantic layer is —
 # the connection is an input to a draft, not its owner.

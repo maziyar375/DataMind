@@ -1,0 +1,225 @@
+/**
+ * What the knowledge tab decides before it draws anything.
+ *
+ * `npm run test:template` — Node runs this file directly, the arrangement
+ * `semantic-drift.test.ts` uses.
+ *
+ * The cases that matter are the ones where being *nearly* right is worse than
+ * being absent: a parameter highlight that lands on the wrong `'EMEA'`, a Save
+ * button that goes green before the server has answered, a tab badge showing a
+ * total when there is nothing to do.
+ */
+import {
+  isUnused, markLiterals, matches, previewQuestion, questionParts, questionSlots,
+  readiness, roleLabel, rowSubtitle, sections, statusOf, tabCount, valuesOf,
+} from './knowledge-template.ts'
+import type { ProposalRow, TemplateRow, TemplateSlot } from './knowledge-template.ts'
+
+let failures = 0
+function check(name: string, actual: unknown, expected: unknown): void {
+  const ok = JSON.stringify(actual) === JSON.stringify(expected)
+  if (!ok) failures += 1
+  console.log(
+    ok
+      ? `ok    ${name}`
+      : `FAIL  ${name}\n        got ${JSON.stringify(actual)}, want ${JSON.stringify(expected)}`,
+  )
+}
+
+const NOW = new Date('2026-08-31T12:00:00Z')
+
+function row(over: Partial<TemplateRow> = {}): TemplateRow {
+  return {
+    id: 'a',
+    question: 'revenue by month for {region} in {year}',
+    params: [
+      { name: 'region', type: 'string', comment: 'one of: EMEA, NA, APAC' },
+      { name: 'year', type: 'date', comment: '' },
+    ],
+    referenced_tables: ['public.orders', 'public.stores'],
+    status: 'ACTIVE',
+    status_reason: '',
+    role: 'RETRIEVABLE',
+    hit_count: 14,
+    last_hit_at: '2026-08-28T09:00:00Z',
+    verified_at: '2026-08-01T09:00:00Z',
+    ...over,
+  }
+}
+
+function slot(name: string, type = 'string', comment = ''): TemplateSlot {
+  return { name, type, comment }
+}
+
+// ── status: never colour alone ────────────────────────────────────────────
+check('an active template reads as active', statusOf(row()), {
+  glyph: '✓', label: 'Active', tone: 'green', needsYou: false,
+})
+check('a stored STALE row needs a human', statusOf(row({ status: 'STALE' })), {
+  glyph: '⚠', label: 'Stale', tone: 'amber', needsYou: true,
+})
+// The list endpoint reports drift on read without writing it. A row can be
+// ACTIVE in the database and stale on the screen, and the screen is the one
+// telling the truth about right now.
+check('read-time drift outranks the stored status', statusOf(row(), true), {
+  glyph: '⚠', label: 'Stale', tone: 'amber', needsYou: true,
+})
+check('drift on an archived row does not resurrect it',
+  statusOf(row({ status: 'ARCHIVED' }), true).label, 'Archived')
+check('an unknown status falls back rather than throwing',
+  statusOf(row({ status: 'SOMETHING_NEW' })).label, 'Active')
+
+check('the default role earns no chip', roleLabel('RETRIEVABLE'), '')
+check('a benchmark row says what it is for', roleLabel('BENCHMARK_ONLY'),
+  'Measures accuracy')
+
+// ── the second line ───────────────────────────────────────────────────────
+check('a healthy row says what it touches and how often it hit',
+  rowSubtitle(row(), false, NOW),
+  { left: 'public.orders, public.stores', right: '14 hits', tone: 'neutral' })
+check('one hit is not "1 hits"',
+  rowSubtitle(row({ hit_count: 1 }), false, NOW).right, '1 hit')
+check('a never-matched template is stated, not accused',
+  rowSubtitle(row({ hit_count: 0, last_hit_at: null }), false, NOW),
+  { left: 'public.orders, public.stores', right: 'No matches yet', tone: 'faint' })
+check('a stale row leads with the reason, verbatim',
+  rowSubtitle(row({ status: 'STALE', status_reason: '`orders.region` no longer exists.' }),
+    false, NOW).right,
+  '`orders.region` no longer exists.')
+check('a stale row with no reason still says something true',
+  rowSubtitle(row({ status: 'STALE' }), false, NOW).right,
+  'This template stopped working when the schema changed.')
+
+// ── unused: information, not an accusation ────────────────────────────────
+check('a template matched last week is not unused',
+  isUnused(row(), NOW), false)
+check('ninety days without a match is worth a faint line',
+  isUnused(row({ last_hit_at: '2026-01-01T00:00:00Z' }), NOW), true)
+check('a template nobody has ever matched is not "unused", it is new',
+  isUnused(row({ hit_count: 0, last_hit_at: null }), NOW), false)
+check('the unused line rides along with the hit count, quietly',
+  rowSubtitle(row({ last_hit_at: '2026-01-01T00:00:00Z' }), false, NOW),
+  { left: 'public.orders, public.stores',
+    right: '14 hits · no matches in 90 days', tone: 'faint' })
+
+// ── the braces the curator learns ─────────────────────────────────────────
+check('a question splits into text and slots, braces kept',
+  questionParts('revenue for {region} now'),
+  [{ text: 'revenue for ', slot: false },
+   { text: '{region}', slot: true },
+   { text: ' now', slot: false }])
+check('a question that is only a slot still splits',
+  questionParts('{region}'), [{ text: '{region}', slot: true }])
+check('a question with no braces is one part',
+  questionParts('revenue'), [{ text: 'revenue', slot: false }])
+// Read at display time into spans, never into markup — a question is user text.
+check('an unclosed brace is text, not a slot',
+  questionParts('revenue for {region').every((p) => !p.slot), true)
+check('slots come back in order without duplicates',
+  questionSlots('{a} then {b} then {a}'), ['a', 'b'])
+
+// ── the live preview ──────────────────────────────────────────────────────
+check('a preview shows the values a curator listed',
+  previewQuestion('revenue by month for {region} in {year}',
+    [slot('region', 'string', 'one of: EMEA, NA, APAC'), slot('year', 'date')]),
+  'revenue by month for EMEA in 2026-01-01')
+check('a string slot with no list falls back to its own name',
+  previewQuestion('revenue for {region}', [slot('region')]), 'revenue for REGION')
+check('a number slot previews as a number',
+  previewQuestion('over {threshold}', [slot('threshold', 'number')]), 'over 1000')
+// One slot, one value — the preview shows a question somebody could ask, and
+// `{a} and {a}` asked with two different values is not one question.
+check('a slot repeated twice gets the same value both times',
+  previewQuestion('{a} and {a}', [slot('a', 'string', 'one of: X, Y')]), 'X and X')
+
+check('a value list is read off the comment', valuesOf('one of: EMEA, NA, APAC'),
+  ['EMEA', 'NA', 'APAC'])
+check('prose is not a value list', valuesOf('the first day of the year'), [])
+check('a colon with no comma is prose too', valuesOf('note: whatever'), [])
+
+// ── highlighting the literal a proposal would replace ─────────────────────
+function proposal(over: Partial<ProposalRow> = {}): ProposalRow {
+  return {
+    name: 'region', literal: "'EMEA'", occurrence: 0,
+    eligible: true, suggested: true, reason: '', ...over,
+  }
+}
+
+check('the literal is marked in place',
+  markLiterals("WHERE region = 'EMEA'", [proposal()]),
+  [{ text: 'WHERE region = ', slot: null }, { text: "'EMEA'", slot: 'region' }])
+
+// The reason `occurrence` exists at all: a statement that filters on 'EMEA'
+// and also mentions it in a CASE has two identical texts, and marking the
+// wrong one tells the curator their filter is about to change when it is not.
+const twice = "CASE WHEN region = 'EMEA' THEN 1 END, x FROM t WHERE region = 'EMEA'"
+check('the second occurrence is the one marked',
+  markLiterals(twice, [proposal({ occurrence: 1 })])
+    .filter((s) => s.slot !== null).length, 1)
+check('and it is the second one, not the first',
+  markLiterals(twice, [proposal({ occurrence: 1 })])[0].text.includes('CASE WHEN'),
+  true)
+check('two proposals mark two literals',
+  markLiterals("a = 'X' AND b = 'Y'",
+    [proposal({ name: 'a', literal: "'X'" }), proposal({ name: 'b', literal: "'Y'" })])
+    .filter((s) => s.slot !== null).map((s) => s.slot), ['a', 'b'])
+check('a literal the SQL no longer contains is skipped, not thrown',
+  markLiterals('SELECT 1', [proposal()]), [{ text: 'SELECT 1', slot: null }])
+check('marks come back in statement order however they arrived',
+  markLiterals("a = 'X' AND b = 'Y'",
+    [proposal({ name: 'b', literal: "'Y'" }), proposal({ name: 'a', literal: "'X'" })])
+    .filter((s) => s.slot !== null).map((s) => s.slot), ['a', 'b'])
+
+// ── the Save button ───────────────────────────────────────────────────────
+const SQL = "SELECT SUM(amount) FROM orders WHERE region = :region"
+check('a complete template is ready',
+  readiness('revenue for {region}', SQL, [slot('region')], true),
+  { ready: true, issue: '' })
+// The one thing the browser must not do: promise something the server rejects.
+check('nothing is ready until the server has answered',
+  readiness('revenue for {region}', SQL, [slot('region')], null),
+  { ready: false, issue: '' })
+check('a rejected statement is not ready',
+  readiness('revenue for {region}', SQL, [slot('region')], false).ready, false)
+check('an empty question is not ready, and says nothing yet',
+  readiness('', SQL, [], true), { ready: false, issue: '' })
+check('a slot the question never names is refused with a sentence',
+  readiness('revenue', SQL, [slot('region')], true),
+  { ready: false,
+    issue: 'The question does not mention {region} — a parameter the question ' +
+      'never names can never be filled in.' })
+check('a brace with no parameter behind it is refused too',
+  readiness('revenue for {region}', 'SELECT 1', [], true),
+  { ready: false,
+    issue: '{region} is in the question but not in the SQL. ' +
+      'Tick the literal it should replace.' })
+check('two loose braces read as a plural',
+  readiness('{a} and {b}', 'SELECT 1', [], true).issue.startsWith('{a}, {b} are'), true)
+
+// ── the sections, and the tab badge ───────────────────────────────────────
+const rows = [
+  row({ id: 'ok' }),
+  row({ id: 'broken', status: 'STALE' }),
+  row({ id: 'gone', status: 'ARCHIVED' }),
+  row({ id: 'drifting' }),
+]
+const split = sections(rows, ['drifting'])
+check('what is broken, what is taught, what was archived',
+  [split.needsYou.map((r) => r.id), split.taught.map((r) => r.id),
+   split.archived.map((r) => r.id)],
+  [['broken', 'drifting'], ['ok'], ['gone']])
+
+// Zero work, no number. A badge that always shows a total is decoration.
+check('the tab counts only what needs a human', tabCount(rows, ['drifting']), 2)
+check('a healthy store shows no badge at all',
+  tabCount([row({ id: 'ok' })], []), undefined)
+
+// ── search ────────────────────────────────────────────────────────────────
+check('an empty search matches everything', matches(row(), '   '), true)
+check('search reads the question', matches(row(), 'REVENUE'), true)
+check('search reads the tables it touches', matches(row(), 'stores'), true)
+check('search reads the parameter names', matches(row(), 'region'), true)
+check('and does not match what is not there', matches(row(), 'churn'), false)
+
+console.log(failures === 0 ? '\nall passed' : `\n${failures} failed`)
+if (failures > 0) throw new Error(`${failures} test(s) failed`)

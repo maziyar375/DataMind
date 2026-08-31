@@ -10,11 +10,13 @@
 import type {
   ArtifactSpec, ChartRedraw, Connection, ConversationSummary, Dashboard, DashboardDocument,
   DashboardImportResult, DashboardSummary,
-  DashboardTile, LlmConfig, MessageWithRun, ProblemDetail, Report, ReportBlock,
+  DashboardTile, KnowledgeTemplate, KnowledgeTemplateList,
+  LlmConfig, MessageWithRun, ProblemDetail, Report, ReportBlock,
   ReportBlockCheck, ReportChart, ReportRun, ReportRunDetail, ReportSection,
   ReportSectionResult,
   ReportSummary, RunDetail, RunEvent, SchemaSnapshot, SemanticDocument, SemanticJob,
-  SemanticLayer, SqlDraft, TilePosition, TileResult, TileType, TestResult, User,
+  SemanticLayer, SqlDraft, TemplateCheckResult, TemplateParam,
+  TilePosition, TileResult, TileType, TestResult, User,
 } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? '/api/v1'
@@ -230,6 +232,62 @@ export const semantic = {
     post<{ valid: boolean; issue: string }>(
       `/connections/${connectionId}/semantic/check`,
       payload,
+    ),
+}
+
+// ── knowledge templates ───────────────────────────────────────────────────
+// A peer of `semantic`, scoped to a connection the same way. `check` is what
+// makes the editor honest: the same backend parser that will reject the
+// statement at save time answers while it is still being typed, and it
+// proposes the parameters in the same round trip because both come from one
+// parse.
+export const knowledge = {
+  list: (connectionId: string, includeArchived = false) =>
+    get<KnowledgeTemplateList>(
+      `/connections/${connectionId}/knowledge/templates` +
+        (includeArchived ? '?include_archived=true' : ''),
+    ),
+  capabilities: (connectionId: string) =>
+    get<{ can_curate: boolean }>(`/connections/${connectionId}/knowledge/capabilities`),
+  check: (
+    connectionId: string,
+    payload: {
+      sql: string
+      question?: string
+      params?: TemplateParam[]
+      // The names the curator has ticked. When present the server does the
+      // substitution — on the tree, not by string replacement — and returns
+      // the parameterized SQL it would store.
+      accept?: string[]
+    },
+  ) =>
+    post<TemplateCheckResult>(
+      `/connections/${connectionId}/knowledge/templates/check`,
+      payload,
+    ),
+  create: (
+    connectionId: string,
+    payload: {
+      question: string
+      sql: string
+      params: TemplateParam[]
+      note?: string
+      source?: string
+      role?: 'RETRIEVABLE' | 'BENCHMARK_ONLY'
+    },
+  ) =>
+    post<KnowledgeTemplate>(`/connections/${connectionId}/knowledge/templates`, payload),
+  update: (connectionId: string, id: string, payload: Record<string, unknown>) =>
+    patch<KnowledgeTemplate>(
+      `/connections/${connectionId}/knowledge/templates/${id}`,
+      payload,
+    ),
+  // Archives. The row is never destroyed — the system does not delete a
+  // person's work, so this returns the archived template rather than nothing.
+  archive: (connectionId: string, id: string) =>
+    request<KnowledgeTemplate>(
+      `/connections/${connectionId}/knowledge/templates/${id}`,
+      { method: 'DELETE' },
     ),
 }
 

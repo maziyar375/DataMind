@@ -258,6 +258,84 @@ export interface SemanticLayer {
   job: SemanticJob | null
 }
 
+/** One declared slot in a template. */
+export interface TemplateParam {
+  name: string
+  type: 'string' | 'number' | 'date' | 'datetime' | 'boolean'
+  comment: string
+}
+
+/**
+ * One literal the AST walk found, ticked or refused.
+ *
+ * `eligible: false` is not an omission — the editor renders the refusal with
+ * its reason beside it, because showing the rejected candidate teaches the
+ * rule better than hiding it, and the curator occasionally knows better.
+ */
+export interface ParamProposal {
+  name: string
+  type: TemplateParam['type']
+  /** The literal as the statement renders it — `'EMEA'`, `10000`. */
+  literal: string
+  /** Which occurrence of that exact text this is, so the highlight lands on
+   *  the right one when a statement filters on `'EMEA'` twice. */
+  occurrence: number
+  comment: string
+  suggested: boolean
+  eligible: boolean
+  reason: string
+}
+
+export type TemplateRole = 'RETRIEVABLE' | 'BENCHMARK_ONLY' | 'HELD_OUT'
+export type TemplateStatus = 'ACTIVE' | 'STALE' | 'CONFLICTED' | 'ARCHIVED'
+
+export interface KnowledgeTemplate {
+  id: string
+  connection_id: string
+  question: string
+  question_normalized: string
+  sql: string
+  params: TemplateParam[]
+  note: string
+  source: string
+  literal_provenance: 'HUMAN_AUTHORED' | 'MODEL_DERIVED'
+  role: TemplateRole
+  status: TemplateStatus
+  status_reason: string
+  schema_version: number
+  referenced_tables: string[]
+  hit_count: number
+  last_hit_at: string | null
+  verified_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface KnowledgeTemplateList {
+  templates: KnowledgeTemplate[]
+  schema_version: number
+  schema_synced: boolean
+  /** Whether this reader may write. The UI **hides** rather than disables. */
+  can_curate: boolean
+  /** Templates whose SQL no longer resolves against the current snapshot.
+   *  Reported on read, not persisted — Phase 4 is what writes `STALE`. */
+  stale_ids: string[]
+}
+
+/** What `POST .../templates/check` answers, in one round trip. */
+export interface TemplateCheckResult {
+  valid: boolean
+  issue: string
+  issues: { rule_id: string; message: string; hint: string | null }[]
+  referenced_tables: string[]
+  proposals: ParamProposal[]
+  /** The SQL as it would be stored, with the accepted literals replaced. */
+  sql: string
+  params: TemplateParam[]
+  /** The `{names}` the question declares. */
+  question_slots: string[]
+}
+
 export interface ConversationSummary {
   id: string
   title: string

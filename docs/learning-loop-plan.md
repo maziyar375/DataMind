@@ -10,8 +10,9 @@
 > **Four decisions were taken before writing this** (§0.2). They are recorded
 > here rather than re-argued: everything below assumes them.
 >
-> **5 of 86 items, verified against the tree on 2026-08-31.** Phase 0 has
-> landed except its three baseline runs, which need a provider key.
+> **27 of 86 items, verified against the tree on 2026-08-31.** Phase 0 has
+> landed except its three baseline runs, which need a provider key; Phase 1 is
+> complete and the store ships inert.
 > [§13](#13-progress-ledger--what-is-done-what-is-not) is the
 > ledger: what is already in the codebase and load-bearing (§13.1), then a
 > checkbox per deliverable per phase, each with the check that proves its state.
@@ -1530,10 +1531,12 @@ it is not, no amount of Phase 5 will help.
 > reading the code, not by memory; every ❌ was confirmed absent the same way.
 > The verification note beside each item is what to re-run to check it again.
 >
-> **Status: 5 of 86 plan items complete** (Phase 0, everything but the three
-> measurements themselves — see §13.2). What is done besides that is
-> the *foundation* the plan leans on (§13.1) — which is substantial, and is why
-> the research put the loop at "60% built and not wired up".
+> **Status: 27 of 86 plan items complete.** Phase 0's instruments are built
+> (its three measurements are not — see §13.2, and they gate Phase 5 only) and
+> **Phase 1 has landed in full**: the store, the curation surface, and the
+> guard's fifth entry point. What is done besides that is the *foundation* the
+> plan leans on (§13.1) — which is substantial, and is why the research put the
+> loop at "60% built and not wired up".
 >
 > **Keep this section honest.** Tick a box in the same commit that lands the
 > work, never in advance and never in a batch afterwards. A checklist that runs
@@ -1578,42 +1581,59 @@ one, and because the plan would be much larger if any were missing.
 > the last box here is ticked — and it is the *numbers* that tick it, not the
 > instruments that produce them.
 
-### 13.3 Phase 1 — The store and the curation surface · **0 / 22** ❌ not started
+### 13.3 Phase 1 — The store and the curation surface · **22 / 22** ✅ landed
 
-**Backend** — `app/knowledge/` does not exist (`ls backend/app/knowledge` → no such directory)
+**Backend**
 
-- [ ] `app/knowledge/models.py` — `KnowledgeTemplate`, `TemplateParam`, `ParamType`
-- [ ] `app/knowledge/normalize.py` — question → `question_normalized`
-- [ ] `app/knowledge/params.py` — the AST walk that proposes parameters (§1.2)
-- [ ] `app/knowledge/validate.py` — template + snapshot → guard verdict + `referenced_tables`
-- [ ] `app/knowledge/__init__.py` — the public surface
-- [ ] `app.knowledge` added to the layered import-linter contract, between `app.semantic` and `app.domain`
-- [ ] An eighth contract: *"knowledge is self-contained"*
-- [ ] `app/services/knowledge_service.py`
-- [ ] `app/api/v1/knowledge.py`, mounted, with `_owned()` scoping
-- [ ] `can_curate(ctx, settings)` in `policy.py` — **confirmed absent:** `grep -rn can_curate backend/app` returns nothing
-- [ ] `curation_admin_only: bool = False` in `core/config.py`
-- [ ] **Every** write endpoint calls `can_curate`; no endpoint checks `ctx.is_admin` directly
-- [ ] `knowledge_templates` model + migration, with `CREATE EXTENSION pg_trgm` and both indexes — **confirmed absent:** no migration mentions `trgm`, no model matches
+- [x] `app/knowledge/models.py` — `KnowledgeTemplate`, `TemplateParam`, `ParamType`, plus `TemplateRole` / `TemplateStatus` / `TemplateSource` / `LiteralProvenance` and `may_render_literals` (§5.2's gate, which had nowhere else to live)
+- [x] `app/knowledge/normalize.py` — question → `question_normalized`, with `slots()` and the editor's preview reading the braces the same way
+- [x] `app/knowledge/params.py` — the AST walk (§1.2), `parameterize()` that substitutes **on the tree**, and `placeholder()` — one `:name` spelling in all four dialects, because Postgres' generator renders `exp.Placeholder` as `%(name)s`
+- [x] `app/knowledge/validate.py` — the fifth door: guard verdict + `referenced_tables` + declared slots, with `E_PARAM_MISMATCH` for the two ways a template fails to hold together. Returns **no executable SQL**, deliberately
+- [x] `app/knowledge/__init__.py` — the public surface, 26 names
+- [x] `app.knowledge` in the layered contract, between `app.semantic` and `app.domain` — `lint-imports` green
+- [x] An eighth contract, *"knowledge is self-contained"* — with `app.sqlguard` deliberately **not** in the forbidden list, because validating a template is calling the guard
+- [x] `app/services/knowledge_service.py` — CRUD, the save gate, the live check, and read-time re-validation that reports drift without persisting it
+- [x] `app/api/v1/knowledge.py`, mounted, with the same `_owned()` scoping `semantic.py` uses
+- [x] `can_curate(ctx, settings)` in `policy.py`
+- [x] `curation_admin_only: bool = False` in `core/config.py`
+- [x] **Every** write endpoint calls `can_curate`; no endpoint checks `ctx.is_admin` — asserted on the **AST**, not by grep, so the module's own docstring saying so does not trip it
+- [x] `knowledge_templates` model + migration `0015`, with `CREATE EXTENSION IF NOT EXISTS pg_trgm` inside a SAVEPOINT (a role that may not create it logs and continues; the GIN index is skipped and Phase 2's matcher degrades) and both other indexes
 
-**Frontend** — no knowledge component exists
+**Frontend**
 
-- [ ] `components/knowledge.tsx`
-- [ ] `components/knowledge-template.ts` + `.test.ts` (joins the nine suites `npm test` runs)
-- [ ] `DataSourcesPage.tsx` — the fourth tab
-- [ ] `api/client.ts` `knowledge` namespace + `api/types.ts` types
+- [x] `components/knowledge.tsx` — the tab, the list, the detail pane and the editor, composed entirely from existing primitives and tokens
+- [x] `components/knowledge-template.ts` + `.test.ts` — 60 checks; `npm test` now runs **ten** suites
+- [x] `DataSourcesPage.tsx` — the fourth tab
+- [x] `api/client.ts` `knowledge` namespace + `api/types.ts` types
 
 **Tests**
 
-- [ ] `test_knowledge_guard.py` — **the fifth entry point**, full hostile corpus, on save *and* on execute
-- [ ] `test_knowledge_params.py` — proposes date bounds and equalities; refuses `<>`, `NOT IN`, `CASE`, `COALESCE`
-- [ ] `test_knowledge_normalize.py`
-- [ ] `test_knowledge_api.py` — ownership scoping, `can_curate` in both settings
-- [ ] `test_knowledge_disclosure.py` — a `MODEL_DERIVED` template is not rendered under `NONE` (§5.2)
+- [x] `test_knowledge_guard.py` — **the fifth entry point**: the corpus imported from `test_sqlguard_hostile.py` and replayed on save, on every use, and a third time with a `:slot` spliced in; plus a test that the template policy builder and `query_service`'s agree
+- [x] `test_knowledge_params.py` — 39 tests: proposes date bounds, equalities and measure thresholds; refuses `<>`, `NOT IN`, `IN`, `LIKE`, `CASE`; never offers a `date_trunc` unit, a `LIMIT` or a `GROUP BY` ordinal
+- [x] `test_knowledge_normalize.py` — 21 tests, both directions of the contract
+- [x] `test_knowledge_api.py` — 30 tests: ownership scoping on every route, `can_curate` across the whole write surface in **both** settings, reading open in both
+- [x] `test_knowledge_disclosure.py` — 13 tests; a `MODEL_DERIVED` template is withheld under `NONE` and `AGGREGATE` (§5.2), and every `TemplateSource` is assigned a provenance
 
 **Done when:** a curator authors a template against `aurora`, sees `:from_date`
 proposed, saves it — and `make test` + `make guard` are green with the corpus
 replayed through the new door. **No chat answer behaves differently.**
+
+> **Done.** The store ships inert: nothing in `app/pipeline/` imports
+> `app.knowledge`, `PROMPT_VERSION` is untouched at `v8`, and no node reads the
+> table. Two things landed slightly wider than the plan asked for, and both are
+> recorded rather than quietly absorbed:
+>
+> * **`parameterize()` lives in the backend, not the browser.** The plan left
+>   the substitution unplaced. Doing it on the tree in the server means the
+>   statement that gets stored is the one the guard just read — and a
+>   `str.replace` in the editor would have rewritten the `'EMEA'` inside a
+>   `CASE` arm along with the filter. `POST /templates/check` takes the ticked
+>   names and returns the parameterized SQL.
+> * **Two agreement rules the guard cannot see** — a declared parameter the SQL
+>   never uses, and a `:slot` the parameter list never declares — are rejected
+>   at save as `E_PARAM_MISMATCH`. Both produce a template that is stored and
+>   never matches, which would reach the curator as silence rather than as an
+>   error.
 
 ### 13.4 Phase 2 — Match, short-circuit, badge · **0 / 12** ❌ not started
 
@@ -1712,8 +1732,8 @@ Docs land in the same commit as the code, per this repo's convention.
 | Phase | Done | Total | Status |
 |---|:--:|:--:|---|
 | Foundation (pre-existing) | 14 | 16 | ✅ two are `⚠️ present but unwired` |
-| 0 · Fix the ruler | 5 | 6 | ⚠️ **still blocking** — the three runs are unmade |
-| 1 · Store + curation surface | 0 | 22 | ❌ |
+| 0 · Fix the ruler | 5 | 6 | ⚠️ **still blocking Phase 5** — the three runs are unmade |
+| 1 · Store + curation surface | 22 | 22 | ✅ |
 | 2 · Match, short-circuit, badge | 0 | 12 | ❌ |
 | 3 · Capture | 0 | 9 | ❌ |
 | 4 · Store health | 0 | 7 | ❌ |
@@ -1722,7 +1742,7 @@ Docs land in the same commit as the code, per this repo's convention.
 | 7 · Embeddings | 0 | 5 | ❌ |
 | 8 · Permissions | 0 | 4 | ❌ |
 | Docs | 0 | 7 | ❌ |
-| **Plan total** | **5** | **86** | |
+| **Plan total** | **27** | **86** | |
 
 ### 13.13 Change log
 
@@ -1732,4 +1752,5 @@ over anything else in the document.
 | Date | What landed | Boxes ticked |
 |---|---|---|
 | 2026-08-31 | This plan written; the tree audited to establish the starting position | — (0 of 86) |
+| 2026-08-31 | **Phase 1 — the store and the curation surface.** `app/knowledge/` (models, normalize, params, validate) with an eighth import-linter contract; `knowledge_templates` + migration `0015` (`pg_trgm` inside a SAVEPOINT, so a role that may not create extensions still migrates); `knowledge_service.py`; `/connections/{id}/knowledge/*` with `can_curate` on every write and `is_admin` nowhere; the Knowledge tab, its DOM-free half and its 60-check suite. Five test files, 216 backend tests — the hostile corpus replayed through the fifth door on save, on use, and with a slot spliced in. Docs: CLAUDE.md (the guard's *five* entry points, a Knowledge templates section, the code map, the eighth contract), security.md §3.2/§3.3/§4.5 (the disclosure rung and the fifth door), docs/README.md (the three unindexed docs indexed together). **The store is inert: `PROMPT_VERSION` is still v8, nothing in `app/pipeline/` imports `app.knowledge`, and no chat answer behaves differently.** | 27 of 86 (§13.3, all 22) |
 | 2026-08-31 | **Phase 0 instruments.** `runs.prompt_version` records the prompt module's constant (+ `tests/unit/test_prompt_version.py`); the eval runner gained `--retrieve-budget` and `--semantic on\|off`, both off by default and both recorded on the scorecard; `backend/fixtures/sales_semantic.json` added as the layer-on arm's input; both decisions logged in `suites/CHANGELOG.md`. Docs: eval.md §1/§4/§6, CLAUDE.md, pipeline.md §5. **The three baseline runs were not made — no provider key in this environment.** | 5 of 86 (§13.2 boxes 1–5) |
