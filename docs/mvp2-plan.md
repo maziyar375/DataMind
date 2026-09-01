@@ -10,7 +10,13 @@
 > the render bug that made the semantic layer inert, is fixed; §1.3 records what
 > changed and what did not. Everything else here is still proposal.
 >
-> Persian edition: [mvp2-plan.fa.md](mvp2-plan.fa.md).
+> **Update 2026-09-01 — Theme A is no longer a proposal.** A1–A4 were designed
+> and built as [learning-loop-plan.md](learning-loop-plan.md), which is the
+> reference for all four of them now: where this document and that one disagree
+> about the knowledge store, **that one is the correction**, and each item below
+> says where. §D4's audit log is **half** built by the same work and says which
+> half. A5, the rest of Theme D, and all of Themes B, C, E and F are untouched
+> proposals still.
 
 ---
 
@@ -1007,6 +1013,19 @@ weeks), **L** (a month or more).
 ### A1. Verified question→SQL pairs · **M** · ⭐ highest value in the document
 *From: Genie example SQL queries / trusted assets; Wren `queries.yml`.*
 
+> **Built 2026-08-31 / 2026-09-01, as
+> [learning-loop-plan.md](learning-loop-plan.md) Phases 1, 2 and 5 — read that
+> instead of this.** The store is `knowledge_templates`, the four write paths
+> below all exist, and the read path is two paths rather than one:
+> a near-exact match **short-circuits** (Phase 2, shipped on) and near misses
+> become few-shot examples (Phase 5, shipped **off** pending the eval gate in
+> [eval.md §6.1](eval.md)). Three things this item did not anticipate and the
+> plan had to add: a template needs a **`role`** (§A3 below), a **`status`** for
+> when the schema moves under it ([§1.4](learning-loop-plan.md)), and a
+> **`literal_provenance`**, because a stored statement's literals are a
+> disclosure this document does not mention at all — [security.md
+> §3.3](security.md) is that argument.
+
 A new per-connection store of `(question, sql, note, verified_by, verified_at)`.
 Written from four places, all of which already exist:
 - an answered chat run — "this was right, save it";
@@ -1033,6 +1052,14 @@ replayed through it (`test_verified_pairs_guard.py`, mirroring
 ### A2. "Verified" as a visible property of an answer · **S**
 *From: Genie's Trusted badge; Power BI's approved-for-Copilot friction.*
 
+> **Built 2026-08-31, as [learning-loop-plan.md](learning-loop-plan.md) Phase
+> 2**, with the three tiers below intact. What the design added: **Verified**
+> shows the matched question and the bound parameters, not just a chip — a badge
+> that
+> says *trust this* without saying *trust this because it is the answer to that
+> question* is asking for a false match to pass — and **Generated** carries no
+> chip at all, because a badge on every answer is a badge on none.
+
 Three tiers, shown in the chat header and on every tile and figure:
 
 | Tier | Means |
@@ -1049,11 +1076,31 @@ value legible to the person deciding whether to invest in curation.
 ### A3. Benchmarks and a score, in the product · **M**
 *From: Genie benchmarks + Evaluations tab; Wren's eval runner.*
 
+> **Built 2026-09-01, as [learning-loop-plan.md](learning-loop-plan.md)
+> Phase 6.** The sentence below is also the one thing in this document that plan had to
+> correct — the correction follows it.
+
 Promote `app/eval/` from a developer CLI to a per-connection feature. A
 benchmark set is a list of `(question, expected_sql)` — **A1's verified pairs are
 already exactly this shape**, so the two features share a table. Run the set
 against a connection; label each **Correct** (result set matches) or **Needs
 review**; show accuracy over time.
+
+> **The correction ([learning-loop-plan.md
+> §1.3](learning-loop-plan.md#13-the-three-roles)).** They share a *table*; they
+> must not share a *row's purpose*. A pair that both teaches the generator and
+> scores it is measuring the store's ability to hold a string — the store is
+> graded on the answers it was handed. So a template carries a **`role`**:
+> `RETRIEVABLE` (answers, never scores), `BENCHMARK_ONLY` and `HELD_OUT` (score,
+> never answer), enforced in the query that builds the candidate set and in the
+> Phase 2 short-circuit, not in a comment. `HELD_OUT` is assigned automatically
+> to a fixed fraction at creation, because a split a curator chooses is a split
+> a curator can flatter. **What shipped is one column further from this item
+> than "share a table" suggests, and one table further too**: the run's own
+> rows are `benchmark_sets` / `benchmark_runs` / `benchmark_results`, named
+> deliberately *not* `eval_runs` / `eval_results` so the customer's benchmark
+> and the developer's harness cannot silently become the same instrument
+> ([eval.md §6.2](eval.md)).
 
 *Why it fits:* it makes accuracy the customer's number instead of the
 developer's, which is the only way curation gets done. It also gives the
@@ -1069,6 +1116,15 @@ stack.
 
 ### A4. Ask-for-review workflow · **S–M**
 *From: Genie's Ask for Review.*
+
+> **Built 2026-08-31, as [learning-loop-plan.md](learning-loop-plan.md) Phase
+> 3**, with the flag open to **any** signed-in user rather than to curators —
+> the person who notices a wrong answer is rarely the person allowed to fix
+> it. A correction
+> does become a template, in the same action that resolves the flag. Phase 8
+> added the half this item leaves implicit: `routed_to` names *whose* queue the
+> flag landed in, resolved by the server, so the acknowledgement stays true when
+> ownership moves.
 
 A flag button on any answer, with a comment. It lands in a review queue for
 whoever owns the connection, showing question, generated SQL, and the comment.
@@ -1246,6 +1302,17 @@ Say "not in MVP2" in the docs with the trigger written down, rather than leaving
 it unmentioned.
 
 ### D4. Turn on the audit log · **S** · ⭐ best ratio in the document
+
+> **Half built 2026-09-01, as [learning-loop-plan.md](learning-loop-plan.md)
+> Phase 8.** `app/services/audit.py` exists, all nine curation writes emit a
+> row, and `GET /audit` is the admin view — a log nobody can read answers *"who did
+> what"* exactly as badly as an empty one. **The ask path is still unlogged**,
+> which is most of the sentence below: no question, no policy, no statement, no
+> row count. The service is shaped so those arrive as more `record()` calls, and
+> three rules bind them when they do — the row joins the caller's transaction, a
+> logging failure never fails the action, and `detail` carries identifiers and
+> counts but **never content** ([security.md §4.8](security.md)).
+
 The table exists at `models.py:940` and nothing writes to it. Write: who asked
 what, against which connection, under which disclosure policy, what SQL ran, how
 many rows returned, and — critically — **what reached the model provider**.

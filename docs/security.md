@@ -55,7 +55,7 @@ Stated plainly so nobody assumes otherwise:
 
 ## 2. Every place data leaves for a model provider
 
-There are **twelve use cases**, across thirteen call sites, and no others. The
+There are **thirteen use cases**, across fifteen call sites, and no others. The
 dependency rule forbids importing `litellm` outside `app/infra/llm/`, and CI
 greps for violations, so this list cannot silently grow.
 
@@ -73,6 +73,7 @@ greps for violations, so this list cannot silently grow.
 | 10 | Propose a report outline | user proposes an outline | `reports/outline.py` — `propose()`:203 |
 | 11 | Write a report section | once per section, per generation; **also a per-section retry** | `workers/report.py` — `_narrate()`:742 |
 | 12 | Write the executive summary | once per generation | `workers/report.py` — `_summarise()`:823 |
+| 13 | Embed a question | the six-hourly index pass; **every analytical question**, on a connection with an embedding model pinned | `services/knowledge_service.py` — `_embedder()`:719, `index_embeddings()`:839 |
 
 **Thirteen and not fourteen** because #8 is a use case without a call site: a
 draft reuses the *node* that would have made the call anyway, which is the whole
@@ -91,8 +92,10 @@ check that actually matters:
 grep -rn --include='*.py' 'llm_gateway\.\|gateway\.complete\|gateway\.structured\|gateway\.stream' backend/app
 ```
 
-One model interaction sends **no customer data at all**: the capability probe
-in `api/v1/llm_configs.py`, a fixed test prompt.
+Two model interactions send **no customer data at all**: the capability probe
+in `api/v1/llm_configs.py`, a fixed test prompt, and `probe_embedding` in
+`knowledge_service.set_embeddings()`, which embeds the string `ok` to *measure*
+a provider's vector width rather than assume it from a model name.
 
 > **Changed:** #6 gained a second trigger. Choosing a chart used to fire only
 > at the end of a chat run; a **dashboard tile draft** now asks it too, so that
@@ -140,6 +143,18 @@ in `api/v1/llm_configs.py`, a fixed test prompt.
 > block left out. The fallback when the provider fails is the old rendering,
 > which still costs nothing.
 
+> **Changed:** #13 is new, and it is the only row in this table that sends **no
+> prompt** — an embedding endpoint takes text and returns a vector, so there is
+> no system message, no schema block, no history and no result row. It is also
+> the only row that is **off by default**: the switch is the absence of a
+> pinned model on the connection, not a flag (§4.7). What leaves is the
+> *masked* text of a question — table names, column names, declared values and
+> literals already replaced — which is strictly less than the same question's
+> generate call (#4) sends beside it. `llm-calls.md` §13b writes out the three
+> requests verbatim. Two call sites and not one because the ask path and the
+> index pass reach the port separately: the ask path builds its embedder lazily
+> so that a connection with no fresh vectors never decrypts a key.
+
 ### 2.1 What each one sends
 
 Common building blocks, both governed by the disclosure policy (§3):
@@ -156,7 +171,7 @@ Common building blocks, both governed by the disclosure policy (§3):
 | 2 | Describe | ✅ | ✅ | ✅ | ❌ | Schema questions only; no SQL is ever written |
 | 3 | Clarify | ✅ | ✅ | ✅ | ❌ | Runs before any SQL exists |
 | 4 | Generate SQL | ✅ | ✅ | ✅ | ❌ | **Never sees results** |
-| 5 | Present | ✅ | ❌ | ❌ | **✅ per policy** | Also sends the executed SQL |
+| 5 | Present | ✅ | ❌ | ❌ | **✅ per policy** | Also sends the executed SQL — **including a taught template's, literals and all** (§3.3) |
 | 6 | Chart | ✅ | ❌ | ❌ | shape only | Counts and types, not values. From a tile draft, the **narrowest** shape block at every policy |
 | 7 | Suggestions | ❌ | ✅ | ✅ | ❌ | Fires without the user asking |
 | 8 | Tile / block SQL draft | ✅ | ✅ | ❌ none | ❌ | History deliberately empty |
@@ -164,6 +179,7 @@ Common building blocks, both governed by the disclosure policy (§3):
 | 10 | Report outline | ✅ the request | ✅ | ❌ none | ❌ | The whole snapshot, not a retrieval |
 | 11 | Report section | ✅ per block | ❌ | ❌ | **✅ per policy** | Plus figures computed from those same rows |
 | 12 | Report summary | ✅ the request | ❌ | ❌ | ❌ | **Prose only** — the sections' own paragraphs |
+| 13 | Embed a question | ✅ **masked** | ❌ | ❌ | ❌ | **No prompt at all.** Table names, column names, declared values and literals are replaced with `<table>`/`<column>`/`<value>` before the text leaves (§4.7) |
 
 The single most important row is **#4**. The node that writes SQL never
 receives result data under any policy — it works from schema, question, and
@@ -451,9 +467,31 @@ tightening would quietly undo it.
 `HintBudget.value_lists` the schema block reads, so the two cannot drift into
 disagreeing about what a value is.
 
-**Phase 1 renders no template into any prompt.** The gate landed with the store
-anyway, because the decision has to be in the tree *before* the read path
-exists — otherwise the read path inherits a gate nobody wrote.
+**Where the gate is applied, and when.** Phase 1 shipped the column and the
+function with **no reader at all** — deliberately, because the decision had to
+be in the tree *before* the read path existed, or the read path would have
+inherited a gate nobody wrote. Phase 5 is that reader.
+`RetrievedContext.render_examples()` asks `HintBudget.from_policy()` at **render
+time**, not at write time, so tightening a connection's policy takes effect on
+the next question rather than on the next edit. A `MODEL_DERIVED` example is
+withheld **whole**: there is no way to take the literal out of a `WHERE` clause
+and leave a statement that still teaches anything, and a half-example teaches
+the wrong thing. On a stock connection nothing renders at all —
+`database_connections.knowledge_examples_enabled` defaults to `false` and the
+examples slot collapses to `PROMPT_VERSION` v8's exact bytes.
+
+**One path this rung does not cover, and it is §3.5's residual wearing a new
+hat.** A Phase 2 short-circuit answers from stored SQL, and `present` (#5) sends
+*the SQL that ran* to the narration call exactly as it does for generated SQL.
+So a `MODEL_DERIVED` template's literals can reach a provider on a short-circuit
+under `NONE`, where `render_examples` would have withheld the same template as a
+few-shot. Recorded rather than papered over. It is the same trade §3.5 already
+makes for kept SQL, for the same reasons and one further one: a short-circuited
+answer shows its matched question and its bindings behind the *saved answer*
+badge, so the statement is an artifact the asker can audit rather than a hidden
+one. If that trade is ever re-decided, the place to decide it is `present`,
+once, for stored and generated SQL together — a second gate on the template path
+would leave the larger half of the same disclosure uncovered.
 
 ### 3.4 The sensitive-name floor
 
@@ -490,6 +528,12 @@ value list a wider policy once allowed. It is a single token, it is already on
 the user's screen as an auditable artifact, and stripping it would take from a
 follow-up the one thing it most needs. Also noted in
 [pipeline.md](pipeline.md) §5.
+
+A **taught** question's SQL reaches the narration call the same way when a
+short-circuit answers from it, which is the second half of §3.3 — same residual,
+one more source. The two are listed as one thing on purpose: whatever is decided
+about a literal in kept SQL should be decided about a literal in stored SQL in
+the same breath, because a user cannot tell which kind answered them.
 
 ---
 
@@ -683,7 +727,7 @@ write down if this document does not.
   `disclose_history()` govern schema contents, result rows and transcript prose;
   an embedding request carries none of the three. `may_render_literals` still
   governs whether a template's **SQL** may be shown as a few-shot example, which
-  is a different call (§5.2) and is unchanged.
+  is a different call (§3.3) and is unchanged.
 * **It is off unless somebody turns it on**, and the off switch is the absence
   of a pinned model rather than a flag: `database_connections.embedding_model`
   empty means the lexical matcher, which needs no provider, no key and no
