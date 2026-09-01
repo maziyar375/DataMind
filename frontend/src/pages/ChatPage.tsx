@@ -5,9 +5,10 @@ import {
 } from '../api/client'
 import type {
   Connection, ConversationSummary, LlmConfig, MessageWithRun, RunDetail, RunStep,
+  TableArtifactSpec,
 } from '../api/types'
 import {
-  AssistantTurn, RunErrorCard, UserBubble,
+  AssistantTurn, RunErrorCard, RunStoppedCard, UserBubble,
 } from '../components/chat'
 import { absorbThought, endThought } from '../components/thinking'
 import type { ThinkingState } from '../components/thinking'
@@ -83,7 +84,15 @@ export default function ChatPage() {
   // of the actual answer is what ends the thinking phase, and testing that
   // against state would mean a set on every token of the answer.
   const thinkingLive = useRef(false)
+  // The rows, as soon as `execute` has them — half a minute before `present`
+  // has finished writing the sentence about them, and a whole round trip
+  // before the persisted turn arrives. Superseded by the run's TABLE artifact
+  // the moment the turn is swapped in; see `RESULT_PREVIEW` in the backend.
+  const [livePreview, setLivePreview] = useState<TableArtifactSpec | null>(null)
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
+  // A stop that has been asked for but not yet landed. The button has to stop
+  // looking like a button the instant it is pressed, or it gets pressed twice.
+  const [stopping, setStopping] = useState(false)
   const stopStreamRef = useRef<(() => void) | null>(null)
   // Which attachment owns the live view. A stream that finishes after another
   // has taken over must not clear the newer one's steps out from under it.
@@ -252,7 +261,9 @@ export default function ChatPage() {
     stopStreamRef.current = null
     streamToken.current += 1
     setActiveRunId(null)
+    setStopping(false)
     setLiveSteps([])
+    setLivePreview(null)
     clearText()
 
     if (!activeId) {
@@ -308,7 +319,9 @@ export default function ChatPage() {
     stopStreamRef.current?.()
     const token = (streamToken.current += 1)
     setActiveRunId(runId)
+    setStopping(false)
     setLiveSteps([])
+    setLivePreview(null)
     clearText()
     clearThinking()
 
@@ -366,6 +379,11 @@ export default function ChatPage() {
           case 'TEXT_RESET':
             clearText()
             break
+          // A repair re-runs the query and emits again, so the last one wins
+          // — the same rule the persisted artifact follows.
+          case 'RESULT_PREVIEW':
+            setLivePreview(event.data as unknown as TableArtifactSpec)
+            break
           default:
             break
         }
@@ -389,7 +407,9 @@ export default function ChatPage() {
         if (streamToken.current !== token) return
 
         setActiveRunId(null)
+        setStopping(false)
         setLiveSteps([])
+        setLivePreview(null)
         clearText()
         clearThinking()
         if (loaded === null) {
@@ -424,6 +444,49 @@ export default function ChatPage() {
       },
     })
   }
+
+  /**
+   * *Stop.*
+   *
+   * The run is cancelled at the server, not merely detached here: closing the
+   * stream would leave the model generating — and being billed for — an answer
+   * nobody is waiting for. `RunService.cancel` writes the terminal status and
+   * `cancel_requested`, which is what reaches the process actually executing;
+   * the stream then closes on its own `RUN_FINISHED` and `onDone` reloads the
+   * thread exactly as it does for a run that finished by itself.
+   *
+   * Refusing to stop is not an error worth a banner: the run reaching a
+   * terminal state on its own in the same second is the common case, and the
+   * reader wanted it stopped either way.
+   */
+  async function stopRun() {
+    const runId = activeRunId
+    if (!runId || stopping) return
+    setStopping(true)
+    try {
+      await runs.cancel(runId)
+    } catch {
+      setStopping(false)
+    }
+  }
+
+  // Escape stops a run from anywhere on the page, which is where a reader's
+  // hand already is — the composer has the focus while an answer streams.
+  //
+  // Except over a dialog, where Escape already means *close this*: the
+  // template editor can be open with a run still going behind it, and one key
+  // press must not both shut the editor and cancel the answer.
+  useEffect(() => {
+    if (!activeRunId) return
+    function onKey(event: KeyboardEvent) {
+      if (event.key !== 'Escape') return
+      if (document.querySelector('[role="dialog"]')) return
+      event.preventDefault()
+      void stopRunRef.current()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [activeRunId])
 
   // ── send ────────────────────────────────────────────────────────────────
   /** `override` lets a suggestion chip send without waiting for a state tick. */
@@ -484,8 +547,10 @@ export default function ChatPage() {
   // So the transcript gets this one, which never changes identity, and it
   // reads the current `send` at the moment it is actually clicked.
   const sendRef = useRef(send)
+  const stopRunRef = useRef(stopRun)
   useEffect(() => {
     sendRef.current = send
+    stopRunRef.current = stopRun
   })
   const pickOption = useCallback((text: string) => {
     void sendRef.current(text)
@@ -578,7 +643,9 @@ export default function ChatPage() {
     stopStreamRef.current?.()
     streamToken.current += 1
     setActiveRunId(null)
+    setStopping(false)
     setLiveSteps([])
+    setLivePreview(null)
     clearText()
     setActiveId(null)
     setMessages([])
@@ -747,11 +814,26 @@ export default function ChatPage() {
                   return (
                     <Fragment key={message.id}>
                       <UserBubble text={message.content ?? ''} />
+                      {/* A run the reader stopped is not a run that broke, and
+                          the red card it used to get said otherwise. */}
+                      {message.run && isStopped(message.run.status) && (
+                        <RunStoppedCard
+                          run={message.run}
+                          onRetry={
+                            message.content
+                              ? () => pickOption(message.content as string)
+                              : undefined
+                          }
+                        />
+                      )}
                       {message.run && isFailure(message.run.status) && (
                         <RunErrorCard run={message.run} />
                       )}
                     </Fragment>
                   )
+                }
+                if (message.run && isStopped(message.run.status)) {
+                  return <RunStoppedCard key={message.id} run={message.run} />
                 }
                 if (message.run && isFailure(message.run.status)) {
                   return <RunErrorCard key={message.id} run={message.run} />
@@ -783,6 +865,7 @@ export default function ChatPage() {
                   run={null}
                   steps={liveSteps}
                   thinking={thinking}
+                  preview={livePreview}
                   streaming
                 />
               )}
@@ -833,7 +916,9 @@ export default function ChatPage() {
           value={draft}
           onChange={setDraft}
           onSubmit={() => void send()}
+          onStop={() => void stopRun()}
           busy={!!activeRunId}
+          stopping={stopping}
           ready={ready}
         />
       </div>
@@ -1542,12 +1627,16 @@ function iconBtnStyle(color: string, hoverBg: string): React.CSSProperties {
 }
 
 function Composer({
-  value, onChange, onSubmit, busy, ready,
+  value, onChange, onSubmit, onStop, busy, stopping, ready,
 }: {
   value: string
   onChange: (value: string) => void
   onSubmit: () => void
+  /** Cancel the run in flight. The same button, while there is one. */
+  onStop: () => void
   busy: boolean
+  /** A stop already asked for and not yet landed. */
+  stopping: boolean
   /** Both a database and a model are chosen — required before a first send. */
   ready: boolean
 }) {
@@ -1564,11 +1653,16 @@ function Composer({
 
   const canSend = value.trim().length > 0 && !busy && ready
   const active = focus || value.trim().length > 0
+  // One control, two jobs — send while there is nothing running, stop while
+  // there is. It is the same button because it is the same question ("what do
+  // I do about this answer?"), and because a second button that is disabled
+  // half the time is a second thing to look at every time it is not.
+  const canStop = busy && !stopping
 
   return (
     <div style={{ padding: '10px 28px 20px', flexShrink: 0 }}>
       <div
-        className={`rm-composer${active ? ' is-active' : ''}`}
+        className={`rm-composer${active ? ' is-active' : ''}${busy ? ' is-busy' : ''}`}
         style={{ maxWidth: 780, margin: '0 auto' }}
       >
         <div
@@ -1617,10 +1711,11 @@ function Composer({
             }}
           />
           <button
-            className="rm-send-btn"
-            onClick={() => canSend && onSubmit()}
-            disabled={!canSend}
-            aria-label="Send"
+            className={`rm-send-btn${canStop ? ' is-running' : ''}`}
+            onClick={() => (busy ? canStop && onStop() : canSend && onSubmit())}
+            disabled={busy ? !canStop : !canSend}
+            aria-label={busy ? 'Stop generating' : 'Send'}
+            title={busy ? 'Stop generating  ·  Esc' : undefined}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -1630,14 +1725,28 @@ function Composer({
               borderRadius: '50%',
               border: 'none',
               flexShrink: 0,
-              background: canSend
-                ? 'linear-gradient(150deg, color-mix(in oklch, var(--accent) 88%, white), var(--accent))'
-                : 'var(--panel-alt)',
-              color: canSend ? 'var(--on-accent)' : 'var(--text-faint)',
-              cursor: canSend ? 'pointer' : 'not-allowed',
+              // Stopping is not the accent action — it undoes one. A solid
+              // neutral disc with the ring of a live run around it (see
+              // `.rm-send-btn.is-running` in styles.css) reads as *the thing
+              // that is happening*, which is what the reader is aiming at.
+              background: busy
+                ? 'var(--panel-alt)'
+                : canSend
+                  ? 'linear-gradient(150deg, color-mix(in oklch, var(--accent) 88%, white), var(--accent))'
+                  : 'var(--panel-alt)',
+              color: busy
+                ? stopping ? 'var(--text-faint)' : 'var(--text-strong)'
+                : canSend ? 'var(--on-accent)' : 'var(--text-faint)',
+              cursor: busy
+                ? canStop ? 'pointer' : 'default'
+                : canSend ? 'pointer' : 'not-allowed',
             }}
           >
-            {busy ? <Spinner size={15} /> : <Icon.Send size={16} />}
+            {busy
+              ? stopping
+                ? <Spinner size={15} />
+                : <Icon.Stop size={13} />
+              : <Icon.Send size={16} />}
           </button>
         </div>
 
@@ -1653,7 +1762,17 @@ function Composer({
             color: 'var(--text-faint)',
           }}
         >
-          {ready ? (
+          {busy ? (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              {stopping ? (
+                'Stopping…'
+              ) : (
+                <>
+                  <span className="rm-kbd">Esc</span> to stop
+                </>
+              )}
+            </span>
+          ) : ready ? (
             <>
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                 <span className="rm-kbd">Enter</span> to send
@@ -1885,5 +2004,11 @@ function HeaderSelect({
  */
 /** Terminal states that owe the reader an explanation. */
 function isFailure(status: string): boolean {
-  return ['FAILED', 'CANCELLED', 'TIMED_OUT'].includes(status)
+  return ['FAILED', 'TIMED_OUT'].includes(status)
+}
+
+/** The one terminal state the reader chose. It owes them nothing but the
+ *  trail of what it had managed before they said stop. */
+function isStopped(status: string): boolean {
+  return status === 'CANCELLED'
 }

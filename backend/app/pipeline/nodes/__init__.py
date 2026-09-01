@@ -1035,6 +1035,30 @@ async def execute(state: RunState, deps: NodeDeps) -> NodeResult:
             "rows_scanned_estimate": scanned,
         },
     )
+    # The rows themselves, live — `present` is the slowest node in the run and
+    # it is writing a sentence *about* this table, so there is no reason for
+    # the reader to wait out the paragraph before seeing the numbers. Transient
+    # (`TRANSIENT_RUN_EVENTS`): the durable copy is the TABLE artifact
+    # `_finalise` writes, and this is deliberately the same shape so one
+    # renderer serves the preview and the record.
+    #
+    # A repair re-enters this node and emits again, so the last preview is
+    # always the last result that actually ran — and a retry that *fails* never
+    # reaches here, which is what leaves the restored earlier result on screen
+    # rather than a table the run went on to discard.
+    await deps.emit(
+        "RESULT_PREVIEW",
+        {
+            "columns": [
+                {"name": c.name, "db_type": c.db_type,
+                 "semantic_type": c.semantic_type}
+                for c in result.columns
+            ],
+            "rows": result.rows,
+            "row_count": result.row_count,
+            "truncated": result.truncated,
+        },
+    )
     return NodeResult(detail=f"{result.row_count} rows in {result.duration_ms}ms")
 
 

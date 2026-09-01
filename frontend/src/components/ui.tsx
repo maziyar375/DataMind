@@ -366,6 +366,19 @@ export const Icon = {
       <path d="M9 13h6M9 17h4" />
     </svg>
   ),
+  /** A stop control, drawn filled: the one square in an outlined icon set,
+   *  because "stop" has to read at a glance inside a 38px circle. */
+  Stop: ({ size = 14, stroke = 'currentColor' }: IconProps) => (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill={stroke}
+      style={{ flexShrink: 0 }}
+    >
+      <rect x="6" y="6" width="12" height="12" rx="2.5" />
+    </svg>
+  ),
   Play: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
     <svg {...iconBase(size, stroke, strokeWidth)}>
       <path d="M6 4.5v15l12-7.5-12-7.5z" />

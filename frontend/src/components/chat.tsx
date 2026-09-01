@@ -29,7 +29,14 @@ import { VegaChart } from './VegaChart'
 import { NODE_META } from '../theme/tokens'
 
 // ── turn frame ────────────────────────────────────────────────────────────
-function AssistantAvatar({ busy, failed }: { busy?: boolean; failed?: boolean }) {
+function AssistantAvatar({
+  busy, failed, stopped,
+}: {
+  busy?: boolean
+  failed?: boolean
+  /** The reader ended this one. Neutral, not red — see `RunStoppedCard`. */
+  stopped?: boolean
+}) {
   return (
     <span
       style={{
@@ -40,8 +47,12 @@ function AssistantAvatar({ busy, failed }: { busy?: boolean; failed?: boolean })
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: failed ? 'var(--red-bg)' : 'var(--accent-bg)',
-        border: `1px solid ${failed ? 'var(--red-border)' : 'var(--accent-border)'}`,
+        background: failed
+          ? 'var(--red-bg)'
+          : stopped ? 'var(--panel-alt)' : 'var(--accent-bg)',
+        border: `1px solid ${
+          failed ? 'var(--red-border)' : stopped ? 'var(--border)' : 'var(--accent-border)'
+        }`,
         marginTop: 1,
       }}
     >
@@ -49,6 +60,8 @@ function AssistantAvatar({ busy, failed }: { busy?: boolean; failed?: boolean })
         <Spinner size={14} />
       ) : failed ? (
         <Icon.Alert size={15} stroke="var(--red)" />
+      ) : stopped ? (
+        <Icon.Stop size={12} stroke="var(--text-faint)" />
       ) : (
         <Icon.Sparkle size={15} stroke="var(--accent)" />
       )}
@@ -116,7 +129,18 @@ function stepTime(ms: number): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`
 }
 
-export function StepTrail({ steps }: { steps: RunStep[] }) {
+export function StepTrail({
+  steps, interrupted,
+}: {
+  steps: RunStep[]
+  /**
+   * The run ended while a step was still RUNNING — a stop, and nothing else
+   * gets here. Without this the node the reader interrupted keeps a spinner
+   * and an accent border for as long as the thread exists, which says the
+   * work is still going on a turn that says it is over.
+   */
+  interrupted?: boolean
+}) {
   if (steps.length === 0) return null
   return (
     <div
@@ -129,9 +153,10 @@ export function StepTrail({ steps }: { steps: RunStep[] }) {
     >
       {steps.map((step) => {
         const meta = NODE_META[step.name] ?? { label: step.name, detail: '' }
-        const running = step.status === 'RUNNING'
+        const running = step.status === 'RUNNING' && !interrupted
+        const stopped = step.status === 'RUNNING' && interrupted
         const failed = step.status === 'FAILED'
-        const skipped = step.status === 'SKIPPED'
+        const skipped = step.status === 'SKIPPED' || stopped
 
         const color = failed
           ? 'var(--red)'
@@ -161,6 +186,9 @@ export function StepTrail({ steps }: { steps: RunStep[] }) {
           >
             {running ? <Spinner size={11} /> : <Dot color={color} />}
             {meta.label}
+            {stopped && (
+              <span style={{ color: 'var(--text-faint)' }}>stopped</span>
+            )}
             {/*
               Every finished step shows its own time, not only the ones that
               ended DONE. A step that ran for forty seconds and then reported
@@ -615,6 +643,62 @@ export const RunErrorCard = memo(function RunErrorCard({ run }: { run: RunDetail
         )}
       </div>
       {run.steps.length > 0 && <StepTrail steps={run.steps} />}
+      {run.queries.length > 0 && <SqlPanel queries={run.queries} />}
+    </Turn>
+  )
+})
+
+/**
+ * A run the reader stopped.
+ *
+ * Not `RunErrorCard`. A cancelled run used to take the same red panel as a
+ * failure — *"This run did not complete"* — which told someone who had just
+ * pressed Stop that something had gone wrong, in the colour this product
+ * reserves for a database refusing a statement. Nothing went wrong: they
+ * changed their mind, which is the one terminal state that owes no
+ * explanation.
+ *
+ * So it keeps what the run did manage — the trail, and the SQL if it got that
+ * far, both persisted and both worth reading — and offers the question back.
+ * There is no partial answer to keep: the text streamed before the stop was
+ * never written down, and showing it here would mean showing something that
+ * vanishes on the next reload.
+ */
+export const RunStoppedCard = memo(function RunStoppedCard({
+  run, onRetry,
+}: {
+  run: RunDetail
+  /** Ask the same question again. Absent where the question is not to hand. */
+  onRetry?: () => void
+}) {
+  return (
+    <Turn avatar={<AssistantAvatar stopped />}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          flexWrap: 'wrap',
+          padding: '10px 14px',
+          borderRadius: 10,
+          border: '1px solid var(--border)',
+          background: 'var(--panel)',
+          fontSize: 12.5,
+          color: 'var(--text-dim)',
+        }}
+      >
+        <Icon.Stop size={11} stroke="var(--text-faint)" />
+        You stopped this answer.
+        {onRetry && (
+          <span style={{ marginLeft: 'auto', display: 'flex' }}>
+            <QuietAction tone="accent" onClick={onRetry}>
+              <Icon.Refresh size={13} />
+              Ask again
+            </QuietAction>
+          </span>
+        )}
+      </div>
+      {run.steps.length > 0 && <StepTrail steps={run.steps} interrupted />}
       {run.queries.length > 0 && <SqlPanel queries={run.queries} />}
     </Turn>
   )
@@ -1296,7 +1380,7 @@ function FeedbackReceipt({ given }: { given: NonNullable<RunKnowledge['feedback'
 }
 
 export const AssistantTurn = memo(function AssistantTurn({
-  text, run, streaming, steps, thinking, onPickOption, optionsDisabled,
+  text, run, streaming, steps, thinking, preview, onPickOption, optionsDisabled,
   onRegenerate, onFeedback, onSaveAsTemplate,
 }: {
   text: string
@@ -1314,6 +1398,14 @@ export const AssistantTurn = memo(function AssistantTurn({
    * turn, since the events it is built from are never stored.
    */
   thinking?: ThinkingState | null
+  /**
+   * The result of the query this run just ran, live — before the run has
+   * finished and before anything has been persisted. `execute` publishes it
+   * the moment it has the rows, which on a normal run is some twenty seconds
+   * before `present` has finished writing the sentence about them. Only ever
+   * set on a streaming turn; a finished one reads its TABLE artifact.
+   */
+  preview?: TableArtifactSpec | null
   onPickOption?: (text: string) => void
   optionsDisabled?: boolean
   /** Records the override, then re-asks the same question without the store. */
@@ -1431,6 +1523,14 @@ export const AssistantTurn = memo(function AssistantTurn({
       {spec && (
         <div className="rm-artifact" style={{ animationDelay: '.06s' }}>
           <ResultTable spec={spec} />
+        </div>
+      )}
+      {/* The same table, twenty seconds earlier. It sits exactly where the
+          persisted one will, so the swap at the end of the run moves nothing
+          on the page — the rows are simply already there. */}
+      {!spec && preview && (
+        <div className="rm-artifact">
+          <ResultTable spec={preview} />
         </div>
       )}
       {run && run.queries.length > 0 && <SqlPanel queries={run.queries} />}

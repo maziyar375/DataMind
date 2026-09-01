@@ -233,6 +233,10 @@ _TAGS: dict[str, Any] = {
     "SQL_REJECTED": lambda d: f"attempt {d['attempt_no']}",
     "SQL_VALIDATED": lambda d: f"attempt {d['attempt_no']}",
     "QUERY_COMPLETED": lambda d: f"{d['row_count']} rows",
+    # Live only (`TRANSIENT_RUN_EVENTS`) and so absent from `run_events`, but
+    # it is on the bus and every reader attached now sees it — which is exactly
+    # what this trail is the contract for.
+    "RESULT_PREVIEW": lambda d: f"{d['row_count']} rows",
     "RESULT_CHECKED": lambda d: ",".join(f["code"] for f in d["findings"]),
     "CLARIFICATION_REQUESTED": lambda d: d["question"],
     "ARTIFACT_CREATED": lambda d: d["kind"],
@@ -354,6 +358,7 @@ async def test_a_clean_analytical_run_emits_the_eleven_node_trail() -> None:
         finished(7, "validate"),
         started(8, "execute"),
         event("QUERY_COMPLETED", "1 rows"),
+        event("RESULT_PREVIEW", "1 rows"),
         finished(8, "execute"),
         started(9, "inspect"), finished(9, "inspect"),
         started(10, "present"),
@@ -457,6 +462,7 @@ async def test_a_failed_check_retry_restores_forward_into_present() -> None:
         finished(7, "validate"),
         started(8, "execute"),
         event("QUERY_COMPLETED", "0 rows"),
+        event("RESULT_PREVIEW", "0 rows"),
         finished(8, "execute"),
         started(9, "inspect"),
         event("RESULT_CHECKED", "C_EMPTY_RESULT"),
@@ -536,6 +542,7 @@ async def test_a_rejected_statement_repairs_and_charts() -> None:
         finished(9, "validate"),
         started(10, "execute"),
         event("QUERY_COMPLETED", "3 rows"),
+        event("RESULT_PREVIEW", "3 rows"),
         finished(10, "execute"),
         started(11, "inspect"), finished(11, "inspect"),
         started(12, "present"),
@@ -590,6 +597,7 @@ async def test_a_database_error_repairs_and_then_restores_from_execute() -> None
         finished(10, "validate"),
         started(11, "execute"),
         event("QUERY_COMPLETED", "0 rows"),
+        event("RESULT_PREVIEW", "0 rows"),
         finished(11, "execute"),
         started(12, "inspect"),
         event("RESULT_CHECKED", "C_EMPTY_RESULT"),
