@@ -39,8 +39,9 @@ import type {
   TemplateCheckResult, TemplateParam,
 } from '../api/types'
 import {
-  Chip, DangerButton, EmptyState, ErrorNote, Field, GhostButton, Icon, Modal,
-  PrimaryButton, SearchField, Spinner, TextArea, TextInput, dirOf, relativeTime,
+  Chip, DangerButton, Dot, EmptyState, ErrorNote, Field, GhostButton, Icon,
+  Modal, PrimaryButton, SearchField, Spinner, TextArea, TextInput, dirOf,
+  relativeTime,
 } from './ui'
 import type { ChipTone } from './ui'
 import { DetailBody } from './settings'
@@ -1384,6 +1385,30 @@ export function TemplateEditor({
     }
   }
 
+  const tables = (check?.referenced_tables ?? []).map((t) => t.split('.').pop() ?? t)
+  const eligible = proposals.filter((p) => p.eligible)
+
+  // What the box under the statement says about it, in one line. The long
+  // green pill this replaces ("Valid · public.order_items, public.orders,
+  // public.products") grew with the query until it pushed the label off its
+  // own row; the verdict is a chip beside the label now, and the tables it
+  // reads are a sentence in the box's own footer, where a long list can wrap.
+  const boxStatus = checking
+    ? 'Checking…'
+    : !sql.trim()
+      ? 'Paste the statement that answers the question.'
+      : check?.valid
+        ? tables.length > 0
+          ? `Reads ${tables.join(', ')}`
+          : 'Valid — it reads no tables.'
+        : check
+          // The guard's own sentence, in the footer of the box that produced
+          // it — one place for the refusal, attached to the statement. It used
+          // to be a chip saying *Rejected* and a red note underneath saying it
+          // again before getting to the reason.
+          ? check.issue || 'Rejected.'
+          : 'Not checked yet'
+
   return (
     <Modal
       title={template ? 'Edit template' : 'Teach a question'}
@@ -1397,106 +1422,172 @@ export function TemplateEditor({
       width={720}
       onClose={onClose}
       footer={
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <GhostButton onClick={onClose}>Cancel</GhostButton>
-          <PrimaryButton onClick={save} disabled={!ready.ready || saving}>
-            {saving && <Spinner />}
-            Save template
-          </PrimaryButton>
+        <div
+          style={{
+            display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap',
+          }}
+        >
+          {/* Why Save is off, beside the button that is off — not at the far
+              end of a scrolling form where the reader has to go looking for
+              the reason they were refused. */}
+          {ready.issue && (
+            <span
+              style={{
+                display: 'flex', alignItems: 'flex-start', gap: 7, flex: '1 1 240px',
+                minWidth: 0, fontSize: 11.5, lineHeight: 1.5, color: 'var(--amber)',
+              }}
+            >
+              <span style={{ display: 'flex', paddingTop: 1 }}>
+                <Icon.Alert size={13} />
+              </span>
+              {ready.issue}
+            </span>
+          )}
+          <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+            <GhostButton onClick={onClose}>Cancel</GhostButton>
+            <PrimaryButton onClick={save} disabled={!ready.ready || saving}>
+              {saving && <Spinner />}
+              Save template
+            </PrimaryButton>
+          </div>
         </div>
       }
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
         {error && <ErrorNote>{error}</ErrorNote>}
 
-        <Field label="Question" hint="Write it the way someone would ask it.">
+        <Field
+          label="Question"
+          hint={
+            question.includes('{')
+              ? undefined
+              : 'Write it the way someone would ask it. Wrap the parts that change in braces — {region}.'
+          }
+        >
           <TextInput
             value={question}
             dir={dirOf(question)}
             placeholder="revenue by month for {region} in {year}"
             onChange={(e) => setQuestion(e.target.value)}
           />
+          {question.includes('{') && params.length > 0 && (
+            <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 5 }}>
+              Matches questions like &ldquo;{previewQuestion(question, params)}&rdquo;
+            </div>
+          )}
         </Field>
-        {question.includes('{') && params.length > 0 && (
-          <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: -10 }}>
-            Matches questions like &ldquo;{previewQuestion(question, params)}&rdquo;
-          </div>
-        )}
 
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            <Label>SQL</Label>
-            <span style={{ flex: 1 }} />
-            <span aria-live="polite" style={{ fontSize: 11 }}>
-              {checking && <Spinner />}
-              {!checking && check?.valid && (
+        <Field
+          label="SQL"
+          status={
+            // The last verdict stays up while the next one is being fetched —
+            // the box's own footer is what says "Checking…", and a chip that
+            // vanished on every keystroke made the header flicker for the
+            // whole time somebody was typing a statement.
+            <span aria-live="polite" style={{ display: 'flex', alignItems: 'center' }}>
+              {check?.valid && (
                 <Chip tone="green">
-                  Valid · {check.referenced_tables.join(', ') || 'no tables'}
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                    <Dot color="var(--green)" />
+                    Valid
+                  </span>
                 </Chip>
               )}
-              {!checking && check && !check.valid && <Chip tone="red">Rejected</Chip>}
+              {check && !check.valid && <Chip tone="red">Rejected</Chip>}
             </span>
-          </div>
-          <TextArea
-            dir="ltr"
-            value={sql}
-            placeholder="SELECT …"
-            onChange={(e) => setSql(e.target.value)}
-            style={{ ...CODE, minHeight: 150, whiteSpace: 'pre-wrap' }}
-          />
-          {marked.some((s) => s.slot) && (
-            <pre
-              aria-hidden
-              style={{ ...CODE, margin: '6px 0 0', padding: 10, borderRadius: 8,
-                       whiteSpace: 'pre-wrap' }}
-            >
-              {marked.map((span, i) => (
-                <span
-                  key={i}
-                  style={
-                    span.slot
-                      ? {
-                          background:
-                            hovered === span.slot ? 'var(--accent)' : 'var(--accent-bg)',
-                          color: hovered === span.slot ? 'var(--bg)' : 'var(--accent)',
-                          borderRadius: 3,
-                        }
-                      : undefined
-                  }
-                >
-                  {span.text}
-                </span>
-              ))}
-            </pre>
-          )}
-          {check && !check.valid && check.issue && <ErrorNote>{check.issue}</ErrorNote>}
-        </div>
-
-        {proposals.length > 0 && (
-          <div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-              <Label>Parameters</Label>
-              <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
-                found by reading your SQL — nothing was sent
+          }
+        >
+          {/* The same shell the report and tile editors use: a statement and
+              the verdict on it are one object, so they share one border. */}
+          <div className="rm-sqlbox">
+            <TextArea
+              className="mono"
+              dir="ltr"
+              value={sql}
+              spellCheck={false}
+              placeholder="SELECT …"
+              onChange={(e) => setSql(e.target.value)}
+              // `.rm-sqlbox` owns the surface now, so the statement gives up
+              // the code background it used to draw for itself — two shades
+              // inside one border read as a box inside a box.
+              style={{
+                ...CODE, background: 'transparent', minHeight: 150,
+                whiteSpace: 'pre-wrap',
+              }}
+            />
+            <div className="rm-sqlbox-bar">
+              <span
+                className={`rm-sqlbox-hint${
+                  check && !check.valid && !checking ? ' is-error' : ''
+                }`}
+                style={{ whiteSpace: 'normal' }}
+              >
+                {checking && <Spinner size={11} />}
+                {boxStatus}
               </span>
             </div>
+          </div>
+          {marked.some((s) => s.slot) && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-faint)', marginBottom: 4 }}>
+                Stored like this — the highlighted values become parameters:
+              </div>
+              <pre
+                aria-hidden
+                style={{ ...CODE, margin: 0, padding: 10, borderRadius: 8,
+                         background: 'var(--code-bg)', whiteSpace: 'pre-wrap' }}
+              >
+                {marked.map((span, i) => (
+                  <span
+                    key={i}
+                    style={
+                      span.slot
+                        ? {
+                            background:
+                              hovered === span.slot ? 'var(--accent)' : 'var(--accent-bg)',
+                            color: hovered === span.slot ? 'var(--bg)' : 'var(--accent)',
+                            borderRadius: 3,
+                          }
+                        : undefined
+                    }
+                  >
+                    {span.text}
+                  </span>
+                ))}
+              </pre>
+            </div>
+          )}
+        </Field>
+
+        {proposals.length > 0 && (
+          <Field
+            label="Parameters"
+            hint="Found by reading your SQL — nothing was sent anywhere."
+            status={
+              <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+                {accepted.length} of {eligible.length} used
+              </span>
+            }
+          >
             <div
               style={{
                 border: '1px solid var(--border)', borderRadius: 8,
+                overflow: 'hidden',
                 display: 'flex', flexDirection: 'column',
               }}
             >
-              {proposals.map((proposal) => (
+              {proposals.map((proposal, index) => (
                 <Proposal
                   key={`${proposal.name}-${proposal.occurrence}`}
                   proposal={proposal}
+                  first={index === 0}
                   checked={accepted.includes(proposal.name)}
                   onToggle={() => toggle(proposal.name)}
                   onHover={setHovered}
                 />
               ))}
             </div>
-          </div>
+          </Field>
         )}
 
         <Field
@@ -1511,19 +1602,36 @@ export function TemplateEditor({
           />
         </Field>
 
-        <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12,
-                        color: 'var(--text-dim)' }}>
+        {/* An option with its consequence attached, rather than a bare
+            checkbox and a sentence the reader has to finish themselves. */}
+        <label
+          style={{
+            display: 'flex', gap: 10, alignItems: 'flex-start', cursor: 'pointer',
+            padding: '10px 12px', borderRadius: 8,
+            border: `1px solid ${benchmark ? 'var(--accent-border)' : 'var(--border)'}`,
+            background: benchmark ? 'var(--accent-bg)' : 'transparent',
+            transition: 'border-color .12s ease, background .12s ease',
+          }}
+        >
           <input
             type="checkbox"
             checked={benchmark}
             onChange={(e) => setBenchmark(e.target.checked)}
+            style={{ accentColor: 'var(--accent)', cursor: 'pointer', marginTop: 1 }}
           />
-          Use this to measure accuracy, not to answer questions
+          <span style={{ minWidth: 0 }}>
+            <span style={{ display: 'block', fontSize: 12.5, color: 'var(--text)' }}>
+              Use this to measure accuracy, not to answer questions
+            </span>
+            <span
+              style={{
+                display: 'block', fontSize: 11, color: 'var(--text-faint)', marginTop: 2,
+              }}
+            >
+              It joins the benchmark set. Questions are never answered from it.
+            </span>
+          </span>
         </label>
-
-        {ready.issue && (
-          <div style={{ fontSize: 12, color: 'var(--amber)' }}>{ready.issue}</div>
-        )}
       </div>
     </Modal>
   )
@@ -1537,21 +1645,32 @@ export function TemplateEditor({
  * it, and the curator occasionally knows better.
  */
 function Proposal({
-  proposal, checked, onToggle, onHover,
+  proposal, first, checked, onToggle, onHover,
 }: {
   proposal: ParamProposal
+  /** No rule above the first row: the container already draws that edge. */
+  first: boolean
   checked: boolean
   onToggle: () => void
   onHover: (name: string | null) => void
 }) {
+  const [hover, setHover] = useState(false)
   return (
     <label
-      onMouseEnter={() => onHover(proposal.name)}
-      onMouseLeave={() => onHover(null)}
+      onMouseEnter={() => {
+        setHover(true)
+        onHover(proposal.name)
+      }}
+      onMouseLeave={() => {
+        setHover(false)
+        onHover(null)
+      }}
       style={{
-        display: 'flex', gap: 10, alignItems: 'baseline', padding: '8px 10px',
-        borderTop: '1px solid var(--border)', fontSize: 12,
-        opacity: proposal.eligible ? 1 : 0.75,
+        display: 'flex', gap: 9, alignItems: 'center', padding: '9px 11px',
+        borderTop: first ? 'none' : '1px solid var(--border)', fontSize: 12,
+        cursor: proposal.eligible ? 'pointer' : 'default',
+        background: hover && proposal.eligible ? 'var(--panel-alt)' : 'transparent',
+        transition: 'background .12s ease',
       }}
     >
       <input
@@ -1559,15 +1678,41 @@ function Proposal({
         checked={checked}
         disabled={!proposal.eligible}
         onChange={onToggle}
+        style={{
+          accentColor: 'var(--accent)',
+          cursor: proposal.eligible ? 'pointer' : 'default',
+          flexShrink: 0,
+        }}
       />
-      <code style={{ ...CODE, background: 'var(--accent-bg)', color: 'var(--accent)',
-                     padding: '1px 5px', borderRadius: 3 }}>
-        {proposal.literal}
-      </code>
-      <span aria-hidden style={{ color: 'var(--text-faint)' }}>→</span>
-      <code style={{ ...CODE, background: 'none', padding: 0 }}>:{proposal.name}</code>
-      <span style={{ color: 'var(--text-faint)' }}>{proposal.type}</span>
-      <span style={{ flex: 1, color: 'var(--text-dim)', minWidth: 0 }}>
+      {/* The substitution, read left to right as one phrase: this literal
+          becomes this name. The arrow is the only thing between them. */}
+      <span
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0,
+          opacity: proposal.eligible ? 1 : 0.6,
+        }}
+      >
+        <code style={{ ...CODE, background: 'var(--accent-bg)', color: 'var(--accent)',
+                       padding: '1px 5px', borderRadius: 3, maxWidth: 160,
+                       overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {proposal.literal}
+        </code>
+        <Icon.ArrowRight size={12} stroke="var(--text-faint)" />
+        <code style={{ ...CODE, background: 'none', padding: 0,
+                       color: 'var(--text)' }}>
+          :{proposal.name}
+        </code>
+        <Chip small>{proposal.type}</Chip>
+      </span>
+      {/* A refusal is rendered rather than hidden, unticked and with its reason
+          beside it — showing the rejected candidate teaches the rule better
+          than hiding it, and the curator occasionally knows better. */}
+      <span
+        style={{
+          flex: 1, minWidth: 0, textAlign: 'right', fontSize: 11.5,
+          color: proposal.eligible ? 'var(--text-faint)' : 'var(--amber)',
+        }}
+      >
         {proposal.comment || proposal.reason}
       </span>
     </label>

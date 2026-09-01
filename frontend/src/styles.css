@@ -1284,6 +1284,11 @@ code, pre, .mono {
   min-width: 0;
 }
 .rm-sqlbox-hint.is-stale { color: var(--amber); }
+/* A refusal, not a warning. The guard's own sentence lands in this bar when a
+   statement is rejected, and amber on the light theme's paper is the one place
+   this footer drops under 4.5:1 — the message that matters most is the one it
+   cannot afford to whisper. */
+.rm-sqlbox-hint.is-error { color: var(--red); }
 
 /* A shortcut rendered as a key, not as prose. Two characters of chrome that
    teach the faster path without spending a sentence on it. */
