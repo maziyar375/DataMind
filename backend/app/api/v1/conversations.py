@@ -37,6 +37,7 @@ from app.infra.db.models import (
     AnswerFeedback,
     Artifact,
     Conversation,
+    DatabaseConnection,
     GeneratedQuery,
     KnowledgeTemplateHit,
     KnowledgeTemplateRow,
@@ -45,8 +46,10 @@ from app.infra.db.models import (
     RunEventRow,
     RunStep,
     SemanticLayerRow,
+    User,
 )
 from app.infra.events.bus import event_bus
+from app.services import audit
 from app.services.knowledge_service import FeedbackService, record_hit
 from app.services.run_service import RunService
 
@@ -394,7 +397,42 @@ async def leave_feedback(
     row = await FeedbackService(db, settings).record(
         run, user_id=ctx.user_id, verdict=payload.verdict, comment=payload.comment
     )
-    return AnswerFeedbackRead.model_validate(row)
+    # Provenance for the flag itself, not only for the curation that answers
+    # it. Who reported a wrong answer, and when, is exactly the kind of thing a
+    # store of business logic has to be able to show afterwards — and this is
+    # the one write in the loop that any signed-in user may make.
+    await audit.record(
+        db, ctx,
+        action=audit.FEEDBACK_RECORDED,
+        resource_type=audit.REVIEW,
+        resource_id=row.id,
+        detail={"run_id": str(run_id), "verdict": row.verdict, "state": row.state},
+    )
+    out = AnswerFeedbackRead.model_validate(row)
+    # Where it went, named by the server. §4.6 wants the control to say the
+    # flag reaches whoever owns the connection; a name resolved here stays true
+    # when ownership moves, and prose baked into the SPA would not.
+    out.routed_to = await _queue_owner(db, row.connection_id)
+    return out
+
+
+async def _queue_owner(db: DbDep, connection_id: UUID | None) -> str:
+    """The display name of the person a flag is routed to.
+
+    The connection's owner. That is the whole of the routing rule today, and it
+    is honest about its limitation rather than pretending: until
+    [mvp2 §D1](../../../docs/mvp2-plan.md) gives a connection an explicit grant
+    list, its creator is the only person who can reach its queue at all, so
+    "the owner" and "whoever can act on this" are the same person by
+    construction rather than by policy.
+    """
+    if connection_id is None:
+        return ""
+    connection = await db.get(DatabaseConnection, connection_id)
+    if connection is None:
+        return ""
+    owner = await db.get(User, connection.owner_id)
+    return (owner.display_name or "") if owner is not None else ""
 
 
 @router.post("/runs/{run_id}/override", response_model=RunKnowledge)

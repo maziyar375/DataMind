@@ -59,6 +59,7 @@ from app.knowledge import (
     TemplateStatus,
     slots,
 )
+from app.services import audit
 from app.services.benchmark_service import (
     MIN_SET_SIZE,
     BenchmarkService,
@@ -91,10 +92,17 @@ async def _owned(db, connection_id: UUID, ctx) -> DatabaseConnection:
     return connection
 
 
-def _require_curator(ctx, settings) -> None:
-    if not can_curate(ctx, settings):
+def _require_curator(ctx, settings, connection) -> None:
+    """Administrator, or the owner of this connection. Never `is_admin` alone.
+
+    The connection is passed rather than looked up because every caller has
+    just resolved it through `_owned()` — and because `can_curate` with no
+    resource asks the strict question, which is the wrong one here.
+    """
+    if not can_curate(ctx, settings, connection):
         raise ForbiddenError(
-            "Only administrators can add templates on this connection."
+            "Only administrators and the owner of this connection can change "
+            "what it has been taught."
         )
 
 
@@ -141,7 +149,7 @@ async def list_templates(
         templates=[KnowledgeTemplateRead.model_validate(r) for r in rows],
         schema_version=current or snapshot_version,
         schema_synced=bool(current),
-        can_curate=can_curate(ctx, settings),
+        can_curate=can_curate(ctx, settings, connection),
         stale_ids=stale,
         health=await _health(service, connection),
     )
@@ -179,9 +187,28 @@ async def revalidate_store(
     something every reader of a connection should be able to start.
     """
     connection = await _owned(db, connection_id, ctx)
-    _require_curator(ctx, settings)
+    _require_curator(ctx, settings, connection)
 
     result = await run_maintenance(db, settings, connection)
+    # A sweep writes template statuses without anybody naming a template, and
+    # the conflict half runs statements against the customer's database. Both
+    # are things somebody should be able to trace back to a person afterwards.
+    await audit.record(
+        db, ctx,
+        action=audit.STORE_REVALIDATED,
+        resource_type=audit.CONNECTION,
+        resource_id=connection.id,
+        detail={
+            "checked": result.staleness.checked,
+            "staled": len(result.staleness.staled),
+            "revived": len(result.staleness.revived),
+            "conflicted": len(result.conflicts.conflicted),
+            "cleared": len(result.conflicts.cleared),
+            "pairs_executed": result.conflicts.pairs_executed,
+            "conflicts_checked": result.conflicts_checked,
+            "indexed": result.index.embedded,
+        },
+    )
     return MaintenanceRead(
         checked=result.staleness.checked,
         staled=result.staleness.staled,
@@ -238,10 +265,24 @@ async def set_embedding_search(
     not.
     """
     connection = await _owned(db, connection_id, ctx)
-    _require_curator(ctx, settings)
+    _require_curator(ctx, settings, connection)
 
     result, message = await set_embeddings(
         db, settings, connection, enabled=payload.enabled, model=payload.model
+    )
+    await audit.record(
+        db, ctx,
+        action=audit.EMBEDDINGS_CHANGED,
+        resource_type=audit.CONNECTION,
+        resource_id=connection.id,
+        outcome=audit.SUCCESS if not (message or result.error) else audit.FAILED,
+        detail={
+            "enabled": payload.enabled,
+            "model": connection.embedding_model,
+            "dimension": connection.embedding_dimension,
+            "indexed": result.embedded,
+            "reason": message or result.error,
+        },
     )
     status = await _embedding_status(db, connection)
     status.message = message or result.error
@@ -282,8 +323,10 @@ async def capabilities(
     connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
 ) -> KnowledgeCapabilities:
     """What this reader may do here, so the UI hides rather than disables."""
-    await _owned(db, connection_id, ctx)
-    return KnowledgeCapabilities(can_curate=can_curate(ctx, settings))
+    connection = await _owned(db, connection_id, ctx)
+    return KnowledgeCapabilities(
+        can_curate=can_curate(ctx, settings, connection)
+    )
 
 
 @router.post("/templates/check", response_model=TemplateCheckResult)
@@ -334,7 +377,7 @@ async def create_template(
     settings: SettingsDep,
 ) -> KnowledgeTemplateRead:
     connection = await _owned(db, connection_id, ctx)
-    _require_curator(ctx, settings)
+    _require_curator(ctx, settings, connection)
 
     source = TemplateSource(payload.source)
     row = await KnowledgeService(db, settings).create(
@@ -347,6 +390,13 @@ async def create_template(
         source=source,
         literal_provenance=_provenance(source),
         role=TemplateRole(payload.role),
+    )
+    await audit.record(
+        db, ctx,
+        action=audit.TEMPLATE_CREATED,
+        resource_type=audit.TEMPLATE,
+        resource_id=row.id,
+        detail={"connection_id": str(connection.id), "source": str(source)},
     )
     return KnowledgeTemplateRead.model_validate(row)
 
@@ -361,7 +411,7 @@ async def update_template(
     settings: SettingsDep,
 ) -> KnowledgeTemplateRead:
     connection = await _owned(db, connection_id, ctx)
-    _require_curator(ctx, settings)
+    _require_curator(ctx, settings, connection)
 
     row = await KnowledgeService(db, settings).update(
         connection,
@@ -373,6 +423,19 @@ async def update_template(
         note=payload.note,
         role=None if payload.role is None else TemplateRole(payload.role),
         status=None if payload.status is None else TemplateStatus(payload.status),
+    )
+    # Which *fields* were sent, not what they were set to — the row's own
+    # columns carry the values, and rule 3 keeps question text and SQL out of
+    # a table that would otherwise become a second copy of the store.
+    await audit.record(
+        db, ctx,
+        action=audit.TEMPLATE_UPDATED,
+        resource_type=audit.TEMPLATE,
+        resource_id=row.id,
+        detail={
+            "connection_id": str(connection.id),
+            "fields": sorted(payload.model_dump(exclude_none=True)),
+        },
     )
     return KnowledgeTemplateRead.model_validate(row)
 
@@ -391,8 +454,15 @@ async def archive_template(
     list still shows it under the archive, and returning it says so.
     """
     connection = await _owned(db, connection_id, ctx)
-    _require_curator(ctx, settings)
+    _require_curator(ctx, settings, connection)
     row = await KnowledgeService(db, settings).archive(connection, template_id)
+    await audit.record(
+        db, ctx,
+        action=audit.TEMPLATE_ARCHIVED,
+        resource_type=audit.TEMPLATE,
+        resource_id=row.id,
+        detail={"connection_id": str(connection.id)},
+    )
     return KnowledgeTemplateRead.model_validate(row)
 
 
@@ -416,7 +486,7 @@ async def list_benchmarks(
 
     return BenchmarkOverview(
         sets=sets,
-        can_curate=can_curate(ctx, settings),
+        can_curate=can_curate(ctx, settings, connection),
         candidates=len(await service.candidates(connection)),
         min_set_size=MIN_SET_SIZE,
     )
@@ -459,7 +529,7 @@ async def create_benchmark(
     changes what the ask path may use.
     """
     connection = await _owned(db, connection_id, ctx)
-    _require_curator(ctx, settings)
+    _require_curator(ctx, settings, connection)
 
     service = BenchmarkService(db, settings)
     row = await service.create_set(
@@ -469,6 +539,20 @@ async def create_benchmark(
         template_ids=payload.template_ids,
         description=payload.description,
         held_out_fraction=payload.held_out_fraction,
+    )
+    # Creating a set takes questions *out* of the ask path. That is a change to
+    # what the product will answer from, made by a person, and it belongs in
+    # the log for the same reason archiving a template does.
+    await audit.record(
+        db, ctx,
+        action=audit.BENCHMARK_CREATED,
+        resource_type=audit.BENCHMARK_SET,
+        resource_id=row.id,
+        detail={
+            "connection_id": str(connection.id),
+            "members": len(payload.template_ids),
+            "held_out_fraction": payload.held_out_fraction,
+        },
     )
     return await _read_set(service, row)
 
@@ -488,8 +572,18 @@ async def delete_benchmark(
     from is returned intact and `RETRIEVABLE`.
     """
     connection = await _owned(db, connection_id, ctx)
-    _require_curator(ctx, settings)
-    await BenchmarkService(db, settings).release(connection, set_id)
+    _require_curator(ctx, settings, connection)
+    released = await BenchmarkService(db, settings).release(connection, set_id)
+    await audit.record(
+        db, ctx,
+        action=audit.BENCHMARK_DELETED,
+        resource_type=audit.BENCHMARK_SET,
+        resource_id=set_id,
+        detail={
+            "connection_id": str(connection.id),
+            "returned_to_retrievable": released,
+        },
+    )
 
 
 @router.post(
@@ -513,7 +607,7 @@ async def run_benchmark(
     than a request that never came back.
     """
     connection = await _owned(db, connection_id, ctx)
-    _require_curator(ctx, settings)
+    _require_curator(ctx, settings, connection)
 
     service = BenchmarkService(db, settings)
     set_row = await service.get_set(connection, set_id)
@@ -521,6 +615,13 @@ async def run_benchmark(
         connection, set_row,
         actor_id=ctx.user_id,
         llm_config_id=llm_config_id or await _default_llm_config(db, ctx),
+    )
+    await audit.record(
+        db, ctx,
+        action=audit.BENCHMARK_RUN_QUEUED,
+        resource_type=audit.BENCHMARK_RUN,
+        resource_id=run.id,
+        detail={"connection_id": str(connection.id), "set_id": str(set_id)},
     )
     await db.commit()
 
@@ -633,7 +734,7 @@ async def resolve_review(
     phase has shipped a suggestion box.
     """
     connection = await _owned(db, connection_id, ctx)
-    _require_curator(ctx, settings)
+    _require_curator(ctx, settings, connection)
 
     if payload.template_id is not None:
         # It must be a template on *this* connection: a resolution pointing at
@@ -647,6 +748,17 @@ async def resolve_review(
         template_id=payload.template_id,
         note=payload.note,
         dismiss=payload.dismiss,
+    )
+    await audit.record(
+        db, ctx,
+        action=audit.REVIEW_RESOLVED,
+        resource_type=audit.REVIEW,
+        resource_id=row.id,
+        detail={
+            "connection_id": str(connection.id),
+            "state": row.state,
+            "became_template": str(payload.template_id or ""),
+        },
     )
     return AnswerFeedbackRead.model_validate(row)
 

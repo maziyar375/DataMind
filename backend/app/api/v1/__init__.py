@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    audit,
     auth,
     connections,
     conversations,
@@ -16,6 +17,9 @@ from app.api.v1 import (
 api_router = APIRouter()
 api_router.include_router(auth.router)
 api_router.include_router(users.router)
+# Administrators only, and a peer of `users` for the same reason: both are
+# about people rather than about a connection's data.
+api_router.include_router(audit.router)
 api_router.include_router(llm_configs.router)
 api_router.include_router(connections.router)
 # Before the connections router would also work; after is fine because the

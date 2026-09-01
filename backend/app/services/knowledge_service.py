@@ -348,6 +348,13 @@ class KnowledgeService:
             row.status_reason = ""
 
         await self._flush_unique(next_question)
+        # `updated_at` carries `onupdate=func.now()`, so the flush that wrote
+        # this row **expired** it: reading the attribute afterwards needs a
+        # database round trip, and doing that lazily from a sync context is
+        # `MissingGreenlet`. Every caller serialises the row it gets back, so
+        # the refresh belongs here rather than at each call site — see the
+        # gotcha in CLAUDE.md, which this method was quietly violating.
+        await self._db.refresh(row)
         return row
 
     async def archive(
@@ -363,6 +370,9 @@ class KnowledgeService:
         row.status = str(TemplateStatus.ARCHIVED)
         row.status_reason = "Archived by a curator."
         await self._db.flush()
+        # Same reason as `update`: the flush expired `updated_at`, and the
+        # caller is about to read it.
+        await self._db.refresh(row)
         return row
 
     # ── re-validation (reports; does not persist a verdict) ──────────────

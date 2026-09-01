@@ -1024,7 +1024,15 @@ function FeedbackFooter({
         ) : given.verdict === 'CORRECT' ? (
           <>Thanks — noted as correct.</>
         ) : (
-          <>Thanks — this is in the review queue.</>
+          // Whose queue, when the server named one. §4.6 asks the control to
+          // say a flag goes to whoever owns the connection; the name comes
+          // from the server so it stays true when ownership moves, where
+          // prose baked in here would quietly start lying.
+          given.routed_to ? (
+            <>Thanks — this is in {given.routed_to}&rsquo;s review queue.</>
+          ) : (
+            <>Thanks — this is in the review queue.</>
+          )
         )}
       </div>
     )

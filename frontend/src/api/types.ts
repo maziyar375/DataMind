@@ -528,6 +528,10 @@ export interface AnswerFeedback {
   became_template: string | null
   resolved_at: string | null
   created_at: string
+  /** Whose queue this landed in — the connection's owner, named by the server
+   *  so the acknowledgement stays true when ownership moves. Empty falls back
+   *  to the generic sentence rather than to a blank. */
+  routed_to: string
 }
 
 /** One flag in the curator's queue, with the evidence beside it. */

@@ -774,10 +774,11 @@ shapes. That is the class this addresses.
 ## Knowledge templates
 
 > The store the learning loop fills, and the plan behind it:
-> **[docs/learning-loop-plan.md](docs/learning-loop-plan.md)**. Phases 1–7 are
+> **[docs/learning-loop-plan.md](docs/learning-loop-plan.md)**. Phases 1–8 are
 > in the tree: the store, the match and short-circuit, feedback and the
 > backlog, the sweep that keeps the store from rotting, few-shot injection
-> (shipped **off**), the in-product benchmark, and the embedding matcher.
+> (shipped **off**), the in-product benchmark, the embedding matcher (also
+> **off** until somebody points it at a provider), and the audit trail.
 
 The semantic layer says what the schema *means*. A knowledge template is the
 next thing along: **a question somebody already answered correctly**, stored so
@@ -823,9 +824,16 @@ edited in Data sources → Knowledge.
   `app/knowledge/models.py`, and [docs/security.md](docs/security.md) for why.
   Hand-authored literals travel with structure like a catalog comment; ones a
   model chose are gated like sample values, at *render* time.
-- **Curation is open to any signed-in user** and gated by exactly one function,
-  `services.policy.can_curate`. `curation_admin_only` flips it; no endpoint
-  checks `ctx.is_admin` directly, and a test asserts that on the parse.
+- **Curation is gated by exactly one function**, `services.policy.can_curate`,
+  and no endpoint checks `ctx.is_admin` directly — a test asserts that on the
+  parse. Phase 8 turned `curation_admin_only` **on by default**, and the rule
+  it means is **administrator *or* the owner of the connection**. The second
+  half is what makes the flip correct rather than a lockout: `_owned()` already
+  scopes every knowledge endpoint to `owner_id == ctx.user_id`, so admin-only
+  alone would have meant *the person who owns a connection cannot curate their
+  own store*. Nobody can observe a difference today; it starts mattering the
+  moment a connection can be **shared** (mvp2 §D1), which is why it is on
+  before sharing exists rather than after.
 - **`app/knowledge/` is self-contained** on the same terms as `sqlguard`,
   `semantic` and `reports` — no fastapi, sqlalchemy, litellm, `app.infra` or
   `app.services`. It *may* import `app.sqlguard`: validating a template **is**
@@ -1055,6 +1063,42 @@ node, both thresholds, the binder, the short-circuit and the badge are untouched
 - **`--matcher lexical|embedding` is how it gets measured**, and the report
   prints retrieval *and* execution accuracy on one line with the reason:
   FK-neighbour expansion once moved recall 70% → 86% with **flat** accuracy.
+
+**Provenance — who did what, and whose queue a flag lands in (Phase 8).**
+`audit_logs` has been in the schema since migration `0001` with **nothing
+writing to it**; mvp2 §D4 calls turning it on the best ratio in that document,
+because a product whose positioning is *"you decide what leaves your database"*
+could not prove what left.
+
+- **Every curation write leaves a row** — template created / updated /
+  archived, a store sweep, an embedding switch, a review resolved, a benchmark
+  set built, deleted or run, and a flag recorded. A test asserts each of those
+  route functions calls `audit.record`, on the parse: one unlogged write is
+  enough to make the log untrustworthy, because a reader cannot tell a gap from
+  a quiet week.
+- **Three rules in `services/audit.py`, and each is how this kind of log
+  rots.** (1) The row joins the caller's transaction and is never flushed on
+  its own — a log that commits while the action rolls back invents history.
+  (2) Failing to log never fails the action; the **opposite** posture to the
+  guard's, and right for the same reason the guard's is right: this observes,
+  it does not authorise. (3) `detail` carries identifiers and counts, **never**
+  SQL, question text or result rows — enforced in one function rather than
+  trusted at ten call sites, because a log that became a second copy of the
+  store is a second thing to secure.
+- **`GET /audit` is administrators only.** An audit log is a record *about
+  people*; a curator needs to change their connection's knowledge and has no
+  operational need to read who else did what, and from where. The actor is a
+  display name, never an address — the review queue's rule.
+- **`actor_ip` reads `X-Real-IP`, never `X-Forwarded-For`.** The second is
+  client-settable, and a log holding an address the actor chose is worse than
+  one holding none: the first is wrong and looks authoritative.
+- **A flag is routed to the connection's owner, and the server says whose queue
+  it went to.** `AnswerFeedbackRead.routed_to` is a display name resolved at
+  write time, so the acknowledgement stays true when ownership moves — prose
+  baked into the SPA would quietly start lying. Until mvp2 §D1 gives a
+  connection an explicit grant list, "the owner" and "whoever can act on this"
+  are the same person by construction, which is honest about the limitation
+  rather than pretending.
 
 ---
 

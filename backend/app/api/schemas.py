@@ -491,6 +491,30 @@ class MaintenanceRead(BaseModel):
     index_error: str = ""
 
 
+# ── the audit log (Phase 8) ──────────────────────────────────────────────
+class AuditEntry(BaseModel):
+    """One audited action, as an administrator reads it.
+
+    No `id` and no `actor_user_id`: this is a record *about people*, and the
+    two questions it exists to answer — who has been changing templates, and
+    what happened to this one — are answered by a display name and a resource
+    id. A row identifier would only be useful for editing, and an audit log
+    that can be edited is not one.
+    """
+
+    at: datetime
+    #: A name, never an address. The same rule the review queue follows.
+    actor: str = ""
+    actor_ip: str = ""
+    action: str
+    resource_type: str = ""
+    resource_id: UUID | None = None
+    outcome: str
+    #: Identifiers and counts. Never SQL, question text or result rows — see
+    #: `services/audit.py`, which enforces that rather than trusting it.
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+
 # ── the embedding matcher (Phase 7) ──────────────────────────────────────
 class EmbeddingWrite(BaseModel):
     """Turn embedding search on or off for a connection.
@@ -747,6 +771,13 @@ class AnswerFeedbackRead(BaseModel):
     became_template: UUID | None = None
     resolved_at: datetime | None = None
     created_at: datetime
+    #: Whose queue this landed in — the connection's owner. §4.6 asks the
+    #: *Ask for review* control to say "it goes to whoever owns the
+    #: connection", and a name the server returns is a promise that stays true
+    #: when ownership changes, where hardcoded prose in the SPA would not.
+    #: Empty when the owner cannot be named, which reads as the generic
+    #: sentence rather than as a blank.
+    routed_to: str = ""
 
 
 class ReviewRead(BaseModel):

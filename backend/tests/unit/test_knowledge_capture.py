@@ -283,16 +283,24 @@ def test_a_verdict_this_system_does_not_record_is_refused(client: Any) -> None:
 def test_feedback_is_open_to_any_signed_in_user() -> None:
     """The headline claim of this phase's permission model.
 
-    Not gated by `can_curate`, deliberately — even when curation is closed.
+    Not gated by `can_curate`, deliberately — even with `curation_admin_only`
+    on, which Phase 8 made the default. Reporting a wrong answer and being
+    allowed to repair it are different rights, and gating the first on the
+    second loses exactly the reports worth having.
     """
     db = FakeDb()
     member = _client(db, admin_only=True)
     assert member.post(f"{RUN}/feedback", json={"verdict": "WRONG"}).status_code == 200
-    # …while resolving a flag is still a curator's act.
+
+    # …while *resolving* a flag stays a curator's act. A stranger does not get
+    # 403 but 404: the queue is routed to the connection's owner, so somebody
+    # else's queue is not a thing they are refused — it is a thing they are
+    # never told about.
     flag = db.feedback[0]
-    assert member.post(
+    stranger = _client(db, user=OTHER, admin_only=True)
+    assert stranger.post(
         f"{KNOWLEDGE}/reviews/{flag.id}/resolve", json={"dismiss": True, "note": "no"}
-    ).status_code == 403
+    ).status_code == 404
 
 
 def test_another_users_run_cannot_be_flagged() -> None:

@@ -60,7 +60,29 @@ async def get_ctx(
         email=who.email,
         role=who.role,
         correlation_id=get_correlation_id(),
+        actor_ip=_client_ip(request),
     )
+
+
+def _client_ip(request: Request) -> str:
+    """The caller's address, for the audit log.
+
+    `X-Real-IP` first, because this repo's own balancer
+    (`scripts/nginx-replicas.conf`) sets it and without it every audited action
+    behind a proxy is attributed to the proxy. **`X-Forwarded-For` is
+    deliberately not read**: it is a client-settable header, and an audit log
+    holding an address the actor chose is worse than one holding no address —
+    the second is silent, the first is wrong and looks authoritative.
+
+    That means a deployment behind a proxy that does *not* set `X-Real-IP`
+    records the proxy's address. Honest, and fixable in one line of that
+    proxy's config.
+    """
+    header = (request.headers.get("x-real-ip") or "").strip()
+    if header:
+        return header[:64]
+    client = request.client
+    return (client.host if client else "")[:64]
 
 
 CtxDep = Annotated[RequestContext, Depends(get_ctx)]

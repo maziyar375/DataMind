@@ -268,23 +268,29 @@ class BenchmarkService:
 
     async def release(
         self, connection: DatabaseConnection, set_id: UUID
-    ) -> BenchmarkSet:
-        """Delete a set and give its questions back to the ask path.
+    ) -> int:
+        """Delete a set and give its questions back. Returns how many returned.
 
         Deletes the set row (its runs cascade) and returns every member to
         `RETRIEVABLE`. A template that was archived or went stale while it was
         in the set is left where it is — this restores a *role*, and it is not
         the place to overrule a curator or the staleness sweep.
+
+        The count rather than the deleted row, because the count is the fact
+        anybody wants afterwards: *how many questions started answering again*.
+        A caller holding a row it has just deleted has nothing to do with it.
         """
         set_row = await self.get_set(connection, set_id)
+        restored = 0
         for row in await self._members(connection, list(set_row.template_ids or [])):
             if row.role in (
                 str(TemplateRole.HELD_OUT), str(TemplateRole.BENCHMARK_ONLY)
             ):
                 row.role = str(TemplateRole.RETRIEVABLE)
+                restored += 1
         await self._db.delete(set_row)
         await self._db.flush()
-        return set_row
+        return restored
 
     async def queue_run(
         self,

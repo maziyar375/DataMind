@@ -110,6 +110,7 @@ class FakeDb:
         self.snapshot = snapshot
         self.rows: list[KnowledgeTemplateRow] = []
         self.flushes = 0
+        self.refreshes = 0
 
     async def execute(self, statement: Any) -> Any:
         selected = statement.column_descriptions[0]
@@ -148,6 +149,20 @@ class FakeDb:
 
     async def flush(self) -> None:
         self.flushes += 1
+
+    async def refresh(self, obj: Any) -> None:
+        """Modelled, because not modelling it hid a real bug for six phases.
+
+        `KnowledgeTemplateRow.updated_at` carries `onupdate=func.now()`, so a
+        flush that UPDATEs the row expires it and reading it afterwards needs a
+        round trip — `MissingGreenlet` against a real async session. `PATCH`
+        and `DELETE` on a template returned **500 in production** the whole
+        time, and every test here passed, because this fake never expired
+        anything. The refresh is what a real session does; here it is what a
+        real session's *timing* does, which is enough to keep the call honest.
+        """
+        self.refreshes += 1
+        obj.updated_at = utcnow()
 
     async def get(self, _model: Any, key: UUID) -> Any:
         return next((r for r in self.rows if r.id == key), None)
@@ -469,25 +484,57 @@ def test_any_signed_in_user_may_curate_by_default(
 
 
 @pytest.mark.parametrize("method,path,payload", WRITES)
-def test_the_flag_makes_every_write_admin_only(
+def test_the_owner_keeps_curating_when_the_flag_is_on(
     method: str, path: str, payload: dict[str, Any] | None
 ) -> None:
-    """One env var, and every write path moves — because they all ask the same
-    function. No endpoint here checks `ctx.is_admin` directly."""
-    seeded = _client(FakeDb(_connection(), _snapshot()))
+    """Phase 8's flip is admin **or owner**, and this is why the second half.
+
+    `curation_admin_only` defaults to true now. Without the owner clause it
+    would mean *the person who owns a connection cannot curate their own
+    store*, because `_owned()` already scopes every endpoint here to
+    `owner_id == ctx.user_id` and an administrator cannot reach somebody
+    else's connection either. That is a lockout, not a security posture.
+    """
+    seeded = _client(FakeDb(_connection(), _snapshot()), admin_only=True)
     created = _teach(seeded, question="seed {region}")
 
-    member = _client(seeded.db, admin_only=True)
-    call = getattr(member, method)
+    call = getattr(seeded, method)
     url = BASE + path.format(id=created["id"])
     response = call(url, json=payload) if payload else call(url)
-    assert response.status_code == 403
-    assert "administrator" in response.json()["detail"]
-
-    admin = _client(seeded.db, admin_only=True, admin=True)
-    call = getattr(admin, method)
-    response = call(url, json=payload) if payload else call(url)
     assert response.status_code in (200, 201), response.text
+
+
+@pytest.mark.parametrize("method,path,payload", WRITES)
+def test_a_stranger_never_reaches_a_write_at_all(
+    method: str, path: str, payload: dict[str, Any] | None
+) -> None:
+    """Ownership is checked *before* curation is asked about.
+
+    So the answer for somebody else's connection is 404 rather than 403: not
+    being told a connection exists is the stronger of the two, and it is the
+    posture `_owned()` has taken since Phase 1.
+    """
+    seeded = _client(FakeDb(_connection(), _snapshot()), admin_only=True)
+    created = _teach(seeded, question="seed {region}")
+
+    stranger = _client(seeded.db, user=uuid4(), admin_only=True)
+    call = getattr(stranger, method)
+    url = BASE + path.format(id=created["id"])
+    response = call(url, json=payload) if payload else call(url)
+    assert response.status_code == 404
+
+
+def test_an_administrator_curates_a_connection_they_own() -> None:
+    """The other half of the rule, and the one that will matter after sharing.
+
+    Today an admin can only reach connections they own, so this is the same
+    path as the owner's. It is asserted separately because the *reason* differs
+    — and when mvp2 §D1 lands, one of these two clauses is what keeps a shared
+    reader from rewriting somebody's store.
+    """
+    admin = _client(FakeDb(_connection(), _snapshot()), admin_only=True, admin=True)
+    created = _teach(admin, question="seed {region}")
+    assert admin.patch(f"{BASE}/templates/{created['id']}", json={"note": "x"}).status_code == 200
 
 
 def test_reading_stays_open_when_curation_is_closed() -> None:
@@ -500,7 +547,6 @@ def test_reading_stays_open_when_curation_is_closed() -> None:
     member = _client(seeded.db, admin_only=True)
     listing = member.get(f"{BASE}/templates")
     assert listing.status_code == 200 and len(listing.json()["templates"]) == 1
-    assert listing.json()["can_curate"] is False
     assert member.post(f"{BASE}/templates/check", json={"sql": GOOD_SQL}).status_code == 200
 
 
@@ -510,8 +556,41 @@ def test_capabilities_says_which_buttons_should_exist() -> None:
     open_client = _client(FakeDb(_connection(), _snapshot()))
     assert open_client.get(f"{BASE}/capabilities").json() == {"can_curate": True}
 
+    # And with the flag on, the owner is still a curator — the capability
+    # follows the same rule the write paths do, or the UI would hide a button
+    # the server would have honoured.
     closed = _client(FakeDb(_connection(), _snapshot()), admin_only=True)
-    assert closed.get(f"{BASE}/capabilities").json() == {"can_curate": False}
+    assert closed.get(f"{BASE}/capabilities").json() == {"can_curate": True}
+
+
+def test_a_write_that_updates_a_row_refreshes_it_before_serialising() -> None:
+    """The regression test for a 500 that shipped in Phase 1 and lived to 7.
+
+    `KnowledgeTemplateRow.updated_at` is `onupdate=func.now()`, so the flush
+    that writes an UPDATE **expires** the attribute: reading it afterwards
+    needs a database round trip, and doing that lazily from a sync context
+    raises `MissingGreenlet` against a real async session. `PATCH` and `DELETE`
+    on a template therefore returned 500 in production — every time, from the
+    day they shipped — while every test here passed, because the fake session
+    never expired anything.
+
+    It is CLAUDE.md's own documented gotcha, found by exercising the endpoints
+    over HTTP against a real database rather than by reading the code. The fake
+    models `refresh` now; this asserts the call is made, so removing it fails
+    here instead of in somebody's browser.
+    """
+    client = _client(FakeDb(_connection(), _snapshot()))
+    created = _teach(client, question="refresh {region}")
+
+    before = client.db.refreshes
+    assert client.patch(
+        f"{BASE}/templates/{created['id']}", json={"note": "edited"}
+    ).status_code == 200
+    assert client.db.refreshes > before, "PATCH serialised a row it did not refresh"
+
+    before = client.db.refreshes
+    assert client.delete(f"{BASE}/templates/{created['id']}").status_code == 200
+    assert client.db.refreshes > before, "DELETE serialised a row it did not refresh"
 
 
 def test_no_knowledge_endpoint_checks_is_admin_directly() -> None:

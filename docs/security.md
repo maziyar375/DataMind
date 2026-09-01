@@ -697,6 +697,51 @@ write down if this document does not.
 `tests/unit/test_knowledge_embeddings.py` asserts the fallback in every one of
 those forms, and that `app/knowledge/embed.py` imports no infrastructure.
 
+### 4.8 The audit log, and what it deliberately does not hold
+
+`audit_logs` was defined in migration `0001` and **nothing wrote to it** until
+Phase 8. That was a real hole in this document's own claims: a product whose
+second section is *"two things are never left to the model"*, and which shows
+the disclosure policy at ask time, could not answer *"who taught this system
+that, and when?"*
+
+Every curation write now leaves a row — a template created, updated or
+archived; a store sweep; embedding search switched; a review resolved; a
+benchmark set built, deleted or run; a flag recorded. Three rules govern what
+goes in, and the third is the one that matters here:
+
+* **The row joins the caller's transaction.** A log that can commit while the
+  action it describes rolls back is a log that invents history. The accepted
+  consequence is that a refused write leaves no row, because it did not happen.
+* **Failing to log never fails the action** — the opposite posture to the
+  guard's, deliberately. The guard authorises; this observes. A curator must
+  not lose a saved template to a full disk on the audit table.
+* **`detail` holds identifiers and counts, never content.** No SQL, no question
+  text, no result rows, no key — enforced by one function rather than trusted
+  at ten call sites. **An audit log that quietly became a second copy of the
+  store would be a second thing to secure, and the one place somebody forgets
+  to.** The row carries the resource id; whatever it points at is where the
+  content lives, under that resource's own access rules.
+
+Reading it is `GET /audit`, **administrators only**, because an audit log is a
+record about *people*: a curator has an operational need to change their
+connection's knowledge and none to read who else did what, and from where. The
+actor is returned as a display name and never an address, the same rule the
+review queue follows.
+
+`actor_ip` is read from `X-Real-IP` and **never from `X-Forwarded-For`**. The
+second is a client-settable header, and an audit log holding an address the
+actor chose is worse than one holding no address at all — the first is wrong
+and looks authoritative. A deployment behind a proxy that does not set
+`X-Real-IP` records the proxy's address, which is honest and fixable in one
+line of that proxy's config.
+
+**This is not the whole of [mvp2 §D4](mvp2-plan.md).** That also wants every
+question recorded with the policy in force, the SQL that ran, how many rows
+came back, and what reached the model provider. Those are writes on the ask
+path and belong to that plan; `services/audit.py` is shaped so they arrive as
+more `record()` calls and no new machinery.
+
 ---
 
 ## 5. Containment underneath correctness
