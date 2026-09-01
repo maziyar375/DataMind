@@ -179,6 +179,10 @@ class ConnectionUpdate(BaseModel):
     #: learning loop that runs statements against the customer's database
     #: without anybody asking, so it gets a checkbox rather than an argument.
     conflict_checks_enabled: bool | None = None
+    #: Whether taught questions reach the generate prompt as few-shot examples.
+    #: Off is byte-identical to v8 and is the default, until the eval gate in
+    #: `docs/eval.md` §6.1 says otherwise.
+    knowledge_examples_enabled: bool | None = None
 
 
 class ConnectionRead(BaseModel):
@@ -200,6 +204,7 @@ class ConnectionRead(BaseModel):
     clarify_enabled: bool = True
     include_db_comments: bool = True
     conflict_checks_enabled: bool = True
+    knowledge_examples_enabled: bool = False
     status: str
     readonly_confirmed: bool
     server_version: str | None = None

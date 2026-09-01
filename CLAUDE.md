@@ -825,8 +825,9 @@ edited in Data sources → Knowledge.
   calling the guard, and that is the point.
 
 **Answering from the store — the `match` node (Phase 2).** Between `route` and
-`retrieve`, no model call, and it changes an answer **without changing a byte of
-the prompt** — `PROMPT_VERSION` is still `v8`.
+`retrieve`, no model call, and on the short-circuit path it changes an answer
+**without changing a byte of the prompt**. (Phase 5 gave the same node a second
+job on a *miss* — see below — and that is what moved `PROMPT_VERSION` to v9.)
 
 - **Two thresholds, not one.** `SHORT_CIRCUIT_THRESHOLD` (0.85) answers;
   `FEW_SHOT_THRESHOLD` is Phase 5's. A near-miss is not a hit: a miss costs
@@ -897,6 +898,42 @@ Ships the reason anyone curates.
   question-shaped (a template), definition-shaped (the semantic layer), or
   neither (dismiss with a reason) — three radios, §1.5's rule as an
   interaction.
+
+**Few-shot injection — the one change that can make the product worse (Phase
+5).** `PROMPT_VERSION` moves **v8 → v9** here, and the whole of that move is one
+slot.
+
+- **Off renders the v8 bytes, exactly.** The slot is written
+  `{schema}\n{examples}\n{history}` and `RetrievedContext.render_examples`
+  returns the empty string when there is nothing to show, so it collapses to the
+  newline that was already there. A connection with no store, one with
+  `knowledge_examples_enabled` off (**the default**), the draft graph and the
+  templates-off eval arm all take that path — which is what keeps every number
+  in [docs/eval.md](docs/eval.md) meaningful.
+- **The default is a measurement, not caution.** Eval Round 2 measured an
+  unconditional addition to this exact prompt costing ten points of execution
+  accuracy on a small model (36% → 26%) by crowding out the schema, and
+  few-shot examples are that shape of change. The plan gates the flip on
+  held-out accuracy not being worse; until [eval.md §6.1](docs/eval.md) has both
+  numbers, off is the honest default.
+- **Last, and small.** Schema first, semantic layer second, examples third. At
+  most four, each capped, the block capped at a fifth of what catalog comments
+  get, and a long example skipped whole rather than truncated so it cannot shut
+  out the short ones behind it.
+- **`match` collects them on a miss, never on a hit.** A run answered from the
+  store has no generator to teach. `STALE`, `CONFLICTED`, `BENCHMARK_ONLY` and
+  `HELD_OUT` templates are excluded here exactly as they are from the
+  short-circuit — a stale template teaching the generator a pattern the schema
+  no longer supports is worse than one refusing to answer.
+- **The disclosure gate is at render time**, like every other rung: a
+  `MODEL_DERIVED` template's literals are withheld under `NONE`/`AGGREGATE`, and
+  the *whole example* is withheld rather than stripped, because there is no way
+  to remove a literal from a `WHERE` clause and leave a statement that still
+  teaches anything.
+- **`--templates on|off` is how it gets measured.** The arm builds a store out
+  of the suite's own questions, holds out two in five deterministically, and
+  excludes every record from the store it is measured against. Only the
+  `held_out` row of the per-tag breakdown is worth quoting.
 
 **Store health — staleness and conflict (Phase 4).** A curated store decays two
 ways, and the two have different costs, so they are two different jobs.
@@ -1278,7 +1315,7 @@ where someone would otherwise repeat them: a "getting the answer right" block in
   the pipeline — the pipeline reads a layer, a report reads a node, and
   neither a layer nor a node knows anything about the thing above it.
 
-  **The three constants as they stand: `PROMPT_VERSION` = `"v8"`,
+  **The three constants as they stand: `PROMPT_VERSION` = `"v9"`,
   `SEMANTIC_PROMPT_VERSION` = `"s4"`, `REPORT_PROMPT_VERSION` = `"r4"`.** Move
   the one whose prompts you changed — and note that "prompts" means everything
   the model ends up reading, not only wording: a change to how much of the

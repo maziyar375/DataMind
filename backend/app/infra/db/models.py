@@ -149,6 +149,18 @@ class DatabaseConnection(Base, TimestampMixin):
     # inherit the connection's read-only credentials, row cap and timeout
     # without exception.
     conflict_checks_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Whether this connection's taught questions reach the generate prompt as
+    # few-shot examples. A switch rather than "delete the templates": the store
+    # still answers questions by short-circuiting, which is a different bet.
+    #
+    # **Off by default, and that default is a measurement, not caution.** This
+    # is the only change in the learning loop that can make the product worse —
+    # the last unconditional addition to the generate prompt cost ten points of
+    # execution accuracy on a small model by crowding out the schema. Off is
+    # byte-identical to v8, so a connection that never turns it on is running
+    # the prompt every recorded baseline was measured on. It flips to True by
+    # default when `docs/eval.md` §6.1 has both numbers in it and they say so.
+    knowledge_examples_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(20), default="UNTESTED")
     readonly_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)

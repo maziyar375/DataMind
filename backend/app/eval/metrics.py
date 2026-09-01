@@ -122,6 +122,19 @@ class RecordOutcome:
     repair_count: int = 0
     succeeded_on_attempt: int | None = None
 
+    # ── the templates arm (Phase 5) ─────────────────────────────────────
+    #: How many taught questions reached the generate prompt as examples. Zero
+    #: on the templates-off arm and on every question the matcher found nothing
+    #: for, which is what makes the split reportable: the questions that were
+    #: shown examples and the questions that were not are different populations
+    #: and only one of them can move for a reason.
+    examples_offered: int = 0
+    #: True when the run was *answered* from a stored template rather than
+    #: generated. Recorded because it must be near zero for the arm's accuracy
+    #: number to be about the prompt at all — an answer that came from the
+    #: store is not a measurement of few-shot injection.
+    short_circuited: bool = False
+
     llm_ms: int = 0
     validate_ms: int = 0
     db_ms: int = 0
@@ -192,6 +205,11 @@ class SuiteReport:
     cost_by_model: dict[str, float]
     # diagnostic, never a gate
     exact_match_rate: float
+    # 6. the templates arm (Phase 5). All zero on every other arm, so a
+    #    scorecard from before this existed reads the same way.
+    examples_offered_rate: float
+    examples_per_question: float
+    short_circuit_rate: float
     # breakdowns
     per_tag: list[TagBreakdown]
     outcome_counts: dict[str, int]
@@ -281,6 +299,15 @@ def aggregate(outcomes: list[RecordOutcome]) -> SuiteReport:
         cost_per_question=round(sum(costed) / len(costed), 6) if costed else None,
         cost_by_model=cost_by_model,
         exact_match_rate=round(_rate(sum(o.exact_match for o in outcomes), n), 4),
+        examples_offered_rate=round(
+            _rate(sum(1 for o in outcomes if o.examples_offered), n), 4
+        ),
+        examples_per_question=round(
+            sum(o.examples_offered for o in outcomes) / n if n else 0.0, 2
+        ),
+        short_circuit_rate=round(
+            _rate(sum(1 for o in outcomes if o.short_circuited), n), 4
+        ),
         per_tag=per_tag,
         outcome_counts=dict(Counter(o.outcome for o in outcomes).most_common()),
     )
@@ -341,6 +368,16 @@ def format_report(report: SuiteReport, *, title: str = "") -> str:
         by = "  ".join(f"{m}=${c:.5f}" for m, c in report.cost_by_model.items())
         lines.append(f"   cost/q by model: {by}")
     lines.append(f"   exact_match (diagnostic, not a gate): {pct(report.exact_match_rate)}")
+    if report.examples_offered_rate or report.short_circuit_rate:
+        # Only on the templates arm. Printed beside the headline because an
+        # accuracy number from this arm is uninterpretable without knowing how
+        # many questions were actually shown an example — and whether any were
+        # *answered* from the store rather than generated.
+        lines.append(
+            f"6. templates: {pct(report.examples_offered_rate)} of questions were "
+            f"shown an example ({report.examples_per_question:.2f} per question); "
+            f"short-circuited {pct(report.short_circuit_rate)}"
+        )
     lines.append("")
     lines.append("per-tag breakdown (exec-accuracy | retrieval-recall | n):")
     for tb in sorted(report.per_tag, key=lambda t: t.execution_accuracy):

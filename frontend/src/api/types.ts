@@ -35,6 +35,14 @@ export interface Connection {
   semantic_layer_enabled: boolean
   clarify_enabled: boolean
   include_db_comments: boolean
+  /** Whether the scheduled conflict checker may run this connection's
+   *  templates against each other. The only thing in the product that queries
+   *  a customer's database without being asked. */
+  conflict_checks_enabled: boolean
+  /** Whether taught questions reach the generate prompt as few-shot examples.
+   *  **Off by default**, and off is byte-identical to `PROMPT_VERSION` v8 —
+   *  the prompt every recorded accuracy measurement was taken on. */
+  knowledge_examples_enabled: boolean
   status: string
   readonly_confirmed: boolean
   server_version: string | null

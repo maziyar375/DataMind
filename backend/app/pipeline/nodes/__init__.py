@@ -53,6 +53,7 @@ from app.pipeline.state import (
     RunError,
     RunState,
     SqlAttempt,
+    TemplateExample,
 )
 from app.sqlguard import GuardPolicy, guard
 from app.sqlguard.validator import ValidationReport
@@ -95,6 +96,18 @@ class NodeDeps:
     # pressed *Generate a fresh answer instead* on a verified answer: that is
     # the one control that makes a Verified badge safe to show.
     templates_enabled: bool = True
+    # Whether a *near* match may reach the generate prompt as an example
+    # (Phase 5). Distinct from `templates_enabled`, which governs the
+    # short-circuit: answering from a stored template and showing one to the
+    # model are different bets with different failure modes, and only the
+    # second can make the product worse.
+    #
+    # **False is byte-identical to v8** — `match` collects nothing, `retrieve`
+    # carries nothing, the `{examples}` slot collapses. False by default here
+    # for the same reason `clarify_enabled` is: a `NodeDeps` built without the
+    # connection in hand renders what it always rendered. It is also the
+    # *column's* default until the eval gate in `docs/eval.md` §6.1 has been run.
+    examples_enabled: bool = False
     # Extra constraints appended to every SQL-producing prompt, for callers
     # whose SQL has to satisfy something a chat question does not. Today that
     # is exactly one caller: a report block, whose statement is saved and
@@ -232,7 +245,11 @@ async def match(state: RunState, deps: NodeDeps) -> NodeResult:
     hit = best(candidates)
     if hit is None:
         near = candidates[0].score if candidates else 0.0
-        return NodeResult(detail=f"No template matched (best {near:.2f})")
+        shown = _collect_examples(state, deps, candidates)
+        detail = f"No template matched (best {near:.2f})"
+        if shown:
+            detail += f" · {shown} offered as {'an example' if shown == 1 else 'examples'}"
+        return NodeResult(detail=detail)
 
     template = hit.template
     state.match_score = hit.score
@@ -268,6 +285,43 @@ async def match(state: RunState, deps: NodeDeps) -> NodeResult:
         goto="validate",
         detail=f"Answered from a saved question ({hit.score:.2f})",
     )
+
+
+def _collect_examples(
+    state: RunState, deps: NodeDeps, candidates: list[Any]
+) -> int:
+    """Put the near misses on the state as few-shot examples. Returns how many.
+
+    **Only on a miss.** A run answered from a stored template has no generator
+    to teach, and offering the template it just used as an example of itself
+    would be a prompt about a call that never happens.
+
+    Two filters and no third:
+
+    * `examples_enabled`, the per-connection switch, which is off by default
+      until the eval gate has been run. Off collects nothing, so `retrieve`
+      carries nothing and the prompt is byte-identical to v8.
+    * `few_shot`, the candidate's own threshold (0.45) — well below the
+      short-circuit's 0.85, because "close enough to be worth showing" and
+      "close enough to answer with" are genuinely different questions.
+
+    The disclosure gate is deliberately **not** here. A template's literals are
+    gated at *render* time (`RetrievedContext.render_examples`), like every
+    other rung of the ladder, so tightening a connection's policy takes effect
+    on the next question rather than on the next match.
+    """
+    if not deps.examples_enabled:
+        return 0
+    state.examples = [
+        TemplateExample(
+            question=candidate.template.question,
+            sql=candidate.template.sql,
+            literal_provenance=str(candidate.template.literal_provenance),
+        )
+        for candidate in candidates
+        if candidate.few_shot and candidate.template.sql
+    ]
+    return len(state.examples)
 
 
 def _tables_from_history(
@@ -429,6 +483,10 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
         semantic=deps.semantic,
         catalog_meta=deps.snapshot.get("catalog_meta") or {},
         include_db_comments=deps.include_db_comments,
+        # Whatever `match` left behind, which is nothing at all unless the
+        # connection has the feature on *and* something scored above the
+        # few-shot threshold *and* the run was not answered from the store.
+        examples=list(state.examples),
     )
     described = (
         sum(
@@ -777,13 +835,28 @@ async def generate(state: RunState, deps: NodeDeps) -> NodeResult:
     # turns ago.
     history_text = _render_history(state.context.history, state.disclosure_policy)
 
+    # Phase 5's whole surface on this path: one string, empty on every run that
+    # matched nothing and on every connection with the feature off — in which
+    # case the slot collapses and the prompt is byte-for-byte v8's. Rendered
+    # against the same disclosure policy as the schema block above it, because
+    # a template's literals are a rung of the same ladder (`docs/security.md`
+    # §3.3) and the gate applies at render time, not at retrieval.
+    #
+    # First attempt only, deliberately. A repair is a fresh conversation about
+    # a statement that was *rejected*, and adding four more statements to the
+    # prompt that produced the rejected one is the opposite of narrowing.
+    examples_text = state.context.render_examples(state.disclosure_policy)
+
     if attempt_no == 1:
         messages = [
             ChatMessage(
                 role="system",
                 content=_with_extra_rules(
                     GENERATE_SYSTEM.format(
-                        dialect=state.dialect, schema=schema_text, history=history_text
+                        dialect=state.dialect,
+                        schema=schema_text,
+                        examples=examples_text,
+                        history=history_text,
                     ),
                     deps.extra_rules,
                 ),

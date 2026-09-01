@@ -61,7 +61,8 @@ def test_every_sql_producing_prompt_states_the_mandatory_rules(
     template: str,
 ) -> None:
     rendered = template.format(
-        dialect="postgres", schema="Dialect: postgres", history="", feedback="x"
+        dialect="postgres", schema="Dialect: postgres", history="",
+        examples="", feedback="x",
     )
     missing = [fragment for fragment in RULE_FRAGMENTS if fragment not in rendered]
     assert not missing, f"prompt dropped: {missing}"
@@ -75,7 +76,8 @@ def test_every_sql_producing_prompt_names_the_dialect(template: str) -> None:
     dialect-aware guard, and the repair budget is 1.
     """
     rendered = template.format(
-        dialect="oracle", schema="(schema omitted)", history="", feedback="x"
+        dialect="oracle", schema="(schema omitted)", history="",
+        examples="", feedback="x",
     )
     assert "Dialect: oracle" in rendered
 
@@ -83,7 +85,8 @@ def test_every_sql_producing_prompt_names_the_dialect(template: str) -> None:
 @pytest.mark.parametrize("template", [GENERATE_SYSTEM, REVIEW_SYSTEM, REPAIR_SYSTEM])
 def test_every_sql_producing_prompt_carries_the_history(template: str) -> None:
     rendered = template.format(
-        dialect="postgres", schema="s", history="Earlier: user: revenue?", feedback="x"
+        dialect="postgres", schema="s", history="Earlier: user: revenue?",
+        examples="", feedback="x",
     )
     assert "Earlier: user: revenue?" in rendered
 

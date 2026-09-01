@@ -11,7 +11,39 @@ from app.charts import (
     MIN_HISTOGRAM_ROWS,
 )
 
-PROMPT_VERSION = "v8"
+PROMPT_VERSION = "v9"
+# v9: the generate prompt has a slot for taught questions — the connection's
+# own knowledge templates, offered as few-shot examples after the schema and
+# the semantic layer.
+#
+# **The empty case is byte-identical to v8**, and that is not a nicety, it is
+# the design. The slot is written `{schema}\n{examples}\n{history}` and
+# `RetrievedContext.render_examples` returns the empty string when there is
+# nothing to show, so `{schema}\n\n{history}` comes back out — exactly the
+# bytes v8 emitted. A connection with no store, a connection with
+# `knowledge_examples_enabled` off (the default), the draft graph and the eval
+# runner all take that path, so every measurement taken on v8 still holds for
+# them.
+#
+# The version moves anyway, for the reason it moved at v4 and v6: two runs
+# either side of this are otherwise indistinguishable from the outside, and the
+# difference between them is whether the connection's taught questions were in
+# the prompt at all. Filing both under one label is how a comparison quietly
+# stops meaning anything.
+#
+# **This is the one change in the learning loop that can make the product
+# worse, and it is gated on a measurement.** Eval Round 2 measured this exact
+# shape of change — an unconditional addition to the generate prompt — costing
+# ten points of execution accuracy on a small model (36% -> 26%), because the
+# extra text crowded out the schema. So: examples are **last** in the priority
+# order, they have their own small ceiling (`_EXAMPLE_CHARS_BLOCK`, a fifth of
+# what catalog comments get), the feature is **off by default per connection**,
+# and `--templates on|off` on the eval runner is how the two numbers get
+# reported side by side. See `docs/eval.md` §6.1 and
+# `docs/learning-loop-plan.md` §3.6 — the gate is that held-out accuracy must
+# not be worse, and a negative delta is a result to publish rather than a
+# reason to tune until it goes positive.
+#
 # v8: the semantic layer actually reaches the model. No wording here changed —
 # what changed is `app/semantic/render.py`, which the generate prompt renders
 # inline, and it changed on every question asked against a connection with more
@@ -286,10 +318,16 @@ Rules, all mandatory:
 
 Schema:
 {{schema}}
-
+{{examples}}
 {{history}}
 
 {_OUTPUT_RULES}"""
+# `{{examples}}` is deliberately on a bare line between two existing ones. Empty
+# it collapses to the single newline that was already there, so the rendered
+# prompt is byte-for-byte v8's; non-empty, `render_examples` supplies its own
+# surrounding blank lines. Every other placement — a header of its own, a slot
+# with blank lines around it in the template — changes the empty case, and the
+# empty case is what every measurement before v9 was taken on.
 # NB (eval Round 2, reverted): adding a "getting the answer right" block of
 # general SQL guidance here *lowered* execution accuracy on the small eval model
 # (36% -> 26%) and hurt parse (98% -> 88%) and guard-pass (96% -> 86%) — the

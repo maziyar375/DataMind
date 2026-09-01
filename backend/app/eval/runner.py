@@ -157,9 +157,18 @@ async def evaluate_record(
     with_cost: bool = True,
     include_db_comments: bool = False,
     semantic: dict[str, Any] | None = None,
+    templates: list[Any] | None = None,
+    held_out: set[str] | None = None,
 ) -> RecordOutcome:
+    # The arm's split rides on `tags`, so `aggregate`'s per-tag breakdown
+    # reports it for free and `docs/eval.md` §6.1 quotes one row of it.
+    tags = list(record.tags)
+    if templates is not None:
+        tags.append(
+            HELD_OUT_TAG if record.id in (held_out or set()) else TAUGHT_TAG
+        )
     o = RecordOutcome(
-        record_id=record.id, tags=record.tags, difficulty=record.difficulty,
+        record_id=record.id, tags=tags, difficulty=record.difficulty,
         model=model_name, gold_sql=record.gold_sql, expected_tables=record.expected_tables,
     )
 
@@ -186,12 +195,18 @@ async def evaluate_record(
         history=[], policy=policy, emit=emit,
         include_db_comments=include_db_comments,
         semantic=semantic,
-        # `matcher` stays None, deliberately and permanently on this path: the
-        # `match` node reports SKIPPED and every number on this suite measures
-        # the *generated* path. A run that answered a golden question from a
-        # template stored for that question would score 1.0 and mean nothing.
-        # Phase 5's `--templates on|off` arm is how the store gets measured,
-        # and it is an arm so both numbers exist side by side.
+        # **`matcher` is None unless the templates arm is on**, and None is the
+        # pre-Phase-2 path exactly: `match` reports SKIPPED, nothing is read,
+        # and the prompt is byte-identical to the one every earlier baseline
+        # was measured on. A run that answered a golden question from a
+        # template stored for that question would score 1.0 and mean nothing,
+        # which is why `matcher_over` excludes each record's own row.
+        matcher=(
+            matcher_over(templates, exclude=record.id)
+            if templates is not None else None
+        ),
+        templates_enabled=templates is not None,
+        examples_enabled=templates is not None,
     )
     pipeline = AnalyticsPipeline(on_step=on_step)
 
@@ -253,6 +268,12 @@ async def evaluate_record(
         )
     o.execution_ok = state.execution is not None
     o.exact_match = metrics.exact_match(record.gold_sql, o.candidate_sql)
+    # Recorded whatever the outcome. `examples_offered` is what makes the arm's
+    # accuracy number interpretable — an arm where nothing matched is measuring
+    # the same prompt as the off arm — and `short_circuited` must be near zero
+    # for the number to be about the prompt at all.
+    o.examples_offered = len(state.examples)
+    o.short_circuited = state.match_outcome == "SHORT_CIRCUIT"
 
     if state.intent in _NON_ANALYTICAL:
         o.outcome = OUTCOME_NO_SQL
@@ -316,6 +337,8 @@ async def run_suite(
     progress: bool = False,
     include_db_comments: bool = False,
     semantic: dict[str, Any] | None = None,
+    templates: list[Any] | None = None,
+    held_out: set[str] | None = None,
 ) -> list[RecordOutcome]:
     outcomes: list[RecordOutcome] = []
     for i, record in enumerate(records, 1):
@@ -323,6 +346,7 @@ async def run_suite(
             record, gateway=gateway, llm=llm, connector=connector, snapshot=snapshot,
             policy=policy, settings=settings, model_name=model_name, with_cost=with_cost,
             include_db_comments=include_db_comments, semantic=semantic,
+            templates=templates, held_out=held_out,
         )
         outcomes.append(outcome)
         if progress:
@@ -483,6 +507,93 @@ def load_semantic(spec: FixtureSpec, snapshot: dict[str, Any]) -> dict[str, Any]
             "the suite:\n  " + "\n  ".join(broken)
         )
     return doc.model_dump(mode="json")
+
+
+# ── the templates arm (Phase 5) ──────────────────────────────────────────────
+#: What fraction of a suite is **held out** of the store in the templates arm.
+#: Two in five, chosen so the held-out population is big enough for the number
+#: to mean something on a suite of this size.
+#:
+#: **The held-out number is the only one worth quoting.** A question whose own
+#: answer is in the store measures the store's ability to hold a string. Every
+#: record is additionally excluded from the store used to evaluate *itself*, so
+#: even the "taught" arm never sees its own gold SQL — the split is between
+#: questions whose *neighbours* were taught and questions whose neighbours were
+#: taught *and which are themselves in the store's vocabulary*.
+HELD_OUT_FRACTION = 0.4
+
+#: Tags added in the templates arm so `aggregate`'s per-tag breakdown reports
+#: the split for free. `docs/eval.md` §6.1 quotes the `held_out` row.
+HELD_OUT_TAG = "held_out"
+TAUGHT_TAG = "taught"
+
+
+def held_out_ids(
+    records: Sequence[GoldRecord], fraction: float = HELD_OUT_FRACTION
+) -> set[str]:
+    """Which records the store may not contain. Deterministic, by sorted id.
+
+    Deterministic and not random: two runs of one arm that held out different
+    questions are two different measurements, and nobody would notice. Sorted
+    by id and taken at a fixed stride rather than hashed, so the split is
+    reproducible from the suite file alone — a reader of `docs/eval.md` can
+    work out which questions were held out without re-running anything.
+    """
+    ordered = sorted(r.id for r in records)
+    if not ordered or fraction <= 0:
+        return set()
+    stride = max(1, round(1 / min(fraction, 1.0)))
+    return {rid for i, rid in enumerate(ordered) if i % stride == 0}
+
+
+def build_template_store(
+    records: Sequence[GoldRecord], held_out: set[str]
+) -> list[Any]:
+    """The suite's own questions as a knowledge store, minus the held-out ones.
+
+    A gold record *is* the artifact this store holds: a question somebody
+    answered correctly, with the statement that answered it. Building the arm's
+    store out of the suite rather than out of a separate fixture is what makes
+    the two arms comparable — same questions, same schema, same everything
+    except whether the prompt carried examples.
+
+    `HUMAN_AUTHORED`, because a person wrote every line of the golden set;
+    §5.2's gate would otherwise withhold every example under the fixture's own
+    policy and the arm would measure nothing.
+    """
+    from app.knowledge import KnowledgeTemplate, normalize_question
+
+    return [
+        KnowledgeTemplate(
+            id=uuid.uuid5(uuid.NAMESPACE_OID, record.id),
+            question=record.question,
+            question_normalized=normalize_question(record.question),
+            sql=record.gold_sql,
+        )
+        for record in records
+        if record.id not in held_out
+    ]
+
+
+def matcher_over(templates: list[Any], *, exclude: str = "") -> Any:
+    """A `LexicalMatcher` over an in-memory store, minus one record's own row.
+
+    The real matcher, the real thresholds, the real masking — an arm that
+    hand-picked its examples would measure a retrieval strategy nobody ships.
+
+    `exclude` is the record being evaluated. **Its own template is never in the
+    store it is measured against**, held out or not: a question answered from
+    its own stored SQL measures the store's ability to hold a string, which is
+    §1.3's measurement trap and the reason `role` exists in the product.
+    """
+    from app.knowledge.matcher import LexicalMatcher
+
+    excluded = uuid.uuid5(uuid.NAMESPACE_OID, exclude) if exclude else None
+
+    async def rows(_connection_id: UUID, _normalized: str, limit: int) -> list[Any]:
+        return [t for t in templates if t.id != excluded][:limit]
+
+    return LexicalMatcher(rows)
 
 
 # ── fixture lifecycle (testcontainers) ───────────────────────────────────────
@@ -710,9 +821,24 @@ async def _amain(args: argparse.Namespace) -> int:
     budget_chars = nodes._RETRIEVE_BUDGET_CHARS
 
     started_at = utcnow()
+    # The templates arm. Built from the suite's own records so the two arms
+    # differ in exactly one thing — whether the prompt carried examples — and
+    # split into held-out and taught, because only the first number is worth
+    # putting in front of anyone.
+    held_out: set[str] = set()
+    templates: list[Any] | None = None
+    if args.templates == "on":
+        held_out = held_out_ids(records)
+        templates = build_template_store(records, held_out)
+
     arm = ", ".join([
         "with catalog comments" if args.comments else "no catalog comments",
         "semantic layer on" if args.semantic == "on" else "semantic layer off",
+        (
+            f"templates on ({len(templates or [])} taught, "
+            f"{len(held_out)} held out)"
+            if templates is not None else "templates off"
+        ),
         f"retrieve budget {budget_chars:,}",
     ])
     print(f"Spinning fixture {spec.name} ({spec.image}, {arm}) …", file=sys.stderr)
@@ -754,6 +880,7 @@ async def _amain(args: argparse.Namespace) -> int:
                     records, gateway=gateway, llm=llm, connector=connector, snapshot=snap,
                     policy=policy, settings=settings, model_name=model_name, progress=True,
                     include_db_comments=args.comments, semantic=semantic,
+                    templates=templates, held_out=held_out,
                 )
                 report = metrics.aggregate(outcomes)
                 report_dict = metrics.report_to_dict(report)
@@ -764,6 +891,18 @@ async def _amain(args: argparse.Namespace) -> int:
             report_dict["catalog_comments"] = bool(args.comments)
             report_dict["catalog_meta"] = snap.get("catalog_meta") or {}
             report_dict["semantic_layer"] = semantic is not None
+            # Which arm, and how the split fell. Recorded on the scorecard
+            # rather than only in the shell that launched it: the gate in
+            # `docs/eval.md` §6.1 compares two `eval_runs` rows, and two runs
+            # that differ only in this are otherwise indistinguishable.
+            report_dict["templates"] = templates is not None
+            report_dict["templates_in_store"] = len(templates or [])
+            report_dict["held_out_ids"] = sorted(held_out)
+            # `PROMPT_VERSION` is v9 from Phase 5 onward, and the templates-off
+            # arm renders the v8 bytes. Stated on the card so a reader of two
+            # scorecards is not left to work out whether v8 and v9 numbers are
+            # comparable — they are, on this arm, and that is the point of it.
+            report_dict["prompt_bytes_equal_v8"] = templates is None
             # Recorded because retrieval recall cannot be read without it: at a
             # budget above the fixture's ~26.5k chars every question takes
             # FULL_SNAPSHOT and recall is 1.0 by construction, which is not the
@@ -902,6 +1041,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="load the fixture's COMMENT ON overlay and render catalog comments "
         "into the prompt (the commented arm of the A/B; off is byte-identical "
         "to every run before the feature)",
+    )
+    parser.add_argument(
+        "--templates", choices=("on", "off"), default="off",
+        help="build a knowledge store from the suite's own questions and offer "
+             "near matches to the generator as few-shot examples. A fixed "
+             "fraction is HELD OUT of the store and every record is excluded "
+             "from the store it is measured against, so the `held_out` row of "
+             "the per-tag breakdown is the only number worth quoting. Off "
+             "renders the prompt byte-identically to PROMPT_VERSION v8.",
     )
     parser.add_argument(
         "--semantic", choices=("on", "off"), default="off",

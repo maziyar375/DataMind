@@ -1592,7 +1592,7 @@ drifted before, both times because a refactor moved a function nobody changed.
 
 | Constant | Value | Moves when |
 |---|---|---|
-| `PROMPT_VERSION` | `v8` | the **rendered SQL-producing prompt** changes — including how much of the schema or semantic block survives its cap, which is what moved v7 → v8. Recorded on every run |
+| `PROMPT_VERSION` | `v9` | the **rendered SQL-producing prompt** changes — including how much of the schema or semantic block survives its cap (v7 → v8), and whether it carries the connection's taught questions as few-shot examples (v8 → v9, empty renders v8's bytes). Recorded on every run |
 | `REPORT_PROMPT_VERSION` | `r4` | any report prompt changes. Recorded on every report run |
 | `SEMANTIC_PROMPT_VERSION` | `s4` | any semantic prompt changes. Recorded on the document |
 

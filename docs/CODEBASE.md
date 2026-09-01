@@ -221,7 +221,7 @@ linear with **five non-chain edges**: three repairs *back* into `generate` (from
 hard ceiling of 24 transitions and a per-run deadline bound it. `describe`
 answers a schema question from the schema block plus the semantic layer and
 halts before any SQL is written. `prompts/` holds versioned prompt templates
-(`PROMPT_VERSION`, currently **v8**); `disclosure.py` is the result gate;
+(`PROMPT_VERSION`, currently **v9**); `disclosure.py` is the result gate;
 `checks.py` is `inspect`'s token-free structural checks; `metadata.py` decides
 which tables a schema question is about. A node crash is caught and recorded as
 a *run failure*, never a bare 500.

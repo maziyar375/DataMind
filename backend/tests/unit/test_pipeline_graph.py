@@ -149,16 +149,46 @@ async def test_a_miss_produces_the_prompt_it_produced_before_this_node_existed()
     assert before.attempts == after.attempts == []
 
 
-def test_the_prompt_version_did_not_move_in_this_phase() -> None:
-    """If it moved, something in Phase 2 was built wrong.
+def test_the_prompt_version_moved_exactly_once_and_for_few_shot() -> None:
+    """v9, and Phase 5 is the only phase allowed to have moved it.
 
-    The short-circuit is a *branch around* the generator, not a change to it.
-    Phase 5 is the phase allowed to move this constant, and it has to earn it
-    with an eval arm.
+    The short-circuit is a *branch around* the generator, not a change to it —
+    Phase 2 had to leave this at v8, and did. Phase 5 adds the `{examples}`
+    slot, so it moves, on the same reasoning as v4 and v6: two runs either side
+    are otherwise indistinguishable from the outside, and the difference is
+    whether the connection's taught questions were in the prompt.
     """
     from app.pipeline import prompts
 
-    assert prompts.PROMPT_VERSION == "v8"
+    assert prompts.PROMPT_VERSION == "v9"
+
+
+def test_an_empty_examples_slot_renders_the_v8_prompt_byte_for_byte() -> None:
+    """The promise that keeps every pre-v9 measurement meaningful.
+
+    A connection with no store, one with `knowledge_examples_enabled` off (the
+    default), the draft graph and the eval runner all render this. If the slot
+    leaves so much as a newline behind, the v8 baselines stop being comparable
+    and nobody finds out until a number moves for no reason.
+    """
+    from app.pipeline.prompts import GENERATE_SYSTEM
+
+    v8_shape = (
+        "Schema:\n(schema)\n\n(history)\n\nReply with the JSON object only."
+    )
+    rendered = GENERATE_SYSTEM.format(
+        dialect="postgres", schema="(schema)", examples="", history="(history)"
+    )
+    assert v8_shape in rendered
+
+    # And the non-empty case is additive: everything v8 said is still there.
+    with_examples = GENERATE_SYSTEM.format(
+        dialect="postgres", schema="(schema)",
+        examples="\nQ: revenue\nA: SELECT 1\n", history="(history)",
+    )
+    assert "Q: revenue" in with_examples
+    assert "Schema:\n(schema)" in with_examples
+    assert "(history)" in with_examples
 
 
 def _state() -> Any:

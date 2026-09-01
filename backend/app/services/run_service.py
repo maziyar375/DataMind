@@ -362,6 +362,15 @@ class RunService:
             # answer, where consulting it again would ignore them.
             matcher=build_matcher(self._db),
             templates_enabled=not run.skip_templates,
+            # Few-shot injection is a separate switch from the short-circuit
+            # and is **off by default on the column**, because it is the one
+            # change in this loop that can lower accuracy. A reader who asked
+            # for a fresh answer is not shown the store as examples either:
+            # they said they did not want it.
+            examples_enabled=(
+                bool(connection.knowledge_examples_enabled)
+                and not run.skip_templates
+            ),
         )
 
         pipeline = AnalyticsPipeline(

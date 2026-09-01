@@ -10,11 +10,13 @@
 > **Four decisions were taken before writing this** (§0.2). They are recorded
 > here rather than re-argued: everything below assumes them.
 >
-> **57 of 86 items.** Phase 0 has landed except its three baseline runs, which
-> need a provider key; **Phases 1, 2, 3 and 4 are complete** — the store is
-> built, filled by hand *and* from traffic, read on the ask path, kept from
-> rotting, and the loop closes back to the person who flagged an answer.
-> `PROMPT_VERSION` has not moved.
+> **63 of 86 items.** **Phases 1–4 are complete** — the store is built, filled
+> by hand *and* from traffic, read on the ask path, kept from rotting, and the
+> loop closes back to the person who flagged an answer. **Phase 5 is built and
+> shipped off**: `PROMPT_VERSION` is v9, the empty slot renders v8's bytes, and
+> `knowledge_examples_enabled` defaults to false because the gate needs a
+> provider key this environment does not have — which is also why Phase 0's
+> three baselines are still unmade.
 > [§13](#13-progress-ledger--what-is-done-what-is-not) is the
 > ledger: what is already in the codebase and load-bearing (§13.1), then a
 > checkbox per deliverable per phase, each with the check that proves its state.
@@ -574,7 +576,9 @@ research, and it costs one line.
   cancel-on-unbound rule.
 - `tests/unit/test_pipeline_graph.py` — extended: the `MATCH` node's two exits,
   and that a miss produces the **byte-identical** prompt it produced before this
-  phase existed. That assertion is the promise `PROMPT_VERSION` stays at v8.
+  phase existed. That assertion is the promise `PROMPT_VERSION` stayed at v8
+  through Phase 2; from Phase 5 it is the promise that v9's empty slot renders
+  v8's bytes.
 - A guard-failure-on-a-stored-template test: the run does **not** fail; the
   template is marked `STALE` with a reason and the run falls through to
   generation (research §6.2 — *fail as a value*).
@@ -1533,7 +1537,7 @@ it is not, no amount of Phase 5 will help.
 > reading the code, not by memory; every ❌ was confirmed absent the same way.
 > The verification note beside each item is what to re-run to check it again.
 >
-> **Status: 57 of 86 plan items complete.** Phase 0's instruments are built
+> **Status: 63 of 86 plan items complete.** Phase 0's instruments are built
 > (its three measurements are not — see §13.2, and they gate Phase 5 only), and
 > **Phases 1–3 have landed in full**: the store, the curation surface, the
 > guard's fifth entry point, the short-circuit, the badge, feedback, the review
@@ -1656,7 +1660,10 @@ replayed through the new door. **No chat answer behaves differently.**
 > `PROMPT_VERSION` **must still read `v8`** when this phase ships. If it moved,
 > something in this phase was built wrong.
 >
-> **It reads `v8`,** and `test_pipeline_graph.py` asserts it.
+> **It read `v8`,** and `test_pipeline_graph.py` asserted it. Phase 5 moved it
+> to `v9` for the `{examples}` slot, and rewrote that assertion to pin the
+> thing that still matters here: with no examples the rendered prompt is
+> byte-identical to v8's, so nothing this phase built changed a prompt.
 >
 > Two things landed differently from the sketch, both recorded rather than
 > quietly absorbed:
@@ -1740,18 +1747,40 @@ replayed through the new door. **No chat answer behaves differently.**
 > Both rows are marked, both keep their evidence, and §4.7's *Keep the first /
 > Keep the second / Edit both* stays a human decision.
 
-### 13.7 Phase 5 — Few-shot, behind an eval gate · **0 / 7** ❌ not started
+### 13.7 Phase 5 — Few-shot, behind an eval gate · **6 / 7** ⚠️ built, and shipped **off** because the gate cannot be run here
 
-- [ ] `RetrievedContext.examples` — **confirmed absent:** `grep -n examples backend/app/pipeline/state.py` returns nothing
-- [ ] The `{examples}` slot in `GENERATE_SYSTEM`, rendering to empty when there are none
-- [ ] Budget fitting — examples **last**, after schema and semantic layer
-- [ ] `PROMPT_VERSION` v8 → v9
-- [ ] A `--templates on|off` eval arm, beside `--comments`
-- [ ] Per-connection `knowledge_examples_enabled` toggle
-- [ ] **The gate:** both numbers in [eval.md](eval.md), and the ship/don't-ship decision written down with its evidence
+- [x] `RetrievedContext.examples` — `list[TemplateExample]`, carrying `literal_provenance` so §5.2's gate applies at render time. `RunState.examples` is where `match` puts them and `retrieve` reads them
+- [x] The `{examples}` slot in `GENERATE_SYSTEM`, rendering to empty when there are none — written `{schema}\n{examples}\n{history}`, so empty collapses to the newline that was already there. `test_knowledge_few_shot.py` asserts the **byte-identity**, not a paraphrase of it
+- [x] Budget fitting — examples **last**, after schema and semantic layer; `_EXAMPLE_CHARS_BLOCK` is 1,600 against the comment block's 2,500, at most four examples, and a long one is skipped whole rather than truncated
+- [x] `PROMPT_VERSION` v8 → v9 — moved on the rule as written, and the ledger's own Phase 2 assertion (`test_pipeline_graph.py`) was rewritten to say v9 **and** to pin the empty case against v8's bytes
+- [x] A `--templates on|off` eval arm, beside `--comments` — builds the store from the suite's own questions, holds out `HELD_OUT_FRACTION` deterministically by sorted id, excludes **every** record from the store it is measured against, tags each record `held_out`/`taught` so the per-tag breakdown reports the split, and records `examples_offered` / `short_circuited` per record so an arm where nothing matched cannot be read as an arm that measured something
+- [x] Per-connection `knowledge_examples_enabled` toggle — migration `0019`, **default `false`**, surfaced in the connection settings beside the disclosure policy
+- [ ] **The gate:** both numbers in [eval.md](eval.md), and the ship/don't-ship decision written down with its evidence — **the table is in [eval.md §6.1](eval.md) with both commands, the four rules for reading them, and empty cells.** Each run calls a real provider and needs an `llm_configs` row with a working key; there is none in this environment, so the numbers are not on paper and this box stays open. **The decision that follows from an unmet gate is written down and is the code's actual default: the feature ships off.**
 
 > A negative delta on a small model is a result to publish, not a reason to tune
 > until it goes positive.
+>
+> **Built, and deliberately inert.** The one box that cannot be ticked here is
+> the one that decides whether the feature is on, so the column default is
+> `false` and off is byte-identical to v8. Everything else — the slot, the
+> budget, the disclosure gate, the arm, the reporting, the switch — is in the
+> tree and tested, so flipping the default is one migration once somebody with
+> a provider key runs two commands.
+>
+> Two things landed differently from the sketch, both recorded:
+>
+> * **`match` grew the second job, not `retrieve`.** The plan put `examples` on
+>   `RetrievedContext` and left the collection unplaced. Doing it in `match`
+>   means one node owns every read of the store and one threshold pair governs
+>   both uses of it — and a short-circuit, which has no generator to teach,
+>   offers nothing by construction rather than by a check somewhere else.
+> * **The eval arm holds out *and* self-excludes.** The plan asked for a
+>   held-out fraction. That is not sufficient on its own: a *taught* record
+>   whose own gold SQL is in the store is answering itself, and its accuracy
+>   would be quoted beside the held-out number as if the two were comparable.
+>   Every record is excluded from the store it is measured against, held out or
+>   not, so the `taught` row means "questions whose neighbours were taught" and
+>   nothing stronger.
 
 ### 13.8 Phase 6 — Benchmark and a score · **2 / 7** ⚠️ the comparator moved in Phase 4
 
@@ -1800,12 +1829,12 @@ Docs land in the same commit as the code, per this repo's convention.
 | 2 · Match, short-circuit, badge | 12 | 12 | ✅ |
 | 3 · Capture | 9 | 9 | ✅ |
 | 4 · Store health | 7 | 7 | ✅ |
-| 5 · Few-shot | 0 | 7 | ❌ |
+| 5 · Few-shot | 6 | 7 | ⚠️ **built and shipped off** — the gate needs a provider key |
 | 6 · Benchmark | 2 | 7 | ⚠️ the comparator moved with Phase 4 |
 | 7 · Embeddings | 0 | 5 | ❌ |
 | 8 · Permissions | 0 | 4 | ❌ |
 | Docs | 0 | 7 | ❌ |
-| **Plan total** | **57** | **86** | |
+| **Plan total** | **63** | **86** | |
 
 ### 13.13 Change log
 
@@ -1815,6 +1844,7 @@ over anything else in the document.
 | Date | What landed | Boxes ticked |
 |---|---|---|
 | 2026-08-31 | This plan written; the tree audited to establish the starting position | — (0 of 86) |
+| 2026-09-01 | **Phase 5 — few-shot injection, built and shipped off.** `RetrievedContext.examples` + `TemplateExample`, and `GENERATE_SYSTEM`'s `{examples}` slot written `{schema}\n{examples}\n{history}` so the empty case collapses to **v8's exact bytes** — asserted, not asserted-about. `PROMPT_VERSION` v8 → v9. `match` collects near misses on a *miss* only (a short-circuit has no generator to teach) and `retrieve` carries them; §5.2's disclosure gate is applied in `render_examples`, at render time, withholding a `MODEL_DERIVED` template's literals whole under `NONE`/`AGGREGATE`. Budget: last in the prompt, four examples, 1,600 chars against the comment block's 2,500, long ones skipped rather than cut. `--templates on|off` on the runner, building the store from the suite itself, holding out two in five deterministically and excluding every record from the store it is measured against; `examples_offered` / `short_circuited` on the scorecard so an arm that matched nothing cannot be read as a measurement. Migration `0019` + the settings toggle, **default false**. 26 new backend tests. Docs: eval.md (the templates arm and §6.1, the gate, with both commands and empty cells), pipeline.md §5 (the v9 table), CLAUDE.md, llm-calls.md, CODEBASE.md. **The gate box stays open: the runs need a provider key, and the decision that follows from an unmet gate is the default the code ships.** | 63 of 86 (§13.7, 6 of 7) |
 | 2026-09-01 | **Phase 4 — store health.** `app/knowledge/compare.py` — the eval harness's result-set comparator moved **down** a layer (`app.eval -> app.knowledge` is permitted; nothing on the request path gained an import of `app.eval`), plus `first_difference`, which returns the *diverging rows* rather than a boolean. `app/knowledge/conflict.py` — `similar_pairs` at a measured 0.60 threshold and `probe_values`, which refuses to invent a string it was not given, because a check that reports the store healthy because it could not test it is worse than no check. `KnowledgeService.sweep_staleness`, run inline on every schema sync: `ACTIVE` → `STALE` with the guard's own sentence, **and `STALE` → `ACTIVE` when the schema heals**. `app/workers/knowledge_maintenance.py` — the conflict checker (similarity → bind both at the same values → execute both through `execute_saved_sql` → compare) on a six-hour loop and on demand, marking **both** rows and storing the diverging rows from each one's own point of view. Migration `0018`: `conflict_evidence`, `last_conflict_check_at`, and `connections.conflict_checks_enabled` — the off switch, checked before a connector opens. `GET /health`, `POST /templates/revalidate`. Frontend: the conflict pane with the two answers side by side and the cell that moved in amber, the *Check the store* action, and the faint unused line with no button beside it. 45 new backend tests plus 14 frontend checks. | 57 of 86 (§13.6 all 7, §13.8 first two) |
 | 2026-08-31 | **Phase 3 — capture: feedback, the queue, the backlog.** `answer_feedback` + migration `0017`; `POST /runs/{id}/feedback` open to **any** signed-in user (the person who notices a wrong answer is rarely the person allowed to fix it), with three verdicts and a `CORRECT` arriving already resolved. `app/knowledge/backlog.py` — the five ranked sources and the vocabulary gap, pure and unit-tested; `FeedbackService` — the queue, the resolution, and the aggregation over `runs`, `dashboard_tiles` and `report_blocks`. `GET /reviews`, `POST /reviews/{id}/resolve` (a dismissal needs a reason), `GET /suggestions`. Frontend: the inline ✓/✗/*Ask for review* footer, *Save as a template* opening the **same** editor the Knowledge tab uses, and the queue and backlog as two more sections of the one list. **`became_template` reaches the flagger on their own answer**, and saving a template from a flag resolves it in the same action. 42 new backend tests plus 14 frontend checks. Also: `tests/conftest.py` now forces JSON logs — an unhandled exception in a route was taking **over a minute** to render through structlog's rich console renderer, which made a failing API test look like a hung suite. | 48 of 86 (§13.5, all 9) |
 | 2026-08-31 | **Phase 2 — match, short-circuit, badge.** `app/knowledge/matcher.py` (the Protocol, `LexicalMatcher` over an injected row source, `trigram_similarity` as Postgres' own algorithm, and the declared-value masking without which the plan's worked example scores 0.83) and `bind.py` (the date grammar and the cancel-on-unbound rule, substituting on the tree). The `match` node between `route` and `retrieve`, wired with both exits — a hit lands on `validate`, so a stored template reuses the guard, the rewriter and the row cap and gets no exemption; a miss writes nothing. `knowledge_template_hits` + migration `0016` + `runs.skip_templates`; every verdict logged, `OVERRIDDEN_BY_USER` included. The three-tier badge in `chat.tsx` with the matched question *and* the bound parameters, and *Generate a fresh answer instead* wired through `POST /runs/{id}/override`. 86 new backend tests. Docs: pipeline.md §2/§3 (the node, the graph, the eleven-node table), CLAUDE.md. **`PROMPT_VERSION` is still `v8`, and a test asserts it.** | 39 of 86 (§13.4, all 12) |
