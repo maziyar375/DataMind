@@ -10,11 +10,11 @@
 > **Four decisions were taken before writing this** (§0.2). They are recorded
 > here rather than re-argued: everything below assumes them.
 >
-> **48 of 86 items, verified against the tree on 2026-08-31.** Phase 0 has
-> landed except its three baseline runs, which need a provider key; **Phases 1,
-> 2 and 3 are complete** — the store is built, filled by hand *and* from
-> traffic, read on the ask path, and the loop closes back to the person who
-> flagged an answer. `PROMPT_VERSION` has not moved.
+> **57 of 86 items.** Phase 0 has landed except its three baseline runs, which
+> need a provider key; **Phases 1, 2, 3 and 4 are complete** — the store is
+> built, filled by hand *and* from traffic, read on the ask path, kept from
+> rotting, and the loop closes back to the person who flagged an answer.
+> `PROMPT_VERSION` has not moved.
 > [§13](#13-progress-ledger--what-is-done-what-is-not) is the
 > ledger: what is already in the codebase and load-bearing (§13.1), then a
 > checkbox per deliverable per phase, each with the check that proves its state.
@@ -1533,7 +1533,7 @@ it is not, no amount of Phase 5 will help.
 > reading the code, not by memory; every ❌ was confirmed absent the same way.
 > The verification note beside each item is what to re-run to check it again.
 >
-> **Status: 48 of 86 plan items complete.** Phase 0's instruments are built
+> **Status: 57 of 86 plan items complete.** Phase 0's instruments are built
 > (its three measurements are not — see §13.2, and they gate Phase 5 only), and
 > **Phases 1–3 have landed in full**: the store, the curation surface, the
 > guard's fifth entry point, the short-circuit, the badge, feedback, the review
@@ -1710,15 +1710,35 @@ replayed through the new door. **No chat answer behaves differently.**
 >   it. Treating a ✓ as open work would put a permanent number on the tab that
 >   no curator could clear, which is how a badge stops being a signal.
 
-### 13.6 Phase 4 — Store health · **0 / 7** ❌ not started
+### 13.6 Phase 4 — Store health · **7 / 7** ✅ landed
 
-- [ ] Re-validate every `ACTIVE` template on schema sync → `STALE` with a readable `status_reason`
-- [ ] `STALE` / `CONFLICTED` withdrawn from matching and few-shot, never deleted
-- [ ] `app/workers/knowledge_maintenance.py`
-- [ ] Conflict detection: similarity → bind both → execute both through the guard → compare with `app/knowledge/compare.py`
-- [ ] `conflicts_with` populated, **and the diverging rows shown as evidence**
-- [ ] Per-connection off switch for the scheduled checker
-- [ ] `test_knowledge_conflicts.py`
+- [x] Re-validate every `ACTIVE` template on schema sync → `STALE` with a readable `status_reason` — `KnowledgeService.sweep_staleness`, called inline from `POST /connections/{id}/schema/sync` in the same transaction, because it is `guard()` per template and makes **no** call to the customer's database. The reverse transition is there too: a template that resolves again returns to `ACTIVE` on its own, without which the first bad sync is permanent
+- [x] `STALE` / `CONFLICTED` withdrawn from matching and few-shot, never deleted — `KnowledgeTemplate.is_withdrawn` beside `is_matchable`, and the predicate is in the candidate query as well as in the code
+- [x] `app/workers/knowledge_maintenance.py` — `run_maintenance` (staleness first, then conflicts, and the order matters), `maintenance_loop` on a six-hour timer wired into `lifespan`, and `KnowledgeMaintenanceExecutor` for the on-demand path
+- [x] Conflict detection: similarity → bind both → execute both through the guard → compare with `app/knowledge/compare.py` — `app/knowledge/conflict.py` holds the pure half (`similar_pairs` at a **measured** 0.60 threshold, `probe_values`), the worker holds the I/O, and execution goes through `execute_saved_sql`, the same door a dashboard tile uses
+- [x] `conflicts_with` populated, **and the diverging rows shown as evidence** — `knowledge_templates.conflict_evidence` (migration `0018`), written from *each* row's own point of view so whichever the curator opens sees its own answer on the left; `ConflictEvidencePane` renders the two tables with the cell that moved in amber
+- [x] Per-connection off switch for the scheduled checker — `connections.conflict_checks_enabled`, checked **before** a connector is opened, and it stops only the half that executes SQL: the staleness sweep is a parse and keeps running
+- [x] `test_knowledge_conflicts.py` — 45 tests, plus 14 new frontend checks
+
+> **Done.** Two things landed beyond the sketch, both recorded rather than
+> quietly absorbed:
+>
+> * **`app/knowledge/compare.py` landed here, not in Phase 6.** Phase 4's own
+>   text says the conflict checker compares with it, so the move had to happen
+>   now — the eval harness's pure comparator came *down* a layer and
+>   `app/eval/metrics.py` re-exports it. That ticks the first two boxes of
+>   §13.8 in this commit; `lint-imports` is green and nothing on the request
+>   path gained an import of `app.eval`.
+> * **Both halves of every state transition, not just the bad one.** A stale
+>   template that resolves again returns to `ACTIVE`; a conflicted pair that
+>   agrees on a later pass is cleared. The plan only asked for the transitions
+>   *into* the withdrawn states, and a store that can enter one and never leave
+>   it is one nobody trusts — healing it would mean a curator opening forty
+>   rows and pressing Save on each.
+>
+> One thing deliberately **not** built: the checker does not pick a winner.
+> Both rows are marked, both keep their evidence, and §4.7's *Keep the first /
+> Keep the second / Edit both* stays a human decision.
 
 ### 13.7 Phase 5 — Few-shot, behind an eval gate · **0 / 7** ❌ not started
 
@@ -1733,10 +1753,10 @@ replayed through the new door. **No chat answer behaves differently.**
 > A negative delta on a small model is a result to publish, not a reason to tune
 > until it goes positive.
 
-### 13.8 Phase 6 — Benchmark and a score · **0 / 7** ❌ not started
+### 13.8 Phase 6 — Benchmark and a score · **2 / 7** ⚠️ the comparator moved in Phase 4
 
-- [ ] The pure comparator moves to `app/knowledge/compare.py`; `app/eval/metrics.py` imports it
-- [ ] `import-linter` still green — `app.eval` reachable from nothing on the request path
+- [x] The pure comparator moves to `app/knowledge/compare.py`; `app/eval/metrics.py` imports it — **landed with Phase 4**, which needed it for the conflict checker. `values_equal`, `rows_equal`, `result_sets_match` and both tolerance constants, plus `first_difference` for the evidence; `metrics.py` re-exports them so every existing caller and `tests/eval/test_metrics.py` keep working against one implementation
+- [x] `import-linter` still green — `app.eval` reachable from nothing on the request path — 8 contracts kept, and `test_knowledge_conflicts.py` asserts on the **parse** that `compare.py` imports nothing from `app.`
 - [ ] `benchmark_sets` / `benchmark_runs` / `benchmark_results` — **separate from `eval_runs` / `eval_results`**
 - [ ] `role` enforced in the query that builds each set (§1.3)
 - [ ] A fixed fraction assigned `HELD_OUT` at creation
@@ -1779,13 +1799,13 @@ Docs land in the same commit as the code, per this repo's convention.
 | 1 · Store + curation surface | 22 | 22 | ✅ |
 | 2 · Match, short-circuit, badge | 12 | 12 | ✅ |
 | 3 · Capture | 9 | 9 | ✅ |
-| 4 · Store health | 0 | 7 | ❌ |
+| 4 · Store health | 7 | 7 | ✅ |
 | 5 · Few-shot | 0 | 7 | ❌ |
-| 6 · Benchmark | 0 | 7 | ❌ |
+| 6 · Benchmark | 2 | 7 | ⚠️ the comparator moved with Phase 4 |
 | 7 · Embeddings | 0 | 5 | ❌ |
 | 8 · Permissions | 0 | 4 | ❌ |
 | Docs | 0 | 7 | ❌ |
-| **Plan total** | **48** | **86** | |
+| **Plan total** | **57** | **86** | |
 
 ### 13.13 Change log
 
@@ -1795,6 +1815,7 @@ over anything else in the document.
 | Date | What landed | Boxes ticked |
 |---|---|---|
 | 2026-08-31 | This plan written; the tree audited to establish the starting position | — (0 of 86) |
+| 2026-09-01 | **Phase 4 — store health.** `app/knowledge/compare.py` — the eval harness's result-set comparator moved **down** a layer (`app.eval -> app.knowledge` is permitted; nothing on the request path gained an import of `app.eval`), plus `first_difference`, which returns the *diverging rows* rather than a boolean. `app/knowledge/conflict.py` — `similar_pairs` at a measured 0.60 threshold and `probe_values`, which refuses to invent a string it was not given, because a check that reports the store healthy because it could not test it is worse than no check. `KnowledgeService.sweep_staleness`, run inline on every schema sync: `ACTIVE` → `STALE` with the guard's own sentence, **and `STALE` → `ACTIVE` when the schema heals**. `app/workers/knowledge_maintenance.py` — the conflict checker (similarity → bind both at the same values → execute both through `execute_saved_sql` → compare) on a six-hour loop and on demand, marking **both** rows and storing the diverging rows from each one's own point of view. Migration `0018`: `conflict_evidence`, `last_conflict_check_at`, and `connections.conflict_checks_enabled` — the off switch, checked before a connector opens. `GET /health`, `POST /templates/revalidate`. Frontend: the conflict pane with the two answers side by side and the cell that moved in amber, the *Check the store* action, and the faint unused line with no button beside it. 45 new backend tests plus 14 frontend checks. | 57 of 86 (§13.6 all 7, §13.8 first two) |
 | 2026-08-31 | **Phase 3 — capture: feedback, the queue, the backlog.** `answer_feedback` + migration `0017`; `POST /runs/{id}/feedback` open to **any** signed-in user (the person who notices a wrong answer is rarely the person allowed to fix it), with three verdicts and a `CORRECT` arriving already resolved. `app/knowledge/backlog.py` — the five ranked sources and the vocabulary gap, pure and unit-tested; `FeedbackService` — the queue, the resolution, and the aggregation over `runs`, `dashboard_tiles` and `report_blocks`. `GET /reviews`, `POST /reviews/{id}/resolve` (a dismissal needs a reason), `GET /suggestions`. Frontend: the inline ✓/✗/*Ask for review* footer, *Save as a template* opening the **same** editor the Knowledge tab uses, and the queue and backlog as two more sections of the one list. **`became_template` reaches the flagger on their own answer**, and saving a template from a flag resolves it in the same action. 42 new backend tests plus 14 frontend checks. Also: `tests/conftest.py` now forces JSON logs — an unhandled exception in a route was taking **over a minute** to render through structlog's rich console renderer, which made a failing API test look like a hung suite. | 48 of 86 (§13.5, all 9) |
 | 2026-08-31 | **Phase 2 — match, short-circuit, badge.** `app/knowledge/matcher.py` (the Protocol, `LexicalMatcher` over an injected row source, `trigram_similarity` as Postgres' own algorithm, and the declared-value masking without which the plan's worked example scores 0.83) and `bind.py` (the date grammar and the cancel-on-unbound rule, substituting on the tree). The `match` node between `route` and `retrieve`, wired with both exits — a hit lands on `validate`, so a stored template reuses the guard, the rewriter and the row cap and gets no exemption; a miss writes nothing. `knowledge_template_hits` + migration `0016` + `runs.skip_templates`; every verdict logged, `OVERRIDDEN_BY_USER` included. The three-tier badge in `chat.tsx` with the matched question *and* the bound parameters, and *Generate a fresh answer instead* wired through `POST /runs/{id}/override`. 86 new backend tests. Docs: pipeline.md §2/§3 (the node, the graph, the eleven-node table), CLAUDE.md. **`PROMPT_VERSION` is still `v8`, and a test asserts it.** | 39 of 86 (§13.4, all 12) |
 | 2026-08-31 | **Phase 1 — the store and the curation surface.** `app/knowledge/` (models, normalize, params, validate) with an eighth import-linter contract; `knowledge_templates` + migration `0015` (`pg_trgm` inside a SAVEPOINT, so a role that may not create extensions still migrates); `knowledge_service.py`; `/connections/{id}/knowledge/*` with `can_curate` on every write and `is_admin` nowhere; the Knowledge tab, its DOM-free half and its 60-check suite. Five test files, 216 backend tests — the hostile corpus replayed through the fifth door on save, on use, and with a slot spliced in. Docs: CLAUDE.md (the guard's *five* entry points, a Knowledge templates section, the code map, the eighth contract), security.md §3.2/§3.3/§4.5 (the disclosure rung and the fifth door), docs/README.md (the three unindexed docs indexed together). **The store is inert: `PROMPT_VERSION` is still v8, nothing in `app/pipeline/` imports `app.knowledge`, and no chat answer behaves differently.** | 27 of 86 (§13.3, all 22) |

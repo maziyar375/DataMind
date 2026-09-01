@@ -75,6 +75,14 @@ class Settings(BaseSettings):
     # `docs/learning-loop-plan.md`; every write path already asks
     # `services.policy.can_curate`, so the flip is this line and nothing else.
     curation_admin_only: bool = False
+    # How often the store-health sweep runs: re-validate every live template,
+    # then run near-duplicate pairs against each other and compare the rows.
+    # Six hours, because a store rots on the schema's schedule rather than on
+    # the request rate — a re-sync already sweeps staleness inline, and this is
+    # the pass that catches the connection nobody has opened in a month. The
+    # conflict half executes SQL on the customer's database and is switchable
+    # off per connection (`connections.conflict_checks_enabled`).
+    knowledge_maintenance_interval_seconds: int = 21_600
 
     # ── llm ──────────────────────────────────────────────────────────────
     llm_request_timeout_seconds: int = 60

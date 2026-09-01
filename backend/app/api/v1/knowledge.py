@@ -22,10 +22,12 @@ from app.api.deps import CtxDep, DbDep, SettingsDep
 from app.api.schemas import (
     AnswerFeedbackRead,
     KnowledgeCapabilities,
+    KnowledgeHealth,
     KnowledgeTemplateList,
     KnowledgeTemplatePatch,
     KnowledgeTemplateRead,
     KnowledgeTemplateWrite,
+    MaintenanceRead,
     ReviewRead,
     ReviewResolve,
     SuggestionRead,
@@ -42,8 +44,13 @@ from app.knowledge import (
     TemplateStatus,
     slots,
 )
-from app.services.knowledge_service import FeedbackService, KnowledgeService
+from app.services.knowledge_service import (
+    UNUSED_AFTER_DAYS,
+    FeedbackService,
+    KnowledgeService,
+)
 from app.services.policy import can_curate
+from app.workers.knowledge_maintenance import run_maintenance
 
 router = APIRouter(
     prefix="/connections/{connection_id}/knowledge", tags=["knowledge"]
@@ -84,11 +91,14 @@ async def list_templates(
 ) -> KnowledgeTemplateList:
     """Every template, with the drift the current snapshot creates.
 
-    Drift is computed on read rather than swept for, exactly as the semantic
-    layer does it: the UI shows a template that stopped working the moment a
-    re-sync creates that fact, with no migration and no background job. It is
-    **reported, not persisted** — withdrawing a template from use is a
-    behaviour change and belongs to Phase 4.
+    Drift is computed on read *as well as* swept for, and the two answer
+    different questions. The sweep runs on a schema sync and on demand, and it
+    writes `STALE`. This read re-validates whatever is still `ACTIVE` and
+    reports it in `stale_ids` without writing anything — so a template that
+    stopped working between the last sweep and this page load is amber on the
+    screen rather than silently trusted, exactly as the semantic layer does it.
+    A row the sweep already withdrew carries `status: "STALE"` and is counted
+    in `health` instead.
     """
     connection = await _owned(db, connection_id, ctx)
     service = KnowledgeService(db, settings)
@@ -112,6 +122,55 @@ async def list_templates(
         schema_synced=bool(current),
         can_curate=can_curate(ctx, settings),
         stale_ids=stale,
+        health=await _health(service, connection),
+    )
+
+
+@router.get("/health", response_model=KnowledgeHealth)
+async def store_health(
+    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+) -> KnowledgeHealth:
+    """Stale, conflicted and unused counts — §4.7's three rows.
+
+    Read-only and open to any reader of the connection, like the queue itself:
+    knowing that the answer you are about to trust came from a store with four
+    conflicts in it is not a privilege.
+    """
+    connection = await _owned(db, connection_id, ctx)
+    return await _health(KnowledgeService(db, settings), connection)
+
+
+@router.post("/templates/revalidate", response_model=MaintenanceRead)
+async def revalidate_store(
+    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+) -> MaintenanceRead:
+    """Sweep this connection's store now, and say what changed.
+
+    Synchronous on purpose, unlike the semantic layer's generation job. The
+    staleness half is a parse per template; the conflict half is two read-only,
+    row-capped queries per near-duplicate pair, bounded by
+    `MAX_PAIRS_PER_PASS`. That is a request a curator can wait for, and waiting
+    means the list they are looking at refreshes to what the sweep found rather
+    than to a job id.
+
+    `can_curate`, because it writes template statuses — and because the
+    conflict half runs statements against the customer's database, which is not
+    something every reader of a connection should be able to start.
+    """
+    connection = await _owned(db, connection_id, ctx)
+    _require_curator(ctx, settings)
+
+    result = await run_maintenance(db, settings, connection)
+    return MaintenanceRead(
+        checked=result.staleness.checked,
+        staled=result.staleness.staled,
+        revived=result.staleness.revived,
+        conflicted=result.conflicts.conflicted,
+        cleared=result.conflicts.cleared,
+        pairs_considered=result.conflicts.pairs_considered,
+        pairs_executed=result.conflicts.pairs_executed,
+        skipped=result.conflicts.skipped,
+        conflicts_checked=result.conflicts_checked,
     )
 
 
@@ -339,6 +398,20 @@ async def list_suggestions(
         )
         for item in items
     ]
+
+
+async def _health(
+    service: KnowledgeService, connection: DatabaseConnection
+) -> KnowledgeHealth:
+    health = await service.health(connection)
+    return KnowledgeHealth(
+        total=health.total,
+        stale=health.stale,
+        conflicted=health.conflicted,
+        unused=health.unused,
+        conflict_checks_enabled=connection.conflict_checks_enabled,
+        unused_after_days=UNUSED_AFTER_DAYS,
+    )
 
 
 async def _display_name(db, user_id: UUID | None) -> str:

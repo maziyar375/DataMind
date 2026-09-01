@@ -244,8 +244,13 @@ backend/app/
                   the three roles, the disclosure rule), normalize.py (the match
                   key), params.py (the AST walk that offers parameters and
                   refuses the rest), validate.py (the guard's fifth entry
-                  point) — self-contained like sqlguard, and allowed to call
-                  the guard because that is what it is for
+                  point), matcher.py + bind.py (the short-circuit and the
+                  cancel-on-unbound rule), backlog.py (what to teach next),
+                  compare.py (the result-set comparator — moved down from
+                  app/eval so the conflict checker and the benchmark share one
+                  set of tolerances), conflict.py (which pairs are worth
+                  running, and with what values) — self-contained like sqlguard,
+                  and allowed to call the guard because that is what it is for
   semantic/       what the schema *means*: models.py (the document), validate.py
                   (bind it to a snapshot, parse metric SQL), generator.py (build
                   one with a model, one call per table), render.py (the prompt
@@ -282,7 +287,11 @@ backend/app/
                   and report.py (generation jobs; minutes long, so they are
                   polled not streamed, with cooperative-then-hard cancel) +
                   report_graph.py (the compiled report graph; a full generation
-                  and a per-section retry are two entries into it)
+                  and a per-section retry are two entries into it) +
+                  knowledge_maintenance.py (store health: the staleness sweep,
+                  and the conflict checker that runs two near-duplicate
+                  templates and compares the rows — never on a request path,
+                  switchable off per connection)
 
 backend/           ← these are SIBLINGS of app/, not inside it
   tests/          unit (incl. test_sqlguard_hostile.py) + integration + eval
@@ -759,9 +768,9 @@ shapes. That is the class this addresses.
 ## Knowledge templates
 
 > The store the learning loop fills, and the plan behind it:
-> **[docs/learning-loop-plan.md](docs/learning-loop-plan.md)**. Phase 1 is in
-> the tree; Phase 2 (match and short-circuit) and Phase 3 (feedback, the review
-> queue, the backlog) follow.
+> **[docs/learning-loop-plan.md](docs/learning-loop-plan.md)**. Phases 1–4 are
+> in the tree: the store, the match and short-circuit, feedback and the
+> backlog, and the sweep that keeps the store from rotting.
 
 The semantic layer says what the schema *means*. A knowledge template is the
 next thing along: **a question somebody already answered correctly**, stored so
@@ -888,6 +897,47 @@ Ships the reason anyone curates.
   question-shaped (a template), definition-shaped (the semantic layer), or
   neither (dismiss with a reason) — three radios, §1.5's rule as an
   interaction.
+
+**Store health — staleness and conflict (Phase 4).** A curated store decays two
+ways, and the two have different costs, so they are two different jobs.
+
+- **Staleness is a parse, so it runs inline on the sync that caused it.**
+  `KnowledgeService.sweep_staleness` re-validates every live template against
+  the snapshot `POST /schema/sync` just wrote: `ACTIVE` → `STALE` with the
+  guard's own sentence in `status_reason` (*"column `orders.region` no longer
+  exists"*, plus the fix), withdrawn from matching and from few-shot, **never
+  deleted**. The reverse transition is there too — a template that resolves
+  again returns to `ACTIVE` on its own, without which the first bad sync is
+  permanent and healing the store means editing forty rows by hand. An empty
+  snapshot changes nothing: that is a broken sync, not a broken store.
+- **Conflict is an execution, and it is what no competitor can do.** Fabric
+  reasons over SQL *text* and reports a confidence of 1–5.
+  `app/workers/knowledge_maintenance.py` finds near-duplicate normalised
+  questions (0.60, measured against real pairs, not picked), binds **both** to
+  the same probe values, runs both through `execute_saved_sql` — the guard's
+  own door, read-only, row-capped at 500 — and compares with
+  `app/knowledge/compare.py`. Differ → **both** rows `CONFLICTED`,
+  `conflicts_with` populated, and the diverging rows stored in
+  `conflict_evidence` from each row's own point of view. The system never picks
+  a winner.
+- **Probe values are derived, never invented.** A date slot gets a fixed past
+  window; a string slot gets a value the *curator* declared; a string slot with
+  no declared vocabulary **stops the pair**, logged with the slot's name. A
+  guessed noun would compare two empty result sets and call that agreement —
+  a check that reports the store healthy because it could not test it.
+- **The comparator moved down a layer, and that is deliberate.** `values_equal`
+  / `result_sets_match` / the tolerances now live in `app/knowledge/compare.py`
+  and `app/eval/metrics.py` re-exports them. `app.eval` is offline-only by
+  contract, and the conflict checker and Phase 6's in-product benchmark both
+  need exactly these tolerances: one implementation, both callers, contract
+  intact.
+- **The customer's off switch is `connections.conflict_checks_enabled`**,
+  checked *before* a connector is opened. It stops only the half that runs SQL
+  on their database; the staleness sweep is a parse and keeps working.
+- **Pruning is surfaced, never enforced.** Ninety days with no hits earns one
+  faint line and no action button. Genie caps instructions at 100 per agent;
+  DataMind's version of that cap is visibility, because a template written for
+  a question asked once a year is not waste.
 
 ---
 

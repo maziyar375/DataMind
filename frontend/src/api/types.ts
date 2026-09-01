@@ -304,11 +304,61 @@ export interface KnowledgeTemplate {
   status_reason: string
   schema_version: number
   referenced_tables: string[]
+  /** The other templates this one disagrees with. Populated only by the
+   *  conflict checker — never by a form. */
+  conflicts_with: string[]
+  /** **The rows that prove a conflict.** Fabric reasons over SQL text and
+   *  reports a confidence of 1–5; this ran both statements and compared the
+   *  answers, so the pane shows the disagreement rather than a warning. Empty
+   *  on every healthy template; every cell is already a string. */
+  conflict_evidence: ConflictEvidence
   hit_count: number
   last_hit_at: string | null
   verified_at: string | null
+  last_validated_at: string | null
   created_at: string
   updated_at: string
+}
+
+/** What `knowledge_templates.conflict_evidence` holds. Written from this
+ *  template's own point of view, so `left_*` is always *this* one's answer. */
+export interface ConflictEvidence {
+  summary?: string
+  left_columns?: string[]
+  right_columns?: string[]
+  left_rows?: string[][]
+  right_rows?: string[][]
+}
+
+/** The store's health — §4.7's three rows of the curator's queue.
+ *  Ids rather than counts, because the queue links to the templates. */
+export interface KnowledgeHealth {
+  total: number
+  stale: string[]
+  conflicted: string[]
+  /** No matches, and old enough for that to mean something. Surfaced, never
+   *  enforced: a template written for a question asked once a year is not
+   *  waste, so this list carries no action button. */
+  unused: string[]
+  /** False means *was not allowed to look*, which must never be printed as
+   *  *found nothing*. */
+  conflict_checks_enabled: boolean
+  unused_after_days: number
+}
+
+/** What one on-demand sweep did, for the button that asked for it. */
+export interface MaintenanceResult {
+  checked: number
+  staled: string[]
+  revived: string[]
+  conflicted: string[]
+  cleared: string[]
+  pairs_considered: number
+  pairs_executed: number
+  /** Pairs the checker declined to run, each naming the slot that had no probe
+   *  value — how a curator learns that a parameter needs a value list. */
+  skipped: string[]
+  conflicts_checked: boolean
 }
 
 export interface KnowledgeTemplateList {
@@ -317,9 +367,12 @@ export interface KnowledgeTemplateList {
   schema_synced: boolean
   /** Whether this reader may write. The UI **hides** rather than disables. */
   can_curate: boolean
-  /** Templates whose SQL no longer resolves against the current snapshot.
-   *  Reported on read, not persisted — Phase 4 is what writes `STALE`. */
+  /** Templates whose SQL no longer resolves against the current snapshot but
+   *  the sweep has not yet withdrawn — read-time drift, reported the moment a
+   *  re-sync creates it. A row the sweep already withdrew carries
+   *  `status: 'STALE'` and is counted in `health.stale` instead. */
   stale_ids: string[]
+  health: KnowledgeHealth
 }
 
 /** What `POST .../templates/check` answers, in one round trip. */

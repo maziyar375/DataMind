@@ -32,7 +32,11 @@ from app.api.v1 import connections as connections_api
 from app.core.clock import utcnow
 from app.core.context import RequestContext
 from app.domain.ports.database import ColumnInfo, SchemaSnapshot, TableInfo
-from app.infra.db.models import DatabaseConnection, SchemaSnapshotRow
+from app.infra.db.models import (
+    DatabaseConnection,
+    KnowledgeTemplateRow,
+    SchemaSnapshotRow,
+)
 from app.main import create_app
 
 USER = uuid4()
@@ -197,6 +201,13 @@ class FakeDb:
             return _Result(self.stored)
         if name == "version":
             return _Result(self.stored.version if self.stored else None)
+        if entity is KnowledgeTemplateRow:
+            # Phase 4: a sync re-validates the knowledge store against the
+            # snapshot it just wrote. This connection has no templates, so the
+            # sweep is a no-op — but the query is real and the fake must answer
+            # it rather than assert, or every catalog test fails for a reason
+            # that has nothing to do with catalogs.
+            return _Result(None, rows=[])
         raise AssertionError(f"unexpected query: {statement}")
 
     def add(self, obj: Any) -> None:
@@ -212,11 +223,23 @@ class FakeDb:
 
 
 class _Result:
-    def __init__(self, value: Any) -> None:
+    def __init__(self, value: Any, rows: list[Any] | None = None) -> None:
         self._value = value
+        self._rows = rows or []
 
     def scalar_one_or_none(self) -> Any:
         return self._value
+
+    def scalars(self) -> Any:
+        return _Scalars(self._rows)
+
+
+class _Scalars:
+    def __init__(self, rows: list[Any]) -> None:
+        self._rows = rows
+
+    def all(self) -> list[Any]:
+        return self._rows
 
 
 @pytest.fixture

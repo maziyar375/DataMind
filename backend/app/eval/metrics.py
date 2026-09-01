@@ -10,24 +10,33 @@ tested without a database or a model:
 5. latency p50/p95 (llm/validate/db), tokens, cost per question
 
 `exact_match` is computed as a diagnostic only and is never a gate.
+
+**The result-set comparator lives in `app/knowledge/compare.py`, not here.**
+It was written here and moved down a layer in Phase 4, because the conflict
+checker and the in-product benchmark need exactly these tolerances and this
+package is offline-only by contract — `app.eval -> app.knowledge` is a
+permitted direction, and nothing on the request path gained an import of
+`app.eval`. It is re-exported below so every existing caller and test keeps
+working against one implementation.
 """
 from __future__ import annotations
 
-import math
 import re
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
-Row = list[Any]
-# Relative tolerance soaks up float noise on large magnitudes (a million-scale
-# SUM summed in a different order). The absolute tolerance matches the golden
-# set's own precision: golds report figures with round(x, 2), so any value
-# within half a cent of the gold is the *same* answer at the precision the gold
-# states. Without this, a correct `AVG(x)` (957.416) is scored wrong against a
-# gold `round(sum/count, 2)` (957.42) — a presentation gap, not an error.
-NUMERIC_REL_TOLERANCE = 1e-6
-NUMERIC_ABS_TOLERANCE = 5e-3
+# Re-exported, not re-implemented. Every existing caller — `runner.py`, and
+# `tests/eval/test_metrics.py`, which is where the tolerances are pinned —
+# keeps importing them from here.
+from app.knowledge.compare import (  # noqa: F401
+    NUMERIC_ABS_TOLERANCE,
+    NUMERIC_REL_TOLERANCE,
+    Row,
+    result_sets_match,
+    rows_equal,
+    values_equal,
+)
 
 # Outcome labels, most-desirable first. `MATCH` is the only success.
 OUTCOME_MATCH = "MATCH"
@@ -36,73 +45,6 @@ OUTCOME_EXEC_FAILED = "EXEC_FAILED"    # valid SQL the database still rejected
 OUTCOME_VALIDATION_FAILED = "VALIDATION_FAILED"  # guard rejected every attempt
 OUTCOME_NO_SQL = "NO_SQL"              # routed away from SQL (metadata/chitchat/…)
 OUTCOME_ERROR = "ERROR"                # pipeline/gold crash
-
-
-# ── value & result-set comparison (execution accuracy) ──────────────────────
-
-
-def _as_number(value: Any) -> float | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        try:
-            return float(value)
-        except ValueError:
-            return None
-    # Decimal, date, etc. — try str->float, else not numeric.
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def values_equal(
-    a: Any,
-    b: Any,
-    rel_tol: float = NUMERIC_REL_TOLERANCE,
-    abs_tol: float = NUMERIC_ABS_TOLERANCE,
-) -> bool:
-    if a is None or b is None:
-        return a is None and b is None
-    na, nb = _as_number(a), _as_number(b)
-    if na is not None and nb is not None:
-        return math.isclose(na, nb, rel_tol=rel_tol, abs_tol=abs_tol)
-    return str(a).strip() == str(b).strip()
-
-
-def _rows_equal(a: Row, b: Row) -> bool:
-    return len(a) == len(b) and all(values_equal(x, y) for x, y in zip(a, b, strict=False))
-
-
-def result_sets_match(gold: list[Row], candidate: list[Row], equivalence: str) -> bool:
-    """Execution accuracy: compare by position within each row.
-
-    * `ordered_rows` — row order is part of the answer (rankings, time series).
-    * everything else — unordered multiset of rows.
-
-    Column names are ignored; the match is positional and tolerance-aware (see
-    the tolerance constants). The unordered case is a greedy multiset match
-    rather than a hash on rounded keys, so two rows equal *within tolerance*
-    match even when they would round to different keys at a bucket boundary.
-    Result sets here are small, so the O(n^2) match is not a concern. Two
-    correct queries are rarely string-identical, which is why string equality
-    is never the gate.
-    """
-    if len(gold) != len(candidate):
-        return False
-    if equivalence == "ordered_rows":
-        return all(_rows_equal(g, c) for g, c in zip(gold, candidate, strict=False))
-    remaining = list(candidate)
-    for g in gold:
-        for i, c in enumerate(remaining):
-            if _rows_equal(g, c):
-                remaining.pop(i)
-                break
-        else:
-            return False
-    return True
 
 
 _WS = re.compile(r"\s+")

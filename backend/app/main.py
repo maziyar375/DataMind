@@ -16,6 +16,7 @@ from app.infra.db.session import dispose_engine, get_sessionmaker
 from app.infra.events.listener import RunEventListener
 from app.services.bootstrap import ensure_admin
 from app.workers.inprocess import InProcessRunExecutor
+from app.workers.knowledge_maintenance import maintenance_loop
 from app.workers.reconciler import reconcile_once, reconciler_loop
 from app.workers.report import ReportRunExecutor
 from app.workers.report import stranded_runs as stranded_report_runs
@@ -71,11 +72,18 @@ async def lifespan(app: FastAPI):
     app.state.run_executor.start_claiming()
 
     reconciler = asyncio.create_task(reconciler_loop(settings))
+    # Store health: re-validate every live template, then run near-duplicate
+    # pairs against each other and compare the rows. Its first tick is one
+    # interval away, deliberately — a fleet restarting together must not open a
+    # connector to every customer database in the same second, and a schema
+    # sync already sweeps staleness inline on the request that caused it.
+    knowledge_maintenance = asyncio.create_task(maintenance_loop(settings))
     log.info("raymand_started", environment=settings.environment)
 
     try:
         yield
     finally:
+        knowledge_maintenance.cancel()
         reconciler.cancel()
         await app.state.run_executor.stop_claiming()
         await app.state.run_event_listener.stop()

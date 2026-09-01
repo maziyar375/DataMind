@@ -74,6 +74,10 @@ def _connection(owner_id: UUID = USER) -> DatabaseConnection:
         max_rows=1000,
         statement_timeout_ms=30_000,
         disclosure_policy="SAMPLE",
+        # Spelled out because the column's default is applied on flush and this
+        # row is never inserted: a real connection is never `None` here, and a
+        # fake that was would exercise the "checks are off" branch by accident.
+        conflict_checks_enabled=True,
     )
 
 

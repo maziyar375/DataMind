@@ -11,8 +11,8 @@ import type {
   AnswerFeedback,
   ArtifactSpec, ChartRedraw, Connection, ConversationSummary, Dashboard, DashboardDocument,
   DashboardImportResult, DashboardSummary,
-  DashboardTile, KnowledgeTemplate, KnowledgeTemplateList,
-  LlmConfig, MessageWithRun, ProblemDetail, Report, ReportBlock,
+  DashboardTile, KnowledgeHealth, KnowledgeTemplate, KnowledgeTemplateList,
+  LlmConfig, MaintenanceResult, MessageWithRun, ProblemDetail, Report, ReportBlock,
   ReportBlockCheck, ReportChart, ReportRun, ReportRunDetail, ReportSection,
   ReportSectionResult,
   ReportSummary, Review, RunDetail, RunEvent, RunKnowledge, SchemaSnapshot,
@@ -269,6 +269,18 @@ export const knowledge = {
     ),
   capabilities: (connectionId: string) =>
     get<{ can_curate: boolean }>(`/connections/${connectionId}/knowledge/capabilities`),
+  // Store health, and the sweep that produces it. `revalidate` is synchronous
+  // rather than a job: the staleness half is a parse per template and the
+  // conflict half is two row-capped read-only queries per near-duplicate pair,
+  // so the list the curator is looking at refreshes to what the sweep found
+  // rather than to a job id.
+  health: (connectionId: string) =>
+    get<KnowledgeHealth>(`/connections/${connectionId}/knowledge/health`),
+  revalidate: (connectionId: string) =>
+    post<MaintenanceResult>(
+      `/connections/${connectionId}/knowledge/templates/revalidate`,
+      {},
+    ),
   check: (
     connectionId: string,
     payload: {

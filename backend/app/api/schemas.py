@@ -175,6 +175,10 @@ class ConnectionUpdate(BaseModel):
     semantic_layer_enabled: bool | None = None
     clarify_enabled: bool | None = None
     include_db_comments: bool | None = None
+    #: The scheduled conflict checker's off switch. It is the one part of the
+    #: learning loop that runs statements against the customer's database
+    #: without anybody asking, so it gets a checkbox rather than an argument.
+    conflict_checks_enabled: bool | None = None
 
 
 class ConnectionRead(BaseModel):
@@ -195,6 +199,7 @@ class ConnectionRead(BaseModel):
     semantic_layer_enabled: bool = True
     clarify_enabled: bool = True
     include_db_comments: bool = True
+    conflict_checks_enabled: bool = True
     status: str
     readonly_confirmed: bool
     server_version: str | None = None
@@ -400,9 +405,17 @@ class KnowledgeTemplateRead(BaseModel):
     status_reason: str = ""
     schema_version: int = 0
     referenced_tables: list[str] = Field(default_factory=list)
+    #: The other templates this one disagrees with, and the rows that prove it
+    #: — `{summary, left_columns, right_columns, left_rows, right_rows}`, all
+    #: cells already strings. Empty on every healthy template. §4.7's pane
+    #: renders this rather than a warning, because the rows *are* the evidence
+    #: and a conflict nobody can see the evidence for is one nobody acts on.
+    conflicts_with: list[UUID] = Field(default_factory=list)
+    conflict_evidence: dict[str, Any] = Field(default_factory=dict)
     hit_count: int = 0
     last_hit_at: datetime | None = None
     verified_at: datetime | None = None
+    last_validated_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -419,9 +432,53 @@ class KnowledgeTemplateList(BaseModel):
     schema_version: int = 0
     schema_synced: bool = False
     can_curate: bool = True
-    #: Templates whose SQL no longer resolves against the current snapshot.
-    #: Reported, not persisted — Phase 4 is what writes `STALE`.
+    #: Templates whose SQL no longer resolves against the current snapshot but
+    #: are not yet marked `STALE` — read-time drift, reported the moment a
+    #: re-sync creates it. A template the sweep has already withdrawn carries
+    #: `status: "STALE"` instead, and appears in `health.stale`.
     stale_ids: list[UUID] = Field(default_factory=list)
+    #: The store's health, so the tab can show the queue's counts without a
+    #: second round trip. Phase 4.
+    health: KnowledgeHealth = Field(default_factory=lambda: KnowledgeHealth())
+
+
+class KnowledgeHealth(BaseModel):
+    """Stale, conflicted and unused — the three rows of §4.7's queue.
+
+    Ids rather than counts, because the queue links to the templates and a
+    count the UI cannot turn into a list is a number nobody can act on.
+    `unused` is deliberately last and deliberately actionless: a template
+    written for a question asked once a year is not waste, so this is
+    information rather than an accusation.
+    """
+
+    total: int = 0
+    stale: list[UUID] = Field(default_factory=list)
+    conflicted: list[UUID] = Field(default_factory=list)
+    unused: list[UUID] = Field(default_factory=list)
+    #: Whether the scheduled conflict checker may run on this connection. False
+    #: means "was not allowed to look", which the UI must never print as
+    #: "found nothing".
+    conflict_checks_enabled: bool = True
+    #: How many days with no hits earns a mention.
+    unused_after_days: int = 90
+
+
+class MaintenanceRead(BaseModel):
+    """What one on-demand sweep did, for the button that asked for it."""
+
+    checked: int = 0
+    staled: list[UUID] = Field(default_factory=list)
+    revived: list[UUID] = Field(default_factory=list)
+    conflicted: list[UUID] = Field(default_factory=list)
+    cleared: list[UUID] = Field(default_factory=list)
+    pairs_considered: int = 0
+    pairs_executed: int = 0
+    #: Pairs the checker declined to run, each naming the slot that had no
+    #: probe value. Surfaced rather than swallowed: it is how a curator learns
+    #: that a parameter needs a value list.
+    skipped: list[str] = Field(default_factory=list)
+    conflicts_checked: bool = False
 
 
 class TemplateParamWrite(BaseModel):

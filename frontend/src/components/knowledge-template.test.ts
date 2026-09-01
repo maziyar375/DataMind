@@ -11,6 +11,7 @@
  */
 import {
   CORRECTION_SHAPES,
+  conflictEvidence, differingCells,
   isUnused, markLiterals, matches, previewQuestion, questionParts, questionSlots,
   readiness, resolveReadiness, roleLabel, rowSubtitle, sections, statusOf,
   suggestionSection, suggestionView, tabCount, valuesOf,
@@ -300,6 +301,97 @@ check(
 )
 // A definition goes to the semantic layer, so there is nothing to save here.
 check('definition-shaped needs nothing else', resolveReadiness('definition', '', false).ready, true)
+
+// ── the conflict's evidence (Phase 4) ─────────────────────────────────────
+// The rows *are* the evidence. Fabric reasons over SQL text and reports a
+// confidence of 1–5; this ran both statements and compared the answers, so the
+// pane shows the disagreement rather than a warning about one.
+const EVIDENCE = {
+  summary: 'The two statements return the same rows with different values.',
+  left_columns: ['month', 'revenue'],
+  right_columns: ['month', 'revenue'],
+  left_rows: [['2026-07', '481220']],
+  right_rows: [['2026-07', '512940']],
+}
+
+check(
+  'the evidence comes through in the shape the pane renders',
+  conflictEvidence(EVIDENCE),
+  {
+    summary: EVIDENCE.summary,
+    mine: { columns: ['month', 'revenue'], rows: [['2026-07', '481220']] },
+    theirs: { columns: ['month', 'revenue'], rows: [['2026-07', '512940']] },
+    hasRows: true,
+  },
+)
+
+// A pane that threw on a missing key would take the whole tab down over a
+// template nobody was looking at — and this comes from a JSONB column.
+check(
+  'a healthy template has no evidence and does not throw',
+  conflictEvidence({}),
+  { summary: '', mine: { columns: [], rows: [] },
+    theirs: { columns: [], rows: [] }, hasRows: false },
+)
+check('undefined evidence is the same as none', conflictEvidence(undefined).hasRows, false)
+check('a malformed row is dropped rather than rendered', conflictEvidence({
+  left_rows: [['a'], 'not-a-row', 7],
+}).mine.rows, [['a']])
+check('every cell is a string by the time the pane sees it', conflictEvidence({
+  left_rows: [[1, null]],
+}).mine.rows, [['1', 'null']])
+
+// A conflict recorded before the evidence column existed still shows its
+// reason — the pane says the rows are gone rather than drawing an empty table.
+check(
+  'a reason with no rows is still a reason',
+  conflictEvidence({ summary: 'Two templates answer this differently.' }),
+  {
+    summary: 'Two templates answer this differently.',
+    mine: { columns: [], rows: [] }, theirs: { columns: [], rows: [] },
+    hasRows: false,
+  },
+)
+
+// The reader is not asked to compare two tables by eye: the cell that moved is
+// marked, positionally, because the comparator that produced the rows is
+// positional too.
+check(
+  'the differing cell is the one that moved',
+  differingCells(['2026-07', '481220'], ['2026-07', '512940']),
+  [false, true],
+)
+check('identical rows differ nowhere', differingCells(['a', 'b'], ['a', 'b']), [false, false])
+check(
+  'a missing counterpart row marks every cell',
+  differingCells(['a', 'b'], []),
+  [true, true],
+)
+check(
+  'a wider row is compared to its full width',
+  differingCells(['a'], ['a', 'b']),
+  [false, true],
+)
+
+// ── the two statuses Phase 4 writes ───────────────────────────────────────
+// Both are withdrawn from answering and both stay visible: deleting a person's
+// work to hide drift is worse than showing it.
+check('a conflicted template is work for a human', statusOf({
+  ...row(), status: 'CONFLICTED',
+}).needsYou, true)
+check('and it says so in words, not only in colour', statusOf({
+  ...row(), status: 'CONFLICTED',
+}).label, 'Conflicted')
+check('a stale template is work too', statusOf({ ...row(), status: 'STALE' }).glyph, '⚠')
+check(
+  "the conflict reason is what the row's second line says",
+  rowSubtitle(
+    { ...row(), status: 'CONFLICTED',
+      status_reason: 'Two templates answer this differently — “revenue by month” disagrees.' },
+    false,
+  ).right,
+  'Two templates answer this differently — “revenue by month” disagrees.',
+)
 
 console.log(failures === 0 ? '\nall passed' : `\n${failures} failed`)
 if (failures > 0) throw new Error(`${failures} test(s) failed`)

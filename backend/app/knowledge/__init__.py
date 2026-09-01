@@ -30,6 +30,24 @@ from app.knowledge.backlog import (
     rank_suggestions,
     unknown_words,
 )
+from app.knowledge.compare import (
+    MAX_EVIDENCE_ROWS,
+    NUMERIC_ABS_TOLERANCE,
+    NUMERIC_REL_TOLERANCE,
+    Divergence,
+    first_difference,
+    result_sets_match,
+    rows_equal,
+    values_equal,
+)
+from app.knowledge.conflict import (
+    CONFLICT_SIMILARITY_THRESHOLD,
+    PROBE_WINDOW_DAYS,
+    Pair,
+    Probe,
+    probe_values,
+    similar_pairs,
+)
 from app.knowledge.models import (
     KnowledgeTemplate,
     LiteralProvenance,
@@ -66,7 +84,21 @@ from app.knowledge.validate import (
 )
 
 __all__ = [
+    "CONFLICT_SIMILARITY_THRESHOLD",
     "DEFAULT_SUGGESTED",
+    "PROBE_WINDOW_DAYS",
+    "Pair",
+    "Probe",
+    "probe_values",
+    "similar_pairs",
+    "MAX_EVIDENCE_ROWS",
+    "NUMERIC_ABS_TOLERANCE",
+    "NUMERIC_REL_TOLERANCE",
+    "Divergence",
+    "first_difference",
+    "result_sets_match",
+    "rows_equal",
+    "values_equal",
     "RANK",
     "STOPWORDS",
     "DRIFT_RULES",

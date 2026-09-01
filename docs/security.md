@@ -624,6 +624,41 @@ Hand-written SQL goes through the identical guard — there is no trusted path
 for SQL a human typed, and `sql_origin` on either table is provenance for the
 editor, never a signal the guard consults.
 
+### 4.6 The conflict checker runs statements nobody asked for
+
+Phase 4 of the learning loop added the one thing in this product that executes
+SQL against a customer's database **without a person having asked a question**:
+`app/workers/knowledge_maintenance.py` takes two templates whose questions are
+near-duplicates, binds both to the same probe values, runs both, and compares
+the result sets — because two templates that disagree on the same connection is
+a fact rather than an opinion, and the diverging rows are the evidence.
+
+That is a real widening of when this system talks to a customer's database, so
+it is worth stating exactly what it does and does not get:
+
+* **It gets no exemption.** Execution goes through `execute_saved_sql`, the
+  same entry point a dashboard tile uses — the guard, name resolution against
+  the *current* snapshot, the rewriter, the row cap, the statement timeout and
+  the connection's own read-only credentials, in that order. There is no code
+  path in this worker that reaches a driver another way.
+* **It is capped tighter than a tile**, at `COMPARE_ROW_CAP` (500) rather than
+  `connections.max_rows`: a disagreement shows itself in the first page.
+* **It makes no model call**, so no rung of §3's disclosure ladder applies to
+  it. The rows it reads are compared in `app/knowledge/compare.py` and the
+  diverging ones are stored in `knowledge_templates.conflict_evidence` — shown
+  only to a reader of that connection, who can already run the statement in the
+  editor and read every row of it.
+* **It is switchable off per connection**, `connections.conflict_checks_enabled`,
+  checked *before* a connector is opened rather than after. Off stops only this
+  half; the staleness sweep is a parse and keeps working.
+* **It never runs on a request path.** The scheduled loop is in
+  `app/workers/`; the on-demand form is `POST .../templates/revalidate`, gated
+  by `can_curate` precisely because it starts statements against the customer's
+  database.
+
+`tests/unit/test_knowledge_conflicts.py` asserts each of these, including that
+no connector is opened at all when the switch is off.
+
 ---
 
 ## 5. Containment underneath correctness

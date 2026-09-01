@@ -34,8 +34,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { knowledge as api } from '../api/client'
 import type {
-  Connection, KnowledgeTemplate, ParamProposal, Review, Suggestion,
-  TemplateCheckResult, TemplateParam,
+  Connection, KnowledgeHealth, KnowledgeTemplate, MaintenanceResult,
+  ParamProposal, Review, Suggestion, TemplateCheckResult, TemplateParam,
 } from '../api/types'
 import {
   Chip, DangerButton, EmptyState, ErrorNote, Field, GhostButton, Icon, Modal,
@@ -44,9 +44,9 @@ import {
 import type { ChipTone } from './ui'
 import { DetailBody } from './settings'
 import {
-  CORRECTION_SHAPES, markLiterals, matches, previewQuestion, questionParts,
-  readiness, resolveReadiness, roleLabel, rowSubtitle, sections, statusOf,
-  suggestionView,
+  CORRECTION_SHAPES, conflictEvidence, differingCells, markLiterals, matches,
+  previewQuestion, questionParts, readiness, resolveReadiness, roleLabel,
+  rowSubtitle, sections, statusOf, suggestionView,
 } from './knowledge-template'
 import type { CorrectionShape, TemplateRow } from './knowledge-template'
 
@@ -77,6 +77,9 @@ const CODE: React.CSSProperties = {
 export function KnowledgeTab({ connection }: { connection: Connection }) {
   const [rows, setRows] = useState<KnowledgeTemplate[]>([])
   const [staleIds, setStaleIds] = useState<string[]>([])
+  const [health, setHealth] = useState<KnowledgeHealth | null>(null)
+  const [sweeping, setSweeping] = useState(false)
+  const [sweepNote, setSweepNote] = useState<string | null>(null)
   const [canCurate, setCanCurate] = useState(true)
   const [synced, setSynced] = useState(true)
   const [loading, setLoading] = useState(true)
@@ -102,6 +105,7 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
     const body = await api.list(connection.id, true)
     setRows(body.templates)
     setStaleIds(body.stale_ids)
+    setHealth(body.health)
     setCanCurate(body.can_curate)
     setSynced(body.schema_synced)
     // The queue and the backlog load beside the store, not after it: they are
@@ -136,6 +140,24 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
       await refresh()
     } catch (err) {
       setError(messageOf(err))
+    }
+  }
+
+  /** Sweep now: re-validate every live template, then run near-duplicate pairs
+   *  against each other and compare the rows. The result is a sentence about
+   *  what changed, not a job id — the list under it has already refreshed to
+   *  whatever the sweep found. */
+  async function sweep() {
+    setSweeping(true)
+    setSweepNote(null)
+    try {
+      const result = await api.revalidate(connection.id)
+      await refresh()
+      setSweepNote(sweepSummary(result))
+    } catch (err) {
+      setError(messageOf(err))
+    } finally {
+      setSweeping(false)
     }
   }
 
@@ -180,6 +202,12 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
             ariaLabel="Search taught questions"
           />
         </div>
+        {canCurate && synced && rows.length > 1 && (
+          <GhostButton onClick={sweep} disabled={sweeping}>
+            {sweeping ? <Spinner size={13} /> : <Icon.Refresh size={13} />}
+            Check the store
+          </GhostButton>
+        )}
         {canCurate && synced && (
           <PrimaryButton onClick={() => setEditing('new')}>
             <Icon.Plus size={14} />
@@ -187,6 +215,21 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
           </PrimaryButton>
         )}
       </div>
+
+      {sweepNote && (
+        <div style={hint()}>{sweepNote}</div>
+      )}
+
+      {health && health.unused.length > 0 && (
+        // The quietest possible treatment, from §4.7: a faint line and no
+        // action button. A template written for a question asked once a year
+        // is not waste — this is information, not an accusation.
+        <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+          {health.unused.length}{' '}
+          {health.unused.length === 1 ? 'template has' : 'templates have'} had no
+          matches in {health.unused_after_days} days.
+        </div>
+      )}
 
       {rows.length === 0 && !search && <FirstRun canCurate={canCurate && synced} />}
 
@@ -316,6 +359,7 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
           template={selected}
           drifted={staleIds.includes(selected.id)}
           canCurate={canCurate}
+          siblings={rows}
           onEdit={() => setEditing(selected)}
           onArchive={() => archive(selected)}
           onClose={() => setSelectedId(null)}
@@ -737,11 +781,14 @@ function Question({ text }: { text: string }) {
 }
 
 function Detail({
-  template, drifted, canCurate, onEdit, onArchive, onClose,
+  template, drifted, canCurate, siblings, onEdit, onArchive, onClose,
 }: {
   template: KnowledgeTemplate
   drifted: boolean
   canCurate: boolean
+  /** Every other template on this connection, so a conflict can name the
+   *  question it disagrees with rather than printing a uuid. */
+  siblings: KnowledgeTemplate[]
   onEdit: () => void
   onArchive: () => void
   onClose: () => void
@@ -790,6 +837,13 @@ function Detail({
             {template.status_reason ||
               'This template stopped working when the schema changed.'}
           </div>
+        )}
+
+        {template.status === 'CONFLICTED' && (
+          <ConflictEvidencePane
+            evidence={template.conflict_evidence}
+            others={conflictLabels(template, siblings)}
+          />
         )}
 
         <div>
@@ -849,6 +903,136 @@ function Detail({
     </div>
   )
 }
+
+/**
+ * The conflict's evidence: two answers to one question, side by side.
+ *
+ * **This is the pane no competitor can draw.** Fabric detects conflicting
+ * instructions by reasoning over SQL text and reports a confidence score of
+ * one to five; DataMind ran both statements through the guard, read-only and
+ * row-capped, and compared the result sets — so what goes here is *"481,220
+ * against 512,940"*, and the cell that moved is marked.
+ *
+ * Deliberately not a diff widget and deliberately no new colour: two small
+ * tables in the tokens the tab already uses, the differing cell in `--amber`,
+ * and the reason above them in the curator's own language.
+ */
+function ConflictEvidencePane({
+  evidence, others,
+}: {
+  evidence: unknown
+  others: string[]
+}) {
+  const view = conflictEvidence(evidence)
+
+  return (
+    <div>
+      <Label>Why this is flagged</Label>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 8 }}>
+        {view.summary ||
+          'Two templates answer this question differently.'}
+      </div>
+
+      {!view.hasRows ? (
+        <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+          The rows that showed this are no longer stored. Run the check again to
+          see them.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <EvidenceTable
+            caption="This template"
+            columns={view.mine.columns}
+            rows={view.mine.rows}
+            against={view.theirs.rows}
+          />
+          <EvidenceTable
+            caption={others[0] ? `“${others[0]}”` : 'The other template'}
+            columns={view.theirs.columns}
+            rows={view.theirs.rows}
+            against={view.mine.rows}
+          />
+        </div>
+      )}
+
+      <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 8 }}>
+        Both are still stored and neither answers questions until one is fixed
+        or archived — the system does not pick a winner.
+      </div>
+    </div>
+  )
+}
+
+/** One side of the disagreement. The cell that differs is marked, so the
+ *  reader is not asked to compare two tables by eye. */
+function EvidenceTable({
+  caption, columns, rows, against,
+}: {
+  caption: string
+  columns: string[]
+  rows: string[][]
+  against: string[][]
+}) {
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: 'var(--text-faint)', marginBottom: 3 }}>
+        {caption}
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ ...CODE, borderCollapse: 'collapse', width: '100%',
+                        padding: 0, borderRadius: 8 }}>
+          {columns.length > 0 && (
+            <thead>
+              <tr>
+                {columns.map((c, i) => (
+                  <th key={i} style={{ ...cellStyle, color: 'var(--text-faint)',
+                                       fontWeight: 500 }}>
+                    {c}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+          )}
+          <tbody>
+            {rows.map((row, r) => {
+              const differs = differingCells(row, against[r] ?? [])
+              return (
+                <tr key={r}>
+                  {row.map((value, c) => (
+                    <td key={c}
+                        style={{ ...cellStyle,
+                                 color: differs[c] ? 'var(--amber)' : undefined }}>
+                      {value}
+                    </td>
+                  ))}
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+const cellStyle: React.CSSProperties = {
+  padding: '4px 8px',
+  borderBottom: '1px solid var(--border)',
+  textAlign: 'left',
+  whiteSpace: 'nowrap',
+}
+
+/** The questions this template disagrees with, by id — never a raw uuid. */
+function conflictLabels(
+  template: KnowledgeTemplate,
+  siblings: KnowledgeTemplate[],
+): string[] {
+  const byId = new Map(siblings.map((t) => [t.id, t.question]))
+  return (template.conflicts_with ?? [])
+    .map((id) => byId.get(id))
+    .filter((q): q is string => Boolean(q))
+}
+
 
 /**
  * The editor — the screen that matters most.
@@ -1192,7 +1376,51 @@ function asRow(t: KnowledgeTemplate): TemplateRow {
     hit_count: t.hit_count,
     last_hit_at: t.last_hit_at,
     verified_at: t.verified_at,
+    conflicts_with: t.conflicts_with,
+    conflict_evidence: t.conflict_evidence,
   }
+}
+
+/**
+ * What a sweep did, in one sentence a curator can act on.
+ *
+ * Reported rather than left to a silent refresh: a button that appears to do
+ * nothing is a button people press twice and then stop trusting. The "was not
+ * allowed to look" case is named explicitly, because printing *"found no
+ * conflicts"* for a connection whose checks are switched off would be a lie.
+ */
+function sweepSummary(result: MaintenanceResult): string {
+  const parts: string[] = []
+  if (result.staled.length) {
+    parts.push(`${result.staled.length} stopped working`)
+  }
+  if (result.revived.length) {
+    parts.push(`${result.revived.length} started working again`)
+  }
+  if (result.conflicted.length) {
+    parts.push(`${result.conflicted.length} disagree with another template`)
+  }
+  if (result.cleared.length) {
+    parts.push(`${result.cleared.length} no longer disagree`)
+  }
+
+  const checked = `Checked ${result.checked} ${
+    result.checked === 1 ? 'template' : 'templates'
+  }`
+  if (!result.conflicts_checked) {
+    return `${checked}${parts.length ? `: ${parts.join(', ')}` : ' — nothing changed'}. ` +
+      'Conflict checks are switched off for this connection, so no statements were run.'
+  }
+  const skipped = result.skipped.length
+    ? ` ${result.skipped.length} pair${result.skipped.length === 1 ? '' : 's'} could ` +
+      'not be checked — a parameter had no values to try.'
+    : ''
+  if (!parts.length) {
+    return `${checked} and ${result.pairs_executed} pair${
+      result.pairs_executed === 1 ? '' : 's'
+    }. Nothing changed.${skipped}`
+  }
+  return `${checked}: ${parts.join(', ')}.${skipped}`
 }
 
 function messageOf(err: unknown): string {

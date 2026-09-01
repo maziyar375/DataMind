@@ -140,6 +140,15 @@ class DatabaseConnection(Base, TimestampMixin):
     # secrets and ticket numbers in comments; this is their one checkbox, and
     # off is byte-identical to the prompt from before the feature existed.
     include_db_comments: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Whether the scheduled conflict checker may run two of this connection's
+    # templates and compare their results. The staleness sweep is a parse and
+    # keeps running either way; this switch is only about executing SQL on the
+    # customer's database on a schedule, which is the one thing in Phase 4 that
+    # a customer might reasonably refuse. On by default — a store rotting
+    # unnoticed is the failure the phase exists to prevent — and the checks
+    # inherit the connection's read-only credentials, row cap and timeout
+    # without exception.
+    conflict_checks_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(20), default="UNTESTED")
     readonly_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -1025,6 +1034,18 @@ class KnowledgeTemplateRow(Base, TimestampMixin):
     conflicts_with: Mapped[list[uuid.UUID]] = mapped_column(
         ARRAY(PgUUID(as_uuid=True)), nullable=False, default=list,
         server_default=text("'{}'"),
+    )
+    #: The rows that *prove* two templates disagree — `{summary, left_columns,
+    #: right_columns, left_rows, right_rows}` from `knowledge.compare`. Fabric
+    #: reasons over SQL text and reports a confidence of 1–5; this ran both
+    #: statements and compared the answers, and the difference between a
+    #: warning and a fact is whether the curator can see the rows. Written only
+    #: by `workers/knowledge_maintenance.py`.
+    conflict_evidence: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    last_conflict_check_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
     )
 
     # Separate, and both SET NULL. A template mined from a tile was created by

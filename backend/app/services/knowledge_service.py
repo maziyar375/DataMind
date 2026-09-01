@@ -7,8 +7,9 @@ things are worth knowing before changing this file:
   stored as it was written, not as it was true; the schema moves underneath it.
   Validating on save answers "is this legal at all", and re-validating on read
   is what lets the UI show drift the moment a re-sync creates it — without a
-  migration and without a background sweep. The re-validation *reports*; it
-  does not persist a status change. Phase 4 is what writes `STALE`.
+  migration and without a background sweep. `revalidate` *reports*;
+  `sweep_staleness` is the one that writes `STALE`, and it runs on the sync
+  that caused the drift.
 * **`app.knowledge` owns the reasoning; this module owns every DB call.** The
   package below cannot import sqlalchemy, and that is the contract that keeps
   the guard's fifth entry point from growing a query of its own.
@@ -16,6 +17,7 @@ things are worth knowing before changing this file:
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 from uuid import UUID
@@ -89,6 +91,53 @@ MAX_NOTE_CHARS = 4_000
 _NO_SNAPSHOT = (
     "Sync this connection's schema first — a template is checked against it."
 )
+
+#: When a template with no hits starts being *mentioned*. Ninety days, from
+#: §4.7: long enough that a quarterly question is not accused of being waste,
+#: short enough that a store filling with near-misses says so within a quarter.
+UNUSED_AFTER_DAYS = 90
+
+
+@dataclass(slots=True)
+class StalenessResult:
+    """What one sweep changed. Ids rather than counts, so a caller can say
+    *which* templates stopped working rather than how many."""
+
+    checked: int = 0
+    staled: list[UUID] = field(default_factory=list)
+    revived: list[UUID] = field(default_factory=list)
+
+    @property
+    def changed(self) -> int:
+        return len(self.staled) + len(self.revived)
+
+
+@dataclass(slots=True)
+class StoreHealth:
+    """The three numbers §4.7 puts in the curator's queue."""
+
+    total: int = 0
+    stale: list[UUID] = field(default_factory=list)
+    conflicted: list[UUID] = field(default_factory=list)
+    #: No hits, and old enough for that to mean something. Surfaced, never
+    #: enforced — this list has no action button beside it.
+    unused: list[UUID] = field(default_factory=list)
+
+
+def _stale_reason(verdict: TemplateVerdict) -> str:
+    """The guard's own sentence, plus the fix, in that order.
+
+    §4.7 leads the pane with the reason and then the fix. Rewriting the guard's
+    message into something friendlier loses the object that moved, which is the
+    only part a curator can act on.
+    """
+    message = verdict.message or "This template no longer validates."
+    if verdict.drifted:
+        return (
+            f"{message} The schema has changed since this template was saved — "
+            "re-sync the connection, then edit the SQL."
+        )
+    return message
 
 
 class KnowledgeService:
@@ -207,6 +256,7 @@ class KnowledgeService:
             schema_version=snapshot["version"],
             referenced_tables=verdict.referenced_tables,
             conflicts_with=[],
+            conflict_evidence={},
             created_by=actor_id,
             # Authoring *is* verification: a person typed this and pressed
             # save. A proposal mined from a tile arrives unverified in Phase 3
@@ -308,11 +358,122 @@ class KnowledgeService:
 
         Phase 1 uses this to *show* drift on read. It deliberately does not
         write `STALE`: withdrawing a template from use is a behaviour change,
-        and this phase changes no behaviour. Phase 4 is where the worker
-        persists the verdict.
+        and `sweep_staleness` below is what makes it.
         """
         snapshot = await self._snapshot(connection.id)
         return self._verdict(connection, snapshot, self.to_model(row))
+
+    # ── staleness (Phase 4: this one persists) ───────────────────────────
+    async def sweep_staleness(
+        self, connection: DatabaseConnection
+    ) -> StalenessResult:
+        """Re-validate every live template and write the verdict down.
+
+        Runs on every schema sync. Three transitions, and the third is the one
+        people forget:
+
+        * **ACTIVE and no longer legal → `STALE`**, with the guard's own
+          sentence in `status_reason` — *"column `orders.region` no longer
+          exists"* and not "validation failed". Withdrawn from matching and
+          from few-shot, kept, never deleted.
+        * **`STALE` and legal again → `ACTIVE`**, reason cleared. A column
+          renamed back, or a re-sync that picks up a schema the previous one
+          missed, must heal the store without a curator editing forty rows by
+          hand. Without this the first bad sync is permanent.
+        * **everything else → untouched**, including `ARCHIVED` and
+          `CONFLICTED`. A conflict is a disagreement about meaning and is not
+          resolved by the schema moving; overwriting it here would drop the
+          evidence a curator was about to read.
+
+        Makes no database call against the *customer's* database and no model
+        call: it is `guard()` over the new snapshot, once per template, which
+        is why it can run inline on the sync that caused it.
+        """
+        snapshot = await self._snapshot(connection.id)
+        if not snapshot["tables"]:
+            # A sync that produced no tables is a broken sync, not a schema in
+            # which every template is suddenly illegal. Marking the whole store
+            # stale on it would be the loudest possible wrong answer.
+            return StalenessResult()
+
+        result = await self._db.execute(
+            select(KnowledgeTemplateRow).where(
+                KnowledgeTemplateRow.connection_id == connection.id,
+                KnowledgeTemplateRow.status.in_(
+                    (str(TemplateStatus.ACTIVE), str(TemplateStatus.STALE))
+                ),
+            )
+        )
+        rows = list(result.scalars().all())
+
+        out = StalenessResult(checked=len(rows))
+        for row in rows:
+            verdict = self._verdict(connection, snapshot, self.to_model(row))
+            row.last_validated_at = utcnow()
+            if verdict.valid:
+                row.schema_version = snapshot["version"]
+                row.referenced_tables = verdict.referenced_tables
+                if row.status == str(TemplateStatus.STALE):
+                    row.status = str(TemplateStatus.ACTIVE)
+                    row.status_reason = ""
+                    out.revived.append(row.id)
+                continue
+            if row.status == str(TemplateStatus.STALE):
+                # Already withdrawn, and the reason may have changed with the
+                # snapshot. Refreshed rather than left, so the pane never shows
+                # a curator the name of a column that moved two syncs ago.
+                row.status_reason = _stale_reason(verdict)
+                continue
+            row.status = str(TemplateStatus.STALE)
+            row.status_reason = _stale_reason(verdict)
+            out.staled.append(row.id)
+
+        await self._db.flush()
+        if out.staled or out.revived:
+            log.info(
+                "knowledge_staleness_swept",
+                connection_id=str(connection.id),
+                checked=out.checked,
+                staled=len(out.staled),
+                revived=len(out.revived),
+            )
+        return out
+
+    # ── health (Phase 4: what the queue counts) ──────────────────────────
+    async def health(self, connection: DatabaseConnection) -> StoreHealth:
+        """Stale, conflicted and unused counts — the numbers §4.7 shows.
+
+        Unused is *surfaced, not enforced*. Genie caps instructions at 100 per
+        agent; DataMind's version of that cap is visibility plus a suggestion,
+        because a template written for a question asked once a year is not
+        waste. Nothing here deletes or archives anything.
+        """
+        result = await self._db.execute(
+            select(KnowledgeTemplateRow).where(
+                KnowledgeTemplateRow.connection_id == connection.id,
+                KnowledgeTemplateRow.status != str(TemplateStatus.ARCHIVED),
+            )
+        )
+        rows = list(result.scalars().all())
+        cutoff = utcnow() - timedelta(days=UNUSED_AFTER_DAYS)
+
+        health = StoreHealth(total=len(rows))
+        for row in rows:
+            if row.status == str(TemplateStatus.STALE):
+                health.stale.append(row.id)
+            elif row.status == str(TemplateStatus.CONFLICTED):
+                health.conflicted.append(row.id)
+            # Age is measured from creation, not from now: a template written
+            # this morning has not "gone unused", it has not had a chance yet.
+            created = row.created_at
+            if (
+                not row.hit_count
+                and created is not None
+                and created < cutoff
+                and row.status == str(TemplateStatus.ACTIVE)
+            ):
+                health.unused.append(row.id)
+        return health
 
     # ── conversions ──────────────────────────────────────────────────────
     @staticmethod
@@ -333,6 +494,7 @@ class KnowledgeService:
             schema_version=row.schema_version,
             referenced_tables=list(row.referenced_tables or []),
             conflicts_with=list(row.conflicts_with or []),
+            conflict_evidence=dict(row.conflict_evidence or {}),
             created_by=row.created_by,
             verified_by=row.verified_by,
             verified_at=row.verified_at,

@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, status
 from sqlalchemy import select
 
-from app.api.deps import CtxDep, DbDep, SecretBoxDep
+from app.api.deps import CtxDep, DbDep, SecretBoxDep, SettingsDep
 from app.api.schemas import (
     ConnectionCreate,
     ConnectionRead,
@@ -20,6 +20,7 @@ from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.domain.value_objects import HintBudget
 from app.infra.connectors.factory import build_connector
 from app.infra.db.models import DatabaseConnection, SchemaSnapshotRow
+from app.services.knowledge_service import KnowledgeService
 
 router = APIRouter(prefix="/connections", tags=["connections"])
 
@@ -218,7 +219,11 @@ async def test_connection(
 
 @router.post("/{connection_id}/schema/sync", response_model=SchemaRead)
 async def sync_schema(
-    connection_id: UUID, ctx: CtxDep, db: DbDep, box: SecretBoxDep
+    connection_id: UUID,
+    ctx: CtxDep,
+    db: DbDep,
+    box: SecretBoxDep,
+    settings: SettingsDep,
 ) -> SchemaRead:
     """Introspect and store a new snapshot version.
 
@@ -279,6 +284,14 @@ async def sync_schema(
     db.add(row)
     connection.last_synced_at = utcnow()
     await db.flush()
+
+    # Phase 4: the knowledge store is re-validated against the snapshot that
+    # just landed, in the same transaction. Inline rather than queued because
+    # it is `guard()` over each template and makes no call to the customer's
+    # database — so the curator sees the amber rows on the screen this sync
+    # returns to, rather than the next time a worker happens to run. The
+    # *conflict* half is the one that executes SQL, and it stays in the worker.
+    await KnowledgeService(db, settings).sweep_staleness(connection)
 
     return _to_schema_read(row)
 

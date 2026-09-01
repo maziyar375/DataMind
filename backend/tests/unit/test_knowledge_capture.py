@@ -60,6 +60,7 @@ def _connection() -> DatabaseConnection:
         id=CONNECTION_ID, owner_id=USER, name="aurora", database_type="postgres",
         host="h", port=5432, database_name="aurora", username="ro",
         encrypted_password="x", max_rows=1000, statement_timeout_ms=30_000,
+        conflict_checks_enabled=True,
     )
 
 

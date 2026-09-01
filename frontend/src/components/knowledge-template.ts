@@ -41,6 +41,10 @@ export interface TemplateRow {
   hit_count: number
   last_hit_at: string | null
   verified_at: string | null
+  /** Phase 4. Optional so every existing caller and test still builds a row
+   *  with the fields it had — a healthy template has neither. */
+  conflicts_with?: string[]
+  conflict_evidence?: unknown
 }
 
 export interface ProposalRow {
@@ -137,6 +141,70 @@ export function rowSubtitle(
     return { left, right: `${hits} · no matches in 90 days`, tone: 'faint' }
   }
   return { left, right: hits, tone: 'neutral' }
+}
+
+// ── the conflict's evidence (Phase 4) ─────────────────────────────────────
+export interface EvidenceCell {
+  columns: string[]
+  rows: string[][]
+}
+
+export interface ConflictView {
+  summary: string
+  mine: EvidenceCell
+  theirs: EvidenceCell
+  /** False when there is nothing to show — an ordinary template, or a
+   *  conflict recorded before the evidence column existed. The pane renders
+   *  the reason alone rather than an empty table. */
+  hasRows: boolean
+}
+
+/**
+ * The two answers that disagree, in the shape §4.7's pane renders.
+ *
+ * **The rows are the evidence.** Fabric detects conflicting instructions by
+ * reasoning over SQL text and reports a confidence score of one to five;
+ * DataMind ran both statements through the guard and compared the result sets,
+ * so what goes on the screen is *"481,220 against 512,940"* rather than *"we
+ * think these might disagree"*. A conflict a curator cannot see the proof of
+ * is one more warning nobody acts on.
+ *
+ * Defensive about every field: this comes from a JSONB column written by a
+ * worker, and a pane that throws on a missing key would take the whole tab
+ * down over a template nobody was looking at.
+ */
+export function conflictEvidence(evidence: unknown): ConflictView {
+  const raw = (evidence ?? {}) as Record<string, unknown>
+  const mine = cell(raw.left_columns, raw.left_rows)
+  const theirs = cell(raw.right_columns, raw.right_rows)
+  return {
+    summary: typeof raw.summary === 'string' ? raw.summary : '',
+    mine,
+    theirs,
+    hasRows: mine.rows.length > 0 || theirs.rows.length > 0,
+  }
+}
+
+function cell(columns: unknown, rows: unknown): EvidenceCell {
+  return {
+    columns: Array.isArray(columns) ? columns.map(String) : [],
+    rows: Array.isArray(rows)
+      ? rows.filter(Array.isArray).map((r) => (r as unknown[]).map(String))
+      : [],
+  }
+}
+
+/**
+ * Which cells differ between two evidence rows, by position.
+ *
+ * So the pane can mark the number that moved rather than making the reader
+ * compare two tables by eye — which is what turns a conflict pane from a
+ * report into something a curator acts on in one read. Positional, because the
+ * comparator that produced the rows is positional too.
+ */
+export function differingCells(mine: string[], theirs: string[]): boolean[] {
+  const width = Math.max(mine.length, theirs.length)
+  return Array.from({ length: width }, (_, i) => mine[i] !== theirs[i])
 }
 
 /** A template nobody has matched in ninety days. Information, not a verdict. */
