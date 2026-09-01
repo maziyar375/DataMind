@@ -15,6 +15,8 @@ from app.core.logging import configure_logging, get_logger
 from app.infra.db.session import dispose_engine, get_sessionmaker
 from app.infra.events.listener import RunEventListener
 from app.services.bootstrap import ensure_admin
+from app.workers.benchmark import BenchmarkExecutor
+from app.workers.benchmark import sweep_stranded as sweep_stranded_benchmarks
 from app.workers.inprocess import InProcessRunExecutor
 from app.workers.knowledge_maintenance import maintenance_loop
 from app.workers.reconciler import reconcile_once, reconciler_loop
@@ -33,6 +35,7 @@ async def lifespan(app: FastAPI):
     app.state.run_executor = InProcessRunExecutor(settings)
     app.state.semantic_executor = SemanticJobExecutor(settings)
     app.state.report_executor = ReportRunExecutor(settings)
+    app.state.benchmark_executor = BenchmarkExecutor(settings)
 
     async with get_sessionmaker()() as session:
         await ensure_admin(session, settings)
@@ -47,6 +50,15 @@ async def lifespan(app: FastAPI):
     stranded = await sweep_orphans()
     if stranded:
         log.warning("startup_failed_stranded_semantic_jobs", count=stranded)
+
+    # A benchmark is failed rather than resumed. Half of it was scored against
+    # a store, a schema and a model that may all have moved since; a number
+    # assembled from two different worlds is worse than no number.
+    stranded_benchmarks = await sweep_stranded_benchmarks()
+    if stranded_benchmarks:
+        log.warning(
+            "startup_failed_stranded_benchmarks", count=stranded_benchmarks
+        )
 
     # A report run is minutes long, so a restart used to cost the user every
     # section that had not finished. It is resumed instead: the rows already

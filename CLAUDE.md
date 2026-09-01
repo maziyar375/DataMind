@@ -291,7 +291,10 @@ backend/app/
                   knowledge_maintenance.py (store health: the staleness sweep,
                   and the conflict checker that runs two near-duplicate
                   templates and compares the rows — never on a request path,
-                  switchable off per connection)
+                  switchable off per connection) + benchmark.py (the customer's
+                  own accuracy number: the real pipeline per question, the gold
+                  executed through the guard, labels from the comparator and
+                  from no model)
 
 backend/           ← these are SIBLINGS of app/, not inside it
   tests/          unit (incl. test_sqlguard_hostile.py) + integration + eval
@@ -975,6 +978,41 @@ ways, and the two have different costs, so they are two different jobs.
   faint line and no action button. Genie caps instructions at 100 per agent;
   DataMind's version of that cap is visibility, because a template written for
   a question asked once a year is not waste.
+
+**The score — a benchmark of the customer's own (Phase 6).** Where a connection
+owner gets a number about *their* data, without a developer.
+
+- **Separate tables, deliberately.** `benchmark_sets` / `benchmark_runs` /
+  `benchmark_results`, **not** `eval_runs` / `eval_results`. MVP2 Part 5's
+  meta-rule: the customer-facing instrument and the frozen developer suite must
+  stay architecturally separate *"or the two will contaminate each other within
+  a month"*, and sharing a table is how that starts. They share a vocabulary
+  and one comparator; they share no table and no import, and a test asserts the
+  second on the parse.
+- **Building a set withdraws its members from answering.** That is the point,
+  not a side effect: §1.3's rule is that a template is retrievable **or**
+  benchmarkable and never both, and it is enforced in the query the ask path
+  uses. Deleting the set gives the questions back.
+- **A fixed fraction is `HELD_OUT` at creation**, deterministically by sorted id
+  so the split is reproducible from the set's own membership list. **That is
+  the only number worth putting in front of a customer.**
+- **Two numbers, and the strip says which to believe.** Held-out first and
+  larger and on the sparkline; questions answered *from* a template second and
+  smaller, because that one goes up for the wrong reasons. `from_template` is
+  the **observed** fact of what the run did, not a label assigned before it ran.
+  Genie's Evaluations tab shows one number.
+- **Nothing that did not run is in a denominator.** A member whose parameters
+  could not be probed, or whose stored answer no longer executes, is counted in
+  `total` and in neither accuracy — and the difference is shown. An accuracy
+  over a shrinking denominator always flatters.
+- **No LLM judge.** Labels come from `app/knowledge/compare.py`, the same
+  deterministic comparator the eval and the conflict checker use. Fabric fell
+  back to a judge and gets *true / false / unclear*.
+- **Runs execute in `app/workers/benchmark.py`**, through the real
+  `AnalyticsPipeline` — a benchmark that measured a simplified path would
+  measure something nobody experiences. A run stranded by a restart is **failed,
+  not resumed**: half of it was scored against a store, a schema and a model
+  that may all have moved.
 
 ---
 

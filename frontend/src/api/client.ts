@@ -9,7 +9,8 @@
 
 import type {
   AnswerFeedback,
-  ArtifactSpec, ChartRedraw, Connection, ConversationSummary, Dashboard, DashboardDocument,
+  ArtifactSpec, BenchmarkCandidate, BenchmarkOverview, BenchmarkResult,
+  BenchmarkRun, BenchmarkSet, ChartRedraw, Connection, ConversationSummary, Dashboard, DashboardDocument,
   DashboardImportResult, DashboardSummary,
   DashboardTile, KnowledgeHealth, KnowledgeTemplate, KnowledgeTemplateList,
   LlmConfig, MaintenanceResult, MessageWithRun, ProblemDetail, Report, ReportBlock,
@@ -313,6 +314,41 @@ export const knowledge = {
     patch<KnowledgeTemplate>(
       `/connections/${connectionId}/knowledge/templates/${id}`,
       payload,
+    ),
+  // The score (Phase 6). Sets, their history, and one run's per-question
+  // verdicts — because a score nobody can drill into is a score nobody should
+  // trust, and the failure reason on a mismatch is usually the next fix.
+  benchmarks: (connectionId: string) =>
+    get<BenchmarkOverview>(`/connections/${connectionId}/knowledge/benchmarks`),
+  benchmarkCandidates: (connectionId: string) =>
+    get<BenchmarkCandidate[]>(
+      `/connections/${connectionId}/knowledge/benchmarks/candidates`,
+    ),
+  createBenchmark: (
+    connectionId: string,
+    payload: {
+      name: string
+      description?: string
+      template_ids: string[]
+      held_out_fraction?: number
+    },
+  ) =>
+    post<BenchmarkSet>(
+      `/connections/${connectionId}/knowledge/benchmarks`,
+      payload,
+    ),
+  // Really deletes — a set is an instrument, not somebody's knowledge, and the
+  // questions it was built from come back RETRIEVABLE.
+  deleteBenchmark: (connectionId: string, setId: string) =>
+    del(`/connections/${connectionId}/knowledge/benchmarks/${setId}`),
+  runBenchmark: (connectionId: string, setId: string) =>
+    post<BenchmarkRun>(
+      `/connections/${connectionId}/knowledge/benchmarks/${setId}/run`,
+      {},
+    ),
+  benchmarkResults: (connectionId: string, runId: string) =>
+    get<BenchmarkResult[]>(
+      `/connections/${connectionId}/knowledge/benchmarks/runs/${runId}/results`,
     ),
   // Archives. The row is never destroyed — the system does not delete a
   // person's work, so this returns the archived template rather than nothing.

@@ -521,6 +521,82 @@ export interface Review {
   flagged_by: string
 }
 
+// ── benchmarks and the score (Phase 6) ────────────────────────────────────
+/** One run of a set, with **both** numbers — never one.
+ *
+ *  Accuracy on questions answered *from* a template and accuracy on questions
+ *  answered *without* one are different numbers, and only the second moves for
+ *  a reason. `held_out_*` is the one the strip puts first and larger. */
+export interface BenchmarkRun {
+  id: string
+  set_id: string
+  status: 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED'
+  prompt_version: string
+  model_snapshot: Record<string, unknown>
+  total: number
+  /** Members that produced a comparable answer. Below `total` when a member
+   *  could not be probed — an accuracy over a shrinking denominator is the
+   *  classic silent lie, so the difference is shown rather than hidden. */
+  scored: number
+  matched: number
+  held_out_total: number
+  held_out_matched: number
+  taught_total: number
+  taught_matched: number
+  error_message: string
+  started_at: string | null
+  finished_at: string | null
+  created_at: string
+}
+
+export interface BenchmarkSet {
+  id: string
+  connection_id: string
+  name: string
+  description: string
+  template_ids: string[]
+  held_out_fraction: number
+  created_at: string
+  updated_at: string
+  /** Newest first, capped — the sparkline's points. */
+  runs: BenchmarkRun[]
+  held_out_count: number
+}
+
+/** One question's verdict, labelled by the comparator and by no model. */
+export interface BenchmarkResult {
+  id: string
+  template_id: string | null
+  question: string
+  gold_sql: string
+  candidate_sql: string
+  role: 'HELD_OUT' | 'BENCHMARK_ONLY'
+  outcome:
+    | 'MATCH' | 'MISMATCH' | 'EXEC_FAILED' | 'VALIDATION_FAILED'
+    | 'NO_SQL' | 'NOT_PROBED' | 'ERROR'
+  from_template: boolean
+  gold_row_count: number | null
+  candidate_row_count: number | null
+  duration_ms: number
+  failure_reason: string
+}
+
+export interface BenchmarkCandidate {
+  id: string
+  question: string
+  hit_count: number
+  referenced_tables: string[]
+}
+
+/** What the score strip needs, in one round trip. An empty `sets` means the
+ *  strip is **absent** rather than showing zeros — §4.8: never an empty chart. */
+export interface BenchmarkOverview {
+  sets: BenchmarkSet[]
+  can_curate: boolean
+  candidates: number
+  min_set_size: number
+}
+
 /** One row in the backlog: what to teach, and why it is worth teaching. */
 export interface Suggestion {
   kind: 'FLAGGED' | 'BACKFILL' | 'TRAFFIC' | 'FAILED' | 'UNKNOWN_WORDS'

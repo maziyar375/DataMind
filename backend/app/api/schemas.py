@@ -486,6 +486,129 @@ class MaintenanceRead(BaseModel):
     conflicts_checked: bool = False
 
 
+# ── benchmarks and the score (Phase 6) ───────────────────────────────────
+class BenchmarkSetWrite(BaseModel):
+    """Create a set. The members' roles move off `RETRIEVABLE` on save."""
+
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=2_000)
+    template_ids: list[UUID] = Field(default_factory=list)
+    #: What share is held out. Bounded away from 0 and 1: a set with nothing
+    #: held out has no honest number in it, and one that holds out everything
+    #: has no taught number to compare against.
+    held_out_fraction: float = Field(default=0.4, ge=0.1, le=0.9)
+
+
+class BenchmarkRunRead(BaseModel):
+    """One run, with **both** numbers — never one.
+
+    Accuracy on questions answered *from* a template and accuracy on questions
+    answered *without* one are different numbers, and only the second moves for
+    a reason. `held_out_accuracy` is `null` rather than `0` when nothing scored,
+    because a run with no held-out question has no held-out accuracy and
+    printing 0% for it would be the loudest possible wrong answer.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    set_id: UUID
+    status: str
+    prompt_version: str = ""
+    model_snapshot: dict[str, Any] = Field(default_factory=dict)
+    total: int = 0
+    scored: int = 0
+    matched: int = 0
+    held_out_total: int = 0
+    held_out_matched: int = 0
+    taught_total: int = 0
+    taught_matched: int = 0
+    error_message: str = ""
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_at: datetime
+
+    @property
+    def held_out_accuracy(self) -> float | None:
+        return (
+            self.held_out_matched / self.held_out_total
+            if self.held_out_total else None
+        )
+
+    @property
+    def taught_accuracy(self) -> float | None:
+        return (
+            self.taught_matched / self.taught_total if self.taught_total else None
+        )
+
+
+class BenchmarkResultRead(BaseModel):
+    """One question's verdict, labelled by the comparator and by no model."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    template_id: UUID | None = None
+    question: str = ""
+    gold_sql: str = ""
+    candidate_sql: str = ""
+    role: str = "HELD_OUT"
+    outcome: str = "ERROR"
+    from_template: bool = False
+    gold_row_count: int | None = None
+    candidate_row_count: int | None = None
+    duration_ms: int = 0
+    failure_reason: str = ""
+
+
+class BenchmarkSetRead(BaseModel):
+    """A set, its history, and the two numbers from its latest run."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    connection_id: UUID
+    name: str
+    description: str = ""
+    template_ids: list[UUID] = Field(default_factory=list)
+    held_out_fraction: float = 0.4
+    created_at: datetime
+    updated_at: datetime
+    #: Newest first. The score strip draws a sparkline from these, so it is
+    #: capped at a handful — a sparkline of sixty points is a smudge.
+    runs: list[BenchmarkRunRead] = Field(default_factory=list)
+    #: How the split fell at creation, so the strip can say "on 25 held-out
+    #: questions" before a single run exists.
+    held_out_count: int = 0
+
+
+class BenchmarkCandidateRead(BaseModel):
+    """A template a set may be built from."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    question: str
+    hit_count: int = 0
+    referenced_tables: list[str] = Field(default_factory=list)
+
+
+class BenchmarkOverview(BaseModel):
+    """What the Knowledge tab's score strip needs, in one round trip.
+
+    Appears only once a set exists — §4.8: never an empty chart. `sets` is
+    empty on a connection that has not built one, and the strip is simply
+    absent rather than showing zeros.
+    """
+
+    sets: list[BenchmarkSetRead] = Field(default_factory=list)
+    can_curate: bool = True
+    #: How many live templates could go into a set today, so the empty state
+    #: can say something specific instead of "create a benchmark".
+    candidates: int = 0
+    min_set_size: int = 4
+
+
 class TemplateParamWrite(BaseModel):
     """A declared slot, as the editor sends it."""
 

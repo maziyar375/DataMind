@@ -34,8 +34,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { knowledge as api } from '../api/client'
 import type {
-  Connection, KnowledgeHealth, KnowledgeTemplate, MaintenanceResult,
-  ParamProposal, Review, Suggestion, TemplateCheckResult, TemplateParam,
+  BenchmarkOverview, Connection, KnowledgeHealth, KnowledgeTemplate,
+  MaintenanceResult, ParamProposal, Review, Suggestion, TemplateCheckResult,
+  TemplateParam,
 } from '../api/types'
 import {
   Chip, DangerButton, EmptyState, ErrorNote, Field, GhostButton, Icon, Modal,
@@ -45,8 +46,9 @@ import type { ChipTone } from './ui'
 import { DetailBody } from './settings'
 import {
   CORRECTION_SHAPES, conflictEvidence, differingCells, markLiterals, matches,
-  previewQuestion, questionParts, readiness, resolveReadiness, roleLabel,
-  rowSubtitle, sections, statusOf, suggestionView,
+  percent, previewQuestion, questionParts, readiness, resolveReadiness,
+  roleLabel, rowSubtitle, scoreView, sections, sparkHeights, statusOf,
+  suggestionView,
 } from './knowledge-template'
 import type { CorrectionShape, TemplateRow } from './knowledge-template'
 
@@ -78,6 +80,7 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
   const [rows, setRows] = useState<KnowledgeTemplate[]>([])
   const [staleIds, setStaleIds] = useState<string[]>([])
   const [health, setHealth] = useState<KnowledgeHealth | null>(null)
+  const [score, setScore] = useState<BenchmarkOverview | null>(null)
   const [sweeping, setSweeping] = useState(false)
   const [sweepNote, setSweepNote] = useState<string | null>(null)
   const [canCurate, setCanCurate] = useState(true)
@@ -111,12 +114,14 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
     // The queue and the backlog load beside the store, not after it: they are
     // three readings of one screen, and loading them in sequence would make
     // the sections appear one at a time under the reader's cursor.
-    const [queue, backlog] = await Promise.all([
+    const [queue, backlog, benchmarks] = await Promise.all([
       api.reviews(connection.id).catch(() => [] as Review[]),
       api.suggestions(connection.id).catch(() => [] as Suggestion[]),
+      api.benchmarks(connection.id).catch(() => null),
     ])
     setReviews(queue)
     setSuggestions(backlog)
+    setScore(benchmarks)
     return body
   }, [connection.id])
 
@@ -185,6 +190,42 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
         <div style={hint()}>
           Only administrators can add templates on this connection.
         </div>
+      )}
+
+      {score && score.sets.length === 0 &&
+        score.can_curate &&
+        score.candidates >= score.min_set_size && (
+          <StartMeasuring
+            candidates={score.candidates}
+            onCreate={async () => {
+              try {
+                const rows = await api.benchmarkCandidates(connection.id)
+                await api.createBenchmark(connection.id, {
+                  name: 'Accuracy',
+                  description:
+                    'Built from the questions taught up to this point.',
+                  template_ids: rows.map((r) => r.id),
+                })
+                await refresh()
+              } catch (err) {
+                setError(messageOf(err))
+              }
+            }}
+          />
+        )}
+
+      {score && score.sets.length > 0 && (
+        <ScoreStrip
+          overview={score}
+          onRun={async (setId) => {
+            try {
+              await api.runBenchmark(connection.id, setId)
+              await refresh()
+            } catch (err) {
+              setError(messageOf(err))
+            }
+          }}
+        />
       )}
 
       <div
@@ -903,6 +944,173 @@ function Detail({
     </div>
   )
 }
+
+/**
+ * The offer to start measuring, before any set exists.
+ *
+ * One sentence and one button, and it says the cost up front: the questions
+ * that go into a set **stop answering questions**, because §1.3's rule is that
+ * a template is retrievable or benchmarkable and never both. Hiding that until
+ * afterwards would be the kind of surprise that makes people distrust a
+ * number.
+ */
+function StartMeasuring({
+  candidates, onCreate,
+}: {
+  candidates: number
+  onCreate: () => void | Promise<void>
+}) {
+  const [busy, setBusy] = useState(false)
+
+  return (
+    <div
+      style={{
+        border: '1px dashed var(--border)', borderRadius: 12,
+        padding: '12px 16px', display: 'flex', gap: 14,
+        alignItems: 'center', flexWrap: 'wrap',
+      }}
+    >
+      <div style={{ flex: 1, minWidth: 240 }}>
+        <div style={{ fontSize: 13, color: 'var(--text-strong)' }}>
+          Measure whether teaching this connection helped
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 3 }}>
+          Turns {candidates} taught {candidates === 1 ? 'question' : 'questions'}{' '}
+          into a benchmark and holds some back, so the score is measured on
+          questions the system cannot look up. Those questions stop answering
+          chat until you delete the benchmark.
+        </div>
+      </div>
+      <GhostButton
+        onClick={async () => {
+          setBusy(true)
+          try {
+            await onCreate()
+          } finally {
+            setBusy(false)
+          }
+        }}
+        disabled={busy}
+      >
+        {busy ? <Spinner size={13} /> : <Icon.Check size={13} />}
+        Create a benchmark
+      </GhostButton>
+    </div>
+  )
+}
+
+
+/**
+ * The score strip — §4.8. One line at the top of the tab, and only once a
+ * benchmark set exists: **never an empty chart.**
+ *
+ * **The held-out number is first, larger, and the one on the sparkline.** The
+ * taught number is shown because hiding it would be dishonest, and shown
+ * second and smaller because it is the number that goes up for the wrong
+ * reasons. Genie's Evaluations tab shows one number; this shows two and says
+ * which one to believe.
+ *
+ * `—` and not `0%` when a run has no held-out questions to score. A run that
+ * measured nothing has no accuracy, and printing zero for it would be the
+ * loudest possible wrong answer.
+ */
+function ScoreStrip({
+  overview, onRun,
+}: {
+  overview: BenchmarkOverview
+  onRun: (setId: string) => void | Promise<void>
+}) {
+  const set = overview.sets[0]
+  const view = scoreView(set.runs, set.held_out_count)
+
+  return (
+    <div
+      style={{
+        border: '1px solid var(--border)', borderRadius: 12,
+        background: 'var(--panel)', padding: '12px 16px',
+        display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap',
+      }}
+    >
+      <div style={{ flex: 1, minWidth: 220 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <span style={{ fontSize: 11, color: 'var(--text-faint)', width: 62 }}>
+            Accuracy
+          </span>
+          <span style={{ fontSize: 24, fontWeight: 600, color: 'var(--text-strong)',
+                         lineHeight: 1.1 }}>
+            {percent(view.heldOut)}
+          </span>
+          <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+            on {view.heldOutCount} held-out{' '}
+            {view.heldOutCount === 1 ? 'question' : 'questions'}
+          </span>
+          {view.spark.length > 1 && (
+            <Sparkline values={sparkHeights(view.spark)} />
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10,
+                      marginTop: 2 }}>
+          <span style={{ width: 62 }} />
+          <span style={{ fontSize: 14, color: 'var(--text-dim)' }}>
+            {percent(view.taught)}
+          </span>
+          <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+            on questions answered from a template
+          </span>
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 5 }}>
+          {set.name}
+          {view.ran && set.runs[0]?.finished_at
+            ? ` · last run ${relativeTime(set.runs[0].finished_at)}`
+            : view.ran ? '' : ' · not run yet'}
+          {view.unscored > 0 &&
+            ` · ${view.unscored} could not be scored`}
+        </div>
+        {view.failed && (
+          <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 4 }}>
+            {view.failed}
+          </div>
+        )}
+      </div>
+
+      {overview.can_curate && (
+        <GhostButton onClick={() => onRun(set.id)} disabled={view.running}>
+          {view.running ? <Spinner size={13} /> : <Icon.Refresh size={13} />}
+          {view.running ? 'Running' : 'Run benchmark'}
+        </GhostButton>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Six bars, against the **fixed 0–100% scale** rather than the series' own
+ * range. Self-normalising would turn 71/72/73% into a dramatic climb, which is
+ * exactly the misreading a score strip must not invite.
+ */
+function Sparkline({ values }: { values: number[] }) {
+  return (
+    <span
+      aria-hidden
+      style={{ display: 'inline-flex', alignItems: 'flex-end', gap: 2,
+               height: 16, marginInlineStart: 4 }}
+    >
+      {values.map((v, i) => (
+        <span
+          key={i}
+          style={{
+            width: 4,
+            height: `${Math.max(2, Math.round(v * 16))}px`,
+            borderRadius: 1,
+            background: i === values.length - 1
+              ? 'var(--accent)' : 'var(--border-strong)',
+          }}
+        />
+      ))}
+    </span>
+  )
+}
+
 
 /**
  * The conflict's evidence: two answers to one question, side by side.

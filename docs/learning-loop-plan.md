@@ -10,13 +10,13 @@
 > **Four decisions were taken before writing this** (§0.2). They are recorded
 > here rather than re-argued: everything below assumes them.
 >
-> **63 of 86 items.** **Phases 1–4 are complete** — the store is built, filled
-> by hand *and* from traffic, read on the ask path, kept from rotting, and the
-> loop closes back to the person who flagged an answer. **Phase 5 is built and
-> shipped off**: `PROMPT_VERSION` is v9, the empty slot renders v8's bytes, and
-> `knowledge_examples_enabled` defaults to false because the gate needs a
-> provider key this environment does not have — which is also why Phase 0's
-> three baselines are still unmade.
+> **68 of 86 items.** **Phases 1–4 and 6 are complete** — the store is built,
+> filled by hand *and* from traffic, read on the ask path, kept from rotting,
+> measurable by its owner, and the loop closes back to the person who flagged an
+> answer. **Phase 5 is built and shipped off**: `PROMPT_VERSION` is v9, the empty
+> slot renders v8's bytes, and `knowledge_examples_enabled` defaults to false
+> because its gate needs a provider key this environment does not have — which
+> is also why Phase 0's three baselines are still unmade.
 > [§13](#13-progress-ledger--what-is-done-what-is-not) is the
 > ledger: what is already in the codebase and load-bearing (§13.1), then a
 > checkbox per deliverable per phase, each with the check that proves its state.
@@ -1537,7 +1537,7 @@ it is not, no amount of Phase 5 will help.
 > reading the code, not by memory; every ❌ was confirmed absent the same way.
 > The verification note beside each item is what to re-run to check it again.
 >
-> **Status: 63 of 86 plan items complete.** Phase 0's instruments are built
+> **Status: 68 of 86 plan items complete.** Phase 0's instruments are built
 > (its three measurements are not — see §13.2, and they gate Phase 5 only), and
 > **Phases 1–3 have landed in full**: the store, the curation surface, the
 > guard's fifth entry point, the short-circuit, the badge, feedback, the review
@@ -1782,15 +1782,39 @@ replayed through the new door. **No chat answer behaves differently.**
 >   not, so the `taught` row means "questions whose neighbours were taught" and
 >   nothing stronger.
 
-### 13.8 Phase 6 — Benchmark and a score · **2 / 7** ⚠️ the comparator moved in Phase 4
+### 13.8 Phase 6 — Benchmark and a score · **7 / 7** ✅ landed
 
 - [x] The pure comparator moves to `app/knowledge/compare.py`; `app/eval/metrics.py` imports it — **landed with Phase 4**, which needed it for the conflict checker. `values_equal`, `rows_equal`, `result_sets_match` and both tolerance constants, plus `first_difference` for the evidence; `metrics.py` re-exports them so every existing caller and `tests/eval/test_metrics.py` keep working against one implementation
-- [x] `import-linter` still green — `app.eval` reachable from nothing on the request path — 8 contracts kept, and `test_knowledge_conflicts.py` asserts on the **parse** that `compare.py` imports nothing from `app.`
-- [ ] `benchmark_sets` / `benchmark_runs` / `benchmark_results` — **separate from `eval_runs` / `eval_results`**
-- [ ] `role` enforced in the query that builds each set (§1.3)
-- [ ] A fixed fraction assigned `HELD_OUT` at creation
-- [ ] Runs execute in `app/workers/`, labelled by the comparator — **no LLM judge**
-- [ ] The score strip (§4.8): held-out number first and larger, taught number second
+- [x] `import-linter` still green — `app.eval` reachable from nothing on the request path — 8 contracts kept, and both `test_knowledge_conflicts.py` and `test_benchmarks.py` assert on the **parse** that neither `compare.py` nor the benchmark worker imports `app.eval`
+- [x] `benchmark_sets` / `benchmark_runs` / `benchmark_results` — **separate from `eval_runs` / `eval_results`**, migration `0020`, with a test that names all four table names so a well-meaning consolidation fails loudly
+- [x] `role` enforced in the query that builds each set (§1.3) — twice: `BenchmarkService.candidates` will only take an `ACTIVE`, `RETRIEVABLE` template, and `workers/benchmark._members` filters on role **again** when it loads them, so a member a curator edited back to `RETRIEVABLE` is excluded rather than silently scored
+- [x] A fixed fraction assigned `HELD_OUT` at creation — `held_out_split`, deterministic by sorted id at a fixed stride, so the split is reproducible from the set's own membership list years later. Creating a set **withdraws every member from answering**, which is the enforcement rather than a side effect
+- [x] Runs execute in `app/workers/`, labelled by the comparator — **no LLM judge** — `workers/benchmark.py` runs the real `AnalyticsPipeline` per question, executes the stored answer through `execute_saved_sql`, and compares with `app.knowledge.compare`. A stranded run is failed, not resumed
+- [x] The score strip (§4.8): held-out number first and larger, taught number second — with the sparkline on the **held-out** series against a fixed 0–100% scale, `—` rather than `0%` when nothing scored, and the count of questions that could not be scored shown beside it
+
+> **Done.** Three things landed beyond the sketch, all three because they are
+> the ways an accuracy quietly becomes a lie:
+>
+> * **`from_template` is observed, not assigned.** §3.7's rule 3 asks for the
+>   split between questions answered *from* a template and questions answered
+>   without one. A member's `role` says what it may be used for; only the run
+>   knows what happened — a held-out question can still be answered from a
+>   *neighbour's* template, which is a real thing that happens on the ask path.
+>   So the taught number counts what the run did, and the held-out number counts
+>   what the role guaranteed.
+> * **Nothing that did not run is in a denominator.** A member whose parameters
+>   could not be probed (`NOT_PROBED`) or whose stored answer no longer executes
+>   is counted in `total`, in neither accuracy, and the difference is shown on
+>   the strip. An accuracy over a shrinking denominator always flatters, and it
+>   is invisible unless somebody prints the gap.
+> * **A set below four questions is refused.** 100%-on-three is a number
+>   somebody would quote.
+>
+> The plan's acceptance test — *"a connection owner opens Knowledge → Score,
+> runs their set, and sees two accuracy numbers with a history — without a
+> developer"* — is built end to end: `POST /benchmarks` from the tab, a `202`
+> and a row, the worker, and the strip. **The numbers themselves need a
+> provider key**, the same blocker as Phase 0's baselines and Phase 5's gate.
 
 ### 13.9 Phase 7 — The embedding matcher · **0 / 5** ❌ not started
 
@@ -1830,11 +1854,11 @@ Docs land in the same commit as the code, per this repo's convention.
 | 3 · Capture | 9 | 9 | ✅ |
 | 4 · Store health | 7 | 7 | ✅ |
 | 5 · Few-shot | 6 | 7 | ⚠️ **built and shipped off** — the gate needs a provider key |
-| 6 · Benchmark | 2 | 7 | ⚠️ the comparator moved with Phase 4 |
+| 6 · Benchmark | 7 | 7 | ✅ |
 | 7 · Embeddings | 0 | 5 | ❌ |
 | 8 · Permissions | 0 | 4 | ❌ |
 | Docs | 0 | 7 | ❌ |
-| **Plan total** | **63** | **86** | |
+| **Plan total** | **68** | **86** | |
 
 ### 13.13 Change log
 
@@ -1844,6 +1868,7 @@ over anything else in the document.
 | Date | What landed | Boxes ticked |
 |---|---|---|
 | 2026-08-31 | This plan written; the tree audited to establish the starting position | — (0 of 86) |
+| 2026-09-01 | **Phase 6 — a benchmark and a score, in the product.** `benchmark_sets` / `benchmark_runs` / `benchmark_results` + migration `0020`, **deliberately not** `eval_runs` / `eval_results` — MVP2 Part 5's meta-rule, with a test that names all four table names. `benchmark_service.py`: `held_out_split` (deterministic by sorted id, so the split is re-derivable from the set's own membership), `create_set` — which **withdraws every member from answering**, because §1.3's rule is enforced in the ask path's own query — `release`, which gives them back, and `score`, the pure function behind both numbers. `workers/benchmark.py`: the real `AnalyticsPipeline` per question, one probe filling both the question and the gold statement, the gold executed through `execute_saved_sql`, and labels from `app.knowledge.compare` — **no LLM judge**, and a test asserts on the parse that the worker imports nothing from `app.eval`. A stranded run is failed, not resumed. `GET/POST /benchmarks`, `DELETE /benchmarks/{id}`, `POST /benchmarks/{id}/run` (202 + a row), `GET /benchmarks/runs/{id}/results`. Frontend: the score strip — held-out first, larger, and on the sparkline against a fixed 0–100% scale; the taught number second and smaller; `—` rather than `0%` when nothing scored; the unscored count shown rather than hidden — plus the offer to create one, which says up front that those questions stop answering chat. 23 new backend tests, 15 new frontend checks. Docs: eval.md §6.2 (two instruments, one comparator, and why they must not share a table), CLAUDE.md. | 68 of 86 (§13.8, all 7) |
 | 2026-09-01 | **Phase 5 — few-shot injection, built and shipped off.** `RetrievedContext.examples` + `TemplateExample`, and `GENERATE_SYSTEM`'s `{examples}` slot written `{schema}\n{examples}\n{history}` so the empty case collapses to **v8's exact bytes** — asserted, not asserted-about. `PROMPT_VERSION` v8 → v9. `match` collects near misses on a *miss* only (a short-circuit has no generator to teach) and `retrieve` carries them; §5.2's disclosure gate is applied in `render_examples`, at render time, withholding a `MODEL_DERIVED` template's literals whole under `NONE`/`AGGREGATE`. Budget: last in the prompt, four examples, 1,600 chars against the comment block's 2,500, long ones skipped rather than cut. `--templates on|off` on the runner, building the store from the suite itself, holding out two in five deterministically and excluding every record from the store it is measured against; `examples_offered` / `short_circuited` on the scorecard so an arm that matched nothing cannot be read as a measurement. Migration `0019` + the settings toggle, **default false**. 26 new backend tests. Docs: eval.md (the templates arm and §6.1, the gate, with both commands and empty cells), pipeline.md §5 (the v9 table), CLAUDE.md, llm-calls.md, CODEBASE.md. **The gate box stays open: the runs need a provider key, and the decision that follows from an unmet gate is the default the code ships.** | 63 of 86 (§13.7, 6 of 7) |
 | 2026-09-01 | **Phase 4 — store health.** `app/knowledge/compare.py` — the eval harness's result-set comparator moved **down** a layer (`app.eval -> app.knowledge` is permitted; nothing on the request path gained an import of `app.eval`), plus `first_difference`, which returns the *diverging rows* rather than a boolean. `app/knowledge/conflict.py` — `similar_pairs` at a measured 0.60 threshold and `probe_values`, which refuses to invent a string it was not given, because a check that reports the store healthy because it could not test it is worse than no check. `KnowledgeService.sweep_staleness`, run inline on every schema sync: `ACTIVE` → `STALE` with the guard's own sentence, **and `STALE` → `ACTIVE` when the schema heals**. `app/workers/knowledge_maintenance.py` — the conflict checker (similarity → bind both at the same values → execute both through `execute_saved_sql` → compare) on a six-hour loop and on demand, marking **both** rows and storing the diverging rows from each one's own point of view. Migration `0018`: `conflict_evidence`, `last_conflict_check_at`, and `connections.conflict_checks_enabled` — the off switch, checked before a connector opens. `GET /health`, `POST /templates/revalidate`. Frontend: the conflict pane with the two answers side by side and the cell that moved in amber, the *Check the store* action, and the faint unused line with no button beside it. 45 new backend tests plus 14 frontend checks. | 57 of 86 (§13.6 all 7, §13.8 first two) |
 | 2026-08-31 | **Phase 3 — capture: feedback, the queue, the backlog.** `answer_feedback` + migration `0017`; `POST /runs/{id}/feedback` open to **any** signed-in user (the person who notices a wrong answer is rarely the person allowed to fix it), with three verdicts and a `CORRECT` arriving already resolved. `app/knowledge/backlog.py` — the five ranked sources and the vocabulary gap, pure and unit-tested; `FeedbackService` — the queue, the resolution, and the aggregation over `runs`, `dashboard_tiles` and `report_blocks`. `GET /reviews`, `POST /reviews/{id}/resolve` (a dismissal needs a reason), `GET /suggestions`. Frontend: the inline ✓/✗/*Ask for review* footer, *Save as a template* opening the **same** editor the Knowledge tab uses, and the queue and backlog as two more sections of the one list. **`became_template` reaches the flagger on their own answer**, and saving a template from a flag resolves it in the same action. 42 new backend tests plus 14 frontend checks. Also: `tests/conftest.py` now forces JSON logs — an unhandled exception in a route was taking **over a minute** to render through structlog's rich console renderer, which made a failing API test look like a hung suite. | 48 of 86 (§13.5, all 9) |

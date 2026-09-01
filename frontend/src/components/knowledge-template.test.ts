@@ -11,13 +11,13 @@
  */
 import {
   CORRECTION_SHAPES,
-  conflictEvidence, differingCells,
+  conflictEvidence, differingCells, percent, scoreView, sparkHeights,
   isUnused, markLiterals, matches, previewQuestion, questionParts, questionSlots,
   readiness, resolveReadiness, roleLabel, rowSubtitle, sections, statusOf,
   suggestionSection, suggestionView, tabCount, valuesOf,
 } from './knowledge-template.ts'
 import type {
-  ProposalRow, SuggestionRow, TemplateRow, TemplateSlot,
+  ProposalRow, ScoreRun, SuggestionRow, TemplateRow, TemplateSlot,
 } from './knowledge-template.ts'
 
 let failures = 0
@@ -392,6 +392,81 @@ check(
   ).right,
   'Two templates answer this differently — “revenue by month” disagrees.',
 )
+
+// ── the score (Phase 6) ───────────────────────────────────────────────────
+// Two numbers, and the strip says which to believe. Genie's Evaluations tab
+// shows one; that is a weakness to improve on, not a design to copy.
+const run = (over: Partial<ScoreRun> = {}): ScoreRun => ({
+  status: 'SUCCEEDED',
+  total: 10,
+  scored: 10,
+  held_out_total: 4,
+  held_out_matched: 3,
+  taught_total: 6,
+  taught_matched: 5,
+  finished_at: '2026-09-01T09:00:00Z',
+  created_at: '2026-09-01T08:00:00Z',
+  ...over,
+})
+
+check('the held-out number is the one from the latest run', scoreView([run()]).heldOut, 0.75)
+check('and the taught number is beside it', scoreView([run()]).taught, 5 / 6)
+check(
+  'a run with no held-out question has no held-out accuracy',
+  scoreView([run({ held_out_total: 0, held_out_matched: 0 })]).heldOut,
+  null,
+)
+// `—`, not `0%`. A run that measured nothing has no accuracy, and printing
+// zero for it would be the loudest possible wrong answer.
+check('and it renders as an em dash, never as zero', percent(null), '—')
+check('a real number renders as a whole percent', percent(0.7234), '72%')
+check('zero really is zero when it was measured', percent(0), '0%')
+
+check(
+  'questions that could not be scored are surfaced, not hidden',
+  scoreView([run({ total: 10, scored: 7 })]).unscored,
+  3,
+)
+
+// The sparkline is the held-out series only: one line, one series, and it is
+// the honest one.
+check(
+  'the sparkline reads oldest to newest',
+  scoreView([
+    run({ held_out_matched: 3 }),
+    run({ held_out_matched: 2 }),
+    run({ held_out_matched: 1 }),
+  ]).spark,
+  [0.25, 0.5, 0.75],
+)
+check(
+  'a failed run contributes no point to the line',
+  scoreView([run({ status: 'FAILED' }), run({ held_out_matched: 2 })]).spark,
+  [0.5],
+)
+check('a set with no finished run has not run', scoreView([]).ran, false)
+check(
+  'a queued run says it is running',
+  scoreView([run({ status: 'QUEUED' })]).running,
+  true,
+)
+check(
+  'a failed newest run shows its reason',
+  scoreView([run({ status: 'FAILED', error_message: 'the model is gone' })]).failed,
+  'the model is gone',
+)
+check(
+  'the held-out count falls back to the set until a run exists',
+  scoreView([], 25).heldOutCount,
+  25,
+)
+
+// Against the fixed 0–100% scale, not the series' own range: self-normalising
+// would turn 71/72/73% into a dramatic climb, which is exactly the misreading
+// a score strip must not invite.
+check('bars are heights against the full scale', sparkHeights([0.71, 0.72, 0.73]),
+      [0.71, 0.72, 0.73])
+check('and are clamped rather than allowed to overflow', sparkHeights([-1, 2]), [0, 1])
 
 console.log(failures === 0 ? '\nall passed' : `\n${failures} failed`)
 if (failures > 0) throw new Error(`${failures} test(s) failed`)

@@ -15,12 +15,18 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Request, status
 from sqlalchemy import select
 
 from app.api.deps import CtxDep, DbDep, SettingsDep
 from app.api.schemas import (
     AnswerFeedbackRead,
+    BenchmarkCandidateRead,
+    BenchmarkOverview,
+    BenchmarkResultRead,
+    BenchmarkRunRead,
+    BenchmarkSetRead,
+    BenchmarkSetWrite,
     KnowledgeCapabilities,
     KnowledgeHealth,
     KnowledgeTemplateList,
@@ -35,7 +41,13 @@ from app.api.schemas import (
     TemplateCheckResult,
 )
 from app.core.errors import ForbiddenError, NotFoundError
-from app.infra.db.models import DatabaseConnection, SchemaSnapshotRow, User
+from app.infra.db.models import (
+    BenchmarkSet,
+    DatabaseConnection,
+    LlmConfig,
+    SchemaSnapshotRow,
+    User,
+)
 from app.knowledge import (
     LiteralProvenance,
     TemplateParam,
@@ -43,6 +55,11 @@ from app.knowledge import (
     TemplateSource,
     TemplateStatus,
     slots,
+)
+from app.services.benchmark_service import (
+    MIN_SET_SIZE,
+    BenchmarkService,
+    held_out_split,
 )
 from app.services.knowledge_service import (
     UNUSED_AFTER_DAYS,
@@ -291,6 +308,193 @@ async def archive_template(
     _require_curator(ctx, settings)
     row = await KnowledgeService(db, settings).archive(connection, template_id)
     return KnowledgeTemplateRead.model_validate(row)
+
+
+# ── the score (Phase 6) ──────────────────────────────────────────────────
+@router.get("/benchmarks", response_model=BenchmarkOverview)
+async def list_benchmarks(
+    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+) -> BenchmarkOverview:
+    """Every set, its recent runs, and how many templates could join one.
+
+    Read-only and open to any reader of the connection. §4.8 shows this strip
+    **only once a set exists** — never an empty chart — so an empty `sets` is
+    the signal for the tab to show nothing rather than zeros.
+    """
+    connection = await _owned(db, connection_id, ctx)
+    service = BenchmarkService(db, settings)
+
+    sets: list[BenchmarkSetRead] = []
+    for row in await service.list_sets(connection):
+        sets.append(await _read_set(service, row))
+
+    return BenchmarkOverview(
+        sets=sets,
+        can_curate=can_curate(ctx, settings),
+        candidates=len(await service.candidates(connection)),
+        min_set_size=MIN_SET_SIZE,
+    )
+
+
+@router.get("/benchmarks/candidates", response_model=list[BenchmarkCandidateRead])
+async def benchmark_candidates(
+    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+) -> list[BenchmarkCandidateRead]:
+    """Templates a set may be built from — live, and still answering questions.
+
+    §1.3's rule in the query that builds the candidate set: `ARCHIVED`, `STALE`
+    and `CONFLICTED` are out (a benchmark whose stored answer no longer runs
+    measures the schema, not the product), and so is anything already committed
+    to a set, because a template cannot be held out of one instrument and
+    answering questions for another.
+    """
+    connection = await _owned(db, connection_id, ctx)
+    rows = await BenchmarkService(db, settings).candidates(connection)
+    return [BenchmarkCandidateRead.model_validate(r) for r in rows]
+
+
+@router.post(
+    "/benchmarks",
+    response_model=BenchmarkSetRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_benchmark(
+    connection_id: UUID,
+    payload: BenchmarkSetWrite,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+) -> BenchmarkSetRead:
+    """Build a set. **This withdraws its members from answering questions.**
+
+    That is the point rather than a side effect: §1.3's rule is that a template
+    is retrievable or benchmarkable and never both, and a held-out question
+    answered from its own stored SQL measures nothing. `can_curate`, because it
+    changes what the ask path may use.
+    """
+    connection = await _owned(db, connection_id, ctx)
+    _require_curator(ctx, settings)
+
+    service = BenchmarkService(db, settings)
+    row = await service.create_set(
+        connection,
+        actor_id=ctx.user_id,
+        name=payload.name,
+        template_ids=payload.template_ids,
+        description=payload.description,
+        held_out_fraction=payload.held_out_fraction,
+    )
+    return await _read_set(service, row)
+
+
+@router.delete("/benchmarks/{set_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_benchmark(
+    connection_id: UUID,
+    set_id: UUID,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+) -> None:
+    """Delete a set and give its questions back to the ask path.
+
+    The one place in the learning loop where `DELETE` really deletes: a set is
+    an instrument, not somebody's knowledge, and the knowledge it was built
+    from is returned intact and `RETRIEVABLE`.
+    """
+    connection = await _owned(db, connection_id, ctx)
+    _require_curator(ctx, settings)
+    await BenchmarkService(db, settings).release(connection, set_id)
+
+
+@router.post(
+    "/benchmarks/{set_id}/run",
+    response_model=BenchmarkRunRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def run_benchmark(
+    connection_id: UUID,
+    set_id: UUID,
+    request: Request,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    llm_config_id: UUID | None = None,
+) -> BenchmarkRunRead:
+    """Queue a run. **202, and a row** — this is minutes of model calls.
+
+    The row first, then the worker, the order `semantic_jobs` uses: a process
+    that dies mid-run leaves a `RUNNING` row somebody can see and retry, rather
+    than a request that never came back.
+    """
+    connection = await _owned(db, connection_id, ctx)
+    _require_curator(ctx, settings)
+
+    service = BenchmarkService(db, settings)
+    set_row = await service.get_set(connection, set_id)
+    run = await service.queue_run(
+        connection, set_row,
+        actor_id=ctx.user_id,
+        llm_config_id=llm_config_id or await _default_llm_config(db, ctx),
+    )
+    await db.commit()
+
+    executor = getattr(request.app.state, "benchmark_executor", None)
+    if executor is not None:
+        await executor.submit(run.id)
+    return BenchmarkRunRead.model_validate(run)
+
+
+@router.get(
+    "/benchmarks/runs/{run_id}/results",
+    response_model=list[BenchmarkResultRead],
+)
+async def benchmark_results(
+    connection_id: UUID,
+    run_id: UUID,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+) -> list[BenchmarkResultRead]:
+    """Every question's verdict, so a number can be argued with.
+
+    A score nobody can drill into is a score nobody should trust — and the
+    `failure_reason` on a mismatch is usually the next template to fix.
+    """
+    connection = await _owned(db, connection_id, ctx)
+    service = BenchmarkService(db, settings)
+    run = await service.get_run(connection, run_id)
+    return [
+        BenchmarkResultRead.model_validate(r) for r in await service.results(run)
+    ]
+
+
+async def _read_set(
+    service: BenchmarkService, row: BenchmarkSet
+) -> BenchmarkSetRead:
+    out = BenchmarkSetRead.model_validate(row)
+    out.runs = [
+        BenchmarkRunRead.model_validate(r) for r in await service.runs(row)
+    ]
+    out.held_out_count = len(
+        held_out_split(list(row.template_ids or []), row.held_out_fraction)
+    )
+    return out
+
+
+async def _default_llm_config(db, ctx) -> UUID | None:
+    """The caller's model, when the request did not name one.
+
+    A benchmark without a model is not a benchmark, and making the UI pick one
+    before it can show a score would put a configuration question in front of
+    somebody who asked for a number.
+    """
+    result = await db.execute(
+        select(LlmConfig)
+        .where(LlmConfig.owner_id == ctx.user_id)
+        .order_by(LlmConfig.created_at)
+    )
+    config = result.scalars().first()
+    return config.id if config is not None else None
 
 
 # ── capture: the queue and the backlog (Phase 3) ─────────────────────────

@@ -1289,3 +1289,152 @@ class EvalResult(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+# ── the customer's own accuracy number (Phase 6) ─────────────────────────
+# **Deliberately not `eval_runs` / `eval_results`.** MVP2 Part 5's meta-rule:
+# the customer-facing instrument and the frozen developer suite must stay
+# architecturally separate *"or the two will contaminate each other within a
+# month"*, and sharing a table is how that starts. The developer suite is
+# frozen, versioned and checked into the repo; a benchmark set is a customer's
+# own questions against their own database, and its whole purpose is to move.
+
+
+class BenchmarkSet(Base, TimestampMixin):
+    """A named list of taught questions used to *measure*, never to answer.
+
+    Membership is an array rather than a join table: a set is a list a person
+    curates, it is read whole every time it is used, and nothing ever queries
+    it from the other side. The **roles stay on the templates**
+    (`knowledge_templates.role`), because §1.3's rule — a template is
+    retrievable or benchmarkable, never both — has to be enforced in the query
+    that builds the candidate set on the *ask* path, and a second copy of that
+    fact here is a second copy that can disagree with it.
+    """
+
+    __tablename__ = "benchmark_sets"
+    __table_args__ = (
+        UniqueConstraint("connection_id", "name", name="uq_benchmark_sets_name"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("database_connections.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    template_ids: Mapped[list[uuid.UUID]] = mapped_column(
+        ARRAY(PgUUID(as_uuid=True)), nullable=False, default=list,
+        server_default=text("'{}'"),
+    )
+    #: What share of the members were assigned `HELD_OUT` at creation. Stored
+    #: so a run's numbers can be read years later without re-deriving the split
+    #: from a constant that has since changed.
+    held_out_fraction: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.4, server_default="0.4"
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+
+
+class BenchmarkRun(Base):
+    """One execution of a set, with **two** accuracy numbers rather than one.
+
+    Genie's Evaluations tab shows a single figure. Accuracy on questions
+    answered *from* a template and accuracy on questions answered *without* one
+    are different numbers, and only the second moves for a reason — so both are
+    stored, and `held_out_*` is the one the product puts first and larger.
+
+    Counted here rather than derived on read: a score strip shows a history,
+    and recomputing a sparkline by scanning every result row of every past run
+    is how it becomes slow enough that nobody opens it.
+    """
+
+    __tablename__ = "benchmark_runs"
+    __table_args__ = (
+        Index("ix_benchmark_runs_set_created", "set_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    set_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("benchmark_sets.id", ondelete="CASCADE"), nullable=False
+    )
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("database_connections.id", ondelete="CASCADE")
+    )
+    llm_config_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("llm_configs.id", ondelete="SET NULL")
+    )
+    #: QUEUED | RUNNING | SUCCEEDED | FAILED | CANCELLED
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="QUEUED")
+    #: The constant that rendered the prompts, stamped by the process that ran
+    #: them — the Phase 0 lesson, applied to the second instrument as well.
+    prompt_version: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    model_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+
+    total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: Members that produced a comparable answer. Lower than `total` when a
+    #: member could not be probed — surfaced rather than hidden, because an
+    #: accuracy over a shrinking denominator is the classic silent lie.
+    scored: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    matched: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    held_out_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    held_out_matched: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    taught_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    taught_matched: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    error_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class BenchmarkResult(Base):
+    """One question's verdict, labelled by the comparator and by nothing else.
+
+    **No LLM judge.** `outcome` comes from `app/knowledge/compare.py`'s
+    deterministic result-set comparison, with the documented numeric tolerance.
+    Fabric fell back to a judge and gets *true / false / unclear*; spending a
+    model call per row to get a worse answer would be a strange trade.
+
+    `from_template` is the *observed* fact behind the split — whether this run
+    was answered from the store — rather than a label assigned before it ran. A
+    template's `role` says what it may be used for; only the run knows what
+    actually happened.
+    """
+
+    __tablename__ = "benchmark_results"
+
+    id: Mapped[uuid.UUID] = _pk()
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("benchmark_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    template_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_templates.id", ondelete="SET NULL")
+    )
+    question: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    gold_sql: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    candidate_sql: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: HELD_OUT | BENCHMARK_ONLY, as it stood when this run executed.
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="HELD_OUT")
+    #: MATCH | MISMATCH | EXEC_FAILED | VALIDATION_FAILED | NO_SQL | NOT_PROBED
+    #: | ERROR. `MATCH` is the only success, and the labels are the eval's, so
+    #: two instruments that must not share a table still share a vocabulary.
+    outcome: Mapped[str] = mapped_column(String(30), nullable=False, default="ERROR")
+    from_template: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    gold_row_count: Mapped[int | None] = mapped_column(Integer)
+    candidate_row_count: Mapped[int | None] = mapped_column(Integer)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failure_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

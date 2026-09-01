@@ -477,6 +477,35 @@ whether the pair means anything:
   **last** in the prompt, capped at a fifth of what catalog comments get, and
   limited to four examples.
 
+### 6.2 This is not the customer's benchmark, and must not become it
+
+From 2026-09-01 there are **two** instruments in this product, and they are
+architecturally separate on purpose.
+
+| | This harness | The in-product benchmark |
+|---|---|---|
+| Tables | `eval_runs` / `eval_results` | `benchmark_sets` / `benchmark_runs` / `benchmark_results` |
+| Questions | `app/eval/suites/*.json`, **frozen**, in the repo | a customer's own taught questions, on their connection |
+| Database | a testcontainers fixture the harness owns | the customer's, read-only |
+| Run by | `python -m app.eval.runner` | `app/workers/benchmark.py`, from the Knowledge tab |
+| Purpose | did *this change* help | is *this deployment* accurate |
+
+MVP2 Part 5's meta-rule is why: *"the customer-facing instrument and the frozen
+developer suite must stay architecturally separate, or the two will contaminate
+each other within a month."* Sharing a table is how that starts — one schema
+serving two lifecycles, and the first migration that suits one breaks the other.
+
+**They do share one thing, and only one:** the result-set comparator in
+[`app/knowledge/compare.py`](../backend/app/knowledge/compare.py). It was
+written here, and moved down a layer in Phase 4 so both callers use one
+implementation with one documented tolerance. `metrics.py` re-exports it; the
+benchmark worker imports it directly and imports nothing else from `app.eval`,
+which `tests/unit/test_benchmarks.py` asserts on the parse.
+
+The in-product benchmark uses **no LLM judge** either, for the reason this page
+gives about `exact_match`: a label that is not reproducible is not a
+measurement.
+
 ### What the eval has actually settled
 
 The semantic layer exists because of a result here, not because it seemed like a

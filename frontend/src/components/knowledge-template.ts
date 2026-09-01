@@ -143,6 +143,100 @@ export function rowSubtitle(
   return { left, right: hits, tone: 'neutral' }
 }
 
+// ── the score (Phase 6) ───────────────────────────────────────────────────
+export interface ScoreRun {
+  status: string
+  total: number
+  scored: number
+  held_out_total: number
+  held_out_matched: number
+  taught_total: number
+  taught_matched: number
+  finished_at: string | null
+  created_at: string
+  error_message?: string
+}
+
+export interface ScoreView {
+  /** The number that goes **first and larger**, as a fraction, or null when
+   *  there is none. Null and not zero: a run that scored no held-out question
+   *  has no held-out accuracy, and 0% would be the loudest wrong answer. */
+  heldOut: number | null
+  heldOutCount: number
+  /** Second, and smaller. Shown because hiding it would be dishonest, and
+   *  shown second because it is the number that goes up for the wrong
+   *  reasons. */
+  taught: number | null
+  taughtCount: number
+  /** Oldest → newest, held-out only. The taught number is deliberately not on
+   *  the sparkline: one line, one series, and it is the honest one. */
+  spark: number[]
+  /** Questions the run could not score — a parameter with no values to try, a
+   *  stored answer that no longer runs. Surfaced, because an accuracy over a
+   *  shrinking denominator is the classic silent lie. */
+  unscored: number
+  ran: boolean
+  running: boolean
+  failed: string
+}
+
+/**
+ * The score strip, from a set's run history. Newest run first, as the API
+ * returns it.
+ *
+ * **Two numbers, and the strip says which to believe.** Genie's Evaluations tab
+ * shows one; that is a weakness to improve on, not a design to copy.
+ */
+export function scoreView(runs: ScoreRun[], heldOutCount = 0): ScoreView {
+  const finished = runs.filter((r) => r.status === 'SUCCEEDED')
+  const latest = finished[0]
+  const running = runs.some((r) => r.status === 'QUEUED' || r.status === 'RUNNING')
+  const failed = runs[0]?.status === 'FAILED' ? (runs[0].error_message ?? '') : ''
+
+  if (!latest) {
+    return {
+      heldOut: null, heldOutCount, taught: null, taughtCount: 0,
+      spark: [], unscored: 0, ran: false, running, failed,
+    }
+  }
+  return {
+    heldOut: ratio(latest.held_out_matched, latest.held_out_total),
+    heldOutCount: latest.held_out_total || heldOutCount,
+    taught: ratio(latest.taught_matched, latest.taught_total),
+    taughtCount: latest.taught_total,
+    // Oldest to newest, so the line reads left to right the way time does.
+    spark: finished
+      .map((r) => ratio(r.held_out_matched, r.held_out_total))
+      .filter((v): v is number => v !== null)
+      .reverse(),
+    unscored: Math.max(0, latest.total - latest.scored),
+    ran: true,
+    running,
+    failed,
+  }
+}
+
+function ratio(matched: number, total: number): number | null {
+  return total > 0 ? matched / total : null
+}
+
+/** A percentage with no decimals, or an em dash. Never `0%` for "no data". */
+export function percent(value: number | null): string {
+  return value === null ? '—' : `${Math.round(value * 100)}%`
+}
+
+/**
+ * A sparkline's points as `0..1` heights, normalised against **the full range
+ * 0–100%**, not against the series' own min and max.
+ *
+ * Self-normalising would turn a set of runs at 71/72/73% into a dramatic climb
+ * — which is exactly the misreading a score strip must not invite. Against the
+ * fixed scale, a flat store looks flat.
+ */
+export function sparkHeights(values: number[]): number[] {
+  return values.map((v) => Math.max(0, Math.min(1, v)))
+}
+
 // ── the conflict's evidence (Phase 4) ─────────────────────────────────────
 export interface EvidenceCell {
   columns: string[]
