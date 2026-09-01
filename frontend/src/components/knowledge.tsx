@@ -34,9 +34,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { knowledge as api } from '../api/client'
 import type {
-  BenchmarkOverview, Connection, KnowledgeHealth, KnowledgeTemplate,
-  MaintenanceResult, ParamProposal, Review, Suggestion, TemplateCheckResult,
-  TemplateParam,
+  BenchmarkOverview, Connection, EmbeddingStatus, KnowledgeHealth,
+  KnowledgeTemplate, MaintenanceResult, ParamProposal, Review, Suggestion,
+  TemplateCheckResult, TemplateParam,
 } from '../api/types'
 import {
   Chip, DangerButton, EmptyState, ErrorNote, Field, GhostButton, Icon, Modal,
@@ -45,10 +45,10 @@ import {
 import type { ChipTone } from './ui'
 import { DetailBody } from './settings'
 import {
-  CORRECTION_SHAPES, conflictEvidence, differingCells, markLiterals, matches,
-  percent, previewQuestion, questionParts, readiness, resolveReadiness,
-  roleLabel, rowSubtitle, scoreView, sections, sparkHeights, statusOf,
-  suggestionView,
+  CORRECTION_SHAPES, conflictEvidence, differingCells, embeddingView,
+  indexSummary, markLiterals, matches, percent, previewQuestion, questionParts,
+  readiness, resolveReadiness, roleLabel, rowSubtitle, scoreView, sections,
+  sparkHeights, statusOf, suggestionView,
 } from './knowledge-template'
 import type { CorrectionShape, TemplateRow } from './knowledge-template'
 
@@ -81,6 +81,8 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
   const [staleIds, setStaleIds] = useState<string[]>([])
   const [health, setHealth] = useState<KnowledgeHealth | null>(null)
   const [score, setScore] = useState<BenchmarkOverview | null>(null)
+  const [embeddings, setEmbeddings] = useState<EmbeddingStatus | null>(null)
+  const [switching, setSwitching] = useState(false)
   const [sweeping, setSweeping] = useState(false)
   const [sweepNote, setSweepNote] = useState<string | null>(null)
   const [canCurate, setCanCurate] = useState(true)
@@ -114,14 +116,16 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
     // The queue and the backlog load beside the store, not after it: they are
     // three readings of one screen, and loading them in sequence would make
     // the sections appear one at a time under the reader's cursor.
-    const [queue, backlog, benchmarks] = await Promise.all([
+    const [queue, backlog, benchmarks, index] = await Promise.all([
       api.reviews(connection.id).catch(() => [] as Review[]),
       api.suggestions(connection.id).catch(() => [] as Suggestion[]),
       api.benchmarks(connection.id).catch(() => null),
+      api.embeddings(connection.id).catch(() => null),
     ])
     setReviews(queue)
     setSuggestions(backlog)
     setScore(benchmarks)
+    setEmbeddings(index)
     return body
   }, [connection.id])
 
@@ -158,7 +162,7 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
     try {
       const result = await api.revalidate(connection.id)
       await refresh()
-      setSweepNote(sweepSummary(result))
+      setSweepNote(sweepSummary(result) + indexSummary(result))
     } catch (err) {
       setError(messageOf(err))
     } finally {
@@ -270,6 +274,26 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
           {health.unused.length === 1 ? 'template has' : 'templates have'} had no
           matches in {health.unused_after_days} days.
         </div>
+      )}
+
+      {embeddings && rows.length > 0 && (
+        <MatchingMode
+          status={embeddings}
+          canCurate={canCurate}
+          busy={switching}
+          onToggle={async (enabled) => {
+            setSwitching(true)
+            setSweepNote(null)
+            try {
+              const next = await api.setEmbeddings(connection.id, enabled)
+              setEmbeddings(next)
+            } catch (err) {
+              setError(messageOf(err))
+            } finally {
+              setSwitching(false)
+            }
+          }}
+        />
       )}
 
       {rows.length === 0 && !search && <FirstRun canCurate={canCurate && synced} />}
@@ -1597,6 +1621,60 @@ function asRow(t: KnowledgeTemplate): TemplateRow {
  * allowed to look" case is named explicitly, because printing *"found no
  * conflicts"* for a connection whose checks are switched off would be a lie.
  */
+/** How this store is searched, and the one control that changes it.
+ *
+ * §4.10's quietest treatment, and deliberately so: **word matching is not a
+ * degraded state.** `pg_trgm` needs no provider, no key and no budget, and a
+ * connection that stays there has lost nothing. So the off state gets a plain
+ * sentence describing what the *other* mode adds rather than a warning about
+ * what this one lacks, and the button reads as an upgrade rather than a fix.
+ *
+ * The four tones come from `embeddingView`, which is where the reasoning is.
+ * The one worth naming here is `indexing`: a model can be pinned with vectors
+ * still missing, and calling that "on" would promise a behaviour the next
+ * question will not show.
+ */
+function MatchingMode({
+  status, canCurate, busy, onToggle,
+}: {
+  status: EmbeddingStatus
+  canCurate: boolean
+  busy: boolean
+  onToggle: (enabled: boolean) => void
+}) {
+  const view = embeddingView(status)
+  const tint: Record<string, string> = {
+    off: 'var(--text-faint)',
+    indexing: 'var(--text-muted)',
+    on: 'var(--accent)',
+    problem: 'var(--warn)',
+  }
+  return (
+    <div
+      style={{
+        display: 'flex', alignItems: 'flex-start', gap: 12,
+        padding: '8px 10px', borderRadius: 8,
+        border: '1px solid var(--border-subtle)',
+      }}
+    >
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12, color: tint[view.tone], fontWeight: 500 }}>
+          {view.label}
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 2 }}>
+          {view.detail}
+        </div>
+      </div>
+      {canCurate && (
+        <GhostButton onClick={() => onToggle(!status.enabled)} disabled={busy}>
+          {busy ? <Spinner size={13} /> : null}
+          {status.enabled ? 'Use word matching' : 'Use embedding search'}
+        </GhostButton>
+      )}
+    </div>
+  )
+}
+
 function sweepSummary(result: MaintenanceResult): string {
   const parts: string[] = []
   if (result.staled.length) {

@@ -11,13 +11,15 @@
  */
 import {
   CORRECTION_SHAPES,
-  conflictEvidence, differingCells, percent, scoreView, sparkHeights,
+  conflictEvidence, differingCells, embeddingView, indexSummary, percent,
+  scoreView, sparkHeights,
   isUnused, markLiterals, matches, previewQuestion, questionParts, questionSlots,
   readiness, resolveReadiness, roleLabel, rowSubtitle, sections, statusOf,
   suggestionSection, suggestionView, tabCount, valuesOf,
 } from './knowledge-template.ts'
 import type {
-  ProposalRow, ScoreRun, SuggestionRow, TemplateRow, TemplateSlot,
+  EmbeddingState, ProposalRow, ScoreRun, SuggestionRow, TemplateRow,
+  TemplateSlot,
 } from './knowledge-template.ts'
 
 let failures = 0
@@ -467,6 +469,61 @@ check(
 check('bars are heights against the full scale', sparkHeights([0.71, 0.72, 0.73]),
       [0.71, 0.72, 0.73])
 check('and are clamped rather than allowed to overflow', sparkHeights([-1, 2]), [0, 1])
+
+// ── the embedding matcher (Phase 7) ──────────────────────────────────────
+// The four states, and the reason there are four: a boolean would collapse
+// "pinned but not yet indexed" into "on", which promises a behaviour the next
+// question will not show.
+function index(over: Partial<EmbeddingState> = {}): EmbeddingState {
+  return {
+    enabled: true, model: 'text-embedding-3-small', dimension: 1536,
+    templates: 10, indexed: 10, message: '', ...over,
+  }
+}
+
+check('word matching is a state, not a warning',
+      embeddingView(index({ enabled: false })).tone, 'off')
+check('and it describes what the other mode adds, not what it lacks',
+      embeddingView(index({ enabled: false })).detail.includes('mean the same thing'),
+      true)
+check('a fully indexed store is on', embeddingView(index()).tone, 'on')
+check('a pinned store with vectors missing is indexing, not on',
+      embeddingView(index({ indexed: 4 })).tone, 'indexing')
+check('and it says how far along it is',
+      embeddingView(index({ indexed: 4 })).detail, '4 of 10 questions indexed — 6 still match on words alone.')
+check('one missing question reads as one', embeddingView(index({ templates: 5, indexed: 4 })).detail,
+      '4 of 5 questions indexed — 1 still matches on words alone.')
+check('the provider\'s own sentence wins over every other state',
+      embeddingView(index({ message: 'Anthropic does not offer an embedding endpoint.' })).tone,
+      'problem')
+check('and it is shown verbatim, because it names the fix',
+      embeddingView(index({ message: 'Anthropic does not offer an embedding endpoint.' })).detail,
+      'Anthropic does not offer an embedding endpoint.')
+check('a message on a disabled store still wins',
+      embeddingView(index({ enabled: false, message: 'no key' })).tone, 'problem')
+check('an on store names the model it was indexed with',
+      embeddingView(index()).detail.includes('text-embedding-3-small'), true)
+
+// The sweep's indexing sentence. It can report a failure without the sweep
+// having failed — staleness and conflicts both completed, and the vectors are
+// simply a pass behind.
+const sweep = { indexed: 0, index_current: 0, index_truncated: false, index_error: '' }
+check('a sweep that indexed nothing says nothing', indexSummary(sweep), '')
+check('a lexical connection adds no sentence at all',
+      indexSummary({ ...sweep, index_current: 12 }), '')
+check('re-indexed questions are counted', indexSummary({ ...sweep, indexed: 3 }),
+      ' 3 questions re-indexed for embedding search.')
+check('one reads as one', indexSummary({ ...sweep, indexed: 1 }),
+      ' 1 question re-indexed for embedding search.')
+check('a truncated pass says the rest are coming',
+      indexSummary({ ...sweep, indexed: 200, index_truncated: true }).includes('next check'),
+      true)
+check('a failure is reported as the index being behind, not as the check breaking',
+      indexSummary({ ...sweep, index_error: 'the key was revoked' }),
+      ' The index could not be brought up to date: the key was revoked')
+check('and a failure outranks a partial success',
+      indexSummary({ ...sweep, indexed: 3, index_error: 'the key was revoked' }).startsWith(' The index'),
+      true)
 
 console.log(failures === 0 ? '\nall passed' : `\n${failures} failed`)
 if (failures > 0) throw new Error(`${failures} test(s) failed`)

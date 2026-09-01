@@ -360,7 +360,9 @@ class RunService:
             # matches, and the `match` node's miss path writes nothing and
             # alters no prompt — except when the reader has asked for a fresh
             # answer, where consulting it again would ignore them.
-            matcher=build_matcher(self._db),
+            matcher=build_matcher(
+                self._db, connection=connection, settings=self._settings
+            ),
             templates_enabled=not run.skip_templates,
             # Few-shot injection is a separate switch from the short-circuit
             # and is **off by default on the column**, because it is the one

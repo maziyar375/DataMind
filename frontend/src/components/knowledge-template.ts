@@ -616,3 +616,104 @@ export function resolveReadiness(
   }
   return { ready: true, issue: '' }
 }
+
+// ── the embedding matcher (Phase 7) ──────────────────────────────────────
+
+/** The status shape the store-health strip reads. Mirrors `EmbeddingStatus`
+ *  in `api/types.ts`, declared structurally so this file stays DOM-free and
+ *  import-free the way the rest of it is. */
+export interface EmbeddingState {
+  enabled: boolean
+  model: string
+  dimension: number
+  templates: number
+  indexed: number
+  message: string
+}
+
+export interface EmbeddingView {
+  /** What the control says it is right now. */
+  label: string
+  /** One honest sentence under it. Never a promise the next question will not
+   *  keep — which is the whole reason `indexing` is a separate state. */
+  detail: string
+  /** `off` is the shipped default and is **not** a warning: `pg_trgm` needs no
+   *  provider, no key and no budget, and most connections will stay here. */
+  tone: 'off' | 'indexing' | 'on' | 'problem'
+}
+
+/** How the store is searched, in a sentence a curator can act on.
+ *
+ * Four states, and the middle two are the ones a boolean would collapse:
+ *
+ * * **off** — no model pinned. The lexical matcher answers, which is the
+ *   shipped behaviour, so this reads as a choice and not as a fault.
+ * * **indexing** — a model is pinned and some questions have no vector yet.
+ *   Saying *on* here would promise a behaviour the next question will not
+ *   show; the count says exactly how far along it is.
+ * * **on** — pinned, and every live question is indexed.
+ * * **problem** — the provider said no. Its own sentence is shown, because
+ *   *"Anthropic does not offer an embedding endpoint"* is a fix somebody can
+ *   act on and *"unavailable"* is not.
+ */
+export function embeddingView(state: EmbeddingState): EmbeddingView {
+  if (state.message) {
+    return { label: 'Embedding search', detail: state.message, tone: 'problem' }
+  }
+  if (!state.enabled) {
+    return {
+      label: 'Word matching',
+      detail:
+        'Questions are matched on the words they share. Embedding search also ' +
+        'matches ones that mean the same thing in different words.',
+      tone: 'off',
+    }
+  }
+  const missing = Math.max(0, state.templates - state.indexed)
+  if (missing > 0) {
+    return {
+      label: 'Embedding search · indexing',
+      detail:
+        `${state.indexed} of ${state.templates} questions indexed — ` +
+        `${missing} still ${missing === 1 ? 'matches' : 'match'} on words alone.`,
+      tone: 'indexing',
+    }
+  }
+  return {
+    label: 'Embedding search',
+    detail:
+      `All ${state.templates} ${state.templates === 1 ? 'question' : 'questions'} ` +
+      `indexed with ${state.model}. Questions that mean the same thing match ` +
+      'even when the words differ.',
+    tone: 'on',
+  }
+}
+
+/** The indexing half of a sweep's summary, or `''` when there was none.
+ *
+ * Separate from the rest of `sweepSummary` because it is the one half that can
+ * report a *failure* without the sweep having failed: the staleness and
+ * conflict passes both completed, and the vectors are simply a pass behind.
+ * Saying so is the difference between "the index is stale" and "the check
+ * broke", and only the first is true.
+ */
+export function indexSummary(result: {
+  indexed: number
+  index_current: number
+  index_truncated: boolean
+  index_error: string
+}): string {
+  if (result.index_error) {
+    return ` The index could not be brought up to date: ${result.index_error}`
+  }
+  if (!result.indexed) {
+    return ''
+  }
+  const more = result.index_truncated
+    ? ' More remain — they are indexed on the next check.'
+    : ''
+  return (
+    ` ${result.indexed} question${result.indexed === 1 ? '' : 's'} re-indexed ` +
+    `for embedding search.${more}`
+  )
+}

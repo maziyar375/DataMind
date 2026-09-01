@@ -51,6 +51,25 @@ _WHITESPACE = re.compile(r"\s+")
 _MASK_RUN = re.compile(re.escape(MASK) + r"(?:\s*" + re.escape(MASK) + r")+")
 
 
+def mask_literals(question: str, token: str = MASK) -> str:
+    """Fold every literal in a question down to one token. Casefolded, NFKC.
+
+    Steps 1–3 of `normalize_question`, factored out because Phase 7's embedding
+    matcher masks the same three things with a *different* token and must not
+    hold a second opinion about what a literal is. One reading of the question,
+    two callers — the property that stops the match key and the embedding key
+    drifting apart after somebody edits one regex.
+
+    Punctuation survives here: `normalize_question` strips it to build a match
+    key, and the embedding matcher keeps it because a sentence is what an
+    embedding model was trained on.
+    """
+    text = unicodedata.normalize("NFKC", question or "").casefold()
+    text = _SLOT.sub(f" {token} ", text)
+    text = _QUOTED.sub(f" {token} ", text)
+    return _NUMERIC.sub(f" {token} ", text)
+
+
 def normalize_question(question: str) -> str:
     """The match key for a question or a question pattern.
 
@@ -58,10 +77,7 @@ def normalize_question(question: str) -> str:
     rather than an exception. The store's unique constraint is on this value,
     so a caller that skipped it would create a duplicate nothing could find.
     """
-    text = unicodedata.normalize("NFKC", question or "").casefold()
-    text = _SLOT.sub(f" {MASK} ", text)
-    text = _QUOTED.sub(f" {MASK} ", text)
-    text = _NUMERIC.sub(f" {MASK} ", text)
+    text = mask_literals(question, MASK)
     text = _PUNCTUATION.sub(" ", text)
     text = _MASK_RUN.sub(MASK, text)
     return _WHITESPACE.sub(" ", text).strip()

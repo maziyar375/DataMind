@@ -367,6 +367,29 @@ export interface MaintenanceResult {
    *  value — how a curator learns that a parameter needs a value list. */
   skipped: string[]
   conflicts_checked: boolean
+  /** The embedding index, when the connection has one pinned. Zeroes on a
+   *  lexical connection, which is the default and most of them. */
+  indexed: number
+  index_current: number
+  index_truncated: boolean
+  index_error: string
+}
+
+/** Whether this store is searched by meaning, and how much of it is indexed.
+ *
+ *  `enabled` and `indexed` are separate on purpose: a connection can have a
+ *  model pinned and no vectors yet, and that is a normal state rather than a
+ *  failure — the UI says *indexing* for it, because *on* would promise a
+ *  behaviour the next question will not show. */
+export interface EmbeddingStatus {
+  enabled: boolean
+  model: string
+  dimension: number
+  templates: number
+  indexed: number
+  /** The provider's own sentence when the probe or the last pass refused.
+   *  Empty on success. */
+  message: string
 }
 
 export interface KnowledgeTemplateList {

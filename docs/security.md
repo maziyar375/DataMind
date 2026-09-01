@@ -659,6 +659,44 @@ it is worth stating exactly what it does and does not get:
 `tests/unit/test_knowledge_conflicts.py` asserts each of these, including that
 no connector is opened at all when the switch is off.
 
+### 4.7 The embedding matcher sends question text, and less of it
+
+Phase 7 added a second endpoint on the same credentials: a connection with an
+embedding model pinned sends the **masked** text of each taught question once,
+when the store is indexed, and of the asked question once per analytical
+question. It is worth being precise about this because "we now send your
+questions to an embedding provider" is the sentence a security review will
+write down if this document does not.
+
+* **A question is not customer data read from a row.** It is the same test §2.4
+  applies to a catalog comment: a person typed it, it does not change when the
+  data changes, and — the part that settles it — the asked question *already*
+  reaches the provider verbatim on every run, as the user message of the
+  generate call. This is not a new recipient of anything.
+* **The masking makes it strictly less.** Table names become `<table>`, column
+  names `<column>`, and declared values and literals `<value>`, before the text
+  leaves. An embedding request carries *fewer* schema names than the generate
+  prompt sitting beside it, not more.
+* **No result row is ever embedded.** There is no path from `disclose()`'s
+  output to `embed`, and none is wanted: the matcher matches questions.
+* **No rung of §3's ladder moves.** `HintBudget`, `disclose()` and
+  `disclose_history()` govern schema contents, result rows and transcript prose;
+  an embedding request carries none of the three. `may_render_literals` still
+  governs whether a template's **SQL** may be shown as a few-shot example, which
+  is a different call (§5.2) and is unchanged.
+* **It is off unless somebody turns it on**, and the off switch is the absence
+  of a pinned model rather than a flag: `database_connections.embedding_model`
+  empty means the lexical matcher, which needs no provider, no key and no
+  budget. Anthropic is refused before any request is made, because it has no
+  embedding endpoint.
+* **Every failure degrades to lexical.** A revoked key, an endpoint that is
+  down, a provider that changed vector width — each returns nothing and the
+  trigram matcher answers. There is no state in which a question fails because
+  embedding search was enabled.
+
+`tests/unit/test_knowledge_embeddings.py` asserts the fallback in every one of
+those forms, and that `app/knowledge/embed.py` imports no infrastructure.
+
 ---
 
 ## 5. Containment underneath correctness

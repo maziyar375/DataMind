@@ -60,8 +60,10 @@ from app.knowledge import (
 from app.knowledge.bind import bind_sql
 from app.knowledge.conflict import Pair
 from app.services.knowledge_service import (
+    IndexResult,
     KnowledgeService,
     StalenessResult,
+    index_embeddings,
 )
 from app.services.query_service import (
     bind_connector,
@@ -114,6 +116,9 @@ class MaintenanceResult:
     #: look" are different sentences and the UI must not print the first for
     #: the second.
     conflicts_checked: bool = False
+    #: What the embedding index did, if the connection has one pinned. All
+    #: zeroes on a lexical connection, which is most of them.
+    index: IndexResult = field(default_factory=IndexResult)
 
 
 # ── the whole pass ───────────────────────────────────────────────────────
@@ -139,6 +144,12 @@ async def run_maintenance(
     if check_conflicts and connection.conflict_checks_enabled:
         out.conflicts_checked = True
         out.conflicts = await detect_conflicts(db, settings, connection)
+
+    # Third, and last for the same reason conflicts run second: both of the
+    # passes above move templates in and out of `ACTIVE`, and there is no point
+    # spending an embedding on a row that this pass has just withdrawn — or
+    # leaving a row that this pass just healed unindexed until the next one.
+    out.index = await index_embeddings(db, settings, connection)
     return out
 
 
@@ -405,7 +416,9 @@ async def maintenance_once(settings: Settings) -> int:
         for connection in connections:
             try:
                 out = await run_maintenance(session, settings, connection)
-                changed += out.staleness.changed + out.conflicts.changed
+                changed += (
+                    out.staleness.changed + out.conflicts.changed + out.index.embedded
+                )
             except Exception:
                 # One connection's unreachable database must not stop the sweep
                 # for every other connection. The next pass tries again.

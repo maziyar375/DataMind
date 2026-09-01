@@ -134,6 +134,12 @@ class RecordOutcome:
     #: number to be about the prompt at all — an answer that came from the
     #: store is not a measurement of few-shot injection.
     short_circuited: bool = False
+    #: Which matcher produced the candidates this run saw — `LEXICAL`,
+    #: `EMBEDDING`, or empty when the store was not consulted. Phase 7's
+    #: `FallbackMatcher` means an embedding arm still answers lexically
+    #: whenever the embedding half found nothing, so the arm's *label* and what
+    #: actually retrieved are different facts and the report prints the second.
+    matcher: str = ""
 
     llm_ms: int = 0
     validate_ms: int = 0
@@ -210,6 +216,11 @@ class SuiteReport:
     examples_offered_rate: float
     examples_per_question: float
     short_circuit_rate: float
+    # 7. the embedding matcher (Phase 7). `embedding_share` is the fraction of
+    #    questions the embedding half actually retrieved for — not the fraction
+    #    the arm was launched with. On a lexical arm it is 0.0 and the whole
+    #    line is suppressed.
+    embedding_share: float
     # breakdowns
     per_tag: list[TagBreakdown]
     outcome_counts: dict[str, int]
@@ -308,6 +319,9 @@ def aggregate(outcomes: list[RecordOutcome]) -> SuiteReport:
         short_circuit_rate=round(
             _rate(sum(1 for o in outcomes if o.short_circuited), n), 4
         ),
+        embedding_share=round(
+            _rate(sum(1 for o in outcomes if o.matcher == "EMBEDDING"), n), 4
+        ),
         per_tag=per_tag,
         outcome_counts=dict(Counter(o.outcome for o in outcomes).most_common()),
     )
@@ -377,6 +391,19 @@ def format_report(report: SuiteReport, *, title: str = "") -> str:
             f"6. templates: {pct(report.examples_offered_rate)} of questions were "
             f"shown an example ({report.examples_per_question:.2f} per question); "
             f"short-circuited {pct(report.short_circuit_rate)}"
+        )
+        # Phase 7's two numbers, printed on one line and in this order on
+        # purpose. §3.8: FK-neighbour expansion once lifted retrieval recall
+        # 70% -> 86% with **flat** execution accuracy, and the lesson is that a
+        # retrieval improvement is not an answer improvement until the second
+        # number moves too. Printing them apart is how somebody quotes the
+        # first one alone.
+        lines.append(
+            f"7. matcher: {pct(report.embedding_share)} of questions were "
+            f"retrieved by embedding "
+            f"(the rest fell back to lexical) — against execution accuracy "
+            f"{pct(report.execution_accuracy)}. Retrieval moving is not "
+            f"accuracy moving; compare BOTH against the lexical arm."
         )
     lines.append("")
     lines.append("per-tag breakdown (exec-accuracy | retrieval-recall | n):")

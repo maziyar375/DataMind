@@ -161,6 +161,31 @@ scorecard also carries `templates`, `templates_in_store`, `held_out_ids` and
 `prompt_bytes_equal_v8`, so two `eval_runs` rows that differ only in this arm
 can be told apart afterwards. The gate itself is §6.1.
 
+### The matcher arm
+
+`--matcher embedding` swaps how the templates arm *finds* its candidates —
+`EmbeddingMatcher` over masked question similarity instead of trigrams — and is
+only meaningful with `--templates on`. It embeds the store once before the first
+question, using the same masking the product uses, and wires the same
+`FallbackMatcher`, because measuring the embedding matcher **without** its
+fallback would measure a configuration nobody ships.
+
+```bash
+python -m app.eval.runner --suite sales_v1 --templates on --matcher lexical
+python -m app.eval.runner --suite sales_v1 --templates on --matcher embedding
+```
+
+One approximation, stated rather than hidden: the masking vocabulary is the
+**whole suite's**, while in production a held-out template is not in the store
+and so contributes no declared values. Re-deriving the vocabulary per record
+would mask every neighbour differently on all fifty records and multiply the
+embedding calls by fifty; the *entries* are excluded per record, the vocabulary
+is not.
+
+The scorecard carries `matcher`, `embedding_model` and `vectors_in_store`, and
+the report prints an extra line: **the share of questions the embedding half
+actually retrieved for, beside execution accuracy, on purpose.** §6.3 is why.
+
 ---
 
 ## 2. The golden set
@@ -505,6 +530,44 @@ which `tests/unit/test_benchmarks.py` asserts on the parse.
 The in-product benchmark uses **no LLM judge** either, for the reason this page
 gives about `exact_match`: a label that is not reproducible is not a
 measurement.
+
+### 6.3 The matcher arm — two numbers, and only one of them is the point
+
+Phase 7's claim is that embedding retrieval finds templates trigrams miss. That
+is a claim about **retrieval**, and this page has already recorded once what
+happens when a retrieval improvement is read as an answer improvement:
+
+> FK-neighbour retrieval expansion lifted recall from **70% to 86%** — and
+> execution accuracy did not move.
+
+So the arm is reported as a pair and compared as a pair:
+
+| | `--matcher lexical` | `--matcher embedding` |
+|---|---|---|
+| questions retrieved by embedding | 0% by construction | *(measure it)* |
+| questions shown an example | | |
+| short-circuit rate | | |
+| execution accuracy, `held_out` row | | |
+
+**The rule for reading it.** The first row moving and the last row not moving
+means embeddings retrieve more and it does not reach the answer — which is a
+real result, worth writing down, and **not** a reason to ship. The last row
+moving is the reason to ship. The last row moving *down* is Eval Round 2's
+lesson repeating itself and the arm has done its job.
+
+`RecordOutcome.matcher` records what actually retrieved rather than the flag the
+run was launched with, because `FallbackMatcher` answers lexically whenever the
+embedding half finds nothing — an arm that quietly fell back for forty questions
+of fifty is not an embedding measurement, and a scorecard that printed the flag
+would call it one.
+
+**These runs have not been made.** They need a provider key with an embedding
+endpoint, which is the same blocker as §6.1's gate and the Phase 0 baselines.
+The instrument is built and tested; the numbers are not measured, and the table
+above is empty because writing a number nobody ran is worse than an empty cell.
+The consequence is the shipped default: `database_connections.embedding_model`
+is empty, so **every connection matches lexically** until somebody turns it on
+against their own provider and reads their own numbers.
 
 ### What the eval has actually settled
 

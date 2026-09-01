@@ -161,6 +161,26 @@ class DatabaseConnection(Base, TimestampMixin):
     # the prompt every recorded baseline was measured on. It flips to True by
     # default when `docs/eval.md` §6.1 has both numbers in it and they say so.
     knowledge_examples_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The embedding model this connection's knowledge store is indexed with,
+    # and the width it answers at. Empty means the lexical matcher — which is
+    # not a degraded state, it is the shipped one: `pg_trgm` needs no provider,
+    # no key and no budget, and Phase 7's whole posture is that embeddings make
+    # the loop *quieter* when present and change nothing when absent.
+    #
+    # Pinned per connection rather than read from the LLM config on every ask,
+    # for the reason `docs/learning-loop-plan.md` §3.8 gives: reproducibility.
+    # A stored vector is only comparable to a question embedded by the same
+    # model at the same width, so the pair that produced the index has to be
+    # written down next to it. Both are set by the capability probe, never
+    # typed into a form — the dimension especially, which is measured from a
+    # real call because two endpoints serving the same model name at different
+    # widths is a thing that happens.
+    embedding_model: Mapped[str] = mapped_column(
+        String(200), nullable=False, default="", server_default=""
+    )
+    embedding_dimension: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(20), default="UNTESTED")
     readonly_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -1059,6 +1079,23 @@ class KnowledgeTemplateRow(Base, TimestampMixin):
     last_conflict_check_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
+
+    #: The masked question's embedding — Phase 7. A plain `double precision[]`
+    #: and not a pgvector column: the store is a curator's worth of rows, the
+    #: cosine is computed in `app/knowledge/embed.py` for the same reason
+    #: `trigram_similarity` is computed in the matcher, and adding an extension
+    #: the base image does not carry would trade a real deployment constraint
+    #: for a speed nobody here needs.
+    embedding: Mapped[list[float] | None] = mapped_column(ARRAY(Float))
+    #: What the vector was computed from — masked text, model id, dimension —
+    #: hashed. **Staleness is derived from this, never tracked**: a template
+    #: edit, a schema re-sync (the mask reads the schema's own names) and a
+    #: model change each make the recomputed fingerprint differ, so there is no
+    #: invalidation call anybody can forget to make.
+    embedding_fingerprint: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default=""
+    )
+    embedded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Separate, and both SET NULL. A template mined from a tile was created by
     # the system and verified by a person; deleting the person must not delete

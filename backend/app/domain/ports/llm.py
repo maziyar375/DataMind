@@ -91,6 +91,24 @@ class Completion:
     truncated: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class EmbeddingCapability:
+    """Whether this endpoint will embed text, and with what.
+
+    The dimension is **measured**, never assumed: it comes back from a real
+    call, because a provider that serves `text-embedding-3-small` at 1536 and
+    a local gateway serving something else at 768 are indistinguishable from
+    the model name alone, and a store half-indexed at each width is a store
+    where cosine means nothing. `reason` carries the provider's own sentence
+    when it says no, so the UI can show why rather than "unavailable".
+    """
+
+    available: bool = False
+    model: str = ""
+    dimension: int = 0
+    reason: str = ""
+
+
 class LLMGateway(Protocol):
     """The model is a text generator, never an actor."""
 
@@ -109,3 +127,17 @@ class LLMGateway(Protocol):
     ) -> T: ...
 
     async def probe(self, llm: ResolvedLLM) -> ProviderCapabilities: ...
+
+    # Embeddings are a *second* endpoint on the same credentials, not a second
+    # gateway: Phase 7 of the learning loop needs vectors and explicitly buys
+    # "no new Python dependency and no new deployment unit" by putting them
+    # through here. `model` names the embedding model, which is never the chat
+    # model — passing `llm` alone would send a chat model id to an embedding
+    # endpoint.
+    async def embed(
+        self, llm: ResolvedLLM, texts: Sequence[str], *, model: str = ""
+    ) -> list[list[float]]: ...
+
+    async def probe_embedding(
+        self, llm: ResolvedLLM, *, model: str = ""
+    ) -> EmbeddingCapability: ...

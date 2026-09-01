@@ -12,7 +12,8 @@ import type {
   ArtifactSpec, BenchmarkCandidate, BenchmarkOverview, BenchmarkResult,
   BenchmarkRun, BenchmarkSet, ChartRedraw, Connection, ConversationSummary, Dashboard, DashboardDocument,
   DashboardImportResult, DashboardSummary,
-  DashboardTile, KnowledgeHealth, KnowledgeTemplate, KnowledgeTemplateList,
+  DashboardTile, EmbeddingStatus, KnowledgeHealth, KnowledgeTemplate,
+  KnowledgeTemplateList,
   LlmConfig, MaintenanceResult, MessageWithRun, ProblemDetail, Report, ReportBlock,
   ReportBlockCheck, ReportChart, ReportRun, ReportRunDetail, ReportSection,
   ReportSectionResult,
@@ -282,6 +283,17 @@ export const knowledge = {
       `/connections/${connectionId}/knowledge/templates/revalidate`,
       {},
     ),
+  // Embedding search. The dimension is never sent — it is measured from the
+  // provider's own reply, because two endpoints serving one model name at
+  // different widths is a thing that happens and a store half indexed at each
+  // is a store where similarity means nothing.
+  embeddings: (connectionId: string) =>
+    get<EmbeddingStatus>(`/connections/${connectionId}/knowledge/embeddings`),
+  setEmbeddings: (connectionId: string, enabled: boolean, model = '') =>
+    put<EmbeddingStatus>(`/connections/${connectionId}/knowledge/embeddings`, {
+      enabled,
+      model,
+    }),
   check: (
     connectionId: string,
     payload: {

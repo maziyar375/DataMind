@@ -16,7 +16,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Request, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.deps import CtxDep, DbDep, SettingsDep
 from app.api.schemas import (
@@ -27,6 +27,8 @@ from app.api.schemas import (
     BenchmarkRunRead,
     BenchmarkSetRead,
     BenchmarkSetWrite,
+    EmbeddingStatus,
+    EmbeddingWrite,
     KnowledgeCapabilities,
     KnowledgeHealth,
     KnowledgeTemplateList,
@@ -44,6 +46,7 @@ from app.core.errors import ForbiddenError, NotFoundError
 from app.infra.db.models import (
     BenchmarkSet,
     DatabaseConnection,
+    KnowledgeTemplateRow,
     LlmConfig,
     SchemaSnapshotRow,
     User,
@@ -65,6 +68,7 @@ from app.services.knowledge_service import (
     UNUSED_AFTER_DAYS,
     FeedbackService,
     KnowledgeService,
+    set_embeddings,
 )
 from app.services.policy import can_curate
 from app.workers.knowledge_maintenance import run_maintenance
@@ -188,6 +192,88 @@ async def revalidate_store(
         pairs_executed=result.conflicts.pairs_executed,
         skipped=result.conflicts.skipped,
         conflicts_checked=result.conflicts_checked,
+        indexed=result.index.embedded,
+        index_current=result.index.current,
+        index_truncated=result.index.truncated,
+        index_error=result.index.error,
+    )
+
+
+@router.get("/embeddings", response_model=EmbeddingStatus)
+async def embedding_status(
+    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+) -> EmbeddingStatus:
+    """Whether this store is searched by meaning, and how much of it is indexed.
+
+    Read-only and open to any reader of the connection: it names a model and
+    counts rows, and both are already visible to anyone who can open the
+    Knowledge tab.
+    """
+    connection = await _owned(db, connection_id, ctx)
+    return await _embedding_status(db, connection)
+
+
+@router.put("/embeddings", response_model=EmbeddingStatus)
+async def set_embedding_search(
+    connection_id: UUID,
+    payload: EmbeddingWrite,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+) -> EmbeddingStatus:
+    """Turn embedding search on or off, and index what is already there.
+
+    Synchronous, like `revalidate`, and for the same reason: turning this on
+    probes the provider once and then embeds the store in batches of
+    sixty-four, so a connection with a curator's worth of templates is a
+    handful of calls. Waiting means the answer on the screen is what the
+    feature will actually do on the next question, rather than a job id.
+
+    `can_curate`, because it spends the owner's provider budget and changes how
+    every question on this connection is matched.
+
+    **A refusal leaves the connection exactly as it was**, and returns the
+    provider's own sentence in `message`: *"Anthropic does not offer an
+    embedding endpoint"* is a fix somebody can act on, and *"unavailable"* is
+    not.
+    """
+    connection = await _owned(db, connection_id, ctx)
+    _require_curator(ctx, settings)
+
+    result, message = await set_embeddings(
+        db, settings, connection, enabled=payload.enabled, model=payload.model
+    )
+    status = await _embedding_status(db, connection)
+    status.message = message or result.error
+    return status
+
+
+async def _embedding_status(db, connection) -> EmbeddingStatus:
+    live = await db.execute(
+        select(func.count())
+        .select_from(KnowledgeTemplateRow)
+        .where(
+            KnowledgeTemplateRow.connection_id == connection.id,
+            KnowledgeTemplateRow.status == str(TemplateStatus.ACTIVE),
+            KnowledgeTemplateRow.role == str(TemplateRole.RETRIEVABLE),
+        )
+    )
+    indexed = await db.execute(
+        select(func.count())
+        .select_from(KnowledgeTemplateRow)
+        .where(
+            KnowledgeTemplateRow.connection_id == connection.id,
+            KnowledgeTemplateRow.status == str(TemplateStatus.ACTIVE),
+            KnowledgeTemplateRow.role == str(TemplateRole.RETRIEVABLE),
+            KnowledgeTemplateRow.embedding_fingerprint != "",
+        )
+    )
+    return EmbeddingStatus(
+        enabled=bool(connection.embedding_model),
+        model=connection.embedding_model or "",
+        dimension=connection.embedding_dimension or 0,
+        templates=live.scalar_one() or 0,
+        indexed=indexed.scalar_one() or 0,
     )
 
 

@@ -249,7 +249,10 @@ backend/app/
                   compare.py (the result-set comparator — moved down from
                   app/eval so the conflict checker and the benchmark share one
                   set of tolerances), conflict.py (which pairs are worth
-                  running, and with what values) — self-contained like sqlguard,
+                  running, and with what values), embed.py (masked question
+                  similarity: the vocabulary, the cosine, and the fingerprint
+                  that makes staleness derived rather than tracked) —
+                  self-contained like sqlguard,
                   and allowed to call the guard because that is what it is for
   semantic/       what the schema *means*: models.py (the document), validate.py
                   (bind it to a snapshot, parse metric SQL), generator.py (build
@@ -771,9 +774,10 @@ shapes. That is the class this addresses.
 ## Knowledge templates
 
 > The store the learning loop fills, and the plan behind it:
-> **[docs/learning-loop-plan.md](docs/learning-loop-plan.md)**. Phases 1–4 are
+> **[docs/learning-loop-plan.md](docs/learning-loop-plan.md)**. Phases 1–7 are
 > in the tree: the store, the match and short-circuit, feedback and the
-> backlog, and the sweep that keeps the store from rotting.
+> backlog, the sweep that keeps the store from rotting, few-shot injection
+> (shipped **off**), the in-product benchmark, and the embedding matcher.
 
 The semantic layer says what the schema *means*. A knowledge template is the
 next thing along: **a question somebody already answered correctly**, stored so
@@ -1013,6 +1017,44 @@ owner gets a number about *their* data, without a developer.
   measure something nobody experiences. A run stranded by a restart is **failed,
   not resumed**: half of it was scored against a store, a schema and a model
   that may all have moved.
+
+**Searching the store by meaning — the embedding matcher (Phase 7).** D3's
+return, collected: `EmbeddingMatcher` sits behind the same Protocol
+`LexicalMatcher` does, so this phase is a **constructor change** and the `match`
+node, both thresholds, the binder, the short-circuit and the badge are untouched.
+
+- **Masked question similarity (DAIL-SQL).** Table names, column names, the
+  values a *curator* declared, and literals are all replaced with `<table>`,
+  `<column>` and `<value>` before anything is embedded — so *"revenue in July
+  for West"* retrieves the template written for *"revenue in March for East"*.
+  Three tokens rather than one, because `revenue by <column>` and `revenue by
+  <table>` are different questions.
+- **The loop degrades to lexical, never to nothing.** `FallbackMatcher` reads an
+  empty result from the embedding half as *"ask the trigram one"*, and every way
+  it can fail produces one: no model pinned, no fresh vector, a revoked key, a
+  provider that changed width. **Word matching is not a degraded state** —
+  `pg_trgm` needs no provider, no key and no budget, and it is the default.
+- **Staleness is derived, never tracked.** A stored vector carries the SHA-256 of
+  the three things that made it (masked text, model id, width). Asking whether it
+  is current is recomputing that and comparing, so a template edit, a schema
+  re-sync (the mask reads the schema's own names) and a model change each
+  invalidate exactly what they should — and there is no invalidation call
+  anybody can forget. A vector that fails is *ignored*, never deleted.
+- **No pgvector, no vector DB, no new deployment unit.** Vectors are a
+  `double precision[]` beside the template and cosine is computed in
+  `app/knowledge/embed.py`, for the same reason `trigram_similarity` is computed
+  in the matcher: **the index narrows, the matcher decides.**
+- **Availability is a capability check.** Anthropic is refused with no network
+  call; anything OpenAI-compatible is *asked*, and the width that comes back is
+  **measured** and pinned on the connection — two gateways serving one model
+  name at different widths is a thing that happens.
+- **Indexing is a worker's job.** `index_embeddings` is the third pass of the
+  six-hourly sweep, after staleness and conflicts so it never spends a call on a
+  row those two just withdrew. Turning the feature on indexes inline, so it
+  works on the next question rather than in six hours.
+- **`--matcher lexical|embedding` is how it gets measured**, and the report
+  prints retrieval *and* execution accuracy on one line with the reason:
+  FK-neighbour expansion once moved recall 70% → 86% with **flat** accuracy.
 
 ---
 

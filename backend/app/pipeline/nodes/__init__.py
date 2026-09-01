@@ -242,6 +242,15 @@ async def match(state: RunState, deps: NodeDeps) -> NodeResult:
         log.warning("template_match_failed", run_id=str(state.run_id))
         return NodeResult(status="SKIPPED", detail="Knowledge store unavailable")
 
+    # Which matcher produced these, recorded before the verdict rather than
+    # after it. Phase 7's `FallbackMatcher` answers with whichever half found
+    # something, so "was this connection's store searched by meaning?" is a
+    # fact about the candidates and not about how the matcher was built — and
+    # a *miss* that offered few-shot examples is exactly as much a retrieval
+    # as a short-circuit is, so it has to be recorded on both paths.
+    if candidates:
+        state.match_kind = candidates[0].matcher
+
     hit = best(candidates)
     if hit is None:
         near = candidates[0].score if candidates else 0.0

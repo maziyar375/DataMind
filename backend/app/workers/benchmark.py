@@ -358,7 +358,7 @@ async def _ask(
         # commit. Everything else is exactly the ask path.
         clarify_enabled=False,
         include_db_comments=connection.include_db_comments,
-        matcher=build_matcher(db),
+        matcher=build_matcher(db, connection=connection, settings=settings),
         templates_enabled=True,
         examples_enabled=bool(connection.knowledge_examples_enabled),
     )

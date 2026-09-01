@@ -22,7 +22,7 @@ from datetime import timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +38,7 @@ from app.infra.db.models import (
     GeneratedQuery,
     KnowledgeTemplateHit,
     KnowledgeTemplateRow,
+    LlmConfig,
     Message,
     Report,
     ReportBlock,
@@ -74,8 +75,22 @@ from app.knowledge.backlog import (
     unknown_reason,
     unknown_words,
 )
+from app.knowledge.embed import (
+    EmbeddingMatcher as _EmbeddingMatcher,
+)
+from app.knowledge.embed import (
+    VectorEntry,
+    VectorIndex,
+    Vocabulary,
+    needs_embedding,
+    to_index,
+)
+from app.knowledge.embed import (
+    fingerprint as embedding_fingerprint,
+)
 from app.knowledge.matcher import (
     SHORTLIST_FLOOR,
+    FallbackMatcher,
     LexicalMatcher,
     TemplateMatcher,
     trigrams,
@@ -612,13 +627,29 @@ async def has_trigram(db: AsyncSession) -> bool:
     return _TRGM_AVAILABLE
 
 
-def build_matcher(db: AsyncSession) -> TemplateMatcher:
-    """The connection's matcher: lexical today, embedding in Phase 7 (D3).
+def build_matcher(
+    db: AsyncSession,
+    *,
+    connection: DatabaseConnection | None = None,
+    settings: Settings | None = None,
+) -> TemplateMatcher:
+    """The connection's matcher: lexical always, embedding when it is pinned.
+
+    D3's return, collected. Phase 7 is a *constructor change* — the `match`
+    node, both thresholds, the binder, the short-circuit and the badge are
+    untouched, because `EmbeddingMatcher` sits behind the same Protocol
+    `LexicalMatcher` does.
 
     The row source is what keeps `app.knowledge` free of sqlalchemy. It uses
     the trigram index to **narrow**; the score that decides is always computed
     in the matcher, so a deployment without `pg_trgm` gets the same verdicts at
     a higher cost rather than a different feature.
+
+    With no `connection` — or one with no embedding model pinned, which is the
+    default and the shipped state — this returns exactly what it returned
+    before Phase 7. `FallbackMatcher` is only wrapped around when there is
+    something to fall back *from*, so the lexical path costs no extra call, no
+    extra query, and no extra try/except on the common case.
     """
 
     async def rows(
@@ -652,7 +683,328 @@ def build_matcher(db: AsyncSession) -> TemplateMatcher:
             found = [t for t in found if asked & trigrams(t.question_normalized)]
         return found[:SHORTLIST_LIMIT]
 
-    return LexicalMatcher(rows)
+    lexical = LexicalMatcher(rows)
+    if connection is None or not connection.embedding_model or settings is None:
+        return lexical
+    return FallbackMatcher(
+        _EmbeddingMatcher(
+            _embedder(settings, db, connection),
+            _index_source(db, connection),
+        ),
+        lexical,
+    )
+
+
+def _embedder(
+    settings: Settings, db: AsyncSession, connection: DatabaseConnection
+) -> Any:
+    """`(texts) -> vectors`, through the port and nothing else.
+
+    Built lazily per call rather than held on the matcher, because resolving
+    the LLM config decrypts a key: on a connection with no fresh vectors the
+    matcher returns before this is ever invoked, and a key that was never
+    decrypted is a key that never sat in memory for the length of a request.
+    """
+
+    async def embed(texts: Any) -> list[list[float]]:
+        from app.infra.llm.litellm_gateway import LiteLLMGateway
+
+        llm = await _embedding_llm(db, settings, connection)
+        if llm is None:
+            return []
+        gateway = LiteLLMGateway.from_settings(settings)
+        return await gateway.embed(llm, list(texts), model=connection.embedding_model)
+
+    return embed
+
+
+def _index_source(db: AsyncSession, connection: DatabaseConnection) -> Any:
+    """`(connection_id) -> VectorIndex`. One read, so one schema.
+
+    The vocabulary and the vectors come from the same call deliberately: a
+    question masked against one snapshot and compared against vectors built
+    from another is a comparison between two different questions, and the
+    fingerprint check would not catch it because both sides would look fresh
+    against their own schema.
+    """
+
+    async def source(connection_id: UUID) -> VectorIndex:
+        from app.services.query_service import latest_snapshot
+
+        result = await db.execute(
+            select(KnowledgeTemplateRow).where(
+                KnowledgeTemplateRow.connection_id == connection_id,
+                KnowledgeTemplateRow.status == str(TemplateStatus.ACTIVE),
+                KnowledgeTemplateRow.role == str(TemplateRole.RETRIEVABLE),
+                KnowledgeTemplateRow.embedding_fingerprint != "",
+            )
+        )
+        rows = list(result.scalars().all())
+        if not rows:
+            # Nothing indexed yet. Skip the snapshot read too — an empty index
+            # is an empty index whatever the schema says, and this is the state
+            # every connection is in until the first maintenance pass.
+            return VectorIndex()
+
+        snapshot = await latest_snapshot(db, connection_id)
+        return to_index(
+            snapshot,
+            connection.embedding_model,
+            connection.embedding_dimension,
+            [
+                VectorEntry(
+                    template=KnowledgeService.to_model(row),
+                    vector=list(row.embedding or []),
+                    stored_fingerprint=row.embedding_fingerprint or "",
+                )
+                for row in rows
+            ],
+        )
+
+    return source
+
+
+async def _embedding_llm(
+    db: AsyncSession, settings: Settings, connection: DatabaseConnection
+) -> Any | None:
+    """The credentials the embedding endpoint is called with.
+
+    The connection's **owner's** default LLM config, which is what §3.8 means
+    by "the connection's LLM config": a connection has no model of its own, and
+    the config that answers its questions is the one that should embed them.
+    `None` when there is no default — a state, not an error, and one the
+    matcher reads as "lexical".
+    """
+    from app.services.query_service import resolve_llm, secret_box
+
+    result = await db.execute(
+        select(LlmConfig)
+        .where(
+            LlmConfig.owner_id == connection.owner_id,
+            LlmConfig.is_default.is_(True),
+        )
+        .limit(1)
+    )
+    config = result.scalar_one_or_none()
+    if config is None:
+        return None
+    return resolve_llm(config, secret_box(settings))
+
+
+# ── the embedding index (Phase 7) ────────────────────────────────────────
+#: How many templates one indexing pass will embed. A ceiling rather than a
+#: setting, for the reason `MAX_PAIRS_PER_PASS` is one: a store that needs more
+#: than this re-embedded in a single pass has just had its schema re-synced or
+#: its model changed, and spreading that across a few six-hourly passes costs
+#: nothing (the lexical matcher answers meanwhile) while a single unbounded
+#: pass is an unbounded bill.
+MAX_EMBEDDINGS_PER_PASS = 200
+
+
+@dataclass(slots=True)
+class IndexResult:
+    """What one indexing pass did, in counts a person can read back."""
+
+    #: Templates that were candidates at all — live, retrievable, matchable.
+    considered: int = 0
+    #: Vectors written this pass.
+    embedded: int = 0
+    #: Candidates whose stored vector was already current. The number that
+    #: should be nearly everything on a steady-state connection, and the one
+    #: that says the fingerprint rule is working.
+    current: int = 0
+    #: True when there was more to do than `MAX_EMBEDDINGS_PER_PASS` allowed.
+    #: Reported rather than inferred, so "the index is partial" is a sentence
+    #: the UI can say instead of a number a reader has to interpret.
+    truncated: bool = False
+    #: The provider's own sentence when the pass could not run. Empty on
+    #: success and on "nothing to do", which are different from "it failed".
+    error: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return not self.error
+
+
+async def index_embeddings(
+    db: AsyncSession, settings: Settings, connection: DatabaseConnection
+) -> IndexResult:
+    """Bring this connection's vectors up to date with its templates.
+
+    Runs in the worker and on the explicit *turn this on* action, never on a
+    request that answers a question: embedding is a provider call, and a
+    question whose latency depended on one would make the feature worse than
+    the lexical matcher it is meant to improve on.
+
+    **A failure here is not a failure of anything.** The pass returns its
+    reason, the vectors that were already current stay current, and the matcher
+    falls back to lexical for anything that is not — which is the shipped
+    behaviour. Nothing is deleted, ever: a vector that no longer matches its
+    fingerprint is ignored on read and overwritten on the next successful pass.
+    """
+    out = IndexResult()
+    if not connection.embedding_model or connection.embedding_dimension <= 0:
+        return out
+
+    from app.services.query_service import latest_snapshot
+
+    result = await db.execute(
+        select(KnowledgeTemplateRow).where(
+            KnowledgeTemplateRow.connection_id == connection.id,
+            KnowledgeTemplateRow.status == str(TemplateStatus.ACTIVE),
+            KnowledgeTemplateRow.role == str(TemplateRole.RETRIEVABLE),
+        )
+    )
+    rows = list(result.scalars().all())
+    out.considered = len(rows)
+    if not rows:
+        return out
+
+    # Every live template contributes its declared values, including the ones
+    # not being re-embedded: the vocabulary is a property of the *store*, and
+    # building it from the pending subset would mask a question one way at
+    # query time and another way here.
+    models = [KnowledgeService.to_model(row) for row in rows]
+    vocabulary = Vocabulary.from_snapshot(
+        await latest_snapshot(db, connection.id), models
+    )
+    pending: list[tuple[KnowledgeTemplateRow, str]] = []
+    for row, template in zip(rows, models, strict=True):
+        masked = needs_embedding(
+            template,
+            row.embedding_fingerprint or "",
+            len(row.embedding or []),
+            vocabulary,
+            connection.embedding_model,
+            connection.embedding_dimension,
+        )
+        if masked:
+            pending.append((row, masked))
+        else:
+            out.current += 1
+
+    if not pending:
+        return out
+    if len(pending) > MAX_EMBEDDINGS_PER_PASS:
+        pending = pending[:MAX_EMBEDDINGS_PER_PASS]
+        out.truncated = True
+
+    llm = await _embedding_llm(db, settings, connection)
+    if llm is None:
+        out.error = (
+            "No default model is configured for this connection's owner, so "
+            "there is nothing to embed with."
+        )
+        return out
+
+    from app.infra.llm.litellm_gateway import LiteLLMGateway
+
+    gateway = LiteLLMGateway.from_settings(settings)
+    try:
+        vectors = await gateway.embed(
+            llm, [masked for _, masked in pending], model=connection.embedding_model
+        )
+    except Exception as err:
+        # Bounded and reported. The store keeps whatever it had, which is the
+        # difference between "the index is a pass behind" and "the index is
+        # empty" — and only the first is true here.
+        out.error = str(err)[:500]
+        log.warning(
+            "knowledge_embedding_failed",
+            connection_id=str(connection.id),
+            pending=len(pending),
+        )
+        return out
+
+    if len(vectors) != len(pending):
+        out.error = "The embedding endpoint returned the wrong number of vectors."
+        return out
+
+    now = utcnow()
+    for (row, masked), vector in zip(pending, vectors, strict=True):
+        if len(vector) != connection.embedding_dimension:
+            # The endpoint changed width underneath the pin. Writing this vector
+            # would put two widths in one store, where cosine means nothing.
+            out.error = (
+                f"The endpoint answered at {len(vector)} dimensions, not the "
+                f"{connection.embedding_dimension} this connection is pinned "
+                f"to. Turn embedding search off and on again to re-pin it."
+            )
+            return out
+        row.embedding = [float(v) for v in vector]
+        row.embedding_fingerprint = embedding_fingerprint(
+            masked, connection.embedding_model, connection.embedding_dimension
+        )
+        row.embedded_at = now
+        out.embedded += 1
+
+    await db.flush()
+    log.info(
+        "knowledge_embeddings_indexed",
+        connection_id=str(connection.id),
+        embedded=out.embedded,
+        current=out.current,
+        truncated=out.truncated,
+    )
+    return out
+
+
+async def set_embeddings(
+    db: AsyncSession,
+    settings: Settings,
+    connection: DatabaseConnection,
+    *,
+    enabled: bool,
+    model: str = "",
+) -> tuple[IndexResult, str]:
+    """Turn embedding search on or off for a connection, and say what happened.
+
+    On: probe the owner's default provider, **measure** the dimension from a
+    real call, pin both on the connection, and index what is there now — so the
+    feature works on the next question rather than after the next six-hourly
+    pass. A provider that cannot embed leaves the connection exactly as it was
+    and returns the provider's own sentence, because "Anthropic has no
+    embedding endpoint" is a fix somebody can act on and "unavailable" is not.
+
+    Off: clear the pin *and* the vectors. Keeping them would leave a store that
+    looks indexed to anyone reading the table and is invisible to the matcher,
+    and the vectors are derived data that one pass rebuilds.
+    """
+    if not enabled:
+        await db.execute(
+            update(KnowledgeTemplateRow)
+            .where(KnowledgeTemplateRow.connection_id == connection.id)
+            .values(embedding=None, embedding_fingerprint="", embedded_at=None)
+        )
+        connection.embedding_model = ""
+        connection.embedding_dimension = 0
+        await db.flush()
+        return IndexResult(), ""
+
+    llm = await _embedding_llm(db, settings, connection)
+    if llm is None:
+        return IndexResult(), (
+            "Add a default model provider first — embedding search calls it "
+            "with the same credentials your questions use."
+        )
+
+    from app.infra.llm.litellm_gateway import LiteLLMGateway
+
+    gateway = LiteLLMGateway.from_settings(settings)
+    capability = await gateway.probe_embedding(llm, model=model.strip())
+    if not capability.available:
+        return IndexResult(), capability.reason or (
+            "That provider did not return an embedding."
+        )
+
+    # Re-pinning invalidates every stored vector by fingerprint alone — the
+    # model id and the width are both hashed into it — so there is nothing to
+    # clear here and no window where a 1536-wide vector is compared to a
+    # 768-wide question.
+    connection.embedding_model = capability.model
+    connection.embedding_dimension = capability.dimension
+    await db.flush()
+    return await index_embeddings(db, settings, connection), ""
 
 
 async def record_hit(

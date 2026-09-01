@@ -159,6 +159,7 @@ async def evaluate_record(
     semantic: dict[str, Any] | None = None,
     templates: list[Any] | None = None,
     held_out: set[str] | None = None,
+    vectors: dict[str, list[float]] | None = None,
 ) -> RecordOutcome:
     # The arm's split rides on `tags`, so `aggregate`'s per-tag breakdown
     # reports it for free and `docs/eval.md` §6.1 quotes one row of it.
@@ -202,7 +203,9 @@ async def evaluate_record(
         # template stored for that question would score 1.0 and mean nothing,
         # which is why `matcher_over` excludes each record's own row.
         matcher=(
-            matcher_over(templates, exclude=record.id)
+            matcher_over(
+                templates, exclude=record.id, vectors=vectors, snapshot=snapshot
+            )
             if templates is not None else None
         ),
         templates_enabled=templates is not None,
@@ -274,6 +277,10 @@ async def evaluate_record(
     # for the number to be about the prompt at all.
     o.examples_offered = len(state.examples)
     o.short_circuited = state.match_outcome == "SHORT_CIRCUIT"
+    # What actually retrieved, not what the arm was launched with: an embedding
+    # arm falls back to lexical whenever the embedding half found nothing, and
+    # a report that printed the launch flag would call that an embedding run.
+    o.matcher = state.match_kind or ""
 
     if state.intent in _NON_ANALYTICAL:
         o.outcome = OUTCOME_NO_SQL
@@ -339,6 +346,7 @@ async def run_suite(
     semantic: dict[str, Any] | None = None,
     templates: list[Any] | None = None,
     held_out: set[str] | None = None,
+    vectors: dict[str, list[float]] | None = None,
 ) -> list[RecordOutcome]:
     outcomes: list[RecordOutcome] = []
     for i, record in enumerate(records, 1):
@@ -346,7 +354,7 @@ async def run_suite(
             record, gateway=gateway, llm=llm, connector=connector, snapshot=snapshot,
             policy=policy, settings=settings, model_name=model_name, with_cost=with_cost,
             include_db_comments=include_db_comments, semantic=semantic,
-            templates=templates, held_out=held_out,
+            templates=templates, held_out=held_out, vectors=vectors,
         )
         outcomes.append(outcome)
         if progress:
@@ -575,8 +583,14 @@ def build_template_store(
     ]
 
 
-def matcher_over(templates: list[Any], *, exclude: str = "") -> Any:
-    """A `LexicalMatcher` over an in-memory store, minus one record's own row.
+def matcher_over(
+    templates: list[Any],
+    *,
+    exclude: str = "",
+    vectors: dict[str, list[float]] | None = None,
+    snapshot: dict[str, Any] | None = None,
+) -> Any:
+    """The real matcher over an in-memory store, minus one record's own row.
 
     The real matcher, the real thresholds, the real masking — an arm that
     hand-picked its examples would measure a retrieval strategy nobody ships.
@@ -585,15 +599,119 @@ def matcher_over(templates: list[Any], *, exclude: str = "") -> Any:
     store it is measured against**, held out or not: a question answered from
     its own stored SQL measures the store's ability to hold a string, which is
     §1.3's measurement trap and the reason `role` exists in the product.
+
+    With `vectors`, this is the Phase 7 arm: the same `EmbeddingMatcher` and
+    `FallbackMatcher` the product builds, over vectors embedded once for the
+    whole suite. The fallback is wired here too, because measuring the
+    embedding matcher *without* the fallback would measure a configuration
+    nobody ships — and the arm's recall delta has to be against what a customer
+    would actually get.
     """
-    from app.knowledge.matcher import LexicalMatcher
+    from app.knowledge.embed import (
+        EmbeddingMatcher,
+        VectorEntry,
+        VectorIndex,
+        Vocabulary,
+        fingerprint,
+        mask_question,
+    )
+    from app.knowledge.matcher import FallbackMatcher, LexicalMatcher
 
     excluded = uuid.uuid5(uuid.NAMESPACE_OID, exclude) if exclude else None
+    kept = [t for t in templates if t.id != excluded]
 
     async def rows(_connection_id: UUID, _normalized: str, limit: int) -> list[Any]:
-        return [t for t in templates if t.id != excluded][:limit]
+        return kept[:limit]
 
-    return LexicalMatcher(rows)
+    lexical = LexicalMatcher(rows)
+    if not vectors:
+        return lexical
+
+    dimension = len(next(iter(vectors.values())))
+    # The vocabulary is the **whole suite's**, not the kept subset's. In the
+    # product a held-out template is not in the store at all, so its declared
+    # values are not in the vocabulary either; here the exclusion is per-record
+    # and re-deriving the vocabulary forty times would mean forty different
+    # maskings of every neighbour and forty times the embedding calls. The
+    # approximation is stated rather than hidden: the *entries* are excluded,
+    # the vocabulary is not.
+    vocabulary = Vocabulary.from_snapshot(snapshot, templates)
+    entries = [
+        VectorEntry(
+            template=template,
+            vector=vectors[str(template.id)],
+            stored_fingerprint=fingerprint(
+                mask_question(template.question, vocabulary),
+                EVAL_EMBEDDING_MODEL,
+                dimension,
+            ),
+        )
+        for template in kept
+        if str(template.id) in vectors
+    ]
+    index = VectorIndex(
+        vocabulary=vocabulary,
+        model=EVAL_EMBEDDING_MODEL,
+        dimension=dimension,
+        entries=entries,
+    )
+
+    async def source(_connection_id: UUID) -> Any:
+        return index
+
+    async def embed(texts: Any) -> list[list[float]]:
+        # Standing in for the ask-time provider call. `embed_store` keyed the
+        # map by masked text as well as by id, so a question that masks to text
+        # the store already holds is answered from the map — and one that does
+        # not returns nothing, which `EmbeddingMatcher` reads as "no vector" and
+        # `FallbackMatcher` turns into the lexical answer. That is exactly the
+        # product's behaviour when an embedding call fails, so the arm measures
+        # a real configuration rather than an optimistic one.
+        return [vectors[t] for t in texts if t in vectors]
+
+    return FallbackMatcher(EmbeddingMatcher(embed, source), lexical)
+
+
+#: The embedding model the arm uses. Named here rather than taken from a flag
+#: because the *recall delta* is only meaningful between two runs that embedded
+#: with the same thing, and a flag is one more way for two scorecards to differ
+#: in a way nobody notices.
+EVAL_EMBEDDING_MODEL = "text-embedding-3-small"
+
+
+async def embed_store(
+    templates: list[Any],
+    *,
+    gateway: Any,
+    llm: Any,
+    snapshot: dict[str, Any] | None,
+) -> dict[str, list[float]]:
+    """One embedding call for the whole store, plus one per question at ask time.
+
+    The questions are masked with the vocabulary the *whole* store implies,
+    which is what the product does — `to_index` builds it from every entry, and
+    each record's own exclusion happens after masking, not before. Excluding a
+    record from the vocabulary as well would mask its neighbours differently on
+    every one of the suite's records and make the arm unreproducible.
+
+    The map is keyed by masked *text* as well as by template id, because the
+    matcher embeds a question at ask time and this stands in for that call: a
+    question that masks to text already in the map is answered from it, which
+    keeps an arm to one provider call rather than one per record.
+    """
+    from app.knowledge.embed import Vocabulary, mask_question
+
+    vocabulary = Vocabulary.from_snapshot(snapshot, templates)
+    masked = {str(t.id): mask_question(t.question, vocabulary) for t in templates}
+    texts = sorted(set(masked.values()))
+    if not texts:
+        return {}
+
+    vectors = await gateway.embed(llm, texts, model=EVAL_EMBEDDING_MODEL)
+    by_text = dict(zip(texts, vectors, strict=True))
+    out: dict[str, list[float]] = dict(by_text)
+    out.update({tid: by_text[text] for tid, text in masked.items()})
+    return out
 
 
 # ── fixture lifecycle (testcontainers) ───────────────────────────────────────
@@ -827,6 +945,7 @@ async def _amain(args: argparse.Namespace) -> int:
     # putting in front of anyone.
     held_out: set[str] = set()
     templates: list[Any] | None = None
+    vectors: dict[str, list[float]] | None = None
     if args.templates == "on":
         held_out = held_out_ids(records)
         templates = build_template_store(records, held_out)
@@ -839,6 +958,7 @@ async def _amain(args: argparse.Namespace) -> int:
             f"{len(held_out)} held out)"
             if templates is not None else "templates off"
         ),
+        f"{args.matcher} matcher" if templates is not None else "no matcher",
         f"retrieve budget {budget_chars:,}",
     ])
     print(f"Spinning fixture {spec.name} ({spec.image}, {arm}) …", file=sys.stderr)
@@ -860,6 +980,24 @@ async def _amain(args: argparse.Namespace) -> int:
             # it will be rendered against — the same order the request path
             # takes, and the only order in which drift is detectable.
             semantic = load_semantic(spec, snap) if args.semantic == "on" else None
+
+            # The embedding arm. One provider call for the whole store, made
+            # here because the masking needs the snapshot and the snapshot
+            # needs the fixture — and made *before* the first question, so a
+            # provider that cannot embed fails the arm rather than silently
+            # measuring the lexical matcher under an embedding label.
+            if templates and args.matcher == "embedding":
+                vectors = await embed_store(
+                    templates, gateway=gateway, llm=llm, snapshot=snap
+                )
+                if not vectors:
+                    print(
+                        "The embedding arm produced no vectors — refusing to "
+                        "report a lexical run as an embedding one.",
+                        file=sys.stderr,
+                    )
+                    return 2
+
             print(
                 f"Running {len(records)} question(s) through the real pipeline …",
                 file=sys.stderr,
@@ -880,7 +1018,7 @@ async def _amain(args: argparse.Namespace) -> int:
                     records, gateway=gateway, llm=llm, connector=connector, snapshot=snap,
                     policy=policy, settings=settings, model_name=model_name, progress=True,
                     include_db_comments=args.comments, semantic=semantic,
-                    templates=templates, held_out=held_out,
+                    templates=templates, held_out=held_out, vectors=vectors,
                 )
                 report = metrics.aggregate(outcomes)
                 report_dict = metrics.report_to_dict(report)
@@ -903,6 +1041,19 @@ async def _amain(args: argparse.Namespace) -> int:
             # scorecards is not left to work out whether v8 and v9 numbers are
             # comparable — they are, on this arm, and that is the point of it.
             report_dict["prompt_bytes_equal_v8"] = templates is None
+            # Which matcher retrieved. Recorded because Phase 7's whole claim is
+            # a *delta* between two runs that differ only in this, and two
+            # scorecards that do not say which matcher ran cannot be compared —
+            # `docs/eval.md` §6.3.
+            report_dict["matcher"] = (
+                args.matcher if templates is not None else "none"
+            )
+            report_dict["embedding_model"] = (
+                EVAL_EMBEDDING_MODEL if vectors else ""
+            )
+            report_dict["vectors_in_store"] = len(
+                {k for k in (vectors or {}) if "-" in k}
+            )
             # Recorded because retrieval recall cannot be read without it: at a
             # budget above the fixture's ~26.5k chars every question takes
             # FULL_SNAPSHOT and recall is 1.0 by construction, which is not the
@@ -1050,6 +1201,16 @@ def build_parser() -> argparse.ArgumentParser:
              "from the store it is measured against, so the `held_out` row of "
              "the per-tag breakdown is the only number worth quoting. Off "
              "renders the prompt byte-identically to PROMPT_VERSION v8.",
+    )
+    parser.add_argument(
+        "--matcher", choices=("lexical", "embedding"), default="lexical",
+        help="which matcher retrieves taught questions (only meaningful with "
+             "--templates on). `embedding` masks table names, column names, "
+             "declared values and literals before embedding, and falls back to "
+             "lexical exactly as the product does. Compare two runs on BOTH "
+             "numbers the report prints for it: retrieval moving is not "
+             "accuracy moving — FK-neighbour expansion once lifted recall "
+             "70%% -> 86%% with flat execution accuracy.",
     )
     parser.add_argument(
         "--semantic", choices=("on", "off"), default="off",

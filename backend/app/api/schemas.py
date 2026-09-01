@@ -484,6 +484,48 @@ class MaintenanceRead(BaseModel):
     #: that a parameter needs a value list.
     skipped: list[str] = Field(default_factory=list)
     conflicts_checked: bool = False
+    #: The embedding index, when the connection has one. Zeroes otherwise.
+    indexed: int = 0
+    index_current: int = 0
+    index_truncated: bool = False
+    index_error: str = ""
+
+
+# ── the embedding matcher (Phase 7) ──────────────────────────────────────
+class EmbeddingWrite(BaseModel):
+    """Turn embedding search on or off for a connection.
+
+    `model` is optional and almost always left empty: the probe tries the
+    provider's small embedding model and pins whatever answers. A deployment
+    running its own endpoint — Ollama, vLLM, a gateway — names its model here,
+    and the *dimension* is never asked for, because it is measured from the
+    endpoint's own reply rather than trusted from a form.
+    """
+
+    enabled: bool
+    model: str = Field(default="", max_length=200)
+
+
+class EmbeddingStatus(BaseModel):
+    """What the store's embedding index looks like right now.
+
+    `available` and `indexed` are separate on purpose: a connection can have a
+    model pinned and no vectors yet (the first pass has not run) and that is a
+    normal state, not a failure. The UI says "indexing" for it rather than
+    "on", because "on" would promise a behaviour the next question will not
+    show.
+    """
+
+    #: A model is pinned. False is the shipped default and means the lexical
+    #: matcher answers — which is a state, not a degradation.
+    enabled: bool = False
+    model: str = ""
+    dimension: int = 0
+    #: Live templates that could carry a vector, and how many currently do.
+    templates: int = 0
+    indexed: int = 0
+    #: Everything the probe or the last pass had to say. Empty on success.
+    message: str = ""
 
 
 # ── benchmarks and the score (Phase 6) ───────────────────────────────────

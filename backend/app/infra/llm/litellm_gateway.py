@@ -34,6 +34,7 @@ from app.core.logging import get_logger
 from app.domain.ports.llm import (
     ChatMessage,
     Completion,
+    EmbeddingCapability,
     ProviderCapabilities,
     ResolvedLLM,
     StreamChunk,
@@ -57,6 +58,21 @@ _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 # three survive being pointed out. Without this, one bad reply costs the caller
 # a whole table.
 STRUCTURED_REPAIRS = 1
+
+# The embedding model tried when a connection has not pinned one. Only one
+# entry, because the product creates exactly two provider kinds and Anthropic
+# has no embedding endpoint at all — a fact worth failing on without a network
+# call rather than discovering as a 404. Anything OpenAI-compatible (OpenAI
+# itself, Ollama, vLLM, LM Studio, a local gateway) may or may not serve this
+# model, which is what the probe is for; a deployment serving something else
+# names it explicitly and the name is pinned on the connection.
+DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
+
+#: Texts per embedding request. Providers accept far more, but a batch is also
+#: a failure unit: one oversized request that trips a token limit loses the
+#: whole indexing pass, and sixty-four short questions is comfortably inside
+#: every endpoint's input cap.
+EMBEDDING_BATCH = 64
 
 # Schema-shaped output is not a place for sampling. The caller's temperature is
 # tuned for prose; above this a model starts inventing keys and trailing commas.
@@ -366,6 +382,117 @@ class LiteLLMGateway:
             supports_streaming=True,
             supports_system_prompt=True,
         )
+
+
+    # ── embeddings (Phase 7) ─────────────────────────────────────────────
+    def _embedding_kwargs(self, llm: ResolvedLLM, model: str) -> dict[str, Any]:
+        """The same credential shaping `_kwargs` does, minus everything a chat
+        call needs and an embedding endpoint rejects (temperature, max_tokens,
+        messages)."""
+        name = model or DEFAULT_EMBEDDING_MODEL
+        if llm.provider in {"OpenAI-compatible", "Custom"} and "/" not in name:
+            name = f"openai/{name}"
+        kwargs: dict[str, Any] = {"model": name, "timeout": self._timeout}
+        if llm.api_key:
+            kwargs["api_key"] = llm.api_key
+        if llm.base_url:
+            kwargs["api_base"] = llm.base_url
+        return kwargs
+
+    async def embed(
+        self, llm: ResolvedLLM, texts: Sequence[str], *, model: str = ""
+    ) -> list[list[float]]:
+        """Vectors for a batch of texts, in the order they were given.
+
+        Order is the contract: the caller pairs the results back onto its own
+        rows by index, so a provider that returned them out of order would
+        silently give every template somebody else's vector. litellm normalises
+        the OpenAI response shape, which carries an explicit `index`; it is
+        sorted on rather than trusted.
+
+        Batched at `EMBEDDING_BATCH`, and one failed batch fails the call —
+        this is never on a request path (indexing runs in the worker, and the
+        ask path embeds exactly one question), so a partial answer would be a
+        half-indexed store nobody could tell from a fully indexed one.
+        """
+        wanted = list(texts)
+        if not wanted:
+            return []
+
+        out: list[list[float]] = []
+        for start in range(0, len(wanted), EMBEDDING_BATCH):
+            batch = wanted[start : start + EMBEDDING_BATCH]
+            payload = self._embedding_kwargs(llm, model)
+            payload["input"] = batch
+            try:
+                response = await litellm.aembedding(**payload)
+            except Exception as err:
+                raise LLMError(_clean(err)) from err
+            out.extend(_vectors(response, len(batch)))
+        return out
+
+    async def probe_embedding(
+        self, llm: ResolvedLLM, *, model: str = ""
+    ) -> EmbeddingCapability:
+        """Whether this endpoint embeds, and at what width — asked, not assumed.
+
+        Anthropic is refused without a call: it has no embedding endpoint, and
+        a probe that spends a request to be told so is a probe that reports
+        "unavailable" for a network blip and "unavailable" for a permanent
+        fact in the same sentence.
+        """
+        if llm.provider == "Anthropic":
+            return EmbeddingCapability(
+                reason=(
+                    "Anthropic does not offer an embedding endpoint. Point this "
+                    "connection at an OpenAI-compatible provider to use "
+                    "embedding search."
+                ),
+            )
+
+        name = model or DEFAULT_EMBEDDING_MODEL
+        try:
+            vectors = await self.embed(llm, ["ok"], model=name)
+        except LLMError as err:
+            return EmbeddingCapability(model=name, reason=str(err))
+
+        if not vectors or not vectors[0]:
+            return EmbeddingCapability(
+                model=name,
+                reason="The endpoint accepted the request but returned no vector.",
+            )
+        return EmbeddingCapability(
+            available=True, model=name, dimension=len(vectors[0])
+        )
+
+
+def _vectors(response: Any, expected: int) -> list[list[float]]:
+    """The embeddings out of a provider response, in request order.
+
+    Sorted on the response's own `index` rather than trusting arrival order,
+    and length-checked: a batch that came back short would shift every
+    subsequent pairing by one, which is the kind of bug that shows up as "the
+    matcher got worse" six weeks later.
+    """
+    data = list(getattr(response, "data", None) or [])
+    rows: list[tuple[int, list[float]]] = []
+    for position, item in enumerate(data):
+        if isinstance(item, dict):
+            vector = item.get("embedding") or []
+            index = item.get("index", position)
+        else:
+            vector = getattr(item, "embedding", None) or []
+            index = getattr(item, "index", position)
+        rows.append((int(index), [float(v) for v in vector]))
+
+    rows.sort(key=lambda pair: pair[0])
+    out = [vector for _, vector in rows]
+    if len(out) != expected:
+        raise LLMError(
+            f"The embedding endpoint returned {len(out)} vectors for "
+            f"{expected} inputs."
+        )
+    return out
 
 
 def estimate_cost_usd(
