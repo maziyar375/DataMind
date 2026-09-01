@@ -138,11 +138,13 @@ class Divergence:
     #: A sentence naming the *kind* of disagreement, for the log and the
     #: template's `status_reason`.
     summary: str = ""
-    #: Column headers, taken from the left statement. Both are shown against
-    #: these: a conflict where even the shape differs is still a conflict, and
-    #: the pane says so rather than pretending the columns line up.
-    left_columns: list[str] = field(default_factory=list)
-    right_columns: list[str] = field(default_factory=list)
+    #: Column headers, taken from each statement. Both are shown, because a
+    #: conflict where even the shape differs is still a conflict and the pane
+    #: says so rather than pretending the columns line up. Typed loosely: a
+    #: caller may hand over strings or the connector's own `ResultColumn`s, and
+    #: `as_dict` reads the name off either.
+    left_columns: list[Any] = field(default_factory=list)
+    right_columns: list[Any] = field(default_factory=list)
     #: Up to `MAX_EVIDENCE_ROWS` rows from each side, chosen to *show the
     #: difference* rather than to show the top of the table.
     left_rows: list[Row] = field(default_factory=list)
@@ -151,15 +153,18 @@ class Divergence:
     def as_dict(self) -> dict[str, Any]:
         """JSON-safe, for the `conflict_evidence` column.
 
-        Every cell is stringified: a `Decimal`, a `date` and a `UUID` all come
-        back from the connectors and none of them is JSON. Stringifying here
-        rather than at render time means the stored evidence is exactly what
-        the curator will be shown.
+        Every cell **and every header** is stringified. A `Decimal`, a `date`
+        and a `UUID` all come back from the connectors and none of them is
+        JSON — and a header is not a string either: `QueryResult.columns` is a
+        list of `ResultColumn`, so the name has to be read off it. Both are
+        done here rather than at render time, so the stored evidence is exactly
+        what the curator will be shown and no caller can put a dataclass in a
+        JSONB column.
         """
         return {
             "summary": self.summary,
-            "left_columns": list(self.left_columns),
-            "right_columns": list(self.right_columns),
+            "left_columns": [_header(c) for c in self.left_columns],
+            "right_columns": [_header(c) for c in self.right_columns],
             "left_rows": [[_cell(v) for v in row] for row in self.left_rows],
             "right_rows": [[_cell(v) for v in row] for row in self.right_rows],
         }
@@ -169,13 +174,24 @@ def _cell(value: Any) -> str:
     return "" if value is None else str(value)
 
 
+def _header(column: Any) -> str:
+    """A column's name, whether it arrived as one or as a `ResultColumn`.
+
+    Duck-typed rather than imported: this package is self-contained by
+    contract, and reading a `.name` off whatever the connector returned costs
+    nothing and keeps `app.knowledge` free of `app.domain.ports`.
+    """
+    name = getattr(column, "name", column)
+    return "" if name is None else str(name)
+
+
 def first_difference(
     left: list[Row],
     right: list[Row],
     *,
     equivalence: str = "",
-    left_columns: list[str] | None = None,
-    right_columns: list[str] | None = None,
+    left_columns: list[Any] | None = None,
+    right_columns: list[Any] | None = None,
 ) -> Divergence:
     """The evidence that two result sets disagree, or `differs=False`.
 

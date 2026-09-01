@@ -319,6 +319,31 @@ def test_the_evidence_is_capped() -> None:
     assert len(found.left_rows) == MAX_EVIDENCE_ROWS
 
 
+def test_evidence_stringifies_the_headers_the_connector_actually_returns() -> None:
+    """`QueryResult.columns` is a list of `ResultColumn`, not of strings.
+
+    Caught end to end against a real database rather than here: the fake in
+    this file handed over strings, so `as_dict` looked JSON-safe and the first
+    real conflict failed with *"Object of type ResultColumn is not JSON
+    serializable"* while writing `conflict_evidence`. The name is read off
+    whatever the connector returned, and both forms are pinned.
+    """
+    from app.domain.ports.database import ResultColumn
+
+    found = first_difference(
+        [[1]], [[2]],
+        left_columns=[ResultColumn(name="revenue", db_type="numeric")],
+        right_columns=["revenue"],
+    )
+    stored = found.as_dict()
+    assert stored["left_columns"] == ["revenue"]
+    assert stored["right_columns"] == ["revenue"]
+    # JSON-safe means JSON-safe: this is what goes into a JSONB column.
+    import json
+
+    json.dumps(stored)
+
+
 def test_evidence_stringifies_every_cell_for_the_column() -> None:
     """`conflict_evidence` is JSONB, and a Decimal is not JSON.
 
