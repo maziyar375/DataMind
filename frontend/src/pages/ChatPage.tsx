@@ -9,6 +9,8 @@ import type {
 import {
   AssistantTurn, RunErrorCard, UserBubble,
 } from '../components/chat'
+import { absorbThought, endThought } from '../components/thinking'
+import type { ThinkingState } from '../components/thinking'
 import { TemplateEditor } from '../components/knowledge'
 import {
   DisclosureBadge, ErrorNote, GlyphBadge, Icon, PrimaryButton, SearchField, Spinner,
@@ -74,6 +76,13 @@ export default function ChatPage() {
   // mid-run recovers from the server rather than from this component.
   const [liveSteps, setLiveSteps] = useState<RunStep[]>([])
   const [liveText, setLiveText] = useState('')
+  // The model's reasoning channel for the run in flight. Null for a model
+  // that does not think out loud, which is most of them.
+  const [thinking, setThinking] = useState<ThinkingState | null>(null)
+  // Whether reasoning is still arriving. A ref, not state: the first token
+  // of the actual answer is what ends the thinking phase, and testing that
+  // against state would mean a set on every token of the answer.
+  const thinkingLive = useRef(false)
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
   const stopStreamRef = useRef<(() => void) | null>(null)
   // Which attachment owns the live view. A stream that finishes after another
@@ -121,6 +130,12 @@ export default function ChatPage() {
       flushTimer.current = null
     }
     setLiveText('')
+  }, [])
+
+  /** Reasoning belongs to one run and is never replayed, so it goes with it. */
+  const clearThinking = useCallback(() => {
+    thinkingLive.current = false
+    setThinking(null)
   }, [])
 
   // ── bootstrap ───────────────────────────────────────────────────────────
@@ -286,7 +301,7 @@ export default function ChatPage() {
     const el = scrollRef.current
     if (!el) return
     el.scrollTop = el.scrollHeight
-  }, [liveText, liveSteps])
+  }, [liveText, liveSteps, thinking])
 
   // ── streaming ───────────────────────────────────────────────────────────
   function attachStream(runId: string, conversationId: string) {
@@ -295,6 +310,7 @@ export default function ChatPage() {
     setActiveRunId(runId)
     setLiveSteps([])
     clearText()
+    clearThinking()
 
     stopStreamRef.current = streamRun(runId, {
       onEvent: (event) => {
@@ -325,7 +341,22 @@ export default function ChatPage() {
               ),
             )
             break
+          // The model working before it has anything to say. Kept live-only
+          // and paced by the server; see `ThinkingPanel`.
+          case 'REASONING_DELTA':
+            thinkingLive.current = true
+            setThinking((prev) =>
+              absorbThought(prev, event.data.text ?? '', event.data.elapsed_ms),
+            )
+            break
           case 'TEXT_DELTA':
+            // The first word of the answer is what ends the thinking phase.
+            // The panel stays — collapsed, reading "Thought for 47s" — because
+            // how long the answer took to start is part of what happened.
+            if (thinkingLive.current) {
+              thinkingLive.current = false
+              setThinking(endThought)
+            }
             appendText(event.data.text ?? '')
             break
           // Narration failed part-way through: the deltas already rendered are
@@ -360,6 +391,7 @@ export default function ChatPage() {
         setActiveRunId(null)
         setLiveSteps([])
         clearText()
+        clearThinking()
         if (loaded === null) {
           setError('Could not refresh this conversation. Try reloading.')
           return
@@ -750,6 +782,7 @@ export default function ChatPage() {
                   text={liveText}
                   run={null}
                   steps={liveSteps}
+                  thinking={thinking}
                   streaming
                 />
               )}

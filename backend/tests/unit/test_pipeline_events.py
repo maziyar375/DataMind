@@ -41,6 +41,7 @@ import pytest
 from app.core.clock import utcnow
 from app.core.errors import ConnectorError
 from app.domain.ports.database import QueryResult, ResultColumn
+from app.domain.ports.llm import StreamChunk
 from app.domain.value_objects import DisclosurePolicy, StepStatus
 from app.pipeline.nodes import NodeDeps
 from app.pipeline.pipeline import AnalyticsPipeline
@@ -175,13 +176,13 @@ class ScriptedGateway:
             return self._chart
         raise AssertionError(f"unscripted structured call for {name}")
 
-    def stream(self, _llm: Any, _messages: Any) -> AsyncIterator[str]:
+    def stream(self, _llm: Any, _messages: Any) -> AsyncIterator[StreamChunk]:
         self.streams += 1
         deltas = list(self._prose)
 
-        async def gen() -> AsyncIterator[str]:
+        async def gen() -> AsyncIterator[StreamChunk]:
             for delta in deltas:
-                yield delta
+                yield StreamChunk(text=delta)
 
         return gen()
 

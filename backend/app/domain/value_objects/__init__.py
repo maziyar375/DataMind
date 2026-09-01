@@ -364,5 +364,29 @@ class RunEventType(StrEnum):
     # Emitted only when narration fails part-way through, so the fallback
     # sentence does not arrive glued to half a sentence — live or on replay.
     TEXT_RESET = "TEXT_RESET"
+    # A reasoning model thinking out loud, before it writes anything. Not the
+    # answer and never part of it — see `TRANSIENT_RUN_EVENTS` for why this one
+    # is the only event that is not written down.
+    REASONING_DELTA = "REASONING_DELTA"
     ERROR = "ERROR"
     RUN_FINISHED = "RUN_FINISHED"
+
+
+#: Published to whoever is watching *now*, and never written to `run_events`.
+#:
+#: Every other event is durable because the run's record has to be replayable:
+#: reopen a thread a week later and the steps, the SQL and the answer are all
+#: still there. Reasoning is the one thing where that trade goes the other way.
+#: It is a scratchpad, not a finding — nobody reopens a thread to re-read what
+#: the model was mulling — and it arrives at a rate that makes storing it
+#: actively harmful: `_emit` commits a row per event, and a model that thinks
+#: for a minute would leave hundreds of rows of deliberation attached to a
+#: three-sentence answer.
+#:
+#: Two consequences worth knowing before adding to this set. A transient event
+#: still takes a `seq` from the bus, so the durable log has gaps — harmless,
+#: since every reader queries `seq > after` and skips what it has seen. And it
+#: never reaches another replica, because cross-process delivery goes through
+#: `NOTIFY` + a read of the row that was not written. Live, on the process
+#: running the node, is the whole contract.
+TRANSIENT_RUN_EVENTS = frozenset({RunEventType.REASONING_DELTA})

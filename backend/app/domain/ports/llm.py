@@ -54,6 +54,29 @@ class ResolvedLLM:
 
 
 @dataclass(frozen=True, slots=True)
+class StreamChunk:
+    """One piece of a streamed reply, on one of two channels.
+
+    A reasoning model does not start writing its answer; it thinks first, in
+    the open, on a channel providers keep separate from the answer itself
+    (`reasoning_content` on the delta). Both arrive over the same stream and
+    both are the model working, but only one of them is the reply: reasoning
+    is a scratchpad, and concatenating it into `state.answer` would publish
+    the model's deliberation as if it were the answer.
+
+    So they travel as one type with two fields rather than as a bare `str`.
+    A caller that only wants the reply reads `text` and ignores the rest; a
+    caller that wants to show the reader that something is happening — the
+    minutes a reasoning model can spend before its first word of prose — has
+    `reasoning` to show. Exactly one field is non-empty on any chunk a
+    provider actually sends.
+    """
+
+    text: str = ""
+    reasoning: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class Completion:
     text: str
     prompt_tokens: int = 0
@@ -79,7 +102,7 @@ class LLMGateway(Protocol):
     # a coroutine — so this is `def`, not `async def` (callers use `async for`).
     def stream(
         self, llm: ResolvedLLM, messages: Sequence[ChatMessage]
-    ) -> AsyncIterator[str]: ...
+    ) -> AsyncIterator[StreamChunk]: ...
 
     async def structured(
         self, llm: ResolvedLLM, messages: Sequence[ChatMessage], schema: type[T]

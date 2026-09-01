@@ -481,13 +481,47 @@ never exist.
    `HALT` **without calling the model**. There is nothing for it to read.
 3. Build the prompt: `context.render(policy)` (schema + semantic block) +
    `metadata.census(...)` + `_render_history(...)`.
-4. `stream()`, emitting `TEXT_DELTA` per chunk — the same wire contract the SPA
-   already renders for `present`, so a schema answer streams like any other.
+4. `stream()`, emitting `TEXT_DELTA` per `text` chunk and `REASONING_DELTA`
+   per `reasoning` chunk — the same wire contract the SPA already renders for
+   `present`, so a schema answer streams like any other.
 5. `LLMError`, or a stream that yields nothing usable → **`TEXT_RESET`** (only
    if deltas were already sent) then `metadata.answer_metadata`, the exact
    rendering this node replaced, emitted as one delta. A provider outage costs
-   the *prose*, never the answer.
+   the *prose*, never the answer. **Reasoning is not prose**: a model that
+   spends its whole budget thinking and never writes a word takes this path
+   too.
 6. `HALT` on every path.
+
+**Reasoning is a second channel, and it used to be dropped on the floor.** A
+reasoning model does not begin by writing; it thinks first, on
+`reasoning_content`, and the gateway yielded only `content`. So `describe`
+emitted nothing at all for the duration — a step chip on `describe`, an empty
+paragraph under it, and no way to tell a thinking model from a dead process.
+This is not hypothetical: `run_steps` has a `describe` that ran for
+**420,828 ms** and succeeded, seven minutes of which the reader saw nothing.
+Neither timeout could have caught it — `check_deadline` runs *between* nodes
+and never inside one, and `LLM_REQUEST_TIMEOUT_SECONDS` is a read timeout that
+a provider still sending chunks resets forever.
+
+`StreamChunk` (`domain/ports/llm.py`) now carries both channels and `_Thinking`
+paces the reasoning one into `REASONING_DELTA` events every 400ms — the first
+piece immediately, so the indicator appears when the wait does. Three rules:
+
+- **Reasoning never reaches `state.answer`.** It is a scratchpad, and
+  concatenating it would publish the model's deliberation as the reply.
+- **`REASONING_DELTA` is the one event that is not written down** — see
+  `TRANSIENT_RUN_EVENTS` in `domain/value_objects`. It is published to live
+  subscribers and skipped by `_emit`'s durable write, because a minute of
+  thinking would otherwise file hundreds of rows of deliberation against a
+  three-sentence answer. Two consequences: the durable log has `seq` gaps
+  (harmless — every reader queries `seq > after`), and the event does not cross
+  replicas, since cross-process delivery reads back a row that was never
+  written.
+- **The duration survives even though the words do not.** `_Thinking.note()`
+  appends `· thought for 30.8s` to the step detail, so reopening a thread still
+  shows where a slow node's time went.
+
+`present` streams on exactly the same terms.
 
 **`census` is the part that is easy to leave out.** On a schema too wide to
 send whole, the model is handed twenty tables — and a model handed twenty

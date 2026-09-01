@@ -11,9 +11,11 @@
  * the transcript read as a stack of forms; only the things that genuinely are
  * objects — a result table, the SQL — keep a border of their own.
  */
-import { Fragment, memo, useMemo, useState } from 'react'
+import { Fragment, memo, useEffect, useMemo, useRef, useState } from 'react'
 import { runs } from '../api/client'
 import { formatAnswer } from './chat-format'
+import { thoughtTime } from './thinking'
+import type { ThinkingState } from './thinking'
 import type {
   Artifact, ChartOption, ClarificationSpec, GeneratedQuery, KpiSpec, RunDetail,
   RunKnowledge, RunStep, TableArtifactSpec,
@@ -257,6 +259,109 @@ function StepPanel({
         {streaming ? <span className="rm-pulse">{status}</span> : status}
       </button>
       {open && <StepTrail steps={steps} />}
+    </div>
+  )
+}
+
+// ── the model thinking out loud ───────────────────────────────────────────
+/**
+ * A line that says the model is working, and how long it has been at it.
+ *
+ * The problem it solves is not decoration. A reasoning model streams its
+ * scratchpad on a channel separate from its answer, and the chat rendered
+ * none of it: a step chip sat on `describe` with an empty paragraph under it
+ * for as long as the model wanted to think, which is indistinguishable from
+ * a crash. The elapsed count is the load-bearing part — it is the one thing
+ * on screen that can only be true if something is still happening.
+ *
+ * Collapsed by default. The thought is genuinely interesting once and then
+ * never again, and a transcript that unrolls hundreds of words of
+ * deliberation above every answer is a worse transcript. Opening it is one
+ * click, and what is inside is the raw channel, unedited.
+ */
+function ThinkingPanel({ thinking }: { thinking: ThinkingState }) {
+  const [open, setOpen] = useState(false)
+  const [, tick] = useState(0)
+  const bodyRef = useRef<HTMLDivElement>(null)
+  // When *this reader* started watching. The server's `ms` is authoritative
+  // but only lands every few hundred milliseconds; this is what lets the
+  // number move once a second in between.
+  const startedAt = useRef(Date.now())
+
+  useEffect(() => {
+    if (thinking.done) return
+    const id = window.setInterval(() => tick((n) => n + 1), 1000)
+    return () => window.clearInterval(id)
+  }, [thinking.done])
+
+  // Pinned to the newest line, and faded at the top only when there is
+  // something scrolled off above it.
+  useEffect(() => {
+    const el = bodyRef.current
+    if (!el || !open) return
+    el.scrollTop = el.scrollHeight
+    el.dataset.faded = String(el.scrollHeight > el.clientHeight + 4)
+  }, [open, thinking.text])
+
+  // Never runs backwards: whichever of the two clocks is further along wins
+  // while it is live, and the server's total is the one that is kept.
+  const elapsed = thinking.done
+    ? thinking.ms
+    : Math.max(thinking.ms, Date.now() - startedAt.current)
+  const label = thinking.done
+    ? `Thought for ${thoughtTime(elapsed)}`
+    : `Thinking… ${thoughtTime(elapsed)}`
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {/* Announced once per state, not once per second: a live region on a
+          ticking clock would read the whole label out every tick. */}
+      <span className="rm-sr" role="status">
+        {thinking.done ? label : 'The model is thinking.'}
+      </span>
+      <button
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          alignSelf: 'flex-start',
+          fontSize: 11.5,
+          fontWeight: 600,
+          fontVariantNumeric: 'tabular-nums',
+          color: 'var(--text-dim)',
+          background: 'transparent',
+          border: 'none',
+          padding: 0,
+          cursor: 'pointer',
+          textAlign: 'left',
+        }}
+      >
+        <Icon.Chevron open={open} size={12} stroke="currentColor" />
+        <span className={thinking.done ? undefined : 'rm-think'}>{label}</span>
+      </button>
+      {open && (
+        <div
+          ref={bodyRef}
+          className="rm-think-body rm-enter"
+          style={{
+            maxHeight: 132,
+            padding: '10px 12px',
+            borderRadius: 8,
+            background: 'var(--panel-alt)',
+            fontSize: 12.5,
+            lineHeight: 1.6,
+            // 4.95:1 on this ground in dark, 5.38:1 in light. `--text-faint`
+            // is the colour this wants to be and cannot be read at.
+            color: 'var(--text-dim)',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+          }}
+        >
+          {thinking.text}
+        </div>
+      )}
     </div>
   )
 }
@@ -970,8 +1075,8 @@ function FeedbackFooter({
 }
 
 export const AssistantTurn = memo(function AssistantTurn({
-  text, run, streaming, steps, onPickOption, optionsDisabled, onRegenerate,
-  onFeedback, onSaveAsTemplate,
+  text, run, streaming, steps, thinking, onPickOption, optionsDisabled,
+  onRegenerate, onFeedback, onSaveAsTemplate,
 }: {
   text: string
   run: RunDetail | null
@@ -982,6 +1087,12 @@ export const AssistantTurn = memo(function AssistantTurn({
    * chips, from the persisted record.
    */
   steps?: RunStep[]
+  /**
+   * The model's reasoning channel, while it has one. Null for the models that
+   * do not think out loud — which is most of them — and null on a finished
+   * turn, since the events it is built from are never stored.
+   */
+  thinking?: ThinkingState | null
   onPickOption?: (text: string) => void
   optionsDisabled?: boolean
   /** Records the override, then re-asks the same question without the store. */
@@ -1008,6 +1119,11 @@ export const AssistantTurn = memo(function AssistantTurn({
         streaming={streaming}
         totalMs={run?.total_latency_ms}
       />
+
+      {/* Under the trail and above the answer, which is where it happens: the
+          step panel names the node that is working, this says the model
+          inside it is still going, and then the answer arrives. */}
+      {thinking && <ThinkingPanel thinking={thinking} />}
 
       {/* Above the answer, not below it: what a reader most needs to know
           about a sentence is whether to believe it, and that has to arrive

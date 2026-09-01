@@ -2655,3 +2655,61 @@ code, pre, .mono {
   .rm-sidebar-about-icon { display: inline-flex; }
   .rm-sidebar-about { padding: 6px; }
 }
+
+/* ── the model thinking out loud ──────────────────────────────────────────
+   A reasoning model spends its wait on a channel that carries no answer, and
+   the chat used to render nothing for it: a step chip, a still cursor, and
+   what looked exactly like a hung run for a minute at a time. This is what
+   that minute looks like now.
+
+   A sweep, not a blink. The step header directly above already uses
+   `rm-pulse`, and two elements blinking out of phase reads as a fault rather
+   than as work. It is the same idiom as `rm-bone` above — a lightness sweep
+   in the theme's own neutrals — moved from a skeleton onto text, so the label
+   reads as something in progress rather than as decorated type.
+
+   The darkest stop is `--text-dim` (4.95:1 on this ground in dark, 5.38:1 in
+   light) rather than `--text-faint`, which is a 3.3:1 colour and cannot carry
+   a label. Sweeping brighter than the floor is free; sweeping below it is
+   not. */
+.rm-think {
+  background-image: linear-gradient(
+    100deg,
+    var(--text-dim) 34%,
+    var(--text-strong) 50%,
+    var(--text-dim) 66%
+  );
+  background-size: 260% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: rm-think 2.4s linear infinite;
+}
+@keyframes rm-think {
+  from { background-position: 200% 50%; }
+  to { background-position: 0 50%; }
+}
+/* The global reduce rule collapses durations to 0.01ms, which would freeze
+   this mid-sweep and leave part of the label at whatever the gradient happened
+   to be. Opt out of the effect entirely instead. */
+@media (prefers-reduced-motion: reduce) {
+  .rm-think {
+    background-image: none;
+    -webkit-background-clip: border-box;
+    background-clip: border-box;
+    color: var(--text-dim);
+    animation: none;
+  }
+}
+
+/* The thought itself, when the reader opens it. Older lines scroll up under a
+   fade rather than being cut off at a hard edge — applied only while there is
+   something above to fade, so a two-line thought is not dimmed for nothing. */
+.rm-think-body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.rm-think-body[data-faded='true'] {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 18px);
+}

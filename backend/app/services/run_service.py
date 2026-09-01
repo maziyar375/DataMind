@@ -36,6 +36,7 @@ from app.core.errors import NotFoundError, RunTimeoutError, ValidationError
 from app.core.logging import get_logger
 from app.domain.ports.llm import ChatMessage
 from app.domain.value_objects import (
+    TRANSIENT_RUN_EVENTS,
     ArtifactKind,
     MessageRole,
     RunStatus,
@@ -658,6 +659,10 @@ class RunService:
     # ── helpers ──────────────────────────────────────────────────────────
     async def _emit(self, run_id: UUID, event_type: str, data: dict[str, Any]) -> None:
         seq = await event_bus.publish(run_id, event_type, data)
+        if event_type in TRANSIENT_RUN_EVENTS:
+            # Live only, deliberately: no row, no NOTIFY, no commit. See
+            # `TRANSIENT_RUN_EVENTS` for the trade and its two consequences.
+            return
         # Durable copy so a reconnecting client can replay from Last-Event-ID —
         # and, since Phase 6, so a replica that is not executing this run can
         # read the event at all.

@@ -36,6 +36,7 @@ from app.domain.ports.llm import (
     Completion,
     ProviderCapabilities,
     ResolvedLLM,
+    StreamChunk,
 )
 
 T = TypeVar("T", bound=BaseModel)
@@ -185,7 +186,23 @@ class LiteLLMGateway:
 
     async def stream(
         self, llm: ResolvedLLM, messages: Sequence[ChatMessage]
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamChunk]:
+        """Both channels of a streamed reply, in the order the provider sends them.
+
+        Reasoning is forwarded rather than dropped. A reasoning model can spend
+        minutes on `reasoning_content` before its first token of `content`, and
+        a stream that yields nothing for that whole time is indistinguishable
+        from a hung run — which is exactly what it looked like: the pipeline's
+        deadline is checked *between* nodes, and a provider still sending
+        chunks never trips the request timeout, so a silent node just sat
+        there. Callers now have something true to show for the wait.
+
+        The field name is not settled across providers: OpenAI-compatible
+        endpoints and litellm normalise to `reasoning_content`, OpenRouter also
+        sends `reasoning`, and a model that inlines its scratchpad in `<think>`
+        tags sends neither (that one is `_THINK_BLOCK`'s problem, not this
+        one). Read both, prefer the normalised name.
+        """
         try:
             response = await self._acompletion(
                 **self._kwargs(llm, messages), stream=True
@@ -194,7 +211,13 @@ class LiteLLMGateway:
                 delta = chunk.choices[0].delta
                 piece = getattr(delta, "content", None)
                 if piece:
-                    yield piece
+                    yield StreamChunk(text=piece)
+                    continue
+                thought = getattr(delta, "reasoning_content", None) or getattr(
+                    delta, "reasoning", None
+                )
+                if thought:
+                    yield StreamChunk(reasoning=thought)
         except Exception as err:
             raise LLMError(_clean(err)) from err
 

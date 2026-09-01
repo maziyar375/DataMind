@@ -483,6 +483,86 @@ def _render_history(
     return "Earlier in this conversation:\n" + "\n".join(lines)
 
 
+# ── thinking out loud ────────────────────────────────────────────────────
+# Reasoning arrives a token at a time, and one event per token is a bus
+# publish and a re-render each for a channel nobody reads word by word. At
+# this cadence the text still visibly moves — which is the entire point of
+# showing it — for a fortieth of the traffic.
+_REASONING_FLUSH_SECONDS = 0.4
+
+
+class _Thinking:
+    """Coalesces a model's reasoning channel into paced `REASONING_DELTA` events.
+
+    Shared by the two nodes that stream prose, and written because of what a
+    reasoning model does to them: it can spend a minute on `reasoning_content`
+    before its first word of `content`, during which the old loop — which read
+    `content` and nothing else — emitted nothing at all. The reader saw a step
+    chip and a still cursor, which is what a hung run looks like. Nothing was
+    hung; the answer had simply not been started yet.
+
+    It keeps no transcript. Pieces are flushed and forgotten, because none of
+    this is the answer: `state.answer` is built from `text` chunks only, and
+    the deliberation is gone the moment it has been shown.
+
+    The first piece flushes immediately — the indicator's job is to appear at
+    the same moment the wait does — and every piece after it waits its turn.
+    """
+
+    __slots__ = ("_emit", "_started", "_last", "_flushed_at", "_pending")
+
+    def __init__(self, emit: Any) -> None:
+        self._emit = emit
+        self._started: float | None = None
+        self._last = 0.0
+        self._flushed_at = 0.0
+        self._pending: list[str] = []
+
+    @property
+    def happened(self) -> bool:
+        """Whether this model thinks out loud at all. Most do not."""
+        return self._started is not None
+
+    @property
+    def elapsed_ms(self) -> int:
+        """How long the reasoning phase ran — measured to the last thought,
+        not to now, so it stops climbing once the prose starts."""
+        if self._started is None:
+            return 0
+        return int((self._last - self._started) * 1000)
+
+    async def add(self, piece: str) -> None:
+        now = time.perf_counter()
+        if self._started is None:
+            self._started = now
+        self._last = now
+        self._pending.append(piece)
+        if now - self._flushed_at >= _REASONING_FLUSH_SECONDS:
+            await self.flush()
+
+    async def flush(self) -> None:
+        if not self._pending:
+            return
+        text = "".join(self._pending)
+        self._pending.clear()
+        self._flushed_at = time.perf_counter()
+        await self._emit(
+            "REASONING_DELTA", {"text": text, "elapsed_ms": self.elapsed_ms}
+        )
+
+    def note(self) -> str:
+        """The step detail's share of it: durable, unlike the text itself.
+
+        `REASONING_DELTA` is deliberately never written down, so without this
+        a reopened thread would show a node that took ninety seconds and no
+        hint of where they went. The trail keeps the number; only the words
+        are transient.
+        """
+        if not self.happened:
+            return ""
+        return f" · thought for {self.elapsed_ms / 1000:.1f}s"
+
+
 # ── describe ─────────────────────────────────────────────────────────────
 async def describe(state: RunState, deps: NodeDeps) -> NodeResult:
     """Answer a question about the schema, from the schema. Never any SQL.
@@ -536,16 +616,25 @@ async def describe(state: RunState, deps: NodeDeps) -> NodeResult:
 
     started = time.perf_counter()
     buffer: list[str] = []
+    thinking = _Thinking(deps.emit)
     failed = False
     try:
-        async for delta in deps.llm_gateway.stream(deps.llm, messages):
-            buffer.append(delta)
-            await deps.emit("TEXT_DELTA", {"text": delta})
+        async for chunk in deps.llm_gateway.stream(deps.llm, messages):
+            if chunk.reasoning:
+                await thinking.add(chunk.reasoning)
+                continue
+            # Whatever is still pending goes out ahead of the first word of
+            # prose, so the thought that produced it is on screen before the
+            # answer it produced.
+            await thinking.flush()
+            buffer.append(chunk.text)
+            await deps.emit("TEXT_DELTA", {"text": chunk.text})
     except LLMError as err:
         log.warning(
             "describe_stream_failed", run_id=str(state.run_id), error=err.message
         )
         failed = True
+    await thinking.flush()
 
     text = "" if failed else "".join(buffer).strip()
     if not text:
@@ -565,6 +654,7 @@ async def describe(state: RunState, deps: NodeDeps) -> NodeResult:
         status="HALT",
         detail=(
             f"Described {described} of {len(tables)} tables in {elapsed}ms"
+            + thinking.note()
             + (" (from the snapshot)" if failed else "")
         ),
     )
@@ -987,10 +1077,15 @@ async def present(state: RunState, deps: NodeDeps) -> NodeResult:
     ]
 
     buffer: list[str] = []
+    thinking = _Thinking(deps.emit)
     try:
-        async for delta in deps.llm_gateway.stream(deps.llm, messages):
-            buffer.append(delta)
-            await deps.emit("TEXT_DELTA", {"text": delta})
+        async for chunk in deps.llm_gateway.stream(deps.llm, messages):
+            if chunk.reasoning:
+                await thinking.add(chunk.reasoning)
+                continue
+            await thinking.flush()
+            buffer.append(chunk.text)
+            await deps.emit("TEXT_DELTA", {"text": chunk.text})
     except LLMError as err:
         # The data is already correct; a narration failure should not lose it.
         log.warning("answer_stream_failed", error=err.message)
@@ -1013,8 +1108,9 @@ async def present(state: RunState, deps: NodeDeps) -> NodeResult:
         buffer = [fallback]
         await deps.emit("TEXT_DELTA", {"text": fallback})
 
+    await thinking.flush()
     state.answer = "".join(buffer).strip()
-    return NodeResult(detail="Answer written")
+    return NodeResult(detail="Answer written" + thinking.note())
 
 
 # ── chart ──────────────────────────────────────────────────────────────────

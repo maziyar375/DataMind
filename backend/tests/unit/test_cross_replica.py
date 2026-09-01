@@ -19,12 +19,14 @@ import base64
 import os
 import uuid
 from typing import Any
+from unittest import mock
 from uuid import UUID
 
 import pytest
 
 from app.infra.events.bus import InProcessEventBus, event_bus
 from app.infra.events.listener import CHANNEL, _parse, notify_run_event
+from app.services.run_service import RunService
 from app.workers.reconciler import RECONCILER_LOCK_KEY, reconcile_once
 
 # No `pytestmark`: `asyncio_mode = "auto"` collects the coroutines here, and an
@@ -158,6 +160,57 @@ async def test_a_cancelled_run_is_forgotten_too() -> None:
     await event_bus.close_run(run_id)
     event_bus.forget(run_id)
     assert event_bus.watermark(run_id) == 0
+
+
+# ── the one event that is not written down ───────────────────────────────
+async def test_a_transient_event_is_published_live_and_never_stored() -> None:
+    """`REASONING_DELTA` reaches whoever is watching now, and nothing else.
+
+    A reasoning model emits its scratchpad at a rate that makes storing it
+    actively harmful — `_emit` commits a row per event, so a minute of
+    thinking would file hundreds of rows of deliberation against a
+    three-sentence answer. It is shown and forgotten. The cost of that trade
+    is spelled out on `TRANSIENT_RUN_EVENTS`: the durable log gains a `seq`
+    gap, and another replica never sees this one at all.
+    """
+    added: list[Any] = []
+    notified: list[int] = []
+    commits = 0
+
+    class Recorder:
+        def add(self, row: Any) -> None:
+            added.append(row)
+
+        async def commit(self) -> None:
+            nonlocal commits
+            commits += 1
+
+        async def rollback(self) -> None:  # pragma: no cover - defensive
+            raise AssertionError("nothing here should fail")
+
+    service = RunService.__new__(RunService)
+    service._db = Recorder()  # type: ignore[assignment]
+
+    run_id = uuid.uuid4()
+    with mock.patch(
+        "app.services.run_service.notify_run_event",
+        new=lambda _db, _run, seq: notified.append(seq) or _noop(),
+    ):
+        await service._emit(run_id, "REASONING_DELTA", {"text": "hmm"})
+        assert added == [] and notified == [] and commits == 0
+
+        await service._emit(run_id, "TEXT_DELTA", {"text": "Revenue was $1.2M."})
+        assert len(added) == 1 and notified and commits == 1
+
+    # It still took a sequence number, which is what leaves the gap: the
+    # durable row is seq 2, and seq 1 exists only for the clients that were
+    # attached while it happened.
+    assert event_bus.watermark(run_id) == 2
+    event_bus.forget(run_id)
+
+
+async def _noop() -> None:
+    return None
 
 
 # ── the notification ─────────────────────────────────────────────────────

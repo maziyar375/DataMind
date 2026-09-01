@@ -14,7 +14,13 @@ import pytest
 from pydantic import BaseModel
 
 from app.core.errors import LLMError
-from app.domain.ports.llm import ChatMessage, Completion, ProviderCapabilities, ResolvedLLM
+from app.domain.ports.llm import (
+    ChatMessage,
+    Completion,
+    ProviderCapabilities,
+    ResolvedLLM,
+    StreamChunk,
+)
 from app.domain.value_objects import DisclosurePolicy, HintBudget
 from app.semantic import generate_document
 
@@ -73,7 +79,7 @@ class ScriptedGateway:
 
     def stream(
         self, llm: ResolvedLLM, messages: Sequence[ChatMessage]
-    ) -> AsyncIterator[str]:  # pragma: no cover - unused
+    ) -> AsyncIterator[StreamChunk]:  # pragma: no cover - unused
         raise NotImplementedError
 
     async def probe(self, llm: ResolvedLLM) -> ProviderCapabilities:  # pragma: no cover

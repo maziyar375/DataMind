@@ -115,9 +115,10 @@ container, and it does not detach — `docker compose up -d` is the backgrounded
 form the README's quick start uses.
 
 Frontend, from `frontend/`: `npm run dev`, `npm run build` (`tsc -b && vite
-build`), `npm run typecheck` (`tsc --noEmit`), `npm test` (all nine DOM-free
+build`), `npm run typecheck` (`tsc --noEmit`), `npm test` (all eleven DOM-free
 logic suites: schedule, format, dashboard document, palette, chat format, report
-document, report readiness, print, semantic drift). **`npm run lint` does not
+document, report readiness, print, semantic drift, knowledge template,
+thinking). **`npm run lint` does not
 work** — the script exists but eslint is neither a devDependency nor
 configured. Typecheck plus build plus `npm test` is the real gate.
 

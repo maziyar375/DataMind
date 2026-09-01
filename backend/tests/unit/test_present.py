@@ -22,6 +22,7 @@ import pytest
 from app.core.clock import utcnow
 from app.core.errors import LLMError
 from app.domain.ports.database import ResultColumn
+from app.domain.ports.llm import StreamChunk
 from app.pipeline.checks import Finding
 from app.pipeline.nodes import NodeDeps, present
 from app.pipeline.state import ExecutionResult, RunState, SqlAttempt
@@ -67,23 +68,34 @@ def _state(findings: list[Finding] | None = None) -> RunState:
 
 
 class FakeGateway:
-    """Streams canned deltas, optionally failing after `fail_after` of them."""
+    """Streams canned deltas, optionally failing after `fail_after` of them.
+
+    `thoughts` are yielded first, on the reasoning channel — what a reasoning
+    model sends before it writes anything.
+    """
 
     def __init__(
-        self, deltas: list[str], *, fail_after: int | None = None
+        self,
+        deltas: list[str],
+        *,
+        fail_after: int | None = None,
+        thoughts: list[str] | None = None,
     ) -> None:
         self._deltas = deltas
         self._fail_after = fail_after
+        self._thoughts = thoughts or []
         self.messages: list[Any] = []
 
-    def stream(self, _llm: Any, messages: Any) -> AsyncIterator[str]:
+    def stream(self, _llm: Any, messages: Any) -> AsyncIterator[StreamChunk]:
         self.messages = list(messages)
 
-        async def gen() -> AsyncIterator[str]:
+        async def gen() -> AsyncIterator[StreamChunk]:
+            for thought in self._thoughts:
+                yield StreamChunk(reasoning=thought)
             for i, delta in enumerate(self._deltas):
                 if self._fail_after is not None and i == self._fail_after:
                     raise LLMError("provider dropped the connection")
-                yield delta
+                yield StreamChunk(text=delta)
             if self._fail_after == len(self._deltas):
                 raise LLMError("provider dropped the connection")
 

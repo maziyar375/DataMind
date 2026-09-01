@@ -21,7 +21,13 @@ from urllib.parse import urlparse
 import pytest
 
 from app.core.config import get_settings
-from app.domain.ports.llm import ChatMessage, Completion, ProviderCapabilities, ResolvedLLM
+from app.domain.ports.llm import (
+    ChatMessage,
+    Completion,
+    ProviderCapabilities,
+    ResolvedLLM,
+    StreamChunk,
+)
 from app.domain.value_objects import DatabaseKind
 from app.eval import dataset, metrics, runner
 from app.infra.connectors.factory import build_connector
@@ -72,8 +78,10 @@ class FakeGateway:
 
         raise LLMError("fake gateway declines chart intent")  # -> heuristic/skip
 
-    async def stream(self, llm: ResolvedLLM, messages: Sequence[ChatMessage]) -> AsyncIterator[str]:
-        yield "ok"
+    async def stream(
+        self, llm: ResolvedLLM, messages: Sequence[ChatMessage]
+    ) -> AsyncIterator[StreamChunk]:
+        yield StreamChunk(text="ok")
 
     async def probe(self, llm: ResolvedLLM) -> ProviderCapabilities:
         return LLM.capabilities
