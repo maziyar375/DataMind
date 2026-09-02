@@ -1,6 +1,6 @@
 # Documentation index
 
-Eighteen documents plus four research notes. This page exists so you don't have
+Eighteen documents plus five research notes. This page exists so you don't have
 to open `architecture.md` (1,500 lines) to answer a question about charts.
 
 The three `pipeline*.md` files are one set: [pipeline.md](pipeline.md) holds the
@@ -57,15 +57,27 @@ is the organisation, not the directory.
 
 ## Research
 
-`research/` holds four notes, each answering *"what do the other four products
-do about this, and what does that tell us"*: [the learning
+`research/` holds five notes. Four of them answer *"what do the other four
+products do about this, and what does that tell us"*: [the learning
 loop](research/learning-loop.md) (the argument behind
 `learning-loop-plan.md` — read it for *why*, and the plan for *what*),
 [retrieval at scale](research/retrieval-at-scale.md), [the semantic layer as a
 model](research/semantic-layer-as-a-model.md), and [the data
-surface](research/data-surface.md). They are arguments with evidence, not
-descriptions of this codebase; where a research note and a shipped doc
-disagree, the shipped doc is what the code does.
+surface](research/data-surface.md).
+
+The fifth, [access control](research/access-control.md), takes a different
+comparison set because the subject demands one — it reads **Lakekeeper**'s
+Keycloak-plus-OpenFGA design down to its `.fga` model files and its `Authorizer`
+trait, calibrates against **Metabase, Superset and Grafana**, and proposes what
+DataMind should build for users, groups, roles and grants ([mvp2-plan.md
+§1.5](mvp2-plan.md#15-single-player-by-construction) and its Theme D). Read §0
+and §5.2 first: they correct two things this repo currently believes about its
+own authorization, including that `services/policy.py` is a seam — four of its
+five functions have no caller anywhere outside the module.
+
+They are arguments with evidence, not descriptions of this codebase; where a
+research note and a shipped doc disagree, the shipped doc is what the code
+does.
 
 ## Not documentation
 
