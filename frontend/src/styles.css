@@ -592,7 +592,17 @@ code, pre, .mono {
   0%, 100% { box-shadow: 0 0 0 1px var(--accent-border); }
   50% { box-shadow: 0 0 0 1px var(--accent), 0 0 0 5px var(--accent-bg); }
 }
-.rm-send-btn.is-running { animation: rm-run-ring 1.9s ease-in-out infinite; }
+.rm-send-btn.is-running {
+  animation: rm-run-ring 1.9s ease-in-out infinite;
+  /* The pill is wider than the disc it replaces, and the composer's row is
+     `align-items: flex-end`, so without this the swap moves the text box. */
+  transform: none;
+}
+.rm-send-btn.is-running:hover:not(:disabled) {
+  transform: none;
+  filter: none;
+  background: var(--panel-hover) !important;
+}
 
 /* The keyboard hint under the composer fades in with focus or content. */
 .rm-composer-hint {

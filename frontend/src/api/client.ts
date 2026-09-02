@@ -588,6 +588,13 @@ export function isRunInFlight(status: string): boolean {
 export const runs = {
   get: (id: string) => get<RunDetail>(`/runs/${id}`),
   cancel: (id: string) => post<{ cancelled: boolean }>(`/runs/${id}/cancel`),
+  /**
+   * Run the same question again, against the same user message — so the
+   * transcript keeps one question where the reader asked one. Refused for a
+   * run that is still going, or one that already produced an answer.
+   */
+  retry: (id: string) =>
+    post<{ run_id: string; message_id: string }>(`/runs/${id}/retry`),
   // Records that a reader did not believe a verified answer. Split from
   // re-asking on purpose: the *measurement* has to survive a reader who closes
   // the tab instead of re-asking, and that measurement — the override rate —

@@ -129,6 +129,48 @@ function stepTime(ms: number): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`
 }
 
+/**
+ * How long the step that is running now has been running.
+ *
+ * The trail shows a duration on every step **except** the one you are waiting
+ * for, which is the only one anybody wonders about. `route` is a model call
+ * and this product has measured it at 0.9s and at 27s on the same thread with
+ * the same model, so "a while with no number on it" is a real state a reader
+ * lands in, and a chip that has been spinning silently for half a minute is
+ * indistinguishable from a chip that is stuck.
+ *
+ * It stays quiet below `SLOW_STEP_MS`: an ordinary step finishes before the
+ * counter appears, so the trail is unchanged for every run that is behaving,
+ * and the number arrives exactly when it starts being the answer to a
+ * question. Timed from when this client first saw the step, which is what the
+ * reader is measuring anyway.
+ */
+const SLOW_STEP_MS = 2000
+
+function useElapsed(key: number | undefined): number {
+  const [now, setNow] = useState(0)
+  const startedAt = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (key === undefined) {
+      startedAt.current = null
+      setNow(0)
+      return
+    }
+    startedAt.current = Date.now()
+    setNow(0)
+    // One second, and rendered as whole seconds: a counter that ticks tenths
+    // is a stopwatch, and a stopwatch on a screen someone is waiting at makes
+    // the wait the subject.
+    const timer = setInterval(() => {
+      if (startedAt.current !== null) setNow(Date.now() - startedAt.current)
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [key])
+
+  return now
+}
+
 export function StepTrail({
   steps, interrupted,
 }: {
@@ -141,6 +183,8 @@ export function StepTrail({
    */
   interrupted?: boolean
 }) {
+  const waitingOn = steps.find((s) => s.status === 'RUNNING' && !interrupted)
+  const elapsed = useElapsed(waitingOn?.seq)
   if (steps.length === 0) return null
   return (
     <div
@@ -200,6 +244,13 @@ export function StepTrail({
             {step.duration_ms != null && !running && (
               <span style={{ color: 'var(--text-faint)' }}>
                 {stepTime(step.duration_ms)}
+              </span>
+            )}
+            {running && elapsed >= SLOW_STEP_MS && (
+              <span
+                style={{ color: 'var(--text-dim)', fontVariantNumeric: 'tabular-nums' }}
+              >
+                {Math.floor(elapsed / 1000)}s
               </span>
             )}
           </span>
@@ -668,34 +719,42 @@ export const RunStoppedCard = memo(function RunStoppedCard({
   run, onRetry,
 }: {
   run: RunDetail
-  /** Ask the same question again. Absent where the question is not to hand. */
-  onRetry?: () => void
+  /** Run the same question again, against this same message. */
+  onRetry?: (run: RunDetail) => void
 }) {
   return (
     <Turn avatar={<AssistantAvatar stopped />}>
+      {/* Sentence and action on one line, the action **next to** the words it
+          answers. It was pinned to the far right of a full-width panel, which
+          put a hairline of a button as far from its own sentence as the layout
+          allowed and made a recovery look like an afterthought. */}
       <div
         style={{
-          display: 'flex',
+          display: 'inline-flex',
+          alignSelf: 'flex-start',
           alignItems: 'center',
-          gap: 10,
+          gap: 4,
           flexWrap: 'wrap',
-          padding: '10px 14px',
-          borderRadius: 10,
+          maxWidth: '100%',
+          padding: '7px 8px 7px 12px',
+          borderRadius: 999,
           border: '1px solid var(--border)',
           background: 'var(--panel)',
           fontSize: 12.5,
           color: 'var(--text-dim)',
         }}
       >
-        <Icon.Stop size={11} stroke="var(--text-faint)" />
-        You stopped this answer.
+        <Icon.Stop size={10} stroke="var(--text-faint)" />
+        <span style={{ padding: '0 8px 0 4px' }}>You stopped this answer.</span>
         {onRetry && (
-          <span style={{ marginLeft: 'auto', display: 'flex' }}>
-            <QuietAction tone="accent" onClick={onRetry}>
-              <Icon.Refresh size={13} />
-              Ask again
-            </QuietAction>
-          </span>
+          <QuietAction
+            tone="accent"
+            onClick={() => onRetry(run)}
+            title="Run this question again"
+          >
+            <Icon.Refresh size={13} />
+            Retry
+          </QuietAction>
         )}
       </div>
       {run.steps.length > 0 && <StepTrail steps={run.steps} interrupted />}

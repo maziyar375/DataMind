@@ -470,6 +470,35 @@ export default function ChatPage() {
     }
   }
 
+  /**
+   * *Retry.*
+   *
+   * The same question, run again — **not** sent again. `POST /runs/{id}/retry`
+   * writes a second run against the user message that is already in the
+   * transcript, so the thread keeps one question where the reader asked one.
+   * Re-posting the text was the obvious implementation and the wrong one: it
+   * left a duplicate bubble on screen and a duplicate turn in the history
+   * every later prompt is built from.
+   *
+   * The stopped run is dropped from its message here rather than waiting for
+   * the reload, so the card the reader clicked is replaced by the live turn in
+   * the same frame — the first step of a run is a model call and can take a
+   * few seconds, and a screen that does not move in that gap reads as a click
+   * that did nothing.
+   */
+  async function retryRun(run: RunDetail) {
+    if (activeRunId) return
+    try {
+      const accepted = await runs.retry(run.id)
+      setMessages((prev) =>
+        prev.map((m) => (m.run?.id === run.id ? { ...m, run: null } : m)),
+      )
+      if (activeId) attachStream(accepted.run_id, activeId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not run that again.')
+    }
+  }
+
   // Escape stops a run from anywhere on the page, which is where a reader's
   // hand already is — the composer has the focus while an answer streams.
   //
@@ -548,12 +577,17 @@ export default function ChatPage() {
   // reads the current `send` at the moment it is actually clicked.
   const sendRef = useRef(send)
   const stopRunRef = useRef(stopRun)
+  const retryRef = useRef(retryRun)
   useEffect(() => {
     sendRef.current = send
     stopRunRef.current = stopRun
+    retryRef.current = retryRun
   })
   const pickOption = useCallback((text: string) => {
     void sendRef.current(text)
+  }, [])
+  const retry = useCallback((run: RunDetail) => {
+    void retryRef.current(run)
   }, [])
 
   /**
@@ -817,14 +851,7 @@ export default function ChatPage() {
                       {/* A run the reader stopped is not a run that broke, and
                           the red card it used to get said otherwise. */}
                       {message.run && isStopped(message.run.status) && (
-                        <RunStoppedCard
-                          run={message.run}
-                          onRetry={
-                            message.content
-                              ? () => pickOption(message.content as string)
-                              : undefined
-                          }
-                        />
+                        <RunStoppedCard run={message.run} onRetry={retry} />
                       )}
                       {message.run && isFailure(message.run.status) && (
                         <RunErrorCard run={message.run} />
@@ -833,7 +860,9 @@ export default function ChatPage() {
                   )
                 }
                 if (message.run && isStopped(message.run.status)) {
-                  return <RunStoppedCard key={message.id} run={message.run} />
+                  return (
+                    <RunStoppedCard key={message.id} run={message.run} onRetry={retry} />
+                  )
                 }
                 if (message.run && isFailure(message.run.status)) {
                   return <RunErrorCard key={message.id} run={message.run} />
@@ -1710,6 +1739,16 @@ function Composer({
               padding: '5px 0',
             }}
           />
+          {/*
+            One slot, two controls — and while a run is going it is *labelled*.
+            An icon-only stop in the same circle, in the same corner, as the
+            send button it replaced was a control nobody noticed had changed:
+            same size, same place, and a 13px square is not a strong enough
+            difference to catch an eye that is reading the answer above it.
+            A pill that says Stop cannot be mistaken for anything else, and the
+            width change is itself the signal that the composer has changed
+            mode. The accent ring around it is the run, breathing.
+          */}
           <button
             className={`rm-send-btn${canStop ? ' is-running' : ''}`}
             onClick={() => (busy ? canStop && onStop() : canSend && onSubmit())}
@@ -1720,33 +1759,47 @@ function Composer({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              width: 38,
+              gap: 7,
               height: 38,
-              borderRadius: '50%',
-              border: 'none',
+              width: busy ? undefined : 38,
+              padding: busy ? '0 15px 0 13px' : 0,
+              fontSize: 13,
+              fontWeight: 600,
+              borderRadius: 999,
+              border: busy ? '1px solid var(--border-strong)' : 'none',
               flexShrink: 0,
-              // Stopping is not the accent action — it undoes one. A solid
-              // neutral disc with the ring of a live run around it (see
-              // `.rm-send-btn.is-running` in styles.css) reads as *the thing
-              // that is happening*, which is what the reader is aiming at.
+              // Stopping is not the accent action — it undoes one — so the
+              // pill stays a neutral surface and lets the answer above it keep
+              // the only accent on the screen.
               background: busy
                 ? 'var(--panel-alt)'
                 : canSend
                   ? 'linear-gradient(150deg, color-mix(in oklch, var(--accent) 88%, white), var(--accent))'
                   : 'var(--panel-alt)',
               color: busy
-                ? stopping ? 'var(--text-faint)' : 'var(--text-strong)'
+                ? stopping ? 'var(--text-dim)' : 'var(--text-strong)'
                 : canSend ? 'var(--on-accent)' : 'var(--text-faint)',
               cursor: busy
                 ? canStop ? 'pointer' : 'default'
                 : canSend ? 'pointer' : 'not-allowed',
+              transition: 'background .15s ease, color .15s ease',
             }}
           >
-            {busy
-              ? stopping
-                ? <Spinner size={15} />
-                : <Icon.Stop size={13} />
-              : <Icon.Send size={16} />}
+            {busy ? (
+              stopping ? (
+                <>
+                  <Spinner size={13} />
+                  Stopping
+                </>
+              ) : (
+                <>
+                  <Icon.Stop size={13} />
+                  Stop
+                </>
+              )
+            ) : (
+              <Icon.Send size={16} />
+            )}
           </button>
         </div>
 

@@ -32,7 +32,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clock import utcnow
 from app.core.config import Settings
-from app.core.errors import NotFoundError, RunTimeoutError, ValidationError
+from app.core.errors import (
+    ConflictError, NotFoundError, RunTimeoutError, ValidationError,
+)
 from app.core.logging import get_logger
 from app.domain.ports.llm import ChatMessage
 from app.domain.value_objects import (
@@ -200,6 +202,71 @@ class RunService:
 
         await self._db.flush()
         return run
+
+    async def retry(self, run_id: UUID, owner_id: UUID) -> Run:
+        """Run the same question again, in place.
+
+        A second `Run` against the **same `user_message_id`**, which is what
+        makes this a retry rather than a re-ask: the transcript keeps one
+        question where the reader asked one question. Posting the text again
+        was the other option and it is the wrong one — it leaves the thread
+        holding two copies of a sentence nobody typed twice, and every later
+        turn's history then carries the duplicate into the prompt.
+
+        Only for a terminal run that never produced an answer — stopped,
+        failed, timed out. A run that *did* answer is re-asked, not retried:
+        that is `POST /runs/{id}/override` plus a new message, and it means
+        something different (the reader did not believe the answer, and the
+        override rate is a number somebody reads).
+
+        The connection and model come from the run being retried, not from the
+        conversation's current defaults, so a retry reproduces the conditions
+        of the attempt it replaces. Either may have been deleted since — the
+        FKs are `SET NULL` — and that is a refusal with the same sentence a
+        released connection gets anywhere else.
+        """
+        run = await self._db.get(Run, run_id)
+        if run is None or run.owner_id != owner_id:
+            raise NotFoundError("Run not found.")
+        if not RunStatus(run.status).is_terminal:
+            raise ConflictError("That run has not finished yet.")
+        if run.assistant_message_id is not None:
+            raise ConflictError("That run produced an answer; ask it again instead.")
+        if run.connection_id is None:
+            raise NotFoundError(_RELEASED)
+        if run.llm_config_id is None:
+            raise NotFoundError("This conversation has no model configured.")
+
+        connection = await self._owned(DatabaseConnection, run.connection_id, owner_id)
+        llm_config = await self._owned(LlmConfig, run.llm_config_id, owner_id)
+
+        retried = Run(
+            id=uuid.uuid4(),
+            conversation_id=run.conversation_id,
+            user_message_id=run.user_message_id,
+            owner_id=owner_id,
+            connection_id=connection.id,
+            llm_config_id=llm_config.id,
+            model_snapshot={
+                "provider": llm_config.provider,
+                "model": llm_config.model,
+                "base_url": llm_config.base_url,
+                "temperature": llm_config.temperature,
+                "max_tokens": llm_config.max_tokens,
+                "connection_name": connection.name,
+                "llm_config_name": llm_config.name,
+            },
+            # Resolved now rather than copied: a retry runs against the prompts
+            # this process has, and filing it under the version the abandoned
+            # attempt ran is how `runs.prompt_version` started lying the first
+            # time. See "Prompt changes" in CLAUDE.md.
+            prompt_version=self._prompt_version(),
+            skip_templates=run.skip_templates,
+            status=RunStatus.QUEUED,
+        )
+        self._db.add(retried)
+        await self._db.flush()
+        return retried
 
     # ── claiming ─────────────────────────────────────────────────────────
     def _claimable(self) -> Any:

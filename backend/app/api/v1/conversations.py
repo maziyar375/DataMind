@@ -187,6 +187,12 @@ async def list_messages(
         select(Run).where(Run.conversation_id == conversation_id)
     )
     runs = list(runs_result.scalars())
+    # Newest last, so that where a message has more than one run — a retry
+    # runs again against the same user message — the later one is what these
+    # dicts end up holding. Without the sort the winner is whatever order the
+    # database happened to return, which is exactly the kind of thing that
+    # works until the table grows.
+    runs.sort(key=lambda r: r.created_at)
     by_assistant = {r.assistant_message_id: r for r in runs if r.assistant_message_id}
     by_user = {r.user_message_id: r for r in runs}
 
@@ -494,6 +500,27 @@ async def cancel_run(
     await request.app.state.run_executor.cancel(run_id)
     cancelled = await RunService(db, settings).cancel(run_id, ctx.user_id)
     return {"cancelled": cancelled}
+
+
+@router.post(
+    "/runs/{run_id}/retry",
+    response_model=MessageAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def retry_run(
+    run_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep, request: Request
+) -> MessageAccepted:
+    """Run the same question again, against the same user message.
+
+    Deliberately not "post the text again": see `RunService.retry`. The
+    response is the same `MessageAccepted` a new message returns, so the client
+    attaches to the new run exactly as it does for a send.
+    """
+    service = RunService(db, settings)
+    run = await service.retry(run_id, ctx.user_id)
+    await db.commit()
+    await request.app.state.run_executor.submit(run.id)
+    return MessageAccepted(run_id=run.id, message_id=run.user_message_id)
 
 
 @router.get("/runs/{run_id}/events")
