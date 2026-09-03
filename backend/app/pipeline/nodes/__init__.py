@@ -6,6 +6,7 @@ happens next beyond an optional `goto`. Ordering lives in the executor.
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -1178,11 +1179,115 @@ def _render_caveats(findings: list[Finding]) -> str:
     return "\n\nCaveats about this result:\n" + "\n".join(lines)
 
 
+@dataclass(slots=True)
+class _ChartAhead:
+    """A chart intent already being fetched while the answer is being written.
+
+    `chart` and `present` ask two independent questions of the same model —
+    *what should this be drawn as* and *what does it say* — and neither reads
+    the other's answer: the chart is planned from the executed result, and the
+    prose is written from the same rows. Run one after the other they cost the
+    reader the sum, and the second half of that wait is spent staring at a
+    finished answer while a step chip spins. Measured on this install: a median
+    7.7s, and 106s at the tail.
+
+    So `present` starts the call and `chart` awaits it. What is deliberately
+    *not* moved is the veto: `unchartable_reason` still runs first, so a result
+    no chart can describe still costs no tokens — starting the call earlier
+    must not mean starting one that would never have been made.
+
+    `profile` travels with the task because the veto needed it anyway, and
+    profiling walks every returned row.
+    """
+
+    profile: Any
+    #: `unchartable_reason`'s verdict. Not None means no call was started.
+    blocked: str | None
+    task: asyncio.Task[Any] | None
+
+    async def intent(self) -> Any:
+        """The model's suggestion, or None — never an exception.
+
+        `propose_chart_intent` is fail-open by contract, so this is defensive
+        rather than load-bearing: a head start that turned an unrelated bug
+        into a failed run would have made the product worse to make it faster.
+        """
+        if self.task is None:
+            return None
+        try:
+            return await self.task
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # pragma: no cover - defensive
+            log.warning("chart_intent_ahead_failed", exc_info=True)
+            return None
+
+    def abandon(self) -> None:
+        """Stop the call nobody is going to read."""
+        if self.task is not None and not self.task.done():
+            self.task.cancel()
+
+
+def _start_chart_intent(state: RunState, deps: NodeDeps) -> None:
+    """Ask what this result should be drawn as, without waiting for the answer.
+
+    Called by `present`, which then streams for as long as the model takes to
+    write a paragraph — the whole of which this call now runs inside. It is
+    idempotent: `present` can be re-entered by a restore edge, and a second
+    head start would strand the first task.
+    """
+    from app.charts import profile_result, unchartable_reason
+
+    if state.chart_ahead is not None:
+        return
+    execution = state.execution
+    if execution is None or execution.row_count == 0:
+        return
+
+    profile = profile_result(
+        execution.columns, execution.rows, truncated=execution.truncated
+    )
+    blocked = unchartable_reason(profile)
+    task = (
+        None
+        if blocked is not None
+        else asyncio.create_task(
+            propose_chart_intent(
+                deps,
+                question=state.question,
+                profile=profile,
+                row_count=execution.row_count,
+                truncated=execution.truncated,
+                policy=state.disclosure_policy,
+                log_context={"run_id": str(state.run_id)},
+            )
+        )
+    )
+    state.chart_ahead = _ChartAhead(profile=profile, blocked=blocked, task=task)
+
+
+def cancel_chart_ahead(state: RunState) -> None:
+    """Drop a head start the run never reached `chart` to collect.
+
+    Called from the pipeline facade's `finally`, so a run that failed, timed
+    out, looped or was cancelled between `present` and `chart` does not leave a
+    provider call running with nobody to read it.
+    """
+    ahead = state.chart_ahead
+    if ahead is not None:
+        state.chart_ahead = None
+        ahead.abandon()
+
+
 async def present(state: RunState, deps: NodeDeps) -> NodeResult:
     from app.pipeline.disclosure import disclose
 
     assert state.execution is not None
     state.disclosed = disclose(state.execution, state.disclosure_policy)
+
+    # Before the stream opens, not after it closes: the chart's model call runs
+    # inside the time this node spends writing the answer. See `_ChartAhead`.
+    _start_chart_intent(state, deps)
 
     # Only the attempt being presented. Findings are recorded on the attempt
     # `inspect` looked at and never accumulated across retries, so a suspicion
@@ -1347,15 +1452,28 @@ async def chart(state: RunState, deps: NodeDeps) -> NodeResult:
     if execution is None or execution.row_count == 0:
         return NodeResult(status="SKIPPED", detail="Nothing chartable")
 
-    profile = profile_result(
-        execution.columns, execution.rows, truncated=execution.truncated
-    )
+    # Usually already done: `present` profiled the result and started the model
+    # call before it wrote a word. The fallback below is not dead code — the
+    # draft graph reaches this node without a `present`, and so does any future
+    # caller — so this node still works alone, it just waits longer.
+    ahead = state.chart_ahead
+    state.chart_ahead = None
+    if ahead is not None:
+        profile, blocked = ahead.profile, ahead.blocked
+    else:
+        profile = profile_result(
+            execution.columns, execution.rows, truncated=execution.truncated
+        )
+        blocked = unchartable_reason(profile)
 
     # Ask the data before asking the model: a single row, a constant measure or
     # a result with no dimension cannot become a chart whatever the model says,
     # so the call is skipped entirely — no tokens, no latency, and the step
     # trail shows a fact about the result instead of "the model declined".
-    if (blocked := unchartable_reason(profile)) is not None:
+    # `_start_chart_intent` applies this same verdict before it starts
+    # anything, which is what keeps the head start from spending the tokens
+    # this veto exists to save.
+    if blocked is not None:
         # One veto is not really about the data being uninteresting. "A single
         # row is a value, not a chart" is a correct statement about plotting
         # and a poor outcome for the reader, because a single-row result is the
@@ -1377,14 +1495,18 @@ async def chart(state: RunState, deps: NodeDeps) -> NodeResult:
         await deps.emit("ARTIFACT_CREATED", {"kind": "KPI"})
         return NodeResult(detail="big number")
 
-    suggestion = await propose_chart_intent(
-        deps,
-        question=state.question,
-        profile=profile,
-        row_count=execution.row_count,
-        truncated=execution.truncated,
-        policy=state.disclosure_policy,
-        log_context={"run_id": str(state.run_id)},
+    suggestion = (
+        await ahead.intent()
+        if ahead is not None
+        else await propose_chart_intent(
+            deps,
+            question=state.question,
+            profile=profile,
+            row_count=execution.row_count,
+            truncated=execution.truncated,
+            policy=state.disclosure_policy,
+            log_context={"run_id": str(state.run_id)},
+        )
     )
 
     plan = plan_chart(profile, suggestion)

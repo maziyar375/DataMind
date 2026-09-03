@@ -540,6 +540,13 @@ class AnalyticsPipeline:
                 code="E_PIPELINE_LOOP",
                 message="The run did not converge and was stopped.",
             )
+        finally:
+            # `present` starts the chart's model call and `chart` collects it.
+            # Every way a run can end between those two — a node crash, the
+            # deadline, a cancel, the recursion ceiling — leaves the call with
+            # nobody waiting on it, so it is dropped here rather than left to
+            # finish into a state no one will read.
+            nodes.cancel_chart_ahead(state)
 
         # The nodes mutate `state` in place and every update carries that same
         # object back, so this *is* the graph's final state — returned rather

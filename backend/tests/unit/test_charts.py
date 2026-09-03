@@ -13,6 +13,8 @@ simply produce no chart.
 """
 from __future__ import annotations
 
+import asyncio
+import time
 import uuid
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta
@@ -50,7 +52,12 @@ from app.core.clock import utcnow
 from app.core.errors import LLMError
 from app.domain.ports.database import ResultColumn
 from app.domain.ports.llm import ChatMessage, ResolvedLLM
-from app.pipeline.nodes import NodeDeps, chart
+from app.pipeline.nodes import (
+    NodeDeps,
+    _start_chart_intent,
+    cancel_chart_ahead,
+    chart,
+)
 from app.pipeline.prompts import CHART_SYSTEM, CHART_SYSTEM_COMPOSED
 from app.pipeline.state import ExecutionResult, RunState
 
@@ -1712,3 +1719,118 @@ async def test_the_other_vetoes_are_not_rescued_by_a_big_number() -> None:
 
     assert result.status == "SKIPPED"
     assert state.kpi is None and state.chart is None
+
+
+# ── the head start ───────────────────────────────────────────────────────
+# `present` and `chart` ask the same model two questions that do not read each
+# other's answers, and asked in sequence the reader waits for both. `present`
+# now starts the chart's call before it opens its own stream. What has to stay
+# true: one call, the same result, the veto still spending nothing, and no
+# request left running when the run ends early.
+
+
+class _SlowGateway(_Gateway):
+    """Answers after `delay` seconds, and records when it was asked."""
+
+    def __init__(self, *, returns: ChartIntent | None = None, delay: float = 0.05):
+        super().__init__(returns=returns)
+        self._delay = delay
+        self.asked_at: float | None = None
+        self.answered_at: float | None = None
+        self.cancelled = False
+
+    async def structured(self, llm, messages, schema, **_kwargs):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        self.sent = list(messages)
+        self.asked_at = time.perf_counter()
+        try:
+            await asyncio.sleep(self._delay)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        self.answered_at = time.perf_counter()
+        return self._returns
+
+
+@pytest.mark.asyncio
+async def test_the_chart_call_starts_before_present_and_is_collected_after() -> None:
+    """The measurable claim: asked during `present`, answered by `chart`, once."""
+    gateway = _SlowGateway(returns=_intent("bar"))
+    deps, _ = _deps(gateway)
+    state = _state()
+
+    _start_chart_intent(state, deps)          # what `present` does first
+    assert gateway.asked_at is None, "create_task must not run it synchronously"
+    await asyncio.sleep(0)                    # the stream's first await
+    assert gateway.calls == 1, "the call is in flight while the answer streams"
+
+    result = await chart(state, deps)
+
+    assert result.status == "OK" and state.chart is not None
+    assert gateway.calls == 1, "chart must collect the call, not repeat it"
+    assert state.chart_ahead is None, "collected, so nothing is left to cancel"
+
+
+@pytest.mark.asyncio
+async def test_chart_still_works_with_no_head_start() -> None:
+    """The draft graph reaches this node without a `present`, so the node has
+    to remain able to ask for itself — slower, and correct."""
+    gateway = _Gateway(returns=_intent("bar"))
+    deps, _ = _deps(gateway)
+    state = _state()
+
+    result = await chart(state, deps)
+
+    assert result.status == "OK" and gateway.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_a_result_no_chart_can_describe_still_costs_nothing() -> None:
+    """The veto moved earlier; it did not weaken. A head start that spent the
+    tokens the veto exists to save would be a regression dressed as a speed-up.
+    """
+    gateway = _Gateway(returns=_intent("bar"))
+    deps, _ = _deps(gateway)
+    state = _state(rows=[["Only one", 12.5]])   # a single row is not a chart
+
+    _start_chart_intent(state, deps)
+    await asyncio.sleep(0)
+
+    assert gateway.calls == 0
+    result = await chart(state, deps)
+    assert gateway.calls == 0
+    assert result.status in {"OK", "SKIPPED"}   # a KPI, or nothing — never a chart
+    assert state.chart is None
+
+
+@pytest.mark.asyncio
+async def test_starting_twice_strands_nothing() -> None:
+    """`present` can be re-entered by a restore edge."""
+    gateway = _SlowGateway(returns=_intent("bar"))
+    deps, _ = _deps(gateway)
+    state = _state()
+
+    _start_chart_intent(state, deps)
+    first = state.chart_ahead
+    _start_chart_intent(state, deps)
+
+    assert state.chart_ahead is first
+    await chart(state, deps)
+    assert gateway.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_ends_before_chart_drops_the_call() -> None:
+    """A crash, the deadline, a cancel: the facade's `finally` runs either way,
+    and a provider call nobody will read should not outlive the run."""
+    gateway = _SlowGateway(returns=_intent("bar"), delay=5)
+    deps, _ = _deps(gateway)
+    state = _state()
+
+    _start_chart_intent(state, deps)
+    await asyncio.sleep(0)
+    cancel_chart_ahead(state)
+    await asyncio.sleep(0.01)
+
+    assert gateway.cancelled and gateway.answered_at is None
+    assert state.chart_ahead is None

@@ -547,6 +547,19 @@ class RunState(BaseModel):
     # the `chart` node reaches for a big number only where a chart was vetoed,
     # so a turn never carries both.
     kpi: dict[str, Any] | None = None
+
+    # ── the chart's head start ───────────────────────────────────────────
+    # `present` starts the chart's model call before opening its own stream,
+    # and `chart` awaits what is already in flight. The two questions are
+    # independent — the chart is chosen from the executed result, never from
+    # the sentence written about it — so asked in sequence they cost the
+    # reader the sum of two model calls for no reason.
+    #
+    # Typed loosely because it carries a live `asyncio.Task`: this module
+    # describes a run's data, and that is the one field here which is not
+    # data. `pipeline/nodes` owns its shape (`_ChartAhead`), and
+    # `AnalyticsPipeline.run` guarantees it is awaited or cancelled.
+    chart_ahead: Any = None
     answer: str | None = None
     error: RunError | None = None
 
