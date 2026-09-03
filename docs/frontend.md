@@ -22,8 +22,8 @@ which is dark-only. The light palette was designed afterwards against it.
 
 **Every screen has a URL.** The rail is `NAV` in `App.tsx` — a path, a label
 and a glyph each — and the route table beside it gives each section a `/*`
-path: `/chat` · `/dashboards` · `/reports` · `/sources` · `/providers` ·
-`/knowledge` · `/users` (admin only; anyone else falls through) ·
+path: `/chat` · `/dashboards` · `/reports` · `/knowledge` · `/sources` ·
+`/providers` · `/users` (admin only; anyone else falls through) ·
 `/settings` (your own account) · `/about`, and anything unrecognised redirects to `/chat`. Adding a
 section means a `NAV` entry and a `<Route>` — except `/settings` and `/about`,
 which are reached from the rail's footer rather than its list.
@@ -75,7 +75,17 @@ does not change, only the gate in front of it.
 
 The rail is **one flat list in the order the product is used**, not grouped:
 captions over seven items are furniture, and a split invites a "which half is
-this in?" decision on every glance. Under it sits a quieter footer group — the
+this in?" decision on every glance. The order does the grouping instead, which
+only works if it never doubles back — Chat, Dashboards, Reports and Knowledge
+are today's work; Data sources, LLM providers and Users keep it running, in
+falling order of how often anyone opens them. Knowledge is the fourth rather
+than the fifth row because Chat is where a wrong answer gets flagged and
+teaching one changes what Chat says next: it closes the loop the three above
+it open. It spent Phase 5 under Data sources, on the argument that a console
+belongs beside what it curates — but the way in from a single connection is
+that connection's Knowledge tab, so the rail was never carrying that, and the
+cost was the product's only badge sitting below the line where configuration
+starts, where a count reads as a setting needing attention. Under it sits a quieter footer group — the
 theme pair, the account, sign out, and Creators, which marks itself with colour
 alone rather than the accent rail a nav row gets, because a credit given the
 same weight as Chat reads as another place to work. The account block is the
@@ -112,9 +122,9 @@ colours are chosen in JS, and the print stylesheet.
 | **Chat** | [`ChatPage.tsx`](../frontend/src/pages/ChatPage.tsx) | Ask one question, watch it answered, keep the thread. The section the product opens on. |
 | **Dashboards** | [`DashboardsPage.tsx`](../frontend/src/pages/DashboardsPage.tsx) | Numbers that are always current: a grid of tiles that refresh themselves. |
 | **Reports** | [`ReportsPage.tsx`](../frontend/src/pages/ReportsPage.tsx) | A document whose structure a human approved, generated over real results and kept as a snapshot. |
+| **Knowledge** | [`KnowledgePage.tsx`](../frontend/src/pages/KnowledgePage.tsx) | The curation console, across every connection: flags raised, questions nothing answers, the maintenance sweep. |
 | **Data sources** | [`DataSourcesPage.tsx`](../frontend/src/pages/DataSourcesPage.tsx) | The connections DataMind may read, and everything known about each one. |
 | **LLM providers** | [`LlmProvidersPage.tsx`](../frontend/src/pages/LlmProvidersPage.tsx) | The models it may call, and the keys it calls them with. |
-| **Knowledge** | [`KnowledgePage.tsx`](../frontend/src/pages/KnowledgePage.tsx) | The curation console, across every connection: flags raised, questions nothing answers, the maintenance sweep. |
 | **Users** | [`UsersPage.tsx`](../frontend/src/pages/UsersPage.tsx) | Who can sign in and what they may do. Admin only — the rail entry is not rendered otherwise. |
 | **Your account** | [`AccountPage.tsx`](../frontend/src/pages/AccountPage.tsx) | `/settings`: your display name and your password. Reached from the user block in the rail, not from `NAV`. |
 | **Creators** | [`AboutPage.tsx`](../frontend/src/pages/AboutPage.tsx) | Who built it. A colophon, not a destination; the one page on both sides of the sign-in wall. |
@@ -177,6 +187,9 @@ Dashboards      index (cards│rows) → one board
 Reports         index → outline editor → run viewer → run history
                   outline editor is a workflow: Describe → Structure → Check → Generate
 
+Knowledge       master (connections, busiest first) → the same console the
+                  Data sources tab renders, filtered to one connection
+
 Data sources    master → detail, 4 tabs and a door:
                   Connection · Policy · Schema (tables│graph) · Semantic layer
                   · Knowledge → (leaves, to /knowledge/:id)
@@ -186,9 +199,6 @@ Data sources    master → detail, 4 tabs and a door:
 LLM providers   master → detail, one form
 
 Users           rows, inline detail, one-time password panel
-
-Knowledge       master (connections, busiest first) → the same console the
-                  Data sources tab renders, filtered to one connection
 
 Your account    /settings, from the rail's user block: display name, password
 ```

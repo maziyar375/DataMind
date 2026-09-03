@@ -23,7 +23,11 @@ import { ShellProvider, isWithin, type BackgroundTask, type Shell } from './shel
 import { applyTheme, type ThemeName } from './theme/tokens'
 
 /**
- * The rail's destinations, in the order the product is used.
+ * The rail's destinations, ordered by how often a row is opened — which is
+ * also the order the product is used, and the order in which its rows stop
+ * being about today's work and start being about keeping it running. The list
+ * stays flat and uncaptioned (see `docs/frontend.md`); the ordering is what
+ * carries the grouping, so it must not zig-zag across that boundary.
  *
  * The paths are the product's vocabulary now that there is a router, so they
  * are written once, here, and both the rail and the route table read them.
@@ -34,13 +38,28 @@ const NAV = [
   { path: '/chat', label: 'Chat', icon: <Icon.Chat /> },
   { path: '/dashboards', label: 'Dashboards', icon: <Icon.Grid /> },
   { path: '/reports', label: 'Reports', icon: <Icon.Doc /> },
-  { path: '/sources', label: 'Data sources', icon: <Icon.Database /> },
-  // Beside Data sources because that is what it curates, and *in* the rail
-  // because the finding it answers is that its queue was invisible: a console
-  // three clicks inside one connection's fourth tab cannot ask for attention.
-  // It is the one entry that carries a count, and the count is the argument
-  // for the entry — if it is always empty, this row has not earned its place.
+  // Last of the four you *work* in rather than first of the three you keep,
+  // because that is what it is: Chat raises the flags, and teaching one
+  // changes what Chat answers next. It closes the loop the three rows above
+  // it open. It sat under Data sources for a while on the grounds that a
+  // console belongs beside what it curates, but that is object-adjacency,
+  // and it is the weaker claim — the way in from one connection is the
+  // Knowledge tab, which navigates here, so no discovery ever depended on
+  // the rail. What the old position cost was an order that fell out of daily
+  // use into a settings page and climbed back out, with the product's only
+  // badge stranded below the line where keeping-it-running begins. A count
+  // down there reads as a setting needing attention, which is the wrong kind
+  // of urgency for somebody's answer having been wrong. It is *in* the rail
+  // at all because the finding it answers is that its queue was invisible: a
+  // console three clicks inside one connection's fourth tab cannot ask for
+  // anything. The count is the argument for the row — if it is permanently
+  // empty on a real install, this row has not earned its place.
   { path: '/knowledge', label: 'Knowledge', icon: <Icon.Flag /> },
+  // Then the three you configure, in the order their frequency falls away: a
+  // connection is edited occasionally — a policy, a schema sync after a
+  // migration — a provider key almost never once it works, and Users is
+  // admin-only and rarer still.
+  { path: '/sources', label: 'Data sources', icon: <Icon.Database /> },
   { path: '/providers', label: 'LLM providers', icon: <Icon.Sparkle /> },
   { path: '/users', label: 'Users', icon: <Icon.Users />, adminOnly: true },
 ]

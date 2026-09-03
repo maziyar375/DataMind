@@ -542,9 +542,10 @@ were ordered; items inside a phase could be done in any order unless noted.
 > alternative cannot satisfy the finding. "Reachable in one click from
 > wherever they are" means the rail; a badge on Data sources that then needs a
 > second click to reach the console leaves the queue exactly as far away as it
-> was. So `Knowledge` sits in the rail directly after Data sources — what it
-> curates — and carries the product's only count badge. The badge is also the
-> argument for the row: if it is permanently empty on a real install, this
+> was. So `Knowledge` sits in the rail and carries the product's only count
+> badge. *(Placed directly after Data sources — what it curates — and moved
+> above it after review: see correction 6.)* The badge is also the argument
+> for the row: if it is permanently empty on a real install, this
 > entry has not earned its place and should go back to being a tab.
 >
 > Consequently the badge lives on **that** entry rather than on Data sources
@@ -744,6 +745,22 @@ wrong while following it. They are the honest part of the record.
    the hero only when the page really is empty; with a queue below it, the
    framing is one line that points at the queue.
 
+6. **The rail doubled back** — Phase 5 put Knowledge between Data sources and
+   LLM providers, reasoning that a console belongs beside what it curates.
+   That is object-adjacency, and it loses to task-adjacency: the way in from
+   one connection is that connection's Knowledge tab, so the rail was never
+   what made the console findable. What the position did cost was an order
+   that ran *work · work · work · configure · work · configure*, which put the
+   product's only badge below the line where configuration starts — and a
+   count down there reads as a setting needing attention rather than as
+   somebody's answer having been wrong. Knowledge is now the fourth row,
+   closing the loop Chat opens, and the last three are the keep-it-running
+   trio in falling order of use. This is the ordering half of **F18**, which
+   the audit raised and this plan excluded; the weighting half — captions, a
+   divider, a quieter treatment for setup rows — is still out of scope, and
+   [frontend.md](frontend.md) says why an uncaptioned flat list is the right
+   shape.
+
 ---
 
 ## Out of scope
@@ -753,6 +770,8 @@ Excluded by request (Low priority in the audit), listed so they are not lost:
 - **F17** — `GET /audit` exists, admin-only, with no UI. Natural home: a tab on
   the Users page.
 - **F18** — Setup destinations sit at equal rail weight with daily-use ones.
+  *Its ordering half was resolved after review* (correction 6): the rail no
+  longer crosses from daily use into setup and back. Weighting is untouched.
 - **F19** — Three overlapping selector primitives; `PillTabs` stranded inside
   `semantic.tsx`.
 - **F20** — `View` key `'settings'` renders the LLM providers page. *Partly
