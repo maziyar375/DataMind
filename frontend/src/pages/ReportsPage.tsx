@@ -24,9 +24,9 @@ import type { Connection, LlmConfig, Report, ReportSummary } from '../api/types'
 import { ReportOutlineEditor, ReportRunViewer } from '../components/report'
 import { ReportRunHistory } from '../components/report-history'
 import {
-  Chip, DisclosureBadge, EmptyState, ErrorNote, Field, GhostButton, Icon, Modal,
-  PrimaryButton, SearchField, Segmented, Spinner, TextArea, TextInput, glyphTint,
-  relativeTime,
+  Chip, DisclosureBadge, EmptyState, ErrorNote, Field, GhostButton, Icon, MetaDot,
+  Modal, PageHeader, PrimaryButton, SearchField, Segmented, Spinner, TextArea,
+  TextInput, glyphTint, relativeTime,
 } from '../components/ui'
 
 /** The policies a report can be written from — the frontend half of §7. */
@@ -276,47 +276,35 @@ function ReportsIndex({
   )
 
   return (
-    <div className="rm-dash-index rm-page-pad" style={{ flex: 1, overflowY: 'auto' }}>
-      <header
-        style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 12, marginBottom: 18 }}
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 }}>
-          <h1
-            style={{
-              margin: 0,
-              fontSize: 25,
-              fontWeight: 700,
-              letterSpacing: '-0.022em',
-              color: 'var(--text-strong)',
-            }}
+    <div className="rm-index rm-page-pad" style={{ flex: 1, overflowY: 'auto' }}>
+      <PageHeader
+        title="Reports"
+        subtitle={
+          cards === null || cards.length === 0 ? (
+            'Written documents built from your data — describe one, approve its outline, and keep every run.'
+          ) : (
+            <>
+              <strong style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{activeCount}</strong>
+              {` ${activeCount === 1 ? 'report' : 'reports'}`}
+              {archivedCount > 0 && (
+                <>
+                  <MetaDot />
+                  {archivedCount} archived
+                </>
+              )}
+            </>
+          )
+        }
+        actions={
+          <PrimaryButton
+            style={{ padding: '10px 17px' }}
+            onClick={() => setCreating(true)}
+            disabled={busy}
           >
-            Reports
-          </h1>
-          <span style={{ fontSize: 13.5, color: 'var(--text-dim)' }}>
-            {cards === null || cards.length === 0 ? (
-              'Written documents built from your data — describe one, approve its outline, and keep every run.'
-            ) : (
-              <>
-                <strong style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{activeCount}</strong>
-                {` ${activeCount === 1 ? 'report' : 'reports'}`}
-                {archivedCount > 0 && (
-                  <>
-                    <span aria-hidden style={{ opacity: 0.4 }}> · </span>
-                    {archivedCount} archived
-                  </>
-                )}
-              </>
-            )}
-          </span>
-        </div>
-        <PrimaryButton
-          style={{ marginLeft: 'auto', padding: '10px 17px' }}
-          onClick={() => setCreating(true)}
-          disabled={busy}
-        >
-          <Icon.Plus /> New report
-        </PrimaryButton>
-      </header>
+            <Icon.Plus /> New report
+          </PrimaryButton>
+        }
+      />
 
       {error && <div style={{ marginBottom: 14 }}><ErrorNote>{error}</ErrorNote></div>}
 

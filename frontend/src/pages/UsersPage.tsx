@@ -133,7 +133,7 @@ export default function UsersPage({ currentUser }: { currentUser: User }) {
   )
 
   return (
-    <div className="rm-dash-index rm-page-pad" style={{ flex: 1, overflowY: 'auto' }}>
+    <div className="rm-index rm-page-pad" style={{ flex: 1, overflowY: 'auto' }}>
       <PageHeader
         title="Users"
         subtitle={

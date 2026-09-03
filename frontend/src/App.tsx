@@ -107,9 +107,14 @@ export default function App() {
         overflow: 'hidden',
       }}
     >
-      {/* The two shell boxes carry classes only so the print stylesheet can
-          reach them: both are viewport-sized scroll containers, and on paper
-          there is no viewport to be sized to — see `@media print`. */}
+      {/* The first thing in the tab order, and invisible until it has focus:
+          the rail is six destinations plus a footer group, and a keyboard user
+          should not have to walk them to reach the page they opened. */}
+      <a className="rm-skip" href="#main">Skip to content</a>
+      {/* The two shell boxes carry classes so the print stylesheet can reach
+          them: both are viewport-sized scroll containers, and on paper there
+          is no viewport to be sized to — see `@media print`. The inner one is
+          also the document's <main>, which is what the skip link targets. */}
       <div className="rm-app-row" style={{ display: 'flex', height: '100vh', width: '100%' }}>
         <Sidebar
           user={user}
@@ -119,7 +124,15 @@ export default function App() {
           onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
           onLogout={handleLogout}
         />
-        <div className="rm-app-view" style={{ flex: 1, display: 'flex', minWidth: 0 }}>
+        <main
+          id="main"
+          // Not focusable in the tab order — only as the skip link's target,
+          // which is how the focus actually lands inside the page rather than
+          // merely scrolling it there.
+          tabIndex={-1}
+          className="rm-app-view"
+          style={{ flex: 1, display: 'flex', minWidth: 0 }}
+        >
           {view === 'chat' && <ChatPage />}
           {view === 'dashboards' && <DashboardsPage />}
           {view === 'reports' && <ReportsPage />}
@@ -127,7 +140,7 @@ export default function App() {
           {view === 'settings' && <LlmProvidersPage />}
           {view === 'users' && <UsersPage currentUser={user} />}
           {view === 'about' && <AboutPage />}
-        </div>
+        </main>
       </div>
     </div>
   )

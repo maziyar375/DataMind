@@ -58,8 +58,13 @@ export function MasterColumn({
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
           {icon && <GlyphBadge size={28}>{icon}</GlyphBadge>}
-          <span
+          {/* The page's one <h1>. Data sources and LLM providers have no title
+              block of their own — this column header is where the page names
+              itself, so it is the heading in the document too, at the size the
+              column was already drawn at rather than a heading's default. */}
+          <h1
             style={{
+              margin: 0,
               fontSize: 14.5,
               fontWeight: 700,
               letterSpacing: '-0.01em',
@@ -67,7 +72,7 @@ export function MasterColumn({
             }}
           >
             {title}
-          </span>
+          </h1>
           <span
             style={{
               fontSize: 11,

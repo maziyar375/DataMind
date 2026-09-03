@@ -32,6 +32,11 @@ theme pair, the account, sign out, and Creators, which marks itself with colour
 alone rather than the accent rail a nav row gets, because a credit given the
 same weight as Chat reads as a sixth place to work.
 
+The view area is the document's `<main id="main">`, and a `.rm-skip` link
+before the rail is the first thing in the tab order — the rail is six
+destinations plus a footer group, and a keyboard user should not have to walk
+them to reach the page they opened.
+
 Theme is `dark | light` in `localStorage`, applied by `applyTheme` writing
 every token onto `:root` as a CSS variable plus a `data-theme` attribute. Two
 things read that attribute rather than the variables: Vega charts, whose
@@ -192,6 +197,16 @@ above.
 - **Destructive acts are confirmed, and a refusal is spoken.** A rejected
   delete that reaches nobody looks exactly like a delete that silently did
   nothing.
+- **Every page has exactly one `<h1>`, and it is a thing already on screen.**
+  The index pages get theirs from `PageHeader` (Dashboards, Reports and Users
+  all render from it — a hand-rolled fourth copy is how three headers stop
+  agreeing), the master–detail pages from `MasterColumn`'s title, and Chat from
+  the conversation title, which goes visually hidden rather than away while it
+  is being renamed.
+- **A dialog is modal to the keyboard, not only to the mouse.** `Modal` moves
+  focus in on open — leaving it where an `autoFocus` field put it — cycles Tab
+  within itself, names itself with `aria-labelledby`, and hands focus back to
+  the control that opened it. `aria-modal` alone is a claim, not a behaviour.
 - **A stale number beats an empty one.** A reloading tile keeps its figures
   with "refreshing" in the header; a failed poll leaves the last result in
   place with its own timestamp.

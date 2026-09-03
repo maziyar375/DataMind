@@ -22,8 +22,8 @@ import {
 import { ImportDialog, exportDashboard } from '../components/dashboard-transfer'
 import { TileEditor } from '../components/tile-editor'
 import {
-  Dot, EmptyState, ErrorNote, GhostButton, Icon, InlineEdit, Modal, PrimaryButton,
-  SearchField, Segmented, Spinner, TextInput, relativeTime,
+  Dot, EmptyState, ErrorNote, GhostButton, Icon, InlineEdit, Modal, PageHeader,
+  PrimaryButton, SearchField, Segmented, Spinner, TextInput, relativeTime,
 } from '../components/ui'
 
 export default function DashboardsPage() {
@@ -199,46 +199,32 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
   const filtering = query.trim().length > 0 || status !== 'ACTIVE'
 
   return (
-    <div className="rm-dash-index rm-page-pad" style={{ flex: 1, overflowY: 'auto' }}>
-      <header
-        style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 12, marginBottom: 18 }}
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 }}>
-          <h1
-            style={{
-              margin: 0,
-              fontSize: 25,
-              fontWeight: 700,
-              letterSpacing: '-0.022em',
-              color: 'var(--text-strong)',
-            }}
-          >
-            Dashboards
-          </h1>
-          {cards === null || cards.length === 0 ? (
-            <span style={{ fontSize: 13.5, color: 'var(--text-dim)' }}>
-              Tiles you keep. Each one has its own connection and its own refresh rate.
-            </span>
-          ) : (
-            <IndexSummary cards={cards} />
-          )}
-        </div>
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-          {/* A ghost next to the primary: importing is how a dashboard arrives
-              from somewhere else, which is a real way to start — but creating
-              one is still the page's own verb. */}
-          <GhostButton style={{ padding: '10px 15px' }} onClick={() => setImporting(true)}>
-            <Icon.ArrowDown size={13} /> Import
-          </GhostButton>
-          <PrimaryButton
-            style={{ padding: '10px 17px' }}
-            onClick={() => setCreating(true)}
-            disabled={busy}
-          >
-            <Icon.Plus /> New dashboard
-          </PrimaryButton>
-        </div>
-      </header>
+    <div className="rm-index rm-page-pad" style={{ flex: 1, overflowY: 'auto' }}>
+      <PageHeader
+        title="Dashboards"
+        subtitle={
+          cards === null || cards.length === 0
+            ? 'Tiles you keep. Each one has its own connection and its own refresh rate.'
+            : <IndexSummary cards={cards} />
+        }
+        actions={
+          <>
+            {/* A ghost next to the primary: importing is how a dashboard arrives
+                from somewhere else, which is a real way to start — but creating
+                one is still the page's own verb. */}
+            <GhostButton style={{ padding: '10px 15px' }} onClick={() => setImporting(true)}>
+              <Icon.ArrowDown size={13} /> Import
+            </GhostButton>
+            <PrimaryButton
+              style={{ padding: '10px 17px' }}
+              onClick={() => setCreating(true)}
+              disabled={busy}
+            >
+              <Icon.Plus /> New dashboard
+            </PrimaryButton>
+          </>
+        }
+      />
 
       {cards !== null && cards.length > 0 && (
         <IndexAttention cards={cards} onShowAll={() => { setQuery(''); setStatus('ALL') }} />

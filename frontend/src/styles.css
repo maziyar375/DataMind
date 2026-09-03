@@ -306,7 +306,7 @@ code, pre, .mono {
    on them, and it is gone the moment content arrives. That is what the
    signed-out screen, the empty chat and `.rm-emptyfield` have in common; it
    is why a populated index gets a plain accent wash instead
-   (`.rm-dash-index`), and why the transient "Nothing matches" states get
+   (`.rm-index`), and why the transient "Nothing matches" states get
    nothing at all — texture that flashes in and out under a search field is
    noise, and a filter that found nothing is not a moment to decorate. */
 :root {
@@ -745,10 +745,10 @@ code, pre, .mono {
    it), so the card itself carries the affordance — pointer, lift, and a
    border that warms on approach.
 
-   The index chrome below and around it — .rm-dash-index, .rm-dash-toolbar,
+   The index chrome below and around it — .rm-index, .rm-dash-toolbar,
    .rm-search, .rm-seg, .rm-toolbar-select, .rm-bone — is shared with the
-   Reports index, which is the same kind of page. The `dash` in those names is
-   where they were written, not who may use them. */
+   Reports index, which is the same kind of page. The `dash` still in those
+   names is where they were written, not who may use them. */
 .rm-dash-card {
   cursor: pointer;
   border: 1px solid var(--border);
@@ -950,13 +950,15 @@ code, pre, .mono {
   .rm-bone { background: var(--panel-alt); animation: none; }
 }
 
-/* ── the dashboards index ───────────────────────────────────────────────
-   The one screen in the app that had no treatment at all, while the welcome
-   and auth screens carried grids and orbs. A single restrained wash at the
-   top, in the theme's own accent, so the page reads as a place rather than a
-   container — and nothing behind the cards, which hold data. */
-.rm-dash-index { position: relative; isolation: isolate; }
-.rm-dash-index::before {
+/* ── the index pages ────────────────────────────────────────────────────
+   Written for the dashboards index — the one screen in the app that had no
+   treatment at all, while the welcome and auth screens carried grids and orbs
+   — and now worn by all three, which is why the name says index rather than
+   dashboards. A single restrained wash at the top, in the theme's own accent,
+   so the page reads as a place rather than a container — and nothing behind
+   the cards, which hold data. */
+.rm-index { position: relative; isolation: isolate; }
+.rm-index::before {
   content: '';
   position: absolute;
   inset: 0 0 auto;
@@ -2169,6 +2171,28 @@ code, pre, .mono {
 .rm-table-card:hover { border-color: var(--border-strong); }
 .rm-table-card > button:hover { background: var(--panel-hover); }
 
+/* The skip link: nowhere until it is focused, then the first thing on screen.
+   It is drawn like the app's own primary action rather than as a browser
+   default, because for the one person who uses it it is a real control.
+   `.rm-app-view` takes focus as its target and must not draw a ring for it —
+   the eye is already going where the link sent it. */
+.rm-skip {
+  position: absolute;
+  top: 10px;
+  left: -9999px;
+  z-index: 200;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--on-accent);
+  background: var(--accent);
+  border-radius: 9px;
+  text-decoration: none;
+  box-shadow: 0 12px 30px -12px rgba(0, 0, 0, 0.55);
+}
+.rm-skip:focus { left: 10px; }
+.rm-app-view:focus { outline: none; }
+
 /* Visually hidden, still read aloud. Used where a colour carries a status and
    the words behind it must survive for anyone who cannot see it. */
 .rm-sr {
@@ -2186,7 +2210,7 @@ code, pre, .mono {
 
 /* ── the people index ─────────────────────────────────────────────────────
    Users is the third index page, so it borrows the second one's furniture
-   (.rm-dash-index, .rm-dash-row, .rm-dash-toolbar). It is a list and only a
+   (.rm-index, .rm-dash-row, .rm-dash-toolbar). It is a list and only a
    list — a person has no face to put on a card, just a name, an address, a
    role, a state and a date, which is a line.
 

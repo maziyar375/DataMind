@@ -1214,6 +1214,12 @@ function SuggestionSkeleton() {
  * appears on hover and a double-click on the title opens the same editor, so
  * a chat can be renamed from where the eye already is rather than only from
  * the sidebar. Non-editable before the first conversation exists.
+ *
+ * It is also Chat's one <h1>: the thread on screen is what this page is about.
+ * The heading survives the rename editor — while the field carries the draft
+ * the heading goes visually hidden rather than away, because a page that has
+ * no heading for as long as a field has focus is a page with no heading, and
+ * an <h1> wrapped around a text field is a heading with no text.
  */
 function HeaderTitle({
   title, editable, onRename,
@@ -1244,42 +1250,45 @@ function HeaderTitle({
 
   if (editing) {
     return (
-      <input
-        ref={inputRef}
-        value={value}
-        dir={dirOf(value)}
-        onChange={(e) => setValue(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            e.preventDefault()
-            commit()
-          } else if (e.key === 'Escape') {
-            e.preventDefault()
-            setEditing(false)
-          }
-        }}
-        style={{
-          minWidth: 0,
-          maxWidth: 360,
-          padding: '5px 9px',
-          fontSize: 14,
-          fontWeight: 600,
-          color: 'var(--text-strong)',
-          background: 'var(--input-bg)',
-          border: '1px solid var(--accent)',
-          borderRadius: 7,
-          outline: 'none',
-        }}
-      />
+      <>
+        <h1 className="rm-sr">{title}</h1>
+        <input
+          ref={inputRef}
+          value={value}
+          dir={dirOf(value)}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              commit()
+            } else if (e.key === 'Escape') {
+              e.preventDefault()
+              setEditing(false)
+            }
+          }}
+          style={{
+            minWidth: 0,
+            maxWidth: 360,
+            padding: '5px 9px',
+            fontSize: 14,
+            fontWeight: 600,
+            color: 'var(--text-strong)',
+            background: 'var(--input-bg)',
+            border: '1px solid var(--accent)',
+            borderRadius: 7,
+            outline: 'none',
+          }}
+        />
+      </>
     )
   }
 
   return (
-    <div
+    <h1
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}
+      style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}
     >
       <div
         dir={dirOf(title)}
@@ -1312,7 +1321,7 @@ function HeaderTitle({
           <Icon.Pencil size={13} stroke="var(--text-faint)" />
         </button>
       )}
-    </div>
+    </h1>
   )
 }
 

@@ -4,7 +4,7 @@
  * Every dimension, radius, and font size here is lifted from the design
  * concept rather than invented. The mock is the specification.
  */
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react'
 
 import {
   formatCell, resolveColumns, sortRows,
@@ -1102,10 +1102,30 @@ export function EmptyState({
   )
 }
 
+/** Everything inside `root` that a Tab can currently land on, in tab order. */
+function focusablesIn(root: HTMLElement): HTMLElement[] {
+  const selector = [
+    'a[href]', 'button', 'input', 'select', 'textarea',
+    '[tabindex]', 'audio[controls]', 'video[controls]', '[contenteditable]',
+  ].map((s) => `${s}:not([disabled]):not([tabindex="-1"])`).join(',')
+  return Array.from(root.querySelectorAll<HTMLElement>(selector))
+    // A control inside a collapsed section is in the DOM and out of reach;
+    // `offsetParent` is null for anything `display: none` has removed.
+    .filter((el) => el.offsetParent !== null || el === document.activeElement)
+}
+
 /**
  * A centered modal dialog over a scrim. Closes on Escape or a click on the
  * backdrop; locks body scroll while open. The header, scrollable body, and
  * optional footer are laid out so long forms scroll without the chrome moving.
+ *
+ * It is modal to the keyboard too, which `aria-modal` alone only claims: focus
+ * moves into the dialog on open, Tab cycles within it, and the control that
+ * opened it gets focus back when it closes. Without that a Tab walks out of an
+ * "over everything" dialog into the page behind it, which is where the eye
+ * cannot follow. The title is the dialog's accessible name via
+ * `aria-labelledby` rather than a duplicated `aria-label`, so a renamed header
+ * cannot leave a stale name behind.
  */
 export function Modal({
   title, subtitle, onClose, children, footer, width = 460,
@@ -1117,18 +1137,72 @@ export function Modal({
   footer?: React.ReactNode
   width?: number
 }) {
+  const dialogRef = useRef<HTMLDivElement | null>(null)
+  const titleId = useId()
+  // Read during the first render, before this dialog's own DOM exists: by the
+  // time an effect runs, a field carrying `autoFocus` has already taken focus
+  // and `document.activeElement` is inside the dialog, not behind it.
+  const openerRef = useRef<HTMLElement | null>(null)
+  if (openerRef.current === null) openerRef.current = document.activeElement as HTMLElement | null
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') return onClose()
+      if (e.key !== 'Tab') return
+      const dialog = dialogRef.current
+      if (!dialog) return
+      const stops = focusablesIn(dialog)
+      // Nothing to land on: keep focus on the dialog rather than letting it
+      // escape to the page underneath.
+      if (stops.length === 0) {
+        e.preventDefault()
+        return dialog.focus()
+      }
+      const first = stops[0]
+      const last = stops[stops.length - 1]
+      const active = document.activeElement as HTMLElement | null
+      if (e.shiftKey && (active === first || active === dialog || !dialog.contains(active))) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && (active === last || !dialog.contains(active))) {
+        e.preventDefault()
+        first.focus()
+      }
     }
     document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  // Scroll lock and focus, once per open. Deliberately separate from the key
+  // handler above: most call sites pass a fresh `onClose` arrow on every
+  // render, and an effect that both depends on it and moves focus would snatch
+  // focus back to the dialog on every keystroke typed into a field inside it.
+  useEffect(() => {
     const prevOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
+
+    // Only if nothing inside asked for focus first. Half these dialogs open
+    // onto a single field with `autoFocus` on it, and landing on the field you
+    // came to fill beats landing on the box around it.
+    const dialog = dialogRef.current
+    if (dialog && !dialog.contains(document.activeElement)) dialog.focus()
+
     return () => {
-      document.removeEventListener('keydown', onKey)
       document.body.style.overflow = prevOverflow
+      // Only when the dialog has really left the page. In development React
+      // runs this cleanup once on mount without unmounting anything, and
+      // handing focus back there would undo the `autoFocus` above on every
+      // dialog that has one — a bug that would exist only in dev, which is
+      // the worst kind to chase.
+      if (dialog && document.contains(dialog)) return
+      // And only if the opener is still on the page and is not itself inside
+      // this dialog — a dialog that deleted the row it was opened from has
+      // nothing to go back to, and focusing a detached node silently drops
+      // focus onto the body, which is the state this restore prevents.
+      const opener = openerRef.current
+      if (opener && document.contains(opener) && !dialog?.contains(opener)) opener.focus()
     }
-  }, [onClose])
+  }, [])
 
   return (
     <div
@@ -1148,10 +1222,14 @@ export function Modal({
       }}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
         className="rm-enter"
         style={{
+          outline: 'none',
           width: '100%',
           maxWidth: width,
           maxHeight: 'calc(100vh - 40px)',
@@ -1174,7 +1252,7 @@ export function Modal({
           }}
         >
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-strong)' }}>
+            <div id={titleId} style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-strong)' }}>
               {title}
             </div>
             {subtitle && (

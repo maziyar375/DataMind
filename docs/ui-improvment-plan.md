@@ -435,12 +435,12 @@ Tick as you go. Phases are ordered; items inside a phase can be done in any
 order unless noted.
 
 ## Phase 0 — Groundwork
-- [ ] **F15** `PageHeader` adopted by DashboardsPage
-- [ ] **F15** `PageHeader` adopted by ReportsPage
-- [ ] **F15** `.rm-dash-index` renamed section-neutral, all call sites updated
-- [ ] **F12** `<main>` landmark + skip link in `App.tsx`
-- [ ] **F12** One `<h1>` on Chat, Data sources, LLM providers
-- [ ] **F12** `Modal`: initial focus, focus trap, focus restore, `aria-labelledby`
+- [x] **F15** `PageHeader` adopted by DashboardsPage
+- [x] **F15** `PageHeader` adopted by ReportsPage
+- [x] **F15** `.rm-dash-index` renamed section-neutral, all call sites updated
+- [x] **F12** `<main>` landmark + skip link in `App.tsx`
+- [x] **F12** One `<h1>` on Chat, Data sources, LLM providers
+- [x] **F12** `Modal`: initial focus, focus trap, focus restore, `aria-labelledby`
 
 ## Phase 1 — Foundation
 - [ ] **F1** `BrowserRouter` mounted; `View` union removed
