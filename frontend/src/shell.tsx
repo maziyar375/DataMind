@@ -30,8 +30,14 @@ export type Shell = {
    * Say whether this surface holds unsaved work. `key` identifies the
    * registrant so two dirty forms cannot clear each other's flag; `reason` is
    * shown in the confirm dialog, so it should name what would be lost.
+   *
+   * `within` is the address the work survives inside — a record's own path,
+   * usually. Moving between the tabs of one connection is a navigation, and
+   * without this the guard stopped a form from reaching the tab beside it to
+   * protect edits that a tab switch does not touch. A confirm dialog people
+   * learn to click through is worse than no dialog at all.
    */
-  setUnsaved: (key: string, reason: string | null) => void
+  setUnsaved: (key: string, reason: string | null, within?: string) => void
 }
 
 const ShellContext = createContext<Shell | null>(null)
@@ -68,17 +74,34 @@ export function useThemeOverride(theme: ThemeName | null): void {
  * connection form and the provider form can both be open in a session, and
  * the last one to go clean must not speak for the other.
  *
+ * `within` names the address the work is safe inside, so a page whose tabs
+ * are routes is not stopped from moving between them. Everything outside it
+ * still asks.
+ *
  * Returns a release: a form that has just *saved* itself and is navigating as
  * part of that save must let go before it goes, or the guard stops the page
  * from leaving a form that no longer has anything to lose. The registration
  * has to be gone by the time `navigate` is called, which an effect running
  * after the render cannot promise.
  */
-export function useUnsavedWork(key: string, reason: string | null): () => void {
+export function useUnsavedWork(
+  key: string, reason: string | null, within?: string,
+): () => void {
   const { setUnsaved } = useShell()
   useEffect(() => {
-    setUnsaved(key, reason)
-  }, [key, reason, setUnsaved])
+    setUnsaved(key, reason, within)
+  }, [key, reason, within, setUnsaved])
   useEffect(() => () => setUnsaved(key, null), [key, setUnsaved])
   return useCallback(() => setUnsaved(key, null), [key, setUnsaved])
+}
+
+/**
+ * Is `pathname` at, or inside, `root`?
+ *
+ * Segment-aware on purpose: a plain `startsWith` makes `/sources/abc` a
+ * parent of `/sources/abcdef`, and two connections whose ids share a prefix
+ * would hand each other's unsaved work a free pass.
+ */
+export function isWithin(pathname: string, root: string): boolean {
+  return pathname === root || pathname.startsWith(`${root}/`)
 }

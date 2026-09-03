@@ -23,15 +23,17 @@ which is dark-only. The light palette was designed afterwards against it.
 **Every screen has a URL.** The rail is `NAV` in `App.tsx` — a path, a label
 and a glyph each — and the route table beside it gives each section a `/*`
 path: `/chat` · `/dashboards` · `/reports` · `/sources` · `/providers` ·
-`/users` (admin only; anyone else falls through) · `/about`, and anything
-unrecognised redirects to `/chat`. Adding a section means a `NAV` entry and a
-`<Route>`.
+`/users` (admin only; anyone else falls through) · `/settings` (your own
+account) · `/about`, and anything unrecognised redirects to `/chat`. Adding a
+section means a `NAV` entry and a `<Route>` — except `/settings` and `/about`,
+which are reached from the rail's footer rather than its list.
 
 **A section owns the routes under it, and reads them with `useMatch` rather
 than nesting a second `<Routes>`.** `/chat` → `/chat/:conversationId`,
 `/dashboards/:id`, `/reports/:id` and its `/history` and `/runs/:runId`,
-`/sources/:id/:tab` (`settings|schema|semantic|knowledge`, with `/sources/new`
-for the create form), `/providers/:id`. The switch is inside the page because
+`/sources/:id/:tab` (`connection|policy|schema|semantic|knowledge` — the first
+is the bare `/sources/:id`, and `/sources/new` is the create form),
+`/providers/:id`. The switch is inside the page because
 the page must **stay mounted** across it: remounting a section on every open
 and close would drop a chat's live stream and re-read a list the reader is
 looking at. A `:id` that is not in a list the page has already loaded is
@@ -40,6 +42,15 @@ fetched on its own — a document reached by its own link has no index behind it
 `createBrowserRouter` rather than `<BrowserRouter>` for one reason:
 `useBlocker` exists only on a data router, and it is what makes the
 unsaved-work guard possible. Nothing here uses loaders or actions.
+
+The guard takes a **scope**. `useUnsavedWork(key, reason, within?)` registers
+what would be lost and, optionally, the address it would survive inside. A
+connection's tabs are separate routes and its draft is keyed on the connection
+rather than the tab, so moving between them loses nothing — without `within`
+the guard interrupted that move anyway, and a dialog that fires when nothing
+is at stake is one people learn to dismiss unread. `App` filters the
+registrations against the *pending* path, so the dialog also names the form
+you are actually leaving rather than the first dirty thing on the app.
 
 > **Wherever this is served, unknown paths must return `index.html`.** The Vite
 > dev server and `vite preview` both do; a static host has to be told.
@@ -77,6 +88,7 @@ colours are chosen in JS, and the print stylesheet.
 | **Data sources** | [`DataSourcesPage.tsx`](../frontend/src/pages/DataSourcesPage.tsx) | The connections DataMind may read, and everything known about each one. |
 | **LLM providers** | [`LlmProvidersPage.tsx`](../frontend/src/pages/LlmProvidersPage.tsx) | The models it may call, and the keys it calls them with. |
 | **Users** | [`UsersPage.tsx`](../frontend/src/pages/UsersPage.tsx) | Who can sign in and what they may do. Admin only — the rail entry is not rendered otherwise. |
+| **Your account** | [`AccountPage.tsx`](../frontend/src/pages/AccountPage.tsx) | `/settings`: your display name and your password. Reached from the user block in the rail, not from `NAV`. |
 | **Creators** | [`AboutPage.tsx`](../frontend/src/pages/AboutPage.tsx) | Who built it. A colophon, not a destination; the one page on both sides of the sign-in wall. |
 | **Login** | [`LoginPage.tsx`](../frontend/src/pages/LoginPage.tsx) | The only public surface, and therefore the only signed-out route to Creators. |
 
@@ -108,13 +120,16 @@ Dashboards      index (cards│rows) → one board
 Reports         index → outline editor → run viewer → run history
                   outline editor is a workflow: Describe → Structure → Check → Generate
 
-Data sources    master → detail, 4 tabs:
-                  Settings · Schema (tables│graph) · Semantic layer · Knowledge
+Data sources    master → detail, 5 tabs:
+                  Connection · Policy · Schema (tables│graph) · Semantic layer
+                  · Knowledge; two forms, two Saves, Test on Connection only
                   semantic detail: Meaning │ Columns │ Metrics
 
 LLM providers   master → detail, one form
 
 Users           rows, inline detail, one-time password panel
+
+Your account    /settings, from the rail's user block: display name, password
 ```
 
 ---
@@ -273,6 +288,18 @@ above.
 - **A credential is testable before it is saved.** Both master–detail pages
   probe the *form* while it is dirty and persist nothing, so nobody has to
   leave a broken row behind to find out it is broken.
+- **Identity and policy do not share a Save button.** A connection's
+  credentials and its governance are edited by different people on different
+  days, so they are two tabs with two dirty states, and each Save sends only
+  its own fields. Nobody should have to open a form containing a password to
+  change a disclosure policy, and two people editing two tabs must not
+  overwrite each other with values neither of them looked at.
+- **Say who owns a list, where the list is read.** Connections, providers,
+  dashboards and reports are scoped to `owner_id`, so two colleagues see the
+  same labels and different lists. The master columns carry one quiet line
+  saying so, and every empty state is written for a second person's first
+  visit — an empty list that reads as a missing one is a bug report waiting to
+  be filed.
 - **Destructive acts are confirmed, and a refusal is spoken.** A rejected
   delete that reaches nobody looks exactly like a delete that silently did
   nothing.

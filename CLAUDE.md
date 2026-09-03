@@ -377,7 +377,10 @@ frontend/src/
                             redrawing charts at page width —
                             `npm run test:print`)
   pages/                    Login, Chat, DataSources, LlmProviders, Users,
-                            Dashboards, Reports, About (who built it — the one
+                            Dashboards, Reports, Account (`/settings` — your own
+                            display name and password, the only two things a
+                            member may change about themselves; every route
+                            under /users is admin-only), About (who built it — the one
                             page reachable from both sides of the sign-in wall:
                             the rail's footer group when signed in, a link on
                             the login screen when not; portraits come from
@@ -405,8 +408,19 @@ at commit time and shows up as drift a release later. Full tour:
 - **A page asks the shell for what is not its own.** `shell.tsx`:
   `useThemeOverride` (a dashboard pinned to a theme — `App` resolves
   `override ?? the user's choice` and is the only caller of `applyTheme`) and
-  `useUnsavedWork` (a dirty form, which the shell's one blocker asks about
-  before letting a navigation through).
+  `useUnsavedWork(key, reason, within?)` (a dirty form, which the shell's one
+  blocker asks about before letting a navigation through). `within` is the
+  address the work survives inside — pass a record's own path when its tabs
+  are routes, or the guard stops a form from reaching the tab beside it to
+  protect edits a tab switch does not touch.
+- **Connections are two things, and the screen says so.** `/sources/:id`
+  opens **Connection** (host, port, database, user, password, SSL, schema
+  allowlist, and the Danger zone) and `/sources/:id/policy` opens **Policy**
+  (disclosure, DB comments, taught examples, clarify, conflict checks, row cap,
+  timeout — the set is `POLICY_KEYS` in `DataSourcesPage.tsx`). Each has its
+  own dirty state and its own Save, and each Save sends **only its own half**,
+  so two people editing two tabs cannot overwrite each other. `Test connection`
+  belongs to Connection, which is the only half it probes.
 - **Styling is two places, and which one is not a preference.** Layout,
   spacing and one-off values are inline `style={}` in the JSX. Anything a
   style attribute cannot express — `:hover`, `:focus-visible`, selection,

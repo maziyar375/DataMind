@@ -475,16 +475,16 @@ order unless noted.
 - [x] **F11** Sorting never re-runs the query
 
 ## Phase 4 — Configuration clarity
-- [ ] **F8** Settings tab split into Connection / Policy
-- [ ] **F8** Independent dirty tracking + Save per tab
-- [ ] **F8** `Test connection` scoped to the Connection tab
-- [ ] **F16** Ownership line on Data sources + LLM providers master columns
-- [ ] **F16** Empty states rewritten for a second user's first visit
-- [ ] **F16** Dashboards + Reports index subtitles updated
-- [ ] **F6** Backend: `PATCH /auth/me`
-- [ ] **F6** Backend: `PUT /auth/me/password` (verifies current, rotates refresh)
-- [ ] **F6** Frontend: account screen at `/settings`, opened from sidebar user block
-- [ ] **F6** Admin set-password path unchanged
+- [x] **F8** Settings tab split into Connection / Policy
+- [x] **F8** Independent dirty tracking + Save per tab
+- [x] **F8** `Test connection` scoped to the Connection tab
+- [x] **F16** Ownership line on Data sources + LLM providers master columns
+- [x] **F16** Empty states rewritten for a second user's first visit
+- [x] **F16** Dashboards + Reports index subtitles updated
+- [x] **F6** Backend: `PATCH /auth/me`
+- [x] **F6** Backend: `PUT /auth/me/password` (verifies current, rotates refresh)
+- [x] **F6** Frontend: account screen at `/settings`, opened from sidebar user block
+- [x] **F6** Admin set-password path unchanged
 
 ## Phase 5 — Background work made visible
 - [ ] **F13** Notification surface at the shell with `aria-live`

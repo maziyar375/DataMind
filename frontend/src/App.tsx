@@ -7,6 +7,7 @@ import { auth, getAccessToken, onAuthChange } from './api/client'
 import type { User } from './api/types'
 import { DangerButton, GhostButton, Icon, Logo, Modal, initialOf } from './components/ui'
 import AboutPage from './pages/AboutPage'
+import AccountPage from './pages/AccountPage'
 import ChatPage from './pages/ChatPage'
 import DashboardsPage from './pages/DashboardsPage'
 import DataSourcesPage from './pages/DataSourcesPage'
@@ -14,7 +15,7 @@ import LlmProvidersPage from './pages/LlmProvidersPage'
 import LoginPage from './pages/LoginPage'
 import ReportsPage from './pages/ReportsPage'
 import UsersPage from './pages/UsersPage'
-import { ShellProvider, type Shell } from './shell'
+import { ShellProvider, isWithin, type Shell } from './shell'
 import { applyTheme, type ThemeName } from './theme/tokens'
 
 /**
@@ -66,12 +67,12 @@ export default function App() {
   // Which surfaces are holding unsaved work, and what would be lost. A ref
   // rather than state: the blocker reads it at navigation time, and a form
   // going dirty is not a reason to re-render the shell around it.
-  const unsaved = useRef(new Map<string, string>())
+  const unsaved = useRef(new Map<string, { reason: string; within?: string }>())
   const shell = useMemo<Shell>(
     () => ({
       requestThemeOverride: setThemeOverride,
-      setUnsaved: (key, reason) => {
-        if (reason) unsaved.current.set(key, reason)
+      setUnsaved: (key, reason, within) => {
+        if (reason) unsaved.current.set(key, { reason, within })
         else unsaved.current.delete(key)
       },
     }),
@@ -81,14 +82,32 @@ export default function App() {
   // One guard for the whole app rather than a check per page: every way out of
   // a dirty form — the rail, a row in the master column, browser Back — is a
   // navigation, and this is where they all pass through.
-  const shouldBlock = useCallback<BlockerFunction>(
-    ({ currentLocation, nextLocation }) =>
-      unsaved.current.size > 0 && currentLocation.pathname !== nextLocation.pathname,
+  //
+  // A registration can name the address its work survives inside (`within`),
+  // and then it is not a reason to stop: the tabs of one connection are
+  // separate routes, and asking someone to confirm the loss of edits that a
+  // tab switch does not touch is how a guard becomes a thing people click
+  // through without reading.
+  const stoppers = useCallback(
+    (nextPath: string) =>
+      [...unsaved.current.values()].filter(
+        (work) => !work.within || !isWithin(nextPath, work.within),
+      ),
     [],
   )
+  const shouldBlock = useCallback<BlockerFunction>(
+    ({ currentLocation, nextLocation }) =>
+      currentLocation.pathname !== nextLocation.pathname
+      && stoppers(nextLocation.pathname).length > 0,
+    [stoppers],
+  )
   const blocker = useBlocker(shouldBlock)
+  // The reason the *pending* navigation was stopped, not merely the first
+  // dirty thing on the app: with two forms registered, one of which permits
+  // this move, naming the wrong one would explain a dialog by pointing at
+  // something the reader is not leaving.
   const blockedReason = blocker.state === 'blocked'
-    ? [...unsaved.current.values()][0]
+    ? stoppers(blocker.location.pathname)[0]?.reason
     : null
 
   // A live refresh cookie means the user is still signed in across reloads.
@@ -212,6 +231,13 @@ export default function App() {
               {user.role === 'ADMIN' && (
                 <Route path="/users" element={<UsersPage currentUser={user} />} />
               )}
+              {/* `/settings` at last means the account, which is what the
+                  word says. It held the LLM providers until routing moved
+                  them to `/providers`. */}
+              <Route
+                path="/settings"
+                element={<AccountPage user={user} onUserChange={setUser} />}
+              />
               <Route path="/about" element={<AboutPage />} />
               <Route path="*" element={<Navigate to="/chat" replace />} />
             </Routes>
@@ -344,6 +370,21 @@ function Sidebar({
         </div>
 
         <div className="rm-sidebar-user">
+          {/* The name and the avatar are now the door to the account screen,
+              rather than a label beside a sign-out icon. It is where the
+              display name is already shown, which makes it the place someone
+              looks when they want to change it — and until F6 there was
+              nowhere to go at all: every route under `/users` is admin-only,
+              so an invited member was stuck on the password an administrator
+              generated for them. Sign out keeps its own button: leaving and
+              editing are not the same intention and must not share a target. */}
+          <button
+            type="button"
+            onClick={() => onNavigate('/settings')}
+            aria-current={pathname === '/settings' ? 'page' : undefined}
+            title="Your account"
+            className={`rm-sidebar-me${pathname === '/settings' ? ' is-on' : ''}`}
+          >
           <span
             style={{
               width: 30,
@@ -361,7 +402,7 @@ function Sidebar({
           >
             {initialOf(user.display_name || user.email)}
           </span>
-          <div className="rm-sidebar-text" style={{ display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.25 }}>
+          <div className="rm-sidebar-text" style={{ display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.25, textAlign: 'start' }}>
             <span
               style={{
                 fontSize: 12.5,
@@ -378,6 +419,7 @@ function Sidebar({
               {user.role === 'ADMIN' ? 'Admin' : 'Member'}
             </span>
           </div>
+          </button>
           <button
             onClick={onLogout}
             title="Sign out"

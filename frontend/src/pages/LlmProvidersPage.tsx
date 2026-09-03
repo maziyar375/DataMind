@@ -299,13 +299,18 @@ export default function LlmProvidersPage() {
       <MasterColumn
         title="LLM providers"
         icon={<Icon.Sparkle size={15} />}
+        note="Yours only — models are not shared with your team."
         count={list.length}
         loading={loading}
         query={query}
         onQuery={setQuery}
         onNew={startCreate}
         newLabel="Add a model"
-        empty="No models configured yet. Add one to start asking questions."
+        // "No models configured yet" implied a workspace someone else had
+        // configured. They are per-account: a second person's first visit is
+        // an empty list because it is theirs, not because something is
+        // missing from it.
+        empty="You have not added a model yet. Providers belong to the account that made them, so a colleague's will not show up here."
       >
         {visible.map((config) => {
           const state = reachability(config.status)
@@ -349,7 +354,7 @@ export default function LlmProvidersPage() {
             <EmptyState
               icon={<Icon.Sparkle size={20} />}
               title="Connect a model"
-              body="DataMind works with any OpenAI-compatible endpoint (including local servers like Ollama) or Anthropic. Testing a model records what it can actually do."
+              body="DataMind works with any OpenAI-compatible endpoint (including local servers like Ollama) or Anthropic. Testing a model records what it can actually do. The key you add is yours — each person adds their own."
               action={<PrimaryButton onClick={startCreate}>Add a model</PrimaryButton>}
             />
           </div>

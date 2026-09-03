@@ -293,7 +293,10 @@ function ReportsIndex({
         title="Reports"
         subtitle={
           cards === null || cards.length === 0 ? (
-            'Written documents built from your data — describe one, approve its outline, and keep every run.'
+            // Same reasoning as the Dashboards index: reports are per-account,
+            // and an empty list is the state a second person's first visit is
+            // genuinely in rather than a load that lost somebody's work.
+            'Written documents built from your data — yours, not the team\u2019s. Describe one, approve its outline, and keep every run.'
           ) : (
             <>
               <strong style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{activeCount}</strong>

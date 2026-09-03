@@ -20,11 +20,21 @@ import { GlyphBadge, Icon } from './ui'
  * follows for its archived filter.
  */
 export function MasterColumn({
-  title, icon, count, onNew, newLabel, empty, query, onQuery, loading, children,
+  title, icon, note, count, onNew, newLabel, empty, query, onQuery, loading, children,
 }: {
   title: string
   /** The section's own glyph — the same mark the sidebar uses for this page. */
   icon?: React.ReactNode
+  /**
+   * A quiet line under the title, for something true of the whole list.
+   *
+   * Both settings pages sit in the rail beside Users and read as workspace
+   * configuration, and neither is: connections and model providers are scoped
+   * to `owner_id`, so two colleagues see the same two labels and two
+   * different lists. That is worth one sentence in the place the list is
+   * actually read, and worth no more than one.
+   */
+  note?: string
   count: number
   onNew: () => void
   newLabel: string
@@ -86,6 +96,19 @@ export function MasterColumn({
             {loading ? '–' : count}
           </span>
         </div>
+
+        {note && (
+          <p
+            style={{
+              margin: '-3px 0 0',
+              fontSize: 11.5,
+              lineHeight: 1.45,
+              color: 'var(--text-faint)',
+            }}
+          >
+            {note}
+          </p>
+        )}
 
         {onQuery && count > 0 && (
           <div className="rm-search rm-master-search">

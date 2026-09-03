@@ -836,6 +836,19 @@ replayed refresh token invalidates the family. Refresh tokens are stored
 hashed, never in the clear. An admin password reset revokes the user's live
 sessions.
 
+**A member may rotate their own password** — `PUT /auth/me/password`, which
+verifies the current one first and then does exactly what the admin reset
+does: revokes every session for that user. It differs in one respect, and
+deliberately: it issues a fresh session immediately afterwards, so the person
+who just changed their password is the only one left signed in rather than the
+only one signed out. Without this route an invited account stayed indefinitely
+on a one-time password an administrator generated and can still read, because
+every route under `/users` is admin-only. Its sibling, `PATCH /auth/me`,
+changes the display name and nothing else: email, role and status are not
+fields on its schema, so a member cannot promote themselves by editing a
+payload. Neither route takes a user id — there is no parameter to point at
+somebody else, and a test walks the route table to keep it that way.
+
 > **Losing `SECRET_BOX_KEY` means every stored credential must be re-entered.**
 > There is no recovery path, by design. Back it up somewhere your database
 > backups are not.

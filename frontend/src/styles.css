@@ -841,6 +841,10 @@ code, pre, .mono {
   .rm-theme { flex-direction: column; }
   .rm-theme button { justify-content: center; padding: 7px; }
   .rm-sidebar-user { flex-direction: column; align-items: center; gap: 8px; }
+  /* On the 66px rail the name is hidden with every other label, so the
+     button is the avatar and nothing else — it must stop growing to fill a
+     column it no longer has anything to fill. */
+  .rm-sidebar-me { flex: 0 0 auto; justify-content: center; }
   .rm-sidebar-logout { margin-left: 0 !important; }
 }
 
@@ -2005,6 +2009,31 @@ code, pre, .mono {
   padding: 12px 6px 0;
   border-top: 1px solid var(--border);
 }
+
+/* The name and avatar, now the way into the account screen. It is drawn as
+   the quietest possible button — no fill, no border, only a warm ground on
+   approach — because it is still primarily a label saying who you are. The
+   sign-out icon stays a separate button beside it: leaving and editing are
+   two intentions, and a single target for both is how people sign out by
+   accident. */
+.rm-sidebar-me {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1;
+  min-width: 0;
+  padding: 4px 5px;
+  margin: -4px -5px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.rm-sidebar-me:hover { background: var(--panel-hover); }
+.rm-sidebar-me.is-on { background: var(--accent-bg); }
 
 /* ── the chat list ────────────────────────────────────────────────────────
    The third list in the product that answers "which one am I on", after the

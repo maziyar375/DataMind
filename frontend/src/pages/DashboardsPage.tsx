@@ -220,7 +220,11 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
         title="Dashboards"
         subtitle={
           cards === null || cards.length === 0
-            ? 'Tiles you keep. Each one has its own connection and its own refresh rate.'
+            // Ownership belongs in the empty state above all: a populated
+            // list is self-evidently somebody's, but an empty one on a shared
+            // install reads as a page that failed to load somebody else's
+            // work. Dashboards are scoped to `owner_id` like everything else.
+            ? 'Tiles you keep — yours, not the team\u2019s. Each one has its own connection and its own refresh rate.'
             : <IndexSummary cards={cards} />
         }
         actions={
