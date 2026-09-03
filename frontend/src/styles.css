@@ -2159,7 +2159,7 @@ code, pre, .mono {
 /* Adding a record is the one thing this column does besides listing them, so
    it is a full-width action rather than a glyph in a corner — it reads as the
    end of the chrome and the start of the list. */
-.rm-master-new {
+.rm-list-new {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2176,7 +2176,7 @@ code, pre, .mono {
   cursor: pointer;
   transition: background .12s ease, border-color .12s ease;
 }
-.rm-master-new:hover { background: color-mix(in oklch, var(--accent) 20%, transparent); }
+.rm-list-new:hover { background: color-mix(in oklch, var(--accent) 20%, transparent); }
 
 /* The pane's header is a toolbar over its body, exactly as the dashboard's is
    over its canvas. */

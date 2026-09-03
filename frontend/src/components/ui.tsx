@@ -822,6 +822,35 @@ export function PrimaryButton({
   )
 }
 
+/**
+ * "New chat", "Add a connection" — the new-record action at the top of a list
+ * column, in every column that has one.
+ *
+ * Tinted rather than filled, and that is the whole design. A solid accent slab
+ * is the loudest thing on the screen, and in this position it would be louder
+ * than the composer's send button — making a way *out* of what you are reading
+ * the most prominent offer on a page whose job is the answer in the middle of
+ * it. Accent text on an accent wash still reads as the one coloured control in
+ * a column of grey rows, which is as much emphasis as the job needs.
+ *
+ * It sits directly under the column's title, above the filter: the filter
+ * belongs against the list it filters, and both columns show theirs only past
+ * a threshold — so a button placed under it would move down as the list grew.
+ */
+export function ListNewButton({
+  label, onClick,
+}: {
+  label: string
+  onClick: () => void
+}) {
+  return (
+    <button type="button" onClick={onClick} title={label} className="rm-list-new">
+      <Icon.Plus size={14} stroke="var(--accent)" />
+      {label}
+    </button>
+  )
+}
+
 export function GhostButton({
   children, style, ...rest
 }: React.ButtonHTMLAttributes<HTMLButtonElement>) {

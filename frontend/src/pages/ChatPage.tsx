@@ -57,7 +57,7 @@ import type { ThinkingState } from '../components/thinking'
 import { TemplateEditor } from '../components/knowledge'
 import { AddToDashboardDialog, AddToReportDialog } from '../components/answer-destinations'
 import {
-  DisclosureBadge, ErrorNote, GlyphBadge, Icon, PrimaryButton, SearchField, Spinner,
+  DisclosureBadge, ErrorNote, GlyphBadge, Icon, ListNewButton, SearchField, Spinner,
   dirOf, engineHue,
 } from '../components/ui'
 import { LIST_DRAWER_ID, ListScrim, ListToggle, useListDrawer } from '../components/list-drawer'
@@ -1866,10 +1866,7 @@ function ConversationSidebar({
           </span>
         </div>
 
-        <PrimaryButton onClick={onNew} style={{ width: '100%', borderRadius: 9 }}>
-          <Icon.Plus size={15} />
-          New chat
-        </PrimaryButton>
+        <ListNewButton label="New chat" onClick={onNew} />
 
         {/* Offered once the list outgrows a glance — the same rule the
             Dashboards toolbar follows for its archived filter. */}

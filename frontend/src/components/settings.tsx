@@ -8,7 +8,7 @@
  */
 import React from 'react'
 import { LIST_DRAWER_ID } from './list-drawer'
-import { GlyphBadge, Icon } from './ui'
+import { GlyphBadge, Icon, ListNewButton } from './ui'
 
 // ── left column ───────────────────────────────────────────────────────────
 /**
@@ -141,6 +141,8 @@ export function MasterColumn({
           </p>
         )}
 
+        {onNew && newLabel && <ListNewButton label={newLabel} onClick={onNew} />}
+
         {onQuery && count > 0 && (
           <div className="rm-search rm-master-search">
             <span aria-hidden className="rm-search-icon"><Icon.Search size={14} /></span>
@@ -168,12 +170,6 @@ export function MasterColumn({
           </div>
         )}
 
-        {onNew && (
-          <button onClick={onNew} title={newLabel} className="rm-master-new">
-            <Icon.Plus size={14} stroke="var(--accent)" />
-            {newLabel}
-          </button>
-        )}
       </div>
 
       <div
