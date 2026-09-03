@@ -1,5 +1,15 @@
 # DataMind — UI/UX & Structure Remediation Plan
 
+> **Status: executed.** All seven phases and all 55 checklist items landed on
+> **2026-09-03**, one commit per phase, `ea26f66..e9d5301`, with two
+> corrections after review. **§ The ledger** at the foot of this file is the
+> record: what each phase actually shipped, the decisions taken while
+> executing, and what had to be fixed afterwards.
+>
+> Read this file for *why* a surface is shaped the way it is.
+> [frontend.md](frontend.md) describes what was built — where the two
+> disagree, frontend.md is right.
+
 Derived from the information-architecture audit of the frontend. Sixteen
 findings (**F1–F16**), sequenced into seven phases.
 
@@ -608,6 +618,102 @@ make lint             # ruff + import-linter contracts
 
 > `npm run lint` is a dead script — eslint is not a declared devDependency and
 > the repo carries no config. Do not add it to a phase's gate.
+
+---
+
+# The ledger
+
+What actually landed, in the order it landed. The checklist above says
+*whether*; this says *what*, *where*, and — where it matters more than
+either — *what changed while it was being executed*.
+
+Every phase was gated on `npm run typecheck`, `npm run build` and `npm test`
+from `frontend/`, and each was driven in the running app with Playwright
+before it was committed. Phase 4 touched the backend and added `make test`,
+`make guard` and `make lint` to its gate.
+
+| # | Commit | Size | What shipped |
+| --- | --- | --- | --- |
+| 0 | `ea26f66` | 10 files, +265/−147 | `PageHeader` adopted by all three index pages, `.rm-dash-index` → `.rm-index`, the `<main>` landmark and skip link, one `<h1>` per page, and `Modal` given real focus management |
+| 1 | `1905538` | 11 files, +544/−175 | `createBrowserRouter`, the `View` union deleted, every section on a `/*` route reading its own sub-routes with `useMatch`, `shell.tsx` (theme override + unsaved work), and one `useBlocker` guard for the whole app |
+| 2 | `0b90fac` | 11 files, +1005/−83 | The tile editor became a routed `Drawer` beside the live grid; *Add to dashboard* and *Add to report* on the answer action row, carrying the run's own SQL |
+| 3 | `aacb229` | 11 files, +858/−93 | Empty header pickers navigate somewhere; the setup checklist on the welcome screen; CSV download, click-to-sort and windowed rendering on `ResultTable` |
+| 4 | `087eafa` | 18 files, +1254/−208 | Connection / Policy split with independent Saves; per-user ownership stated where lists are read; `PATCH /auth/me`, `PUT /auth/me/password` and the account screen at `/settings` |
+| 5 | `ca3bda8` | 14 files, +1173/−38 | The shell's `aria-live` notice surface and its background watcher; the knowledge console promoted to `/knowledge` with a rail badge and `knowledge-queue.ts` |
+| 6 | `e9d5301` | 11 files, +360/−17 | The second column becomes an off-canvas drawer below 700px, with every surface the earlier phases added checked at 375px |
+| — | `48a6c27` | 10 files, +186/−34 | The docs that still described the shell this work replaced: README, the docs index, CODEBASE, reports, dashboards, security, and the learning loop's superseded §4.2 |
+
+## Decisions taken while executing
+
+Recorded inline where they were made, and listed here so none is lost:
+
+- **Phase 1 → Phase 4.** The single navigation guard learned a *scope*
+  (`useUnsavedWork(key, reason, within?)`). Splitting the connection form into
+  two routed tabs made the guard fire on a move that loses nothing, and a
+  dialog that interrupts when nothing is at stake is one people learn to click
+  through unread.
+- **Phase 4.** A wrong *current* password answers **422, not 401** — the
+  client reads a 401 as a dead session, which would end a typo in a sign-out
+  screen. The rotation revokes every session and immediately issues a fresh
+  one, so the person who changed their password is the only one still signed
+  in rather than the only one signed out.
+- **Phase 5.** The knowledge badge moved off Data sources onto the promoted
+  entry. Step 1 described the cheapest move, taken *before* the promotion;
+  once the console has its own destination, two badges for one number is
+  noise. The full argument is the block quote in Phase 5's checklist above.
+- **Phase 6.** Three things the audit did not name, invisible until the second
+  column stopped taking the width: the chat header's two fixed-width pickers,
+  a five-tab strip wider than a phone, and a dashboard toolbar whose labels
+  had to go *visually* rather than out of the accessibility tree.
+
+## Corrected after review
+
+Review found five things this plan got wrong, or that the implementation got
+wrong while following it. They are the honest part of the record.
+
+1. **The knowledge column borrowed what it was not** — `7d4fc41`. Promoting
+   the console reused the settings master column wholesale and inherited an
+   *Add a connection* primary action (a way *out* of the section, as the
+   loudest control on the page), a count pill showing the number of
+   connections under a word the rail was labelling with the size of the queue,
+   and a summary line restating the rows below it. All three are gone;
+   `MasterColumn`'s new-verb and count pill are optional now.
+2. **The badge cried wolf** — `7d4fc41`. Red over a queue that is entirely
+   *suggestions* says something is broken where nothing is. Red is now
+   reserved for a flag somebody raised on a wrong answer; a backlog is amber
+   (`queueTone`), and the rail, the rows and the detail chips all follow it.
+3. **The console shipped twice** — `91f3f8b`. Step 3's *"keep the
+   per-connection tab as a filtered view of the same screen"* was implemented
+   as the tab rendering its own copy, so two addresses with the **same scope**
+   rendered byte-identical screens. A scoped view beside a global one is a
+   sound pattern; two views of one scope is one screen twice. The tab is a
+   **door** now — it navigates to `/knowledge/:id` — and the old address
+   redirects there.
+4. **A deep link showed a blank form** — `91f3f8b`, and the worst of the five,
+   because it predates the review by five phases. Both master–detail pages
+   hydrated their form in an effect keyed on the id *in the URL*. On the
+   arrival Phase 1 exists to make possible — typing, bookmarking or refreshing
+   `/sources/:id` — that id is set at mount while the list it must be found in
+   is still in flight, so the effect ran once against a `null` row, bailed,
+   and never ran again: blank values on screen, both halves reporting unsaved
+   changes nobody had made, and the navigation guard then refusing to let
+   anyone leave. Keyed on `selected?.id` it hydrates when the row arrives.
+
+   No phase verification caught it, and the reason is worth keeping: every
+   scripted check reached a connection through `/sources` and its landing
+   redirect, which sets the id *after* the list has loaded. **A route a test
+   only ever arrives at from inside the app is a route nobody has tested.**
+5. **The first-run panel argued with the page under it** — the commit that
+   added this ledger. On a
+   connection with an empty store and a backlog, a hero panel read *"write a
+   question the way someone would ask it, paste the SQL that answers it"*
+   directly above twenty-two questions people really asked, each with a *Teach
+   this* button beside it. It buried the better path under an invitation to
+   ignore it, and spent 200px of the top of the page doing so. The hero is now
+   the hero only when the page really is empty; with a queue below it, the
+   framing is one line that points at the queue.
+
+---
 
 ## Out of scope
 

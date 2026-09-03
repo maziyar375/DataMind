@@ -370,7 +370,13 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
         />
       )}
 
-      {rows.length === 0 && !search && <FirstRun canCurate={canCurate && synced} />}
+      {rows.length === 0 && !search && (
+        <FirstRun
+          canCurate={canCurate && synced}
+          reviews={reviews.length}
+          suggestions={suggestions.filter((s) => s.kind !== 'FLAGGED').length}
+        />
+      )}
 
       {rows.length > 0 && visible.length === 0 && (
         <EmptyState
@@ -540,16 +546,59 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
  * dashboard tiles. Until then the honest version is one sentence, which is
  * better than an empty list dressed up as a feature.)
  */
-function FirstRun({ canCurate }: { canCurate: boolean }) {
+/**
+ * Nothing taught here yet — said differently depending on what *is* here.
+ *
+ * The first version was one hero panel reading *"write a question the way
+ * someone would ask it, paste the SQL that answers it"*, rendered whenever the
+ * template list was empty. On a connection with an empty store and a backlog
+ * that is a screen arguing with itself: it tells you to start from a blank
+ * page directly above twenty-two questions people really asked, each with a
+ * *Teach this* button beside it. It buries the better path under an invitation
+ * to ignore it, and it spends 200px of the top of the page doing so.
+ *
+ * So the panel is the hero only when the page really is empty. With a queue
+ * below it, the framing shrinks to one line and points at the queue — which
+ * is both shorter and the correct advice, because a question somebody actually
+ * asked is a better first template than one you invent.
+ */
+function FirstRun({
+  canCurate, reviews, suggestions,
+}: {
+  canCurate: boolean
+  /** Flags raised on wrong answers, waiting below this. */
+  reviews: number
+  /** Questions that went unanswered, waiting below this. */
+  suggestions: number
+}) {
+  if (!canCurate) {
+    return (
+      <EmptyState
+        icon={<Icon.Sparkle size={20} />}
+        title="Teach this connection"
+        body="Nothing has been taught here yet."
+      />
+    )
+  }
+
+  if (reviews > 0 || suggestions > 0) {
+    return (
+      <div style={hint()}>
+        Nothing taught here yet — and you do not have to start from a blank
+        page.{' '}
+        {reviews > 0
+          ? 'Each flag below is an answer somebody marked wrong, and it arrives with the question and the statement already on it.'
+          : 'The questions below were really asked here and went unanswered.'}{' '}
+        Teach one and this connection answers it the same way next time.
+      </div>
+    )
+  }
+
   return (
     <EmptyState
       icon={<Icon.Sparkle size={20} />}
       title="Teach this connection"
-      body={
-        canCurate
-          ? 'Write a question the way someone would ask it, paste the SQL that answers it, and this connection will answer it the same way next time.'
-          : 'Nothing has been taught here yet.'
-      }
+      body="Write a question the way someone would ask it, paste the SQL that answers it, and this connection will answer it the same way next time."
     />
   )
 }
