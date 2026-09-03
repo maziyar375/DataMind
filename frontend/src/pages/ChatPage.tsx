@@ -434,6 +434,15 @@ export default function ChatPage() {
       onEvent: (event) => {
         switch (event.type) {
           case 'STEP_STARTED':
+            // A thought belongs to the step that had it. `clarify` can think
+            // for half a minute and then produce no prose at all — it decides
+            // the question is answerable and moves on — so the first word of
+            // the answer cannot be the only thing that stops the clock, or its
+            // panel would still be counting while `generate` runs.
+            if (thinkingLive.current) {
+              thinkingLive.current = false
+              setThinking(endThought)
+            }
             setLiveSteps((prev) => [
               ...prev.filter((s) => s.seq !== event.data.seq),
               {

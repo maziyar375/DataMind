@@ -105,12 +105,25 @@ check(
   { text: 'mulling', ms: 47_000, done: true },
 )
 
-// A thought that has ended is still a thought: a late delta on the same run
-// would reopen it, which is correct — the model went back to thinking.
+// ── two nodes think in one run ───────────────────────────────────────────
+// `clarify` deliberates over the question, then `present` deliberates over the
+// answer. A delta arriving after a thought has ended is therefore the *next*
+// node starting, not the previous one resuming — the two must not be spliced
+// into one panel that reads as a model changing the subject mid-sentence.
 check(
-  'a delta after the end reopens it',
-  absorbThought({ text: 'a', ms: 10, done: true }, 'b', 20).done,
-  false,
+  'a delta after the end starts a new thought, not a longer one',
+  absorbThought({ text: 'which revenue column?', ms: 8_000, done: true }, 'now the answer', 200),
+  { text: 'now the answer', ms: 200, done: false },
+)
+check(
+  "the new thought takes the server's clock, not the old one's",
+  absorbThought({ text: 'a', ms: 35_000, done: true }, 'b', undefined).ms,
+  0,
+)
+check(
+  'a delta while a thought is live still continues it',
+  absorbThought({ text: 'half a ', ms: 100, done: false }, 'thought', 200),
+  { text: 'half a thought', ms: 200, done: false },
 )
 
 console.log(failures === 0 ? '\nall passed' : `\n${failures} failed`)

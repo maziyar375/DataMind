@@ -14,6 +14,7 @@ import json
 import re
 import time
 from collections.abc import AsyncIterator, Sequence
+from types import SimpleNamespace
 from typing import Any, TypeVar
 
 import litellm
@@ -36,6 +37,7 @@ from app.domain.ports.llm import (
     Completion,
     EmbeddingCapability,
     ProviderCapabilities,
+    ReasoningSink,
     ResolvedLLM,
     StreamChunk,
 )
@@ -103,6 +105,23 @@ def _retry_after_seconds(err: Exception) -> float | None:
             except (TypeError, ValueError):
                 pass
     return None
+
+
+class _StreamedReply:
+    """A reassembled stream, shaped like the one-shot response it stands in for.
+
+    `structured` reads `choices[0].message.content` and `finish_reason`, and it
+    reads them the same way whichever transport fetched the reply. Giving the
+    streamed path this shape is what keeps the parse, the validation and the
+    repair round-trip one piece of code with one set of tests, rather than two
+    that have to be kept in agreement.
+    """
+
+    __slots__ = ("choices",)
+
+    def __init__(self, text: str, finish_reason: str) -> None:
+        message = SimpleNamespace(content=text)
+        self.choices = [SimpleNamespace(message=message, finish_reason=finish_reason)]
 
 
 class LiteLLMGateway:
@@ -295,8 +314,97 @@ class LiteLLMGateway:
         except Exception as err:
             raise LLMError(_clean(err)) from err
 
+    async def _consume_structured_stream(
+        self, payload: dict[str, Any], on_reasoning: ReasoningSink
+    ) -> _StreamedReply:
+        """One structured completion, taken as a stream so the thinking shows.
+
+        Streaming and structured output are orthogonal flags on the same
+        request — `stream` says how the bytes arrive, `response_format` says
+        what they have to contain — so this sends both and reassembles the
+        reply before anyone parses it. Nothing downstream can tell the
+        difference: the object returned is shaped like the one-shot response,
+        and the caller's parse, validation and repair round-trip are unchanged.
+
+        The reason to pay for the reassembly is the *other* channel. A
+        reasoning model spends its whole latency in `reasoning_content` before
+        it emits a byte of JSON, and that channel exists only on a streamed
+        request. Non-streamed, a thirty-second `clarify` can show a spinner and
+        nothing else, which is what a hung run looks like.
+
+        **The stall guard replaces the request timeout, which stops applying
+        the moment chunks flow** (see `stream`). It measures silence, not
+        length: a model that thinks for two minutes and says so every second is
+        working, and killing it would be wrong. One that says nothing at all
+        for a whole timeout's worth of seconds is not coming back.
+        """
+        response = await self._acompletion(**payload, stream=True)
+        parts: list[str] = []
+        finish_reason = ""
+        chunks = response.__aiter__()
+        while True:
+            try:
+                chunk = await asyncio.wait_for(
+                    chunks.__anext__(), timeout=self._timeout
+                )
+            except StopAsyncIteration:
+                break
+            except TimeoutError as err:
+                raise LLMError(
+                    f"The model sent nothing for {self._timeout}s and the "
+                    "request was abandoned."
+                ) from err
+            if not chunk.choices:
+                continue
+            choice = chunk.choices[0]
+            finish_reason = getattr(choice, "finish_reason", "") or finish_reason
+            delta = choice.delta
+            piece = getattr(delta, "content", None)
+            if piece:
+                parts.append(piece)
+                continue
+            thought = getattr(delta, "reasoning_content", None) or getattr(
+                delta, "reasoning", None
+            )
+            if thought:
+                await on_reasoning(thought)
+        return _StreamedReply("".join(parts), finish_reason)
+
+    async def _structured_stream_call(
+        self, payload: dict[str, Any], on_reasoning: ReasoningSink
+    ) -> Any:
+        """`_structured_call`'s error handling, over the streamed transport.
+
+        Deliberately the same shape, including the `response_format` retry: a
+        provider that rejects the format does so on the request, before any
+        chunk arrives, so nothing has been shown to anyone when the plain
+        re-ask goes out.
+        """
+        try:
+            return await self._consume_structured_stream(payload, on_reasoning)
+        except ContextWindowExceededError as err:
+            raise LLMError(_clean(err)) from err
+        except BadRequestError as err:
+            if "response_format" not in payload:
+                raise LLMError(_clean(err)) from err
+            log.warning("llm_response_format_rejected", error=_clean(err))
+            plain = {k: v for k, v in payload.items() if k != "response_format"}
+            try:
+                return await self._consume_structured_stream(plain, on_reasoning)
+            except Exception as retry_err:
+                raise LLMError(_clean(retry_err)) from retry_err
+        except LLMError:
+            raise
+        except Exception as err:
+            raise LLMError(_clean(err)) from err
+
     async def structured(
-        self, llm: ResolvedLLM, messages: Sequence[ChatMessage], schema: type[T]
+        self,
+        llm: ResolvedLLM,
+        messages: Sequence[ChatMessage],
+        schema: type[T],
+        *,
+        on_reasoning: ReasoningSink | None = None,
     ) -> T:
         """A validated `schema` instance, however the provider gets us there.
 
@@ -306,6 +414,13 @@ class LiteLLMGateway:
         prompt or returns an empty string. A provider claiming schema support is
         not a reason to trust its output, so the reply is parsed and validated
         here either way.
+
+        `on_reasoning` switches the transport, and nothing else. Given one, the
+        request is streamed so the model's reasoning channel can be forwarded
+        while it thinks; the JSON is reassembled and put through exactly the
+        same parse, validation and repair below. Given none, the request is the
+        single call it has always been — the callers that show nothing while
+        they wait should not pay for a stream nobody watches.
         """
         base = self._kwargs(llm, messages)
         base["messages"] = [
@@ -319,7 +434,11 @@ class LiteLLMGateway:
 
         payload = base
         for attempt in range(STRUCTURED_REPAIRS + 1):
-            response = await self._structured_call(payload)
+            response = await (
+                self._structured_stream_call(payload, on_reasoning)
+                if on_reasoning is not None
+                else self._structured_call(payload)
+            )
             raw = (response.choices[0].message.content or "").strip()
             truncated = _finish_reason(response) == "length"
             try:

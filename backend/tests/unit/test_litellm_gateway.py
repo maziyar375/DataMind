@@ -12,6 +12,7 @@ model with no JSON instruction at all.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 from unittest.mock import patch
@@ -365,3 +366,190 @@ async def test_recovers_json_after_an_inlined_reasoning_block() -> None:
         )
 
     assert out.label == "orders"
+
+
+# ── structured output, streamed ───────────────────────────────────────────
+# `on_reasoning` changes the transport and nothing else. Everything above this
+# line has to keep holding on the streamed path, because the reason to stream a
+# reply nobody reads token by token is the *other* channel: a reasoning model
+# spends its whole latency in `reasoning_content` before the first byte of
+# JSON, and that channel exists only on a streamed request.
+
+
+def _chunk(*, content: str = "", reasoning: str = "", finish_reason: str = "") -> Any:
+    """One streamed chunk, in the shape litellm hands back."""
+    delta = type(
+        "_D", (), {"content": content or None, "reasoning_content": reasoning or None}
+    )()
+    choice = type("_C", (), {"delta": delta, "finish_reason": finish_reason})()
+    return type("_Chunk", (), {"choices": [choice]})()
+
+
+def _stream(chunks: list[Any]) -> Any:
+    """A provider response that is an async iterator, as `stream=True` returns."""
+
+    class _Stream:
+        def __aiter__(self) -> Any:
+            async def gen() -> Any:
+                for chunk in chunks:
+                    yield chunk
+
+            return gen()
+
+    return _Stream()
+
+
+async def _sink(_piece: str) -> None:
+    return None
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_reply_is_reassembled_and_parsed_like_any_other() -> None:
+    """The JSON arrives in pieces and the caller cannot tell."""
+    thoughts: list[str] = []
+
+    async def collect(piece: str) -> None:
+        thoughts.append(piece)
+
+    async def streamed(**payload: Any) -> Any:
+        assert payload["stream"] is True
+        return _stream(
+            [
+                _chunk(reasoning="which "),
+                _chunk(reasoning="column?"),
+                _chunk(content='{"label"'),
+                _chunk(content=': "orders"}'),
+                _chunk(finish_reason="stop"),
+            ]
+        )
+
+    with patch("litellm.acompletion", side_effect=streamed):
+        out = await _gateway(0).structured(
+            _structured_llm(supports=False), _MSG, _Answer, on_reasoning=collect
+        )
+
+    assert out.label == "orders"
+    assert "".join(thoughts) == "which column?"
+
+
+@pytest.mark.asyncio
+async def test_without_a_sink_the_request_is_not_streamed() -> None:
+    """The callers that show nothing while they wait must not pay for a stream
+    nobody watches — and this is what keeps every non-streamed test above
+    describing the path those callers still take."""
+    seen: list[dict[str, Any]] = []
+
+    async def plain(**payload: Any) -> Any:
+        seen.append(payload)
+        return _reply('{"label": "orders"}')
+
+    with patch("litellm.acompletion", side_effect=plain):
+        await _gateway(0).structured(_structured_llm(supports=False), _MSG, _Answer)
+
+    assert "stream" not in seen[0]
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_reply_gets_the_same_repair_round_trip() -> None:
+    calls = {"n": 0}
+
+    async def flaky(**_: Any) -> Any:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _stream([_chunk(content="Happy to help!")])
+        return _stream([_chunk(content='{"label": "orders"}')])
+
+    with patch("litellm.acompletion", side_effect=flaky):
+        out = await _gateway(0).structured(
+            _structured_llm(supports=False), _MSG, _Answer, on_reasoning=_sink
+        )
+
+    assert out.label == "orders" and calls["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_truncation_is_still_reported_as_truncation() -> None:
+    """`finish_reason` rides the last chunk rather than the response object, and
+    the message a truncated reply produces is the one that tells somebody to
+    raise `max_tokens` — losing it turns a fixable setting into a mystery."""
+
+    async def cut_off(**_: Any) -> Any:
+        return _stream(
+            [
+                _chunk(content='{"label": "ord'),
+                _chunk(finish_reason="length"),
+            ]
+        )
+
+    with patch("litellm.acompletion", side_effect=cut_off), pytest.raises(LLMError) as err:
+        await _gateway(0).structured(
+            _structured_llm(supports=False), _MSG, _Answer, on_reasoning=_sink
+        )
+
+    assert (
+        "max_tokens" in str(err.value.message).lower()
+        or "cut off" in str(err.value.message).lower()
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_response_format_still_falls_back_when_streamed() -> None:
+    """The 400 arrives on the request, before any chunk, so nothing has been
+    shown to anybody when the plain re-ask goes out."""
+    seen: list[dict[str, Any]] = []
+
+    async def picky(**payload: Any) -> Any:
+        seen.append(payload)
+        if "response_format" in payload:
+            raise litellm.BadRequestError(
+                "response_format json_schema is not supported",
+                llm_provider="deepseek",
+                model="deepseek/deepseek-chat",
+            )
+        return _stream([_chunk(content='{"label": "orders"}')])
+
+    with (
+        patch("litellm.acompletion", side_effect=picky),
+        patch("litellm.supports_response_schema", return_value=True),
+    ):
+        out = await _gateway(0).structured(
+            _structured_llm(supports=True), _MSG, _Answer, on_reasoning=_sink
+        )
+
+    assert out.label == "orders"
+    assert len(seen) == 2 and "response_format" not in seen[1]
+
+
+@pytest.mark.asyncio
+async def test_a_provider_that_goes_silent_is_abandoned() -> None:
+    """The request timeout stops applying the moment chunks flow, so the
+    streamed path carries its own guard. It measures *silence*: a model that
+    thinks for two minutes and says so every second is working."""
+
+    thoughts: list[str] = []
+
+    async def collect(piece: str) -> None:
+        thoughts.append(piece)
+
+    async def hangs(**_: Any) -> Any:
+        class _Stalled:
+            def __aiter__(self) -> Any:
+                async def gen() -> Any:
+                    yield _chunk(reasoning="starting to think")
+                    await asyncio.sleep(3)  # far longer than the gateway's timeout
+                    yield _chunk(content='{"label": "too late"}')
+
+                return gen()
+
+        return _Stalled()
+
+    gateway = LiteLLMGateway(timeout_seconds=1, max_retries=0)
+    with patch("litellm.acompletion", side_effect=hangs), pytest.raises(LLMError) as err:
+        await gateway.structured(
+            _structured_llm(supports=False), _MSG, _Answer, on_reasoning=collect
+        )
+
+    # The first chunk was read and forwarded; the guard fired on the silence
+    # after it, not on the call as a whole.
+    assert thoughts == ["starting to think"]
+    assert "sent nothing" in str(err.value.message)

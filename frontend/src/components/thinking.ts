@@ -46,28 +46,42 @@ export function thoughtTime(ms: number): string {
  * when it is smaller — it is the authority on how long the model has been at
  * it, and the panel's own clock is only there to move the number between
  * events.
+ *
+ * **A finished thought is not continued, it is replaced.** More than one node
+ * thinks out loud now — `clarify` judges the question, then `present` writes
+ * the answer — and appending the second to the first would produce one panel
+ * reading "thought for 8s" over the text of two different deliberations, in
+ * which the model appears to change the subject. Each node's thinking is its
+ * own, and the step trail keeps the one durable trace of the earlier ones.
  */
 export function absorbThought(
   prev: ThinkingState | null,
   delta: string,
   elapsedMs: number | undefined,
 ): ThinkingState {
-  const joined = (prev?.text ?? '') + delta
+  const continuing = prev && !prev.done ? prev : null
+  const joined = (continuing?.text ?? '') + delta
   return {
     text: joined.length > REASONING_TAIL_CHARS
       ? joined.slice(-REASONING_TAIL_CHARS)
       : joined,
-    ms: elapsedMs ?? prev?.ms ?? 0,
+    ms: elapsedMs ?? continuing?.ms ?? 0,
     done: false,
   }
 }
 
 /**
- * The first word of the answer has arrived: stop the clock, keep the panel.
+ * The thought is over: stop the clock, keep the panel.
  *
- * How long an answer took to start is part of what happened, so the line stays
- * — collapsed, reading "Thought for 47s" — rather than disappearing at the one
- * moment the reader learns what the wait was for.
+ * Two things end one. The first word of the answer, which is the reader
+ * learning what the wait was for — and the *next step starting*, which is how
+ * a thought that produced no prose ends: `clarify` thinks, decides the question
+ * is answerable, and says nothing at all. Without that second trigger its panel
+ * would sit open with a live clock for the rest of the run, describing a node
+ * that finished.
+ *
+ * How long it took is part of what happened, so the line stays — collapsed,
+ * reading "Thought for 47s" — rather than disappearing.
  */
 export function endThought(prev: ThinkingState | null): ThinkingState | null {
   return prev ? { ...prev, done: true } : prev

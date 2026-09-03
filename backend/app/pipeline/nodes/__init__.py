@@ -773,6 +773,16 @@ async def clarify(state: RunState, deps: NodeDeps) -> NodeResult:
     started = time.perf_counter()
     history_text = _render_history(state.context.history, state.disclosure_policy)
 
+    # Streamed for the reasoning channel, not for the JSON. This node asks a
+    # reasoning model a judgement question and then shows the reader nothing
+    # until it has finished thinking — measured on a real install at eight
+    # seconds typically and thirty-five on a bad day, against a step chip with
+    # no text under it, which is what a hung run looks like. The reply is still
+    # one validated `ClarificationProposal`: `on_reasoning` changes the
+    # transport and nothing else, so the prompt is byte-identical and
+    # `PROMPT_VERSION` does not move.
+    thinking = _Thinking(deps.emit)
+
     try:
         proposal = await deps.llm_gateway.structured(
             deps.llm,
@@ -789,18 +799,28 @@ async def clarify(state: RunState, deps: NodeDeps) -> NodeResult:
                 ),
             ],
             ClarificationProposal,
+            on_reasoning=thinking.add,
         )
     except (LLMError, ValueError) as err:
         log.warning("clarify_failed", run_id=str(state.run_id), error=str(err))
+        await thinking.flush()
         elapsed = int((time.perf_counter() - started) * 1000)
         return NodeResult(
-            detail=f"Clarification check unavailable, after {elapsed}ms — proceeded"
+            detail=(
+                f"Clarification check unavailable, after {elapsed}ms — proceeded"
+                f"{thinking.note()}"
+            )
         )
 
+    # Whatever is still pending goes out before the node's own verdict, so the
+    # last thought is on screen before the step that produced it turns green.
+    await thinking.flush()
     elapsed = int((time.perf_counter() - started) * 1000)
     question = " ".join(proposal.question.split())
     if proposal.answerable or not question:
-        return NodeResult(detail=f"Answerable as asked, in {elapsed}ms")
+        return NodeResult(
+            detail=f"Answerable as asked, in {elapsed}ms{thinking.note()}"
+        )
 
     state.clarification = ClarificationRequest(
         question=question, options=_clean_options(proposal.options)
@@ -811,7 +831,9 @@ async def clarify(state: RunState, deps: NodeDeps) -> NodeResult:
     await deps.emit(
         "CLARIFICATION_REQUESTED", state.clarification.model_dump(mode="json")
     )
-    return NodeResult(status="HALT", detail=f"Asked the user in {elapsed}ms")
+    return NodeResult(
+        status="HALT", detail=f"Asked the user in {elapsed}ms{thinking.note()}"
+    )
 
 
 # ── generate ─────────────────────────────────────────────────────────────

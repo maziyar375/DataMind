@@ -13,6 +13,7 @@ properties matter more than the judgement itself, and each has a test here:
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import timedelta
 from typing import Any
 from uuid import uuid4
@@ -49,17 +50,37 @@ def _state(question: str = "Show me our best customers") -> RunState:
 
 
 class FakeGateway:
-    """Returns a canned proposal, or raises, and records what it was sent."""
+    """Returns a canned proposal, or raises, and records what it was sent.
 
-    def __init__(self, proposal: Any = None, error: Exception | None = None) -> None:
+    `thoughts` is what a reasoning model would have streamed on the way to that
+    proposal. The real gateway forwards each piece to `on_reasoning` as it
+    arrives; this one hands them over before answering, which is the same
+    contract at a coarser grain — the node's job is to pass the sink and flush
+    it, not to pace the provider.
+    """
+
+    def __init__(
+        self,
+        proposal: Any = None,
+        error: Exception | None = None,
+        thoughts: Sequence[str] = (),
+    ) -> None:
         self._proposal = proposal
         self._error = error
+        self._thoughts = list(thoughts)
         self.messages: list[Any] = []
         self.calls = 0
+        self.streamed = False
 
-    async def structured(self, _llm: Any, messages: Any, _schema: Any) -> Any:
+    async def structured(
+        self, _llm: Any, messages: Any, _schema: Any, *, on_reasoning: Any = None
+    ) -> Any:
         self.calls += 1
         self.messages = list(messages)
+        self.streamed = on_reasoning is not None
+        if on_reasoning is not None:
+            for piece in self._thoughts:
+                await on_reasoning(piece)
         if self._error is not None:
             raise self._error
         return self._proposal
@@ -433,3 +454,79 @@ def test_the_prompt_asks_for_options_on_every_question() -> None:
     from app.pipeline.prompts import CLARIFY_SYSTEM
 
     assert "Always give 2-4 options" in CLARIFY_SYSTEM
+
+
+# ── the thinking channel ────────────────────────────────────────────────────
+# Why this node streams a call whose reply is JSON: the JSON is not the reason.
+# `clarify` asks a reasoning model a judgement question, and on the non-streamed
+# transport the whole of that latency — measured on a real install at 8s
+# typically and 35s at the tail — reaches the reader as a spinner with nothing
+# under it, which is indistinguishable from a hung run. The reasoning channel
+# exists only on a streamed request, so this is the only way to have anything
+# true to show.
+
+
+@pytest.mark.asyncio
+async def test_the_reasoning_reaches_the_reader_while_the_model_is_still_thinking() -> None:
+    gateway = FakeGateway(
+        ClarificationProposal(answerable=True, question="", options=[], reasoning=""),
+        thoughts=["Two revenue columns", " — but the layer defines one."],
+    )
+    deps, events = _deps(gateway)
+
+    await clarify(_state(), deps)
+
+    assert gateway.streamed, "clarify must ask for the streamed transport"
+    thoughts = [data["text"] for name, data in events if name == "REASONING_DELTA"]
+    assert "".join(thoughts) == "Two revenue columns — but the layer defines one."
+
+
+@pytest.mark.asyncio
+async def test_the_step_records_how_long_it_thought_because_the_words_are_not_kept() -> None:
+    """`REASONING_DELTA` is never written down, so a reopened thread would show
+    a node that took half a minute and no hint of where it went. The trail keeps
+    the number — the same bargain `present` and `describe` already make."""
+    gateway = FakeGateway(
+        ClarificationProposal(answerable=True, question="", options=[], reasoning=""),
+        thoughts=["thinking"],
+    )
+    deps, _ = _deps(gateway)
+
+    result = await clarify(_state(), deps)
+
+    assert "thought for" in (result.detail or "")
+
+
+@pytest.mark.asyncio
+async def test_a_provider_that_fails_mid_thought_still_shows_what_it_thought() -> None:
+    """Fail-open, and the deltas already emitted are not retracted: the node
+    proceeds to `generate`, and the wait the reader watched is accounted for in
+    the step rather than vanishing with the error."""
+    gateway = FakeGateway(
+        error=LLMError("provider exploded"), thoughts=["halfway through a thought"]
+    )
+    deps, events = _deps(gateway)
+
+    result = await clarify(_state(), deps)
+
+    assert result.status == "OK" and "unavailable" in (result.detail or "")
+    assert "thought for" in (result.detail or "")
+    assert [d["text"] for n, d in events if n == "REASONING_DELTA"] == [
+        "halfway through a thought"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_model_that_does_not_think_out_loud_changes_nothing() -> None:
+    """Most models send no reasoning channel at all. That path must be the one
+    that was there before this existed: no events, and no dangling clause on the
+    step detail."""
+    gateway = FakeGateway(
+        ClarificationProposal(answerable=True, question="", options=[], reasoning="")
+    )
+    deps, events = _deps(gateway)
+
+    result = await clarify(_state(), deps)
+
+    assert not [n for n, _ in events if n == "REASONING_DELTA"]
+    assert "thought for" not in (result.detail or "")

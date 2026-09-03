@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, TypeVar
 
@@ -109,6 +109,12 @@ class EmbeddingCapability:
     reason: str = ""
 
 
+#: Where a streamed structured call sends the model's reasoning as it arrives.
+#: Pieces, not a transcript: the caller decides what to do with each one, and
+#: nothing here keeps them.
+ReasoningSink = Callable[[str], Awaitable[None]]
+
+
 class LLMGateway(Protocol):
     """The model is a text generator, never an actor."""
 
@@ -122,8 +128,19 @@ class LLMGateway(Protocol):
         self, llm: ResolvedLLM, messages: Sequence[ChatMessage]
     ) -> AsyncIterator[StreamChunk]: ...
 
+    # `on_reasoning` asks for the streamed transport and nothing else: same
+    # schema, same validation, same repair. It exists because the reasoning
+    # channel only arrives on a streamed request, so a node that wants to show
+    # a reasoning model thinking has no other way to see it. Implementations
+    # that cannot stream may ignore it — the JSON is what the caller branches
+    # on, and it is unchanged either way.
     async def structured(
-        self, llm: ResolvedLLM, messages: Sequence[ChatMessage], schema: type[T]
+        self,
+        llm: ResolvedLLM,
+        messages: Sequence[ChatMessage],
+        schema: type[T],
+        *,
+        on_reasoning: ReasoningSink | None = None,
     ) -> T: ...
 
     async def probe(self, llm: ResolvedLLM) -> ProviderCapabilities: ...
