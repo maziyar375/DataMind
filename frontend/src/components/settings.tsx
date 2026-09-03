@@ -449,7 +449,16 @@ export function Tabs({
 }: {
   value: string
   onChange: (value: string) => void
-  items: { value: string; label: string; count?: number }[]
+  /**
+   * `leaves` marks a tab that navigates out of its own strip.
+   *
+   * Data sources has exactly one: Knowledge, whose console is a destination
+   * of its own (`/knowledge/:id`) rather than a second copy rendered here.
+   * The tab stays because this is where people look for a connection's store
+   * — but a tab that quietly takes you somewhere else is worse than one that
+   * says it will, so it carries an arrow and says so in its tooltip.
+   */
+  items: { value: string; label: string; count?: number; leaves?: boolean }[]
 }) {
   return (
     <div
@@ -472,6 +481,7 @@ export function Tabs({
             key={item.value}
             onClick={() => onChange(item.value)}
             aria-current={active ? 'true' : undefined}
+            title={item.leaves ? `${item.label} — opens the curation console` : undefined}
             className="rm-tab"
             style={{
               display: 'inline-flex',
@@ -489,6 +499,11 @@ export function Tabs({
             }}
           >
             {item.label}
+            {item.leaves && (
+              <span aria-hidden style={{ display: 'flex', opacity: 0.55 }}>
+                <Icon.ArrowRight size={12} />
+              </span>
+            )}
             {item.count != null && (
               <span
                 style={{

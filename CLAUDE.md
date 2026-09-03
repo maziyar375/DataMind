@@ -383,10 +383,12 @@ frontend/src/
   pages/                    Login, Chat, DataSources, LlmProviders, Users,
                             Dashboards, Reports, Knowledge (`/knowledge` — the
                             curation console promoted out of a connection's
-                            fourth tab; the same `KnowledgeTab` with a
-                            connection picker in front of it, and the rail's
-                            only count badge — red for a flag somebody raised,
-                            amber for a backlog), Account (`/settings` — your own
+                            fourth tab; `KnowledgeTab` behind a connection
+                            picker, reached from the rail or from the Data
+                            sources tab that now points here rather than
+                            rendering a second copy; the rail's only count
+                            badge — red for a flag somebody raised, amber for
+                            a backlog), Account (`/settings` — your own
                             display name and password, the only two things a
                             member may change about themselves; every route
                             under /users is admin-only), About (who built it — the one
@@ -414,6 +416,13 @@ at commit time and shows up as drift a release later. Full tour:
   remount would drop a chat's live stream). A new section is a `NAV` entry and
   a `<Route>`. Unknown paths redirect to `/chat`, and **whatever serves the
   build must return `index.html` for unknown paths.**
+- **Hydrate a form from the row, not from the URL.** A detail page whose form
+  is filled from a list must key that effect on `selected?.id`, never on the id
+  in the path: on a deep link the path has an id before the list has arrived,
+  so a URL-keyed effect fires once against `null`, bails, and leaves a blank
+  form claiming unsaved changes — with the navigation guard then refusing to
+  let anyone leave it. The *id*, not the row: the row is a new object after
+  every list refresh and would re-hydrate over what was typed.
 - **A page asks the shell for what is not its own.** `shell.tsx`:
   `useThemeOverride` (a dashboard pinned to a theme — `App` resolves
   `override ?? the user's choice` and is the only caller of `applyTheme`) and
@@ -433,7 +442,10 @@ at commit time and shows up as drift a release later. Full tour:
   opens **Connection** (host, port, database, user, password, SSL, schema
   allowlist, and the Danger zone) and `/sources/:id/policy` opens **Policy**
   (disclosure, DB comments, taught examples, clarify, conflict checks, row cap,
-  timeout — the set is `POLICY_KEYS` in `DataSourcesPage.tsx`). Each has its
+  timeout — the set is `POLICY_KEYS` in `DataSourcesPage.tsx`). The strip's
+  fifth entry, Knowledge, is a **door**: it navigates to `/knowledge/:id`,
+  where the console actually lives, and `/sources/:id/knowledge` redirects
+  there. Each of the two forms has its
   own dirty state and its own Save, and each Save sends **only its own half**,
   so two people editing two tabs cannot overwrite each other. `Test connection`
   belongs to Connection, which is the only half it probes.

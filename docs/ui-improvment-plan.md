@@ -493,7 +493,7 @@ order unless noted.
 - [x] **F13** Wired: semantic generation, benchmark runs, conflict checks
 - [x] **F5** Cross-connection review/suggestion count badge on the rail
 - [x] **F5** Knowledge console promoted to a top-level route with a filter
-- [x] **F5** Per-connection tab retained as a filtered view of the same screen
+- [x] **F5** Per-connection tab retained as the way in from a connection
 - [x] **F5** Rail-entry decision made with real usage data
 
 > **The step-4 decision: it earns a rail entry.** Not because the queue is
@@ -534,6 +534,34 @@ order unless noted.
 > backlog — `queueTone`, followed by the rail, the rows and the detail chips
 > alike. A mark that cries wolf about a backlog is one people stop looking at,
 > which is the failure this badge exists to prevent.
+>
+> **Step 3 was read too literally, and the console shipped twice.** "Keep the
+> per-connection tab as a filtered view of the same screen" was implemented as
+> the tab rendering its own copy of `KnowledgeTab` — so `/knowledge/:id` and
+> `/sources/:id/knowledge` were byte-identical screens at two addresses, with
+> the *same* scope. A scoped view beside a global one is a sound pattern (a
+> repo's issues, and all your issues); this was not that, because neither view
+> was global — `/knowledge` is a connection picker in front of a
+> per-connection console. It was one screen twice, and the reader paid for it
+> with a "which one do I use?" on every visit.
+>
+> The tab is now a **door**: it stays in the strip with its count and an arrow,
+> and it navigates to `/knowledge/:id` for the connection you are on.
+> `/sources/:id/knowledge` redirects there, so anything already bookmarked
+> still opens the console. Step 3's actual requirement — "a curator working on
+> one database is not forced up a level" — is met by the tab preserving the
+> connection, which the rail entry deliberately does not: the rail is the
+> queue view and opens wherever the work is.
+>
+> The rejected alternative was to make `/knowledge` genuinely cross-connection
+> — one merged queue of flags and suggestions from every connection, with the
+> templates, benchmarks and sweep staying on the tab. It is the better-sounding
+> design and it is wrong here, because it breaks the thing §4.2 of the learning
+> loop's design brief built the console around: *one work list, three sections,
+> one detail pane, so "what should I do next" is never a navigation problem.*
+> Splitting the queue away from the templates reintroduces exactly that
+> problem, and at one or two connections — which is most installs — the merged
+> queue is identical to the per-connection one anyway.
 
 ## Phase 6 — Responsive
 - [x] **F7** `.rm-chats` becomes an overlay drawer below ~700px

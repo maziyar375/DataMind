@@ -879,10 +879,11 @@ place people are *sent* — from a wrong answer, from a flag, from the backlog.
 >
 > So the console is also `/knowledge`, a rail entry with the cross-connection
 > count on it. The first two reasons still hold and nothing about them changed:
-> a template is still scoped to one connection, and the per-connection tab is
-> **still there and still the same screen** — `/knowledge` renders the same
-> `KnowledgeTab` with a connection picker in front of it, so a curator working
-> on one database is not forced up a level. See
+> a template is still scoped to one connection, and the tab is **still in the
+> strip**, where people look for a connection's store. It is a door rather than
+> a second room: it opens `/knowledge/:id` for the connection you are on, so a
+> curator working on one database is not forced up a level and the console
+> exists exactly once. See
 > [ui-improvment-plan.md](ui-improvment-plan.md) Phase 5 for the decision, and
 > [frontend.md §2](frontend.md) for the shape.
 

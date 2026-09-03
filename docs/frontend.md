@@ -31,13 +31,27 @@ which are reached from the rail's footer rather than its list.
 **A section owns the routes under it, and reads them with `useMatch` rather
 than nesting a second `<Routes>`.** `/chat` → `/chat/:conversationId`,
 `/dashboards/:id`, `/reports/:id` and its `/history` and `/runs/:runId`,
-`/sources/:id/:tab` (`connection|policy|schema|semantic|knowledge` — the first
-is the bare `/sources/:id`, and `/sources/new` is the create form),
-`/providers/:id`, `/knowledge/:connectionId`. The switch is inside the page because
+`/sources/:id/:tab` (`connection|policy|schema|semantic` — the first is the
+bare `/sources/:id`, and `/sources/new` is the create form), `/providers/:id`,
+`/knowledge/:connectionId`. `/sources/:id/knowledge` is kept as a **redirect**
+to that last one: the console used to be rendered in both places, and one
+screen at two addresses is a question the reader has to answer on every visit
+for no benefit. The switch is inside the page because
 the page must **stay mounted** across it: remounting a section on every open
 and close would drop a chat's live stream and re-read a list the reader is
 looking at. A `:id` that is not in a list the page has already loaded is
 fetched on its own — a document reached by its own link has no index behind it.
+
+**A page that hydrates a form from a list must key that on the loaded row, not
+on the id in the URL.** The two differ for exactly one arrival, and it is the
+one routing made possible: typing, bookmarking or refreshing `/sources/:id`
+sets the id at mount while the list it has to be found in is still in flight.
+An effect keyed on the URL fires once against a `selected` of `null`, bails,
+and never runs again — so the form stays on its blank defaults, reports unsaved
+changes in every field, and arms the navigation guard against edits nobody
+made. Key it on `selected?.id`: the *id* rather than the row, because the row
+is a fresh object after every list refresh and depending on it would discard
+what the user had typed each time a save reloaded the list.
 
 `createBrowserRouter` rather than `<BrowserRouter>` for one reason:
 `useBlocker` exists only on a data router, and it is what makes the
@@ -131,13 +145,22 @@ console shows neither — the rows carry the per-connection counts, the rail
 carries the total, and the one place *Add a connection* belongs is the empty
 state beside it, where it is the single thing that unblocks the page.
 
-**Knowledge is deliberately not a new screen.** `/knowledge` renders
-`KnowledgeTab` — the same component `/sources/:id/knowledge` renders — with a
-connection picker in front of it. The console it shows was always there; what
-was missing was a way to find it, because a work queue three clicks inside one
-connection's fourth tab cannot ask for attention. So the promotion adds a
-column and a rail badge and changes nothing about the console itself. If the
-two renderings ever disagree, one of them is a bug.
+**Knowledge is one screen with two doors.** `/knowledge/:id` renders
+`KnowledgeTab` — the console that used to be a connection's fourth tab —
+behind a connection picker ordered by how much work each one is waiting on.
+The console was always there; what was missing was a way to find it, because a
+work queue three clicks inside one connection's fourth tab cannot ask for
+attention. So the promotion adds a column and a rail badge and changes nothing
+about the console itself.
+
+The tab **stays in the Data sources strip**, because that is where people look
+for a connection's store — but it is a *door*, not a second room: it navigates
+to `/knowledge/:id` for the connection you are on, and carries an arrow saying
+so (`leaves` on `Tabs`). It rendered its own copy of the console at first, and
+that was wrong. A scoped view beside a global one is a good pattern — a repo's
+issues and all your issues — but both of these had the *same* scope and the
+same content, which is not that pattern; it is one screen twice, and the reader
+pays for it with a "which one do I use?" on every visit.
 
 ### Sub-sections
 
@@ -154,9 +177,10 @@ Dashboards      index (cards│rows) → one board
 Reports         index → outline editor → run viewer → run history
                   outline editor is a workflow: Describe → Structure → Check → Generate
 
-Data sources    master → detail, 5 tabs:
+Data sources    master → detail, 4 tabs and a door:
                   Connection · Policy · Schema (tables│graph) · Semantic layer
-                  · Knowledge; two forms, two Saves, Test on Connection only
+                  · Knowledge → (leaves, to /knowledge/:id)
+                  two forms, two Saves, Test on Connection only
                   semantic detail: Meaning │ Columns │ Metrics
 
 LLM providers   master → detail, one form

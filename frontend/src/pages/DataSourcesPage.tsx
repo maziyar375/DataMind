@@ -49,7 +49,6 @@ import {
   StatusLine, Tabs, UnsavedNote,
 } from '../components/settings'
 import { ListScrim, ListToggle, useListDrawer } from '../components/list-drawer'
-import { KnowledgeTab } from '../components/knowledge'
 import { forConnection } from '../components/knowledge-queue'
 import { SemanticLayerTab } from '../components/semantic'
 import { DATABASE_TYPES } from '../theme/tokens'
@@ -148,7 +147,14 @@ export default function DataSourcesPage() {
     ? (withTab!.params.tab as Tab)
     : 'connection'
   const setTab = useCallback(
-    (next: Tab) => navigate(`/sources/${routeId}/${next}`),
+    // `knowledge` is the one tab that leaves. The console it used to render
+    // here is the console `/knowledge/:id` renders — the same component, the
+    // same connection, the same everything — and two addresses for one screen
+    // is a question ("which one do I use?") the reader has to answer on every
+    // visit for no benefit. It stays in the strip because this is where people
+    // look for a connection's store; it just goes to the one that exists.
+    (next: Tab) =>
+      navigate(next === 'knowledge' ? `/knowledge/${routeId}` : `/sources/${routeId}/${next}`),
     [navigate, routeId],
   )
   const [draft, setDraft] = useState<Record<string, any>>(BLANK)
@@ -265,6 +271,15 @@ export default function DataSourcesPage() {
     releasePolicy()
   }, [releaseConnection, releasePolicy])
 
+  // A typed or bookmarked `/sources/:id/knowledge` is not an error — it is
+  // where this screen used to be. Replace, so Back does not bounce between
+  // the two addresses.
+  useEffect(() => {
+    if (!creating && tab === 'knowledge' && selectedId) {
+      navigate(`/knowledge/${selectedId}`, { replace: true })
+    }
+  }, [creating, tab, selectedId, navigate])
+
   const refresh = useCallback(async () => {
     const items = await api.list()
     setList(items)
@@ -307,7 +322,21 @@ export default function DataSourcesPage() {
       .schema(selected.id)
       .then(setSchema)
       .catch(() => setSchema(null))
-  }, [selectedId])
+    // Keyed on the **loaded row's** id, not on the id in the URL.
+    //
+    // Those differ for exactly one arrival, and it is the one routing made
+    // possible: a deep link. Typing, bookmarking or refreshing
+    // `/{route}/:id` sets the id from the URL at mount, while the list it
+    // has to be looked up in is still in flight — so an effect keyed on the
+    // URL fired once against a `selected` of `null`, bailed, and never ran
+    // again. The form stayed on `BLANK`, showing a blank record, reporting
+    // unsaved changes in every field, and arming the navigation guard against
+    // edits nobody made. Keyed on the row, it hydrates when the row arrives.
+    //
+    // Still the *id* rather than the row itself: `selected` is a fresh object
+    // on every list refresh, and depending on it would re-hydrate the form —
+    // discarding what the user had typed — every time a save reloaded the list.
+  }, [selected?.id])
 
   function startCreate() {
     setSchema(null)
@@ -835,6 +864,10 @@ export default function DataSourcesPage() {
                     value: 'knowledge',
                     label: 'Knowledge',
                     count: selected ? forConnection(queue, selected.id) : undefined,
+                    // Marked as leaving, because it does: a tab that quietly
+                    // navigates out of its own strip is worse than one that
+                    // says it will.
+                    leaves: true,
                   },
                 ]}
               />
@@ -1146,9 +1179,9 @@ export default function DataSourcesPage() {
               />
             )}
 
-            {!creating && tab === 'knowledge' && (
-              <KnowledgeTab key={selected!.id} connection={selected!} />
-            )}
+            {/* No `tab === 'knowledge'` branch: the effect above has already
+                sent this address to `/knowledge/:id`, which is where the
+                console lives. */}
           </>
         )}
       </div>

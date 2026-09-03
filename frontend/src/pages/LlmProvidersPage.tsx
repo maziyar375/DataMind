@@ -183,7 +183,21 @@ export default function LlmProvidersPage() {
       temperature: selected.temperature,
       max_tokens: selected.max_tokens,
     })
-  }, [selectedId])
+    // Keyed on the **loaded row's** id, not on the id in the URL.
+    //
+    // Those differ for exactly one arrival, and it is the one routing made
+    // possible: a deep link. Typing, bookmarking or refreshing
+    // `/{route}/:id` sets the id from the URL at mount, while the list it
+    // has to be looked up in is still in flight — so an effect keyed on the
+    // URL fired once against a `selected` of `null`, bailed, and never ran
+    // again. The form stayed on `BLANK`, showing a blank record, reporting
+    // unsaved changes in every field, and arming the navigation guard against
+    // edits nobody made. Keyed on the row, it hydrates when the row arrives.
+    //
+    // Still the *id* rather than the row itself: `selected` is a fresh object
+    // on every list refresh, and depending on it would re-hydrate the form —
+    // discarding what the user had typed — every time a save reloaded the list.
+  }, [selected?.id])
 
   function startCreate() {
     setDraft(BLANK)
