@@ -214,7 +214,10 @@ tile shell, scheduler), [`tile-editor.tsx`](../frontend/src/components/tile-edit
 
 **Index → open.** A searchable, sortable index of cards or rows — filterable by
 status, since archiving is otherwise a verb with nowhere for the result to go.
-Then one dashboard filling the page.
+Then one dashboard filling the page, at `/dashboards/:id`, with the tile editor
+at `/dashboards/:id/tiles/new` and `…/tiles/:tileId` under it. The section stays
+mounted across all three: opening a tile must not reload the board it is being
+placed on, and a refresh has to come back to the tile.
 
 **View mode vs edit mode.** The header's *Edit grid* toggle governs the
 **layout** only — drag, resize, add, the inline name. A tile's own
@@ -272,8 +275,14 @@ Rates: `Manual / 15s / 30s / 1m / 5m / 15m / 1h / 6h / 24h`, plus "inherit".
 
 ### The tile editor
 
-One modal, two tabs over **one shared SQL textarea** — the tab chooses how the
-text got there, not what happens to it afterwards. The debounced guard check
+**A drawer beside the grid, at its own URL** — `/dashboards/:id/tiles/new` and
+`…/tiles/:tileId`. It was an 880px modal, which hid the one thing an author is
+placing a tile *among*; as a drawer the board stays on screen and stays live,
+and a half-written tile survives a refresh. It is deliberately not modal: no
+scrim, no scroll lock, no focus trap (`Drawer` in `ui.tsx`, beside `Modal`).
+
+Two tabs over **one shared SQL textarea** — the tab chooses how the text got
+there, not what happens to it afterwards. The debounced guard check
 watches the textarea whatever put text in it, so editing what the model wrote
 is checked exactly like typing it yourself.
 
@@ -333,9 +342,29 @@ properties keep it safe:
   default from "hide anything not on the list", and the one that cannot lose
   data. A configured column the result loses is greyed rather than deleted.
 
+Two things a *reader* does sit on top of that, in the same module and under the
+same rule — **neither re-runs the query**:
+
+- **Clicking a heading sorts.** Ascending → descending → back to the stored
+  order, with `aria-sort` on the header cell. The author's default sort is not
+  overwritten; the reader's choice layers over it and dies with the page. A
+  tile whose stored sort a reader could silently replace is a tile that shows
+  two people different things.
+- **Downloading gives CSV.** The *resolved* column config — hidden columns
+  gone, columns in the author's order, headers relabelled — over the **raw**
+  values rather than the formatted ones, because a currency-formatted string is
+  not a number to a spreadsheet. RFC 4180 quoting, a UTF-8 BOM so Excel reads
+  Persian correctly, and a leading apostrophe on any value starting `=`, `+`,
+  `@` or a control character, which is the spreadsheet formula-injection guard.
+
 Rules live in [`table-format.ts`](../frontend/src/components/table-format.ts),
 DOM-free for the same reason as the scheduler: every way they can be wrong is
 quiet. `npm run test:format`.
+
+Past ~200 rows only the visible window is rendered, with spacer rows holding the
+scroll height. That is a rendering decision and nothing else: the rows are
+already in memory, the sort and the CSV both see all of them, and no request is
+made.
 
 > **Hiding a column hides it; it does not withhold it.** The value is in the
 > payload that reached the browser. Anything that must not be sent belongs to
@@ -401,14 +430,23 @@ Worth knowing what a few of them pin:
 
 ## 10. Not built
 
-Filters, sharing, "add to dashboard" from a chat run, and scheduled
-server-side warm refresh. (Export and import are built — §11.)
+Filters, sharing, and scheduled server-side warm refresh. (Export and import
+are built — §11.)
 
-"Add to dashboard" is the cheapest of these — a succeeded run already has
-validated SQL, a connection and a chart spec to copy into a tile. It was left
-out so the dashboard would stand on its own: a user who never opens chat still
-builds one, and promotion is a shortcut on top of a feature that has to exist
-first.
+**"Add to dashboard" from a chat run is built.** It was left out first so the
+dashboard would stand on its own — a user who never opens chat still builds one
+— and promotion is a shortcut on top of a feature that has to exist first. That
+feature exists, so the shortcut is here: the answer's action row picks a board
+and opens the tile editor at `/dashboards/:id/tiles/new` with
+`{ question, sql, connectionId, chartConfig }` in route state.
+
+Nothing about the tile path is special-cased for it. The prefilled statement is
+checked by the same `POST /sql/drafts/validate` a typed one is, saved through
+the same route, and re-guarded on every refresh; `sql_origin` records
+`GENERATED`, because a model did write it, and that is provenance rather than
+trust. **No model call and no re-execution happen on the way**: the SQL that
+lands is the SQL that ran, which is the whole point — a tile built by retyping
+the question is a tile whose query nobody approved.
 
 ## 11. Moving a dashboard: export and import
 

@@ -10,7 +10,14 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    SecretStr,
+    field_validator,
+)
 
 # The one place that knows what an outline can be asked for. Imported rather
 # than restated so the range the API rejects and the range the prompt honours
@@ -40,6 +47,48 @@ class MeResponse(BaseModel):
     email: str
     display_name: str
     role: str
+
+
+class ProfileUpdate(BaseModel):
+    """What a signed-in person may change about themselves.
+
+    One field, and the omissions are the design. Email is the login
+    identifier and stays with the administrator who issued it; role and
+    status are the two things a member must never be able to grant
+    themselves, and a schema that cannot express them cannot be tricked
+    into applying them.
+    """
+
+    display_name: str = Field(min_length=1, max_length=200)
+
+    @field_validator("display_name")
+    @classmethod
+    def _not_only_whitespace(cls, value: str) -> str:
+        """`min_length` counts spaces; the sidebar does not.
+
+        Trimming in the route instead would accept `"   "`, store `""`, and
+        erase the account from the rail that shows it — a 200 that deletes
+        your own name. So the trim happens here, where the empty result is
+        still a rejected request.
+        """
+        trimmed = value.strip()
+        if not trimmed:
+            raise ValueError("A display name cannot be blank.")
+        return trimmed
+
+
+class ChangePasswordRequest(BaseModel):
+    """A member rotating their own password.
+
+    `current_password` is what separates this from the admin path: proof of
+    possession, so a borrowed session cannot lock the owner out of their own
+    account. The floor on the new one is `AdminSetPasswordRequest`'s, because
+    two different minimum lengths for one password field is a policy nobody
+    can state.
+    """
+
+    current_password: SecretStr
+    new_password: SecretStr = Field(min_length=8, max_length=200)
 
 
 # ── users ────────────────────────────────────────────────────────────────

@@ -306,7 +306,7 @@ code, pre, .mono {
    on them, and it is gone the moment content arrives. That is what the
    signed-out screen, the empty chat and `.rm-emptyfield` have in common; it
    is why a populated index gets a plain accent wash instead
-   (`.rm-dash-index`), and why the transient "Nothing matches" states get
+   (`.rm-index`), and why the transient "Nothing matches" states get
    nothing at all — texture that flashes in and out under a search field is
    noise, and a filter that found nothing is not a moment to decorate. */
 :root {
@@ -594,8 +594,10 @@ code, pre, .mono {
 }
 .rm-send-btn.is-running {
   animation: rm-run-ring 1.9s ease-in-out infinite;
-  /* The pill is wider than the disc it replaces, and the composer's row is
-     `align-items: flex-end`, so without this the swap moves the text box. */
+  /* No lift while running: the hover transform on a button someone is aiming
+     at to *stop* something should not move it. (It also used to stop a wider
+     stop-pill from nudging the composer row, which is `align-items:
+     flex-end` — the pill is gone and the disc is one size in both modes.) */
   transform: none;
 }
 .rm-send-btn.is-running:hover:not(:disabled) {
@@ -745,10 +747,10 @@ code, pre, .mono {
    it), so the card itself carries the affordance — pointer, lift, and a
    border that warms on approach.
 
-   The index chrome below and around it — .rm-dash-index, .rm-dash-toolbar,
+   The index chrome below and around it — .rm-index, .rm-dash-toolbar,
    .rm-search, .rm-seg, .rm-toolbar-select, .rm-bone — is shared with the
-   Reports index, which is the same kind of page. The `dash` in those names is
-   where they were written, not who may use them. */
+   Reports index, which is the same kind of page. The `dash` still in those
+   names is where they were written, not who may use them. */
 .rm-dash-card {
   cursor: pointer;
   border: 1px solid var(--border);
@@ -841,6 +843,10 @@ code, pre, .mono {
   .rm-theme { flex-direction: column; }
   .rm-theme button { justify-content: center; padding: 7px; }
   .rm-sidebar-user { flex-direction: column; align-items: center; gap: 8px; }
+  /* On the 66px rail the name is hidden with every other label, so the
+     button is the avatar and nothing else — it must stop growing to fill a
+     column it no longer has anything to fill. */
+  .rm-sidebar-me { flex: 0 0 auto; justify-content: center; }
   .rm-sidebar-logout { margin-left: 0 !important; }
 }
 
@@ -854,6 +860,20 @@ code, pre, .mono {
     border-left: 1px solid var(--border-strong);
     box-shadow: -18px 0 50px rgba(0, 0, 0, 0.4);
   }
+  /* The tile editor is a form, not a settings list: at floating width its
+     two-column rows have ~150px a side, which is a select showing four
+     characters. It gets the same stacking the 640px rule gives every other
+     form, one breakpoint earlier, because the drawer narrows before the page
+     does. !important because the columns are declared inline. */
+  .rm-tile-drawer .rm-col-2 { grid-template-columns: 1fr !important; }
+}
+
+/* Wider than the settings drawer because it is a working surface rather than
+   a list of switches — but still a third of a laptop screen, so the grid it is
+   placing a tile on stays readable beside it. */
+.rm-tile-drawer { width: min(520px, 42vw) !important; }
+@media (max-width: 900px) {
+  .rm-tile-drawer { width: min(420px, 92vw) !important; }
 }
 
 @media (max-width: 640px) {
@@ -950,13 +970,15 @@ code, pre, .mono {
   .rm-bone { background: var(--panel-alt); animation: none; }
 }
 
-/* ── the dashboards index ───────────────────────────────────────────────
-   The one screen in the app that had no treatment at all, while the welcome
-   and auth screens carried grids and orbs. A single restrained wash at the
-   top, in the theme's own accent, so the page reads as a place rather than a
-   container — and nothing behind the cards, which hold data. */
-.rm-dash-index { position: relative; isolation: isolate; }
-.rm-dash-index::before {
+/* ── the index pages ────────────────────────────────────────────────────
+   Written for the dashboards index — the one screen in the app that had no
+   treatment at all, while the welcome and auth screens carried grids and orbs
+   — and now worn by all three, which is why the name says index rather than
+   dashboards. A single restrained wash at the top, in the theme's own accent,
+   so the page reads as a place rather than a container — and nothing behind
+   the cards, which hold data. */
+.rm-index { position: relative; isolation: isolate; }
+.rm-index::before {
   content: '';
   position: absolute;
   inset: 0 0 auto;
@@ -1990,6 +2012,31 @@ code, pre, .mono {
   border-top: 1px solid var(--border);
 }
 
+/* The name and avatar, now the way into the account screen. It is drawn as
+   the quietest possible button — no fill, no border, only a warm ground on
+   approach — because it is still primarily a label saying who you are. The
+   sign-out icon stays a separate button beside it: leaving and editing are
+   two intentions, and a single target for both is how people sign out by
+   accident. */
+.rm-sidebar-me {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1;
+  min-width: 0;
+  padding: 4px 5px;
+  margin: -4px -5px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.rm-sidebar-me:hover { background: var(--panel-hover); }
+.rm-sidebar-me.is-on { background: var(--accent-bg); }
+
 /* ── the chat list ────────────────────────────────────────────────────────
    The third list in the product that answers "which one am I on", after the
    nav rail and the settings index, and it now says so the same way: warm on
@@ -2160,6 +2207,21 @@ code, pre, .mono {
 .rm-tab { transition: color .12s ease, background .12s ease; }
 .rm-tab:hover { color: var(--text-strong); }
 
+/* The way into a setup step. Underlined on approach rather than always, so
+   four of them in a column do not read as a paragraph of links. */
+.rm-step-go:hover { text-decoration: underline; }
+
+/* A result table's headings are controls: click to sort, click again to
+   reverse, once more to give the table's own ordering back. The mark is drawn
+   at every heading and only *shown* where the pointer is or where the sort
+   actually is — a column of permanent arrows reads as decoration, and a
+   heading with no arrow at all never gets clicked. */
+.rm-th-sort .rm-sort-glyph { opacity: 0; transition: opacity .12s ease; }
+.rm-th-sort:hover .rm-sort-glyph,
+.rm-th-sort:focus-visible .rm-sort-glyph { opacity: 0.5; }
+.rm-th-sort .rm-sort-glyph.is-on { opacity: 1; color: var(--accent); }
+.rm-th-sort:hover { color: var(--text-strong); }
+
 /* A schema table, which is a disclosure rather than a link: it fills on
    approach instead of lifting, the way the dense dashboard rows do. */
 .rm-table-card {
@@ -2168,6 +2230,28 @@ code, pre, .mono {
 }
 .rm-table-card:hover { border-color: var(--border-strong); }
 .rm-table-card > button:hover { background: var(--panel-hover); }
+
+/* The skip link: nowhere until it is focused, then the first thing on screen.
+   It is drawn like the app's own primary action rather than as a browser
+   default, because for the one person who uses it it is a real control.
+   `.rm-app-view` takes focus as its target and must not draw a ring for it —
+   the eye is already going where the link sent it. */
+.rm-skip {
+  position: absolute;
+  top: 10px;
+  left: -9999px;
+  z-index: 200;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--on-accent);
+  background: var(--accent);
+  border-radius: 9px;
+  text-decoration: none;
+  box-shadow: 0 12px 30px -12px rgba(0, 0, 0, 0.55);
+}
+.rm-skip:focus { left: 10px; }
+.rm-app-view:focus { outline: none; }
 
 /* Visually hidden, still read aloud. Used where a colour carries a status and
    the words behind it must survive for anyone who cannot see it. */
@@ -2186,7 +2270,7 @@ code, pre, .mono {
 
 /* ── the people index ─────────────────────────────────────────────────────
    Users is the third index page, so it borrows the second one's furniture
-   (.rm-dash-index, .rm-dash-row, .rm-dash-toolbar). It is a list and only a
+   (.rm-index, .rm-dash-row, .rm-dash-toolbar). It is a list and only a
    list — a person has no face to put on a card, just a name, an address, a
    role, a state and a date, which is a line.
 
@@ -2757,4 +2841,226 @@ code, pre, .mono {
 .rm-think-body[data-faded='true'] {
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18px);
   mask-image: linear-gradient(to bottom, transparent 0, #000 18px);
+}
+
+/* The rail's one count. It sits at the end of the row on the wide rail and
+   rides the glyph's corner on the 66px one, where the label it belonged
+   beside is hidden — a number floating in the middle of an icon strip reads
+   as part of the icon. Not the accent: this is work waiting, not the page you
+   are on, and the accent already means "here". Red is reserved for a flag
+   somebody raised on a wrong answer; a backlog of unanswered questions is
+   `.is-amber`, because a mark that cries wolf about a backlog is one people
+   stop looking at. */
+.rm-nav-badge {
+  margin-left: auto;
+  flex-shrink: 0;
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: 20px;
+  background: var(--red-bg);
+  color: var(--red);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.5;
+  text-align: center;
+}
+.rm-nav-badge.is-amber { background: var(--amber-bg); color: var(--amber); }
+
+@media (max-width: 860px) {
+  .rm-sidebar .rm-nav-btn { position: relative; }
+  .rm-nav-badge {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    margin-left: 0;
+    min-width: 0;
+    padding: 1px 4px;
+    font-size: 9.5px;
+    border: 1px solid var(--sidebar-bg);
+  }
+}
+
+/* ── the notification surface ─────────────────────────────────────────────
+   Bottom-right, over everything except a modal, and never in the way of the
+   thing being read: the stack is capped at three in `App`, and each card is
+   its own row so a long body pushes nothing sideways.
+
+   `pointer-events: none` on the container with `auto` on the cards is what
+   keeps the empty column above the stack from swallowing clicks meant for
+   the page — a full-height fixed layer is invisible right up until somebody
+   cannot press a button under it. */
+.rm-notices {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(360px, calc(100vw - 36px));
+  pointer-events: none;
+}
+
+.rm-notice {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 12px 12px 13px;
+  border: 1px solid var(--border);
+  /* The tone is a rail, not a fill: a green card and a red card at this size
+     read as two different components rather than two states of one. */
+  border-left: 3px solid var(--rm-notice-tone, var(--border));
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  animation: rm-notice-in 0.18s ease-out;
+}
+
+@keyframes rm-notice-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* The global reduced-motion opt-out already zeroes durations; this keeps the
+   card from arriving displaced when it does. */
+@media (prefers-reduced-motion: reduce) {
+  .rm-notice { animation: none; }
+}
+
+/* Nothing that announces itself belongs on paper. */
+@media print {
+  .rm-notices { display: none !important; }
+}
+
+/* ── the second column, below 700px ───────────────────────────────────────
+   Every working page here is a list beside a thing. The rail collapses to
+   66px at 860px, but the *second* column did not give ground with it, so on a
+   375px screen about a hundred pixels were left for the transcript, the form
+   or the report — not cramped, unusable.
+
+   So below 700px the list becomes an overlay in the same treatment
+   `.rm-drawer` gives the dashboard's settings panel, sitting beside the rail
+   rather than over it: the rail is how you leave the page, and covering it
+   would make the drawer a trap. `!important` throughout because both columns
+   declare their width and layout inline.
+
+   The toggle exists at exactly the widths the drawer does, which is why the
+   two rules are written together — a button that opens what is already open
+   is furniture, and the pair drifting apart is how that happens. */
+.rm-list-toggle { display: none; }
+
+@media (max-width: 700px) {
+  .rm-list-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text-dim);
+    cursor: pointer;
+  }
+  .rm-list-toggle:hover { background: var(--panel-hover); color: var(--text); }
+  .rm-list-toggle[aria-expanded='true'] {
+    background: var(--accent-bg);
+    border-color: var(--accent-border, var(--border));
+    color: var(--accent);
+  }
+
+  .rm-chats,
+  .rm-master {
+    position: fixed !important;
+    top: 0;
+    bottom: 0;
+    /* Beside the collapsed rail, never over it. */
+    left: 66px;
+    z-index: 55;
+    width: min(280px, calc(100vw - 76px)) !important;
+    border-right: 1px solid var(--border-strong) !important;
+    box-shadow: 18px 0 50px rgba(0, 0, 0, 0.4);
+    transform: translateX(calc(-100% - 70px));
+    transition: transform 0.18s ease;
+  }
+  .rm-chats.is-open,
+  .rm-master.is-open { transform: none; }
+
+  .rm-list-scrim {
+    position: fixed;
+    inset: 0 0 0 66px;
+    z-index: 50;
+    background: rgba(0, 0, 0, 0.45);
+  }
+
+  /* The detail header stops being a row of chips and a title on one line:
+     at this width the record's name and its Save button both matter, and
+     the header is the only place either of them lives. */
+  .rm-detail-header { padding: 12px 14px !important; gap: 10px !important; }
+  .rm-dash-header { flex-wrap: wrap; }
+
+  /* The chat header's two pickers move onto their own line and share it.
+     `width` is declared inline on each trigger (232px and 190px, so they do
+     not jump width as the choice changes) — a promise worth keeping on a
+     laptop and impossible to keep on a phone, where together they are wider
+     than the screen. */
+  .rm-chat-header { flex-wrap: wrap; padding: 10px 14px !important; gap: 10px !important; }
+  .rm-chat-pickers { width: 100%; margin-left: 0 !important; }
+  .rm-chat-pickers .rm-picker { flex: 1 1 0; min-width: 0; }
+  .rm-chat-pickers .rm-picker > button { width: 100% !important; }
+
+  /* Five tabs are wider than a phone. Scrolled, not wrapped: a tab strip on
+     two lines stops reading as one strip, and the scrollbar is hidden
+     because the tabs themselves are the affordance. */
+  .rm-tabs {
+    padding: 0 14px !important;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .rm-tabs::-webkit-scrollbar { display: none; }
+  .rm-tab { white-space: nowrap; }
+
+  .rm-detail-pane .rm-page-pad,
+  .rm-index.rm-page-pad { padding: 16px 14px; }
+
+  /* The dashboard toolbar keeps its shape and loses its labels. The group is
+     one segmented switch — wrapping it onto two lines would stop it reading
+     as one control, and shrinking the caps clips the last verb off the edge —
+     so below this width the verbs go and the glyphs stand in, which is the
+     same trade the rail makes at 860px. Present / Edit grid / Settings are
+     the three modes of this screen and all three must stay reachable. */
+  .rm-toolgroup button { padding: 6px 8px !important; }
+  /* Visually hidden rather than `display: none`: these labels *are* the
+     buttons' accessible names, and removing them from the tree would leave
+     three unlabelled glyphs on the screen where a label matters most. Same
+     technique as `.rm-sr`, applied only at this width. */
+  .rm-toolgroup-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  /* Host / Port / Database at ~85px a column is a port field showing three
+     of five digits. !important because the columns are declared inline. */
+  .rm-fieldrow { grid-template-columns: 1fr !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rm-chats, .rm-master { transition: none; }
+}
+
+/* On paper there is no viewport, so there is no off-canvas either. */
+@media print {
+  .rm-list-toggle, .rm-list-scrim { display: none !important; }
 }

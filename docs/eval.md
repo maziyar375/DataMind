@@ -512,7 +512,7 @@ architecturally separate on purpose.
 | Tables | `eval_runs` / `eval_results` | `benchmark_sets` / `benchmark_runs` / `benchmark_results` |
 | Questions | `app/eval/suites/*.json`, **frozen**, in the repo | a customer's own taught questions, on their connection |
 | Database | a testcontainers fixture the harness owns | the customer's, read-only |
-| Run by | `python -m app.eval.runner` | `app/workers/benchmark.py`, from the Knowledge tab |
+| Run by | `python -m app.eval.runner` | `app/workers/benchmark.py`, from the knowledge console — the connection's Knowledge tab or `/knowledge`, which render the same component |
 | Purpose | did *this change* help | is *this deployment* accurate |
 
 MVP2 Part 5's meta-rule is why: *"the customer-facing instrument and the frozen

@@ -35,7 +35,9 @@
  * graph is the reason schema sync records foreign keys at all.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useMatch, useNavigate } from 'react-router-dom'
 import { connections as api } from '../api/client'
+import { useQueue, useUnsavedWork } from '../shell'
 import type { Connection, SchemaSnapshot, SchemaTable, TestResult } from '../api/types'
 import {
   Chip, DangerButton, DisclosureBadge, EmptyState, ErrorNote, Field, GhostButton,
@@ -46,7 +48,8 @@ import {
   DetailBody, DetailHeader, FieldRow, MasterColumn, MasterItem, Section,
   StatusLine, Tabs, UnsavedNote,
 } from '../components/settings'
-import { KnowledgeTab } from '../components/knowledge'
+import { ListScrim, ListToggle, useListDrawer } from '../components/list-drawer'
+import { forConnection } from '../components/knowledge-queue'
 import { SemanticLayerTab } from '../components/semantic'
 import { DATABASE_TYPES } from '../theme/tokens'
 
@@ -79,25 +82,94 @@ const BLANK = {
   knowledge_examples_enabled: false,
 }
 
+/**
+ * The detail pane's tabs, and the segment each one is written as.
+ *
+ * `settings` was one tab holding two unrelated things: the credentials that
+ * reach the database, and the rules about what may be sent to a model. They
+ * are edited by different people on different days — nobody rotates a
+ * password because the disclosure policy changed — and one Save button over
+ * both meant every policy change opened a form containing a password field.
+ * So they are two tabs with two Save buttons, and `Test connection` follows
+ * the half it actually probes.
+ *
+ * `/sources/:id/settings` is not redirected: an unknown segment already reads
+ * as the pane's front door, which now is Connection — the half that old link
+ * most likely meant.
+ */
+const TABS = ['connection', 'policy', 'schema', 'semantic', 'knowledge'] as const
+type Tab = (typeof TABS)[number]
+
+/**
+ * Which draft fields belong to Policy. Everything else is Connection.
+ *
+ * Named as the *smaller* half deliberately. A field added to `BLANK` later
+ * and forgotten here lands on Connection, where it is visible and saveable;
+ * listing the connection fields instead would leave a forgotten field on
+ * neither tab and saveable from nowhere. That is the same failure a
+ * hand-written list produced once already, when `clarify_enabled` was missing
+ * from the dirty check.
+ */
+const POLICY_KEYS = new Set([
+  'disclosure_policy',
+  'clarify_enabled',
+  'include_db_comments',
+  'knowledge_examples_enabled',
+  'conflict_checks_enabled',
+  'max_rows',
+  'statement_timeout_ms',
+])
+
 export default function DataSourcesPage() {
   const [list, setList] = useState<Connection[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('')
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  // Which connection, and which of its tabs — both in the URL, so a colleague
+  // asking "where do I set the disclosure policy?" can be sent the tab rather
+  // than told how to reach it. `/sources/new` is the create form: it is a
+  // state of this screen like any other, and it has an address like any other.
+  const navigate = useNavigate()
+  // Below 700px the index is an overlay; above it this does nothing.
+  const listDrawer = useListDrawer()
+  const withTab = useMatch('/sources/:id/:tab')
+  const plain = useMatch('/sources/:id')
+  const routeId = withTab?.params.id ?? plain?.params.id ?? null
+  const creating = routeId === 'new'
+  const selectedId = creating ? null : routeId
+  const setSelectedId = useCallback(
+    (id: string | null, { replace = false } = {}) =>
+      navigate(id ? `/sources/${id}` : '/sources', { replace }),
+    [navigate],
+  )
+  // An unknown tab is not an error worth a screen — it reads as the page's
+  // front door, which is what a mistyped or renamed segment most likely meant.
+  const tab: Tab = TABS.includes(withTab?.params.tab as Tab)
+    ? (withTab!.params.tab as Tab)
+    : 'connection'
+  const setTab = useCallback(
+    // `knowledge` is the one tab that leaves. The console it used to render
+    // here is the console `/knowledge/:id` renders — the same component, the
+    // same connection, the same everything — and two addresses for one screen
+    // is a question ("which one do I use?") the reader has to answer on every
+    // visit for no benefit. It stays in the strip because this is where people
+    // look for a connection's store; it just goes to the one that exists.
+    (next: Tab) =>
+      navigate(next === 'knowledge' ? `/knowledge/${routeId}` : `/sources/${routeId}/${next}`),
+    [navigate, routeId],
+  )
   const [draft, setDraft] = useState<Record<string, any>>(BLANK)
   const [password, setPassword] = useState('')
-  const [creating, setCreating] = useState(false)
   const [schema, setSchema] = useState<SchemaSnapshot | null>(null)
-  const [tab, setTab] = useState<'settings' | 'schema' | 'semantic' | 'knowledge'>(
-    'settings',
-  )
   const [schemaView, setSchemaView] = useState<'tables' | 'graph'>('tables')
   const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<TestResult | null>(null)
   const [syncing, setSyncing] = useState(false)
-  const [saving, setSaving] = useState(false)
+  // Which Save is in flight, not merely whether one is: two tabs have two
+  // buttons, and a boolean would spin both.
+  const [saving, setSaving] = useState<'connection' | 'policy' | null>(null)
+  const { rows: queue } = useQueue()
   const [error, setError] = useState<string | null>(null)
 
   const selected = useMemo(
@@ -122,39 +194,101 @@ export default function DataSourcesPage() {
     )
   }, [selected, draft, password])
 
-  // True when the form differs from the saved row in *any* field — the
-  // question "is there anything to save?", which is broader than `isDirty`
-  // above and must stay that way: that one answers "would a probe behave
-  // differently?" and deliberately ignores the row cap and disclosure policy.
+  // *Which* fields differ from the saved row — the raw material both Save
+  // buttons are derived from, and broader than `isDirty` above, which must
+  // stay that way: that one answers "would a probe behave differently?" and
+  // deliberately ignores the row cap and the disclosure policy.
   //
   // Derived from the draft's own keys rather than a written-out list, because
   // a hand-maintained one silently omits every field added after it — the
   // reason `clarify_enabled` would have been missed here.
-  const hasChanges = useMemo(() => {
-    if (creating) return true      // nothing saved yet to differ from
-    if (!selected) return false
-    if (password !== '') return true
+  const changed = useMemo(() => {
+    if (creating || !selected) return new Set<string>()
     const saved = selected as unknown as Record<string, unknown>
-    return Object.keys(draft).some((key) => {
-      // The draft hydrates a null `ssl_mode` as 'require' (the Select has no
-      // empty option), so compare through the same lens or a form that was
-      // only just opened reads as edited.
-      const a = key === 'ssl_mode' ? (draft[key] ?? 'require') : draft[key]
-      const b = key === 'ssl_mode' ? (saved[key] ?? 'require') : saved[key]
-      if (Array.isArray(a) || Array.isArray(b)) {
-        return JSON.stringify(a ?? []) !== JSON.stringify(b ?? [])
-      }
-      if (typeof b === 'number') return Number(a) !== b
-      return (a ?? null) !== (b ?? null)
-    })
-  }, [creating, selected, draft, password])
+    return new Set(
+      Object.keys(draft).filter((key) => {
+        // The draft hydrates a null `ssl_mode` as 'require' (the Select has no
+        // empty option), so compare through the same lens or a form that was
+        // only just opened reads as edited.
+        const a = key === 'ssl_mode' ? (draft[key] ?? 'require') : draft[key]
+        const b = key === 'ssl_mode' ? (saved[key] ?? 'require') : saved[key]
+        if (Array.isArray(a) || Array.isArray(b)) {
+          return JSON.stringify(a ?? []) !== JSON.stringify(b ?? [])
+        }
+        if (typeof b === 'number') return Number(a) !== b
+        return (a ?? null) !== (b ?? null)
+      }),
+    )
+  }, [creating, selected, draft])
+
+  // One question per Save button. A typed password counts as a connection
+  // change, since a blank field means "keep the stored one" — see test().
+  const connectionChanges =
+    creating
+    || password !== ''
+    || [...changed].some((key) => !POLICY_KEYS.has(key))
+  const policyChanges = [...changed].some((key) => POLICY_KEYS.has(key))
+
+  // What the navigation guard stops for. A brand-new form counts only once
+  // something has been typed into it: `hasChanges` is true from the moment
+  // Add is clicked (there is nothing saved to differ from), and asking someone
+  // to confirm the loss of a form they have not filled in is how a guard
+  // becomes a thing people click through without reading.
+  const touchedNew = useMemo(
+    () =>
+      creating
+      && (password !== ''
+        || Object.keys(BLANK).some(
+          (key) => JSON.stringify(draft[key]) !== JSON.stringify((BLANK as Record<string, unknown>)[key]),
+        )),
+    [creating, draft, password],
+  )
+  // Two registrations, because there are two forms — and both are scoped to
+  // this record's own address, so moving between its tabs is not stopped. The
+  // draft outlives a tab switch (it is keyed on the connection, not the tab),
+  // so there is nothing to lose in that direction, and a dialog that fires
+  // when nothing is at stake is one people learn to dismiss unread.
+  const recordPath = creating ? '/sources/new' : selected ? `/sources/${selected.id}` : undefined
+  const named = selected?.name ?? 'this connection'
+  const releaseConnection = useUnsavedWork(
+    'connection-identity',
+    creating
+      ? (touchedNew ? 'This new connection has not been saved yet.' : null)
+      : (connectionChanges
+        ? `The connection details for “${named}” have not been saved.`
+        : null),
+    recordPath,
+  )
+  const releasePolicy = useUnsavedWork(
+    'connection-policy',
+    !creating && policyChanges
+      ? `The policy for “${named}” has not been saved.`
+      : null,
+    recordPath,
+  )
+  const releaseUnsaved = useCallback(() => {
+    releaseConnection()
+    releasePolicy()
+  }, [releaseConnection, releasePolicy])
+
+  // A typed or bookmarked `/sources/:id/knowledge` is not an error — it is
+  // where this screen used to be. Replace, so Back does not bounce between
+  // the two addresses.
+  useEffect(() => {
+    if (!creating && tab === 'knowledge' && selectedId) {
+      navigate(`/knowledge/${selectedId}`, { replace: true })
+    }
+  }, [creating, tab, selectedId, navigate])
 
   const refresh = useCallback(async () => {
     const items = await api.list()
     setList(items)
-    if (!selectedId && items.length > 0) setSelectedId(items[0].id)
+    // Landing on `/sources` opens the first connection, which is what this
+    // screen has always done — as a redirect now, so the address bar says
+    // which one is open and a refresh returns to it.
+    if (!routeId && items.length > 0) setSelectedId(items[0].id, { replace: true })
     return items
-  }, [selectedId])
+  }, [routeId, setSelectedId])
 
   useEffect(() => {
     refresh()
@@ -164,7 +298,6 @@ export default function DataSourcesPage() {
 
   useEffect(() => {
     if (!selected) return
-    setCreating(false)
     setPassword('')
     setTestResult(null)
     setError(null)
@@ -189,39 +322,67 @@ export default function DataSourcesPage() {
       .schema(selected.id)
       .then(setSchema)
       .catch(() => setSchema(null))
-  }, [selectedId])
+    // Keyed on the **loaded row's** id, not on the id in the URL.
+    //
+    // Those differ for exactly one arrival, and it is the one routing made
+    // possible: a deep link. Typing, bookmarking or refreshing
+    // `/{route}/:id` sets the id from the URL at mount, while the list it
+    // has to be looked up in is still in flight — so an effect keyed on the
+    // URL fired once against a `selected` of `null`, bailed, and never ran
+    // again. The form stayed on `BLANK`, showing a blank record, reporting
+    // unsaved changes in every field, and arming the navigation guard against
+    // edits nobody made. Keyed on the row, it hydrates when the row arrives.
+    //
+    // Still the *id* rather than the row itself: `selected` is a fresh object
+    // on every list refresh, and depending on it would re-hydrate the form —
+    // discarding what the user had typed — every time a save reloaded the list.
+  }, [selected?.id])
 
   function startCreate() {
-    setCreating(true)
-    setSelectedId(null)
     setSchema(null)
     setDraft(BLANK)
     setPassword('')
     setTestResult(null)
     setError(null)
-    setTab('settings')
+    navigate('/sources/new')
   }
 
-  async function save() {
-    setSaving(true)
+  /**
+   * Save one tab's half of the form, and only that half.
+   *
+   * The payload is filtered rather than sent whole. Sending everything would
+   * work — the fields are identical to what is on screen — but it would make
+   * the Policy tab's Save capable of writing a host, which is the coupling
+   * this split exists to remove: two people editing two tabs of one
+   * connection must not overwrite each other with values neither of them
+   * looked at.
+   */
+  async function save(group: 'connection' | 'policy') {
+    setSaving(group)
     setError(null)
     try {
       if (creating) {
         const created = await api.create({ ...draft, password })
         await refresh()
-        setSelectedId(created.id)
-        setCreating(false)
+        // Let go before navigating: the form has just been saved, and the
+        // guard would otherwise stop this page from leaving itself.
+        releaseUnsaved()
+        // Replace: `/sources/new` describes a form that no longer exists.
+        setSelectedId(created.id, { replace: true })
       } else if (selected) {
-        const payload: Record<string, unknown> = { ...draft }
-        if (password) payload.password = password
+        const payload: Record<string, unknown> = {}
+        for (const key of Object.keys(draft)) {
+          if (POLICY_KEYS.has(key) === (group === 'policy')) payload[key] = draft[key]
+        }
+        if (group === 'connection' && password) payload.password = password
         await api.update(selected.id, payload)
         await refresh()
-        setPassword('')
+        if (group === 'connection') setPassword('')
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save this connection.')
     } finally {
-      setSaving(false)
+      setSaving(null)
     }
   }
 
@@ -304,12 +465,16 @@ export default function DataSourcesPage() {
       setError(err instanceof Error ? err.message : 'Could not delete this connection.')
       return
     }
-    setSelectedId(null)
+    // Only once the row is actually gone: a refused delete leaves the form,
+    // and its edits, exactly where they were.
+    releaseUnsaved()
     setSchema(null)
     setError(null)
     const items = await api.list()
     setList(items)
-    if (items.length > 0) setSelectedId(items[0].id)
+    // Replace: the deleted connection's address is not somewhere Back should
+    // be able to return to.
+    setSelectedId(items[0]?.id ?? null, { replace: true })
   }
 
   const filteredTables = useMemo(() => {
@@ -378,18 +543,166 @@ export default function DataSourcesPage() {
     )
   }, [list, filter])
 
+  /**
+   * The Policy tab's fields — and the tail of the create form.
+   *
+   * One definition rendered in two places rather than two copies. A new
+   * connection is one form with one Save (there is no record yet for a tab to
+   * belong to), so the policy travels with the create form and moves onto its
+   * own tab the moment the row exists. Two copies of six governance switches
+   * is how two forms start disagreeing about what the defaults are.
+   *
+   * Two cards, because "Safety & limits" was two subjects under one heading:
+   * what leaves this database for a model, and what a query is allowed to
+   * spend. The first is a disclosure decision somebody may have to defend to
+   * their own security team; the second is a resource dial. Reading them as
+   * one list is what let the row cap sit beside the sentence about sending
+   * your DBA's comments to a third party.
+   */
+  const policyFields = (
+    <>
+      <Section
+        title="What the model may see"
+        description="Everything here decides what leaves your database for the model provider."
+        icon={<Icon.Shield size={14} />}
+      >
+        <Field
+          label="Result sharing"
+          hint="How much of a query result may be sent to the model provider."
+        >
+          <Select
+            value={draft.disclosure_policy}
+            onChange={(e) =>
+              setDraft({ ...draft, disclosure_policy: e.target.value })
+            }
+          >
+            <option value="NONE">Nothing — the model never sees result rows</option>
+            <option value="AGGREGATE">Totals only</option>
+            <option value="SAMPLE">A sample of rows</option>
+            <option value="FULL">All returned rows</option>
+          </Select>
+        </Field>
+
+        <Field
+          label="Schema descriptions"
+          hint="Descriptions your DBA wrote in the database itself (COMMENT ON, MS_Description). They travel with the column names, under every result-sharing setting — turn this off if your comments hold anything you would not send."
+        >
+          <Toggle
+            checked={draft.include_db_comments !== false}
+            onChange={(next) =>
+              setDraft({ ...draft, include_db_comments: next })
+            }
+            label={
+              draft.include_db_comments !== false
+                ? 'Send them to the model'
+                : 'Keep them out of prompts'
+            }
+          />
+        </Field>
+
+        <Field
+          label="Taught questions as examples"
+          hint="Shows the model up to four questions this connection has already been taught, after the schema. Off is exactly the prompt every recorded accuracy measurement was taken on — leave it off until you have measured that turning it on helps."
+        >
+          <Toggle
+            checked={draft.knowledge_examples_enabled === true}
+            onChange={(next) =>
+              setDraft({ ...draft, knowledge_examples_enabled: next })
+            }
+            label={
+              draft.knowledge_examples_enabled === true
+                ? 'Show taught questions to the model'
+                : 'Keep them out of prompts'
+            }
+          />
+        </Field>
+      </Section>
+
+      <Section
+        title="Answering & limits"
+        description="Applied to every query DataMind runs on this connection."
+        icon={<Icon.Sliders size={14} />}
+      >
+        <Field
+          label="Ambiguous questions"
+          hint="Only fires when a question genuinely cannot be answered without guessing; everything else runs straight through."
+        >
+          <Toggle
+            checked={draft.clarify_enabled !== false}
+            onChange={(next) =>
+              setDraft({ ...draft, clarify_enabled: next })
+            }
+            label={
+              draft.clarify_enabled !== false
+                ? 'Ask before answering'
+                : 'Always answer, never ask'
+            }
+          />
+        </Field>
+
+        <Field
+          label="Conflict checks"
+          hint="On a schedule, runs pairs of near-duplicate templates and compares the answers, so two templates that disagree are found before somebody quotes one of them. Read-only, row-capped, and the only thing here that queries your database without being asked."
+        >
+          <Toggle
+            checked={draft.conflict_checks_enabled !== false}
+            onChange={(next) =>
+              setDraft({ ...draft, conflict_checks_enabled: next })
+            }
+            label={
+              draft.conflict_checks_enabled !== false
+                ? 'Check the store on a schedule'
+                : 'Only when somebody asks'
+            }
+          />
+        </Field>
+
+        <FieldRow>
+          <Field label="Row limit" hint="Rows a single query may return.">
+            <TextInput
+              type="number"
+              value={draft.max_rows}
+              onChange={(e) =>
+                setDraft({ ...draft, max_rows: Number(e.target.value) })
+              }
+            />
+          </Field>
+          <Field label="Query timeout (ms)" hint="Cancelled past this budget.">
+            <TextInput
+              type="number"
+              value={draft.statement_timeout_ms}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  statement_timeout_ms: Number(e.target.value),
+                })
+              }
+            />
+          </Field>
+        </FieldRow>
+      </Section>
+    </>
+  )
+
   return (
     <div style={{ display: 'flex', height: '100%', width: '100%', minWidth: 0 }}>
+      <ListScrim open={listDrawer.open} onClick={listDrawer.close} />
       <MasterColumn
         title="Data sources"
+        open={listDrawer.open}
         icon={<Icon.Database size={15} />}
+        note="Yours only — connections are not shared with your team."
         count={list.length}
         loading={loading}
         query={filter}
         onQuery={setFilter}
         onNew={startCreate}
         newLabel="Add a connection"
-        empty="No data sources yet. Add one to start asking questions."
+        // Not "no data sources yet": the list is per-account, so a colleague's
+        // connection is genuinely absent here rather than missing, and a
+        // second person's first visit should read as an empty list rather
+        // than as a database that failed to appear.
+        empty="You have not added a connection yet. Connections belong to the account that made them, so a colleague's will not show up here."
       >
         {visible.map((connection) => {
           const state = reachability(connection.status)
@@ -406,7 +719,12 @@ export default function DataSourcesPage() {
                   <Icon.Database size={15} />
                 </GlyphBadge>
               }
-              onClick={() => setSelectedId(connection.id)}
+              // Carrying the open tab across: someone comparing two schemas
+              // (or two policies) is switching the connection, not asking to
+              // start again at Connection.
+              onClick={() =>
+                navigate(`/sources/${connection.id}${tab === 'connection' ? '' : `/${tab}`}`)
+              }
             />
           )
         })}
@@ -439,13 +757,16 @@ export default function DataSourcesPage() {
             <EmptyState
               icon={<Icon.Database size={20} />}
               title="Connect a database"
-              body="DataMind reads your schema over a read-only role, writes SQL against only what it finds there, and shows you every query it ran."
+              body="DataMind reads your schema over a read-only role, writes SQL against only what it finds there, and shows you every query it ran. The connection is yours — each person adds their own."
               action={<PrimaryButton onClick={startCreate}>Add a connection</PrimaryButton>}
             />
           </div>
         ) : (
           <>
             <DetailHeader
+              leading={
+                <ListToggle open={listDrawer.open} label="Data sources" onClick={listDrawer.toggle} />
+              }
               glyph={
                 <GlyphBadge size={40} hue={engineHue(draft.database_type)}>
                   <Icon.Database size={19} />
@@ -474,12 +795,16 @@ export default function DataSourcesPage() {
                 )
               }
               actions={
-                // Only on the tab that owns the form. Schema and Semantic
-                // layer save themselves; leaving these here offered to save a
-                // form the reader could not see.
-                creating || tab === 'settings' ? (
+                // Each Save belongs to the tab whose fields it writes. Schema
+                // and Semantic layer save themselves; leaving buttons up on
+                // those tabs offered to save a form the reader could not see.
+                //
+                // Test rides with Connection alone, and always has probed only
+                // connectivity fields — it was simply parked on a tab that also
+                // held the disclosure policy.
+                creating || tab === 'connection' ? (
                   <>
-                    {!creating && hasChanges && <UnsavedNote />}
+                    {!creating && connectionChanges && <UnsavedNote />}
                     <GhostButton
                       onClick={test}
                       disabled={testing || !canTest}
@@ -493,12 +818,24 @@ export default function DataSourcesPage() {
                       Test connection
                     </GhostButton>
                     <PrimaryButton
-                      onClick={save}
-                      disabled={saving || !hasChanges}
-                      title={hasChanges ? undefined : 'No changes to save.'}
+                      onClick={() => save('connection')}
+                      disabled={saving !== null || !connectionChanges}
+                      title={connectionChanges ? undefined : 'No changes to save.'}
                     >
-                      {saving && <Spinner />}
-                      {creating ? 'Add connection' : 'Save changes'}
+                      {saving === 'connection' && <Spinner />}
+                      {creating ? 'Add connection' : 'Save connection'}
+                    </PrimaryButton>
+                  </>
+                ) : tab === 'policy' ? (
+                  <>
+                    {policyChanges && <UnsavedNote />}
+                    <PrimaryButton
+                      onClick={() => save('policy')}
+                      disabled={saving !== null || !policyChanges}
+                      title={policyChanges ? undefined : 'No changes to save.'}
+                    >
+                      {saving === 'policy' && <Spinner />}
+                      Save policy
                     </PrimaryButton>
                   </>
                 ) : undefined
@@ -509,23 +846,34 @@ export default function DataSourcesPage() {
               <Tabs
                 value={tab}
                 onChange={(v) =>
-                  setTab(v as 'settings' | 'schema' | 'semantic' | 'knowledge')
+                  setTab(v as Tab)
                 }
                 items={[
-                  { value: 'settings', label: 'Settings' },
+                  { value: 'connection', label: 'Connection' },
+                  { value: 'policy', label: 'Policy' },
                   { value: 'schema', label: 'Schema', count: schema?.tables.length },
                   { value: 'semantic', label: 'Semantic layer' },
-                  // No count here: the tab's badge is *only* the number of
-                  // things needing a human, and that is not known until the
-                  // tab has loaded. A badge that always shows a total is
-                  // decoration; one that appears when there is work is a
-                  // signal, and showing nothing is the honest third state.
-                  { value: 'knowledge', label: 'Knowledge' },
+                  // It has a count now, and the objection that kept it off
+                  // is answered rather than overruled: the number was not
+                  // known until the tab had loaded, so a badge would have
+                  // appeared a second late or shown a total instead of a
+                  // signal. The shell counts the queue for the rail already,
+                  // so this is the same number, known before the tab opens,
+                  // and still absent rather than zero when there is no work.
+                  {
+                    value: 'knowledge',
+                    label: 'Knowledge',
+                    count: selected ? forConnection(queue, selected.id) : undefined,
+                    // Marked as leaving, because it does: a tab that quietly
+                    // navigates out of its own strip is worse than one that
+                    // says it will.
+                    leaves: true,
+                  },
                 ]}
               />
             )}
 
-            {(creating || tab === 'settings') && (
+            {(creating || tab === 'connection') && (
               <DetailBody>
                 {error && <ErrorNote>{error}</ErrorNote>}
                 {testResult && (
@@ -643,120 +991,9 @@ export default function DataSourcesPage() {
                   </FieldRow>
                 </Section>
 
-                <Section
-                  title="Safety & limits"
-                  description="Applied to every query DataMind runs on this connection."
-                  icon={<Icon.Shield size={14} />}
-                >
-                  <Field
-                    label="Result sharing"
-                    hint="How much of a query result may be sent to the model provider."
-                  >
-                    <Select
-                      value={draft.disclosure_policy}
-                      onChange={(e) =>
-                        setDraft({ ...draft, disclosure_policy: e.target.value })
-                      }
-                    >
-                      <option value="NONE">Nothing — the model never sees result rows</option>
-                      <option value="AGGREGATE">Totals only</option>
-                      <option value="SAMPLE">A sample of rows</option>
-                      <option value="FULL">All returned rows</option>
-                    </Select>
-                  </Field>
-
-                  <Field
-                    label="Ambiguous questions"
-                    hint="Only fires when a question genuinely cannot be answered without guessing; everything else runs straight through."
-                  >
-                    <Toggle
-                      checked={draft.clarify_enabled !== false}
-                      onChange={(next) =>
-                        setDraft({ ...draft, clarify_enabled: next })
-                      }
-                      label={
-                        draft.clarify_enabled !== false
-                          ? 'Ask before answering'
-                          : 'Always answer, never ask'
-                      }
-                    />
-                  </Field>
-
-                  <Field
-                    label="Schema descriptions"
-                    hint="Descriptions your DBA wrote in the database itself (COMMENT ON, MS_Description). They travel with the column names, under every result-sharing setting — turn this off if your comments hold anything you would not send."
-                  >
-                    <Toggle
-                      checked={draft.include_db_comments !== false}
-                      onChange={(next) =>
-                        setDraft({ ...draft, include_db_comments: next })
-                      }
-                      label={
-                        draft.include_db_comments !== false
-                          ? 'Send them to the model'
-                          : 'Keep them out of prompts'
-                      }
-                    />
-                  </Field>
-
-                  <Field
-                    label="Taught questions as examples"
-                    hint="Shows the model up to four questions this connection has already been taught, after the schema. Off is exactly the prompt every recorded accuracy measurement was taken on — leave it off until you have measured that turning it on helps."
-                  >
-                    <Toggle
-                      checked={draft.knowledge_examples_enabled === true}
-                      onChange={(next) =>
-                        setDraft({ ...draft, knowledge_examples_enabled: next })
-                      }
-                      label={
-                        draft.knowledge_examples_enabled === true
-                          ? 'Show taught questions to the model'
-                          : 'Keep them out of prompts'
-                      }
-                    />
-                  </Field>
-
-                  <Field
-                    label="Conflict checks"
-                    hint="On a schedule, runs pairs of near-duplicate templates and compares the answers, so two templates that disagree are found before somebody quotes one of them. Read-only, row-capped, and the only thing here that queries your database without being asked."
-                  >
-                    <Toggle
-                      checked={draft.conflict_checks_enabled !== false}
-                      onChange={(next) =>
-                        setDraft({ ...draft, conflict_checks_enabled: next })
-                      }
-                      label={
-                        draft.conflict_checks_enabled !== false
-                          ? 'Check the store on a schedule'
-                          : 'Only when somebody asks'
-                      }
-                    />
-                  </Field>
-
-                  <FieldRow>
-                    <Field label="Row limit" hint="Rows a single query may return.">
-                      <TextInput
-                        type="number"
-                        value={draft.max_rows}
-                        onChange={(e) =>
-                          setDraft({ ...draft, max_rows: Number(e.target.value) })
-                        }
-                      />
-                    </Field>
-                    <Field label="Query timeout (ms)" hint="Cancelled past this budget.">
-                      <TextInput
-                        type="number"
-                        value={draft.statement_timeout_ms}
-                        onChange={(e) =>
-                          setDraft({
-                            ...draft,
-                            statement_timeout_ms: Number(e.target.value),
-                          })
-                        }
-                      />
-                    </Field>
-                  </FieldRow>
-                </Section>
+                {/* A new row is one form with one Save: the policy has no tab
+                    of its own until the record exists. */}
+                {creating && policyFields}
 
                 {!creating && (
                   <Section
@@ -771,6 +1008,13 @@ export default function DataSourcesPage() {
                     </DangerButton>
                   </Section>
                 )}
+              </DetailBody>
+            )}
+
+            {!creating && tab === 'policy' && (
+              <DetailBody>
+                {error && <ErrorNote>{error}</ErrorNote>}
+                {policyFields}
               </DetailBody>
             )}
 
@@ -935,9 +1179,9 @@ export default function DataSourcesPage() {
               />
             )}
 
-            {!creating && tab === 'knowledge' && (
-              <KnowledgeTab key={selected!.id} connection={selected!} />
-            )}
+            {/* No `tab === 'knowledge'` branch: the effect above has already
+                sent this address to `/knowledge/:id`, which is where the
+                console lives. */}
           </>
         )}
       </div>

@@ -1,6 +1,6 @@
 # Documentation index
 
-Nineteen documents plus five research notes. This page exists so you don't have
+Twenty documents plus five research notes. This page exists so you don't have
 to open `architecture.md` (1,600 lines) to answer a question about charts.
 
 The three `pipeline*.md` files are one set: [pipeline.md](pipeline.md) holds the
@@ -21,7 +21,7 @@ chat run **and** the map of all three pipelines (§0), with
 
 | Touching | Read first | Why |
 | --- | --- | --- |
-| Anything under `frontend/src/` — a page, a component, a token, a class | [frontend.md](frontend.md) | The shell and every section in it, what each owns, the four components they share, and the design-system rules nothing in CI enforces |
+| Anything under `frontend/src/` — a page, a component, a token, a class | [frontend.md](frontend.md) | The shell and every section in it, what each owns, the components they share, the breakpoint table, and the design-system rules nothing in CI enforces |
 | `sqlguard/`, `disclosure.py`, `HintBudget`, or adding an LLM call site | [security.md](security.md) | Every claim names the module that enforces it, and states its limits |
 | A prompt, or anything a model is sent | [llm-calls.md](llm-calls.md) | Every unique LLM call: trigger, gateway method, the verbatim system and user prompt, what fills each placeholder, and what happens when it fails |
 | A pipeline node, a prompt, the routing | [pipeline.md](pipeline.md) | The chat run node by node — plus §0, which maps all three pipelines and lists every LLM call site |
@@ -45,7 +45,7 @@ Read the §-pointers in the status table before starting anywhere else in them.
 
 ## Plans and records
 
-These six are **narratives of work**, not references: each was written to be
+These seven are **narratives of work**, not references: each was written to be
 executed against, and each carries a dated ledger of what changed while it was
 being executed. They stay in `docs/` rather than in a `plans/` subfolder because
 the cross-links point at them from the reference docs — the classification below
@@ -55,10 +55,11 @@ is the organisation, not the directory.
 | --- | --- |
 | [langgraph-migration.md](langgraph-migration.md) | **Live.** Phases 0–3 and 6 are done — the chat pipeline and the report worker are compiled graphs, the repair region is one subgraph with two callers, and the cross-replica work landed as [cross-replica.md](cross-replica.md). Phase 4 (checkpointing) and Phase 5 (durable clarification) are argued and *declined*, each with the measurement that decided it. Read it before moving anything else onto LangGraph. |
 | [catalog-metadata-plan.md](catalog-metadata-plan.md) | **Live, and still the reference.** Unlike `reports-plan.md` this one was never superseded by a companion: it is both the plan and the only description of catalog comments, so §10's ledger and "decisions changed while executing" are the record of what actually shipped. Read §1 for the per-engine SQL and §4 for what reaches the model. |
-| [learning-loop-plan.md](learning-loop-plan.md) | **Live.** Teaching the system a question and measuring whether it helped. All nine phases are in the tree — the store and the curation surface, match/short-circuit/badge, feedback and the backlog, store health, few-shot, the in-product benchmark, the embedding matcher, permissions — but **three of them ship *off***: the few-shot block, the embedding matcher and Phase 0's own baselines all wait on the same thing, a provider key this environment does not have. §13 is the ledger, one checkbox per deliverable with the check that proves its state, and §13.13 is the dated record of each landing. Read §0.2 before arguing with any of it — four decisions are recorded there rather than re-argued. |
+| [learning-loop-plan.md](learning-loop-plan.md) | **Live.** Teaching the system a question and measuring whether it helped. All nine phases are in the tree — the store and the curation surface, match/short-circuit/badge, feedback and the backlog, store health, few-shot, the in-product benchmark, the embedding matcher, permissions — but **three of them ship *off***: the few-shot block, the embedding matcher and Phase 0's own baselines all wait on the same thing, a provider key this environment does not have. §13 is the ledger, one checkbox per deliverable with the check that proves its state, and §13.13 is the dated record of each landing. Read §0.2 before arguing with any of it — four decisions are recorded there rather than re-argued. **§4.2's information architecture was superseded** by the UI audit: the console is a rail entry at `/knowledge` as well as a connection tab, and the correction is inline where the original reasoning is. |
 | [mvp2-plan.md](mvp2-plan.md) | **Live.** The wider second-milestone plan the learning loop is one strand of. Where it and `learning-loop-plan.md` disagree about the knowledge store, §1.3 of the latter is the correction. |
 | [reports-plan.md](reports-plan.md) | **Superseded.** The phase-by-phase plan for Reports, kept as the record of what was intended. [reports.md](reports.md) describes what was built — where they disagree, reports.md is right. |
 | [access-control-plan.md](access-control-plan.md) | **Proposed, not built.** Users, groups, roles and grants, argued from [research/access-control.md](research/access-control.md). Nothing in it ships yet — the product is still owner-only, as [dashboards.md §9](dashboards.md) and [reports.md §14](reports.md) both say. Read §0 of the research note first: it corrects two things this repo believes about its own authorization. |
+| [ui-improvment-plan.md](ui-improvment-plan.md) | **Done.** All seven phases and all 55 checklist items, one commit per phase. The remediation plan for the frontend's information architecture — sixteen findings from a whole-app UI/UX audit, sequenced by dependency first and importance second. The two load-bearing ones were Phase 1's routing (`react-router-dom` was a declared dependency imported nowhere, so nothing in the product had a URL) and Phase 2's Chat→Dashboard/Report bridge (the backend treats all three as one guarded path; the UI exposed no route between them). Read it now for *why* each surface is shaped the way it is, and **§ The ledger** at its foot for what actually landed: a row per phase with its commit and size, the four decisions taken while executing, and the five things review found wrong afterwards — including a deep-link bug that five phases of verification missed because every scripted check reached the page from inside the app. [frontend.md](frontend.md) describes what was built; where they disagree, frontend.md is right. Four Low-priority findings are under *Out of scope* rather than dropped — F20 was resolved as a side effect. |
 
 ## Research
 

@@ -4,11 +4,11 @@
  * Every dimension, radius, and font size here is lifted from the design
  * concept rather than invented. The mock is the specification.
  */
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react'
 
 import {
-  formatCell, resolveColumns, sortRows,
-  type ResultTableConfig,
+  csvFileName, formatCell, nextSort, resolveColumns, sortRows, toCsv, withSort,
+  type ResolvedColumn, type ResultTableConfig, type UserSort,
 } from './table-format'
 
 // ── logo ──────────────────────────────────────────────────────────────────
@@ -364,6 +364,19 @@ export const Icon = {
       <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
       <path d="M14 3v5h5" />
       <path d="M9 13h6M9 17h4" />
+    </svg>
+  ),
+  /** An open book, for the Knowledge section — the store of taught questions.
+   *  Not the flag it used to be: a flag is one of the three things in that
+   *  queue (a wrong answer somebody raised), and putting it over the section
+   *  makes the whole store look like a fault report, which is the opposite of
+   *  what the amber-not-red badge decision says about a backlog. Not a
+   *  lightbulb either: `Sparkle` is two rows below it and a bulb is the
+   *  universal glyph for a *hint*, which is the queue's other half. */
+  Book: ({ size = 17, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <path d="M12 6.6v13.2" />
+      <path d="M12 6.6C10.4 5 7.9 4.2 3.4 4.5v12.9c4.5-.3 7 .5 8.6 2 1.6-1.5 4.1-2.3 8.6-2V4.5c-4.5-.3-7 .5-8.6 2.1z" />
     </svg>
   ),
   /** A stop control, drawn filled: the one square in an outlined icon set,
@@ -1102,10 +1115,72 @@ export function EmptyState({
   )
 }
 
+/** Everything inside `root` that a Tab can currently land on, in tab order. */
+function focusablesIn(root: HTMLElement): HTMLElement[] {
+  const selector = [
+    'a[href]', 'button', 'input', 'select', 'textarea',
+    '[tabindex]', 'audio[controls]', 'video[controls]', '[contenteditable]',
+  ].map((s) => `${s}:not([disabled]):not([tabindex="-1"])`).join(',')
+  return Array.from(root.querySelectorAll<HTMLElement>(selector))
+    // A control inside a collapsed section is in the DOM and out of reach;
+    // `offsetParent` is null for anything `display: none` has removed.
+    .filter((el) => el.offsetParent !== null || el === document.activeElement)
+}
+
+/**
+ * Focus in on open, and back to the opener when the surface really closes.
+ *
+ * Shared by `Modal` and `Drawer`, which differ about the *keyboard*: a modal
+ * traps Tab because the page behind it is not usable, a drawer does not
+ * because the page behind it is the thing being edited. Everything else about
+ * how focus arrives and where it goes back to is the same, and a second copy
+ * would be a second place for the three rules below to be got wrong.
+ */
+function useSurfaceFocus(surface: React.RefObject<HTMLElement | null>): void {
+  // Read during the first render, before this surface's own DOM exists: by the
+  // time an effect runs, a field carrying `autoFocus` has already taken focus
+  // and `document.activeElement` is inside the surface, not behind it.
+  const openerRef = useRef<HTMLElement | null>(null)
+  if (openerRef.current === null) openerRef.current = document.activeElement as HTMLElement | null
+
+  useEffect(() => {
+    // Only if nothing inside asked for focus first. Half these surfaces open
+    // onto a single field with `autoFocus` on it, and landing on the field you
+    // came to fill beats landing on the box around it.
+    const el = surface.current
+    if (el && !el.contains(document.activeElement)) el.focus()
+
+    return () => {
+      // Only when it has really left the page. In development React runs this
+      // cleanup once on mount without unmounting anything, and handing focus
+      // back there would undo the `autoFocus` above on every surface that has
+      // one — a bug that would exist only in dev, which is the worst kind to
+      // chase.
+      if (el && document.contains(el)) return
+      // And only if the opener is still on the page and is not itself inside
+      // this surface — one that deleted the row it was opened from has
+      // nothing to go back to, and focusing a detached node silently drops
+      // focus onto the body, which is the state this restore prevents.
+      const opener = openerRef.current
+      if (opener && document.contains(opener) && !el?.contains(opener)) opener.focus()
+    }
+    // Once per open: `surface` is a ref and never changes identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+}
+
 /**
  * A centered modal dialog over a scrim. Closes on Escape or a click on the
  * backdrop; locks body scroll while open. The header, scrollable body, and
  * optional footer are laid out so long forms scroll without the chrome moving.
+ *
+ * It is modal to the keyboard too, which `aria-modal` alone only claims: focus
+ * moves into the dialog on open, Tab cycles within it, and the control that
+ * opened it gets focus back when it closes. Without that a Tab walks out of an
+ * "over everything" dialog into the page behind it, which is where the eye
+ * cannot follow. The title is the dialog's accessible name via
+ * `aria-labelledby` rather than a duplicated `aria-label`, so a renamed header
+ * cannot leave a stale name behind.
  */
 export function Modal({
   title, subtitle, onClose, children, footer, width = 460,
@@ -1117,18 +1192,47 @@ export function Modal({
   footer?: React.ReactNode
   width?: number
 }) {
+  const dialogRef = useRef<HTMLDivElement | null>(null)
+  const titleId = useId()
+  useSurfaceFocus(dialogRef)
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape') return onClose()
+      if (e.key !== 'Tab') return
+      const dialog = dialogRef.current
+      if (!dialog) return
+      const stops = focusablesIn(dialog)
+      // Nothing to land on: keep focus on the dialog rather than letting it
+      // escape to the page underneath.
+      if (stops.length === 0) {
+        e.preventDefault()
+        return dialog.focus()
+      }
+      const first = stops[0]
+      const last = stops[stops.length - 1]
+      const active = document.activeElement as HTMLElement | null
+      if (e.shiftKey && (active === first || active === dialog || !dialog.contains(active))) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && (active === last || !dialog.contains(active))) {
+        e.preventDefault()
+        first.focus()
+      }
     }
     document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  // Scroll lock, once per open. The page behind a modal is not usable, so it
+  // must not scroll under it either.
+  useEffect(() => {
     const prevOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     return () => {
-      document.removeEventListener('keydown', onKey)
       document.body.style.overflow = prevOverflow
     }
-  }, [onClose])
+  }, [])
 
   return (
     <div
@@ -1148,10 +1252,14 @@ export function Modal({
       }}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
         className="rm-enter"
         style={{
+          outline: 'none',
           width: '100%',
           maxWidth: width,
           maxHeight: 'calc(100vh - 40px)',
@@ -1174,7 +1282,7 @@ export function Modal({
           }}
         >
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-strong)' }}>
+            <div id={titleId} style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-strong)' }}>
               {title}
             </div>
             {subtitle && (
@@ -1232,6 +1340,149 @@ export function Modal({
         )}
       </div>
     </div>
+  )
+}
+
+/**
+ * A working surface beside the page, rather than over it.
+ *
+ * The same anatomy as `Modal` — header, scrolling body, optional footer — and
+ * deliberately **not** modal: no scrim, no scroll lock, no focus trap. A
+ * drawer is for editing a thing while looking at the thing, so the page next
+ * to it stays readable, scrollable and tabbable. That is the whole difference,
+ * and it is why this is a second component rather than a `variant` prop on the
+ * first: every one of those three behaviours would have to be switched off.
+ *
+ * Escape still closes it, because a surface that opened over your work should
+ * always have one key that gets rid of it. It lays out as a flex item beside
+ * the content (`.rm-drawer` floats it over the page below 900px, where there
+ * is no room for two columns).
+ */
+export function Drawer({
+  title, subtitle, icon, onClose, children, footer, width = 520,
+  closeLabel = 'Close', className,
+}: {
+  title: React.ReactNode
+  subtitle?: React.ReactNode
+  /** A glyph beside the title, in the muted register the settings drawer uses. */
+  icon?: React.ReactNode
+  onClose: () => void
+  children: React.ReactNode
+  footer?: React.ReactNode
+  width?: number
+  /** For the close button's accessible name, e.g. "Close the tile editor". */
+  closeLabel?: string
+  /** Joined to `.rm-drawer`, for rules that belong to one drawer's content. */
+  className?: string
+}) {
+  const drawerRef = useRef<HTMLElement | null>(null)
+  const titleId = useId()
+  useSurfaceFocus(drawerRef)
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <aside
+      ref={drawerRef}
+      role="dialog"
+      aria-labelledby={titleId}
+      tabIndex={-1}
+      className={className ? `rm-drawer ${className}` : 'rm-drawer'}
+      style={{
+        width,
+        flexShrink: 0,
+        outline: 'none',
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 0,
+        borderLeft: '1px solid var(--border)',
+        background: 'var(--sidebar-bg)',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 10,
+          padding: '14px 16px',
+          borderBottom: '1px solid var(--border)',
+          flexShrink: 0,
+        }}
+      >
+        {icon && (
+          <span aria-hidden style={{ display: 'flex', paddingTop: 2, color: 'var(--text-dim)' }}>
+            {icon}
+          </span>
+        )}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div id={titleId} style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-strong)' }}>
+            {title}
+          </div>
+          {subtitle && (
+            <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2, lineHeight: 1.45 }}>
+              {subtitle}
+            </div>
+          )}
+        </div>
+        <button
+          onClick={onClose}
+          aria-label={closeLabel}
+          className="rm-icon-btn"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 28,
+            height: 28,
+            flexShrink: 0,
+            background: 'transparent',
+            color: 'var(--text-dim)',
+            border: 'none',
+            borderRadius: 7,
+            cursor: 'pointer',
+            ['--rm-hover-bg' as string]: 'var(--panel-alt)',
+          }}
+        >
+          <Icon.Close size={15} />
+        </button>
+      </div>
+
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          padding: 16,
+          overflowY: 'auto',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 14,
+        }}
+      >
+        {children}
+      </div>
+
+      {footer && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+            gap: 10,
+            padding: '12px 16px',
+            borderTop: '1px solid var(--border)',
+            flexShrink: 0,
+          }}
+        >
+          {footer}
+        </div>
+      )}
+    </aside>
   )
 }
 
@@ -1614,18 +1865,157 @@ export interface ResultTableSpec {
   rows: unknown[][]
 }
 
-export function ResultTable({ spec, previewRows = 5, maxHeight = 420, config }: {
+/** Past this many rows the expanded table renders a window, not all of it. */
+const WINDOW_FROM = 200
+/** Rows kept either side of the viewport, so a fast scroll finds them drawn. */
+const OVERSCAN = 10
+
+/** The nearest ancestor that actually scrolls — the one whose offset decides
+ *  which rows are on screen. */
+function scrollerOf(el: HTMLElement | null): HTMLElement | null {
+  for (let node = el?.parentElement ?? null; node; node = node.parentElement) {
+    if (/(auto|scroll|overlay)/.test(getComputedStyle(node).overflowY)) return node
+  }
+  return null
+}
+
+/**
+ * Which slice of a long result is worth putting in the DOM.
+ *
+ * "Show all" used to mount every row a query returned — up to the connection's
+ * cap, 1,000 by default — and a thousand rows of six cells is six thousand
+ * elements that all have to be laid out before the click feels finished. Here
+ * the rows outside the viewport become two spacer rows of exactly their
+ * height, so the scrollbar and the scroll position stay honest.
+ *
+ * It measures the first drawn row rather than assuming a height: cells are
+ * `nowrap`, so every row is one line, and one measurement holds for all of
+ * them. Below `WINDOW_FROM` this returns null and the table renders normally —
+ * virtualisation costs a screen reader the rows it cannot see, and that is
+ * only worth paying where the alternative is a page that stalls.
+ */
+function useRowWindow(
+  body: React.RefObject<HTMLTableSectionElement | null>,
+  count: number,
+): { start: number; end: number; rowPx: number } | null {
+  const [range, setRange] = useState<{ start: number; end: number } | null>(null)
+  const rowPx = useRef(33)
+  const on = count > WINDOW_FROM
+
+  useEffect(() => {
+    if (!on) {
+      setRange(null)
+      return
+    }
+    const el = body.current
+    const scroller = scrollerOf(el)
+    if (!el || !scroller) return
+
+    function measure() {
+      if (!el || !scroller) return
+      const first = el.rows[el.rows[0]?.hasAttribute('aria-hidden') ? 1 : 0]
+      if (first && first.offsetHeight > 0) rowPx.current = first.offsetHeight
+      // How far the body's own top edge has travelled above the viewport.
+      const top = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+      const above = Math.max(0, Math.floor(-top / rowPx.current))
+      const fits = Math.ceil(scroller.clientHeight / rowPx.current)
+      const start = Math.max(0, above - OVERSCAN)
+      const end = Math.min(count, above + fits + OVERSCAN)
+      setRange((current) =>
+        current && current.start === start && current.end === end
+          ? current
+          : { start, end },
+      )
+    }
+
+    measure()
+    scroller.addEventListener('scroll', measure, { passive: true })
+    window.addEventListener('resize', measure)
+    return () => {
+      scroller.removeEventListener('scroll', measure)
+      window.removeEventListener('resize', measure)
+    }
+  }, [on, count, body])
+
+  return on && range ? { ...range, rowPx: rowPx.current } : null
+}
+
+/** The mark on a sortable heading: faint on approach, lit when it is the sort. */
+function SortGlyph({ direction }: { direction: 'asc' | 'desc' | null }) {
+  return (
+    <svg
+      className={`rm-sort-glyph${direction ? ' is-on' : ''}`}
+      width={9}
+      height={11}
+      viewBox="0 0 9 11"
+      aria-hidden
+      style={{ flexShrink: 0 }}
+    >
+      <path
+        d="M4.5 0.5 L7.5 4 H1.5 Z"
+        fill="currentColor"
+        opacity={direction === 'desc' ? 0.25 : 1}
+      />
+      <path
+        d="M4.5 10.5 L1.5 7 H7.5 Z"
+        fill="currentColor"
+        opacity={direction === 'asc' ? 0.25 : 1}
+      />
+    </svg>
+  )
+}
+
+/** Hands the browser a file it saves rather than opens. */
+function saveCsv(title: string, text: string): void {
+  // The BOM is not decoration: without it Excel reads a UTF-8 CSV as the local
+  // 8-bit codepage, and every Persian heading in this product arrives as
+  // mojibake in the one place the user cannot fix it.
+  const blob = new Blob([`\ufeff${text}`], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = csvFileName(title)
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+export function ResultTable({
+  spec, previewRows = 5, maxHeight = 420, config, download,
+}: {
   spec: ResultTableSpec
   /** How many rows before "show all". */
   previewRows?: number
   maxHeight?: number | 'none'
   /** Omitted: every column, in query order, unsorted — as the query returned it. */
   config?: ResultTableConfig | null
+  /**
+   * Offer the rows as a file, named after this. Opt-in: the tile editor's
+   * preview is a verdict about a statement, not a result anyone takes away.
+   */
+  download?: string
 }) {
   const [expanded, setExpanded] = useState(false)
-  const columns = useMemo(() => resolveColumns(spec, config), [spec, config])
-  const sorted = useMemo(() => sortRows(spec.rows, spec, config), [spec, config])
+  /**
+   * The sort the reader asked for by clicking a heading, over the stored one.
+   *
+   * Client-side, always: the rows are already here, and a re-query would spend
+   * a round trip on the customer's database to answer a question the browser
+   * can answer — the same reasoning that has the chart picker redraw from rows
+   * already returned. A third click gives the tile's own ordering back.
+   */
+  const [userSort, setUserSort] = useState<UserSort | null>(null)
+  const effective = useMemo(() => withSort(config, userSort), [config, userSort])
+  const columns = useMemo(() => resolveColumns(spec, effective), [spec, effective])
+  const sorted = useMemo(() => sortRows(spec.rows, spec, effective), [spec, effective])
   const rows = expanded ? sorted : sorted.slice(0, previewRows)
+
+  const bodyRef = useRef<HTMLTableSectionElement | null>(null)
+  const win = useRowWindow(bodyRef, rows.length)
+  const drawn = win ? rows.slice(win.start, win.end) : rows
+  const sortOf = (column: ResolvedColumn): 'asc' | 'desc' | null =>
+    userSort?.column === column.name ? userSort.direction : null
 
   if (spec.columns.length === 0) {
     return (
@@ -1656,31 +2046,85 @@ export function ResultTable({ spec, previewRows = 5, maxHeight = 420, config }: 
         >
           <thead>
             <tr>
-              {columns.map((column) => (
-                <th
-                  key={column.name}
-                  style={{
-                    position: 'sticky',
-                    top: 0,
-                    textAlign: column.align,
-                    padding: '9px 12px',
-                    background: 'var(--panel-alt)',
-                    color: 'var(--text-dim)',
-                    fontWeight: 600,
-                    fontSize: 11,
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.04em',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {column.heading}
-                </th>
-              ))}
+              {columns.map((column) => {
+                const direction = sortOf(column)
+                return (
+                  <th
+                    key={column.name}
+                    aria-sort={
+                      direction === 'asc' ? 'ascending'
+                      : direction === 'desc' ? 'descending'
+                      : 'none'
+                    }
+                    style={{
+                      position: 'sticky',
+                      top: 0,
+                      textAlign: column.align,
+                      padding: 0,
+                      background: 'var(--panel-alt)',
+                      color: 'var(--text-dim)',
+                      fontWeight: 600,
+                      fontSize: 11,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.04em',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {/* A button inside the cell rather than a click handler on
+                        it: a heading that reorders a table is a control, and a
+                        control has to be reachable by keyboard and say what it
+                        does. The padding moves here so the whole cell is the
+                        hit area. */}
+                    <button
+                      type="button"
+                      className="rm-th-sort"
+                      onClick={() => setUserSort((current) => nextSort(current, column.name))}
+                      title={
+                        direction === 'asc' ? `Sort by ${column.heading}, descending`
+                        : direction === 'desc' ? `Stop sorting by ${column.heading}`
+                        : `Sort by ${column.heading}`
+                      }
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 5,
+                        width: '100%',
+                        padding: '9px 12px',
+                        justifyContent:
+                          column.align === 'right' ? 'flex-end'
+                          : column.align === 'center' ? 'center'
+                          : 'flex-start',
+                        font: 'inherit',
+                        letterSpacing: 'inherit',
+                        textTransform: 'inherit',
+                        color: direction ? 'var(--text-strong)' : 'inherit',
+                        background: 'transparent',
+                        border: 'none',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {column.heading}
+                      <SortGlyph direction={direction} />
+                    </button>
+                  </th>
+                )
+              })}
             </tr>
           </thead>
-          <tbody>
-            {rows.map((row, rowIndex) => (
-              <tr key={rowIndex} style={{ borderTop: '1px solid var(--border)' }}>
+          <tbody ref={bodyRef}>
+            {/* The rows above and below the window, as the exact height they
+                would have taken: the scrollbar stays the length of the result
+                rather than the length of what happens to be drawn. */}
+            {win && win.start > 0 && (
+              <tr aria-hidden style={{ height: win.start * win.rowPx }}>
+                <td colSpan={columns.length} style={{ padding: 0, border: 'none' }} />
+              </tr>
+            )}
+            {drawn.map((row, index) => (
+              <tr
+                key={(win?.start ?? 0) + index}
+                style={{ borderTop: '1px solid var(--border)' }}
+              >
                 {columns.map((column) => (
                   <td
                     key={column.name}
@@ -1697,27 +2141,47 @@ export function ResultTable({ spec, previewRows = 5, maxHeight = 420, config }: 
                 ))}
               </tr>
             ))}
+            {win && win.end < rows.length && (
+              <tr aria-hidden style={{ height: (rows.length - win.end) * win.rowPx }}>
+                <td colSpan={columns.length} style={{ padding: 0, border: 'none' }} />
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
 
-      {spec.rows.length > previewRows && (
-        <button
-          onClick={() => setExpanded(!expanded)}
-          style={{
-            alignSelf: 'flex-start',
-            fontSize: 12,
-            color: 'var(--accent)',
-            background: 'transparent',
-            border: 'none',
-            cursor: 'pointer',
-            padding: 0,
-          }}
-        >
-          {expanded
-            ? 'Show fewer rows'
-            : `Show all ${spec.rows.length.toLocaleString()} rows`}
-        </button>
+      {(spec.rows.length > previewRows || download) && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          {spec.rows.length > previewRows && (
+            <button
+              onClick={() => setExpanded(!expanded)}
+              style={{
+                fontSize: 12,
+                color: 'var(--accent)',
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                padding: 0,
+              }}
+            >
+              {expanded
+                ? 'Show fewer rows'
+                : `Show all ${spec.rows.length.toLocaleString()} rows`}
+            </button>
+          )}
+          {/* Every row the result has, not the page on screen — the file is
+              for the arithmetic the screen cannot do, and a download that
+              silently stops at the preview is worse than none. */}
+          {download && (
+            <QuietAction
+              onClick={() => saveCsv(download, toCsv(columns, sorted))}
+              title={`Download ${sorted.length.toLocaleString()} rows as a CSV file`}
+            >
+              <Icon.ArrowDown size={12} />
+              CSV
+            </QuietAction>
+          )}
+        </div>
       )}
     </div>
   )

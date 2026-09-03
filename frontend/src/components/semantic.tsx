@@ -36,6 +36,7 @@ import {
 } from './ui'
 import type { ChipTone } from './ui'
 import { DetailBody, FieldRow } from './settings'
+import { useBackgroundWatch } from '../shell'
 import { explainRekey, rekeyDrift } from './semantic-drift'
 
 const ACTIVE = ['QUEUED', 'RUNNING']
@@ -107,6 +108,7 @@ export function SemanticLayerTab({
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
   const [open, setOpen] = useState<Record<string, boolean>>({})
+  const watch = useBackgroundWatch()
 
   const dirty = doc !== null && JSON.stringify(doc) !== baseline
 
@@ -210,8 +212,37 @@ export function SemanticLayerTab({
   }) {
     setError(null)
     try {
-      setJob(await api.generate(connection.id, payload))
+      const started = await api.generate(connection.id, payload)
+      setJob(started)
       setAskGenerate(false)
+      // Writing a layer is minutes of model calls, and nobody watches a
+      // progress bar for four minutes. The poll above draws that bar while
+      // this tab is open; this hands the *ending* to the shell, which is
+      // still mounted wherever the reader has gone.
+      watch({
+        key: `semantic:${started.id}`,
+        poll: async () => {
+          const next = await api.job(connection.id, started.id)
+          if (ACTIVE.includes(next.status)) return null
+          if (next.status === 'SUCCEEDED') {
+            return {
+              tone: 'ok',
+              title: `Semantic layer written for ${connection.name}`,
+              body: describeOutcome(next),
+              to: `/sources/${connection.id}/semantic`,
+              toLabel: 'Review it',
+            }
+          }
+          if (next.status === 'CANCELLED') return null
+          return {
+            tone: 'error',
+            title: `Semantic layer failed for ${connection.name}`,
+            body: next.error_message || undefined,
+            to: `/sources/${connection.id}/semantic`,
+            toLabel: 'Open',
+          }
+        },
+      })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not start generation.')
     }
@@ -913,6 +944,24 @@ function Panel({
  *
  * Silent when there is nothing to report: a clean run draws no box.
  */
+/**
+ * A finished generation in one line, for the notice.
+ *
+ * The counts, not the verdict: `SUCCEEDED` with four tables refused is a
+ * success the reader still needs to know about, which is the same reason
+ * `PartialOutcome` exists on the tab itself. This is its sentence-sized
+ * cousin, for someone who is three screens away.
+ */
+function describeOutcome(job: SemanticJob): string {
+  const described = job.stats.tables_described ?? 0
+  const failed = (job.stats.tables_failed ?? []).length
+  const parts = [`${described} ${described === 1 ? 'table' : 'tables'} described`]
+  if (failed) parts.push(`${failed} could not be`)
+  const dropped = job.stats.metrics_dropped ?? 0
+  if (dropped) parts.push(`${dropped} ${dropped === 1 ? 'metric' : 'metrics'} dropped`)
+  return `${parts.join(', ')}.`
+}
+
 function PartialOutcome({ job }: { job: SemanticJob }) {
   const failed = job.stats.tables_failed ?? []
   const dropped = job.stats.metrics_dropped ?? 0

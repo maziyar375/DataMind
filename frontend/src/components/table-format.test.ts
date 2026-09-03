@@ -9,7 +9,7 @@
  * format turns a value into `NaN`. Nothing throws; it just reads wrong.
  */
 import {
-  formatCell, resolveColumns, sortRows,
+  csvFileName, formatCell, nextSort, resolveColumns, sortRows, toCsv, withSort,
   type ResultTableConfig, type TableColumns,
 } from './table-format.ts'
 
@@ -132,6 +132,111 @@ check(
   'pending',
 )
 check('a numeric string still formats', formatCell('1234.5', 'decimal'), '1,234.50')
+
+// ── the sort a reader asks for ───────────────────────────────────────────
+check('a first click sorts ascending', nextSort(null, 'total'), {
+  column: 'total', direction: 'asc',
+})
+check(
+  'a second click on the same column reverses it',
+  nextSort({ column: 'total', direction: 'asc' }, 'total'),
+  { column: 'total', direction: 'desc' },
+)
+check(
+  'a third click gives the stored order back',
+  nextSort({ column: 'total', direction: 'desc' }, 'total'),
+  null,
+)
+check(
+  'a click on another column starts that one ascending',
+  nextSort({ column: 'total', direction: 'desc' }, 'status'),
+  { column: 'status', direction: 'asc' },
+)
+
+check(
+  'no reader sort leaves the stored config exactly as it was',
+  withSort({ sort_column: 'total', sort_direction: 'desc' }, null),
+  { sort_column: 'total', sort_direction: 'desc' },
+)
+check(
+  'a reader sort replaces the stored ordering and keeps the rest',
+  withSort(
+    { columns: [{ name: 'total', label: 'Revenue' }], sort_column: 'total', sort_direction: 'desc' },
+    { column: 'status', direction: 'asc' },
+  ),
+  {
+    columns: [{ name: 'total', label: 'Revenue' }],
+    sort_column: 'status',
+    sort_direction: 'asc',
+  },
+)
+check(
+  'a reader sort works where nothing was configured at all',
+  withSort(null, { column: 'total', direction: 'desc' }),
+  { sort_column: 'total', sort_direction: 'desc' },
+)
+
+// ── the file ─────────────────────────────────────────────────────────────
+const csvRows: unknown[][] = [
+  ['paid', 1234.5, 'EMEA'],
+  ['new', null, 'APAC'],
+]
+
+check(
+  'the file has the visible columns, in their order, under their headings',
+  toCsv(
+    resolveColumns(spec, {
+      columns: [{ name: 'total', label: 'Revenue' }, { name: 'region', hidden: true }],
+    }),
+    csvRows,
+  ),
+  'Revenue,status\r\n1234.5,paid\r\n,new\r\n',
+)
+check(
+  'values are raw, not the formatted text on screen',
+  toCsv(resolveColumns({ columns: [{ name: 'total', semantic_type: 'quantitative' }] }), [
+    [1234.5678],
+  ]),
+  'total\r\n1234.5678\r\n',
+)
+check(
+  'a comma, a quote and a newline are quoted the way a spreadsheet reads them',
+  toCsv(resolveColumns({ columns: [{ name: 'note', semantic_type: 'nominal' }] }), [
+    ['a, b'], ['say "hi"'], ['two\nlines'],
+  ]),
+  'note\r\n"a, b"\r\n"say ""hi"""\r\n"two\nlines"\r\n',
+)
+check(
+  'a value that would be a formula is defused, not executed',
+  toCsv(resolveColumns({ columns: [{ name: 'note', semantic_type: 'nominal' }] }), [
+    ['=1+1'], ['@SUM(A1)'], ['+49 30 123'],
+  ]),
+  "note\r\n'=1+1\r\n'@SUM(A1)\r\n'+49 30 123\r\n",
+)
+check(
+  'a negative number is a number, not a formula',
+  toCsv(resolveColumns({ columns: [{ name: 'total', semantic_type: 'quantitative' }] }), [
+    [-42],
+  ]),
+  'total\r\n-42\r\n',
+)
+check(
+  'a null cell is empty, not the em dash the screen shows',
+  toCsv(resolveColumns({ columns: [{ name: 'total', semantic_type: 'quantitative' }] }), [
+    [null],
+  ]),
+  'total\r\n\r\n',
+)
+
+check('the file is named after the thing on screen', csvFileName('Revenue by month'), 'Revenue by month.csv')
+check(
+  'characters no filesystem takes are replaced, not dropped silently',
+  csvFileName('Q3: revenue / margin'),
+  'Q3 revenue margin.csv',
+)
+check('a Persian title survives', csvFileName('فروش ماهانه'), 'فروش ماهانه.csv')
+check('an untitled result still has a name', csvFileName('   '), 'result.csv')
+check('a name that is only dots is not a directory', csvFileName('..'), 'result.csv')
 
 if (failures > 0) {
   // A thrown error is the non-zero exit; `process` would need Node's types.

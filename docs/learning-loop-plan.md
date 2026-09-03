@@ -869,9 +869,36 @@ this screen when they open the layer, and curation is the same job; and a
 top-level nav item would promise a destination people visit, when this is a
 place people are *sent* — from a wrong answer, from a flag, from the backlog.
 
+> **Superseded on 2026-09-03, and the third reason is what broke.** The UI
+> audit's F5 found the practical consequence: a console with a work queue,
+> three clicks inside one connection's fourth tab, is invisible unless somebody
+> already knows to go looking — and a queue nobody looks at is not a queue.
+> Being "a place people are sent" is true of an *item*, not of the backlog: a
+> flag arrives from a wrong answer, but "is anything waiting on any of my
+> connections?" is a question with nowhere to be asked.
+>
+> So the console is also `/knowledge`, a rail entry with the cross-connection
+> count on it. The first two reasons still hold and nothing about them changed:
+> a template is still scoped to one connection, and the tab is **still in the
+> strip**, where people look for a connection's store. It is a door rather than
+> a second room: it opens `/knowledge/:id` for the connection you are on, so a
+> curator working on one database is not forced up a level and the console
+> exists exactly once. See
+> [ui-improvment-plan.md](ui-improvment-plan.md) Phase 5 for the decision, and
+> [frontend.md §2](frontend.md) for the shape.
+
 The count on the tab is **only** the number of things needing a human. Zero
 work, no number. A badge that always shows a total is decoration; a badge that
 appears when there is work is a signal.
+
+> **That count now exists**, on the tab and on the rail, and the objection that
+> kept it off the tab is answered rather than overruled: the number was not
+> known until the tab had loaded, so a badge would have arrived a beat late.
+> The shell counts the queue for the rail anyway, so the tab reads the same
+> number and shows it before it opens. The rule above is unchanged — absent
+> rather than `0`, and counting exactly what the sections list, which is why
+> `FLAGGED` suggestions are excluded (they are the reviews beside them, and
+> counting both would show four over a list of two).
 
 **Inside the tab: one work list, three sections, one detail pane.** Not
 sub-tabs — tabs inside tabs bury the work and make "what should I do next" a

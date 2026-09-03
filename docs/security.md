@@ -836,6 +836,19 @@ replayed refresh token invalidates the family. Refresh tokens are stored
 hashed, never in the clear. An admin password reset revokes the user's live
 sessions.
 
+**A member may rotate their own password** — `PUT /auth/me/password`, which
+verifies the current one first and then does exactly what the admin reset
+does: revokes every session for that user. It differs in one respect, and
+deliberately: it issues a fresh session immediately afterwards, so the person
+who just changed their password is the only one left signed in rather than the
+only one signed out. Without this route an invited account stayed indefinitely
+on a one-time password an administrator generated and can still read, because
+every route under `/users` is admin-only. Its sibling, `PATCH /auth/me`,
+changes the display name and nothing else: email, role and status are not
+fields on its schema, so a member cannot promote themselves by editing a
+payload. Neither route takes a user id — there is no parameter to point at
+somebody else, and a test walks the route table to keep it that way.
+
 > **Losing `SECRET_BOX_KEY` means every stored credential must be re-entered.**
 > There is no recovery path, by design. Back it up somewhere your database
 > backups are not.
@@ -847,8 +860,20 @@ sessions.
 The defaults are development defaults. Before real data:
 
 - [ ] **Change `ADMIN_PASSWORD`.** The bootstrap admin is
-      `admin@raymand.local` / `raymand`, and the API logs a loud warning while
-      it stays that way.
+      `admin@raymand.local` / `raymand`, and the API logs a loud warning about
+      it — **on the boot that creates the account, and only that one.**
+      `ensure_admin` returns early once the user exists
+      ([`services/bootstrap.py`](../backend/app/services/bootstrap.py)), so a
+      deployment left on the default gets no reminder after its first start.
+      Change it *in the product* — the account screen at `/settings`, which
+      asks for the current password — rather than only in `.env`: the variable
+      seeds the account and is never read again, so an edited `.env` beside an
+      unchanged account is a password that still works and is no longer written
+      down anywhere you are looking.
+- [ ] **Tell invited members to set their own password.** An admin-created
+      account starts on a one-time password the administrator can read, and
+      `/settings` is where the holder replaces it — which also revokes every
+      session that password opened.
 - [ ] **Generate fresh secrets** with `make secrets` — `SECRET_BOX_KEY` and
       `JWT_SECRET` — and back up the box key separately.
 - [ ] **Grant read-only database roles.** Confirm each connection reports

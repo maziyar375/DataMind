@@ -49,6 +49,24 @@ class LocalIdentityProvider:
     def hash_password(self, password: str) -> str:
         return self._hasher.hash(password)
 
+    def verify_password(self, user: User, password: str) -> bool:
+        """Does `password` belong to this already-identified user?
+
+        Not `authenticate` with the user's own email: that one is the login
+        path and does login things — it stamps `last_login_at` and decides
+        whether the account may sign in at all. Proving you know the current
+        password before changing it is a different question, asked by someone
+        already inside, and answering it should not make the account look as
+        though it was just signed into.
+        """
+        if not user.password_hash:
+            return False
+        try:
+            self._hasher.verify(user.password_hash, password)
+        except (VerifyMismatchError, InvalidHashError):
+            return False
+        return True
+
     # ── authenticate ─────────────────────────────────────────────────────
     async def authenticate(self, credentials: Credentials) -> AuthenticatedIdentity:
         result = await self._db.execute(

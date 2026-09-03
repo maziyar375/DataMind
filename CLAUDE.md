@@ -115,7 +115,7 @@ container, and it does not detach — `docker compose up -d` is the backgrounded
 form the README's quick start uses.
 
 Frontend, from `frontend/`: `npm run dev`, `npm run build` (`tsc -b && vite
-build`), `npm run typecheck` (`tsc --noEmit`), `npm test` (all eleven DOM-free
+build`), `npm run typecheck` (`tsc --noEmit`), `npm test` (all twelve DOM-free
 logic suites: schedule, format, dashboard document, palette, chat format, report
 document, report readiness, print, semantic drift, knowledge template,
 thinking). **`npm run lint` does not
@@ -357,14 +357,20 @@ frontend/src/
                             one-tick refresh scheduler), dashboard-schedule.ts
                             (the due-tile rule, DOM-free, + its .test.ts —
                             `npm run test:schedule`), table-format.ts (how a
-                            configured table resolves/sorts/formats, also
-                            DOM-free — `npm run test:format`),
+                            configured table resolves/sorts/formats, the sort a
+                            reader layers over that by clicking a heading, and
+                            the CSV it downloads — DOM-free,
+                            `npm run test:format`),
                             dashboard-document.ts (reading an exported file:
                             what it is, and which connection each of its
                             databases is here — `npm run test:document`) +
                             dashboard-transfer.tsx (the download and the import
                             dialog), tile-editor.tsx
                             (ask or write the SQL; one guard check for both),
+                            knowledge-queue.ts (how much curation work is
+                            waiting, per connection and in total — DOM-free,
+                            `npm run test:queue`), notifications.tsx (the
+                            shell's one aria-live surface),
                             report.tsx (the outline editor + the document
                             viewer), report-history.tsx, report-document.ts
                             (merging a run into a document — `npm run
@@ -375,7 +381,17 @@ frontend/src/
                             redrawing charts at page width —
                             `npm run test:print`)
   pages/                    Login, Chat, DataSources, LlmProviders, Users,
-                            Dashboards, Reports, About (who built it — the one
+                            Dashboards, Reports, Knowledge (`/knowledge` — the
+                            curation console promoted out of a connection's
+                            fourth tab; `KnowledgeTab` behind a connection
+                            picker, reached from the rail or from the Data
+                            sources tab that now points here rather than
+                            rendering a second copy; the rail's only count
+                            badge — red for a flag somebody raised, amber for
+                            a backlog), Account (`/settings` — your own
+                            display name and password, the only two things a
+                            member may change about themselves; every route
+                            under /users is admin-only), About (who built it — the one
                             page reachable from both sides of the sign-in wall:
                             the rail's footer group when signed in, a link on
                             the login screen when not; portraits come from
@@ -391,10 +407,48 @@ below is held up by the code agreeing with itself. Breaking one costs nothing
 at commit time and shows up as drift a release later. Full tour:
 [docs/frontend.md](docs/frontend.md).
 
-- **There is no router.** `react-router-dom` is in `package.json` and is
-  imported *nowhere*. Navigation is the `View` union in `App.tsx` plus one
-  `useState`; the rail sets it, and the shell renders one page. A new section
-  is a member of that union, a rail entry, and a branch — not a `<Route>`.
+- **Every screen has a URL, and the router is a *data* router.** `main.tsx`
+  mounts `createBrowserRouter` — not `<BrowserRouter>` — because `useBlocker`
+  exists only on that one, and it is what stops a navigation out of a dirty
+  form. `App.tsx` holds the rail (`NAV`) and the route table; each section owns
+  a `/*` path and reads its own sub-routes with `useMatch` rather than nesting
+  a second `<Routes>`, so the section stays mounted across open and close (a
+  remount would drop a chat's live stream). A new section is a `NAV` entry and
+  a `<Route>`. Unknown paths redirect to `/chat`, and **whatever serves the
+  build must return `index.html` for unknown paths.**
+- **Hydrate a form from the row, not from the URL.** A detail page whose form
+  is filled from a list must key that effect on `selected?.id`, never on the id
+  in the path: on a deep link the path has an id before the list has arrived,
+  so a URL-keyed effect fires once against `null`, bails, and leaves a blank
+  form claiming unsaved changes — with the navigation guard then refusing to
+  let anyone leave it. The *id*, not the row: the row is a new object after
+  every list refresh and would re-hydrate over what was typed.
+- **A page asks the shell for what is not its own.** `shell.tsx`:
+  `useThemeOverride` (a dashboard pinned to a theme — `App` resolves
+  `override ?? the user's choice` and is the only caller of `applyTheme`) and
+  `useUnsavedWork(key, reason, within?)` (a dirty form, which the shell's one
+  blocker asks about before letting a navigation through). `within` is the
+  address the work survives inside — pass a record's own path when its tabs
+  are routes, or the guard stops a form from reaching the tab beside it to
+  protect edits a tab switch does not touch.
+- **Long work announces itself; in-page errors stay put.** `shell.tsx`'s
+  `useNotify` raises a `Notice` in the shell's `aria-live` corner, and
+  `useBackgroundWatch` hands the shell a `{key, poll}` so a job outlives the
+  page that started it (semantic generation, benchmark runs). It is for
+  events that outlive their screen — **not** an error channel: a failed save
+  still says so in an `ErrorNote` beside the button that failed, and moving
+  those would make every failure less legible.
+- **Connections are two things, and the screen says so.** `/sources/:id`
+  opens **Connection** (host, port, database, user, password, SSL, schema
+  allowlist, and the Danger zone) and `/sources/:id/policy` opens **Policy**
+  (disclosure, DB comments, taught examples, clarify, conflict checks, row cap,
+  timeout — the set is `POLICY_KEYS` in `DataSourcesPage.tsx`). The strip's
+  fifth entry, Knowledge, is a **door**: it navigates to `/knowledge/:id`,
+  where the console actually lives, and `/sources/:id/knowledge` redirects
+  there. Each of the two forms has its
+  own dirty state and its own Save, and each Save sends **only its own half**,
+  so two people editing two tabs cannot overwrite each other. `Test connection`
+  belongs to Connection, which is the only half it probes.
 - **Styling is two places, and which one is not a preference.** Layout,
   spacing and one-off values are inline `style={}` in the JSX. Anything a
   style attribute cannot express — `:hover`, `:focus-visible`, selection,
@@ -405,15 +459,23 @@ at commit time and shows up as drift a release later. Full tour:
   router that is not used. Primitives live in `components/ui.tsx`; the
   master–detail frame that Data sources and LLM providers share is
   `components/settings.tsx`. Compose from those before writing a new one.
+- **Below 700px no page has two fixed columns.** The chat list and the
+  settings master column become off-canvas drawers beside the collapsed rail
+  (`components/list-drawer.tsx`: `useListDrawer`, `ListToggle`, `ListScrim`),
+  closing on Escape, on the scrim, and on any navigation — which is what
+  "close on select" means when every list here navigates. A page with a
+  second column gets a `ListToggle` in its header and passes `open` to the
+  column; that is the whole contract.
 - **Never hardcode a colour.** Every value comes from a CSS variable defined in
   `theme/tokens.ts`, which ships a **dark and a light** definition for each.
   A literal hex or `oklch()` in a component is a bug in both themes — one of
   them just has not been looked at yet. Chart colours are the one exception and
   they live in `components/palette.ts`, tested apart from React.
-- **The eleven DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
+- **The twelve DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
   `table-format.ts`, `dashboard-document.ts`, `palette.ts`, `chat-format.ts`,
   `report-document.ts`, `report-readiness.ts`, `report-print.ts`,
-  `semantic-drift.ts`, `knowledge-template.ts`, `thinking.ts` — they hold the
+  `semantic-drift.ts`, `knowledge-template.ts`, `thinking.ts`,
+  `knowledge-queue.ts` — they hold the
   logic whose failures are quiet, they are the *only* tested code in the
   frontend, and their suites are plain `node --experimental-strip-types`
   scripts. One React import turns a suite into a thing that cannot run.
@@ -1199,8 +1261,14 @@ The one thing that makes this hard, and everything else is CRUD:
   half-built dashboard.
 
 Not built, on purpose: filters (`QueryExecutor.execute` takes no bind
-parameters — **never** by string interpolation), sharing, and "add to dashboard"
-from a chat run.
+parameters — **never** by string interpolation) and sharing.
+
+**"Add to dashboard" from a chat run is built now** (`docs/dashboards.md` §10):
+the answer's action row picks a board and opens the tile editor prefilled with
+the run's own question, statement, connection and chart type. It re-asks no
+model and re-runs no query — the editor checks the statement it was handed, the
+same one the reader watched succeed, and the guard runs again at save and on
+every refresh as it does for a typed one.
 
 ---
 

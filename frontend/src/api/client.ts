@@ -96,6 +96,19 @@ async function attemptRefresh(): Promise<boolean> {
   return refreshInFlight
 }
 
+/**
+ * The routes that mint or destroy the session itself, and so must never be
+ * retried behind a refresh: refreshing to retry a refresh is circular, and
+ * "your credentials are wrong" is not a stale token.
+ *
+ * This was `/auth/*` until the account screen arrived. `/auth/me` and
+ * `/auth/me/password` are ordinary authenticated calls made by a page that
+ * has been open for a while — excluding them meant an expired access token
+ * turned "save my new display name" into a hard 401 that the refresh cookie
+ * sitting right there could have rescued.
+ */
+const SESSION_ROUTES = ['/auth/login', '/auth/refresh', '/auth/logout']
+
 async function request<T>(
   path: string,
   init: RequestInit = {},
@@ -113,7 +126,7 @@ async function request<T>(
     credentials: 'include',
   })
 
-  if (response.status === 401 && retry && !path.startsWith('/auth/')) {
+  if (response.status === 401 && retry && !SESSION_ROUTES.includes(path)) {
     if (await attemptRefresh()) return request<T>(path, init, false)
     setAccessToken(null)
   }
@@ -161,6 +174,24 @@ export const auth = {
     }
   },
   me: () => get<User>('/auth/me'),
+  /** Your own display name. Email, role and status stay with an admin. */
+  updateProfile: (display_name: string) =>
+    patch<User>('/auth/me', { display_name }),
+  /**
+   * Your own password, proving you know the current one.
+   *
+   * The server revokes every session and issues a fresh one, so the response
+   * carries the access token that replaces the one this call was made with.
+   * Forgetting to swap it in would sign the caller out one request later —
+   * which is the bug the endpoint was written to avoid.
+   */
+  async changePassword(current: string, next: string): Promise<void> {
+    const tokens = await put<{ access_token: string }>('/auth/me/password', {
+      current_password: current,
+      new_password: next,
+    })
+    setAccessToken(tokens.access_token)
+  },
 }
 
 // ── users ─────────────────────────────────────────────────────────────────

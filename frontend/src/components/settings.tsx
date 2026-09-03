@@ -7,6 +7,7 @@
  * fields.
  */
 import React from 'react'
+import { LIST_DRAWER_ID } from './list-drawer'
 import { GlyphBadge, Icon } from './ui'
 
 // ── left column ───────────────────────────────────────────────────────────
@@ -20,24 +21,62 @@ import { GlyphBadge, Icon } from './ui'
  * follows for its archived filter.
  */
 export function MasterColumn({
-  title, icon, count, onNew, newLabel, empty, query, onQuery, loading, children,
+  title, icon, note, count, showCount = true, onNew, newLabel, empty, query,
+  onQuery, loading, open, children,
 }: {
   title: string
   /** The section's own glyph — the same mark the sidebar uses for this page. */
   icon?: React.ReactNode
+  /**
+   * A quiet line under the title, for something true of the whole list.
+   *
+   * Both settings pages sit in the rail beside Users and read as workspace
+   * configuration, and neither is: connections and model providers are scoped
+   * to `owner_id`, so two colleagues see the same two labels and two
+   * different lists. That is worth one sentence in the place the list is
+   * actually read, and worth no more than one.
+   */
+  note?: string
+  /** How many rows the list holds. Drives the skeleton and the empty text. */
   count: number
-  onNew: () => void
-  newLabel: string
+  /**
+   * Whether to show that number beside the title.
+   *
+   * True where the count *is* the list's subject — Data sources has two data
+   * sources. False where the list is a filter rather than the thing being
+   * counted: the Knowledge console lists connections, so a pill reading `2`
+   * under the word "Knowledge" contradicts the rail's badge reading `42`
+   * three inches away. Two different numbers under one word is worse than no
+   * number at all.
+   */
+  showCount?: boolean
+  /**
+   * The list's own new-verb, if it has one.
+   *
+   * Optional because not every column adds to itself. A page whose primary
+   * action would navigate *out of the section* should not put it here — this
+   * is the loudest control in the column, and pointing it somewhere else
+   * makes the page's most prominent offer a way to leave.
+   */
+  onNew?: () => void
+  newLabel?: string
   empty: string
   query?: string
   onQuery?: (next: string) => void
   /** Outline rows while the first read is in flight, so the column has shape. */
   loading?: boolean
+  /**
+   * Below 700px this column is an overlay rather than a column — see
+   * `list-drawer.tsx`. Above it the flag does nothing at all, because the
+   * stylesheet only gives `.is-open` a meaning inside that media query.
+   */
+  open?: boolean
   children: React.ReactNode
 }) {
   return (
     <div
-      className="rm-master"
+      id={LIST_DRAWER_ID}
+      className={`rm-master${open ? ' is-open' : ''}`}
       style={{
         width: 274,
         flexShrink: 0,
@@ -58,8 +97,13 @@ export function MasterColumn({
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
           {icon && <GlyphBadge size={28}>{icon}</GlyphBadge>}
-          <span
+          {/* The page's one <h1>. Data sources and LLM providers have no title
+              block of their own — this column header is where the page names
+              itself, so it is the heading in the document too, at the size the
+              column was already drawn at rather than a heading's default. */}
+          <h1
             style={{
+              margin: 0,
               fontSize: 14.5,
               fontWeight: 700,
               letterSpacing: '-0.01em',
@@ -67,20 +111,35 @@ export function MasterColumn({
             }}
           >
             {title}
-          </span>
-          <span
+          </h1>
+          {showCount && (
+            <span
+              style={{
+                fontSize: 11,
+                fontWeight: 600,
+                color: 'var(--text-faint)',
+                background: 'var(--panel-alt)',
+                padding: '2px 7px',
+                borderRadius: 20,
+              }}
+            >
+              {loading ? '–' : count}
+            </span>
+          )}
+        </div>
+
+        {note && (
+          <p
             style={{
-              fontSize: 11,
-              fontWeight: 600,
+              margin: '-3px 0 0',
+              fontSize: 11.5,
+              lineHeight: 1.45,
               color: 'var(--text-faint)',
-              background: 'var(--panel-alt)',
-              padding: '2px 7px',
-              borderRadius: 20,
             }}
           >
-            {loading ? '–' : count}
-          </span>
-        </div>
+            {note}
+          </p>
+        )}
 
         {onQuery && count > 0 && (
           <div className="rm-search rm-master-search">
@@ -109,10 +168,12 @@ export function MasterColumn({
           </div>
         )}
 
-        <button onClick={onNew} title={newLabel} className="rm-master-new">
-          <Icon.Plus size={14} stroke="var(--accent)" />
-          {newLabel}
-        </button>
+        {onNew && (
+          <button onClick={onNew} title={newLabel} className="rm-master-new">
+            <Icon.Plus size={14} stroke="var(--accent)" />
+            {newLabel}
+          </button>
+        )}
       </div>
 
       <div
@@ -183,14 +244,24 @@ export function MasterItem({
   title: string
   subtitle: string
   active: boolean
-  tone: 'green' | 'red' | 'neutral'
+  /**
+   * `amber` exists because a dot that can only say good / bad / unknown
+   * cannot say *attention*. The knowledge console needs the difference: a
+   * connection with flags raised on it is red, one with only unanswered
+   * questions waiting is amber, and calling the second red says something is
+   * broken when nothing is.
+   */
+  tone: 'green' | 'amber' | 'red' | 'neutral'
   /** What the dot means, in words — a tooltip, and the screen-reader text. */
   toneLabel?: string
   glyph?: React.ReactNode
   onClick: () => void
 }) {
   const dotColor =
-    tone === 'green' ? 'var(--green)' : tone === 'red' ? 'var(--red)' : 'var(--text-faint)'
+    tone === 'green' ? 'var(--green)'
+      : tone === 'amber' ? 'var(--amber)'
+        : tone === 'red' ? 'var(--red)'
+          : 'var(--text-faint)'
 
   return (
     <button
@@ -252,13 +323,19 @@ export function MasterItem({
  * which is the equivalent strip on the pages next door.
  */
 export function DetailHeader({
-  title, subtitle, chips, actions, glyph,
+  title, subtitle, chips, actions, glyph, leading,
 }: {
   title: string
   subtitle: React.ReactNode
   chips?: React.ReactNode
   actions: React.ReactNode
   glyph?: React.ReactNode
+  /**
+   * Before the glyph: the control that opens the list column when it is an
+   * overlay. It goes here rather than beside the actions because it is a way
+   * *back*, and back is on the left of every screen anyone has ever used.
+   */
+  leading?: React.ReactNode
 }) {
   return (
     <div
@@ -273,6 +350,7 @@ export function DetailHeader({
         flexShrink: 0,
       }}
     >
+      {leading}
       {glyph}
       {/* A basis, not just `minWidth: 0`: with the actions unshrinkable beside
           it, a pure `min-width: 0` column collapses to nothing on a narrow
@@ -315,8 +393,12 @@ export function DetailHeader({
           marginLeft: 'auto',
           display: 'flex',
           alignItems: 'center',
+          justifyContent: 'flex-end',
+          // Wrapping, not shrinking: two buttons and an "Unsaved changes"
+          // note are ~330px, which is wider than a phone's content column.
+          // Unshrinkable *and* unwrappable is how Save left the screen.
+          flexWrap: 'wrap',
           gap: 8,
-          flexShrink: 0,
         }}
       >
         {actions}
@@ -367,10 +449,23 @@ export function Tabs({
 }: {
   value: string
   onChange: (value: string) => void
-  items: { value: string; label: string; count?: number }[]
+  /**
+   * `leaves` marks a tab that navigates out of its own strip.
+   *
+   * Data sources has exactly one: Knowledge, whose console is a destination
+   * of its own (`/knowledge/:id`) rather than a second copy rendered here.
+   * The tab stays because this is where people look for a connection's store
+   * — but a tab that quietly takes you somewhere else is worse than one that
+   * says it will, so it carries an arrow and says so in its tooltip.
+   */
+  items: { value: string; label: string; count?: number; leaves?: boolean }[]
 }) {
   return (
     <div
+      // Five tabs are ~430px, and a connection's Knowledge tab must be
+      // reachable on a phone — silently clipping the last two is the failure
+      // this class prevents.
+      className="rm-tabs"
       style={{
         display: 'flex',
         gap: 2,
@@ -386,6 +481,7 @@ export function Tabs({
             key={item.value}
             onClick={() => onChange(item.value)}
             aria-current={active ? 'true' : undefined}
+            title={item.leaves ? `${item.label} — opens the curation console` : undefined}
             className="rm-tab"
             style={{
               display: 'inline-flex',
@@ -403,6 +499,11 @@ export function Tabs({
             }}
           >
             {item.label}
+            {item.leaves && (
+              <span aria-hidden style={{ display: 'flex', opacity: 0.55 }}>
+                <Icon.ArrowRight size={12} />
+              </span>
+            )}
             {item.count != null && (
               <span
                 style={{
@@ -511,6 +612,10 @@ export function FieldRow({
 }) {
   return (
     <div
+      // Host / Port / Database is three columns of ~85px on a phone, which is
+      // a port field showing three of five digits. The stylesheet collapses
+      // this to one column below 640px, the same rule `.rm-col-2` follows.
+      className="rm-fieldrow"
       style={{
         display: 'grid',
         gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,

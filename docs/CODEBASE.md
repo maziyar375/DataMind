@@ -74,7 +74,7 @@ concept: the **dark** tokens in `src/theme/tokens.ts` are copied verbatim from
 was designed afterwards against it — warm "paper" neutrals at hue ~80, with a
 plum accent (~315) drawn from the logo rather than the dark theme's blue.
 
-There is **no test runner**: the eleven logic suites are plain `node
+There is **no test runner**: the twelve logic suites are plain `node
 --experimental-strip-types` scripts over DOM-free modules. That is a deliberate
 consequence of where the risk is — see §7.
 
@@ -170,7 +170,11 @@ guard, and the fifth entry point exists precisely so it reuses the same
 ### `backend/app/api` — the edge
 Eleven routers under `v1/`: `auth`, `users`, `llm_configs`, `connections`,
 `semantic`, `knowledge`, `conversations`, `drafts`, `dashboards`, `reports`,
-`audit`. Each router only shapes HTTP: extracts the identity, validates the DTO
+`audit`. The split between the first two is about *who*, not about *what*:
+everything under `/users` is `AdminDep`, and the two self-scoped routes a member
+has to their own account — `PATCH /auth/me` and `PUT /auth/me/password` — live
+on `auth` and take no user id at all, so there is no path parameter that could
+name somebody else. Each router only shapes HTTP: extracts the identity, validates the DTO
 (`schemas.py`, 1.7k lines), and calls a service. Errors map to RFC 7807 `problem+json`
 (`errors.py`). `main.py` is the ASGI factory — it wires CORS, a correlation-id
 middleware (every response carries `X-Correlation-ID`), health probes, and a
@@ -368,15 +372,25 @@ the puzzle-piece `Logo`, `ResultTable`, `Kpi`), chat (`chat.tsx` + the DOM-free
 (`dashboard.tsx`, `tile-editor.tsx`, `dashboard-transfer.tsx`), the semantic
 layer editor (`semantic.tsx`, 2.9k lines), the knowledge/curation surface
 (`knowledge.tsx`, 1.9k lines, plus the DOM-free `knowledge-template.ts`),
-reports (`report.tsx`, 4k lines, plus `report-history.tsx`), and settings
-scaffolding. `pages/` are Login, Chat, DataSources, LlmProviders, Users,
-Dashboards, Reports and About.
+reports (`report.tsx`, 4k lines, plus `report-history.tsx`), settings
+scaffolding, and three shell-level pieces: `answer-destinations.tsx` (turning a
+chat answer into a tile or a report block), `notifications.tsx` (the one
+`aria-live` surface, for work that outlives the screen that started it) and
+`list-drawer.tsx` (the second column, off-canvas below 700px). `pages/` are
+Login, Chat, DataSources, LlmProviders, Knowledge, Users, Dashboards, Reports,
+Account and About.
 
-**Eleven modules are deliberately DOM-free and carry their own tests**, because
+`App.tsx` is the shell — the rail, the route table, and the one navigation
+blocker — mounted by `main.tsx` on a **data router** (`createBrowserRouter`,
+because `useBlocker` exists only there). `shell.tsx` is what a page may ask of
+it: a theme override, a registration of unsaved work, a notice, a background
+job to keep watching, and the curation queue behind the rail's one badge.
+
+**Twelve modules are deliberately DOM-free and carry their own tests**, because
 every way they can be wrong is quiet: `dashboard-schedule.ts`, `table-format.ts`,
 `dashboard-document.ts`, `palette.ts`, `chat-format.ts`, `report-document.ts`,
 `report-readiness.ts`, `report-print.ts`, `semantic-drift.ts`,
-`knowledge-template.ts`, `thinking.ts`.
+`knowledge-template.ts`, `thinking.ts`, `knowledge-queue.ts`.
 
 ---
 
@@ -517,7 +531,7 @@ make db-repair # recreate the empty PGDATA runtime dirs the studio drive strips
 ```
 
 Frontend (from `frontend/`): `npm run dev`, `npm run build` (`tsc -b && vite
-build`), `npm run typecheck` (`tsc --noEmit`), `npm test` (all eleven DOM-free logic
+build`), `npm run typecheck` (`tsc --noEmit`), `npm test` (all twelve DOM-free logic
 suites, listed in §3). **`npm run lint` does not work** — the script exists but
 eslint is neither a devDependency nor configured.
 

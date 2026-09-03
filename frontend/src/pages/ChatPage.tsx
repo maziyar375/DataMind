@@ -40,6 +40,7 @@
  * editors are two chances to get one of them wrong.
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation, useMatch, useNavigate } from 'react-router-dom'
 import {
   conversations, connections as connectionsApi, llmConfigs,
   isRunInFlight, runs, streamRun,
@@ -54,10 +55,12 @@ import {
 import { absorbThought, endThought } from '../components/thinking'
 import type { ThinkingState } from '../components/thinking'
 import { TemplateEditor } from '../components/knowledge'
+import { AddToDashboardDialog, AddToReportDialog } from '../components/answer-destinations'
 import {
   DisclosureBadge, ErrorNote, GlyphBadge, Icon, PrimaryButton, SearchField, Spinner,
   dirOf, engineHue,
 } from '../components/ui'
+import { LIST_DRAWER_ID, ListScrim, ListToggle, useListDrawer } from '../components/list-drawer'
 
 /**
  * How long streamed tokens are collected before they are painted.
@@ -79,9 +82,66 @@ function glideBehavior(): ScrollBehavior {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
 }
 
+/**
+ * An answer on its way somewhere else — the payload both destinations take.
+ *
+ * The question the reader typed, the statement that actually ran, and the
+ * chart it was drawn as. No model call and no re-execution: this is the run's
+ * own work, carried, which is the difference between *add to dashboard* and
+ * *ask the same question again in a different box*.
+ */
+interface AnswerHandoff {
+  to: 'dashboard' | 'report'
+  question: string
+  sql: string
+  chartConfig: Record<string, unknown> | null
+}
+
+/**
+ * What the picture on screen can honestly say about itself.
+ *
+ * The compiler stamps its decision into the Vega-Lite spec's `usermeta`
+ * (`app/charts`), so the type, orientation and stack are read rather than
+ * guessed from the encoding — a horizontal bar swaps its axes on the way to
+ * the spec, and sniffing them back out is how a tile ends up drawn sideways.
+ * The *columns* are deliberately not carried: the tile editor checks the same
+ * statement itself and fills the axes from that result's own fields.
+ */
+function chartIntentOf(run: RunDetail): Record<string, unknown> | null {
+  const spec = run.artifacts.find((artifact) => artifact.kind === 'CHART')?.spec as
+    | { usermeta?: { datamind?: { chart_type?: string; orientation?: string; stack?: string } } }
+    | undefined
+  const meta = spec?.usermeta?.datamind
+  if (!meta?.chart_type) return null
+  const intent: Record<string, unknown> = { chart_type: meta.chart_type }
+  // Only when they say something: each has a default the backend applies, and
+  // writing it would freeze a decision the planner should keep making.
+  if (meta.orientation && meta.orientation !== 'auto') intent.orientation = meta.orientation
+  if (meta.stack && meta.stack !== 'stacked') intent.stack = meta.stack
+  return intent
+}
+
 export default function ChatPage() {
   const [conversationList, setConversationList] = useState<ConversationSummary[]>([])
-  const [activeId, setActiveId] = useState<string | null>(null)
+  // The open thread is the URL. Everything below still reads `activeId` the
+  // way it did when this was `useState`, so the effects that clear a stream on
+  // a thread change did not have to move; what changed is where the value
+  // comes from and that a refresh keeps the conversation open.
+  const navigate = useNavigate()
+  // Below 700px the thread list is an overlay; above it this does nothing.
+  const listDrawer = useListDrawer()
+  const { pathname } = useLocation()
+  const activeId = useMatch('/chat/:conversationId')?.params.conversationId ?? null
+  const setActiveId = useCallback(
+    (id: string | null, { replace = false } = {}) => {
+      const next = id ? `/chat/${id}` : '/chat'
+      // New chat pressed while already on an empty one is not a navigation:
+      // pushing the same address again gives Back a step that does nothing.
+      if (next === pathname) return
+      navigate(next, { replace })
+    },
+    [navigate, pathname],
+  )
   const [messages, setMessages] = useState<MessageWithRun[]>([])
   // Read by `regenerate`, which is given a stable identity so a transcript of
   // memoised turns does not re-render on every streamed token. It needs the
@@ -96,6 +156,10 @@ export default function ChatPage() {
   const [teaching, setTeaching] = useState<{ question: string; sql: string } | null>(
     null,
   )
+  // Which destination dialog is open, and what it is carrying. One piece of
+  // state rather than two booleans: the two are alternatives, and an answer
+  // goes to exactly one place at a time.
+  const [sending, setSending] = useState<AnswerHandoff | null>(null)
   const [connections, setConnections] = useState<Connection[]>([])
   const [models, setModels] = useState<LlmConfig[]>([])
   const [connectionId, setConnectionId] = useState<string>('')
@@ -582,7 +646,9 @@ export default function ChatPage() {
         })
         conversationId = created.id
         justCreatedRef.current = created.id
-        setActiveId(created.id)
+        // Replace: the empty composer this thread was started from is not a
+        // screen Back should return to — it no longer exists.
+        setActiveId(created.id, { replace: true })
         setConversationList((prev) => [created, ...prev])
       }
 
@@ -690,6 +756,72 @@ export default function ChatPage() {
     setTeaching({ question: askedFor(run), sql })
   }, [askedFor])
 
+  /**
+   * *Add to dashboard* / *Add to report.* The other half of the same idea as
+   * `teach`: the answer in front of the reader already carries validated SQL
+   * and a fitted chart, and until now the only way to a tile was to retype the
+   * question into the tile editor and spend another model call on it.
+   *
+   * This only opens the picker. What travels is assembled here, once, so both
+   * destinations carry identical work.
+   */
+  const handOff = useCallback(
+    (to: 'dashboard' | 'report') => (run: RunDetail) => {
+      // The last attempt is the one that passed the guard and ran; `raw_sql`
+      // rather than the rewritten form, because the row cap and the rewrite
+      // belong to the connection at execution time and both destinations
+      // re-guard from scratch. Same statement `teach` carries.
+      const sql = run.queries.at(-1)?.raw_sql ?? ''
+      if (!sql) return
+      setSending({ to, question: askedFor(run), sql, chartConfig: chartIntentOf(run) })
+    },
+    [askedFor],
+  )
+  const addToDashboard = useMemo(() => handOff('dashboard'), [handOff])
+  const addToReport = useMemo(() => handOff('report'), [handOff])
+
+  // How far setup has got, and whether the reader has waved the list away.
+  const setup = useMemo(() => setupStateOf(connections, models), [connections, models])
+  const [dismissedSetup, setDismissedSetup] = useState(
+    () => localStorage.getItem(SETUP_DISMISSED) === '1',
+  )
+  const dismissSetup = useCallback(() => {
+    localStorage.setItem(SETUP_DISMISSED, '1')
+    setDismissedSetup(true)
+  }, [])
+
+  // The connection this thread is bound to, as it stands *now*. A saved thread
+  // reads it from the conversation rather than from the picker, because the
+  // picker holds whatever was last chosen and the thread's own binding is the
+  // only thing an answer in it can be sent onward under. A deletion sets the
+  // column NULL, which is why a missing row is the test.
+  const threadConnection = useMemo(() => {
+    const conversation = conversationList.find((c) => c.id === activeId) ?? null
+    const id = conversation ? conversation.default_connection_id : connectionId
+    return connections.find((c) => c.id === id) ?? null
+  }, [activeId, connectionId, connections, conversationList])
+
+  // Why an answer cannot be sent onward, in a sentence. Memoised because it is
+  // handed to every memoised turn in the transcript, and a fresh object each
+  // render would re-render all of them on every keystroke.
+  const blocked = useMemo(() => {
+    if (!threadConnection) {
+      const gone = "This conversation's database was removed, so this answer cannot become a tile or a figure. The answer and its SQL stay readable."
+      return { dashboard: gone, report: gone }
+    }
+    // A tile never sends a row to a model, so no policy rules one out. A
+    // report's prose is written from the values, which is why §7 refuses the
+    // two narrow policies — said here rather than at the create call, where it
+    // would arrive as a 422 after the reader had already chosen a name.
+    const narrow = !['SAMPLE', 'FULL'].includes(threadConnection.disclosure_policy)
+    return {
+      dashboard: null,
+      report: narrow
+        ? `Result sharing on ${threadConnection.name} is ${threadConnection.disclosure_policy}, so no values reach the model — and a report's analysis is written from them. A tile has no such limit.`
+        : null,
+    }
+  }, [threadConnection])
+
   const regenerate = useCallback((run: RunDetail) => {
     const question = askedFor(run)
 
@@ -742,7 +874,9 @@ export default function ChatPage() {
       setLiveSteps([])
       clearText()
       setMessages([])
-      setActiveId(remaining[0]?.id ?? null)
+      // Replace, for the same reason: the deleted thread's URL is not
+      // somewhere Back should be able to go.
+      setActiveId(remaining[0]?.id ?? null, { replace: true })
     }
     try {
       await conversations.remove(id)
@@ -801,13 +935,16 @@ export default function ChatPage() {
         activeId={activeId}
         onSelect={setActiveId}
         onNew={newChat}
+        open={listDrawer.open}
         onDelete={deleteConversation}
         onRename={renameConversation}
       />
+      <ListScrim open={listDrawer.open} onClick={listDrawer.close} />
 
       {/* main column */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <header
+          className="rm-chat-header"
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -817,6 +954,9 @@ export default function ChatPage() {
             flexShrink: 0,
           }}
         >
+          {/* Before the title: the way back to the list, on the left, where
+              back has always been. */}
+          <ListToggle open={listDrawer.open} label="Chats" onClick={listDrawer.toggle} />
           <HeaderTitle
             key={activeId ?? 'none'}
             title={activeTitle}
@@ -825,6 +965,7 @@ export default function ChatPage() {
           />
 
           <div
+            className="rm-chat-pickers"
             style={{
               marginLeft: 'auto',
               display: 'flex',
@@ -841,6 +982,8 @@ export default function ChatPage() {
               options={connections.map((c) => ({ value: c.id, label: c.name }))}
               width={232}
               disabled={locked}
+              emptyLabel="Connect a database…"
+              onEmpty={() => navigate('/sources')}
               badge={
                 <DisclosureBadge
                   policy={connections.find((c) => c.id === connectionId)?.disclosure_policy}
@@ -854,6 +997,8 @@ export default function ChatPage() {
               onChange={setModelId}
               options={models.map((m) => ({ value: m.id, label: m.name }))}
               disabled={locked}
+              emptyLabel="Add a model provider…"
+              onEmpty={() => navigate('/providers')}
             />
           </div>
         </header>
@@ -877,10 +1022,17 @@ export default function ChatPage() {
               {error && <ErrorNote>{error}</ErrorNote>}
 
               {messages.length === 0 && !activeRunId && (
-                <Welcome ready={ready} onPick={(text) => void send(text)} />
+                <Welcome
+                  ready={ready}
+                  setup={setup}
+                  connections={connections}
+                  dismissedSetup={dismissedSetup}
+                  onDismissSetup={dismissSetup}
+                  onPick={(text) => void send(text)}
+                />
               )}
 
-              {messages.map((message) => {
+              {messages.map((message, index) => {
                 if (message.role === 'USER') {
                   // A run that died before writing an answer has no assistant
                   // message to hang off, so the server attaches it here.
@@ -920,6 +1072,12 @@ export default function ChatPage() {
                     onRegenerate={regenerate}
                     onFeedback={leaveFeedback}
                     onSaveAsTemplate={teach}
+                    onAddToDashboard={addToDashboard}
+                    onAddToReport={addToReport}
+                    blocked={blocked}
+                    // The turn before this one is the question it answered —
+                    // what a downloaded result should be called.
+                    title={messages[index - 1]?.content ?? ''}
                   />
                 )
               })}
@@ -1007,6 +1165,251 @@ export default function ChatPage() {
           onSaved={() => setTeaching(null)}
         />
       )}
+
+      {/* Pick the board, then leave for the tile editor carrying the answer.
+          The editor is where a tile is given its type, its chart and its
+          clock, and it opens over the grid the tile is joining — so this ends
+          one screen further on rather than in a second form here. */}
+      {sending?.to === 'dashboard' && (
+        <AddToDashboardDialog
+          question={sending.question}
+          onClose={() => setSending(null)}
+          onPicked={(dashboardId) => {
+            setSending(null)
+            navigate(`/dashboards/${dashboardId}/tiles/new`, {
+              state: {
+                prefill: {
+                  question: sending.question,
+                  sql: sending.sql,
+                  connectionId: threadConnection?.id,
+                  chartConfig: sending.chartConfig,
+                },
+              },
+            })
+          }}
+        />
+      )}
+
+      {sending?.to === 'report' && threadConnection && (
+        <AddToReportDialog
+          connection={threadConnection}
+          modelId={modelId || null}
+          question={sending.question}
+          sql={sending.sql}
+          onClose={() => setSending(null)}
+          onAdded={(reportId) => {
+            setSending(null)
+            // Into the outline, where the block now is: a figure added to a
+            // document nobody is shown is indistinguishable from one that was
+            // not added at all.
+            navigate(`/reports/${reportId}`)
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+/**
+ * How far a fresh install has got, read off what is already on screen.
+ *
+ * No new endpoint and no extra request: the chat page fetches connections and
+ * providers at boot for its own pickers, and every fact this needs is on those
+ * two lists. The real order — provider, connection, schema sync, semantic
+ * layer — lived only in the README, and the third step is not optional in the
+ * way it looks: **an unsynced connection can answer nothing at all**, because
+ * the guard resolves every name in a generated statement against the stored
+ * snapshot.
+ */
+interface SetupState {
+  provider: boolean
+  connection: boolean
+  synced: boolean
+  /** Every step that gates asking a question is done. */
+  usable: boolean
+}
+
+function setupStateOf(connections: Connection[], models: LlmConfig[]): SetupState {
+  const provider = models.length > 0
+  const connection = connections.length > 0
+  const synced = connections.some((c) => Boolean(c.last_synced_at))
+  return { provider, connection, synced, usable: provider && connection && synced }
+}
+
+/** Remembered per browser: a checklist dismissed once should stay dismissed. */
+const SETUP_DISMISSED = 'raymand.setup.dismissed'
+
+/**
+ * The four steps, while any of the first three is outstanding.
+ *
+ * It replaces the starter questions rather than joining them: a chip that
+ * cannot be clicked is worse than no chip, and until a connection is synced
+ * none of them can be answered. The moment the product works, this goes and
+ * the starters come back — which is also why the fourth step, the semantic
+ * layer, is marked optional and does not hold the list open. It improves
+ * answers; it does not gate them.
+ */
+function SetupChecklist({
+  state, connections, onDismiss,
+}: {
+  state: SetupState
+  connections: Connection[]
+  onDismiss: () => void
+}) {
+  const navigate = useNavigate()
+  const first = connections[0]
+  const steps = [
+    {
+      done: state.provider,
+      label: 'Add a model provider',
+      hint: 'The model that writes the SQL. OpenAI-compatible or Anthropic.',
+      action: 'LLM providers',
+      to: '/providers',
+    },
+    {
+      done: state.connection,
+      label: 'Connect a database',
+      hint: 'Read-only credentials. DataMind proves the role cannot write before it uses it.',
+      action: 'Data sources',
+      to: '/sources',
+    },
+    {
+      done: state.synced,
+      label: 'Sync its schema',
+      hint: 'Not optional: every table and column in a generated query is resolved against this snapshot.',
+      action: 'Schema',
+      to: first ? `/sources/${first.id}/schema` : '/sources',
+    },
+    {
+      done: false,
+      optional: true,
+      label: 'Describe what it means',
+      hint: 'A semantic layer — grain, metrics, time conventions. Better answers, not a requirement.',
+      action: 'Semantic layer',
+      to: first ? `/sources/${first.id}/semantic` : '/sources',
+    },
+  ]
+
+  return (
+    <div
+      style={{
+        width: '100%',
+        maxWidth: 520,
+        marginTop: 6,
+        padding: '14px 16px 12px',
+        textAlign: 'left',
+        background: 'var(--panel)',
+        border: '1px solid var(--border)',
+        borderRadius: 12,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-strong)' }}>
+          Four steps to your first answer
+        </span>
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Dismiss the setup checklist"
+          title="Dismiss"
+          className="rm-icon-btn"
+          style={{
+            marginLeft: 'auto',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 24,
+            height: 24,
+            borderRadius: 6,
+            border: 'none',
+            background: 'transparent',
+            color: 'var(--text-faint)',
+            cursor: 'pointer',
+            ['--rm-hover-bg' as string]: 'var(--panel-alt)',
+          }}
+        >
+          <Icon.Close size={13} />
+        </button>
+      </div>
+
+      <ol style={{ display: 'flex', flexDirection: 'column', gap: 9, margin: 0, padding: 0, listStyle: 'none' }}>
+        {steps.map((step, index) => (
+          <li key={step.label} style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
+            {/* Done is a tick; not-done is its number, so the list reads as an
+                order of work rather than a set of empty boxes. */}
+            <span
+              aria-hidden
+              style={{
+                display: 'grid',
+                placeItems: 'center',
+                width: 18,
+                height: 18,
+                flexShrink: 0,
+                marginTop: 1,
+                borderRadius: 999,
+                fontSize: 10.5,
+                fontWeight: 700,
+                background: step.done ? 'var(--green-bg)' : 'var(--panel-alt)',
+                border: `1px solid ${step.done ? 'var(--green-border)' : 'var(--border)'}`,
+                color: step.done ? 'var(--green)' : 'var(--text-faint)',
+              }}
+            >
+              {step.done ? <Icon.Check size={11} /> : index + 1}
+            </span>
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <span
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  color: step.done ? 'var(--text-dim)' : 'var(--text-strong)',
+                }}
+              >
+                {step.label}
+                {step.optional && (
+                  <span style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--text-faint)' }}>
+                    optional
+                  </span>
+                )}
+                <span className="rm-sr">{step.done ? ' — done' : ' — still to do'}</span>
+              </span>
+              <span style={{ display: 'block', fontSize: 11.5, color: 'var(--text-faint)', lineHeight: 1.5 }}>
+                {step.hint}
+              </span>
+            </span>
+            {/* Drawn as a link rather than a quiet action: the finding this
+                list answers is that the empty pickers said "None configured"
+                and *were not links*, and an action faint until hovered would
+                repeat it for anyone who never hovers. */}
+            {!step.done && (
+              <button
+                type="button"
+                onClick={() => navigate(step.to)}
+                className="rm-step-go"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 3,
+                  flexShrink: 0,
+                  padding: '2px 0 2px 8px',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  fontFamily: 'inherit',
+                  color: 'var(--accent)',
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                }}
+              >
+                {step.action}
+                <Icon.ArrowRight size={12} />
+              </button>
+            )}
+          </li>
+        ))}
+      </ol>
     </div>
   )
 }
@@ -1023,7 +1426,19 @@ const STARTERS = [
   'Show me a sample of rows',
 ]
 
-function Welcome({ ready, onPick }: { ready: boolean; onPick: (text: string) => void }) {
+function Welcome({
+  ready, setup, connections, dismissedSetup, onDismissSetup, onPick,
+}: {
+  ready: boolean
+  setup: SetupState
+  connections: Connection[]
+  dismissedSetup: boolean
+  onDismissSetup: () => void
+  onPick: (text: string) => void
+}) {
+  // The checklist replaces the starters while the product cannot answer
+  // anything, and gives them back the moment it can.
+  const showChecklist = !setup.usable && !dismissedSetup
   return (
     <div
       className="rm-welcome"
@@ -1068,26 +1483,34 @@ function Welcome({ ready, onPick }: { ready: boolean; onPick: (text: string) => 
         read-only connection, and shows you exactly what it did.
       </p>
 
-      <div
-        style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 8,
-          justifyContent: 'center',
-          marginTop: 6,
-        }}
-      >
-        {STARTERS.map((text) => (
-          <StarterChip
-            key={text}
-            text={text}
-            disabled={!ready}
-            onClick={() => onPick(text)}
-          />
-        ))}
-      </div>
+      {showChecklist ? (
+        <SetupChecklist
+          state={setup}
+          connections={connections}
+          onDismiss={onDismissSetup}
+        />
+      ) : (
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 8,
+            justifyContent: 'center',
+            marginTop: 6,
+          }}
+        >
+          {STARTERS.map((text) => (
+            <StarterChip
+              key={text}
+              text={text}
+              disabled={!ready}
+              onClick={() => onPick(text)}
+            />
+          ))}
+        </div>
+      )}
 
-      {!ready && (
+      {!ready && !showChecklist && (
         <div style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 2 }}>
           Choose a database and model in the header to begin.
         </div>
@@ -1214,6 +1637,12 @@ function SuggestionSkeleton() {
  * appears on hover and a double-click on the title opens the same editor, so
  * a chat can be renamed from where the eye already is rather than only from
  * the sidebar. Non-editable before the first conversation exists.
+ *
+ * It is also Chat's one <h1>: the thread on screen is what this page is about.
+ * The heading survives the rename editor — while the field carries the draft
+ * the heading goes visually hidden rather than away, because a page that has
+ * no heading for as long as a field has focus is a page with no heading, and
+ * an <h1> wrapped around a text field is a heading with no text.
  */
 function HeaderTitle({
   title, editable, onRename,
@@ -1244,42 +1673,45 @@ function HeaderTitle({
 
   if (editing) {
     return (
-      <input
-        ref={inputRef}
-        value={value}
-        dir={dirOf(value)}
-        onChange={(e) => setValue(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            e.preventDefault()
-            commit()
-          } else if (e.key === 'Escape') {
-            e.preventDefault()
-            setEditing(false)
-          }
-        }}
-        style={{
-          minWidth: 0,
-          maxWidth: 360,
-          padding: '5px 9px',
-          fontSize: 14,
-          fontWeight: 600,
-          color: 'var(--text-strong)',
-          background: 'var(--input-bg)',
-          border: '1px solid var(--accent)',
-          borderRadius: 7,
-          outline: 'none',
-        }}
-      />
+      <>
+        <h1 className="rm-sr">{title}</h1>
+        <input
+          ref={inputRef}
+          value={value}
+          dir={dirOf(value)}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              commit()
+            } else if (e.key === 'Escape') {
+              e.preventDefault()
+              setEditing(false)
+            }
+          }}
+          style={{
+            minWidth: 0,
+            maxWidth: 360,
+            padding: '5px 9px',
+            fontSize: 14,
+            fontWeight: 600,
+            color: 'var(--text-strong)',
+            background: 'var(--input-bg)',
+            border: '1px solid var(--accent)',
+            borderRadius: 7,
+            outline: 'none',
+          }}
+        />
+      </>
     )
   }
 
   return (
-    <div
+    <h1
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}
+      style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}
     >
       <div
         dir={dirOf(title)}
@@ -1312,7 +1744,7 @@ function HeaderTitle({
           <Icon.Pencil size={13} stroke="var(--text-faint)" />
         </button>
       )}
-    </div>
+    </h1>
   )
 }
 
@@ -1342,12 +1774,15 @@ function bucketOf(iso: string, now: number): string {
 const BUCKETS = ['Today', 'Previous 7 days', 'Previous 30 days', 'Older']
 
 function ConversationSidebar({
-  conversations: list, connections, activeId, onSelect, onNew, onDelete, onRename,
+  conversations: list, connections, activeId, open, onSelect, onNew, onDelete,
+  onRename,
 }: {
   conversations: ConversationSummary[]
   /** To name the data source each thread is bound to, on its row. */
   connections: Connection[]
   activeId: string | null
+  /** Below 700px this list is an overlay — see `list-drawer.tsx`. */
+  open?: boolean
   onSelect: (id: string) => void
   onNew: () => void
   onDelete: (id: string) => void
@@ -1383,7 +1818,8 @@ function ConversationSidebar({
 
   return (
     <aside
-      className="rm-chats"
+      id={LIST_DRAWER_ID}
+      className={`rm-chats${open ? ' is-open' : ''}`}
       style={{
         width: 252,
         flexShrink: 0,
@@ -1781,14 +2217,17 @@ function Composer({
             }}
           />
           {/*
-            One slot, two controls — and while a run is going it is *labelled*.
-            An icon-only stop in the same circle, in the same corner, as the
-            send button it replaced was a control nobody noticed had changed:
-            same size, same place, and a 13px square is not a strong enough
-            difference to catch an eye that is reading the answer above it.
-            A pill that says Stop cannot be mistaken for anything else, and the
-            width change is itself the signal that the composer has changed
-            mode. The accent ring around it is the run, breathing.
+            One slot, two controls, one disc — the arrow becomes a square while
+            a run is in flight, which is the convention every chat product has
+            settled on and therefore the one people arrive already knowing.
+            It was a labelled pill for a while, on the worry that a 13px glyph
+            swap in the same circle is too quiet to notice. Three things carry
+            that signal without a word: the square is now a third of the disc
+            rather than a detail in the middle of it, the accent ring around
+            the button breathes for as long as the run lasts, and the hint
+            line directly underneath says `Esc` to stop. The word inside the
+            button was the fourth telling of the same thing — and the only one
+            that cost a control its shape.
           */}
           <button
             className={`rm-send-btn${canStop ? ' is-running' : ''}`}
@@ -1800,18 +2239,16 @@ function Composer({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: 7,
               height: 38,
-              width: busy ? undefined : 38,
-              padding: busy ? '0 15px 0 13px' : 0,
-              fontSize: 13,
-              fontWeight: 600,
+              width: 38,
+              padding: 0,
               borderRadius: 999,
               border: busy ? '1px solid var(--border-strong)' : 'none',
               flexShrink: 0,
               // Stopping is not the accent action — it undoes one — so the
-              // pill stays a neutral surface and lets the answer above it keep
-              // the only accent on the screen.
+              // disc goes neutral and lets the answer above it keep the only
+              // accent on the screen. The ring around it stays accent: that
+              // is the run, not the button.
               background: busy
                 ? 'var(--panel-alt)'
                 : canSend
@@ -1827,17 +2264,10 @@ function Composer({
             }}
           >
             {busy ? (
-              stopping ? (
-                <>
-                  <Spinner size={13} />
-                  Stopping
-                </>
-              ) : (
-                <>
-                  <Icon.Stop size={13} />
-                  Stop
-                </>
-              )
+              // 24 draws a 12px square inside a 38px disc — the same third of
+              // the button the products this borrows from use, and enough to
+              // read as a shape rather than as a dot.
+              stopping ? <Spinner size={15} /> : <Icon.Stop size={24} />
             ) : (
               <Icon.Send size={16} />
             )}
@@ -1900,6 +2330,7 @@ function Composer({
  */
 function HeaderSelect({
   icon, label, value, onChange, options, badge, width = 190, disabled = false,
+  emptyLabel, onEmpty,
 }: {
   icon: React.ReactNode
   label: string
@@ -1911,6 +2342,9 @@ function HeaderSelect({
   width?: number
   /** Read-only: once a thread has started, its database/model can't change. */
   disabled?: boolean
+  /** What to offer when there is nothing to choose — "Add a database…". */
+  emptyLabel?: string
+  onEmpty?: () => void
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -1939,7 +2373,10 @@ function HeaderSelect({
   }, [open])
 
   return (
-    <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
+    // `rm-picker`: below 700px the header wraps onto its own line and the two
+    // pickers share it, so the fixed trigger width — which exists to stop them
+    // jumping on every change — has to give way to an equal share.
+    <div ref={ref} className="rm-picker" style={{ position: 'relative', flexShrink: 0 }}>
       <button
         onClick={() => !disabled && setOpen((v) => !v)}
         disabled={disabled}
@@ -2027,15 +2464,48 @@ function HeaderSelect({
           }}
         >
           {options.length === 0 ? (
-            <div
-              style={{
-                fontSize: 12.5,
-                color: 'var(--text-faint)',
-                padding: '9px 10px',
-              }}
-            >
-              None configured
-            </div>
+            /* An empty menu used to say "None configured" and stop there — a
+               dead end at the exact moment a new user needs a door. The row
+               that says nothing exists is now the row that goes and makes
+               one. */
+            onEmpty ? (
+              <button
+                type="button"
+                className="rm-menu-item"
+                onClick={() => {
+                  setOpen(false)
+                  onEmpty()
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  width: '100%',
+                  padding: '9px 10px',
+                  borderRadius: 7,
+                  border: 'none',
+                  background: 'transparent',
+                  color: 'var(--accent)',
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <Icon.Plus size={13} />
+                {emptyLabel ?? 'Set one up'}
+              </button>
+            ) : (
+              <div
+                style={{
+                  fontSize: 12.5,
+                  color: 'var(--text-faint)',
+                  padding: '9px 10px',
+                }}
+              >
+                None configured
+              </div>
+            )
           ) : (
             options.map((option) => {
               const active = option.value === value
