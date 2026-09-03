@@ -242,6 +242,11 @@ export const Icon = {
       <path d="M18 6L6 18M6 6l12 12" />
     </svg>
   ),
+  Flag: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <path d="M5 21V4.5m0 0h11.5l-2.2 3.7 2.2 3.8H5" />
+    </svg>
+  ),
   Key: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
     <svg {...iconBase(size, stroke, strokeWidth)}>
       <circle cx="7.5" cy="15.5" r="4.5" />
@@ -285,6 +290,11 @@ export const Icon = {
     <svg {...iconBase(size, stroke, strokeWidth)}>
       <circle cx="12" cy="12" r="10" />
       <path d="M12 16v-4.5M12 8h.01" />
+    </svg>
+  ),
+  ArrowRight: ({ size = 14, stroke = 'currentColor', strokeWidth = 2.2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <path d="M5 12h14M13 6l6 6-6 6" />
     </svg>
   ),
   ArrowLeft: ({ size = 15, stroke = 'currentColor', strokeWidth = 2.2 }: IconProps) => (
@@ -354,6 +364,19 @@ export const Icon = {
       <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
       <path d="M14 3v5h5" />
       <path d="M9 13h6M9 17h4" />
+    </svg>
+  ),
+  /** A stop control, drawn filled: the one square in an outlined icon set,
+   *  because "stop" has to read at a glance inside a 38px circle. */
+  Stop: ({ size = 14, stroke = 'currentColor' }: IconProps) => (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill={stroke}
+      style={{ flexShrink: 0 }}
+    >
+      <rect x="6" y="6" width="12" height="12" rx="2.5" />
     </svg>
   ),
   Play: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
@@ -471,15 +494,37 @@ export const inputStyle: React.CSSProperties = {
 }
 
 export function Field({
-  label, children, hint,
+  label, children, hint, status,
 }: {
   label: string
   children: React.ReactNode
   hint?: string
+  /**
+   * A live verdict about the field, on the label's own line — a validity
+   * chip, a count, a spinner. It rides here rather than floating above the
+   * control so that every labelled thing in a form keeps one label style: a
+   * section that grew its own uppercase heading to make room for a status is
+   * how one dialog ends up with two type scales for the same job.
+   */
+  status?: React.ReactNode
 }) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <label style={{ fontSize: 12, color: 'var(--text-dim)' }}>{label}</label>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          minHeight: status ? 20 : undefined,
+        }}
+      >
+        <label style={{ fontSize: 12, color: 'var(--text-dim)' }}>{label}</label>
+        {status && (
+          <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center' }}>
+            {status}
+          </span>
+        )}
+      </div>
       {children}
       {hint && (
         <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>{hint}</span>
@@ -788,6 +833,87 @@ export function GhostButton({
     >
       {children}
     </HoverButton>
+  )
+}
+
+/**
+ * The quiet family: chrome that sits *beside* content rather than on top of it.
+ *
+ * A `GhostButton` is a button — a border, near-white ink, a real box. That is
+ * right for a dialog footer and wrong for the row under an answer, where five
+ * of them in two rows shouted louder than the sentence they were judging. This
+ * is the same control with the box taken away: dimmed ink at rest, and a
+ * tinted pill only under the cursor, so a transcript reads as prose with a
+ * line of chrome under it rather than as a stack of forms.
+ *
+ * `tone` picks the colour that arrives on hover — the control stays neutral
+ * until it is reached for, and then says what it will do. `active` keeps that
+ * colour on for a choice already made.
+ *
+ * Quiet is a matter of size, weight and the missing box — **not** of dimming
+ * the ink. At 11.5px `--text-faint` is about 3.4:1 on the light theme's paper,
+ * and an earlier draft that also dimmed the whole row to 78% took it under
+ * 2.5:1: a control nobody can read is not restrained, it is broken. So the
+ * resting ink is `--text-dim`, and the difference between resting and reached
+ * for is carried by the tinted pill, which is the stronger signal anyway.
+ */
+export type QuietTone = 'neutral' | 'green' | 'red' | 'accent'
+
+const QUIET_TONES: Record<QuietTone, { ink: string; bg: string }> = {
+  neutral: { ink: 'var(--text)', bg: 'var(--panel-alt)' },
+  green: { ink: 'var(--green)', bg: 'var(--green-bg)' },
+  red: { ink: 'var(--red)', bg: 'var(--red-bg)' },
+  accent: { ink: 'var(--accent)', bg: 'var(--accent-bg)' },
+}
+
+export function QuietAction({
+  children, tone = 'neutral', active = false, style, ...rest
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & {
+  tone?: QuietTone
+  /** A verdict already given: hold the tone rather than waiting for a hover. */
+  active?: boolean
+}) {
+  const { ink, bg } = QUIET_TONES[tone]
+  return (
+    <HoverButton
+      {...rest}
+      baseStyle={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        fontSize: 11.5,
+        fontWeight: 500,
+        lineHeight: 1.4,
+        background: active ? bg : 'transparent',
+        color: active ? ink : 'var(--text-dim)',
+        border: 'none',
+        padding: '4px 7px',
+        borderRadius: 6,
+        cursor: rest.disabled ? 'default' : 'pointer',
+        opacity: rest.disabled ? 0.55 : 1,
+        transition: 'color .12s ease, background .12s ease',
+        ...style,
+      }}
+      hoverStyle={{ color: ink, background: bg }}
+    >
+      {children}
+    </HoverButton>
+  )
+}
+
+/** A hairline between two groups of quiet actions. */
+export function ActionDivider() {
+  return (
+    <span
+      aria-hidden
+      style={{
+        width: 1,
+        height: 13,
+        margin: '0 5px',
+        flexShrink: 0,
+        background: 'var(--border)',
+      }}
+    />
   )
 }
 
@@ -1119,7 +1245,9 @@ export function CopyButton({
   const [copied, setCopied] = useState(false)
 
   return (
-    <button
+    <QuietAction
+      tone="green"
+      active={copied}
       onClick={() => {
         void navigator.clipboard.writeText(text).then(() => {
           setCopied(true)
@@ -1128,23 +1256,10 @@ export function CopyButton({
       }}
       title={label}
       aria-label={label}
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 5,
-        fontSize: 11.5,
-        fontWeight: 500,
-        color: copied ? 'var(--green)' : 'var(--text-faint)',
-        background: 'transparent',
-        border: 'none',
-        padding: '4px 6px',
-        borderRadius: 6,
-        cursor: 'pointer',
-      }}
     >
-      {copied ? <Icon.Check size={13} stroke="var(--green)" /> : <Icon.Copy size={13} />}
+      {copied ? <Icon.Check size={13} /> : <Icon.Copy size={13} />}
       {copied ? 'Copied' : label}
-    </button>
+    </QuietAction>
   )
 }
 

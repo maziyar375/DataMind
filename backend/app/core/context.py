@@ -28,6 +28,12 @@ class RequestContext:
     role: str
     session_id: UUID | None = None
     correlation_id: str = ""
+    #: Where the request came from, for the audit log and nothing else.
+    #: Empty when it cannot be established, which is a state rather than a
+    #: failure — `AuditLog.actor_ip` is nullable for exactly that case, and a
+    #: log that refused to record an action because it could not name an
+    #: address would be worse than one that records the action without it.
+    actor_ip: str = ""
 
     @property
     def is_admin(self) -> bool:

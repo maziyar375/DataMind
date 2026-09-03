@@ -244,8 +244,16 @@ backend/app/
                   the three roles, the disclosure rule), normalize.py (the match
                   key), params.py (the AST walk that offers parameters and
                   refuses the rest), validate.py (the guard's fifth entry
-                  point) — self-contained like sqlguard, and allowed to call
-                  the guard because that is what it is for
+                  point), matcher.py + bind.py (the short-circuit and the
+                  cancel-on-unbound rule), backlog.py (what to teach next),
+                  compare.py (the result-set comparator — moved down from
+                  app/eval so the conflict checker and the benchmark share one
+                  set of tolerances), conflict.py (which pairs are worth
+                  running, and with what values), embed.py (masked question
+                  similarity: the vocabulary, the cosine, and the fingerprint
+                  that makes staleness derived rather than tracked) —
+                  self-contained like sqlguard,
+                  and allowed to call the guard because that is what it is for
   semantic/       what the schema *means*: models.py (the document), validate.py
                   (bind it to a snapshot, parse metric SQL), generator.py (build
                   one with a model, one call per table), render.py (the prompt
@@ -282,7 +290,14 @@ backend/app/
                   and report.py (generation jobs; minutes long, so they are
                   polled not streamed, with cooperative-then-hard cancel) +
                   report_graph.py (the compiled report graph; a full generation
-                  and a per-section retry are two entries into it)
+                  and a per-section retry are two entries into it) +
+                  knowledge_maintenance.py (store health: the staleness sweep,
+                  and the conflict checker that runs two near-duplicate
+                  templates and compares the rows — never on a request path,
+                  switchable off per connection) + benchmark.py (the customer's
+                  own accuracy number: the real pipeline per question, the gold
+                  executed through the guard, labels from the comparator and
+                  from no model)
 
 backend/           ← these are SIBLINGS of app/, not inside it
   tests/          unit (incl. test_sqlguard_hostile.py) + integration + eval
@@ -759,9 +774,11 @@ shapes. That is the class this addresses.
 ## Knowledge templates
 
 > The store the learning loop fills, and the plan behind it:
-> **[docs/learning-loop-plan.md](docs/learning-loop-plan.md)**. Phase 1 is in
-> the tree; Phase 2 (match and short-circuit) and Phase 3 (feedback, the review
-> queue, the backlog) follow.
+> **[docs/learning-loop-plan.md](docs/learning-loop-plan.md)**. Phases 1–8 are
+> in the tree: the store, the match and short-circuit, feedback and the
+> backlog, the sweep that keeps the store from rotting, few-shot injection
+> (shipped **off**), the in-product benchmark, the embedding matcher (also
+> **off** until somebody points it at a provider), and the audit trail.
 
 The semantic layer says what the schema *means*. A knowledge template is the
 next thing along: **a question somebody already answered correctly**, stored so
@@ -807,17 +824,25 @@ edited in Data sources → Knowledge.
   `app/knowledge/models.py`, and [docs/security.md](docs/security.md) for why.
   Hand-authored literals travel with structure like a catalog comment; ones a
   model chose are gated like sample values, at *render* time.
-- **Curation is open to any signed-in user** and gated by exactly one function,
-  `services.policy.can_curate`. `curation_admin_only` flips it; no endpoint
-  checks `ctx.is_admin` directly, and a test asserts that on the parse.
+- **Curation is gated by exactly one function**, `services.policy.can_curate`,
+  and no endpoint checks `ctx.is_admin` directly — a test asserts that on the
+  parse. Phase 8 turned `curation_admin_only` **on by default**, and the rule
+  it means is **administrator *or* the owner of the connection**. The second
+  half is what makes the flip correct rather than a lockout: `_owned()` already
+  scopes every knowledge endpoint to `owner_id == ctx.user_id`, so admin-only
+  alone would have meant *the person who owns a connection cannot curate their
+  own store*. Nobody can observe a difference today; it starts mattering the
+  moment a connection can be **shared** (mvp2 §D1), which is why it is on
+  before sharing exists rather than after.
 - **`app/knowledge/` is self-contained** on the same terms as `sqlguard`,
   `semantic` and `reports` — no fastapi, sqlalchemy, litellm, `app.infra` or
   `app.services`. It *may* import `app.sqlguard`: validating a template **is**
   calling the guard, and that is the point.
 
 **Answering from the store — the `match` node (Phase 2).** Between `route` and
-`retrieve`, no model call, and it changes an answer **without changing a byte of
-the prompt** — `PROMPT_VERSION` is still `v8`.
+`retrieve`, no model call, and on the short-circuit path it changes an answer
+**without changing a byte of the prompt**. (Phase 5 gave the same node a second
+job on a *miss* — see below — and that is what moved `PROMPT_VERSION` to v9.)
 
 - **Two thresholds, not one.** `SHORT_CIRCUIT_THRESHOLD` (0.85) answers;
   `FEW_SHOT_THRESHOLD` is Phase 5's. A near-miss is not a hit: a miss costs
@@ -888,6 +913,192 @@ Ships the reason anyone curates.
   question-shaped (a template), definition-shaped (the semantic layer), or
   neither (dismiss with a reason) — three radios, §1.5's rule as an
   interaction.
+
+**Few-shot injection — the one change that can make the product worse (Phase
+5).** `PROMPT_VERSION` moves **v8 → v9** here, and the whole of that move is one
+slot.
+
+- **Off renders the v8 bytes, exactly.** The slot is written
+  `{schema}\n{examples}\n{history}` and `RetrievedContext.render_examples`
+  returns the empty string when there is nothing to show, so it collapses to the
+  newline that was already there. A connection with no store, one with
+  `knowledge_examples_enabled` off (**the default**), the draft graph and the
+  templates-off eval arm all take that path — which is what keeps every number
+  in [docs/eval.md](docs/eval.md) meaningful.
+- **The default is a measurement, not caution.** Eval Round 2 measured an
+  unconditional addition to this exact prompt costing ten points of execution
+  accuracy on a small model (36% → 26%) by crowding out the schema, and
+  few-shot examples are that shape of change. The plan gates the flip on
+  held-out accuracy not being worse; until [eval.md §6.1](docs/eval.md) has both
+  numbers, off is the honest default.
+- **Last, and small.** Schema first, semantic layer second, examples third. At
+  most four, each capped, the block capped at a fifth of what catalog comments
+  get, and a long example skipped whole rather than truncated so it cannot shut
+  out the short ones behind it.
+- **`match` collects them on a miss, never on a hit.** A run answered from the
+  store has no generator to teach. `STALE`, `CONFLICTED`, `BENCHMARK_ONLY` and
+  `HELD_OUT` templates are excluded here exactly as they are from the
+  short-circuit — a stale template teaching the generator a pattern the schema
+  no longer supports is worse than one refusing to answer.
+- **The disclosure gate is at render time**, like every other rung: a
+  `MODEL_DERIVED` template's literals are withheld under `NONE`/`AGGREGATE`, and
+  the *whole example* is withheld rather than stripped, because there is no way
+  to remove a literal from a `WHERE` clause and leave a statement that still
+  teaches anything.
+- **`--templates on|off` is how it gets measured.** The arm builds a store out
+  of the suite's own questions, holds out two in five deterministically, and
+  excludes every record from the store it is measured against. Only the
+  `held_out` row of the per-tag breakdown is worth quoting.
+
+**Store health — staleness and conflict (Phase 4).** A curated store decays two
+ways, and the two have different costs, so they are two different jobs.
+
+- **Staleness is a parse, so it runs inline on the sync that caused it.**
+  `KnowledgeService.sweep_staleness` re-validates every live template against
+  the snapshot `POST /schema/sync` just wrote: `ACTIVE` → `STALE` with the
+  guard's own sentence in `status_reason` (*"column `orders.region` no longer
+  exists"*, plus the fix), withdrawn from matching and from few-shot, **never
+  deleted**. The reverse transition is there too — a template that resolves
+  again returns to `ACTIVE` on its own, without which the first bad sync is
+  permanent and healing the store means editing forty rows by hand. An empty
+  snapshot changes nothing: that is a broken sync, not a broken store.
+- **Conflict is an execution, and it is what no competitor can do.** Fabric
+  reasons over SQL *text* and reports a confidence of 1–5.
+  `app/workers/knowledge_maintenance.py` finds near-duplicate normalised
+  questions (0.60, measured against real pairs, not picked), binds **both** to
+  the same probe values, runs both through `execute_saved_sql` — the guard's
+  own door, read-only, row-capped at 500 — and compares with
+  `app/knowledge/compare.py`. Differ → **both** rows `CONFLICTED`,
+  `conflicts_with` populated, and the diverging rows stored in
+  `conflict_evidence` from each row's own point of view. The system never picks
+  a winner.
+- **Probe values are derived, never invented.** A date slot gets a fixed past
+  window; a string slot gets a value the *curator* declared; a string slot with
+  no declared vocabulary **stops the pair**, logged with the slot's name. A
+  guessed noun would compare two empty result sets and call that agreement —
+  a check that reports the store healthy because it could not test it.
+- **The comparator moved down a layer, and that is deliberate.** `values_equal`
+  / `result_sets_match` / the tolerances now live in `app/knowledge/compare.py`
+  and `app/eval/metrics.py` re-exports them. `app.eval` is offline-only by
+  contract, and the conflict checker and Phase 6's in-product benchmark both
+  need exactly these tolerances: one implementation, both callers, contract
+  intact.
+- **The customer's off switch is `connections.conflict_checks_enabled`**,
+  checked *before* a connector is opened. It stops only the half that runs SQL
+  on their database; the staleness sweep is a parse and keeps working.
+- **Pruning is surfaced, never enforced.** Ninety days with no hits earns one
+  faint line and no action button. Genie caps instructions at 100 per agent;
+  DataMind's version of that cap is visibility, because a template written for
+  a question asked once a year is not waste.
+
+**The score — a benchmark of the customer's own (Phase 6).** Where a connection
+owner gets a number about *their* data, without a developer.
+
+- **Separate tables, deliberately.** `benchmark_sets` / `benchmark_runs` /
+  `benchmark_results`, **not** `eval_runs` / `eval_results`. MVP2 Part 5's
+  meta-rule: the customer-facing instrument and the frozen developer suite must
+  stay architecturally separate *"or the two will contaminate each other within
+  a month"*, and sharing a table is how that starts. They share a vocabulary
+  and one comparator; they share no table and no import, and a test asserts the
+  second on the parse.
+- **Building a set withdraws its members from answering.** That is the point,
+  not a side effect: §1.3's rule is that a template is retrievable **or**
+  benchmarkable and never both, and it is enforced in the query the ask path
+  uses. Deleting the set gives the questions back.
+- **A fixed fraction is `HELD_OUT` at creation**, deterministically by sorted id
+  so the split is reproducible from the set's own membership list. **That is
+  the only number worth putting in front of a customer.**
+- **Two numbers, and the strip says which to believe.** Held-out first and
+  larger and on the sparkline; questions answered *from* a template second and
+  smaller, because that one goes up for the wrong reasons. `from_template` is
+  the **observed** fact of what the run did, not a label assigned before it ran.
+  Genie's Evaluations tab shows one number.
+- **Nothing that did not run is in a denominator.** A member whose parameters
+  could not be probed, or whose stored answer no longer executes, is counted in
+  `total` and in neither accuracy — and the difference is shown. An accuracy
+  over a shrinking denominator always flatters.
+- **No LLM judge.** Labels come from `app/knowledge/compare.py`, the same
+  deterministic comparator the eval and the conflict checker use. Fabric fell
+  back to a judge and gets *true / false / unclear*.
+- **Runs execute in `app/workers/benchmark.py`**, through the real
+  `AnalyticsPipeline` — a benchmark that measured a simplified path would
+  measure something nobody experiences. A run stranded by a restart is **failed,
+  not resumed**: half of it was scored against a store, a schema and a model
+  that may all have moved.
+
+**Searching the store by meaning — the embedding matcher (Phase 7).** D3's
+return, collected: `EmbeddingMatcher` sits behind the same Protocol
+`LexicalMatcher` does, so this phase is a **constructor change** and the `match`
+node, both thresholds, the binder, the short-circuit and the badge are untouched.
+
+- **Masked question similarity (DAIL-SQL).** Table names, column names, the
+  values a *curator* declared, and literals are all replaced with `<table>`,
+  `<column>` and `<value>` before anything is embedded — so *"revenue in July
+  for West"* retrieves the template written for *"revenue in March for East"*.
+  Three tokens rather than one, because `revenue by <column>` and `revenue by
+  <table>` are different questions.
+- **The loop degrades to lexical, never to nothing.** `FallbackMatcher` reads an
+  empty result from the embedding half as *"ask the trigram one"*, and every way
+  it can fail produces one: no model pinned, no fresh vector, a revoked key, a
+  provider that changed width. **Word matching is not a degraded state** —
+  `pg_trgm` needs no provider, no key and no budget, and it is the default.
+- **Staleness is derived, never tracked.** A stored vector carries the SHA-256 of
+  the three things that made it (masked text, model id, width). Asking whether it
+  is current is recomputing that and comparing, so a template edit, a schema
+  re-sync (the mask reads the schema's own names) and a model change each
+  invalidate exactly what they should — and there is no invalidation call
+  anybody can forget. A vector that fails is *ignored*, never deleted.
+- **No pgvector, no vector DB, no new deployment unit.** Vectors are a
+  `double precision[]` beside the template and cosine is computed in
+  `app/knowledge/embed.py`, for the same reason `trigram_similarity` is computed
+  in the matcher: **the index narrows, the matcher decides.**
+- **Availability is a capability check.** Anthropic is refused with no network
+  call; anything OpenAI-compatible is *asked*, and the width that comes back is
+  **measured** and pinned on the connection — two gateways serving one model
+  name at different widths is a thing that happens.
+- **Indexing is a worker's job.** `index_embeddings` is the third pass of the
+  six-hourly sweep, after staleness and conflicts so it never spends a call on a
+  row those two just withdrew. Turning the feature on indexes inline, so it
+  works on the next question rather than in six hours.
+- **`--matcher lexical|embedding` is how it gets measured**, and the report
+  prints retrieval *and* execution accuracy on one line with the reason:
+  FK-neighbour expansion once moved recall 70% → 86% with **flat** accuracy.
+
+**Provenance — who did what, and whose queue a flag lands in (Phase 8).**
+`audit_logs` has been in the schema since migration `0001` with **nothing
+writing to it**; mvp2 §D4 calls turning it on the best ratio in that document,
+because a product whose positioning is *"you decide what leaves your database"*
+could not prove what left.
+
+- **Every curation write leaves a row** — template created / updated /
+  archived, a store sweep, an embedding switch, a review resolved, a benchmark
+  set built, deleted or run, and a flag recorded. A test asserts each of those
+  route functions calls `audit.record`, on the parse: one unlogged write is
+  enough to make the log untrustworthy, because a reader cannot tell a gap from
+  a quiet week.
+- **Three rules in `services/audit.py`, and each is how this kind of log
+  rots.** (1) The row joins the caller's transaction and is never flushed on
+  its own — a log that commits while the action rolls back invents history.
+  (2) Failing to log never fails the action; the **opposite** posture to the
+  guard's, and right for the same reason the guard's is right: this observes,
+  it does not authorise. (3) `detail` carries identifiers and counts, **never**
+  SQL, question text or result rows — enforced in one function rather than
+  trusted at ten call sites, because a log that became a second copy of the
+  store is a second thing to secure.
+- **`GET /audit` is administrators only.** An audit log is a record *about
+  people*; a curator needs to change their connection's knowledge and has no
+  operational need to read who else did what, and from where. The actor is a
+  display name, never an address — the review queue's rule.
+- **`actor_ip` reads `X-Real-IP`, never `X-Forwarded-For`.** The second is
+  client-settable, and a log holding an address the actor chose is worse than
+  one holding none: the first is wrong and looks authoritative.
+- **A flag is routed to the connection's owner, and the server says whose queue
+  it went to.** `AnswerFeedbackRead.routed_to` is a display name resolved at
+  write time, so the acknowledgement stays true when ownership moves — prose
+  baked into the SPA would quietly start lying. Until mvp2 §D1 gives a
+  connection an explicit grant list, "the owner" and "whoever can act on this"
+  are the same person by construction, which is honest about the limitation
+  rather than pretending.
 
 ---
 
@@ -1228,7 +1439,7 @@ where someone would otherwise repeat them: a "getting the answer right" block in
   the pipeline — the pipeline reads a layer, a report reads a node, and
   neither a layer nor a node knows anything about the thing above it.
 
-  **The three constants as they stand: `PROMPT_VERSION` = `"v8"`,
+  **The three constants as they stand: `PROMPT_VERSION` = `"v9"`,
   `SEMANTIC_PROMPT_VERSION` = `"s4"`, `REPORT_PROMPT_VERSION` = `"r4"`.** Move
   the one whose prompts you changed — and note that "prompts" means everything
   the model ends up reading, not only wording: a change to how much of the

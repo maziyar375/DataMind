@@ -45,14 +45,6 @@ const MONTHS = [
   'July', 'August', 'September', 'October', 'November', 'December',
 ]
 
-const ROLE_TONE: Record<string, string> = {
-  fact: 'var(--accent)',
-  dimension: 'var(--green)',
-  bridge: 'var(--amber)',
-  lookup: 'var(--text-faint)',
-  unknown: 'var(--border-strong)',
-}
-
 /** What each table's kind is called, and the chip tone that carries it.
  *
  *  The kind used to be encoded only as a stripe down the left of a collapsed
@@ -1191,6 +1183,93 @@ function Overview({
 /** Sticks to the top of the scroll area: a 42-table schema scrolls past this
  *  in a second, and losing the search box is what makes a long list feel
  *  unmanageable. */
+/**
+ * The pill switcher, in the two places this file needs one.
+ *
+ * It was drawn inline in the filter bar and then wanted again inside an
+ * expanded table, which is the moment a shape stops being a layout and starts
+ * being a control. `Segmented` in `ui.tsx` is the app's other one and is
+ * deliberately not this: that is a two- or three-way *view* toggle with no
+ * counts, and stretching it to carry a number per option would have made both
+ * callers worse.
+ *
+ * `alert` is what makes a count worth having — a red number is the difference
+ * between a tab that says how much is in there and a tab that says something
+ * in there needs you.
+ */
+function PillTabs<T extends string>({
+  value, onChange, options, ariaLabel,
+}: {
+  value: T
+  onChange: (next: T) => void
+  options: { value: T; label: string; count?: number; alert?: boolean }[]
+  ariaLabel: string
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label={ariaLabel}
+      style={{
+        display: 'flex',
+        gap: 2,
+        background: 'var(--panel-alt)',
+        borderRadius: 9,
+        padding: 3,
+        flexShrink: 0,
+      }}
+    >
+      {options.map((option) => {
+        const active = option.value === value
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(option.value)}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 12.5,
+              fontWeight: 600,
+              padding: '6px 11px',
+              borderRadius: 6,
+              cursor: 'pointer',
+              border: 'none',
+              color: active ? 'var(--text-strong)' : 'var(--text-dim)',
+              background: active ? 'var(--panel)' : 'transparent',
+              boxShadow: active ? '0 1px 3px rgba(0,0,0,0.10)' : 'none',
+            }}
+          >
+            {option.label}
+            {option.count !== undefined && (
+              <span
+                style={{
+                  fontSize: 10.5,
+                  fontWeight: 700,
+                  fontVariantNumeric: 'tabular-nums',
+                  color: option.alert ? 'var(--red)' : 'var(--text-faint)',
+                }}
+              >
+                {option.count}
+              </span>
+            )}
+            {option.alert && option.count === undefined && (
+              <span
+                aria-label="needs attention"
+                style={{
+                  width: 5, height: 5, borderRadius: '50%', background: 'var(--red)',
+                }}
+              />
+            )}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 function FilterBar({
   value, onChange, search, onSearch, counts, shown,
 }: {
@@ -1227,55 +1306,17 @@ function FilterBar({
         boxShadow: '0 10px 24px -18px rgba(0,0,0,0.55)',
       }}
     >
-      <div
-        style={{
-          display: 'flex',
-          gap: 2,
-          background: 'var(--panel-alt)',
-          borderRadius: 9,
-          padding: 3,
-        }}
-      >
-        {options.map((option) => {
-          const active = option.value === value
-          const count = counts[option.value]
-          return (
-            <button
-              key={option.value}
-              onClick={() => onChange(option.value)}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                fontSize: 12.5,
-                fontWeight: 600,
-                padding: '6px 11px',
-                borderRadius: 6,
-                cursor: 'pointer',
-                border: 'none',
-                color: active ? 'var(--text-strong)' : 'var(--text-dim)',
-                background: active ? 'var(--panel)' : 'transparent',
-                boxShadow: active ? '0 1px 3px rgba(0,0,0,0.10)' : 'none',
-              }}
-            >
-              {option.label}
-              <span
-                style={{
-                  fontSize: 10.5,
-                  fontWeight: 700,
-                  fontVariantNumeric: 'tabular-nums',
-                  color:
-                    option.value === 'issues' && count > 0
-                      ? 'var(--red)'
-                      : 'var(--text-faint)',
-                }}
-              >
-                {count}
-              </span>
-            </button>
-          )
-        })}
-      </div>
+      <PillTabs
+        value={value}
+        onChange={onChange}
+        ariaLabel="Filter tables"
+        options={options.map((option) => ({
+          value: option.value,
+          label: option.label,
+          count: counts[option.value],
+          alert: option.value === 'issues' && counts[option.value] > 0,
+        }))}
+      />
 
       <div style={{ position: 'relative', marginLeft: 'auto', width: 260 }}>
         <span
@@ -1306,6 +1347,31 @@ function FilterBar({
 }
 
 // ── one entity ─────────────────────────────────────────────────────────────
+/**
+ * One table in the layer — a row when closed, three tabs when open.
+ *
+ * Opening one used to produce a single 1,800px form: the meaning fields, then
+ * every described column, then every metric, then two switches at the very
+ * bottom. Three lists of near-identical collapsed rows in one scroll, with the
+ * table's own name off the top of the screen by the time you reached the
+ * metrics — you could not tell which list you were in, and the one control
+ * that says *I have checked this* was the furthest thing from the heading.
+ *
+ * So the open card is **one region at a time**, under a header that stays put:
+ *
+ *  - the head sticks while the body scrolls, so the table being edited is
+ *    always named;
+ *  - `PillTabs` splits the body into Meaning, Columns and Metrics, each with
+ *    its own count, so the page has a size the reader can hold;
+ *  - a tab whose contents are broken carries its count in red, because a tab
+ *    is only allowed to hide things that are not asking for you.
+ *
+ * The role tone is a chip and no longer a 2px stripe down the left of the
+ * header: the stripe covered the head and stopped at the body, so an open card
+ * looked cut in half.
+ */
+type Section = 'meaning' | 'columns' | 'metrics'
+
 function EntityCard({
   connectionId, entity, open, onToggle, onChange,
 }: {
@@ -1317,6 +1383,10 @@ function EntityCard({
 }) {
   const broken = hasIssue(entity)
   const role = ROLE_META[entity.role] ?? ROLE_META.unknown
+  const [section, setSection] = useState<Section>('meaning')
+
+  const badColumns = entity.columns.filter((c) => !c.valid).length
+  const badMetrics = entity.metrics.filter((m) => !m.valid).length
 
   return (
     <div
@@ -1324,98 +1394,147 @@ function EntityCard({
         border: `1px solid ${broken ? 'var(--red-border)' : 'var(--border)'}`,
         borderRadius: 11,
         background: 'var(--panel)',
-        overflow: 'hidden',
+        // Deliberately **not** `overflow: hidden`. That is the tidy way to keep
+        // children inside a rounded card, and it also makes this card the
+        // scrollport for anything sticky inside it — which turned the header
+        // below into a block offset 56px down its own card, floating over the
+        // first field row and sticking to nothing. Nothing here needs clipping:
+        // the head and the body are both `--panel` on a `--panel` card.
         opacity: entity.exclude ? 0.6 : 1,
       }}
     >
-      <button
-        onClick={onToggle}
-        aria-expanded={open}
+      {/* Sticky only while open, and only as tall as the head plus its tabs:
+          a closed row has nothing to stay behind, and a sticky element in a
+          list of forty of them would pile up down the page.
+          `top` clears the filter bar, which is sticky at 6 and ~44 tall. */}
+      <div
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 11,
-          width: '100%',
-          padding: '12px 14px',
-          background: 'transparent',
-          border: 'none',
-          borderLeft: `2px solid ${ROLE_TONE[entity.role] ?? ROLE_TONE.unknown}`,
-          cursor: 'pointer',
-          textAlign: 'left',
+          position: open ? 'sticky' : undefined,
+          top: 56,
+          zIndex: open ? 3 : undefined,
+          background: 'var(--panel)',
+          borderBottom: open ? '1px solid var(--border)' : undefined,
+          borderRadius: '10px 10px 0 0',
         }}
       >
-        <Icon.Chevron open={open} size={13} stroke="var(--text-dim)" />
+        <button
+          onClick={onToggle}
+          aria-expanded={open}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 11,
+            width: '100%',
+            padding: '12px 14px',
+            background: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+            textAlign: 'left',
+          }}
+        >
+          <Icon.Chevron open={open} size={13} stroke="var(--text-dim)" />
 
-        <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
-          <span style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
-            <span
-              style={{
-                fontSize: 13.5,
-                fontWeight: 600,
-                color: 'var(--text-strong)',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {entity.label || entity.table.split('.').slice(-1)[0]}
+          <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
+            <span style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
+              <span
+                style={{
+                  fontSize: 13.5,
+                  fontWeight: 600,
+                  color: 'var(--text-strong)',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {entity.label || entity.table.split('.').slice(-1)[0]}
+              </span>
+              <span
+                className="mono"
+                style={{
+                  fontSize: 11,
+                  color: 'var(--text-faint)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {entity.table}
+              </span>
             </span>
             <span
-              className="mono"
               style={{
-                fontSize: 11,
-                color: 'var(--text-faint)',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
+                display: 'flex',
+                alignItems: 'baseline',
+                gap: 8,
+                minWidth: 0,
+                fontSize: 11.5,
               }}
             >
-              {entity.table}
+              <span
+                style={{
+                  color: entity.grain ? 'var(--text-dim)' : 'var(--text-faint)',
+                  fontStyle: entity.grain ? 'normal' : 'italic',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {entity.grain || 'no grain described yet'}
+              </span>
+              {/* What is inside, without opening it — and once it *is* open the
+                  tabs carry the same two numbers, so this stands down. */}
+              {!open && (
+                <span
+                  style={{ color: 'var(--text-faint)', whiteSpace: 'nowrap', flexShrink: 0 }}
+                >
+                  {entity.columns.length > 0 && `${entity.columns.length} cols`}
+                  {entity.columns.length > 0 && entity.metrics.length > 0 && ' · '}
+                  {entity.metrics.length > 0 &&
+                    `${entity.metrics.length} ${entity.metrics.length === 1 ? 'metric' : 'metrics'}`}
+                </span>
+              )}
             </span>
           </span>
-          <span
-            style={{
-              display: 'flex',
-              alignItems: 'baseline',
-              gap: 8,
-              minWidth: 0,
-              fontSize: 11.5,
-            }}
-          >
-            <span
-              style={{
-                color: entity.grain ? 'var(--text-dim)' : 'var(--text-faint)',
-                fontStyle: entity.grain ? 'normal' : 'italic',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {entity.grain || 'no grain described yet'}
-            </span>
-            {/* What is inside, without opening it. Quiet text rather than more
-                chips — the chips to the right are for the exceptions. */}
-            <span
-              style={{ color: 'var(--text-faint)', whiteSpace: 'nowrap', flexShrink: 0 }}
-            >
-              {entity.columns.length > 0 && `${entity.columns.length} cols`}
-              {entity.columns.length > 0 && entity.metrics.length > 0 && ' · '}
-              {entity.metrics.length > 0 &&
-                `${entity.metrics.length} ${entity.metrics.length === 1 ? 'metric' : 'metrics'}`}
-            </span>
-          </span>
-        </span>
 
-        <span style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
-          <Chip tone={role.tone}>{role.label}</Chip>
-          {entity.exclude && <Chip>hidden</Chip>}
-          {broken && <Chip tone="red">needs attention</Chip>}
-          {entity.provenance.reviewed && <Chip tone="accent">reviewed</Chip>}
-        </span>
-      </button>
+          <span style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
+            <Chip tone={role.tone}>{role.label}</Chip>
+            {entity.exclude && <Chip>hidden</Chip>}
+            {broken && <Chip tone="red">needs attention</Chip>}
+            {entity.provenance.reviewed && <Chip tone="accent">reviewed</Chip>}
+          </span>
+        </button>
+
+        {open && (
+          <div style={{ padding: '0 14px 12px 38px' }}>
+            <PillTabs
+              value={section}
+              onChange={setSection}
+              ariaLabel={`Sections of ${entity.label || entity.table}`}
+              options={[
+                {
+                  value: 'meaning',
+                  label: 'Meaning',
+                  alert: !entity.valid || entity.issue !== '',
+                },
+                {
+                  value: 'columns',
+                  label: 'Columns',
+                  count: entity.columns.length,
+                  alert: badColumns > 0,
+                },
+                {
+                  value: 'metrics',
+                  label: 'Metrics',
+                  count: entity.metrics.length,
+                  alert: badMetrics > 0,
+                },
+              ]}
+            />
+          </div>
+        )}
+      </div>
 
       {open && (
         <div
           style={{
-            borderTop: '1px solid var(--border)',
             padding: 18,
             display: 'flex',
             flexDirection: 'column',
@@ -1423,106 +1542,115 @@ function EntityCard({
             background: 'var(--panel)',
           }}
         >
-          {entity.issue && <Note tone="amber">{entity.issue}</Note>}
+          {entity.issue && section === 'meaning' && <Note tone="amber">{entity.issue}</Note>}
 
-          <Group title="Meaning">
-            <FieldRow>
-              <Field label="Business name">
-                <TextInput
-                  value={entity.label}
-                  placeholder="e.g. Orders"
-                  onChange={(e) => onChange({ label: e.target.value })}
-                />
-              </Field>
-              <Field label="Also called" hint="Comma separated.">
-                <TextInput
-                  value={entity.synonyms.join(', ')}
-                  placeholder="e.g. purchases, sales orders"
-                  onChange={(e) => onChange({ synonyms: splitList(e.target.value) })}
-                />
-              </Field>
-            </FieldRow>
+          {section === 'meaning' && (
+            <>
+              <FieldRow>
+                <Field label="Business name">
+                  <TextInput
+                    value={entity.label}
+                    placeholder="e.g. Orders"
+                    onChange={(e) => onChange({ label: e.target.value })}
+                  />
+                </Field>
+                <Field label="Also called" hint="Comma separated.">
+                  <TextInput
+                    value={entity.synonyms.join(', ')}
+                    placeholder="e.g. purchases, sales orders"
+                    onChange={(e) => onChange({ synonyms: splitList(e.target.value) })}
+                  />
+                </Field>
+              </FieldRow>
 
-            <Field
-              label="One row is…"
-              hint="The most valuable sentence here — it is what stops a join from double-counting."
-            >
-              <TextInput
-                value={entity.grain}
-                placeholder="e.g. one row per line item on an order"
-                onChange={(e) => onChange({ grain: e.target.value })}
-              />
-            </Field>
-
-            <Field label="Description">
-              <TextArea
-                value={entity.description}
-                placeholder="What this table records, and when a row appears."
-                onChange={(e) => onChange({ description: e.target.value })}
-              />
-            </Field>
-
-            <FieldRow>
-              <Field label="Kind of table">
-                <Select
-                  value={entity.role}
-                  onChange={(e) =>
-                    onChange({ role: e.target.value as SemanticEntity['role'] })
-                  }
-                >
-                  <option value="unknown">Not specified</option>
-                  <option value="fact">Fact — events or transactions</option>
-                  <option value="dimension">Dimension — things being described</option>
-                  <option value="bridge">Bridge — joins two others</option>
-                  <option value="lookup">Lookup — reference codes</option>
-                </Select>
-              </Field>
               <Field
-                label="Date column"
-                hint="Which column answers “when did this happen”."
+                label="One row is…"
+                hint="The most valuable sentence here — it is what stops a join from double-counting."
               >
                 <TextInput
-                  className="mono"
-                  value={entity.default_time_column}
-                  placeholder="e.g. ordered_at"
-                  onChange={(e) => onChange({ default_time_column: e.target.value })}
+                  value={entity.grain}
+                  placeholder="e.g. one row per line item on an order"
+                  onChange={(e) => onChange({ grain: e.target.value })}
                 />
               </Field>
-            </FieldRow>
-          </Group>
 
-          <Columns entity={entity} onChange={(columns) => onChange({ columns })} />
+              <Field label="Description">
+                <TextArea
+                  value={entity.description}
+                  placeholder="What this table records, and when a row appears."
+                  onChange={(e) => onChange({ description: e.target.value })}
+                />
+              </Field>
 
-          <Metrics
-            connectionId={connectionId}
-            entity={entity}
-            onChange={(metrics) => onChange({ metrics })}
-          />
+              <FieldRow>
+                <Field label="Kind of table">
+                  <Select
+                    value={entity.role}
+                    onChange={(e) =>
+                      onChange({ role: e.target.value as SemanticEntity['role'] })
+                    }
+                  >
+                    <option value="unknown">Not specified</option>
+                    <option value="fact">Fact — events or transactions</option>
+                    <option value="dimension">Dimension — things being described</option>
+                    <option value="bridge">Bridge — joins two others</option>
+                    <option value="lookup">Lookup — reference codes</option>
+                  </Select>
+                </Field>
+                <Field
+                  label="Date column"
+                  hint="Which column answers “when did this happen”."
+                >
+                  <TextInput
+                    className="mono"
+                    value={entity.default_time_column}
+                    placeholder="e.g. ordered_at"
+                    onChange={(e) => onChange({ default_time_column: e.target.value })}
+                  />
+                </Field>
+              </FieldRow>
 
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-              gap: 14,
-              paddingTop: 14,
-              borderTop: '1px solid var(--border)',
-            }}
-          >
-            <Toggle
-              checked={entity.provenance.reviewed}
-              onChange={(reviewed) =>
-                onChange({ provenance: { ...entity.provenance, reviewed } })
-              }
-              label="Reviewed"
-              hint="You have checked this description is true."
+              {/* What to *do* with this table, at the end of the tab that
+                  describes it — rather than at the foot of a scroll that used
+                  to run past every column and metric to reach it. */}
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+                  gap: 14,
+                  paddingTop: 14,
+                  borderTop: '1px solid var(--border)',
+                }}
+              >
+                <Toggle
+                  checked={entity.provenance.reviewed}
+                  onChange={(reviewed) =>
+                    onChange({ provenance: { ...entity.provenance, reviewed } })
+                  }
+                  label="Reviewed"
+                  hint="You have checked this description is true."
+                />
+                <Toggle
+                  checked={entity.exclude}
+                  onChange={(exclude) => onChange({ exclude })}
+                  label="Hide from the model"
+                  hint="For deprecated or staging tables."
+                />
+              </div>
+            </>
+          )}
+
+          {section === 'columns' && (
+            <Columns entity={entity} onChange={(columns) => onChange({ columns })} />
+          )}
+
+          {section === 'metrics' && (
+            <Metrics
+              connectionId={connectionId}
+              entity={entity}
+              onChange={(metrics) => onChange({ metrics })}
             />
-            <Toggle
-              checked={entity.exclude}
-              onChange={(exclude) => onChange({ exclude })}
-              label="Hide from the model"
-              hint="For deprecated or staging tables."
-            />
-          </div>
+          )}
         </div>
       )}
     </div>
@@ -1534,7 +1662,13 @@ function EntityCard({
 function Group({
   title, hint, count, action, children,
 }: {
-  title: string
+  /**
+   * Optional, because inside an expanded table the tab above already names
+   * the region: a heading that repeats the tab you just pressed is a line of
+   * type spent saying nothing. Without one this is the region's guidance and
+   * its one action, over the rule.
+   */
+  title?: string
   hint?: string
   count?: number
   action?: React.ReactNode
@@ -1557,30 +1691,32 @@ function Group({
         }}
       >
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'baseline',
-              gap: 7,
-              fontSize: 13,
-              fontWeight: 600,
-              color: 'var(--text-strong)',
-            }}
-          >
-            {title}
-            {count !== undefined && (
-              <span style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--text-faint)' }}>
-                {count}
-              </span>
-            )}
-          </div>
+          {title && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'baseline',
+                gap: 7,
+                fontSize: 13,
+                fontWeight: 600,
+                color: 'var(--text-strong)',
+              }}
+            >
+              {title}
+              {count !== undefined && (
+                <span style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--text-faint)' }}>
+                  {count}
+                </span>
+              )}
+            </div>
+          )}
           {hint && (
             <div
               style={{
                 fontSize: 11.5,
                 lineHeight: 1.5,
                 color: 'var(--text-dim)',
-                marginTop: 4,
+                marginTop: title ? 4 : 0,
               }}
             >
               {hint}
@@ -1601,7 +1737,9 @@ function Columns({
   entity: SemanticEntity
   onChange: (columns: SemanticColumn[]) => void
 }) {
-  const [adding, setAdding] = useState('')
+  // `null` is "not adding"; a string is the name being typed. Two states in
+  // one value, because an empty string is a legitimate thing to be typing.
+  const [adding, setAdding] = useState<string | null>(null)
   // Collapsed by default, and several may be open at once — the same rule the
   // table list above follows, so the two levels behave alike.
   const [open, setOpen] = useState<Set<number>>(new Set())
@@ -1625,20 +1763,64 @@ function Columns({
   }
 
   function add() {
-    const name = adding.trim()
+    const name = (adding ?? '').trim()
     if (!name) return
     onChange([...entity.columns, blankColumn(name)])
     // Open what was just added — a new row that arrives collapsed and empty
     // looks like the button did nothing.
     setOpen((prev) => new Set(prev).add(entity.columns.length))
-    setAdding('')
+    setAdding(null)
   }
 
   return (
     <Group
-      title="Columns worth explaining"
-      count={entity.columns.length}
       hint="Only the ones whose name is not self-evident — codes, units, abbreviations."
+      action={
+        // The same shape Metrics has always had, in the same place. This used
+        // to be a naked text field and a button loose at the foot of the list,
+        // which read as a twelfth column that behaved differently from the
+        // other eleven.
+        adding === null ? (
+          <GhostButton
+            onClick={() => setAdding('')}
+            style={{ padding: '6px 11px', fontSize: 12.5, flexShrink: 0 }}
+          >
+            <Icon.Plus size={13} />
+            Add column
+          </GhostButton>
+        ) : (
+          <span style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+            <TextInput
+              autoFocus
+              className="mono"
+              placeholder="e.g. ordered_at"
+              value={adding}
+              onChange={(e) => setAdding(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  add()
+                }
+                if (e.key === 'Escape') setAdding(null)
+              }}
+              style={{ width: 180, fontSize: 13, padding: '6px 10px' }}
+            />
+            <GhostButton
+              disabled={!adding.trim()}
+              onClick={add}
+              style={{ padding: '6px 11px', fontSize: 12.5 }}
+            >
+              Add
+            </GhostButton>
+            <GhostButton
+              onClick={() => setAdding(null)}
+              style={{ padding: '6px 11px', fontSize: 12.5 }}
+            >
+              Cancel
+            </GhostButton>
+          </span>
+        )
+      }
     >
       {entity.columns.map((column, index) => (
         <SubCard key={`${column.name}-${index}`} invalid={!column.valid} compact={!open.has(index)}>
@@ -1718,29 +1900,21 @@ function Columns({
         </SubCard>
       ))}
 
-      <div style={{ display: 'flex', gap: 8 }}>
-        <TextInput
-          className="mono"
-          placeholder="e.g. ordered_at"
-          value={adding}
-          onChange={(e) => setAdding(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault()
-              add()
-            }
+      {entity.columns.length === 0 && (
+        <div
+          style={{
+            border: '1px dashed var(--border-strong)',
+            borderRadius: 9,
+            padding: '16px 14px',
+            fontSize: 12.5,
+            color: 'var(--text-faint)',
+            textAlign: 'center',
           }}
-          style={{ maxWidth: 240, fontSize: 13, padding: '7px 10px' }}
-        />
-        <GhostButton
-          disabled={!adding.trim()}
-          onClick={add}
-          style={{ padding: '7px 12px', fontSize: 12.5 }}
         >
-          <Icon.Plus size={13} />
-          Add column
-        </GhostButton>
-      </div>
+          No columns explained yet. Most tables need only the few whose names
+          give nothing away.
+        </div>
+      )}
     </Group>
   )
 }
@@ -1775,8 +1949,6 @@ function Metrics({
 
   return (
     <Group
-      title="Metrics"
-      count={entity.metrics.length}
       hint="The part that changes answers: a named measure bound to exact SQL, including the filters that belong to the definition rather than the question."
       action={
         <GhostButton
@@ -2543,6 +2715,9 @@ function SubCard({
 }) {
   return (
     <div
+      // `rm-subcard` is only the hover hook for the row's delete button; the
+      // look stays here with everything else in this file.
+      className={`rm-subcard${compact ? '' : ' is-open'}`}
       style={{
         border: `1px solid ${invalid ? 'var(--red-border)' : 'var(--border)'}`,
         borderRadius: 9,
@@ -2626,7 +2801,11 @@ function SubCardHead({
           </span>
         )}
       </button>
-      <span style={{ flexShrink: 0 }}>
+      {/* Eleven columns and seven metrics meant eighteen bordered delete
+          buttons down one card, which made *remove* the most repeated thing on
+          a screen whose job is describing. It waits for the row now — and
+          stays for a row that is open, or focused from the keyboard. */}
+      <span className="rm-row-actions" style={{ flexShrink: 0 }}>
         <IconButton label={removeLabel} onClick={onRemove}>
           <Icon.Trash />
         </IconButton>

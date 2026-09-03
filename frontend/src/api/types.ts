@@ -35,6 +35,14 @@ export interface Connection {
   semantic_layer_enabled: boolean
   clarify_enabled: boolean
   include_db_comments: boolean
+  /** Whether the scheduled conflict checker may run this connection's
+   *  templates against each other. The only thing in the product that queries
+   *  a customer's database without being asked. */
+  conflict_checks_enabled: boolean
+  /** Whether taught questions reach the generate prompt as few-shot examples.
+   *  **Off by default**, and off is byte-identical to `PROMPT_VERSION` v8 —
+   *  the prompt every recorded accuracy measurement was taken on. */
+  knowledge_examples_enabled: boolean
   status: string
   readonly_confirmed: boolean
   server_version: string | null
@@ -304,11 +312,84 @@ export interface KnowledgeTemplate {
   status_reason: string
   schema_version: number
   referenced_tables: string[]
+  /** The other templates this one disagrees with. Populated only by the
+   *  conflict checker — never by a form. */
+  conflicts_with: string[]
+  /** **The rows that prove a conflict.** Fabric reasons over SQL text and
+   *  reports a confidence of 1–5; this ran both statements and compared the
+   *  answers, so the pane shows the disagreement rather than a warning. Empty
+   *  on every healthy template; every cell is already a string. */
+  conflict_evidence: ConflictEvidence
   hit_count: number
   last_hit_at: string | null
   verified_at: string | null
+  last_validated_at: string | null
   created_at: string
   updated_at: string
+}
+
+/** What `knowledge_templates.conflict_evidence` holds. Written from this
+ *  template's own point of view, so `left_*` is always *this* one's answer. */
+export interface ConflictEvidence {
+  summary?: string
+  left_columns?: string[]
+  right_columns?: string[]
+  left_rows?: string[][]
+  right_rows?: string[][]
+}
+
+/** The store's health — §4.7's three rows of the curator's queue.
+ *  Ids rather than counts, because the queue links to the templates. */
+export interface KnowledgeHealth {
+  total: number
+  stale: string[]
+  conflicted: string[]
+  /** No matches, and old enough for that to mean something. Surfaced, never
+   *  enforced: a template written for a question asked once a year is not
+   *  waste, so this list carries no action button. */
+  unused: string[]
+  /** False means *was not allowed to look*, which must never be printed as
+   *  *found nothing*. */
+  conflict_checks_enabled: boolean
+  unused_after_days: number
+}
+
+/** What one on-demand sweep did, for the button that asked for it. */
+export interface MaintenanceResult {
+  checked: number
+  staled: string[]
+  revived: string[]
+  conflicted: string[]
+  cleared: string[]
+  pairs_considered: number
+  pairs_executed: number
+  /** Pairs the checker declined to run, each naming the slot that had no probe
+   *  value — how a curator learns that a parameter needs a value list. */
+  skipped: string[]
+  conflicts_checked: boolean
+  /** The embedding index, when the connection has one pinned. Zeroes on a
+   *  lexical connection, which is the default and most of them. */
+  indexed: number
+  index_current: number
+  index_truncated: boolean
+  index_error: string
+}
+
+/** Whether this store is searched by meaning, and how much of it is indexed.
+ *
+ *  `enabled` and `indexed` are separate on purpose: a connection can have a
+ *  model pinned and no vectors yet, and that is a normal state rather than a
+ *  failure — the UI says *indexing* for it, because *on* would promise a
+ *  behaviour the next question will not show. */
+export interface EmbeddingStatus {
+  enabled: boolean
+  model: string
+  dimension: number
+  templates: number
+  indexed: number
+  /** The provider's own sentence when the probe or the last pass refused.
+   *  Empty on success. */
+  message: string
 }
 
 export interface KnowledgeTemplateList {
@@ -317,9 +398,12 @@ export interface KnowledgeTemplateList {
   schema_synced: boolean
   /** Whether this reader may write. The UI **hides** rather than disables. */
   can_curate: boolean
-  /** Templates whose SQL no longer resolves against the current snapshot.
-   *  Reported on read, not persisted — Phase 4 is what writes `STALE`. */
+  /** Templates whose SQL no longer resolves against the current snapshot but
+   *  the sweep has not yet withdrawn — read-time drift, reported the moment a
+   *  re-sync creates it. A row the sweep already withdrew carries
+   *  `status: 'STALE'` and is counted in `health.stale` instead. */
   stale_ids: string[]
+  health: KnowledgeHealth
 }
 
 /** What `POST .../templates/check` answers, in one round trip. */
@@ -444,6 +528,10 @@ export interface AnswerFeedback {
   became_template: string | null
   resolved_at: string | null
   created_at: string
+  /** Whose queue this landed in — the connection's owner, named by the server
+   *  so the acknowledgement stays true when ownership moves. Empty falls back
+   *  to the generic sentence rather than to a blank. */
+  routed_to: string
 }
 
 /** One flag in the curator's queue, with the evidence beside it. */
@@ -458,6 +546,82 @@ export interface Review {
   sql: string
   /** A name, never an address. */
   flagged_by: string
+}
+
+// ── benchmarks and the score (Phase 6) ────────────────────────────────────
+/** One run of a set, with **both** numbers — never one.
+ *
+ *  Accuracy on questions answered *from* a template and accuracy on questions
+ *  answered *without* one are different numbers, and only the second moves for
+ *  a reason. `held_out_*` is the one the strip puts first and larger. */
+export interface BenchmarkRun {
+  id: string
+  set_id: string
+  status: 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED'
+  prompt_version: string
+  model_snapshot: Record<string, unknown>
+  total: number
+  /** Members that produced a comparable answer. Below `total` when a member
+   *  could not be probed — an accuracy over a shrinking denominator is the
+   *  classic silent lie, so the difference is shown rather than hidden. */
+  scored: number
+  matched: number
+  held_out_total: number
+  held_out_matched: number
+  taught_total: number
+  taught_matched: number
+  error_message: string
+  started_at: string | null
+  finished_at: string | null
+  created_at: string
+}
+
+export interface BenchmarkSet {
+  id: string
+  connection_id: string
+  name: string
+  description: string
+  template_ids: string[]
+  held_out_fraction: number
+  created_at: string
+  updated_at: string
+  /** Newest first, capped — the sparkline's points. */
+  runs: BenchmarkRun[]
+  held_out_count: number
+}
+
+/** One question's verdict, labelled by the comparator and by no model. */
+export interface BenchmarkResult {
+  id: string
+  template_id: string | null
+  question: string
+  gold_sql: string
+  candidate_sql: string
+  role: 'HELD_OUT' | 'BENCHMARK_ONLY'
+  outcome:
+    | 'MATCH' | 'MISMATCH' | 'EXEC_FAILED' | 'VALIDATION_FAILED'
+    | 'NO_SQL' | 'NOT_PROBED' | 'ERROR'
+  from_template: boolean
+  gold_row_count: number | null
+  candidate_row_count: number | null
+  duration_ms: number
+  failure_reason: string
+}
+
+export interface BenchmarkCandidate {
+  id: string
+  question: string
+  hit_count: number
+  referenced_tables: string[]
+}
+
+/** What the score strip needs, in one round trip. An empty `sets` means the
+ *  strip is **absent** rather than showing zeros — §4.8: never an empty chart. */
+export interface BenchmarkOverview {
+  sets: BenchmarkSet[]
+  can_curate: boolean
+  candidates: number
+  min_set_size: number
 }
 
 /** One row in the backlog: what to teach, and why it is worth teaching. */

@@ -9,10 +9,12 @@
 
 import type {
   AnswerFeedback,
-  ArtifactSpec, ChartRedraw, Connection, ConversationSummary, Dashboard, DashboardDocument,
+  ArtifactSpec, BenchmarkCandidate, BenchmarkOverview, BenchmarkResult,
+  BenchmarkRun, BenchmarkSet, ChartRedraw, Connection, ConversationSummary, Dashboard, DashboardDocument,
   DashboardImportResult, DashboardSummary,
-  DashboardTile, KnowledgeTemplate, KnowledgeTemplateList,
-  LlmConfig, MessageWithRun, ProblemDetail, Report, ReportBlock,
+  DashboardTile, EmbeddingStatus, KnowledgeHealth, KnowledgeTemplate,
+  KnowledgeTemplateList,
+  LlmConfig, MaintenanceResult, MessageWithRun, ProblemDetail, Report, ReportBlock,
   ReportBlockCheck, ReportChart, ReportRun, ReportRunDetail, ReportSection,
   ReportSectionResult,
   ReportSummary, Review, RunDetail, RunEvent, RunKnowledge, SchemaSnapshot,
@@ -269,6 +271,29 @@ export const knowledge = {
     ),
   capabilities: (connectionId: string) =>
     get<{ can_curate: boolean }>(`/connections/${connectionId}/knowledge/capabilities`),
+  // Store health, and the sweep that produces it. `revalidate` is synchronous
+  // rather than a job: the staleness half is a parse per template and the
+  // conflict half is two row-capped read-only queries per near-duplicate pair,
+  // so the list the curator is looking at refreshes to what the sweep found
+  // rather than to a job id.
+  health: (connectionId: string) =>
+    get<KnowledgeHealth>(`/connections/${connectionId}/knowledge/health`),
+  revalidate: (connectionId: string) =>
+    post<MaintenanceResult>(
+      `/connections/${connectionId}/knowledge/templates/revalidate`,
+      {},
+    ),
+  // Embedding search. The dimension is never sent — it is measured from the
+  // provider's own reply, because two endpoints serving one model name at
+  // different widths is a thing that happens and a store half indexed at each
+  // is a store where similarity means nothing.
+  embeddings: (connectionId: string) =>
+    get<EmbeddingStatus>(`/connections/${connectionId}/knowledge/embeddings`),
+  setEmbeddings: (connectionId: string, enabled: boolean, model = '') =>
+    put<EmbeddingStatus>(`/connections/${connectionId}/knowledge/embeddings`, {
+      enabled,
+      model,
+    }),
   check: (
     connectionId: string,
     payload: {
@@ -301,6 +326,41 @@ export const knowledge = {
     patch<KnowledgeTemplate>(
       `/connections/${connectionId}/knowledge/templates/${id}`,
       payload,
+    ),
+  // The score (Phase 6). Sets, their history, and one run's per-question
+  // verdicts — because a score nobody can drill into is a score nobody should
+  // trust, and the failure reason on a mismatch is usually the next fix.
+  benchmarks: (connectionId: string) =>
+    get<BenchmarkOverview>(`/connections/${connectionId}/knowledge/benchmarks`),
+  benchmarkCandidates: (connectionId: string) =>
+    get<BenchmarkCandidate[]>(
+      `/connections/${connectionId}/knowledge/benchmarks/candidates`,
+    ),
+  createBenchmark: (
+    connectionId: string,
+    payload: {
+      name: string
+      description?: string
+      template_ids: string[]
+      held_out_fraction?: number
+    },
+  ) =>
+    post<BenchmarkSet>(
+      `/connections/${connectionId}/knowledge/benchmarks`,
+      payload,
+    ),
+  // Really deletes — a set is an instrument, not somebody's knowledge, and the
+  // questions it was built from come back RETRIEVABLE.
+  deleteBenchmark: (connectionId: string, setId: string) =>
+    del(`/connections/${connectionId}/knowledge/benchmarks/${setId}`),
+  runBenchmark: (connectionId: string, setId: string) =>
+    post<BenchmarkRun>(
+      `/connections/${connectionId}/knowledge/benchmarks/${setId}/run`,
+      {},
+    ),
+  benchmarkResults: (connectionId: string, runId: string) =>
+    get<BenchmarkResult[]>(
+      `/connections/${connectionId}/knowledge/benchmarks/runs/${runId}/results`,
     ),
   // Archives. The row is never destroyed — the system does not delete a
   // person's work, so this returns the archived template rather than nothing.
@@ -528,6 +588,13 @@ export function isRunInFlight(status: string): boolean {
 export const runs = {
   get: (id: string) => get<RunDetail>(`/runs/${id}`),
   cancel: (id: string) => post<{ cancelled: boolean }>(`/runs/${id}/cancel`),
+  /**
+   * Run the same question again, against the same user message — so the
+   * transcript keeps one question where the reader asked one. Refused for a
+   * run that is still going, or one that already produced an answer.
+   */
+  retry: (id: string) =>
+    post<{ run_id: string; message_id: string }>(`/runs/${id}/retry`),
   // Records that a reader did not believe a verified answer. Split from
   // re-asking on purpose: the *measurement* has to survive a reader who closes
   // the tab instead of re-asking, and that measurement — the override rate —

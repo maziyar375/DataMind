@@ -140,6 +140,47 @@ class DatabaseConnection(Base, TimestampMixin):
     # secrets and ticket numbers in comments; this is their one checkbox, and
     # off is byte-identical to the prompt from before the feature existed.
     include_db_comments: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Whether the scheduled conflict checker may run two of this connection's
+    # templates and compare their results. The staleness sweep is a parse and
+    # keeps running either way; this switch is only about executing SQL on the
+    # customer's database on a schedule, which is the one thing in Phase 4 that
+    # a customer might reasonably refuse. On by default — a store rotting
+    # unnoticed is the failure the phase exists to prevent — and the checks
+    # inherit the connection's read-only credentials, row cap and timeout
+    # without exception.
+    conflict_checks_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Whether this connection's taught questions reach the generate prompt as
+    # few-shot examples. A switch rather than "delete the templates": the store
+    # still answers questions by short-circuiting, which is a different bet.
+    #
+    # **Off by default, and that default is a measurement, not caution.** This
+    # is the only change in the learning loop that can make the product worse —
+    # the last unconditional addition to the generate prompt cost ten points of
+    # execution accuracy on a small model by crowding out the schema. Off is
+    # byte-identical to v8, so a connection that never turns it on is running
+    # the prompt every recorded baseline was measured on. It flips to True by
+    # default when `docs/eval.md` §6.1 has both numbers in it and they say so.
+    knowledge_examples_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The embedding model this connection's knowledge store is indexed with,
+    # and the width it answers at. Empty means the lexical matcher — which is
+    # not a degraded state, it is the shipped one: `pg_trgm` needs no provider,
+    # no key and no budget, and Phase 7's whole posture is that embeddings make
+    # the loop *quieter* when present and change nothing when absent.
+    #
+    # Pinned per connection rather than read from the LLM config on every ask,
+    # for the reason `docs/learning-loop-plan.md` §3.8 gives: reproducibility.
+    # A stored vector is only comparable to a question embedded by the same
+    # model at the same width, so the pair that produced the index has to be
+    # written down next to it. Both are set by the capability probe, never
+    # typed into a form — the dimension especially, which is measured from a
+    # real call because two endpoints serving the same model name at different
+    # widths is a thing that happens.
+    embedding_model: Mapped[str] = mapped_column(
+        String(200), nullable=False, default="", server_default=""
+    )
+    embedding_dimension: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(20), default="UNTESTED")
     readonly_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -1026,6 +1067,35 @@ class KnowledgeTemplateRow(Base, TimestampMixin):
         ARRAY(PgUUID(as_uuid=True)), nullable=False, default=list,
         server_default=text("'{}'"),
     )
+    #: The rows that *prove* two templates disagree — `{summary, left_columns,
+    #: right_columns, left_rows, right_rows}` from `knowledge.compare`. Fabric
+    #: reasons over SQL text and reports a confidence of 1–5; this ran both
+    #: statements and compared the answers, and the difference between a
+    #: warning and a fact is whether the curator can see the rows. Written only
+    #: by `workers/knowledge_maintenance.py`.
+    conflict_evidence: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    last_conflict_check_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+
+    #: The masked question's embedding — Phase 7. A plain `double precision[]`
+    #: and not a pgvector column: the store is a curator's worth of rows, the
+    #: cosine is computed in `app/knowledge/embed.py` for the same reason
+    #: `trigram_similarity` is computed in the matcher, and adding an extension
+    #: the base image does not carry would trade a real deployment constraint
+    #: for a speed nobody here needs.
+    embedding: Mapped[list[float] | None] = mapped_column(ARRAY(Float))
+    #: What the vector was computed from — masked text, model id, dimension —
+    #: hashed. **Staleness is derived from this, never tracked**: a template
+    #: edit, a schema re-sync (the mask reads the schema's own names) and a
+    #: model change each make the recomputed fingerprint differ, so there is no
+    #: invalidation call anybody can forget to make.
+    embedding_fingerprint: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default=""
+    )
+    embedded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Separate, and both SET NULL. A template mined from a tile was created by
     # the system and verified by a person; deleting the person must not delete
@@ -1253,6 +1323,155 @@ class EvalResult(Base):
     cost_usd: Mapped[float | None] = mapped_column()
 
     failure_reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+# ── the customer's own accuracy number (Phase 6) ─────────────────────────
+# **Deliberately not `eval_runs` / `eval_results`.** MVP2 Part 5's meta-rule:
+# the customer-facing instrument and the frozen developer suite must stay
+# architecturally separate *"or the two will contaminate each other within a
+# month"*, and sharing a table is how that starts. The developer suite is
+# frozen, versioned and checked into the repo; a benchmark set is a customer's
+# own questions against their own database, and its whole purpose is to move.
+
+
+class BenchmarkSet(Base, TimestampMixin):
+    """A named list of taught questions used to *measure*, never to answer.
+
+    Membership is an array rather than a join table: a set is a list a person
+    curates, it is read whole every time it is used, and nothing ever queries
+    it from the other side. The **roles stay on the templates**
+    (`knowledge_templates.role`), because §1.3's rule — a template is
+    retrievable or benchmarkable, never both — has to be enforced in the query
+    that builds the candidate set on the *ask* path, and a second copy of that
+    fact here is a second copy that can disagree with it.
+    """
+
+    __tablename__ = "benchmark_sets"
+    __table_args__ = (
+        UniqueConstraint("connection_id", "name", name="uq_benchmark_sets_name"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("database_connections.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    template_ids: Mapped[list[uuid.UUID]] = mapped_column(
+        ARRAY(PgUUID(as_uuid=True)), nullable=False, default=list,
+        server_default=text("'{}'"),
+    )
+    #: What share of the members were assigned `HELD_OUT` at creation. Stored
+    #: so a run's numbers can be read years later without re-deriving the split
+    #: from a constant that has since changed.
+    held_out_fraction: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.4, server_default="0.4"
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+
+
+class BenchmarkRun(Base):
+    """One execution of a set, with **two** accuracy numbers rather than one.
+
+    Genie's Evaluations tab shows a single figure. Accuracy on questions
+    answered *from* a template and accuracy on questions answered *without* one
+    are different numbers, and only the second moves for a reason — so both are
+    stored, and `held_out_*` is the one the product puts first and larger.
+
+    Counted here rather than derived on read: a score strip shows a history,
+    and recomputing a sparkline by scanning every result row of every past run
+    is how it becomes slow enough that nobody opens it.
+    """
+
+    __tablename__ = "benchmark_runs"
+    __table_args__ = (
+        Index("ix_benchmark_runs_set_created", "set_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    set_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("benchmark_sets.id", ondelete="CASCADE"), nullable=False
+    )
+    connection_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("database_connections.id", ondelete="CASCADE")
+    )
+    llm_config_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("llm_configs.id", ondelete="SET NULL")
+    )
+    #: QUEUED | RUNNING | SUCCEEDED | FAILED | CANCELLED
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="QUEUED")
+    #: The constant that rendered the prompts, stamped by the process that ran
+    #: them — the Phase 0 lesson, applied to the second instrument as well.
+    prompt_version: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    model_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+
+    total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: Members that produced a comparable answer. Lower than `total` when a
+    #: member could not be probed — surfaced rather than hidden, because an
+    #: accuracy over a shrinking denominator is the classic silent lie.
+    scored: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    matched: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    held_out_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    held_out_matched: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    taught_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    taught_matched: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    error_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class BenchmarkResult(Base):
+    """One question's verdict, labelled by the comparator and by nothing else.
+
+    **No LLM judge.** `outcome` comes from `app/knowledge/compare.py`'s
+    deterministic result-set comparison, with the documented numeric tolerance.
+    Fabric fell back to a judge and gets *true / false / unclear*; spending a
+    model call per row to get a worse answer would be a strange trade.
+
+    `from_template` is the *observed* fact behind the split — whether this run
+    was answered from the store — rather than a label assigned before it ran. A
+    template's `role` says what it may be used for; only the run knows what
+    actually happened.
+    """
+
+    __tablename__ = "benchmark_results"
+
+    id: Mapped[uuid.UUID] = _pk()
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("benchmark_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    template_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("knowledge_templates.id", ondelete="SET NULL")
+    )
+    question: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    gold_sql: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    candidate_sql: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: HELD_OUT | BENCHMARK_ONLY, as it stood when this run executed.
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="HELD_OUT")
+    #: MATCH | MISMATCH | EXEC_FAILED | VALIDATION_FAILED | NO_SQL | NOT_PROBED
+    #: | ERROR. `MATCH` is the only success, and the labels are the eval's, so
+    #: two instruments that must not share a table still share a vocabulary.
+    outcome: Mapped[str] = mapped_column(String(30), nullable=False, default="ERROR")
+    from_template: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    gold_row_count: Mapped[int | None] = mapped_column(Integer)
+    candidate_row_count: Mapped[int | None] = mapped_column(Integer)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failure_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

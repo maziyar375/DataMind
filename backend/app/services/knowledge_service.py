@@ -7,8 +7,9 @@ things are worth knowing before changing this file:
   stored as it was written, not as it was true; the schema moves underneath it.
   Validating on save answers "is this legal at all", and re-validating on read
   is what lets the UI show drift the moment a re-sync creates it — without a
-  migration and without a background sweep. The re-validation *reports*; it
-  does not persist a status change. Phase 4 is what writes `STALE`.
+  migration and without a background sweep. `revalidate` *reports*;
+  `sweep_staleness` is the one that writes `STALE`, and it runs on the sync
+  that caused the drift.
 * **`app.knowledge` owns the reasoning; this module owns every DB call.** The
   package below cannot import sqlalchemy, and that is the contract that keeps
   the guard's fifth entry point from growing a query of its own.
@@ -16,11 +17,12 @@ things are worth knowing before changing this file:
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,6 +38,7 @@ from app.infra.db.models import (
     GeneratedQuery,
     KnowledgeTemplateHit,
     KnowledgeTemplateRow,
+    LlmConfig,
     Message,
     Report,
     ReportBlock,
@@ -72,8 +75,22 @@ from app.knowledge.backlog import (
     unknown_reason,
     unknown_words,
 )
+from app.knowledge.embed import (
+    EmbeddingMatcher as _EmbeddingMatcher,
+)
+from app.knowledge.embed import (
+    VectorEntry,
+    VectorIndex,
+    Vocabulary,
+    needs_embedding,
+    to_index,
+)
+from app.knowledge.embed import (
+    fingerprint as embedding_fingerprint,
+)
 from app.knowledge.matcher import (
     SHORTLIST_FLOOR,
+    FallbackMatcher,
     LexicalMatcher,
     TemplateMatcher,
     trigrams,
@@ -89,6 +106,53 @@ MAX_NOTE_CHARS = 4_000
 _NO_SNAPSHOT = (
     "Sync this connection's schema first — a template is checked against it."
 )
+
+#: When a template with no hits starts being *mentioned*. Ninety days, from
+#: §4.7: long enough that a quarterly question is not accused of being waste,
+#: short enough that a store filling with near-misses says so within a quarter.
+UNUSED_AFTER_DAYS = 90
+
+
+@dataclass(slots=True)
+class StalenessResult:
+    """What one sweep changed. Ids rather than counts, so a caller can say
+    *which* templates stopped working rather than how many."""
+
+    checked: int = 0
+    staled: list[UUID] = field(default_factory=list)
+    revived: list[UUID] = field(default_factory=list)
+
+    @property
+    def changed(self) -> int:
+        return len(self.staled) + len(self.revived)
+
+
+@dataclass(slots=True)
+class StoreHealth:
+    """The three numbers §4.7 puts in the curator's queue."""
+
+    total: int = 0
+    stale: list[UUID] = field(default_factory=list)
+    conflicted: list[UUID] = field(default_factory=list)
+    #: No hits, and old enough for that to mean something. Surfaced, never
+    #: enforced — this list has no action button beside it.
+    unused: list[UUID] = field(default_factory=list)
+
+
+def _stale_reason(verdict: TemplateVerdict) -> str:
+    """The guard's own sentence, plus the fix, in that order.
+
+    §4.7 leads the pane with the reason and then the fix. Rewriting the guard's
+    message into something friendlier loses the object that moved, which is the
+    only part a curator can act on.
+    """
+    message = verdict.message or "This template no longer validates."
+    if verdict.drifted:
+        return (
+            f"{message} The schema has changed since this template was saved — "
+            "re-sync the connection, then edit the SQL."
+        )
+    return message
 
 
 class KnowledgeService:
@@ -207,6 +271,7 @@ class KnowledgeService:
             schema_version=snapshot["version"],
             referenced_tables=verdict.referenced_tables,
             conflicts_with=[],
+            conflict_evidence={},
             created_by=actor_id,
             # Authoring *is* verification: a person typed this and pressed
             # save. A proposal mined from a tile arrives unverified in Phase 3
@@ -283,6 +348,13 @@ class KnowledgeService:
             row.status_reason = ""
 
         await self._flush_unique(next_question)
+        # `updated_at` carries `onupdate=func.now()`, so the flush that wrote
+        # this row **expired** it: reading the attribute afterwards needs a
+        # database round trip, and doing that lazily from a sync context is
+        # `MissingGreenlet`. Every caller serialises the row it gets back, so
+        # the refresh belongs here rather than at each call site — see the
+        # gotcha in CLAUDE.md, which this method was quietly violating.
+        await self._db.refresh(row)
         return row
 
     async def archive(
@@ -298,6 +370,9 @@ class KnowledgeService:
         row.status = str(TemplateStatus.ARCHIVED)
         row.status_reason = "Archived by a curator."
         await self._db.flush()
+        # Same reason as `update`: the flush expired `updated_at`, and the
+        # caller is about to read it.
+        await self._db.refresh(row)
         return row
 
     # ── re-validation (reports; does not persist a verdict) ──────────────
@@ -308,11 +383,122 @@ class KnowledgeService:
 
         Phase 1 uses this to *show* drift on read. It deliberately does not
         write `STALE`: withdrawing a template from use is a behaviour change,
-        and this phase changes no behaviour. Phase 4 is where the worker
-        persists the verdict.
+        and `sweep_staleness` below is what makes it.
         """
         snapshot = await self._snapshot(connection.id)
         return self._verdict(connection, snapshot, self.to_model(row))
+
+    # ── staleness (Phase 4: this one persists) ───────────────────────────
+    async def sweep_staleness(
+        self, connection: DatabaseConnection
+    ) -> StalenessResult:
+        """Re-validate every live template and write the verdict down.
+
+        Runs on every schema sync. Three transitions, and the third is the one
+        people forget:
+
+        * **ACTIVE and no longer legal → `STALE`**, with the guard's own
+          sentence in `status_reason` — *"column `orders.region` no longer
+          exists"* and not "validation failed". Withdrawn from matching and
+          from few-shot, kept, never deleted.
+        * **`STALE` and legal again → `ACTIVE`**, reason cleared. A column
+          renamed back, or a re-sync that picks up a schema the previous one
+          missed, must heal the store without a curator editing forty rows by
+          hand. Without this the first bad sync is permanent.
+        * **everything else → untouched**, including `ARCHIVED` and
+          `CONFLICTED`. A conflict is a disagreement about meaning and is not
+          resolved by the schema moving; overwriting it here would drop the
+          evidence a curator was about to read.
+
+        Makes no database call against the *customer's* database and no model
+        call: it is `guard()` over the new snapshot, once per template, which
+        is why it can run inline on the sync that caused it.
+        """
+        snapshot = await self._snapshot(connection.id)
+        if not snapshot["tables"]:
+            # A sync that produced no tables is a broken sync, not a schema in
+            # which every template is suddenly illegal. Marking the whole store
+            # stale on it would be the loudest possible wrong answer.
+            return StalenessResult()
+
+        result = await self._db.execute(
+            select(KnowledgeTemplateRow).where(
+                KnowledgeTemplateRow.connection_id == connection.id,
+                KnowledgeTemplateRow.status.in_(
+                    (str(TemplateStatus.ACTIVE), str(TemplateStatus.STALE))
+                ),
+            )
+        )
+        rows = list(result.scalars().all())
+
+        out = StalenessResult(checked=len(rows))
+        for row in rows:
+            verdict = self._verdict(connection, snapshot, self.to_model(row))
+            row.last_validated_at = utcnow()
+            if verdict.valid:
+                row.schema_version = snapshot["version"]
+                row.referenced_tables = verdict.referenced_tables
+                if row.status == str(TemplateStatus.STALE):
+                    row.status = str(TemplateStatus.ACTIVE)
+                    row.status_reason = ""
+                    out.revived.append(row.id)
+                continue
+            if row.status == str(TemplateStatus.STALE):
+                # Already withdrawn, and the reason may have changed with the
+                # snapshot. Refreshed rather than left, so the pane never shows
+                # a curator the name of a column that moved two syncs ago.
+                row.status_reason = _stale_reason(verdict)
+                continue
+            row.status = str(TemplateStatus.STALE)
+            row.status_reason = _stale_reason(verdict)
+            out.staled.append(row.id)
+
+        await self._db.flush()
+        if out.staled or out.revived:
+            log.info(
+                "knowledge_staleness_swept",
+                connection_id=str(connection.id),
+                checked=out.checked,
+                staled=len(out.staled),
+                revived=len(out.revived),
+            )
+        return out
+
+    # ── health (Phase 4: what the queue counts) ──────────────────────────
+    async def health(self, connection: DatabaseConnection) -> StoreHealth:
+        """Stale, conflicted and unused counts — the numbers §4.7 shows.
+
+        Unused is *surfaced, not enforced*. Genie caps instructions at 100 per
+        agent; DataMind's version of that cap is visibility plus a suggestion,
+        because a template written for a question asked once a year is not
+        waste. Nothing here deletes or archives anything.
+        """
+        result = await self._db.execute(
+            select(KnowledgeTemplateRow).where(
+                KnowledgeTemplateRow.connection_id == connection.id,
+                KnowledgeTemplateRow.status != str(TemplateStatus.ARCHIVED),
+            )
+        )
+        rows = list(result.scalars().all())
+        cutoff = utcnow() - timedelta(days=UNUSED_AFTER_DAYS)
+
+        health = StoreHealth(total=len(rows))
+        for row in rows:
+            if row.status == str(TemplateStatus.STALE):
+                health.stale.append(row.id)
+            elif row.status == str(TemplateStatus.CONFLICTED):
+                health.conflicted.append(row.id)
+            # Age is measured from creation, not from now: a template written
+            # this morning has not "gone unused", it has not had a chance yet.
+            created = row.created_at
+            if (
+                not row.hit_count
+                and created is not None
+                and created < cutoff
+                and row.status == str(TemplateStatus.ACTIVE)
+            ):
+                health.unused.append(row.id)
+        return health
 
     # ── conversions ──────────────────────────────────────────────────────
     @staticmethod
@@ -333,6 +519,7 @@ class KnowledgeService:
             schema_version=row.schema_version,
             referenced_tables=list(row.referenced_tables or []),
             conflicts_with=list(row.conflicts_with or []),
+            conflict_evidence=dict(row.conflict_evidence or {}),
             created_by=row.created_by,
             verified_by=row.verified_by,
             verified_at=row.verified_at,
@@ -450,13 +637,29 @@ async def has_trigram(db: AsyncSession) -> bool:
     return _TRGM_AVAILABLE
 
 
-def build_matcher(db: AsyncSession) -> TemplateMatcher:
-    """The connection's matcher: lexical today, embedding in Phase 7 (D3).
+def build_matcher(
+    db: AsyncSession,
+    *,
+    connection: DatabaseConnection | None = None,
+    settings: Settings | None = None,
+) -> TemplateMatcher:
+    """The connection's matcher: lexical always, embedding when it is pinned.
+
+    D3's return, collected. Phase 7 is a *constructor change* — the `match`
+    node, both thresholds, the binder, the short-circuit and the badge are
+    untouched, because `EmbeddingMatcher` sits behind the same Protocol
+    `LexicalMatcher` does.
 
     The row source is what keeps `app.knowledge` free of sqlalchemy. It uses
     the trigram index to **narrow**; the score that decides is always computed
     in the matcher, so a deployment without `pg_trgm` gets the same verdicts at
     a higher cost rather than a different feature.
+
+    With no `connection` — or one with no embedding model pinned, which is the
+    default and the shipped state — this returns exactly what it returned
+    before Phase 7. `FallbackMatcher` is only wrapped around when there is
+    something to fall back *from*, so the lexical path costs no extra call, no
+    extra query, and no extra try/except on the common case.
     """
 
     async def rows(
@@ -490,7 +693,328 @@ def build_matcher(db: AsyncSession) -> TemplateMatcher:
             found = [t for t in found if asked & trigrams(t.question_normalized)]
         return found[:SHORTLIST_LIMIT]
 
-    return LexicalMatcher(rows)
+    lexical = LexicalMatcher(rows)
+    if connection is None or not connection.embedding_model or settings is None:
+        return lexical
+    return FallbackMatcher(
+        _EmbeddingMatcher(
+            _embedder(settings, db, connection),
+            _index_source(db, connection),
+        ),
+        lexical,
+    )
+
+
+def _embedder(
+    settings: Settings, db: AsyncSession, connection: DatabaseConnection
+) -> Any:
+    """`(texts) -> vectors`, through the port and nothing else.
+
+    Built lazily per call rather than held on the matcher, because resolving
+    the LLM config decrypts a key: on a connection with no fresh vectors the
+    matcher returns before this is ever invoked, and a key that was never
+    decrypted is a key that never sat in memory for the length of a request.
+    """
+
+    async def embed(texts: Any) -> list[list[float]]:
+        from app.infra.llm.litellm_gateway import LiteLLMGateway
+
+        llm = await _embedding_llm(db, settings, connection)
+        if llm is None:
+            return []
+        gateway = LiteLLMGateway.from_settings(settings)
+        return await gateway.embed(llm, list(texts), model=connection.embedding_model)
+
+    return embed
+
+
+def _index_source(db: AsyncSession, connection: DatabaseConnection) -> Any:
+    """`(connection_id) -> VectorIndex`. One read, so one schema.
+
+    The vocabulary and the vectors come from the same call deliberately: a
+    question masked against one snapshot and compared against vectors built
+    from another is a comparison between two different questions, and the
+    fingerprint check would not catch it because both sides would look fresh
+    against their own schema.
+    """
+
+    async def source(connection_id: UUID) -> VectorIndex:
+        from app.services.query_service import latest_snapshot
+
+        result = await db.execute(
+            select(KnowledgeTemplateRow).where(
+                KnowledgeTemplateRow.connection_id == connection_id,
+                KnowledgeTemplateRow.status == str(TemplateStatus.ACTIVE),
+                KnowledgeTemplateRow.role == str(TemplateRole.RETRIEVABLE),
+                KnowledgeTemplateRow.embedding_fingerprint != "",
+            )
+        )
+        rows = list(result.scalars().all())
+        if not rows:
+            # Nothing indexed yet. Skip the snapshot read too — an empty index
+            # is an empty index whatever the schema says, and this is the state
+            # every connection is in until the first maintenance pass.
+            return VectorIndex()
+
+        snapshot = await latest_snapshot(db, connection_id)
+        return to_index(
+            snapshot,
+            connection.embedding_model,
+            connection.embedding_dimension,
+            [
+                VectorEntry(
+                    template=KnowledgeService.to_model(row),
+                    vector=list(row.embedding or []),
+                    stored_fingerprint=row.embedding_fingerprint or "",
+                )
+                for row in rows
+            ],
+        )
+
+    return source
+
+
+async def _embedding_llm(
+    db: AsyncSession, settings: Settings, connection: DatabaseConnection
+) -> Any | None:
+    """The credentials the embedding endpoint is called with.
+
+    The connection's **owner's** default LLM config, which is what §3.8 means
+    by "the connection's LLM config": a connection has no model of its own, and
+    the config that answers its questions is the one that should embed them.
+    `None` when there is no default — a state, not an error, and one the
+    matcher reads as "lexical".
+    """
+    from app.services.query_service import resolve_llm, secret_box
+
+    result = await db.execute(
+        select(LlmConfig)
+        .where(
+            LlmConfig.owner_id == connection.owner_id,
+            LlmConfig.is_default.is_(True),
+        )
+        .limit(1)
+    )
+    config = result.scalar_one_or_none()
+    if config is None:
+        return None
+    return resolve_llm(config, secret_box(settings))
+
+
+# ── the embedding index (Phase 7) ────────────────────────────────────────
+#: How many templates one indexing pass will embed. A ceiling rather than a
+#: setting, for the reason `MAX_PAIRS_PER_PASS` is one: a store that needs more
+#: than this re-embedded in a single pass has just had its schema re-synced or
+#: its model changed, and spreading that across a few six-hourly passes costs
+#: nothing (the lexical matcher answers meanwhile) while a single unbounded
+#: pass is an unbounded bill.
+MAX_EMBEDDINGS_PER_PASS = 200
+
+
+@dataclass(slots=True)
+class IndexResult:
+    """What one indexing pass did, in counts a person can read back."""
+
+    #: Templates that were candidates at all — live, retrievable, matchable.
+    considered: int = 0
+    #: Vectors written this pass.
+    embedded: int = 0
+    #: Candidates whose stored vector was already current. The number that
+    #: should be nearly everything on a steady-state connection, and the one
+    #: that says the fingerprint rule is working.
+    current: int = 0
+    #: True when there was more to do than `MAX_EMBEDDINGS_PER_PASS` allowed.
+    #: Reported rather than inferred, so "the index is partial" is a sentence
+    #: the UI can say instead of a number a reader has to interpret.
+    truncated: bool = False
+    #: The provider's own sentence when the pass could not run. Empty on
+    #: success and on "nothing to do", which are different from "it failed".
+    error: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return not self.error
+
+
+async def index_embeddings(
+    db: AsyncSession, settings: Settings, connection: DatabaseConnection
+) -> IndexResult:
+    """Bring this connection's vectors up to date with its templates.
+
+    Runs in the worker and on the explicit *turn this on* action, never on a
+    request that answers a question: embedding is a provider call, and a
+    question whose latency depended on one would make the feature worse than
+    the lexical matcher it is meant to improve on.
+
+    **A failure here is not a failure of anything.** The pass returns its
+    reason, the vectors that were already current stay current, and the matcher
+    falls back to lexical for anything that is not — which is the shipped
+    behaviour. Nothing is deleted, ever: a vector that no longer matches its
+    fingerprint is ignored on read and overwritten on the next successful pass.
+    """
+    out = IndexResult()
+    if not connection.embedding_model or connection.embedding_dimension <= 0:
+        return out
+
+    from app.services.query_service import latest_snapshot
+
+    result = await db.execute(
+        select(KnowledgeTemplateRow).where(
+            KnowledgeTemplateRow.connection_id == connection.id,
+            KnowledgeTemplateRow.status == str(TemplateStatus.ACTIVE),
+            KnowledgeTemplateRow.role == str(TemplateRole.RETRIEVABLE),
+        )
+    )
+    rows = list(result.scalars().all())
+    out.considered = len(rows)
+    if not rows:
+        return out
+
+    # Every live template contributes its declared values, including the ones
+    # not being re-embedded: the vocabulary is a property of the *store*, and
+    # building it from the pending subset would mask a question one way at
+    # query time and another way here.
+    models = [KnowledgeService.to_model(row) for row in rows]
+    vocabulary = Vocabulary.from_snapshot(
+        await latest_snapshot(db, connection.id), models
+    )
+    pending: list[tuple[KnowledgeTemplateRow, str]] = []
+    for row, template in zip(rows, models, strict=True):
+        masked = needs_embedding(
+            template,
+            row.embedding_fingerprint or "",
+            len(row.embedding or []),
+            vocabulary,
+            connection.embedding_model,
+            connection.embedding_dimension,
+        )
+        if masked:
+            pending.append((row, masked))
+        else:
+            out.current += 1
+
+    if not pending:
+        return out
+    if len(pending) > MAX_EMBEDDINGS_PER_PASS:
+        pending = pending[:MAX_EMBEDDINGS_PER_PASS]
+        out.truncated = True
+
+    llm = await _embedding_llm(db, settings, connection)
+    if llm is None:
+        out.error = (
+            "No default model is configured for this connection's owner, so "
+            "there is nothing to embed with."
+        )
+        return out
+
+    from app.infra.llm.litellm_gateway import LiteLLMGateway
+
+    gateway = LiteLLMGateway.from_settings(settings)
+    try:
+        vectors = await gateway.embed(
+            llm, [masked for _, masked in pending], model=connection.embedding_model
+        )
+    except Exception as err:
+        # Bounded and reported. The store keeps whatever it had, which is the
+        # difference between "the index is a pass behind" and "the index is
+        # empty" — and only the first is true here.
+        out.error = str(err)[:500]
+        log.warning(
+            "knowledge_embedding_failed",
+            connection_id=str(connection.id),
+            pending=len(pending),
+        )
+        return out
+
+    if len(vectors) != len(pending):
+        out.error = "The embedding endpoint returned the wrong number of vectors."
+        return out
+
+    now = utcnow()
+    for (row, masked), vector in zip(pending, vectors, strict=True):
+        if len(vector) != connection.embedding_dimension:
+            # The endpoint changed width underneath the pin. Writing this vector
+            # would put two widths in one store, where cosine means nothing.
+            out.error = (
+                f"The endpoint answered at {len(vector)} dimensions, not the "
+                f"{connection.embedding_dimension} this connection is pinned "
+                f"to. Turn embedding search off and on again to re-pin it."
+            )
+            return out
+        row.embedding = [float(v) for v in vector]
+        row.embedding_fingerprint = embedding_fingerprint(
+            masked, connection.embedding_model, connection.embedding_dimension
+        )
+        row.embedded_at = now
+        out.embedded += 1
+
+    await db.flush()
+    log.info(
+        "knowledge_embeddings_indexed",
+        connection_id=str(connection.id),
+        embedded=out.embedded,
+        current=out.current,
+        truncated=out.truncated,
+    )
+    return out
+
+
+async def set_embeddings(
+    db: AsyncSession,
+    settings: Settings,
+    connection: DatabaseConnection,
+    *,
+    enabled: bool,
+    model: str = "",
+) -> tuple[IndexResult, str]:
+    """Turn embedding search on or off for a connection, and say what happened.
+
+    On: probe the owner's default provider, **measure** the dimension from a
+    real call, pin both on the connection, and index what is there now — so the
+    feature works on the next question rather than after the next six-hourly
+    pass. A provider that cannot embed leaves the connection exactly as it was
+    and returns the provider's own sentence, because "Anthropic has no
+    embedding endpoint" is a fix somebody can act on and "unavailable" is not.
+
+    Off: clear the pin *and* the vectors. Keeping them would leave a store that
+    looks indexed to anyone reading the table and is invisible to the matcher,
+    and the vectors are derived data that one pass rebuilds.
+    """
+    if not enabled:
+        await db.execute(
+            update(KnowledgeTemplateRow)
+            .where(KnowledgeTemplateRow.connection_id == connection.id)
+            .values(embedding=None, embedding_fingerprint="", embedded_at=None)
+        )
+        connection.embedding_model = ""
+        connection.embedding_dimension = 0
+        await db.flush()
+        return IndexResult(), ""
+
+    llm = await _embedding_llm(db, settings, connection)
+    if llm is None:
+        return IndexResult(), (
+            "Add a default model provider first — embedding search calls it "
+            "with the same credentials your questions use."
+        )
+
+    from app.infra.llm.litellm_gateway import LiteLLMGateway
+
+    gateway = LiteLLMGateway.from_settings(settings)
+    capability = await gateway.probe_embedding(llm, model=model.strip())
+    if not capability.available:
+        return IndexResult(), capability.reason or (
+            "That provider did not return an embedding."
+        )
+
+    # Re-pinning invalidates every stored vector by fingerprint alone — the
+    # model id and the width are both hashed into it — so there is nothing to
+    # clear here and no window where a 1536-wide vector is compared to a
+    # 768-wide question.
+    connection.embedding_model = capability.model
+    connection.embedding_dimension = capability.dimension
+    await db.flush()
+    return await index_embeddings(db, settings, connection), ""
 
 
 async def record_hit(

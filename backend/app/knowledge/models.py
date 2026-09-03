@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -148,6 +149,9 @@ class KnowledgeTemplate(BaseModel):
     schema_version: int = 0
     referenced_tables: list[str] = Field(default_factory=list)
     conflicts_with: list[UUID] = Field(default_factory=list)
+    #: The rows that prove a conflict — see `compare.Divergence.as_dict`. Empty
+    #: on every healthy template, and never written by a form.
+    conflict_evidence: dict[str, Any] = Field(default_factory=dict)
 
     created_by: UUID | None = None
     verified_by: UUID | None = None
@@ -167,6 +171,17 @@ class KnowledgeTemplate(BaseModel):
         a stale row answers with SQL the schema no longer supports.
         """
         return self.status.is_usable and self.role.is_retrievable
+
+    @property
+    def is_withdrawn(self) -> bool:
+        """Kept, shown, and not used to answer anything.
+
+        The two states Phase 4 writes. Named rather than open-coded because
+        three call sites ask the question — the matcher, few-shot retrieval and
+        the health count — and a fourth that forgot one of the two values would
+        answer a question from SQL the schema no longer supports.
+        """
+        return self.status in (TemplateStatus.STALE, TemplateStatus.CONFLICTED)
 
     def param(self, name: str) -> TemplateParam | None:
         return next((p for p in self.params if p.name == name), None)

@@ -38,6 +38,9 @@
 | 15 | Report section prose | `workers/report` · `_narrate()` | `complete` | `REPORT_SECTION_SYSTEM` |
 | 16 | Executive summary | `workers/report` · `_summarise()` | `complete` | `REPORT_SUMMARY_SYSTEM` |
 | 17 | Capability probe | `api/v1/llm_configs` | `probe` | fixed test strings |
+| 18 | Embed the taught questions | `services/knowledge_service` · `index_embeddings()` | `embed` | **no prompt** — masked question text |
+| 19 | Embed the asked question | `knowledge/embed` · `EmbeddingMatcher.match()` | `embed` | **no prompt** — masked question text |
+| 20 | Embedding capability probe | `services/knowledge_service` · `set_embeddings()` | `probe_embedding` | fixed test string |
 
 Two *rule blocks* are not calls of their own — they are appended to calls 4–6
 by a caller that needs them, and they are documented in §14:
@@ -61,6 +64,8 @@ to import `litellm`. Four methods:
 | `stream` | `AsyncIterator[str]` of deltas | 2, 7 |
 | `structured` | a validated pydantic instance | 3, 4, 5, 6, 8, 9, 11, 12, 13 |
 | `probe` | `ProviderCapabilities` | 17 |
+| `embed` | `list[list[float]]`, one vector per input, in request order | 18, 19 |
+| `probe_embedding` | `EmbeddingCapability(available, model, dimension, reason)` | 20 |
 
 ### 1.2 The request every call actually sends
 
@@ -1360,6 +1365,51 @@ supports_system_prompt=True)`, stored on the `llm_configs` row and read back by
 `_response_format` on every later `structured` call.
 
 ---
+## 13b. Calls 18–20 — Embeddings (Phase 7 of the learning loop)
+
+| | |
+|---|---|
+| **Sites** | `services/knowledge_service.py` · `index_embeddings`, `set_embeddings`; `knowledge/embed.py` · `EmbeddingMatcher.match` |
+| **Trigger** | 18: the six-hourly maintenance pass, or turning embedding search on. 19: **every analytical question**, on a connection with a model pinned. 20: turning embedding search on. |
+| **Method** | `embed`, `probe_embedding` |
+| **Disclosure** | the **masked** question text, and nothing else |
+
+**These are the only three calls in the product that send no prompt.** An
+embedding endpoint takes text and returns a vector; there is no system message,
+no schema block, no history and no result row, so most of §16's table does not
+apply and the parts that do are narrower than anywhere else.
+
+What actually leaves, for all three:
+
+```text
+18. embed(["revenue by <column> for <value>", "how many <table> last month", …])
+19. embed(["revenue by <column> for <value>"])
+20. embed(["ok"])
+```
+
+**A question is not customer data read from a row**, which is the same test
+`docs/security.md` §2.4 applies to a catalog comment: a person typed it, it does
+not change when the data changes, and it already reaches the provider verbatim
+on every question through call 4. The masking makes this strictly *less* than
+what call 4 already sends — table names, column names, declared values and
+literals are all replaced with `<table>`, `<column>` and `<value>` before the
+text leaves — so no disclosure rung moves and none is bypassed.
+
+**Availability is a capability check, not a preference.** Anthropic is refused
+without a network call (it has no embedding endpoint); every OpenAI-compatible
+endpoint is *asked*, and the dimension that comes back is measured and pinned on
+the connection rather than assumed from the model name. A connection with no
+model pinned makes none of these calls and the lexical matcher answers, which is
+the shipped default.
+
+**Call 19 is the one on a request path**, and it is the reason the store is
+indexed in a worker rather than on save: one embedding of one short string, only
+when the connection has a pinned model *and* at least one fresh vector to
+compare against. Every failure — no key, a provider that is down, a provider
+that changed width — returns nothing and falls back to the lexical matcher, so
+the worst case is today's behaviour and never a failed question.
+
+---
 ## 14. The two rule blocks (not calls — appended to calls 4–6)
 
 Both arrive through the single hook `NodeDeps.extra_rules`, appended by
@@ -1561,6 +1611,8 @@ exactly as much customer data as a column name.
 | 15 section | ✗ | **✓** (≤50 rows/block) | ✗ | + computed facts |
 | 16 summary | ✗ | ✗ | ✗ | prose only |
 | 17 probe | ✗ | ✗ | ✗ | fixed strings |
+| 18–19 embed | names **removed** | ✗ | ✗ | the masked question and nothing else — see §13b |
+| 20 embed probe | ✗ | ✗ | ✗ | fixed string |
 
 **Residual risks, stated plainly.** Under `SAMPLE`/`FULL` a result row reaches
 the model, and a row containing instructions is a row the model reads — the
@@ -1592,7 +1644,7 @@ drifted before, both times because a refactor moved a function nobody changed.
 
 | Constant | Value | Moves when |
 |---|---|---|
-| `PROMPT_VERSION` | `v8` | the **rendered SQL-producing prompt** changes — including how much of the schema or semantic block survives its cap, which is what moved v7 → v8. Recorded on every run |
+| `PROMPT_VERSION` | `v9` | the **rendered SQL-producing prompt** changes — including how much of the schema or semantic block survives its cap (v7 → v8), and whether it carries the connection's taught questions as few-shot examples (v8 → v9, empty renders v8's bytes). Recorded on every run |
 | `REPORT_PROMPT_VERSION` | `r4` | any report prompt changes. Recorded on every report run |
 | `SEMANTIC_PROMPT_VERSION` | `s4` | any semantic prompt changes. Recorded on the document |
 

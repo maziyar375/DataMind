@@ -41,6 +41,10 @@ export interface TemplateRow {
   hit_count: number
   last_hit_at: string | null
   verified_at: string | null
+  /** Phase 4. Optional so every existing caller and test still builds a row
+   *  with the fields it had — a healthy template has neither. */
+  conflicts_with?: string[]
+  conflict_evidence?: unknown
 }
 
 export interface ProposalRow {
@@ -137,6 +141,164 @@ export function rowSubtitle(
     return { left, right: `${hits} · no matches in 90 days`, tone: 'faint' }
   }
   return { left, right: hits, tone: 'neutral' }
+}
+
+// ── the score (Phase 6) ───────────────────────────────────────────────────
+export interface ScoreRun {
+  status: string
+  total: number
+  scored: number
+  held_out_total: number
+  held_out_matched: number
+  taught_total: number
+  taught_matched: number
+  finished_at: string | null
+  created_at: string
+  error_message?: string
+}
+
+export interface ScoreView {
+  /** The number that goes **first and larger**, as a fraction, or null when
+   *  there is none. Null and not zero: a run that scored no held-out question
+   *  has no held-out accuracy, and 0% would be the loudest wrong answer. */
+  heldOut: number | null
+  heldOutCount: number
+  /** Second, and smaller. Shown because hiding it would be dishonest, and
+   *  shown second because it is the number that goes up for the wrong
+   *  reasons. */
+  taught: number | null
+  taughtCount: number
+  /** Oldest → newest, held-out only. The taught number is deliberately not on
+   *  the sparkline: one line, one series, and it is the honest one. */
+  spark: number[]
+  /** Questions the run could not score — a parameter with no values to try, a
+   *  stored answer that no longer runs. Surfaced, because an accuracy over a
+   *  shrinking denominator is the classic silent lie. */
+  unscored: number
+  ran: boolean
+  running: boolean
+  failed: string
+}
+
+/**
+ * The score strip, from a set's run history. Newest run first, as the API
+ * returns it.
+ *
+ * **Two numbers, and the strip says which to believe.** Genie's Evaluations tab
+ * shows one; that is a weakness to improve on, not a design to copy.
+ */
+export function scoreView(runs: ScoreRun[], heldOutCount = 0): ScoreView {
+  const finished = runs.filter((r) => r.status === 'SUCCEEDED')
+  const latest = finished[0]
+  const running = runs.some((r) => r.status === 'QUEUED' || r.status === 'RUNNING')
+  const failed = runs[0]?.status === 'FAILED' ? (runs[0].error_message ?? '') : ''
+
+  if (!latest) {
+    return {
+      heldOut: null, heldOutCount, taught: null, taughtCount: 0,
+      spark: [], unscored: 0, ran: false, running, failed,
+    }
+  }
+  return {
+    heldOut: ratio(latest.held_out_matched, latest.held_out_total),
+    heldOutCount: latest.held_out_total || heldOutCount,
+    taught: ratio(latest.taught_matched, latest.taught_total),
+    taughtCount: latest.taught_total,
+    // Oldest to newest, so the line reads left to right the way time does.
+    spark: finished
+      .map((r) => ratio(r.held_out_matched, r.held_out_total))
+      .filter((v): v is number => v !== null)
+      .reverse(),
+    unscored: Math.max(0, latest.total - latest.scored),
+    ran: true,
+    running,
+    failed,
+  }
+}
+
+function ratio(matched: number, total: number): number | null {
+  return total > 0 ? matched / total : null
+}
+
+/** A percentage with no decimals, or an em dash. Never `0%` for "no data". */
+export function percent(value: number | null): string {
+  return value === null ? '—' : `${Math.round(value * 100)}%`
+}
+
+/**
+ * A sparkline's points as `0..1` heights, normalised against **the full range
+ * 0–100%**, not against the series' own min and max.
+ *
+ * Self-normalising would turn a set of runs at 71/72/73% into a dramatic climb
+ * — which is exactly the misreading a score strip must not invite. Against the
+ * fixed scale, a flat store looks flat.
+ */
+export function sparkHeights(values: number[]): number[] {
+  return values.map((v) => Math.max(0, Math.min(1, v)))
+}
+
+// ── the conflict's evidence (Phase 4) ─────────────────────────────────────
+export interface EvidenceCell {
+  columns: string[]
+  rows: string[][]
+}
+
+export interface ConflictView {
+  summary: string
+  mine: EvidenceCell
+  theirs: EvidenceCell
+  /** False when there is nothing to show — an ordinary template, or a
+   *  conflict recorded before the evidence column existed. The pane renders
+   *  the reason alone rather than an empty table. */
+  hasRows: boolean
+}
+
+/**
+ * The two answers that disagree, in the shape §4.7's pane renders.
+ *
+ * **The rows are the evidence.** Fabric detects conflicting instructions by
+ * reasoning over SQL text and reports a confidence score of one to five;
+ * DataMind ran both statements through the guard and compared the result sets,
+ * so what goes on the screen is *"481,220 against 512,940"* rather than *"we
+ * think these might disagree"*. A conflict a curator cannot see the proof of
+ * is one more warning nobody acts on.
+ *
+ * Defensive about every field: this comes from a JSONB column written by a
+ * worker, and a pane that throws on a missing key would take the whole tab
+ * down over a template nobody was looking at.
+ */
+export function conflictEvidence(evidence: unknown): ConflictView {
+  const raw = (evidence ?? {}) as Record<string, unknown>
+  const mine = cell(raw.left_columns, raw.left_rows)
+  const theirs = cell(raw.right_columns, raw.right_rows)
+  return {
+    summary: typeof raw.summary === 'string' ? raw.summary : '',
+    mine,
+    theirs,
+    hasRows: mine.rows.length > 0 || theirs.rows.length > 0,
+  }
+}
+
+function cell(columns: unknown, rows: unknown): EvidenceCell {
+  return {
+    columns: Array.isArray(columns) ? columns.map(String) : [],
+    rows: Array.isArray(rows)
+      ? rows.filter(Array.isArray).map((r) => (r as unknown[]).map(String))
+      : [],
+  }
+}
+
+/**
+ * Which cells differ between two evidence rows, by position.
+ *
+ * So the pane can mark the number that moved rather than making the reader
+ * compare two tables by eye — which is what turns a conflict pane from a
+ * report into something a curator acts on in one read. Positional, because the
+ * comparator that produced the rows is positional too.
+ */
+export function differingCells(mine: string[], theirs: string[]): boolean[] {
+  const width = Math.max(mine.length, theirs.length)
+  return Array.from({ length: width }, (_, i) => mine[i] !== theirs[i])
 }
 
 /** A template nobody has matched in ninety days. Information, not a verdict. */
@@ -453,4 +615,105 @@ export function resolveReadiness(
     return { ready: false, issue: 'Save the template first.' }
   }
   return { ready: true, issue: '' }
+}
+
+// ── the embedding matcher (Phase 7) ──────────────────────────────────────
+
+/** The status shape the store-health strip reads. Mirrors `EmbeddingStatus`
+ *  in `api/types.ts`, declared structurally so this file stays DOM-free and
+ *  import-free the way the rest of it is. */
+export interface EmbeddingState {
+  enabled: boolean
+  model: string
+  dimension: number
+  templates: number
+  indexed: number
+  message: string
+}
+
+export interface EmbeddingView {
+  /** What the control says it is right now. */
+  label: string
+  /** One honest sentence under it. Never a promise the next question will not
+   *  keep — which is the whole reason `indexing` is a separate state. */
+  detail: string
+  /** `off` is the shipped default and is **not** a warning: `pg_trgm` needs no
+   *  provider, no key and no budget, and most connections will stay here. */
+  tone: 'off' | 'indexing' | 'on' | 'problem'
+}
+
+/** How the store is searched, in a sentence a curator can act on.
+ *
+ * Four states, and the middle two are the ones a boolean would collapse:
+ *
+ * * **off** — no model pinned. The lexical matcher answers, which is the
+ *   shipped behaviour, so this reads as a choice and not as a fault.
+ * * **indexing** — a model is pinned and some questions have no vector yet.
+ *   Saying *on* here would promise a behaviour the next question will not
+ *   show; the count says exactly how far along it is.
+ * * **on** — pinned, and every live question is indexed.
+ * * **problem** — the provider said no. Its own sentence is shown, because
+ *   *"Anthropic does not offer an embedding endpoint"* is a fix somebody can
+ *   act on and *"unavailable"* is not.
+ */
+export function embeddingView(state: EmbeddingState): EmbeddingView {
+  if (state.message) {
+    return { label: 'Embedding search', detail: state.message, tone: 'problem' }
+  }
+  if (!state.enabled) {
+    return {
+      label: 'Word matching',
+      detail:
+        'Questions are matched on the words they share. Embedding search also ' +
+        'matches ones that mean the same thing in different words.',
+      tone: 'off',
+    }
+  }
+  const missing = Math.max(0, state.templates - state.indexed)
+  if (missing > 0) {
+    return {
+      label: 'Embedding search · indexing',
+      detail:
+        `${state.indexed} of ${state.templates} questions indexed — ` +
+        `${missing} still ${missing === 1 ? 'matches' : 'match'} on words alone.`,
+      tone: 'indexing',
+    }
+  }
+  return {
+    label: 'Embedding search',
+    detail:
+      `All ${state.templates} ${state.templates === 1 ? 'question' : 'questions'} ` +
+      `indexed with ${state.model}. Questions that mean the same thing match ` +
+      'even when the words differ.',
+    tone: 'on',
+  }
+}
+
+/** The indexing half of a sweep's summary, or `''` when there was none.
+ *
+ * Separate from the rest of `sweepSummary` because it is the one half that can
+ * report a *failure* without the sweep having failed: the staleness and
+ * conflict passes both completed, and the vectors are simply a pass behind.
+ * Saying so is the difference between "the index is stale" and "the check
+ * broke", and only the first is true.
+ */
+export function indexSummary(result: {
+  indexed: number
+  index_current: number
+  index_truncated: boolean
+  index_error: string
+}): string {
+  if (result.index_error) {
+    return ` The index could not be brought up to date: ${result.index_error}`
+  }
+  if (!result.indexed) {
+    return ''
+  }
+  const more = result.index_truncated
+    ? ' More remain — they are indexed on the next check.'
+    : ''
+  return (
+    ` ${result.indexed} question${result.indexed === 1 ? '' : 's'} re-indexed ` +
+    `for embedding search.${more}`
+  )
 }

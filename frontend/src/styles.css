@@ -274,6 +274,19 @@ code, pre, .mono {
 .rm-turn:hover .rm-turn-actions,
 .rm-turn-actions:focus-within { opacity: 1; }
 
+/* A row's own destructive control, revealed by the row. The semantic layer's
+   columns and metrics are lists of a dozen-odd collapsed rows, and a delete
+   button drawn on every one of them is the loudest repeated element on a
+   screen for describing things. Kept for an open row, and for keyboard users,
+   who never generate a hover. */
+.rm-subcard .rm-row-actions { opacity: 0; transition: opacity .14s ease; }
+.rm-subcard:hover .rm-row-actions,
+.rm-subcard.is-open .rm-row-actions,
+.rm-subcard:focus-within .rm-row-actions { opacity: 1; }
+@media (hover: none) {
+  .rm-subcard .rm-row-actions { opacity: 1; }
+}
+
 /* ── the grid motif ────────────────────────────────────────────────────────
    One thin-line grid, defined here and drawn by everything that draws it: the
    signed-out screen, the empty chat, the empty rooms below, and the
@@ -567,6 +580,30 @@ code, pre, .mono {
 .rm-send-btn:hover:not(:disabled) { transform: translateY(-1px) scale(1.04); filter: brightness(1.06); }
 .rm-send-btn:active:not(:disabled) { transform: translateY(0) scale(0.97); }
 
+/* A run in flight, drawn on the one control that can end it.
+   The disc goes neutral while an answer is being written — stopping undoes
+   work, it does not do any — so the ring is what says something is happening
+   there. It breathes rather than spins: a spinner in this position for the
+   forty seconds a run can take reads as "wait", and the whole point of the
+   button in that moment is that you do not have to.
+   Under `prefers-reduced-motion` the global reset freezes it on the 0% frame,
+   which is deliberately a visible ring rather than nothing. */
+@keyframes rm-run-ring {
+  0%, 100% { box-shadow: 0 0 0 1px var(--accent-border); }
+  50% { box-shadow: 0 0 0 1px var(--accent), 0 0 0 5px var(--accent-bg); }
+}
+.rm-send-btn.is-running {
+  animation: rm-run-ring 1.9s ease-in-out infinite;
+  /* The pill is wider than the disc it replaces, and the composer's row is
+     `align-items: flex-end`, so without this the swap moves the text box. */
+  transform: none;
+}
+.rm-send-btn.is-running:hover:not(:disabled) {
+  transform: none;
+  filter: none;
+  background: var(--panel-hover) !important;
+}
+
 /* The keyboard hint under the composer fades in with focus or content. */
 .rm-composer-hint {
   opacity: 0;
@@ -574,7 +611,10 @@ code, pre, .mono {
   transition: opacity 0.18s ease, transform 0.18s ease;
   pointer-events: none;
 }
-.rm-composer.is-active .rm-composer-hint { opacity: 1; transform: translateY(0); }
+.rm-composer.is-active .rm-composer-hint,
+/* …and while a run is in flight, whether or not the box has focus: that is
+   the one moment the hint carries an action rather than a keyboard tip. */
+.rm-composer.is-busy .rm-composer-hint { opacity: 1; transform: translateY(0); }
 .rm-kbd {
   font-family: 'JetBrains Mono', Vazirmatn, ui-monospace, monospace;
   font-size: 10px;
@@ -1284,6 +1324,11 @@ code, pre, .mono {
   min-width: 0;
 }
 .rm-sqlbox-hint.is-stale { color: var(--amber); }
+/* A refusal, not a warning. The guard's own sentence lands in this bar when a
+   statement is rejected, and amber on the light theme's paper is the one place
+   this footer drops under 4.5:1 — the message that matters most is the one it
+   cannot afford to whisper. */
+.rm-sqlbox-hint.is-error { color: var(--red); }
 
 /* A shortcut rendered as a key, not as prose. Two characters of chrome that
    teach the faster path without spending a sentence on it. */

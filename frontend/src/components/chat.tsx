@@ -22,14 +22,21 @@ import type {
 } from '../api/types'
 import { ChartGlyph, ChartTypePicker } from './chart-picker'
 import {
-  Chip, CopyButton, Dot, GhostButton, Icon, Kpi, ResultTable, Spinner, TextArea,
-  dirOf,
+  ActionDivider, Chip, CopyButton, Dot, Icon, Kpi, PrimaryButton, QuietAction,
+  ResultTable, Spinner, TextArea, dirOf,
 } from './ui'
 import { VegaChart } from './VegaChart'
 import { NODE_META } from '../theme/tokens'
 
 // ── turn frame ────────────────────────────────────────────────────────────
-function AssistantAvatar({ busy, failed }: { busy?: boolean; failed?: boolean }) {
+function AssistantAvatar({
+  busy, failed, stopped,
+}: {
+  busy?: boolean
+  failed?: boolean
+  /** The reader ended this one. Neutral, not red — see `RunStoppedCard`. */
+  stopped?: boolean
+}) {
   return (
     <span
       style={{
@@ -40,8 +47,12 @@ function AssistantAvatar({ busy, failed }: { busy?: boolean; failed?: boolean })
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: failed ? 'var(--red-bg)' : 'var(--accent-bg)',
-        border: `1px solid ${failed ? 'var(--red-border)' : 'var(--accent-border)'}`,
+        background: failed
+          ? 'var(--red-bg)'
+          : stopped ? 'var(--panel-alt)' : 'var(--accent-bg)',
+        border: `1px solid ${
+          failed ? 'var(--red-border)' : stopped ? 'var(--border)' : 'var(--accent-border)'
+        }`,
         marginTop: 1,
       }}
     >
@@ -49,6 +60,8 @@ function AssistantAvatar({ busy, failed }: { busy?: boolean; failed?: boolean })
         <Spinner size={14} />
       ) : failed ? (
         <Icon.Alert size={15} stroke="var(--red)" />
+      ) : stopped ? (
+        <Icon.Stop size={12} stroke="var(--text-faint)" />
       ) : (
         <Icon.Sparkle size={15} stroke="var(--accent)" />
       )}
@@ -116,7 +129,62 @@ function stepTime(ms: number): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`
 }
 
-export function StepTrail({ steps }: { steps: RunStep[] }) {
+/**
+ * How long the step that is running now has been running.
+ *
+ * The trail shows a duration on every step **except** the one you are waiting
+ * for, which is the only one anybody wonders about. `route` is a model call
+ * and this product has measured it at 0.9s and at 27s on the same thread with
+ * the same model, so "a while with no number on it" is a real state a reader
+ * lands in, and a chip that has been spinning silently for half a minute is
+ * indistinguishable from a chip that is stuck.
+ *
+ * It stays quiet below `SLOW_STEP_MS`: an ordinary step finishes before the
+ * counter appears, so the trail is unchanged for every run that is behaving,
+ * and the number arrives exactly when it starts being the answer to a
+ * question. Timed from when this client first saw the step, which is what the
+ * reader is measuring anyway.
+ */
+const SLOW_STEP_MS = 2000
+
+function useElapsed(key: number | undefined): number {
+  const [now, setNow] = useState(0)
+  const startedAt = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (key === undefined) {
+      startedAt.current = null
+      setNow(0)
+      return
+    }
+    startedAt.current = Date.now()
+    setNow(0)
+    // One second, and rendered as whole seconds: a counter that ticks tenths
+    // is a stopwatch, and a stopwatch on a screen someone is waiting at makes
+    // the wait the subject.
+    const timer = setInterval(() => {
+      if (startedAt.current !== null) setNow(Date.now() - startedAt.current)
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [key])
+
+  return now
+}
+
+export function StepTrail({
+  steps, interrupted,
+}: {
+  steps: RunStep[]
+  /**
+   * The run ended while a step was still RUNNING — a stop, and nothing else
+   * gets here. Without this the node the reader interrupted keeps a spinner
+   * and an accent border for as long as the thread exists, which says the
+   * work is still going on a turn that says it is over.
+   */
+  interrupted?: boolean
+}) {
+  const waitingOn = steps.find((s) => s.status === 'RUNNING' && !interrupted)
+  const elapsed = useElapsed(waitingOn?.seq)
   if (steps.length === 0) return null
   return (
     <div
@@ -129,9 +197,10 @@ export function StepTrail({ steps }: { steps: RunStep[] }) {
     >
       {steps.map((step) => {
         const meta = NODE_META[step.name] ?? { label: step.name, detail: '' }
-        const running = step.status === 'RUNNING'
+        const running = step.status === 'RUNNING' && !interrupted
+        const stopped = step.status === 'RUNNING' && interrupted
         const failed = step.status === 'FAILED'
-        const skipped = step.status === 'SKIPPED'
+        const skipped = step.status === 'SKIPPED' || stopped
 
         const color = failed
           ? 'var(--red)'
@@ -161,6 +230,9 @@ export function StepTrail({ steps }: { steps: RunStep[] }) {
           >
             {running ? <Spinner size={11} /> : <Dot color={color} />}
             {meta.label}
+            {stopped && (
+              <span style={{ color: 'var(--text-faint)' }}>stopped</span>
+            )}
             {/*
               Every finished step shows its own time, not only the ones that
               ended DONE. A step that ran for forty seconds and then reported
@@ -172,6 +244,13 @@ export function StepTrail({ steps }: { steps: RunStep[] }) {
             {step.duration_ms != null && !running && (
               <span style={{ color: 'var(--text-faint)' }}>
                 {stepTime(step.duration_ms)}
+              </span>
+            )}
+            {running && elapsed >= SLOW_STEP_MS && (
+              <span
+                style={{ color: 'var(--text-dim)', fontVariantNumeric: 'tabular-nums' }}
+              >
+                {Math.floor(elapsed / 1000)}s
               </span>
             )}
           </span>
@@ -621,6 +700,70 @@ export const RunErrorCard = memo(function RunErrorCard({ run }: { run: RunDetail
 })
 
 /**
+ * A run the reader stopped.
+ *
+ * Not `RunErrorCard`. A cancelled run used to take the same red panel as a
+ * failure — *"This run did not complete"* — which told someone who had just
+ * pressed Stop that something had gone wrong, in the colour this product
+ * reserves for a database refusing a statement. Nothing went wrong: they
+ * changed their mind, which is the one terminal state that owes no
+ * explanation.
+ *
+ * So it keeps what the run did manage — the trail, and the SQL if it got that
+ * far, both persisted and both worth reading — and offers the question back.
+ * There is no partial answer to keep: the text streamed before the stop was
+ * never written down, and showing it here would mean showing something that
+ * vanishes on the next reload.
+ */
+export const RunStoppedCard = memo(function RunStoppedCard({
+  run, onRetry,
+}: {
+  run: RunDetail
+  /** Run the same question again, against this same message. */
+  onRetry?: (run: RunDetail) => void
+}) {
+  return (
+    <Turn avatar={<AssistantAvatar stopped />}>
+      {/* Sentence and action on one line, the action **next to** the words it
+          answers. It was pinned to the far right of a full-width panel, which
+          put a hairline of a button as far from its own sentence as the layout
+          allowed and made a recovery look like an afterthought. */}
+      <div
+        style={{
+          display: 'inline-flex',
+          alignSelf: 'flex-start',
+          alignItems: 'center',
+          gap: 4,
+          flexWrap: 'wrap',
+          maxWidth: '100%',
+          padding: '7px 8px 7px 12px',
+          borderRadius: 999,
+          border: '1px solid var(--border)',
+          background: 'var(--panel)',
+          fontSize: 12.5,
+          color: 'var(--text-dim)',
+        }}
+      >
+        <Icon.Stop size={10} stroke="var(--text-faint)" />
+        <span style={{ padding: '0 8px 0 4px' }}>You stopped this answer.</span>
+        {onRetry && (
+          <QuietAction
+            tone="accent"
+            onClick={() => onRetry(run)}
+            title="Run this question again"
+          >
+            <Icon.Refresh size={13} />
+            Retry
+          </QuietAction>
+        )}
+      </div>
+      {run.steps.length > 0 && <StepTrail steps={run.steps} interrupted />}
+      {run.queries.length > 0 && <SqlPanel queries={run.queries} />}
+    </Turn>
+  )
+})
+
+/**
  * The readings offered when a run stopped to ask rather than guess.
  *
  * Chips, not a form: the question is already the assistant's message, so this
@@ -975,35 +1118,41 @@ function AnswerBadge({
 }
 
 /**
- * *Was this right?* — in the footer, small, and never a modal.
+ * Everything you can do *to* a finished answer, on one line.
  *
- * Three verdicts, not two. Genie's *Yes / Fix it / Request review* split exists
- * because "this is wrong" and "please look at this" are different asks: one is
- * a correction the reader could make themselves, the other is a question they
- * cannot answer. Collapsing them loses the second.
+ * It used to be two rows of bordered buttons — copy and teach on one, then
+ * *Was this right?* with three more underneath — drawn in the brightest ink
+ * the theme has. Five boxes under every answer read louder than the sentence
+ * they were judging, and the transcript became a stack of forms again.
  *
- * `✗ No` and `Ask for review` expand **one textarea inline**. Both submit to a
- * single line of acknowledgement in place: no toast, no dialog, no confetti.
+ * So: one row, `QuietAction` throughout, faint until reached for. The two
+ * groups either side of the hairline are genuinely different asks — *use this
+ * answer* on the left, *judge this answer* on the right — and the divider is
+ * what lets them share a line without reading as one menu of five things.
  *
- * And once a flag becomes a template, this is where the person who raised it
- * finds out — the one thing that keeps a feedback control from becoming a
- * suggestion box people learn to ignore.
+ * The row is always present rather than revealed on hover, unlike the controls
+ * above it. Feedback nobody can see is feedback nobody gives, and hiding the
+ * one control that asks whether an answer was right is how a learning loop
+ * quietly stops learning. At this weight it costs the page nothing.
  */
-function FeedbackFooter({
-  run, onSubmit,
+function AnswerActions({
+  text, run, onFeedback, onSaveAsTemplate,
 }: {
-  run: RunDetail
-  onSubmit: (verdict: string, comment: string) => Promise<void>
+  text: string
+  run: RunDetail | null
+  onFeedback?: (run: RunDetail, verdict: string, comment: string) => Promise<void>
+  onSaveAsTemplate?: (run: RunDetail) => void
 }) {
-  const given = run.knowledge.feedback
   const [pending, setPending] = useState<string | null>(null)
   const [comment, setComment] = useState('')
   const [busy, setBusy] = useState(false)
+  const given = run?.knowledge.feedback
 
-  async function submit(verdict: string, text = '') {
+  async function submit(verdict: string, note = '') {
+    if (!run || !onFeedback) return
     setBusy(true)
     try {
-      await onSubmit(verdict, text)
+      await onFeedback(run, verdict, note)
       setPending(null)
       setComment('')
     } finally {
@@ -1011,71 +1160,286 @@ function FeedbackFooter({
     }
   }
 
-  if (given && !pending) {
-    return (
-      <div style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
-        {given.became_template ? (
-          <>
-            Your flag became a saved question. This will be answered from it next
-            time.
-          </>
-        ) : given.state === 'DISMISSED' ? (
-          <>Reviewed — {given.resolution_note}</>
-        ) : given.verdict === 'CORRECT' ? (
-          <>Thanks — noted as correct.</>
-        ) : (
-          <>Thanks — this is in the review queue.</>
-        )}
-      </div>
-    )
-  }
-
-  if (pending) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 520 }}>
-        <TextArea
-          autoFocus
-          value={comment}
-          placeholder={
-            pending === 'WRONG'
-              ? 'What was wrong? — optional'
-              : 'What should someone look at? — optional'
-          }
-          onChange={(e) => setComment(e.target.value)}
-          style={{ minHeight: 56, fontSize: 12.5 }}
-        />
-        {pending === 'NEEDS_REVIEW' && (
-          <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
-            This goes to whoever owns the connection.
-          </span>
-        )}
-        <div style={{ display: 'flex', gap: 6 }}>
-          <GhostButton onClick={() => submit(pending, comment)} disabled={busy}>
-            {busy && <Spinner />}
-            Send
-          </GhostButton>
-          <GhostButton onClick={() => setPending(null)}>Cancel</GhostButton>
-        </div>
-      </div>
-    )
-  }
+  const canTeach = onSaveAsTemplate && run && run.queries.length > 0
+  const canJudge = Boolean(onFeedback && run)
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5 }}>
-      <span style={{ color: 'var(--text-faint)' }}>Was this right?</span>
-      <GhostButton onClick={() => submit('CORRECT')} disabled={busy}>
-        ✓ Yes
-      </GhostButton>
-      <GhostButton onClick={() => setPending('WRONG')}>✗ No</GhostButton>
-      <GhostButton onClick={() => setPending('NEEDS_REVIEW')}>
-        Ask for review
-      </GhostButton>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          gap: 1,
+          rowGap: 2,
+          // The first control's own padding, pulled back so its *label* lines
+          // up with the answer above rather than its invisible hit area.
+          marginLeft: -7,
+        }}
+      >
+        <CopyButton text={text} />
+        {/* One click from an answer that worked to the knowledge that keeps it
+            working. The editor opens prefilled with the question and the
+            statement the reader just watched succeed, which is the whole
+            reason this belongs here rather than on the Knowledge tab. */}
+        {canTeach && (
+          <QuietAction
+            tone="accent"
+            onClick={() => onSaveAsTemplate!(run!)}
+            title="Teach this question, prefilled with the SQL that answered it"
+          >
+            <Icon.Sparkle size={13} />
+            Save as template
+          </QuietAction>
+        )}
+        {canJudge && <ActionDivider />}
+        {/* The verdict travels as one group, so a column too narrow for the
+            whole row breaks *between* the two asks rather than through the
+            middle of one — "Yes" stranded on the line above "No" is a choice
+            that no longer looks like a choice. */}
+        {canJudge && (
+          <span
+            // The verdict is replaced in place by its receipt, so a reader who
+            // is not watching this corner of the page is told that it landed.
+            aria-live="polite"
+            style={{
+              display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1,
+              rowGap: 2, minWidth: 0,
+            }}
+          >
+          {given ? (
+            <FeedbackReceipt given={given} />
+          ) : (
+            <>
+              <span
+                style={{
+                  fontSize: 11.5,
+                  color: 'var(--text-dim)',
+                  padding: '0 6px 0 1px',
+                }}
+              >
+                Was this right?
+              </span>
+              {/* The only verdict that submits on the click itself: there is
+                  nothing to ask someone who says the answer was right. */}
+              <QuietAction
+                tone="green"
+                disabled={busy}
+                onClick={() => void submit('CORRECT')}
+              >
+                {busy ? <Spinner size={13} /> : <Icon.Check size={13} />}
+                Yes
+              </QuietAction>
+              <QuietAction
+                tone="red"
+                disabled={busy}
+                active={pending === 'WRONG'}
+                onClick={() => setPending(pending === 'WRONG' ? null : 'WRONG')}
+              >
+                <Icon.Close size={13} />
+                No
+              </QuietAction>
+              {/* Three verdicts, not two. Genie's *Yes / Fix it / Request
+                  review* split exists because "this is wrong" and "please look
+                  at this" are different asks: one is a correction the reader
+                  could make themselves, the other is a question they cannot
+                  answer. Collapsing them loses the second. */}
+              <QuietAction
+                tone="accent"
+                disabled={busy}
+                active={pending === 'NEEDS_REVIEW'}
+                onClick={() =>
+                  setPending(pending === 'NEEDS_REVIEW' ? null : 'NEEDS_REVIEW')
+                }
+              >
+                <Icon.Flag size={13} />
+                Ask for review
+              </QuietAction>
+            </>
+          )}
+          </span>
+        )}
+      </div>
+
+      {/* `✗ No` and `Ask for review` expand one note **in place**: no toast, no
+          dialog, no confetti — and no second modal over a transcript people are
+          reading. */}
+      {pending && (
+        <FeedbackNote
+          verdict={pending}
+          value={comment}
+          busy={busy}
+          onChange={setComment}
+          onSend={() => void submit(pending, comment)}
+          onCancel={() => {
+            setPending(null)
+            setComment('')
+          }}
+        />
+      )}
     </div>
   )
 }
 
+/**
+ * The note that opens under `No` and `Ask for review`.
+ *
+ * A titled card rather than a bare textarea with two buttons loose under it.
+ * The two verdicts ask for different things — one is a correction, the other a
+ * question for a person — and the heading is where that difference is said,
+ * so the placeholder does not have to carry it alone.
+ */
+function FeedbackNote({
+  verdict, value, busy, onChange, onSend, onCancel,
+}: {
+  verdict: string
+  value: string
+  busy: boolean
+  onChange: (value: string) => void
+  onSend: () => void
+  onCancel: () => void
+}) {
+  const wrong = verdict === 'WRONG'
+  const tone = wrong ? 'red' : 'accent'
+  return (
+    <div
+      className="rm-enter"
+      style={{
+        maxWidth: 520,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+        padding: 12,
+        borderRadius: 10,
+        border: '1px solid var(--border)',
+        background: 'var(--panel)',
+      }}
+    >
+      <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
+        <span
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 22,
+            height: 22,
+            flexShrink: 0,
+            borderRadius: 6,
+            background: `var(--${tone}-bg)`,
+            color: `var(--${tone})`,
+          }}
+        >
+          {wrong ? <Icon.Close size={13} /> : <Icon.Flag size={13} />}
+        </span>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-strong)' }}>
+            {wrong ? 'What was wrong?' : 'Ask someone to look at this'}
+          </div>
+          <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2 }}>
+            {wrong
+              ? 'Optional — but it is what the next person reads.'
+              : 'This goes to whoever owns the connection.'}
+          </div>
+        </div>
+      </div>
+      <TextArea
+        autoFocus
+        value={value}
+        // An example rather than the heading again: the heading asks the
+        // question, so the box is free to show what an answer looks like.
+        placeholder={
+          wrong
+            ? 'It counted refunded orders…'
+            : 'What should someone look at?'
+        }
+        onChange={(e) => onChange(e.target.value)}
+        // Enter sends, Shift+Enter breaks the line: the composer above already
+        // taught that, and a note this short is not worth a trip to the mouse.
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault()
+            onSend()
+          }
+        }}
+        style={{ minHeight: 62, fontSize: 12.5 }}
+      />
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'flex-end' }}>
+        <QuietAction onClick={onCancel} disabled={busy}>
+          Cancel
+        </QuietAction>
+        <PrimaryButton
+          onClick={onSend}
+          disabled={busy}
+          style={{ fontSize: 12, padding: '7px 15px', borderRadius: 7 }}
+        >
+          {busy && <Spinner size={12} />}
+          Send
+        </PrimaryButton>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * What happened to a verdict already given.
+ *
+ * And once a flag becomes a template, this is where the person who raised it
+ * finds out — the one thing that keeps a feedback control from becoming a
+ * suggestion box people learn to ignore.
+ */
+function FeedbackReceipt({ given }: { given: NonNullable<RunKnowledge['feedback']> }) {
+  const view = given.became_template
+    ? {
+        icon: <Icon.Sparkle size={13} />,
+        tone: 'var(--accent)',
+        text: 'Your flag became a saved question — this will be answered from it next time.',
+      }
+    : given.state === 'DISMISSED'
+      ? {
+          icon: <Icon.Check size={13} />,
+          tone: 'var(--text-faint)',
+          text: `Reviewed — ${given.resolution_note}`,
+        }
+      : given.verdict === 'CORRECT'
+        ? {
+            icon: <Icon.Check size={13} />,
+            tone: 'var(--green)',
+            text: 'Thanks — noted as correct.',
+          }
+        : {
+            icon: <Icon.Flag size={13} />,
+            tone: 'var(--accent)',
+            // Whose queue, when the server named one. §4.6 asks the control to
+            // say a flag goes to whoever owns the connection; the name comes
+            // from the server so it stays true when ownership moves, where
+            // prose baked in here would quietly start lying.
+            text: given.routed_to
+              ? `Thanks — this is in ${given.routed_to}’s review queue.`
+              : 'Thanks — this is in the review queue.',
+          }
+
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'baseline',
+        gap: 6,
+        padding: '4px 2px',
+        fontSize: 11.5,
+        color: 'var(--text-dim)',
+        minWidth: 0,
+      }}
+    >
+      <span style={{ color: view.tone, alignSelf: 'center', display: 'flex' }}>
+        {view.icon}
+      </span>
+      {view.text}
+    </span>
+  )
+}
+
 export const AssistantTurn = memo(function AssistantTurn({
-  text, run, streaming, steps, thinking, onPickOption, optionsDisabled,
+  text, run, streaming, steps, thinking, preview, onPickOption, optionsDisabled,
   onRegenerate, onFeedback, onSaveAsTemplate,
 }: {
   text: string
@@ -1093,6 +1457,14 @@ export const AssistantTurn = memo(function AssistantTurn({
    * turn, since the events it is built from are never stored.
    */
   thinking?: ThinkingState | null
+  /**
+   * The result of the query this run just ran, live — before the run has
+   * finished and before anything has been persisted. `execute` publishes it
+   * the moment it has the rows, which on a normal run is some twenty seconds
+   * before `present` has finished writing the sentence about them. Only ever
+   * set on a streaming turn; a finished one reads its TABLE artifact.
+   */
+  preview?: TableArtifactSpec | null
   onPickOption?: (text: string) => void
   optionsDisabled?: boolean
   /** Records the override, then re-asks the same question without the store. */
@@ -1212,34 +1584,24 @@ export const AssistantTurn = memo(function AssistantTurn({
           <ResultTable spec={spec} />
         </div>
       )}
+      {/* The same table, twenty seconds earlier. It sits exactly where the
+          persisted one will, so the swap at the end of the run moves nothing
+          on the page — the rows are simply already there. */}
+      {!spec && preview && (
+        <div className="rm-artifact">
+          <ResultTable spec={preview} />
+        </div>
+      )}
       {run && run.queries.length > 0 && <SqlPanel queries={run.queries} />}
       {run && <RunMetadata run={run} />}
 
-      {/* Revealed on hover of the turn, so a finished answer stays quiet. */}
+      {/* Copy, teach and judge on one quiet line — see `AnswerActions`. */}
       {!streaming && text && (
-        <div
-          className="rm-turn-actions"
-          style={{ display: 'flex', alignItems: 'center', gap: 2, marginLeft: -6 }}
-        >
-          <CopyButton text={text} />
-          {/* One click from an answer that worked to the knowledge that keeps
-              it working. The editor opens prefilled with the question and the
-              statement the reader just watched succeed, which is the whole
-              reason this belongs here rather than on the Knowledge tab. */}
-          {onSaveAsTemplate && run && run.queries.length > 0 && (
-            <GhostButton onClick={() => onSaveAsTemplate(run)}>
-              <Icon.Sparkle size={13} />
-              Save as a template
-            </GhostButton>
-          )}
-        </div>
-      )}
-
-      {/* Beside the copy control, and never a modal. */}
-      {!streaming && run && text && onFeedback && (
-        <FeedbackFooter
+        <AnswerActions
+          text={text}
           run={run}
-          onSubmit={(verdict, comment) => onFeedback(run, verdict, comment)}
+          onFeedback={onFeedback}
+          onSaveAsTemplate={onSaveAsTemplate}
         />
       )}
     </Turn>

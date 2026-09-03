@@ -10,11 +10,16 @@
 > **Four decisions were taken before writing this** (§0.2). They are recorded
 > here rather than re-argued: everything below assumes them.
 >
-> **48 of 86 items, verified against the tree on 2026-08-31.** Phase 0 has
-> landed except its three baseline runs, which need a provider key; **Phases 1,
-> 2 and 3 are complete** — the store is built, filled by hand *and* from
-> traffic, read on the ask path, and the loop closes back to the person who
-> flagged an answer. `PROMPT_VERSION` has not moved.
+> **82 of 85 items.** **Every phase is built.** Phases 1–4, 6 and 8 are complete
+> and on — the store is built, filled by hand *and* from traffic, read on the
+> ask path, kept from rotting, measurable by its owner, audited, and the loop
+> closes back to the person who flagged an answer — and the documentation is
+> landed. **Phases 5 and 7 are built and shipped *off***: `PROMPT_VERSION` is
+> v9 and the empty slot renders v8's bytes, `knowledge_examples_enabled`
+> defaults to false, and `embedding_model` defaults to empty, because both
+> switches are gated on measurements that need a provider key this environment
+> does not have — which is also why Phase 0's three baselines are still unmade.
+> **All three open boxes are that one blocker**, and none of them is code.
 > [§13](#13-progress-ledger--what-is-done-what-is-not) is the
 > ledger: what is already in the codebase and load-bearing (§13.1), then a
 > checkbox per deliverable per phase, each with the check that proves its state.
@@ -574,7 +579,9 @@ research, and it costs one line.
   cancel-on-unbound rule.
 - `tests/unit/test_pipeline_graph.py` — extended: the `MATCH` node's two exits,
   and that a miss produces the **byte-identical** prompt it produced before this
-  phase existed. That assertion is the promise `PROMPT_VERSION` stays at v8.
+  phase existed. That assertion is the promise `PROMPT_VERSION` stayed at v8
+  through Phase 2; from Phase 5 it is the promise that v9's empty slot renders
+  v8's bytes.
 - A guard-failure-on-a-stored-template test: the run does **not** fail; the
   template is marked `STALE` with a reason and the run falls through to
   generation (research §6.2 — *fail as a value*).
@@ -1390,6 +1397,9 @@ All under `/api/v1/connections/{connection_id}/knowledge`, scoped by the same
 | `POST` | `/templates/revalidate` | 4 | `can_curate` — kicks the worker |
 | `GET` | `/health` | 4 | read — stale / conflicted / unused counts |
 | `GET`/`POST` | `/benchmarks`, `/benchmarks/{id}/run` | 6 | `can_curate` |
+| `GET` | `/embeddings` | 7 | read — is this store searched by meaning, and how much is indexed |
+| `PUT` | `/embeddings` | 7 | `can_curate` — probes the provider, pins model + measured width, indexes inline |
+| `GET` | `/audit` *(not under `/knowledge`)* | 8 | **admin only** — a record about people, not about a connection |
 
 `POST /templates/check` is the endpoint the editor calls on every pause in
 typing. It returns the guard verdict, `referenced_tables`, and the parameter
@@ -1451,8 +1461,11 @@ document is part of the change, not a follow-up:
 - [docs/README.md](README.md) — index this document.
 - [mvp2-plan.md](mvp2-plan.md) — §A1/§A3 gain a pointer here, and §A3's *"the two
   features share a table"* gets the §1.3 correction.
-- A Persian edition (`learning-loop-plan.fa.md`) if this plan is adopted, matching
-  [mvp2-plan.fa.md](mvp2-plan.fa.md).
+
+> **Struck 2026-09-01:** a seventh line here asked for a Persian edition
+> (`learning-loop-plan.fa.md`) matching `mvp2-plan.fa.md`. That file has been
+> deleted and the convention is retired, so there is nothing to match and
+> nothing to write. `mvp2-plan.md`'s pointer to it went with it.
 
 ---
 
@@ -1529,17 +1542,27 @@ it is not, no amount of Phase 5 will help.
 
 ## 13. Progress ledger — what is done, what is not
 
-> **Verified against the tree on 2026-08-31.** Every ✅ below was checked by
+> **Verified against the tree on 2026-09-01.** Every ✅ below was checked by
 > reading the code, not by memory; every ❌ was confirmed absent the same way.
 > The verification note beside each item is what to re-run to check it again.
 >
-> **Status: 48 of 86 plan items complete.** Phase 0's instruments are built
-> (its three measurements are not — see §13.2, and they gate Phase 5 only), and
-> **Phases 1–3 have landed in full**: the store, the curation surface, the
-> guard's fifth entry point, the short-circuit, the badge, feedback, the review
-> queue and the ranked backlog. What is done besides that is the *foundation* the
-> plan leans on (§13.1) — which is substantial, and is why the research put the
-> loop at "60% built and not wired up".
+> **Status: 82 of 85 plan items complete.** Phase 0's instruments are built (its
+> three measurements are not — see §13.2), and **Phases 1–8 have landed in
+> full**: the store, the curation surface, the guard's fifth entry point, the
+> short-circuit, the badge, feedback, the review queue, the ranked backlog,
+> staleness and conflict detection, few-shot injection, the in-product
+> benchmark, the embedding matcher, the permissions flip and the audit log.
+> **The three boxes still open are the same box three times** — a run against a
+> real provider — and each is written so the number, not an argument, decides
+> what ships.
+>
+> **§13.11 was wrong in the other direction, and that is worth naming.** It read
+> `0 / 7` while five of its six boxes were already substantially true: each phase
+> updated the documents it touched, as the convention requires, and none came
+> back to tick the line. A ledger drifts both ways, and a box that *undercounts*
+> is not the harmless kind — it sends the next reader off to write something
+> that already exists, and it hides the two documents that had gone stale among four
+> that had not.
 >
 > **Keep this section honest.** Tick a box in the same commit that lands the
 > work, never in advance and never in a batch afterwards. A checklist that runs
@@ -1656,7 +1679,10 @@ replayed through the new door. **No chat answer behaves differently.**
 > `PROMPT_VERSION` **must still read `v8`** when this phase ships. If it moved,
 > something in this phase was built wrong.
 >
-> **It reads `v8`,** and `test_pipeline_graph.py` asserts it.
+> **It read `v8`,** and `test_pipeline_graph.py` asserted it. Phase 5 moved it
+> to `v9` for the `{examples}` slot, and rewrote that assertion to pin the
+> thing that still matters here: with no examples the rendered prompt is
+> byte-identical to v8's, so nothing this phase built changed a prompt.
 >
 > Two things landed differently from the sketch, both recorded rather than
 > quietly absorbed:
@@ -1710,65 +1736,148 @@ replayed through the new door. **No chat answer behaves differently.**
 >   it. Treating a ✓ as open work would put a permanent number on the tab that
 >   no curator could clear, which is how a badge stops being a signal.
 
-### 13.6 Phase 4 — Store health · **0 / 7** ❌ not started
+### 13.6 Phase 4 — Store health · **7 / 7** ✅ landed
 
-- [ ] Re-validate every `ACTIVE` template on schema sync → `STALE` with a readable `status_reason`
-- [ ] `STALE` / `CONFLICTED` withdrawn from matching and few-shot, never deleted
-- [ ] `app/workers/knowledge_maintenance.py`
-- [ ] Conflict detection: similarity → bind both → execute both through the guard → compare with `app/knowledge/compare.py`
-- [ ] `conflicts_with` populated, **and the diverging rows shown as evidence**
-- [ ] Per-connection off switch for the scheduled checker
-- [ ] `test_knowledge_conflicts.py`
+- [x] Re-validate every `ACTIVE` template on schema sync → `STALE` with a readable `status_reason` — `KnowledgeService.sweep_staleness`, called inline from `POST /connections/{id}/schema/sync` in the same transaction, because it is `guard()` per template and makes **no** call to the customer's database. The reverse transition is there too: a template that resolves again returns to `ACTIVE` on its own, without which the first bad sync is permanent
+- [x] `STALE` / `CONFLICTED` withdrawn from matching and few-shot, never deleted — `KnowledgeTemplate.is_withdrawn` beside `is_matchable`, and the predicate is in the candidate query as well as in the code
+- [x] `app/workers/knowledge_maintenance.py` — `run_maintenance` (staleness first, then conflicts, and the order matters), `maintenance_loop` on a six-hour timer wired into `lifespan`, and `KnowledgeMaintenanceExecutor` for the on-demand path
+- [x] Conflict detection: similarity → bind both → execute both through the guard → compare with `app/knowledge/compare.py` — `app/knowledge/conflict.py` holds the pure half (`similar_pairs` at a **measured** 0.60 threshold, `probe_values`), the worker holds the I/O, and execution goes through `execute_saved_sql`, the same door a dashboard tile uses
+- [x] `conflicts_with` populated, **and the diverging rows shown as evidence** — `knowledge_templates.conflict_evidence` (migration `0018`), written from *each* row's own point of view so whichever the curator opens sees its own answer on the left; `ConflictEvidencePane` renders the two tables with the cell that moved in amber
+- [x] Per-connection off switch for the scheduled checker — `connections.conflict_checks_enabled`, checked **before** a connector is opened, and it stops only the half that executes SQL: the staleness sweep is a parse and keeps running
+- [x] `test_knowledge_conflicts.py` — 45 tests, plus 14 new frontend checks
 
-### 13.7 Phase 5 — Few-shot, behind an eval gate · **0 / 7** ❌ not started
+> **Done.** Two things landed beyond the sketch, both recorded rather than
+> quietly absorbed:
+>
+> * **`app/knowledge/compare.py` landed here, not in Phase 6.** Phase 4's own
+>   text says the conflict checker compares with it, so the move had to happen
+>   now — the eval harness's pure comparator came *down* a layer and
+>   `app/eval/metrics.py` re-exports it. That ticks the first two boxes of
+>   §13.8 in this commit; `lint-imports` is green and nothing on the request
+>   path gained an import of `app.eval`.
+> * **Both halves of every state transition, not just the bad one.** A stale
+>   template that resolves again returns to `ACTIVE`; a conflicted pair that
+>   agrees on a later pass is cleared. The plan only asked for the transitions
+>   *into* the withdrawn states, and a store that can enter one and never leave
+>   it is one nobody trusts — healing it would mean a curator opening forty
+>   rows and pressing Save on each.
+>
+> One thing deliberately **not** built: the checker does not pick a winner.
+> Both rows are marked, both keep their evidence, and §4.7's *Keep the first /
+> Keep the second / Edit both* stays a human decision.
 
-- [ ] `RetrievedContext.examples` — **confirmed absent:** `grep -n examples backend/app/pipeline/state.py` returns nothing
-- [ ] The `{examples}` slot in `GENERATE_SYSTEM`, rendering to empty when there are none
-- [ ] Budget fitting — examples **last**, after schema and semantic layer
-- [ ] `PROMPT_VERSION` v8 → v9
-- [ ] A `--templates on|off` eval arm, beside `--comments`
-- [ ] Per-connection `knowledge_examples_enabled` toggle
-- [ ] **The gate:** both numbers in [eval.md](eval.md), and the ship/don't-ship decision written down with its evidence
+### 13.7 Phase 5 — Few-shot, behind an eval gate · **6 / 7** ⚠️ built, and shipped **off** because the gate cannot be run here
+
+- [x] `RetrievedContext.examples` — `list[TemplateExample]`, carrying `literal_provenance` so §5.2's gate applies at render time. `RunState.examples` is where `match` puts them and `retrieve` reads them
+- [x] The `{examples}` slot in `GENERATE_SYSTEM`, rendering to empty when there are none — written `{schema}\n{examples}\n{history}`, so empty collapses to the newline that was already there. `test_knowledge_few_shot.py` asserts the **byte-identity**, not a paraphrase of it
+- [x] Budget fitting — examples **last**, after schema and semantic layer; `_EXAMPLE_CHARS_BLOCK` is 1,600 against the comment block's 2,500, at most four examples, and a long one is skipped whole rather than truncated
+- [x] `PROMPT_VERSION` v8 → v9 — moved on the rule as written, and the ledger's own Phase 2 assertion (`test_pipeline_graph.py`) was rewritten to say v9 **and** to pin the empty case against v8's bytes
+- [x] A `--templates on|off` eval arm, beside `--comments` — builds the store from the suite's own questions, holds out `HELD_OUT_FRACTION` deterministically by sorted id, excludes **every** record from the store it is measured against, tags each record `held_out`/`taught` so the per-tag breakdown reports the split, and records `examples_offered` / `short_circuited` per record so an arm where nothing matched cannot be read as an arm that measured something
+- [x] Per-connection `knowledge_examples_enabled` toggle — migration `0019`, **default `false`**, surfaced in the connection settings beside the disclosure policy
+- [ ] **The gate:** both numbers in [eval.md](eval.md), and the ship/don't-ship decision written down with its evidence — **the table is in [eval.md §6.1](eval.md) with both commands, the four rules for reading them, and empty cells.** Each run calls a real provider and needs an `llm_configs` row with a working key; there is none in this environment, so the numbers are not on paper and this box stays open. **The decision that follows from an unmet gate is written down and is the code's actual default: the feature ships off.**
 
 > A negative delta on a small model is a result to publish, not a reason to tune
 > until it goes positive.
+>
+> **Built, and deliberately inert.** The one box that cannot be ticked here is
+> the one that decides whether the feature is on, so the column default is
+> `false` and off is byte-identical to v8. Everything else — the slot, the
+> budget, the disclosure gate, the arm, the reporting, the switch — is in the
+> tree and tested, so flipping the default is one migration once somebody with
+> a provider key runs two commands.
+>
+> Two things landed differently from the sketch, both recorded:
+>
+> * **`match` grew the second job, not `retrieve`.** The plan put `examples` on
+>   `RetrievedContext` and left the collection unplaced. Doing it in `match`
+>   means one node owns every read of the store and one threshold pair governs
+>   both uses of it — and a short-circuit, which has no generator to teach,
+>   offers nothing by construction rather than by a check somewhere else.
+> * **The eval arm holds out *and* self-excludes.** The plan asked for a
+>   held-out fraction. That is not sufficient on its own: a *taught* record
+>   whose own gold SQL is in the store is answering itself, and its accuracy
+>   would be quoted beside the held-out number as if the two were comparable.
+>   Every record is excluded from the store it is measured against, held out or
+>   not, so the `taught` row means "questions whose neighbours were taught" and
+>   nothing stronger.
 
-### 13.8 Phase 6 — Benchmark and a score · **0 / 7** ❌ not started
+### 13.8 Phase 6 — Benchmark and a score · **7 / 7** ✅ landed
 
-- [ ] The pure comparator moves to `app/knowledge/compare.py`; `app/eval/metrics.py` imports it
-- [ ] `import-linter` still green — `app.eval` reachable from nothing on the request path
-- [ ] `benchmark_sets` / `benchmark_runs` / `benchmark_results` — **separate from `eval_runs` / `eval_results`**
-- [ ] `role` enforced in the query that builds each set (§1.3)
-- [ ] A fixed fraction assigned `HELD_OUT` at creation
-- [ ] Runs execute in `app/workers/`, labelled by the comparator — **no LLM judge**
-- [ ] The score strip (§4.8): held-out number first and larger, taught number second
+- [x] The pure comparator moves to `app/knowledge/compare.py`; `app/eval/metrics.py` imports it — **landed with Phase 4**, which needed it for the conflict checker. `values_equal`, `rows_equal`, `result_sets_match` and both tolerance constants, plus `first_difference` for the evidence; `metrics.py` re-exports them so every existing caller and `tests/eval/test_metrics.py` keep working against one implementation
+- [x] `import-linter` still green — `app.eval` reachable from nothing on the request path — 8 contracts kept, and both `test_knowledge_conflicts.py` and `test_benchmarks.py` assert on the **parse** that neither `compare.py` nor the benchmark worker imports `app.eval`
+- [x] `benchmark_sets` / `benchmark_runs` / `benchmark_results` — **separate from `eval_runs` / `eval_results`**, migration `0020`, with a test that names all four table names so a well-meaning consolidation fails loudly
+- [x] `role` enforced in the query that builds each set (§1.3) — twice: `BenchmarkService.candidates` will only take an `ACTIVE`, `RETRIEVABLE` template, and `workers/benchmark._members` filters on role **again** when it loads them, so a member a curator edited back to `RETRIEVABLE` is excluded rather than silently scored
+- [x] A fixed fraction assigned `HELD_OUT` at creation — `held_out_split`, deterministic by sorted id at a fixed stride, so the split is reproducible from the set's own membership list years later. Creating a set **withdraws every member from answering**, which is the enforcement rather than a side effect
+- [x] Runs execute in `app/workers/`, labelled by the comparator — **no LLM judge** — `workers/benchmark.py` runs the real `AnalyticsPipeline` per question, executes the stored answer through `execute_saved_sql`, and compares with `app.knowledge.compare`. A stranded run is failed, not resumed
+- [x] The score strip (§4.8): held-out number first and larger, taught number second — with the sparkline on the **held-out** series against a fixed 0–100% scale, `—` rather than `0%` when nothing scored, and the count of questions that could not be scored shown beside it
 
-### 13.9 Phase 7 — The embedding matcher · **0 / 5** ❌ not started
+> **Done.** Three things landed beyond the sketch, all three because they are
+> the ways an accuracy quietly becomes a lie:
+>
+> * **`from_template` is observed, not assigned.** §3.7's rule 3 asks for the
+>   split between questions answered *from* a template and questions answered
+>   without one. A member's `role` says what it may be used for; only the run
+>   knows what happened — a held-out question can still be answered from a
+>   *neighbour's* template, which is a real thing that happens on the ask path.
+>   So the taught number counts what the run did, and the held-out number counts
+>   what the role guaranteed.
+> * **Nothing that did not run is in a denominator.** A member whose parameters
+>   could not be probed (`NOT_PROBED`) or whose stored answer no longer executes
+>   is counted in `total`, in neither accuracy, and the difference is shown on
+>   the strip. An accuracy over a shrinking denominator always flatters, and it
+>   is invisible unless somebody prints the gap.
+> * **A set below four questions is refused.** 100%-on-three is a number
+>   somebody would quote.
+>
+> The plan's acceptance test — *"a connection owner opens Knowledge → Score,
+> runs their set, and sees two accuracy numbers with a history — without a
+> developer"* — is built end to end: `POST /benchmarks` from the tab, a `202`
+> and a row, the worker, and the strip. **The numbers themselves need a
+> provider key**, the same blocker as Phase 0's baselines and Phase 5's gate.
 
-- [ ] `EmbeddingMatcher` behind the same Protocol
-- [ ] Masked question similarity (table names, column names, literals → generic tokens)
-- [ ] Capability detection on the connection's LLM config; silent fallback to lexical
-- [ ] Embedding model id + dimension pinned per connection; staleness rule on edit and on model change
-- [ ] Recall delta **and** execution accuracy reported — remembering FK expansion moved recall 70 → 86% with flat accuracy
+### 13.9 Phase 7 — The embedding matcher · **4 / 5** ⚠️ built, and shipped **off** because the arm cannot be run here
 
-### 13.10 Phase 8 — Permissions hardening · **0 / 4** ❌ not started
+- [x] `EmbeddingMatcher` behind the same Protocol — `app/knowledge/embed.py`, and `build_matcher` returns a bare `LexicalMatcher` unless a model is pinned, so the lexical path gained no wrapper and no branch
+- [x] Masked question similarity (table names, column names, literals → generic tokens) — plus the values a **curator** declared, without which the canonical example does not work; `mask_literals` factored out of `normalize_question` so there is one reading of what a literal is
+- [x] Capability detection on the connection's LLM config; silent fallback to lexical — `probe_embedding` refuses Anthropic with no network call and *asks* everything else; `FallbackMatcher` turns every failure into today's behaviour
+- [x] Embedding model id + dimension pinned per connection; staleness rule on edit and on model change — **derived from a fingerprint, not tracked**, so a schema re-sync invalidates the right vectors too and no invalidation call exists to forget
+- [ ] Recall delta **and** execution accuracy reported — remembering FK expansion moved recall 70 → 86% with flat accuracy — *`--matcher lexical|embedding` is built and the report prints both numbers on one line; **the two runs need a provider key with an embedding endpoint**, the same blocker as §13.2 and §13.7. [eval.md §6.3](eval.md) carries both commands and an empty table.*
 
-- [ ] `curation_admin_only` default flipped to `true`
-- [ ] The review queue routed to a connection owner (needs [mvp2 §D1](mvp2-plan.md))
-- [ ] Every curation write emits an `audit_logs` row
-- [ ] `audit_logs` actually being written at all (mvp2 §D4) — **confirmed absent today**
+### 13.10 Phase 8 — Permissions hardening · **4 / 4** ✅ landed
 
-### 13.11 Documentation · **0 / 7** ❌ not started
+- [x] `curation_admin_only` default flipped to `true` — and the rule it means is **administrator *or* the owner of the connection**. Admin-only alone would have been a lockout, not a posture: `_owned()` already scopes every knowledge endpoint to the owner and an administrator cannot reach somebody else's connection either, so the blunt flip takes rights away and grants none. Inert today; it starts mattering when a connection can be shared (§D1), which is the argument for flipping it *before* that lands
+- [x] The review queue routed to a connection owner — `AnswerFeedbackRead.routed_to` names whose queue a flag went to, resolved by the server so the acknowledgement stays true when ownership moves. Until [mvp2 §D1](mvp2-plan.md) gives a connection a grant list, "the owner" and "whoever can act on this" are the same person **by construction**, which is stated rather than pretended
+- [x] Every curation write emits an `audit_logs` row — nine route functions, asserted **on the parse**, because one unlogged write makes the whole log untrustworthy: a reader cannot tell a gap from a quiet week
+- [x] `audit_logs` actually being written at all (mvp2 §D4) — `app/services/audit.py`, plus `GET /audit` for administrators, because a log nobody can read answers *"who did what"* exactly as badly as an empty one. **Not the whole of §D4**, which also wants the ask path's questions, policies, statements and row counts; this is shaped so those arrive as more `record()` calls
 
-Docs land in the same commit as the code, per this repo's convention.
+### 13.11 Documentation · **6 / 6** ✅ landed
 
-- [ ] [CLAUDE.md](../CLAUDE.md) — a "Knowledge templates" section, and the fifth guard entry point named
-- [ ] [security.md](security.md) — §5.2's disclosure rung
-- [ ] [pipeline.md](pipeline.md) — the `MATCH` node in §0's map
-- [ ] [eval.md](eval.md) — Phase 0 baselines, Phase 5 arm
-- [ ] [docs/README.md](README.md) — index this document *(note: `mvp2-plan.md` and `research/` are not indexed there either; index all three together or none)*
-- [ ] [mvp2-plan.md](mvp2-plan.md) — §A1/§A3 point here, and §A3's *"the two features share a table"* takes the §1.3 correction
-- [ ] `learning-loop-plan.fa.md`, if this plan is adopted
+Docs land in the same commit as the code, per this repo's convention — which is
+exactly why this section read `0 / 7` while **only one** of its six boxes was
+genuinely untouched. The convention worked; the ledger for it did not, because
+every phase updated the documents it touched and none came back here to tick the
+line. That is the failure mode a checklist has that a test does not: a box
+nobody owns is a box nobody reads, and it goes on being wrong quietly.
+
+The 2026-09-01 pass re-checked all six **against the tree**, not against §13.13,
+and found three states rather than two: three boxes true and current, two true
+but carrying a claim that had since gone stale, and one — `mvp2-plan.md` — never
+started. This is therefore the one commit in this plan that is documentation
+only. That is the catch-up, not a new convention.
+
+- [x] [CLAUDE.md](../CLAUDE.md) — a "Knowledge templates" section, and the fifth guard entry point named — *landed with Phase 1 and grown by every phase since: 331 lines at `CLAUDE.md:774`, and the guard section opens **"The guard has five entry points and none is privileged"***
+- [x] [security.md](security.md) — §5.2's disclosure rung — *§3.3, landed with Phase 1 when it still had no reader. **Two corrections in this pass**: its closing claim was still "Phase 1 renders no template into any prompt", false since Phase 5 shipped `render_examples`; and the rung has a **hole on the short-circuit path**, now recorded in §3.3 and §3.5 rather than left for a reader to find*
+- [x] [pipeline.md](pipeline.md) — the `MATCH` node in §0's map — *landed with Phase 2: the map at §0.1, the graph at §2, the eleven-node summary table, and §3.2 node by node*
+- [x] [eval.md](eval.md) — Phase 0 baselines, Phase 5 arm — *the baseline table, §6.1's gate and §6.3's matcher arm all exist with their commands written out and **their result cells empty**, which is the honest state: the instruments are built and the runs need a provider key*
+- [x] [docs/README.md](README.md) — index this document *(note: `mvp2-plan.md` and `research/` are not indexed there either; index all three together or none)* — *all three indexed together, as the note asks. **Corrected in this pass:** the status line still said "Phases 1–3 are in the tree" three phases after that stopped being true*
+- [x] [mvp2-plan.md](mvp2-plan.md) — §A1/§A3 point here, and §A3's *"the two features share a table"* takes the §1.3 correction — *the one box that was genuinely untouched. A1–A4 now each carry a **built** banner naming the phase that built them, §A3 carries the roles correction beneath the sentence it corrects, and §D4 says which half of the audit log exists. Also removed: a pointer to `mvp2-plan.fa.md`, a file that is not in the repo*
+
+> **Struck: `learning-loop-plan.fa.md`.** The seventh box asked for a Persian
+> edition *"if this plan is adopted"*, matching `mvp2-plan.fa.md`. That file has
+> been deleted and the convention retired, so the box has no referent — it is
+> removed rather than left open, because an open box that can never be ticked
+> teaches the next reader to distrust the whole ledger. The denominator moves
+> 7 → 6, and the plan total 86 → 85.
 
 ### 13.12 Totals
 
@@ -1779,22 +1888,32 @@ Docs land in the same commit as the code, per this repo's convention.
 | 1 · Store + curation surface | 22 | 22 | ✅ |
 | 2 · Match, short-circuit, badge | 12 | 12 | ✅ |
 | 3 · Capture | 9 | 9 | ✅ |
-| 4 · Store health | 0 | 7 | ❌ |
-| 5 · Few-shot | 0 | 7 | ❌ |
-| 6 · Benchmark | 0 | 7 | ❌ |
-| 7 · Embeddings | 0 | 5 | ❌ |
-| 8 · Permissions | 0 | 4 | ❌ |
-| Docs | 0 | 7 | ❌ |
-| **Plan total** | **48** | **86** | |
+| 4 · Store health | 7 | 7 | ✅ |
+| 5 · Few-shot | 6 | 7 | ⚠️ **built and shipped off** — the gate needs a provider key |
+| 6 · Benchmark | 7 | 7 | ✅ |
+| 7 · Embeddings | 4 | 5 | ⚠️ **built and shipped off** — the arm needs a provider key |
+| 8 · Permissions | 4 | 4 | ✅ |
+| Docs | 6 | 6 | ✅ *(was `0 / 7`; the seventh box is struck — §13.11)* |
+| **Plan total** | **82** | **85** | **the three open boxes are one blocker: a provider key** |
 
 ### 13.13 Change log
 
-One line per landing, newest last. This is the record the next reader trusts
-over anything else in the document.
+One line per landing. The first row is where the plan started; **every row after
+it is newest first**, so the most recent landing is always the second row and a
+reader who opens this section sees the current state without scrolling. (The
+instruction here used to read *"newest last"*, which nine rows had already
+ignored.) This is the record the next reader trusts over anything else in the
+document.
 
 | Date | What landed | Boxes ticked |
 |---|---|---|
 | 2026-08-31 | This plan written; the tree audited to establish the starting position | — (0 of 86) |
+| 2026-09-01 | **Documentation — and most of it was already written.** §13.11 read `0 / 7`; the tree said otherwise. CLAUDE.md's Knowledge templates section (331 lines) and its *"the guard has five entry points and none is privileged"*, pipeline.md's `match` node in the §0 map and §3.2, eval.md's baseline table, few-shot gate and matcher arm, and docs/README.md's index of all three unindexed documents had each landed **with the phase that needed them**, per this repo's convention — nobody came back to tick the line. So the pass was a re-check against the tree rather than a write-up, and it found five stale or false claims a write-up would have missed. **security.md §3.3 still closed with *"Phase 1 renders no template into any prompt"*, false since Phase 5**; it now names `render_examples` as the reader, says the gate runs at *render* time so a tightened policy takes effect on the next question, and says the withholding is **whole examples, not stripped literals**. More usefully it now records a **hole**: a Phase 2 short-circuit sends the stored SQL to the narration call (#5) like any other statement, so a `MODEL_DERIVED` template's literals reach a provider on a path the few-shot gate does not cover — the same residual §3.5 already recorded for kept SQL, now written in both places and pointed at `present` as the one place to fix both at once, rather than discovered later by somebody reading the code. **security.md §2 claimed *"twelve use cases, across thirteen call sites, and no others"* — Phase 7's embedding calls made that false**; the table gains #13, the *no customer data at all* sentence gains `probe_embedding`, and §4.7's dangling `(§5.2)` now points at `(§3.3)`, a section that exists in that document. **docs/README.md** still described the plan as *"Phases 1–3 are in the tree"*. **mvp2-plan.md was the one genuinely untouched box**: A1–A4 now carry a *built* banner naming the phase that built each, §A3's *"the two features share a table"* carries the [§1.3](#13-the-three-roles) correction directly beneath the sentence it corrects — they share a table, not a row's purpose — and §D4 says which half of the audit log exists. Its pointer to `mvp2-plan.fa.md`, a file not in the repo, is gone, and with it §13.11's seventh box: **denominator 7 → 6, plan total 86 → 85.** Three smaller repairs found on the way: §13.13's own instruction said *"newest last"* while nine rows below it ran newest first; the Phase 5 row's `--templates on\|off` was splitting its own table cell on an unescaped pipe; and `RetrievedContext.render_examples`' docstring said *"Two gates, in this order:"* twice — the only line of code in this commit. | 82 of 85 (§13.11, all 6) |
+| 2026-09-01 | **Phase 8 — permissions hardening, and the audit hole closed.** `curation_admin_only` flipped to **true**, and `can_curate` grew a resource argument so the rule is *administrator **or** the owner of the connection*. That second half is the whole of the change: `_owned()` already scopes every knowledge endpoint to `owner_id == ctx.user_id`, so the blunt flip would have meant **the person who owns a connection cannot curate their own store** — a lockout that takes rights from members and grants none to anybody. Nobody can observe a difference today; it starts mattering the moment [mvp2 §D1](mvp2-plan.md) lets a connection be shared, which is the argument for having it on before that rather than after. Omitting the resource asks the strict question, because the fail-closed reading of *"I cannot establish who owns this"* is no. `app/services/audit.py`: the table defined in migration `0001` and written by **nothing** since — mvp2 §D4's *"best ratio in the document"* — now takes a row from all nine curation writes, asserted on the parse rather than by counting call sites. Three rules, each a way this kind of log rots: the row **joins the caller's transaction** (a log that commits while its action rolls back invents history), **failing to log never fails the action** (the opposite posture to the guard's, and right for the same reason the guard's is right), and **`detail` carries identifiers and counts, never content** — no SQL, no question text, no rows, enforced in one function because a log that became a second copy of the store is a second thing to secure. `GET /audit` for administrators only, actor as a display name and never an address; `actor_ip` reads `X-Real-IP` and **never `X-Forwarded-For`**, since a log holding an address the actor chose is worse than one holding none. `AnswerFeedbackRead.routed_to` names whose queue a flag landed in, from the server, so §4.6's promise stays true when ownership moves. 16 new backend tests. **Also fixed, and found by exercising the endpoints over HTTP rather than by reading the code: `PATCH` and `DELETE` on a template returned 500 in production from the day Phase 1 shipped.** `updated_at` is `onupdate=func.now()`, so the flush expired it and serialising the row afterwards raised `MissingGreenlet` — CLAUDE.md's own documented gotcha, invisible to every unit test because the fake session never expired anything. The fakes model `refresh` now, and a regression test names the reason. | 76 of 86 (§13.10, all 4) |
+| 2026-09-01 | **Phase 7 — the embedding matcher, built and shipped off.** `app/knowledge/embed.py`: masked question similarity (DAIL-SQL) with **three** tokens rather than one — `revenue by <column>` and `revenue by <table>` are different questions — plus the values a *curator* declared, which is the piece without which the canonical example does not work and is the same information `mask_declared_values` already uses lexically. `mask_literals` factored out of `normalize_question`, so the match key and the embedding key cannot hold two opinions about what a literal is. `EmbeddingMatcher` behind the **same Protocol** and against the **same two thresholds**, so the phase is a constructor change: the `match` node, the binder, the short-circuit and the badge are untouched, and `build_matcher` returns a bare `LexicalMatcher` when no model is pinned — no wrapper, no extra query, no extra branch on the shipped path. `FallbackMatcher` makes *"degrades to lexical, never to nothing"* ten lines instead of a branch in every caller, and `Candidate.matcher` already travels to `knowledge_template_hits.matcher`, so "is this doing anything?" is a query rather than a log search. **Staleness is derived, never tracked**: a vector stores the SHA-256 of (masked text, model id, width), so a template edit, a model change *and* a schema re-sync each invalidate exactly what they should and there is no invalidation call to forget — a failed vector is ignored, never deleted. Migration `0021`: five columns, **no pgvector** — the base image does not carry it, the store is a curator's worth of rows, and cosine belongs where `trigram_similarity` already is. `embed` / `probe_embedding` on the `LLMGateway` port and in the one module allowed to import litellm; the width is **measured** from a real call, and Anthropic is refused without one. `index_embeddings` is the maintenance pass's third step, after staleness and conflicts so it never spends a call on a row those two just withdrew; `PUT /knowledge/embeddings` probes, pins and indexes inline so the feature works on the next question. Frontend: one quiet strip with four states, and *word matching* reads as a choice rather than a fault — the off state describes what the other mode **adds**. 56 new backend tests plus 23 frontend checks. Docs: security.md §4.7 (what leaves, and why it is less than the generate prompt already sends), llm-calls.md §13b (calls 18–20, the only three in the product that send no prompt), eval.md (the matcher arm and §6.3), CLAUDE.md. **The last box stays open: the recall/accuracy pair needs a provider key, and the default that follows from an unmeasured arm is `embedding_model` empty — every connection matches lexically until somebody turns it on.** | 72 of 86 (§13.9, 4 of 5) |
+| 2026-09-01 | **Phase 6 — a benchmark and a score, in the product.** `benchmark_sets` / `benchmark_runs` / `benchmark_results` + migration `0020`, **deliberately not** `eval_runs` / `eval_results` — MVP2 Part 5's meta-rule, with a test that names all four table names. `benchmark_service.py`: `held_out_split` (deterministic by sorted id, so the split is re-derivable from the set's own membership), `create_set` — which **withdraws every member from answering**, because §1.3's rule is enforced in the ask path's own query — `release`, which gives them back, and `score`, the pure function behind both numbers. `workers/benchmark.py`: the real `AnalyticsPipeline` per question, one probe filling both the question and the gold statement, the gold executed through `execute_saved_sql`, and labels from `app.knowledge.compare` — **no LLM judge**, and a test asserts on the parse that the worker imports nothing from `app.eval`. A stranded run is failed, not resumed. `GET/POST /benchmarks`, `DELETE /benchmarks/{id}`, `POST /benchmarks/{id}/run` (202 + a row), `GET /benchmarks/runs/{id}/results`. Frontend: the score strip — held-out first, larger, and on the sparkline against a fixed 0–100% scale; the taught number second and smaller; `—` rather than `0%` when nothing scored; the unscored count shown rather than hidden — plus the offer to create one, which says up front that those questions stop answering chat. 23 new backend tests, 15 new frontend checks. Docs: eval.md §6.2 (two instruments, one comparator, and why they must not share a table), CLAUDE.md. | 68 of 86 (§13.8, all 7) |
+| 2026-09-01 | **Phase 5 — few-shot injection, built and shipped off.** `RetrievedContext.examples` + `TemplateExample`, and `GENERATE_SYSTEM`'s `{examples}` slot written `{schema}\n{examples}\n{history}` so the empty case collapses to **v8's exact bytes** — asserted, not asserted-about. `PROMPT_VERSION` v8 → v9. `match` collects near misses on a *miss* only (a short-circuit has no generator to teach) and `retrieve` carries them; §5.2's disclosure gate is applied in `render_examples`, at render time, withholding a `MODEL_DERIVED` template's literals whole under `NONE`/`AGGREGATE`. Budget: last in the prompt, four examples, 1,600 chars against the comment block's 2,500, long ones skipped rather than cut. `--templates on\|off` on the runner, building the store from the suite itself, holding out two in five deterministically and excluding every record from the store it is measured against; `examples_offered` / `short_circuited` on the scorecard so an arm that matched nothing cannot be read as a measurement. Migration `0019` + the settings toggle, **default false**. 26 new backend tests. Docs: eval.md (the templates arm and §6.1, the gate, with both commands and empty cells), pipeline.md §5 (the v9 table), CLAUDE.md, llm-calls.md, CODEBASE.md. **The gate box stays open: the runs need a provider key, and the decision that follows from an unmet gate is the default the code ships.** | 63 of 86 (§13.7, 6 of 7) |
+| 2026-09-01 | **Phase 4 — store health.** `app/knowledge/compare.py` — the eval harness's result-set comparator moved **down** a layer (`app.eval -> app.knowledge` is permitted; nothing on the request path gained an import of `app.eval`), plus `first_difference`, which returns the *diverging rows* rather than a boolean. `app/knowledge/conflict.py` — `similar_pairs` at a measured 0.60 threshold and `probe_values`, which refuses to invent a string it was not given, because a check that reports the store healthy because it could not test it is worse than no check. `KnowledgeService.sweep_staleness`, run inline on every schema sync: `ACTIVE` → `STALE` with the guard's own sentence, **and `STALE` → `ACTIVE` when the schema heals**. `app/workers/knowledge_maintenance.py` — the conflict checker (similarity → bind both at the same values → execute both through `execute_saved_sql` → compare) on a six-hour loop and on demand, marking **both** rows and storing the diverging rows from each one's own point of view. Migration `0018`: `conflict_evidence`, `last_conflict_check_at`, and `connections.conflict_checks_enabled` — the off switch, checked before a connector opens. `GET /health`, `POST /templates/revalidate`. Frontend: the conflict pane with the two answers side by side and the cell that moved in amber, the *Check the store* action, and the faint unused line with no button beside it. 45 new backend tests plus 14 frontend checks. | 57 of 86 (§13.6 all 7, §13.8 first two) |
 | 2026-08-31 | **Phase 3 — capture: feedback, the queue, the backlog.** `answer_feedback` + migration `0017`; `POST /runs/{id}/feedback` open to **any** signed-in user (the person who notices a wrong answer is rarely the person allowed to fix it), with three verdicts and a `CORRECT` arriving already resolved. `app/knowledge/backlog.py` — the five ranked sources and the vocabulary gap, pure and unit-tested; `FeedbackService` — the queue, the resolution, and the aggregation over `runs`, `dashboard_tiles` and `report_blocks`. `GET /reviews`, `POST /reviews/{id}/resolve` (a dismissal needs a reason), `GET /suggestions`. Frontend: the inline ✓/✗/*Ask for review* footer, *Save as a template* opening the **same** editor the Knowledge tab uses, and the queue and backlog as two more sections of the one list. **`became_template` reaches the flagger on their own answer**, and saving a template from a flag resolves it in the same action. 42 new backend tests plus 14 frontend checks. Also: `tests/conftest.py` now forces JSON logs — an unhandled exception in a route was taking **over a minute** to render through structlog's rich console renderer, which made a failing API test look like a hung suite. | 48 of 86 (§13.5, all 9) |
 | 2026-08-31 | **Phase 2 — match, short-circuit, badge.** `app/knowledge/matcher.py` (the Protocol, `LexicalMatcher` over an injected row source, `trigram_similarity` as Postgres' own algorithm, and the declared-value masking without which the plan's worked example scores 0.83) and `bind.py` (the date grammar and the cancel-on-unbound rule, substituting on the tree). The `match` node between `route` and `retrieve`, wired with both exits — a hit lands on `validate`, so a stored template reuses the guard, the rewriter and the row cap and gets no exemption; a miss writes nothing. `knowledge_template_hits` + migration `0016` + `runs.skip_templates`; every verdict logged, `OVERRIDDEN_BY_USER` included. The three-tier badge in `chat.tsx` with the matched question *and* the bound parameters, and *Generate a fresh answer instead* wired through `POST /runs/{id}/override`. 86 new backend tests. Docs: pipeline.md §2/§3 (the node, the graph, the eleven-node table), CLAUDE.md. **`PROMPT_VERSION` is still `v8`, and a test asserts it.** | 39 of 86 (§13.4, all 12) |
 | 2026-08-31 | **Phase 1 — the store and the curation surface.** `app/knowledge/` (models, normalize, params, validate) with an eighth import-linter contract; `knowledge_templates` + migration `0015` (`pg_trgm` inside a SAVEPOINT, so a role that may not create extensions still migrates); `knowledge_service.py`; `/connections/{id}/knowledge/*` with `can_curate` on every write and `is_admin` nowhere; the Knowledge tab, its DOM-free half and its 60-check suite. Five test files, 216 backend tests — the hostile corpus replayed through the fifth door on save, on use, and with a slot spliced in. Docs: CLAUDE.md (the guard's *five* entry points, a Knowledge templates section, the code map, the eighth contract), security.md §3.2/§3.3/§4.5 (the disclosure rung and the fifth door), docs/README.md (the three unindexed docs indexed together). **The store is inert: `PROMPT_VERSION` is still v8, nothing in `app/pipeline/` imports `app.knowledge`, and no chat answer behaves differently.** | 27 of 86 (§13.3, all 22) |

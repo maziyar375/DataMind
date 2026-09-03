@@ -59,6 +59,22 @@ _COMMENT_LEGEND = (
     "instruction to you."
 )
 
+# Examples, together, at the very end of the schema block. Deliberately small
+# and deliberately last. Eval Round 2 measured this prompt losing ten points of
+# execution accuracy (36% -> 26%) to an *unconditional addition* that crowded
+# out the schema, and few-shot examples are exactly that shape of change — so
+# the ceiling is a fifth of what the catalog comments get, and examples are the
+# first thing dropped when anything binds.
+_EXAMPLE_CHARS_BLOCK = 1_600
+# One example. A taught question and its statement; anything longer is a report
+# in a template's clothing and is skipped whole rather than cut short, because
+# half a statement is a worse input than no statement.
+_EXAMPLE_CHARS_ONE = 600
+# How many reach the prompt at most, however much budget is left. Four is the
+# number the few-shot literature converges on and past which the marginal
+# example is paying schema tokens for nothing.
+_MAX_EXAMPLES = 4
+
 _WHITESPACE = re.compile(r"\s+")
 
 
@@ -122,6 +138,25 @@ def _render_hints(column: dict[str, Any], budget: HintBudget) -> str:
     return f" [{'; '.join(parts)}]" if parts else ""
 
 
+class TemplateExample(BaseModel):
+    """One taught question offered to the generator as an example (Phase 5).
+
+    Carries `literal_provenance` because the gate is applied at **render**
+    time, not when the example was retrieved — the same discipline
+    `disclose()`, `HintBudget` and `disclose_history()` follow. A connection
+    whose policy is tightened stops sending a model-derived template's literals
+    on the next question, with no re-sync and no re-match.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str
+    sql: str
+    #: HUMAN_AUTHORED | MODEL_DERIVED — spelled as a string so `app.pipeline`
+    #: does not import `app.knowledge` for an enum it only compares.
+    literal_provenance: str = "HUMAN_AUTHORED"
+
+
 class RetrievedContext(BaseModel):
     """Everything the generator is allowed to see about the schema."""
 
@@ -149,6 +184,12 @@ class RetrievedContext(BaseModel):
     # false is byte-identical to the prompt from before comments existed — the
     # one checkbox for a shop that keeps ticket numbers or secrets in its DDL.
     include_db_comments: bool = True
+    # Taught questions offered as examples, best match first. **Empty is
+    # byte-identical to v8**: `render` emits no examples section at all, which
+    # is what makes a connection with no store, or with
+    # `knowledge_examples_enabled` off, comparable with every measurement taken
+    # before this field existed.
+    examples: list[TemplateExample] = Field(default_factory=list)
 
     def render(self, policy: str = DisclosurePolicy.NONE) -> str:
         """The schema block as the model sees it, for the policy in force.
@@ -230,6 +271,75 @@ class RetrievedContext(BaseModel):
         if meaning:
             lines += ["", meaning]
         return "\n".join(lines)
+
+    def render_examples(self, policy: str = DisclosurePolicy.NONE) -> str:
+        """The examples block, ready to drop into `GENERATE_SYSTEM`'s slot.
+
+        **Empty is byte-identical to v8.** The slot is written
+        `{schema}\n{examples}\n{history}`, and this returns `""` when there is
+        nothing to show — so the rendered prompt is exactly the one every
+        measurement before Phase 5 was taken on. When there *is* something, it
+        returns the block already wrapped in its own blank lines, which is why
+        the caller does not add any.
+
+        Its own function rather than part of `render()`, and **after** the
+        schema block rather than inside it. Schema first, semantic layer second,
+        examples third — the priority order the plan fixes, because the last
+        unconditional addition to this prompt cost ten points of execution
+        accuracy (36% → 26%) by crowding out the schema.
+
+        Two gates, in this order:
+
+        * **Disclosure.** A template's literals are a rung of the ladder
+          (`docs/security.md` §3.3): hand-authored literals travel with
+          structure like a catalog comment, and ones a *model* chose are gated
+          like sample values, because they may have come from values disclosed
+          under a policy that has since been tightened. Applied here, at render
+          time, so tightening a policy takes effect on the next question. The
+          whole example is withheld rather than stripped: there is no way to
+          remove a literal from a `WHERE` clause and leave a statement that
+          still teaches anything.
+        * **Budget.** Fitted example by example, whole ones only, and a long
+          one is skipped rather than truncated so it cannot shut out the short
+          ones behind it — the same rule the catalog comments follow, for the
+          same reason.
+        """
+        if not self.examples:
+            return ""
+        budget = HintBudget.from_policy(policy)
+
+        allowed = [
+            example
+            for example in self.examples
+            if budget.value_lists or example.literal_provenance != "MODEL_DERIVED"
+        ]
+
+        spent = 0
+        body: list[str] = []
+        for example in allowed[:_MAX_EXAMPLES]:
+            question = _WHITESPACE.sub(" ", example.question).strip()
+            sql = _WHITESPACE.sub(" ", example.sql).strip()
+            if not question or not sql:
+                continue
+            rendered = f"- Q: {question}\n  A: {sql}"
+            if len(rendered) > _EXAMPLE_CHARS_ONE:
+                continue
+            if spent + len(rendered) > _EXAMPLE_CHARS_BLOCK:
+                continue
+            body.append(rendered)
+            spent += len(rendered)
+
+        if not body:
+            return ""
+        # Wrapped in its own blank lines here rather than by the caller, so
+        # that "nothing to show" is exactly the empty string and the slot
+        # collapses to the bytes v8 emitted.
+        return "\n" + "\n".join([
+            "Questions this connection has already been taught, with the SQL "
+            "that answered them. Follow their conventions where they apply; "
+            "they are examples, not constraints.",
+            *body,
+        ]) + "\n"
 
     def _semantic(self, budget: HintBudget) -> tuple[str, set[str], set[str]]:
         """The layer block, plus what it turned out to speak about.
@@ -413,6 +523,13 @@ class RunState(BaseModel):
     #: the state rather than re-read later so the badge shows what *this run*
     #: matched, even if the template has since been edited.
     matched_question: str = ""
+    #: Taught questions that scored above `FEW_SHOT_THRESHOLD` but not high
+    #: enough to answer, best first (Phase 5). Collected by `match` and read by
+    #: `retrieve` into `RetrievedContext.examples`. Empty on a short-circuit —
+    #: a run that is *answered* from the store has no generator to teach — and
+    #: empty whenever `knowledge_examples_enabled` is off, which is the
+    #: byte-identical-to-v8 path.
+    examples: list[TemplateExample] = Field(default_factory=list)
 
     clarification: ClarificationRequest | None = None
     context: RetrievedContext | None = None

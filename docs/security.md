@@ -55,7 +55,7 @@ Stated plainly so nobody assumes otherwise:
 
 ## 2. Every place data leaves for a model provider
 
-There are **twelve use cases**, across thirteen call sites, and no others. The
+There are **thirteen use cases**, across fifteen call sites, and no others. The
 dependency rule forbids importing `litellm` outside `app/infra/llm/`, and CI
 greps for violations, so this list cannot silently grow.
 
@@ -73,6 +73,7 @@ greps for violations, so this list cannot silently grow.
 | 10 | Propose a report outline | user proposes an outline | `reports/outline.py` — `propose()`:203 |
 | 11 | Write a report section | once per section, per generation; **also a per-section retry** | `workers/report.py` — `_narrate()`:742 |
 | 12 | Write the executive summary | once per generation | `workers/report.py` — `_summarise()`:823 |
+| 13 | Embed a question | the six-hourly index pass; **every analytical question**, on a connection with an embedding model pinned | `services/knowledge_service.py` — `_embedder()`:719, `index_embeddings()`:839 |
 
 **Thirteen and not fourteen** because #8 is a use case without a call site: a
 draft reuses the *node* that would have made the call anyway, which is the whole
@@ -91,8 +92,10 @@ check that actually matters:
 grep -rn --include='*.py' 'llm_gateway\.\|gateway\.complete\|gateway\.structured\|gateway\.stream' backend/app
 ```
 
-One model interaction sends **no customer data at all**: the capability probe
-in `api/v1/llm_configs.py`, a fixed test prompt.
+Two model interactions send **no customer data at all**: the capability probe
+in `api/v1/llm_configs.py`, a fixed test prompt, and `probe_embedding` in
+`knowledge_service.set_embeddings()`, which embeds the string `ok` to *measure*
+a provider's vector width rather than assume it from a model name.
 
 > **Changed:** #6 gained a second trigger. Choosing a chart used to fire only
 > at the end of a chat run; a **dashboard tile draft** now asks it too, so that
@@ -140,6 +143,18 @@ in `api/v1/llm_configs.py`, a fixed test prompt.
 > block left out. The fallback when the provider fails is the old rendering,
 > which still costs nothing.
 
+> **Changed:** #13 is new, and it is the only row in this table that sends **no
+> prompt** — an embedding endpoint takes text and returns a vector, so there is
+> no system message, no schema block, no history and no result row. It is also
+> the only row that is **off by default**: the switch is the absence of a
+> pinned model on the connection, not a flag (§4.7). What leaves is the
+> *masked* text of a question — table names, column names, declared values and
+> literals already replaced — which is strictly less than the same question's
+> generate call (#4) sends beside it. `llm-calls.md` §13b writes out the three
+> requests verbatim. Two call sites and not one because the ask path and the
+> index pass reach the port separately: the ask path builds its embedder lazily
+> so that a connection with no fresh vectors never decrypts a key.
+
 ### 2.1 What each one sends
 
 Common building blocks, both governed by the disclosure policy (§3):
@@ -156,7 +171,7 @@ Common building blocks, both governed by the disclosure policy (§3):
 | 2 | Describe | ✅ | ✅ | ✅ | ❌ | Schema questions only; no SQL is ever written |
 | 3 | Clarify | ✅ | ✅ | ✅ | ❌ | Runs before any SQL exists |
 | 4 | Generate SQL | ✅ | ✅ | ✅ | ❌ | **Never sees results** |
-| 5 | Present | ✅ | ❌ | ❌ | **✅ per policy** | Also sends the executed SQL |
+| 5 | Present | ✅ | ❌ | ❌ | **✅ per policy** | Also sends the executed SQL — **including a taught template's, literals and all** (§3.3) |
 | 6 | Chart | ✅ | ❌ | ❌ | shape only | Counts and types, not values. From a tile draft, the **narrowest** shape block at every policy |
 | 7 | Suggestions | ❌ | ✅ | ✅ | ❌ | Fires without the user asking |
 | 8 | Tile / block SQL draft | ✅ | ✅ | ❌ none | ❌ | History deliberately empty |
@@ -164,6 +179,7 @@ Common building blocks, both governed by the disclosure policy (§3):
 | 10 | Report outline | ✅ the request | ✅ | ❌ none | ❌ | The whole snapshot, not a retrieval |
 | 11 | Report section | ✅ per block | ❌ | ❌ | **✅ per policy** | Plus figures computed from those same rows |
 | 12 | Report summary | ✅ the request | ❌ | ❌ | ❌ | **Prose only** — the sections' own paragraphs |
+| 13 | Embed a question | ✅ **masked** | ❌ | ❌ | ❌ | **No prompt at all.** Table names, column names, declared values and literals are replaced with `<table>`/`<column>`/`<value>` before the text leaves (§4.7) |
 
 The single most important row is **#4**. The node that writes SQL never
 receives result data under any policy — it works from schema, question, and
@@ -451,9 +467,31 @@ tightening would quietly undo it.
 `HintBudget.value_lists` the schema block reads, so the two cannot drift into
 disagreeing about what a value is.
 
-**Phase 1 renders no template into any prompt.** The gate landed with the store
-anyway, because the decision has to be in the tree *before* the read path
-exists — otherwise the read path inherits a gate nobody wrote.
+**Where the gate is applied, and when.** Phase 1 shipped the column and the
+function with **no reader at all** — deliberately, because the decision had to
+be in the tree *before* the read path existed, or the read path would have
+inherited a gate nobody wrote. Phase 5 is that reader.
+`RetrievedContext.render_examples()` asks `HintBudget.from_policy()` at **render
+time**, not at write time, so tightening a connection's policy takes effect on
+the next question rather than on the next edit. A `MODEL_DERIVED` example is
+withheld **whole**: there is no way to take the literal out of a `WHERE` clause
+and leave a statement that still teaches anything, and a half-example teaches
+the wrong thing. On a stock connection nothing renders at all —
+`database_connections.knowledge_examples_enabled` defaults to `false` and the
+examples slot collapses to `PROMPT_VERSION` v8's exact bytes.
+
+**One path this rung does not cover, and it is §3.5's residual wearing a new
+hat.** A Phase 2 short-circuit answers from stored SQL, and `present` (#5) sends
+*the SQL that ran* to the narration call exactly as it does for generated SQL.
+So a `MODEL_DERIVED` template's literals can reach a provider on a short-circuit
+under `NONE`, where `render_examples` would have withheld the same template as a
+few-shot. Recorded rather than papered over. It is the same trade §3.5 already
+makes for kept SQL, for the same reasons and one further one: a short-circuited
+answer shows its matched question and its bindings behind the *saved answer*
+badge, so the statement is an artifact the asker can audit rather than a hidden
+one. If that trade is ever re-decided, the place to decide it is `present`,
+once, for stored and generated SQL together — a second gate on the template path
+would leave the larger half of the same disclosure uncovered.
 
 ### 3.4 The sensitive-name floor
 
@@ -490,6 +528,12 @@ value list a wider policy once allowed. It is a single token, it is already on
 the user's screen as an auditable artifact, and stripping it would take from a
 follow-up the one thing it most needs. Also noted in
 [pipeline.md](pipeline.md) §5.
+
+A **taught** question's SQL reaches the narration call the same way when a
+short-circuit answers from it, which is the second half of §3.3 — same residual,
+one more source. The two are listed as one thing on purpose: whatever is decided
+about a literal in kept SQL should be decided about a literal in stored SQL in
+the same breath, because a user cannot tell which kind answered them.
 
 ---
 
@@ -623,6 +667,124 @@ the result goes back through `guard()` like anything else.
 Hand-written SQL goes through the identical guard — there is no trusted path
 for SQL a human typed, and `sql_origin` on either table is provenance for the
 editor, never a signal the guard consults.
+
+### 4.6 The conflict checker runs statements nobody asked for
+
+Phase 4 of the learning loop added the one thing in this product that executes
+SQL against a customer's database **without a person having asked a question**:
+`app/workers/knowledge_maintenance.py` takes two templates whose questions are
+near-duplicates, binds both to the same probe values, runs both, and compares
+the result sets — because two templates that disagree on the same connection is
+a fact rather than an opinion, and the diverging rows are the evidence.
+
+That is a real widening of when this system talks to a customer's database, so
+it is worth stating exactly what it does and does not get:
+
+* **It gets no exemption.** Execution goes through `execute_saved_sql`, the
+  same entry point a dashboard tile uses — the guard, name resolution against
+  the *current* snapshot, the rewriter, the row cap, the statement timeout and
+  the connection's own read-only credentials, in that order. There is no code
+  path in this worker that reaches a driver another way.
+* **It is capped tighter than a tile**, at `COMPARE_ROW_CAP` (500) rather than
+  `connections.max_rows`: a disagreement shows itself in the first page.
+* **It makes no model call**, so no rung of §3's disclosure ladder applies to
+  it. The rows it reads are compared in `app/knowledge/compare.py` and the
+  diverging ones are stored in `knowledge_templates.conflict_evidence` — shown
+  only to a reader of that connection, who can already run the statement in the
+  editor and read every row of it.
+* **It is switchable off per connection**, `connections.conflict_checks_enabled`,
+  checked *before* a connector is opened rather than after. Off stops only this
+  half; the staleness sweep is a parse and keeps working.
+* **It never runs on a request path.** The scheduled loop is in
+  `app/workers/`; the on-demand form is `POST .../templates/revalidate`, gated
+  by `can_curate` precisely because it starts statements against the customer's
+  database.
+
+`tests/unit/test_knowledge_conflicts.py` asserts each of these, including that
+no connector is opened at all when the switch is off.
+
+### 4.7 The embedding matcher sends question text, and less of it
+
+Phase 7 added a second endpoint on the same credentials: a connection with an
+embedding model pinned sends the **masked** text of each taught question once,
+when the store is indexed, and of the asked question once per analytical
+question. It is worth being precise about this because "we now send your
+questions to an embedding provider" is the sentence a security review will
+write down if this document does not.
+
+* **A question is not customer data read from a row.** It is the same test §2.4
+  applies to a catalog comment: a person typed it, it does not change when the
+  data changes, and — the part that settles it — the asked question *already*
+  reaches the provider verbatim on every run, as the user message of the
+  generate call. This is not a new recipient of anything.
+* **The masking makes it strictly less.** Table names become `<table>`, column
+  names `<column>`, and declared values and literals `<value>`, before the text
+  leaves. An embedding request carries *fewer* schema names than the generate
+  prompt sitting beside it, not more.
+* **No result row is ever embedded.** There is no path from `disclose()`'s
+  output to `embed`, and none is wanted: the matcher matches questions.
+* **No rung of §3's ladder moves.** `HintBudget`, `disclose()` and
+  `disclose_history()` govern schema contents, result rows and transcript prose;
+  an embedding request carries none of the three. `may_render_literals` still
+  governs whether a template's **SQL** may be shown as a few-shot example, which
+  is a different call (§3.3) and is unchanged.
+* **It is off unless somebody turns it on**, and the off switch is the absence
+  of a pinned model rather than a flag: `database_connections.embedding_model`
+  empty means the lexical matcher, which needs no provider, no key and no
+  budget. Anthropic is refused before any request is made, because it has no
+  embedding endpoint.
+* **Every failure degrades to lexical.** A revoked key, an endpoint that is
+  down, a provider that changed vector width — each returns nothing and the
+  trigram matcher answers. There is no state in which a question fails because
+  embedding search was enabled.
+
+`tests/unit/test_knowledge_embeddings.py` asserts the fallback in every one of
+those forms, and that `app/knowledge/embed.py` imports no infrastructure.
+
+### 4.8 The audit log, and what it deliberately does not hold
+
+`audit_logs` was defined in migration `0001` and **nothing wrote to it** until
+Phase 8. That was a real hole in this document's own claims: a product whose
+second section is *"two things are never left to the model"*, and which shows
+the disclosure policy at ask time, could not answer *"who taught this system
+that, and when?"*
+
+Every curation write now leaves a row — a template created, updated or
+archived; a store sweep; embedding search switched; a review resolved; a
+benchmark set built, deleted or run; a flag recorded. Three rules govern what
+goes in, and the third is the one that matters here:
+
+* **The row joins the caller's transaction.** A log that can commit while the
+  action it describes rolls back is a log that invents history. The accepted
+  consequence is that a refused write leaves no row, because it did not happen.
+* **Failing to log never fails the action** — the opposite posture to the
+  guard's, deliberately. The guard authorises; this observes. A curator must
+  not lose a saved template to a full disk on the audit table.
+* **`detail` holds identifiers and counts, never content.** No SQL, no question
+  text, no result rows, no key — enforced by one function rather than trusted
+  at ten call sites. **An audit log that quietly became a second copy of the
+  store would be a second thing to secure, and the one place somebody forgets
+  to.** The row carries the resource id; whatever it points at is where the
+  content lives, under that resource's own access rules.
+
+Reading it is `GET /audit`, **administrators only**, because an audit log is a
+record about *people*: a curator has an operational need to change their
+connection's knowledge and none to read who else did what, and from where. The
+actor is returned as a display name and never an address, the same rule the
+review queue follows.
+
+`actor_ip` is read from `X-Real-IP` and **never from `X-Forwarded-For`**. The
+second is a client-settable header, and an audit log holding an address the
+actor chose is worse than one holding no address at all — the first is wrong
+and looks authoritative. A deployment behind a proxy that does not set
+`X-Real-IP` records the proxy's address, which is honest and fixable in one
+line of that proxy's config.
+
+**This is not the whole of [mvp2 §D4](mvp2-plan.md).** That also wants every
+question recorded with the policy in force, the SQL that ran, how many rows
+came back, and what reached the model provider. Those are writes on the ask
+path and belong to that plan; `services/audit.py` is shaped so they arrive as
+more `record()` calls and no new machinery.
 
 ---
 

@@ -68,13 +68,31 @@ class Settings(BaseSettings):
     hard_row_cap: int = 100_000
 
     # ── knowledge templates ──────────────────────────────────────────────
-    # Who may teach this system a question. False — anyone signed in — is the
-    # deliberate default while the product is single-player: the highest-value
-    # correction comes from the person who knew the answer, and they are
-    # usually not an administrator. Flipping this to true is Phase 8 of
-    # `docs/learning-loop-plan.md`; every write path already asks
-    # `services.policy.can_curate`, so the flip is this line and nothing else.
-    curation_admin_only: bool = False
+    # Who may teach this system a question. **True since Phase 8** of
+    # `docs/learning-loop-plan.md`: curation writes business logic that answers
+    # questions on other people's behalf, and user management now exists to
+    # express that privilege. Every write path already asked
+    # `services.policy.can_curate`, so the flip was this line and nothing else.
+    #
+    # It reads as admin-only and is really *administrator **or** the owner of
+    # the connection* — see `policy.can_curate`, which explains why the second
+    # half is what makes the flip correct instead of a lockout. Nobody can
+    # observe a difference today, because `_owned()` already scopes every
+    # knowledge endpoint to the connection's owner. It starts mattering when
+    # connections can be shared (mvp2 §D1), which is the point of having it on
+    # *before* sharing exists rather than after.
+    #
+    # Set it to false for a single-player install where the highest-value
+    # correction comes from whoever knew the answer and nobody is an admin.
+    curation_admin_only: bool = True
+    # How often the store-health sweep runs: re-validate every live template,
+    # then run near-duplicate pairs against each other and compare the rows.
+    # Six hours, because a store rots on the schema's schedule rather than on
+    # the request rate — a re-sync already sweeps staleness inline, and this is
+    # the pass that catches the connection nobody has opened in a month. The
+    # conflict half executes SQL on the customer's database and is switchable
+    # off per connection (`connections.conflict_checks_enabled`).
+    knowledge_maintenance_interval_seconds: int = 21_600
 
     # ── llm ──────────────────────────────────────────────────────────────
     llm_request_timeout_seconds: int = 60

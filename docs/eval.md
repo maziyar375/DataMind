@@ -131,6 +131,61 @@ documentation is not measured. `tests/eval/test_golden_set.py` asserts both are
 still there, so a well-meaning cleanup cannot quietly remove the hard half of
 the test.
 
+### The templates arm
+
+`--templates on` builds a **knowledge store out of the suite's own questions**
+and lets `match` offer near misses to the generator as few-shot examples, which
+is what a connection with `knowledge_examples_enabled` does in production. Off
+is not merely "the previous behaviour": it renders the generate prompt
+byte-identically to `PROMPT_VERSION` v8, so every number on this page still
+holds for it.
+
+```bash
+python -m app.eval.runner --suite sales_v1 --templates off   # = the v8 bytes
+python -m app.eval.runner --suite sales_v1 --templates on
+```
+
+The store is built from the suite rather than from a separate fixture so the two
+arms differ in exactly one thing. Two exclusions make the number honest, and
+both are enforced in the code that builds the store rather than in a convention:
+
+- **A fixed fraction is held out** (`HELD_OUT_FRACTION`, two in five), by sorted
+  id at a fixed stride, so the split is deterministic and reproducible from the
+  suite file. Those questions are never in the store.
+- **Every record is excluded from the store it is measured against**, held out
+  or not. A question answered with help from its own gold SQL measures nothing.
+
+Each record is tagged `held_out` or `taught`, so the per-tag breakdown reports
+the split for free — and **`held_out` is the only row worth quoting.** The
+scorecard also carries `templates`, `templates_in_store`, `held_out_ids` and
+`prompt_bytes_equal_v8`, so two `eval_runs` rows that differ only in this arm
+can be told apart afterwards. The gate itself is §6.1.
+
+### The matcher arm
+
+`--matcher embedding` swaps how the templates arm *finds* its candidates —
+`EmbeddingMatcher` over masked question similarity instead of trigrams — and is
+only meaningful with `--templates on`. It embeds the store once before the first
+question, using the same masking the product uses, and wires the same
+`FallbackMatcher`, because measuring the embedding matcher **without** its
+fallback would measure a configuration nobody ships.
+
+```bash
+python -m app.eval.runner --suite sales_v1 --templates on --matcher lexical
+python -m app.eval.runner --suite sales_v1 --templates on --matcher embedding
+```
+
+One approximation, stated rather than hidden: the masking vocabulary is the
+**whole suite's**, while in production a held-out template is not in the store
+and so contributes no declared values. Re-deriving the vocabulary per record
+would mask every neighbour differently on all fifty records and multiply the
+embedding calls by fifty; the *entries* are excluded per record, the vocabulary
+is not.
+
+The scorecard carries `matcher`, `embedding_model` and `vectors_in_store`, and
+the report prints an extra line: **the share of questions the embedding half
+actually retrieved for, beside execution accuracy, on purpose.** §6.3 is why.
+
 ---
 
 ## 2. The golden set
@@ -391,6 +446,128 @@ Three rules for whoever runs them:
 
 Until row 3 exists, no claim that a change improved retrieval is falsifiable on
 this suite, and the plan's Phase 5 (few-shot injection) is not allowed to start.
+
+### 6.1 The few-shot gate — the one arm that can fail
+
+[learning-loop-plan.md §3.6](learning-loop-plan.md#36-phase-5--few-shot-injection-behind-an-eval-gate)
+ships few-shot injection **only if it earns it**, and it is the only phase of
+that plan with a rule written so it can fail:
+
+> Ship few-shot injection only if execution accuracy on **held-out** questions
+> is not worse than the Phase 0 baseline, at the same retrieval budget, on the
+> same suite. Report both numbers — with templates and without — and report the
+> split between questions that matched a template and questions that did not.
+
+The arm exists as of 2026-09-01 (`--templates on|off`, beside `--comments` and
+`--semantic`). **The runs have not been made**, for the same reason the three
+Phase 0 baselines have not: each calls a real provider and needs an
+`llm_configs` row with a working key, and there is none in this environment.
+
+**So the feature ships off.** `connections.knowledge_examples_enabled` defaults
+to `false`, and off renders the generate prompt byte-identically to
+`PROMPT_VERSION` v8 — the prompt every number on this page was measured on. The
+switch, the arm and the reporting are built; the default flips when this table
+has numbers in it and they say it should.
+
+| # | Arm | Command | Execution accuracy (all) | …on `held_out` | …on `taught` | `eval_run` |
+|---|---|---|---|---|---|---|
+| 4 | v9, templates **off** (= v8 bytes) | `--suite sales_v1 --templates off` | *not yet run* | n/a | n/a | — |
+| 5 | v9, templates **on** | `--suite sales_v1 --templates on` | *not yet run* | *not yet run* | *not yet run* | — |
+
+Four rules for whoever runs them, and the first two are the ones that decide
+whether the pair means anything:
+
+- **Only the `held_out` column is the gate.** The arm builds its store out of
+  the suite's own questions, holds out a fixed fraction
+  (`runner.HELD_OUT_FRACTION`, two in five, split deterministically by sorted
+  id so it is reproducible from the suite file), and additionally excludes
+  every record's *own* row from the store it is measured against. A question
+  answered with help from its own stored SQL measures the store's ability to
+  hold a string — [§1.3](learning-loop-plan.md#13-the-three-roles)'s
+  measurement trap, which is why `role` is a column in the product.
+- **Read `6. templates:` on the scorecard before reading the accuracy.** It
+  prints what fraction of questions were actually shown an example, how many
+  each got, and the short-circuit rate. An arm where nothing matched is
+  measuring the same prompt as the off arm, and a run where questions were
+  *answered* from the store is not measuring the prompt at all.
+- **Row 4 against row 1, not against row 5 alone.** Row 4 renders the v8 bytes,
+  so it is also a check that the v9 slot really collapses: a row 4 that differs
+  from the Phase 0 layer-off baseline on the same model means the slot left
+  something behind, and nothing below it can be trusted until that is fixed.
+- **A negative delta is a result, not a bug to tune away.** Publish it here and
+  leave the default off. This prompt has surprised us before — a "getting the
+  answer right" block of general SQL guidance took execution accuracy from 36%
+  to 26% on a small model by crowding out the schema, which is exactly the
+  shape of change few-shot examples are. That is why the examples block is
+  **last** in the prompt, capped at a fifth of what catalog comments get, and
+  limited to four examples.
+
+### 6.2 This is not the customer's benchmark, and must not become it
+
+From 2026-09-01 there are **two** instruments in this product, and they are
+architecturally separate on purpose.
+
+| | This harness | The in-product benchmark |
+|---|---|---|
+| Tables | `eval_runs` / `eval_results` | `benchmark_sets` / `benchmark_runs` / `benchmark_results` |
+| Questions | `app/eval/suites/*.json`, **frozen**, in the repo | a customer's own taught questions, on their connection |
+| Database | a testcontainers fixture the harness owns | the customer's, read-only |
+| Run by | `python -m app.eval.runner` | `app/workers/benchmark.py`, from the Knowledge tab |
+| Purpose | did *this change* help | is *this deployment* accurate |
+
+MVP2 Part 5's meta-rule is why: *"the customer-facing instrument and the frozen
+developer suite must stay architecturally separate, or the two will contaminate
+each other within a month."* Sharing a table is how that starts — one schema
+serving two lifecycles, and the first migration that suits one breaks the other.
+
+**They do share one thing, and only one:** the result-set comparator in
+[`app/knowledge/compare.py`](../backend/app/knowledge/compare.py). It was
+written here, and moved down a layer in Phase 4 so both callers use one
+implementation with one documented tolerance. `metrics.py` re-exports it; the
+benchmark worker imports it directly and imports nothing else from `app.eval`,
+which `tests/unit/test_benchmarks.py` asserts on the parse.
+
+The in-product benchmark uses **no LLM judge** either, for the reason this page
+gives about `exact_match`: a label that is not reproducible is not a
+measurement.
+
+### 6.3 The matcher arm — two numbers, and only one of them is the point
+
+Phase 7's claim is that embedding retrieval finds templates trigrams miss. That
+is a claim about **retrieval**, and this page has already recorded once what
+happens when a retrieval improvement is read as an answer improvement:
+
+> FK-neighbour retrieval expansion lifted recall from **70% to 86%** — and
+> execution accuracy did not move.
+
+So the arm is reported as a pair and compared as a pair:
+
+| | `--matcher lexical` | `--matcher embedding` |
+|---|---|---|
+| questions retrieved by embedding | 0% by construction | *(measure it)* |
+| questions shown an example | | |
+| short-circuit rate | | |
+| execution accuracy, `held_out` row | | |
+
+**The rule for reading it.** The first row moving and the last row not moving
+means embeddings retrieve more and it does not reach the answer — which is a
+real result, worth writing down, and **not** a reason to ship. The last row
+moving is the reason to ship. The last row moving *down* is Eval Round 2's
+lesson repeating itself and the arm has done its job.
+
+`RecordOutcome.matcher` records what actually retrieved rather than the flag the
+run was launched with, because `FallbackMatcher` answers lexically whenever the
+embedding half finds nothing — an arm that quietly fell back for forty questions
+of fifty is not an embedding measurement, and a scorecard that printed the flag
+would call it one.
+
+**These runs have not been made.** They need a provider key with an embedding
+endpoint, which is the same blocker as §6.1's gate and the Phase 0 baselines.
+The instrument is built and tested; the numbers are not measured, and the table
+above is empty because writing a number nobody ran is worse than an empty cell.
+The consequence is the shipped default: `database_connections.embedding_model`
+is empty, so **every connection matches lexically** until somebody turns it on
+against their own provider and reads their own numbers.
 
 ### What the eval has actually settled
 

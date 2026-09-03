@@ -148,6 +148,45 @@ class LexicalMatcher:
         return sorted(candidates, key=_rank, reverse=True)[:limit]
 
 
+class FallbackMatcher:
+    """Try one matcher, fall back to another when it cannot answer.
+
+    Phase 7's *"the loop degrades to lexical, never to nothing"*, written as
+    ten lines rather than as a branch inside every caller. The embedding
+    matcher returns `[]` for every reason it might have — no model pinned on
+    the connection, no vector fresh enough to trust, an embedding endpoint that
+    is down — and each of those means *"ask the lexical one"*, which is exactly
+    today's behaviour.
+
+    **Empty rather than an exception is the contract, and the try/except here
+    is the second door.** A matcher that raises would fail a person's question
+    over a feature that is meant to be invisible when absent; the `match` node
+    also catches, and both are cheap.
+
+    Nothing is logged and nothing is counted here, because there is already a
+    better record: `Candidate.matcher` travels to
+    `knowledge_template_hits.matcher`, so *"is the embedding matcher doing
+    anything?"* is a query against a table rather than a search through logs.
+    """
+
+    __slots__ = ("_primary", "_fallback")
+
+    def __init__(self, primary: TemplateMatcher, fallback: TemplateMatcher) -> None:
+        self._primary = primary
+        self._fallback = fallback
+
+    async def match(
+        self, question: str, connection_id: UUID, *, limit: int = DEFAULT_LIMIT
+    ) -> list[Candidate]:
+        try:
+            found = await self._primary.match(question, connection_id, limit=limit)
+        except Exception:
+            found = []
+        if found:
+            return found
+        return await self._fallback.match(question, connection_id, limit=limit)
+
+
 def score_against(normalized_question: str, template: KnowledgeTemplate) -> float:
     """How well a normalised question matches one template.
 

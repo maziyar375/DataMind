@@ -30,6 +30,42 @@ from app.knowledge.backlog import (
     rank_suggestions,
     unknown_words,
 )
+from app.knowledge.compare import (
+    MAX_EVIDENCE_ROWS,
+    NUMERIC_ABS_TOLERANCE,
+    NUMERIC_REL_TOLERANCE,
+    Divergence,
+    first_difference,
+    result_sets_match,
+    rows_equal,
+    values_equal,
+)
+from app.knowledge.conflict import (
+    CONFLICT_SIMILARITY_THRESHOLD,
+    PROBE_WINDOW_DAYS,
+    Pair,
+    Probe,
+    probe_values,
+    similar_pairs,
+)
+from app.knowledge.embed import (
+    COLUMN_MASK,
+    MIN_TERM_CHARS,
+    SIMILARITY_FLOOR,
+    TABLE_MASK,
+    VALUE_MASK,
+    EmbeddingMatcher,
+    VectorEntry,
+    VectorIndex,
+    Vocabulary,
+    cosine,
+    mask_question,
+    needs_embedding,
+    to_index,
+)
+from app.knowledge.embed import (
+    fingerprint as embedding_fingerprint,
+)
 from app.knowledge.models import (
     KnowledgeTemplate,
     LiteralProvenance,
@@ -43,6 +79,7 @@ from app.knowledge.models import (
 from app.knowledge.normalize import (
     MASK,
     example_questions,
+    mask_literals,
     normalize_question,
     slots,
 )
@@ -66,7 +103,36 @@ from app.knowledge.validate import (
 )
 
 __all__ = [
+    "COLUMN_MASK",
+    "CONFLICT_SIMILARITY_THRESHOLD",
+    "MIN_TERM_CHARS",
+    "SIMILARITY_FLOOR",
+    "TABLE_MASK",
+    "VALUE_MASK",
+    "EmbeddingMatcher",
+    "VectorEntry",
+    "VectorIndex",
+    "Vocabulary",
+    "cosine",
+    "embedding_fingerprint",
+    "mask_literals",
+    "mask_question",
+    "needs_embedding",
+    "to_index",
     "DEFAULT_SUGGESTED",
+    "PROBE_WINDOW_DAYS",
+    "Pair",
+    "Probe",
+    "probe_values",
+    "similar_pairs",
+    "MAX_EVIDENCE_ROWS",
+    "NUMERIC_ABS_TOLERANCE",
+    "NUMERIC_REL_TOLERANCE",
+    "Divergence",
+    "first_difference",
+    "result_sets_match",
+    "rows_equal",
+    "values_equal",
     "RANK",
     "STOPWORDS",
     "DRIFT_RULES",

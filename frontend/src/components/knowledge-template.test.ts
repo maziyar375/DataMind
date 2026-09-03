@@ -11,12 +11,15 @@
  */
 import {
   CORRECTION_SHAPES,
+  conflictEvidence, differingCells, embeddingView, indexSummary, percent,
+  scoreView, sparkHeights,
   isUnused, markLiterals, matches, previewQuestion, questionParts, questionSlots,
   readiness, resolveReadiness, roleLabel, rowSubtitle, sections, statusOf,
   suggestionSection, suggestionView, tabCount, valuesOf,
 } from './knowledge-template.ts'
 import type {
-  ProposalRow, SuggestionRow, TemplateRow, TemplateSlot,
+  EmbeddingState, ProposalRow, ScoreRun, SuggestionRow, TemplateRow,
+  TemplateSlot,
 } from './knowledge-template.ts'
 
 let failures = 0
@@ -300,6 +303,227 @@ check(
 )
 // A definition goes to the semantic layer, so there is nothing to save here.
 check('definition-shaped needs nothing else', resolveReadiness('definition', '', false).ready, true)
+
+// ── the conflict's evidence (Phase 4) ─────────────────────────────────────
+// The rows *are* the evidence. Fabric reasons over SQL text and reports a
+// confidence of 1–5; this ran both statements and compared the answers, so the
+// pane shows the disagreement rather than a warning about one.
+const EVIDENCE = {
+  summary: 'The two statements return the same rows with different values.',
+  left_columns: ['month', 'revenue'],
+  right_columns: ['month', 'revenue'],
+  left_rows: [['2026-07', '481220']],
+  right_rows: [['2026-07', '512940']],
+}
+
+check(
+  'the evidence comes through in the shape the pane renders',
+  conflictEvidence(EVIDENCE),
+  {
+    summary: EVIDENCE.summary,
+    mine: { columns: ['month', 'revenue'], rows: [['2026-07', '481220']] },
+    theirs: { columns: ['month', 'revenue'], rows: [['2026-07', '512940']] },
+    hasRows: true,
+  },
+)
+
+// A pane that threw on a missing key would take the whole tab down over a
+// template nobody was looking at — and this comes from a JSONB column.
+check(
+  'a healthy template has no evidence and does not throw',
+  conflictEvidence({}),
+  { summary: '', mine: { columns: [], rows: [] },
+    theirs: { columns: [], rows: [] }, hasRows: false },
+)
+check('undefined evidence is the same as none', conflictEvidence(undefined).hasRows, false)
+check('a malformed row is dropped rather than rendered', conflictEvidence({
+  left_rows: [['a'], 'not-a-row', 7],
+}).mine.rows, [['a']])
+check('every cell is a string by the time the pane sees it', conflictEvidence({
+  left_rows: [[1, null]],
+}).mine.rows, [['1', 'null']])
+
+// A conflict recorded before the evidence column existed still shows its
+// reason — the pane says the rows are gone rather than drawing an empty table.
+check(
+  'a reason with no rows is still a reason',
+  conflictEvidence({ summary: 'Two templates answer this differently.' }),
+  {
+    summary: 'Two templates answer this differently.',
+    mine: { columns: [], rows: [] }, theirs: { columns: [], rows: [] },
+    hasRows: false,
+  },
+)
+
+// The reader is not asked to compare two tables by eye: the cell that moved is
+// marked, positionally, because the comparator that produced the rows is
+// positional too.
+check(
+  'the differing cell is the one that moved',
+  differingCells(['2026-07', '481220'], ['2026-07', '512940']),
+  [false, true],
+)
+check('identical rows differ nowhere', differingCells(['a', 'b'], ['a', 'b']), [false, false])
+check(
+  'a missing counterpart row marks every cell',
+  differingCells(['a', 'b'], []),
+  [true, true],
+)
+check(
+  'a wider row is compared to its full width',
+  differingCells(['a'], ['a', 'b']),
+  [false, true],
+)
+
+// ── the two statuses Phase 4 writes ───────────────────────────────────────
+// Both are withdrawn from answering and both stay visible: deleting a person's
+// work to hide drift is worse than showing it.
+check('a conflicted template is work for a human', statusOf({
+  ...row(), status: 'CONFLICTED',
+}).needsYou, true)
+check('and it says so in words, not only in colour', statusOf({
+  ...row(), status: 'CONFLICTED',
+}).label, 'Conflicted')
+check('a stale template is work too', statusOf({ ...row(), status: 'STALE' }).glyph, '⚠')
+check(
+  "the conflict reason is what the row's second line says",
+  rowSubtitle(
+    { ...row(), status: 'CONFLICTED',
+      status_reason: 'Two templates answer this differently — “revenue by month” disagrees.' },
+    false,
+  ).right,
+  'Two templates answer this differently — “revenue by month” disagrees.',
+)
+
+// ── the score (Phase 6) ───────────────────────────────────────────────────
+// Two numbers, and the strip says which to believe. Genie's Evaluations tab
+// shows one; that is a weakness to improve on, not a design to copy.
+const run = (over: Partial<ScoreRun> = {}): ScoreRun => ({
+  status: 'SUCCEEDED',
+  total: 10,
+  scored: 10,
+  held_out_total: 4,
+  held_out_matched: 3,
+  taught_total: 6,
+  taught_matched: 5,
+  finished_at: '2026-09-01T09:00:00Z',
+  created_at: '2026-09-01T08:00:00Z',
+  ...over,
+})
+
+check('the held-out number is the one from the latest run', scoreView([run()]).heldOut, 0.75)
+check('and the taught number is beside it', scoreView([run()]).taught, 5 / 6)
+check(
+  'a run with no held-out question has no held-out accuracy',
+  scoreView([run({ held_out_total: 0, held_out_matched: 0 })]).heldOut,
+  null,
+)
+// `—`, not `0%`. A run that measured nothing has no accuracy, and printing
+// zero for it would be the loudest possible wrong answer.
+check('and it renders as an em dash, never as zero', percent(null), '—')
+check('a real number renders as a whole percent', percent(0.7234), '72%')
+check('zero really is zero when it was measured', percent(0), '0%')
+
+check(
+  'questions that could not be scored are surfaced, not hidden',
+  scoreView([run({ total: 10, scored: 7 })]).unscored,
+  3,
+)
+
+// The sparkline is the held-out series only: one line, one series, and it is
+// the honest one.
+check(
+  'the sparkline reads oldest to newest',
+  scoreView([
+    run({ held_out_matched: 3 }),
+    run({ held_out_matched: 2 }),
+    run({ held_out_matched: 1 }),
+  ]).spark,
+  [0.25, 0.5, 0.75],
+)
+check(
+  'a failed run contributes no point to the line',
+  scoreView([run({ status: 'FAILED' }), run({ held_out_matched: 2 })]).spark,
+  [0.5],
+)
+check('a set with no finished run has not run', scoreView([]).ran, false)
+check(
+  'a queued run says it is running',
+  scoreView([run({ status: 'QUEUED' })]).running,
+  true,
+)
+check(
+  'a failed newest run shows its reason',
+  scoreView([run({ status: 'FAILED', error_message: 'the model is gone' })]).failed,
+  'the model is gone',
+)
+check(
+  'the held-out count falls back to the set until a run exists',
+  scoreView([], 25).heldOutCount,
+  25,
+)
+
+// Against the fixed 0–100% scale, not the series' own range: self-normalising
+// would turn 71/72/73% into a dramatic climb, which is exactly the misreading
+// a score strip must not invite.
+check('bars are heights against the full scale', sparkHeights([0.71, 0.72, 0.73]),
+      [0.71, 0.72, 0.73])
+check('and are clamped rather than allowed to overflow', sparkHeights([-1, 2]), [0, 1])
+
+// ── the embedding matcher (Phase 7) ──────────────────────────────────────
+// The four states, and the reason there are four: a boolean would collapse
+// "pinned but not yet indexed" into "on", which promises a behaviour the next
+// question will not show.
+function index(over: Partial<EmbeddingState> = {}): EmbeddingState {
+  return {
+    enabled: true, model: 'text-embedding-3-small', dimension: 1536,
+    templates: 10, indexed: 10, message: '', ...over,
+  }
+}
+
+check('word matching is a state, not a warning',
+      embeddingView(index({ enabled: false })).tone, 'off')
+check('and it describes what the other mode adds, not what it lacks',
+      embeddingView(index({ enabled: false })).detail.includes('mean the same thing'),
+      true)
+check('a fully indexed store is on', embeddingView(index()).tone, 'on')
+check('a pinned store with vectors missing is indexing, not on',
+      embeddingView(index({ indexed: 4 })).tone, 'indexing')
+check('and it says how far along it is',
+      embeddingView(index({ indexed: 4 })).detail, '4 of 10 questions indexed — 6 still match on words alone.')
+check('one missing question reads as one', embeddingView(index({ templates: 5, indexed: 4 })).detail,
+      '4 of 5 questions indexed — 1 still matches on words alone.')
+check('the provider\'s own sentence wins over every other state',
+      embeddingView(index({ message: 'Anthropic does not offer an embedding endpoint.' })).tone,
+      'problem')
+check('and it is shown verbatim, because it names the fix',
+      embeddingView(index({ message: 'Anthropic does not offer an embedding endpoint.' })).detail,
+      'Anthropic does not offer an embedding endpoint.')
+check('a message on a disabled store still wins',
+      embeddingView(index({ enabled: false, message: 'no key' })).tone, 'problem')
+check('an on store names the model it was indexed with',
+      embeddingView(index()).detail.includes('text-embedding-3-small'), true)
+
+// The sweep's indexing sentence. It can report a failure without the sweep
+// having failed — staleness and conflicts both completed, and the vectors are
+// simply a pass behind.
+const sweep = { indexed: 0, index_current: 0, index_truncated: false, index_error: '' }
+check('a sweep that indexed nothing says nothing', indexSummary(sweep), '')
+check('a lexical connection adds no sentence at all',
+      indexSummary({ ...sweep, index_current: 12 }), '')
+check('re-indexed questions are counted', indexSummary({ ...sweep, indexed: 3 }),
+      ' 3 questions re-indexed for embedding search.')
+check('one reads as one', indexSummary({ ...sweep, indexed: 1 }),
+      ' 1 question re-indexed for embedding search.')
+check('a truncated pass says the rest are coming',
+      indexSummary({ ...sweep, indexed: 200, index_truncated: true }).includes('next check'),
+      true)
+check('a failure is reported as the index being behind, not as the check breaking',
+      indexSummary({ ...sweep, index_error: 'the key was revoked' }),
+      ' The index could not be brought up to date: the key was revoked')
+check('and a failure outranks a partial success',
+      indexSummary({ ...sweep, indexed: 3, index_error: 'the key was revoked' }).startsWith(' The index'),
+      true)
 
 console.log(failures === 0 ? '\nall passed' : `\n${failures} failed`)
 if (failures > 0) throw new Error(`${failures} test(s) failed`)

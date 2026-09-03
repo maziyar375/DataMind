@@ -175,6 +175,14 @@ class ConnectionUpdate(BaseModel):
     semantic_layer_enabled: bool | None = None
     clarify_enabled: bool | None = None
     include_db_comments: bool | None = None
+    #: The scheduled conflict checker's off switch. It is the one part of the
+    #: learning loop that runs statements against the customer's database
+    #: without anybody asking, so it gets a checkbox rather than an argument.
+    conflict_checks_enabled: bool | None = None
+    #: Whether taught questions reach the generate prompt as few-shot examples.
+    #: Off is byte-identical to v8 and is the default, until the eval gate in
+    #: `docs/eval.md` §6.1 says otherwise.
+    knowledge_examples_enabled: bool | None = None
 
 
 class ConnectionRead(BaseModel):
@@ -195,6 +203,8 @@ class ConnectionRead(BaseModel):
     semantic_layer_enabled: bool = True
     clarify_enabled: bool = True
     include_db_comments: bool = True
+    conflict_checks_enabled: bool = True
+    knowledge_examples_enabled: bool = False
     status: str
     readonly_confirmed: bool
     server_version: str | None = None
@@ -400,9 +410,17 @@ class KnowledgeTemplateRead(BaseModel):
     status_reason: str = ""
     schema_version: int = 0
     referenced_tables: list[str] = Field(default_factory=list)
+    #: The other templates this one disagrees with, and the rows that prove it
+    #: — `{summary, left_columns, right_columns, left_rows, right_rows}`, all
+    #: cells already strings. Empty on every healthy template. §4.7's pane
+    #: renders this rather than a warning, because the rows *are* the evidence
+    #: and a conflict nobody can see the evidence for is one nobody acts on.
+    conflicts_with: list[UUID] = Field(default_factory=list)
+    conflict_evidence: dict[str, Any] = Field(default_factory=dict)
     hit_count: int = 0
     last_hit_at: datetime | None = None
     verified_at: datetime | None = None
+    last_validated_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -419,9 +437,242 @@ class KnowledgeTemplateList(BaseModel):
     schema_version: int = 0
     schema_synced: bool = False
     can_curate: bool = True
-    #: Templates whose SQL no longer resolves against the current snapshot.
-    #: Reported, not persisted — Phase 4 is what writes `STALE`.
+    #: Templates whose SQL no longer resolves against the current snapshot but
+    #: are not yet marked `STALE` — read-time drift, reported the moment a
+    #: re-sync creates it. A template the sweep has already withdrawn carries
+    #: `status: "STALE"` instead, and appears in `health.stale`.
     stale_ids: list[UUID] = Field(default_factory=list)
+    #: The store's health, so the tab can show the queue's counts without a
+    #: second round trip. Phase 4.
+    health: KnowledgeHealth = Field(default_factory=lambda: KnowledgeHealth())
+
+
+class KnowledgeHealth(BaseModel):
+    """Stale, conflicted and unused — the three rows of §4.7's queue.
+
+    Ids rather than counts, because the queue links to the templates and a
+    count the UI cannot turn into a list is a number nobody can act on.
+    `unused` is deliberately last and deliberately actionless: a template
+    written for a question asked once a year is not waste, so this is
+    information rather than an accusation.
+    """
+
+    total: int = 0
+    stale: list[UUID] = Field(default_factory=list)
+    conflicted: list[UUID] = Field(default_factory=list)
+    unused: list[UUID] = Field(default_factory=list)
+    #: Whether the scheduled conflict checker may run on this connection. False
+    #: means "was not allowed to look", which the UI must never print as
+    #: "found nothing".
+    conflict_checks_enabled: bool = True
+    #: How many days with no hits earns a mention.
+    unused_after_days: int = 90
+
+
+class MaintenanceRead(BaseModel):
+    """What one on-demand sweep did, for the button that asked for it."""
+
+    checked: int = 0
+    staled: list[UUID] = Field(default_factory=list)
+    revived: list[UUID] = Field(default_factory=list)
+    conflicted: list[UUID] = Field(default_factory=list)
+    cleared: list[UUID] = Field(default_factory=list)
+    pairs_considered: int = 0
+    pairs_executed: int = 0
+    #: Pairs the checker declined to run, each naming the slot that had no
+    #: probe value. Surfaced rather than swallowed: it is how a curator learns
+    #: that a parameter needs a value list.
+    skipped: list[str] = Field(default_factory=list)
+    conflicts_checked: bool = False
+    #: The embedding index, when the connection has one. Zeroes otherwise.
+    indexed: int = 0
+    index_current: int = 0
+    index_truncated: bool = False
+    index_error: str = ""
+
+
+# ── the audit log (Phase 8) ──────────────────────────────────────────────
+class AuditEntry(BaseModel):
+    """One audited action, as an administrator reads it.
+
+    No `id` and no `actor_user_id`: this is a record *about people*, and the
+    two questions it exists to answer — who has been changing templates, and
+    what happened to this one — are answered by a display name and a resource
+    id. A row identifier would only be useful for editing, and an audit log
+    that can be edited is not one.
+    """
+
+    at: datetime
+    #: A name, never an address. The same rule the review queue follows.
+    actor: str = ""
+    actor_ip: str = ""
+    action: str
+    resource_type: str = ""
+    resource_id: UUID | None = None
+    outcome: str
+    #: Identifiers and counts. Never SQL, question text or result rows — see
+    #: `services/audit.py`, which enforces that rather than trusting it.
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+
+# ── the embedding matcher (Phase 7) ──────────────────────────────────────
+class EmbeddingWrite(BaseModel):
+    """Turn embedding search on or off for a connection.
+
+    `model` is optional and almost always left empty: the probe tries the
+    provider's small embedding model and pins whatever answers. A deployment
+    running its own endpoint — Ollama, vLLM, a gateway — names its model here,
+    and the *dimension* is never asked for, because it is measured from the
+    endpoint's own reply rather than trusted from a form.
+    """
+
+    enabled: bool
+    model: str = Field(default="", max_length=200)
+
+
+class EmbeddingStatus(BaseModel):
+    """What the store's embedding index looks like right now.
+
+    `available` and `indexed` are separate on purpose: a connection can have a
+    model pinned and no vectors yet (the first pass has not run) and that is a
+    normal state, not a failure. The UI says "indexing" for it rather than
+    "on", because "on" would promise a behaviour the next question will not
+    show.
+    """
+
+    #: A model is pinned. False is the shipped default and means the lexical
+    #: matcher answers — which is a state, not a degradation.
+    enabled: bool = False
+    model: str = ""
+    dimension: int = 0
+    #: Live templates that could carry a vector, and how many currently do.
+    templates: int = 0
+    indexed: int = 0
+    #: Everything the probe or the last pass had to say. Empty on success.
+    message: str = ""
+
+
+# ── benchmarks and the score (Phase 6) ───────────────────────────────────
+class BenchmarkSetWrite(BaseModel):
+    """Create a set. The members' roles move off `RETRIEVABLE` on save."""
+
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=2_000)
+    template_ids: list[UUID] = Field(default_factory=list)
+    #: What share is held out. Bounded away from 0 and 1: a set with nothing
+    #: held out has no honest number in it, and one that holds out everything
+    #: has no taught number to compare against.
+    held_out_fraction: float = Field(default=0.4, ge=0.1, le=0.9)
+
+
+class BenchmarkRunRead(BaseModel):
+    """One run, with **both** numbers — never one.
+
+    Accuracy on questions answered *from* a template and accuracy on questions
+    answered *without* one are different numbers, and only the second moves for
+    a reason. `held_out_accuracy` is `null` rather than `0` when nothing scored,
+    because a run with no held-out question has no held-out accuracy and
+    printing 0% for it would be the loudest possible wrong answer.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    set_id: UUID
+    status: str
+    prompt_version: str = ""
+    model_snapshot: dict[str, Any] = Field(default_factory=dict)
+    total: int = 0
+    scored: int = 0
+    matched: int = 0
+    held_out_total: int = 0
+    held_out_matched: int = 0
+    taught_total: int = 0
+    taught_matched: int = 0
+    error_message: str = ""
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_at: datetime
+
+    @property
+    def held_out_accuracy(self) -> float | None:
+        return (
+            self.held_out_matched / self.held_out_total
+            if self.held_out_total else None
+        )
+
+    @property
+    def taught_accuracy(self) -> float | None:
+        return (
+            self.taught_matched / self.taught_total if self.taught_total else None
+        )
+
+
+class BenchmarkResultRead(BaseModel):
+    """One question's verdict, labelled by the comparator and by no model."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    template_id: UUID | None = None
+    question: str = ""
+    gold_sql: str = ""
+    candidate_sql: str = ""
+    role: str = "HELD_OUT"
+    outcome: str = "ERROR"
+    from_template: bool = False
+    gold_row_count: int | None = None
+    candidate_row_count: int | None = None
+    duration_ms: int = 0
+    failure_reason: str = ""
+
+
+class BenchmarkSetRead(BaseModel):
+    """A set, its history, and the two numbers from its latest run."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    connection_id: UUID
+    name: str
+    description: str = ""
+    template_ids: list[UUID] = Field(default_factory=list)
+    held_out_fraction: float = 0.4
+    created_at: datetime
+    updated_at: datetime
+    #: Newest first. The score strip draws a sparkline from these, so it is
+    #: capped at a handful — a sparkline of sixty points is a smudge.
+    runs: list[BenchmarkRunRead] = Field(default_factory=list)
+    #: How the split fell at creation, so the strip can say "on 25 held-out
+    #: questions" before a single run exists.
+    held_out_count: int = 0
+
+
+class BenchmarkCandidateRead(BaseModel):
+    """A template a set may be built from."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    question: str
+    hit_count: int = 0
+    referenced_tables: list[str] = Field(default_factory=list)
+
+
+class BenchmarkOverview(BaseModel):
+    """What the Knowledge tab's score strip needs, in one round trip.
+
+    Appears only once a set exists — §4.8: never an empty chart. `sets` is
+    empty on a connection that has not built one, and the strip is simply
+    absent rather than showing zeros.
+    """
+
+    sets: list[BenchmarkSetRead] = Field(default_factory=list)
+    can_curate: bool = True
+    #: How many live templates could go into a set today, so the empty state
+    #: can say something specific instead of "create a benchmark".
+    candidates: int = 0
+    min_set_size: int = 4
 
 
 class TemplateParamWrite(BaseModel):
@@ -520,6 +771,13 @@ class AnswerFeedbackRead(BaseModel):
     became_template: UUID | None = None
     resolved_at: datetime | None = None
     created_at: datetime
+    #: Whose queue this landed in — the connection's owner. §4.6 asks the
+    #: *Ask for review* control to say "it goes to whoever owns the
+    #: connection", and a name the server returns is a promise that stays true
+    #: when ownership changes, where hardcoded prose in the SPA would not.
+    #: Empty when the owner cannot be named, which reads as the generic
+    #: sentence rather than as a blank.
+    routed_to: str = ""
 
 
 class ReviewRead(BaseModel):

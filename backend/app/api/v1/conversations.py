@@ -37,6 +37,7 @@ from app.infra.db.models import (
     AnswerFeedback,
     Artifact,
     Conversation,
+    DatabaseConnection,
     GeneratedQuery,
     KnowledgeTemplateHit,
     KnowledgeTemplateRow,
@@ -45,8 +46,10 @@ from app.infra.db.models import (
     RunEventRow,
     RunStep,
     SemanticLayerRow,
+    User,
 )
 from app.infra.events.bus import event_bus
+from app.services import audit
 from app.services.knowledge_service import FeedbackService, record_hit
 from app.services.run_service import RunService
 
@@ -184,6 +187,12 @@ async def list_messages(
         select(Run).where(Run.conversation_id == conversation_id)
     )
     runs = list(runs_result.scalars())
+    # Newest last, so that where a message has more than one run — a retry
+    # runs again against the same user message — the later one is what these
+    # dicts end up holding. Without the sort the winner is whatever order the
+    # database happened to return, which is exactly the kind of thing that
+    # works until the table grows.
+    runs.sort(key=lambda r: r.created_at)
     by_assistant = {r.assistant_message_id: r for r in runs if r.assistant_message_id}
     by_user = {r.user_message_id: r for r in runs}
 
@@ -394,7 +403,42 @@ async def leave_feedback(
     row = await FeedbackService(db, settings).record(
         run, user_id=ctx.user_id, verdict=payload.verdict, comment=payload.comment
     )
-    return AnswerFeedbackRead.model_validate(row)
+    # Provenance for the flag itself, not only for the curation that answers
+    # it. Who reported a wrong answer, and when, is exactly the kind of thing a
+    # store of business logic has to be able to show afterwards — and this is
+    # the one write in the loop that any signed-in user may make.
+    await audit.record(
+        db, ctx,
+        action=audit.FEEDBACK_RECORDED,
+        resource_type=audit.REVIEW,
+        resource_id=row.id,
+        detail={"run_id": str(run_id), "verdict": row.verdict, "state": row.state},
+    )
+    out = AnswerFeedbackRead.model_validate(row)
+    # Where it went, named by the server. §4.6 wants the control to say the
+    # flag reaches whoever owns the connection; a name resolved here stays true
+    # when ownership moves, and prose baked into the SPA would not.
+    out.routed_to = await _queue_owner(db, row.connection_id)
+    return out
+
+
+async def _queue_owner(db: DbDep, connection_id: UUID | None) -> str:
+    """The display name of the person a flag is routed to.
+
+    The connection's owner. That is the whole of the routing rule today, and it
+    is honest about its limitation rather than pretending: until
+    [mvp2 §D1](../../../docs/mvp2-plan.md) gives a connection an explicit grant
+    list, its creator is the only person who can reach its queue at all, so
+    "the owner" and "whoever can act on this" are the same person by
+    construction rather than by policy.
+    """
+    if connection_id is None:
+        return ""
+    connection = await db.get(DatabaseConnection, connection_id)
+    if connection is None:
+        return ""
+    owner = await db.get(User, connection.owner_id)
+    return (owner.display_name or "") if owner is not None else ""
 
 
 @router.post("/runs/{run_id}/override", response_model=RunKnowledge)
@@ -456,6 +500,27 @@ async def cancel_run(
     await request.app.state.run_executor.cancel(run_id)
     cancelled = await RunService(db, settings).cancel(run_id, ctx.user_id)
     return {"cancelled": cancelled}
+
+
+@router.post(
+    "/runs/{run_id}/retry",
+    response_model=MessageAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def retry_run(
+    run_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep, request: Request
+) -> MessageAccepted:
+    """Run the same question again, against the same user message.
+
+    Deliberately not "post the text again": see `RunService.retry`. The
+    response is the same `MessageAccepted` a new message returns, so the client
+    attaches to the new run exactly as it does for a send.
+    """
+    service = RunService(db, settings)
+    run = await service.retry(run_id, ctx.user_id)
+    await db.commit()
+    await request.app.state.run_executor.submit(run.id)
+    return MessageAccepted(run_id=run.id, message_id=run.user_message_id)
 
 
 @router.get("/runs/{run_id}/events")

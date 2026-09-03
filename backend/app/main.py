@@ -15,7 +15,10 @@ from app.core.logging import configure_logging, get_logger
 from app.infra.db.session import dispose_engine, get_sessionmaker
 from app.infra.events.listener import RunEventListener
 from app.services.bootstrap import ensure_admin
+from app.workers.benchmark import BenchmarkExecutor
+from app.workers.benchmark import sweep_stranded as sweep_stranded_benchmarks
 from app.workers.inprocess import InProcessRunExecutor
+from app.workers.knowledge_maintenance import maintenance_loop
 from app.workers.reconciler import reconcile_once, reconciler_loop
 from app.workers.report import ReportRunExecutor
 from app.workers.report import stranded_runs as stranded_report_runs
@@ -32,6 +35,7 @@ async def lifespan(app: FastAPI):
     app.state.run_executor = InProcessRunExecutor(settings)
     app.state.semantic_executor = SemanticJobExecutor(settings)
     app.state.report_executor = ReportRunExecutor(settings)
+    app.state.benchmark_executor = BenchmarkExecutor(settings)
 
     async with get_sessionmaker()() as session:
         await ensure_admin(session, settings)
@@ -46,6 +50,15 @@ async def lifespan(app: FastAPI):
     stranded = await sweep_orphans()
     if stranded:
         log.warning("startup_failed_stranded_semantic_jobs", count=stranded)
+
+    # A benchmark is failed rather than resumed. Half of it was scored against
+    # a store, a schema and a model that may all have moved since; a number
+    # assembled from two different worlds is worse than no number.
+    stranded_benchmarks = await sweep_stranded_benchmarks()
+    if stranded_benchmarks:
+        log.warning(
+            "startup_failed_stranded_benchmarks", count=stranded_benchmarks
+        )
 
     # A report run is minutes long, so a restart used to cost the user every
     # section that had not finished. It is resumed instead: the rows already
@@ -71,11 +84,18 @@ async def lifespan(app: FastAPI):
     app.state.run_executor.start_claiming()
 
     reconciler = asyncio.create_task(reconciler_loop(settings))
+    # Store health: re-validate every live template, then run near-duplicate
+    # pairs against each other and compare the rows. Its first tick is one
+    # interval away, deliberately — a fleet restarting together must not open a
+    # connector to every customer database in the same second, and a schema
+    # sync already sweeps staleness inline on the request that caused it.
+    knowledge_maintenance = asyncio.create_task(maintenance_loop(settings))
     log.info("raymand_started", environment=settings.environment)
 
     try:
         yield
     finally:
+        knowledge_maintenance.cancel()
         reconciler.cancel()
         await app.state.run_executor.stop_claiming()
         await app.state.run_event_listener.stop()

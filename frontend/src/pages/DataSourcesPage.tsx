@@ -36,6 +36,11 @@ const BLANK = {
   disclosure_policy: 'SAMPLE',
   clarify_enabled: true,
   include_db_comments: true,
+  conflict_checks_enabled: true,
+  // Off, and the default is a measurement rather than caution: this is the one
+  // switch in the learning loop that can lower accuracy, and off renders the
+  // prompt every recorded baseline was taken on.
+  knowledge_examples_enabled: false,
 }
 
 export default function DataSourcesPage() {
@@ -141,6 +146,8 @@ export default function DataSourcesPage() {
       disclosure_policy: selected.disclosure_policy,
       clarify_enabled: selected.clarify_enabled,
       include_db_comments: selected.include_db_comments,
+      conflict_checks_enabled: selected.conflict_checks_enabled,
+      knowledge_examples_enabled: selected.knowledge_examples_enabled,
     })
     api
       .schema(selected.id)
@@ -652,6 +659,40 @@ export default function DataSourcesPage() {
                         draft.include_db_comments !== false
                           ? 'Send them to the model'
                           : 'Keep them out of prompts'
+                      }
+                    />
+                  </Field>
+
+                  <Field
+                    label="Taught questions as examples"
+                    hint="Shows the model up to four questions this connection has already been taught, after the schema. Off is exactly the prompt every recorded accuracy measurement was taken on — leave it off until you have measured that turning it on helps."
+                  >
+                    <Toggle
+                      checked={draft.knowledge_examples_enabled === true}
+                      onChange={(next) =>
+                        setDraft({ ...draft, knowledge_examples_enabled: next })
+                      }
+                      label={
+                        draft.knowledge_examples_enabled === true
+                          ? 'Show taught questions to the model'
+                          : 'Keep them out of prompts'
+                      }
+                    />
+                  </Field>
+
+                  <Field
+                    label="Conflict checks"
+                    hint="On a schedule, runs pairs of near-duplicate templates and compares the answers, so two templates that disagree are found before somebody quotes one of them. Read-only, row-capped, and the only thing here that queries your database without being asked."
+                  >
+                    <Toggle
+                      checked={draft.conflict_checks_enabled !== false}
+                      onChange={(next) =>
+                        setDraft({ ...draft, conflict_checks_enabled: next })
+                      }
+                      label={
+                        draft.conflict_checks_enabled !== false
+                          ? 'Check the store on a schedule'
+                          : 'Only when somebody asks'
                       }
                     />
                   </Field>

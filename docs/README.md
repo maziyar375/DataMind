@@ -1,6 +1,6 @@
 # Documentation index
 
-Eighteen documents plus four research notes. This page exists so you don't have
+Eighteen documents plus five research notes. This page exists so you don't have
 to open `architecture.md` (1,500 lines) to answer a question about charts.
 
 The three `pipeline*.md` files are one set: [pipeline.md](pipeline.md) holds the
@@ -51,21 +51,33 @@ is the organisation, not the directory.
 | --- | --- |
 | [langgraph-migration.md](langgraph-migration.md) | **Live.** Phases 0–3 and 6 are done — the chat pipeline and the report worker are compiled graphs, the repair region is one subgraph with two callers, and the cross-replica work landed as [cross-replica.md](cross-replica.md). Phase 4 (checkpointing) and Phase 5 (durable clarification) are argued and *declined*, each with the measurement that decided it. Read it before moving anything else onto LangGraph. |
 | [catalog-metadata-plan.md](catalog-metadata-plan.md) | **Live, and still the reference.** Unlike `reports-plan.md` this one was never superseded by a companion: it is both the plan and the only description of catalog comments, so §10's ledger and "decisions changed while executing" are the record of what actually shipped. Read §1 for the per-engine SQL and §4 for what reaches the model. |
-| [learning-loop-plan.md](learning-loop-plan.md) | **Live.** Teaching the system a question and measuring whether it helped. Phase 0 (fix the ruler) and Phases 1–3 (the store and the curation surface, match/short-circuit/badge, feedback and the backlog) are in the tree; §13 is the ledger, one checkbox per deliverable with the check that proves its state. Read §0.2 before arguing with any of it — four decisions are recorded there rather than re-argued. |
+| [learning-loop-plan.md](learning-loop-plan.md) | **Live.** Teaching the system a question and measuring whether it helped. All nine phases are in the tree — the store and the curation surface, match/short-circuit/badge, feedback and the backlog, store health, few-shot, the in-product benchmark, the embedding matcher, permissions — but **three of them ship *off***: the few-shot block, the embedding matcher and Phase 0's own baselines all wait on the same thing, a provider key this environment does not have. §13 is the ledger, one checkbox per deliverable with the check that proves its state, and §13.13 is the dated record of each landing. Read §0.2 before arguing with any of it — four decisions are recorded there rather than re-argued. |
 | [mvp2-plan.md](mvp2-plan.md) | **Live.** The wider second-milestone plan the learning loop is one strand of. Where it and `learning-loop-plan.md` disagree about the knowledge store, §1.3 of the latter is the correction. |
 | [reports-plan.md](reports-plan.md) | **Superseded.** The phase-by-phase plan for Reports, kept as the record of what was intended. [reports.md](reports.md) describes what was built — where they disagree, reports.md is right. |
 
 ## Research
 
-`research/` holds four notes, each answering *"what do the other four products
-do about this, and what does that tell us"*: [the learning
+`research/` holds five notes. Four of them answer *"what do the other four
+products do about this, and what does that tell us"*: [the learning
 loop](research/learning-loop.md) (the argument behind
 `learning-loop-plan.md` — read it for *why*, and the plan for *what*),
 [retrieval at scale](research/retrieval-at-scale.md), [the semantic layer as a
 model](research/semantic-layer-as-a-model.md), and [the data
-surface](research/data-surface.md). They are arguments with evidence, not
-descriptions of this codebase; where a research note and a shipped doc
-disagree, the shipped doc is what the code does.
+surface](research/data-surface.md).
+
+The fifth, [access control](research/access-control.md), takes a different
+comparison set because the subject demands one — it reads **Lakekeeper**'s
+Keycloak-plus-OpenFGA design down to its `.fga` model files and its `Authorizer`
+trait, calibrates against **Metabase, Superset and Grafana**, and proposes what
+DataMind should build for users, groups, roles and grants ([mvp2-plan.md
+§1.5](mvp2-plan.md#15-single-player-by-construction) and its Theme D). Read §0
+and §5.2 first: they correct two things this repo currently believes about its
+own authorization, including that `services/policy.py` is a seam — four of its
+five functions have no caller anywhere outside the module.
+
+They are arguments with evidence, not descriptions of this codebase; where a
+research note and a shipped doc disagree, the shipped doc is what the code
+does.
 
 ## Not documentation
 

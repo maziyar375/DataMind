@@ -34,19 +34,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { knowledge as api } from '../api/client'
 import type {
-  Connection, KnowledgeTemplate, ParamProposal, Review, Suggestion,
+  BenchmarkOverview, Connection, EmbeddingStatus, KnowledgeHealth,
+  KnowledgeTemplate, MaintenanceResult, ParamProposal, Review, Suggestion,
   TemplateCheckResult, TemplateParam,
 } from '../api/types'
 import {
-  Chip, DangerButton, EmptyState, ErrorNote, Field, GhostButton, Icon, Modal,
-  PrimaryButton, SearchField, Spinner, TextArea, TextInput, dirOf, relativeTime,
+  Chip, DangerButton, Dot, EmptyState, ErrorNote, Field, GhostButton, Icon,
+  Modal, PrimaryButton, SearchField, Spinner, TextArea, TextInput, dirOf,
+  relativeTime,
 } from './ui'
 import type { ChipTone } from './ui'
 import { DetailBody } from './settings'
 import {
-  CORRECTION_SHAPES, markLiterals, matches, previewQuestion, questionParts,
-  readiness, resolveReadiness, roleLabel, rowSubtitle, sections, statusOf,
-  suggestionView,
+  CORRECTION_SHAPES, conflictEvidence, differingCells, embeddingView,
+  indexSummary, markLiterals, matches, percent, previewQuestion, questionParts,
+  readiness, resolveReadiness, roleLabel, rowSubtitle, scoreView, sections,
+  sparkHeights, statusOf, suggestionView,
 } from './knowledge-template'
 import type { CorrectionShape, TemplateRow } from './knowledge-template'
 
@@ -77,6 +80,12 @@ const CODE: React.CSSProperties = {
 export function KnowledgeTab({ connection }: { connection: Connection }) {
   const [rows, setRows] = useState<KnowledgeTemplate[]>([])
   const [staleIds, setStaleIds] = useState<string[]>([])
+  const [health, setHealth] = useState<KnowledgeHealth | null>(null)
+  const [score, setScore] = useState<BenchmarkOverview | null>(null)
+  const [embeddings, setEmbeddings] = useState<EmbeddingStatus | null>(null)
+  const [switching, setSwitching] = useState(false)
+  const [sweeping, setSweeping] = useState(false)
+  const [sweepNote, setSweepNote] = useState<string | null>(null)
   const [canCurate, setCanCurate] = useState(true)
   const [synced, setSynced] = useState(true)
   const [loading, setLoading] = useState(true)
@@ -102,17 +111,22 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
     const body = await api.list(connection.id, true)
     setRows(body.templates)
     setStaleIds(body.stale_ids)
+    setHealth(body.health)
     setCanCurate(body.can_curate)
     setSynced(body.schema_synced)
     // The queue and the backlog load beside the store, not after it: they are
     // three readings of one screen, and loading them in sequence would make
     // the sections appear one at a time under the reader's cursor.
-    const [queue, backlog] = await Promise.all([
+    const [queue, backlog, benchmarks, index] = await Promise.all([
       api.reviews(connection.id).catch(() => [] as Review[]),
       api.suggestions(connection.id).catch(() => [] as Suggestion[]),
+      api.benchmarks(connection.id).catch(() => null),
+      api.embeddings(connection.id).catch(() => null),
     ])
     setReviews(queue)
     setSuggestions(backlog)
+    setScore(benchmarks)
+    setEmbeddings(index)
     return body
   }, [connection.id])
 
@@ -136,6 +150,24 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
       await refresh()
     } catch (err) {
       setError(messageOf(err))
+    }
+  }
+
+  /** Sweep now: re-validate every live template, then run near-duplicate pairs
+   *  against each other and compare the rows. The result is a sentence about
+   *  what changed, not a job id — the list under it has already refreshed to
+   *  whatever the sweep found. */
+  async function sweep() {
+    setSweeping(true)
+    setSweepNote(null)
+    try {
+      const result = await api.revalidate(connection.id)
+      await refresh()
+      setSweepNote(sweepSummary(result) + indexSummary(result))
+    } catch (err) {
+      setError(messageOf(err))
+    } finally {
+      setSweeping(false)
     }
   }
 
@@ -165,6 +197,42 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
         </div>
       )}
 
+      {score && score.sets.length === 0 &&
+        score.can_curate &&
+        score.candidates >= score.min_set_size && (
+          <StartMeasuring
+            candidates={score.candidates}
+            onCreate={async () => {
+              try {
+                const rows = await api.benchmarkCandidates(connection.id)
+                await api.createBenchmark(connection.id, {
+                  name: 'Accuracy',
+                  description:
+                    'Built from the questions taught up to this point.',
+                  template_ids: rows.map((r) => r.id),
+                })
+                await refresh()
+              } catch (err) {
+                setError(messageOf(err))
+              }
+            }}
+          />
+        )}
+
+      {score && score.sets.length > 0 && (
+        <ScoreStrip
+          overview={score}
+          onRun={async (setId) => {
+            try {
+              await api.runBenchmark(connection.id, setId)
+              await refresh()
+            } catch (err) {
+              setError(messageOf(err))
+            }
+          }}
+        />
+      )}
+
       <div
         style={{
           position: 'sticky', top: 0, zIndex: 2, display: 'flex', gap: 10,
@@ -180,6 +248,12 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
             ariaLabel="Search taught questions"
           />
         </div>
+        {canCurate && synced && rows.length > 1 && (
+          <GhostButton onClick={sweep} disabled={sweeping}>
+            {sweeping ? <Spinner size={13} /> : <Icon.Refresh size={13} />}
+            Check the store
+          </GhostButton>
+        )}
         {canCurate && synced && (
           <PrimaryButton onClick={() => setEditing('new')}>
             <Icon.Plus size={14} />
@@ -187,6 +261,41 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
           </PrimaryButton>
         )}
       </div>
+
+      {sweepNote && (
+        <div style={hint()}>{sweepNote}</div>
+      )}
+
+      {health && health.unused.length > 0 && (
+        // The quietest possible treatment, from §4.7: a faint line and no
+        // action button. A template written for a question asked once a year
+        // is not waste — this is information, not an accusation.
+        <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+          {health.unused.length}{' '}
+          {health.unused.length === 1 ? 'template has' : 'templates have'} had no
+          matches in {health.unused_after_days} days.
+        </div>
+      )}
+
+      {embeddings && rows.length > 0 && (
+        <MatchingMode
+          status={embeddings}
+          canCurate={canCurate}
+          busy={switching}
+          onToggle={async (enabled) => {
+            setSwitching(true)
+            setSweepNote(null)
+            try {
+              const next = await api.setEmbeddings(connection.id, enabled)
+              setEmbeddings(next)
+            } catch (err) {
+              setError(messageOf(err))
+            } finally {
+              setSwitching(false)
+            }
+          }}
+        />
+      )}
 
       {rows.length === 0 && !search && <FirstRun canCurate={canCurate && synced} />}
 
@@ -316,6 +425,7 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
           template={selected}
           drifted={staleIds.includes(selected.id)}
           canCurate={canCurate}
+          siblings={rows}
           onEdit={() => setEditing(selected)}
           onArchive={() => archive(selected)}
           onClose={() => setSelectedId(null)}
@@ -737,11 +847,14 @@ function Question({ text }: { text: string }) {
 }
 
 function Detail({
-  template, drifted, canCurate, onEdit, onArchive, onClose,
+  template, drifted, canCurate, siblings, onEdit, onArchive, onClose,
 }: {
   template: KnowledgeTemplate
   drifted: boolean
   canCurate: boolean
+  /** Every other template on this connection, so a conflict can name the
+   *  question it disagrees with rather than printing a uuid. */
+  siblings: KnowledgeTemplate[]
   onEdit: () => void
   onArchive: () => void
   onClose: () => void
@@ -790,6 +903,13 @@ function Detail({
             {template.status_reason ||
               'This template stopped working when the schema changed.'}
           </div>
+        )}
+
+        {template.status === 'CONFLICTED' && (
+          <ConflictEvidencePane
+            evidence={template.conflict_evidence}
+            others={conflictLabels(template, siblings)}
+          />
         )}
 
         <div>
@@ -849,6 +969,303 @@ function Detail({
     </div>
   )
 }
+
+/**
+ * The offer to start measuring, before any set exists.
+ *
+ * One sentence and one button, and it says the cost up front: the questions
+ * that go into a set **stop answering questions**, because §1.3's rule is that
+ * a template is retrievable or benchmarkable and never both. Hiding that until
+ * afterwards would be the kind of surprise that makes people distrust a
+ * number.
+ */
+function StartMeasuring({
+  candidates, onCreate,
+}: {
+  candidates: number
+  onCreate: () => void | Promise<void>
+}) {
+  const [busy, setBusy] = useState(false)
+
+  return (
+    <div
+      style={{
+        border: '1px dashed var(--border)', borderRadius: 12,
+        padding: '12px 16px', display: 'flex', gap: 14,
+        alignItems: 'center', flexWrap: 'wrap',
+      }}
+    >
+      <div style={{ flex: 1, minWidth: 240 }}>
+        <div style={{ fontSize: 13, color: 'var(--text-strong)' }}>
+          Measure whether teaching this connection helped
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 3 }}>
+          Turns {candidates} taught {candidates === 1 ? 'question' : 'questions'}{' '}
+          into a benchmark and holds some back, so the score is measured on
+          questions the system cannot look up. Those questions stop answering
+          chat until you delete the benchmark.
+        </div>
+      </div>
+      <GhostButton
+        onClick={async () => {
+          setBusy(true)
+          try {
+            await onCreate()
+          } finally {
+            setBusy(false)
+          }
+        }}
+        disabled={busy}
+      >
+        {busy ? <Spinner size={13} /> : <Icon.Check size={13} />}
+        Create a benchmark
+      </GhostButton>
+    </div>
+  )
+}
+
+
+/**
+ * The score strip — §4.8. One line at the top of the tab, and only once a
+ * benchmark set exists: **never an empty chart.**
+ *
+ * **The held-out number is first, larger, and the one on the sparkline.** The
+ * taught number is shown because hiding it would be dishonest, and shown
+ * second and smaller because it is the number that goes up for the wrong
+ * reasons. Genie's Evaluations tab shows one number; this shows two and says
+ * which one to believe.
+ *
+ * `—` and not `0%` when a run has no held-out questions to score. A run that
+ * measured nothing has no accuracy, and printing zero for it would be the
+ * loudest possible wrong answer.
+ */
+function ScoreStrip({
+  overview, onRun,
+}: {
+  overview: BenchmarkOverview
+  onRun: (setId: string) => void | Promise<void>
+}) {
+  const set = overview.sets[0]
+  const view = scoreView(set.runs, set.held_out_count)
+
+  return (
+    <div
+      style={{
+        border: '1px solid var(--border)', borderRadius: 12,
+        background: 'var(--panel)', padding: '12px 16px',
+        display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap',
+      }}
+    >
+      <div style={{ flex: 1, minWidth: 220 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+          <span style={{ fontSize: 11, color: 'var(--text-faint)', width: 62 }}>
+            Accuracy
+          </span>
+          <span style={{ fontSize: 24, fontWeight: 600, color: 'var(--text-strong)',
+                         lineHeight: 1.1 }}>
+            {percent(view.heldOut)}
+          </span>
+          <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+            on {view.heldOutCount} held-out{' '}
+            {view.heldOutCount === 1 ? 'question' : 'questions'}
+          </span>
+          {view.spark.length > 1 && (
+            <Sparkline values={sparkHeights(view.spark)} />
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10,
+                      marginTop: 2 }}>
+          <span style={{ width: 62 }} />
+          <span style={{ fontSize: 14, color: 'var(--text-dim)' }}>
+            {percent(view.taught)}
+          </span>
+          <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+            on questions answered from a template
+          </span>
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 5 }}>
+          {set.name}
+          {view.ran && set.runs[0]?.finished_at
+            ? ` · last run ${relativeTime(set.runs[0].finished_at)}`
+            : view.ran ? '' : ' · not run yet'}
+          {view.unscored > 0 &&
+            ` · ${view.unscored} could not be scored`}
+        </div>
+        {view.failed && (
+          <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 4 }}>
+            {view.failed}
+          </div>
+        )}
+      </div>
+
+      {overview.can_curate && (
+        <GhostButton onClick={() => onRun(set.id)} disabled={view.running}>
+          {view.running ? <Spinner size={13} /> : <Icon.Refresh size={13} />}
+          {view.running ? 'Running' : 'Run benchmark'}
+        </GhostButton>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Six bars, against the **fixed 0–100% scale** rather than the series' own
+ * range. Self-normalising would turn 71/72/73% into a dramatic climb, which is
+ * exactly the misreading a score strip must not invite.
+ */
+function Sparkline({ values }: { values: number[] }) {
+  return (
+    <span
+      aria-hidden
+      style={{ display: 'inline-flex', alignItems: 'flex-end', gap: 2,
+               height: 16, marginInlineStart: 4 }}
+    >
+      {values.map((v, i) => (
+        <span
+          key={i}
+          style={{
+            width: 4,
+            height: `${Math.max(2, Math.round(v * 16))}px`,
+            borderRadius: 1,
+            background: i === values.length - 1
+              ? 'var(--accent)' : 'var(--border-strong)',
+          }}
+        />
+      ))}
+    </span>
+  )
+}
+
+
+/**
+ * The conflict's evidence: two answers to one question, side by side.
+ *
+ * **This is the pane no competitor can draw.** Fabric detects conflicting
+ * instructions by reasoning over SQL text and reports a confidence score of
+ * one to five; DataMind ran both statements through the guard, read-only and
+ * row-capped, and compared the result sets — so what goes here is *"481,220
+ * against 512,940"*, and the cell that moved is marked.
+ *
+ * Deliberately not a diff widget and deliberately no new colour: two small
+ * tables in the tokens the tab already uses, the differing cell in `--amber`,
+ * and the reason above them in the curator's own language.
+ */
+function ConflictEvidencePane({
+  evidence, others,
+}: {
+  evidence: unknown
+  others: string[]
+}) {
+  const view = conflictEvidence(evidence)
+
+  return (
+    <div>
+      <Label>Why this is flagged</Label>
+      <div style={{ fontSize: 12, color: 'var(--text-dim)', marginBottom: 8 }}>
+        {view.summary ||
+          'Two templates answer this question differently.'}
+      </div>
+
+      {!view.hasRows ? (
+        <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+          The rows that showed this are no longer stored. Run the check again to
+          see them.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <EvidenceTable
+            caption="This template"
+            columns={view.mine.columns}
+            rows={view.mine.rows}
+            against={view.theirs.rows}
+          />
+          <EvidenceTable
+            caption={others[0] ? `“${others[0]}”` : 'The other template'}
+            columns={view.theirs.columns}
+            rows={view.theirs.rows}
+            against={view.mine.rows}
+          />
+        </div>
+      )}
+
+      <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 8 }}>
+        Both are still stored and neither answers questions until one is fixed
+        or archived — the system does not pick a winner.
+      </div>
+    </div>
+  )
+}
+
+/** One side of the disagreement. The cell that differs is marked, so the
+ *  reader is not asked to compare two tables by eye. */
+function EvidenceTable({
+  caption, columns, rows, against,
+}: {
+  caption: string
+  columns: string[]
+  rows: string[][]
+  against: string[][]
+}) {
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: 'var(--text-faint)', marginBottom: 3 }}>
+        {caption}
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ ...CODE, borderCollapse: 'collapse', width: '100%',
+                        padding: 0, borderRadius: 8 }}>
+          {columns.length > 0 && (
+            <thead>
+              <tr>
+                {columns.map((c, i) => (
+                  <th key={i} style={{ ...cellStyle, color: 'var(--text-faint)',
+                                       fontWeight: 500 }}>
+                    {c}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+          )}
+          <tbody>
+            {rows.map((row, r) => {
+              const differs = differingCells(row, against[r] ?? [])
+              return (
+                <tr key={r}>
+                  {row.map((value, c) => (
+                    <td key={c}
+                        style={{ ...cellStyle,
+                                 color: differs[c] ? 'var(--amber)' : undefined }}>
+                      {value}
+                    </td>
+                  ))}
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+const cellStyle: React.CSSProperties = {
+  padding: '4px 8px',
+  borderBottom: '1px solid var(--border)',
+  textAlign: 'left',
+  whiteSpace: 'nowrap',
+}
+
+/** The questions this template disagrees with, by id — never a raw uuid. */
+function conflictLabels(
+  template: KnowledgeTemplate,
+  siblings: KnowledgeTemplate[],
+): string[] {
+  const byId = new Map(siblings.map((t) => [t.id, t.question]))
+  return (template.conflicts_with ?? [])
+    .map((id) => byId.get(id))
+    .filter((q): q is string => Boolean(q))
+}
+
 
 /**
  * The editor — the screen that matters most.
@@ -968,6 +1385,30 @@ export function TemplateEditor({
     }
   }
 
+  const tables = (check?.referenced_tables ?? []).map((t) => t.split('.').pop() ?? t)
+  const eligible = proposals.filter((p) => p.eligible)
+
+  // What the box under the statement says about it, in one line. The long
+  // green pill this replaces ("Valid · public.order_items, public.orders,
+  // public.products") grew with the query until it pushed the label off its
+  // own row; the verdict is a chip beside the label now, and the tables it
+  // reads are a sentence in the box's own footer, where a long list can wrap.
+  const boxStatus = checking
+    ? 'Checking…'
+    : !sql.trim()
+      ? 'Paste the statement that answers the question.'
+      : check?.valid
+        ? tables.length > 0
+          ? `Reads ${tables.join(', ')}`
+          : 'Valid — it reads no tables.'
+        : check
+          // The guard's own sentence, in the footer of the box that produced
+          // it — one place for the refusal, attached to the statement. It used
+          // to be a chip saying *Rejected* and a red note underneath saying it
+          // again before getting to the reason.
+          ? check.issue || 'Rejected.'
+          : 'Not checked yet'
+
   return (
     <Modal
       title={template ? 'Edit template' : 'Teach a question'}
@@ -981,106 +1422,172 @@ export function TemplateEditor({
       width={720}
       onClose={onClose}
       footer={
-        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <GhostButton onClick={onClose}>Cancel</GhostButton>
-          <PrimaryButton onClick={save} disabled={!ready.ready || saving}>
-            {saving && <Spinner />}
-            Save template
-          </PrimaryButton>
+        <div
+          style={{
+            display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap',
+          }}
+        >
+          {/* Why Save is off, beside the button that is off — not at the far
+              end of a scrolling form where the reader has to go looking for
+              the reason they were refused. */}
+          {ready.issue && (
+            <span
+              style={{
+                display: 'flex', alignItems: 'flex-start', gap: 7, flex: '1 1 240px',
+                minWidth: 0, fontSize: 11.5, lineHeight: 1.5, color: 'var(--amber)',
+              }}
+            >
+              <span style={{ display: 'flex', paddingTop: 1 }}>
+                <Icon.Alert size={13} />
+              </span>
+              {ready.issue}
+            </span>
+          )}
+          <div style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+            <GhostButton onClick={onClose}>Cancel</GhostButton>
+            <PrimaryButton onClick={save} disabled={!ready.ready || saving}>
+              {saving && <Spinner />}
+              Save template
+            </PrimaryButton>
+          </div>
         </div>
       }
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
         {error && <ErrorNote>{error}</ErrorNote>}
 
-        <Field label="Question" hint="Write it the way someone would ask it.">
+        <Field
+          label="Question"
+          hint={
+            question.includes('{')
+              ? undefined
+              : 'Write it the way someone would ask it. Wrap the parts that change in braces — {region}.'
+          }
+        >
           <TextInput
             value={question}
             dir={dirOf(question)}
             placeholder="revenue by month for {region} in {year}"
             onChange={(e) => setQuestion(e.target.value)}
           />
+          {question.includes('{') && params.length > 0 && (
+            <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 5 }}>
+              Matches questions like &ldquo;{previewQuestion(question, params)}&rdquo;
+            </div>
+          )}
         </Field>
-        {question.includes('{') && params.length > 0 && (
-          <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: -10 }}>
-            Matches questions like &ldquo;{previewQuestion(question, params)}&rdquo;
-          </div>
-        )}
 
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            <Label>SQL</Label>
-            <span style={{ flex: 1 }} />
-            <span aria-live="polite" style={{ fontSize: 11 }}>
-              {checking && <Spinner />}
-              {!checking && check?.valid && (
+        <Field
+          label="SQL"
+          status={
+            // The last verdict stays up while the next one is being fetched —
+            // the box's own footer is what says "Checking…", and a chip that
+            // vanished on every keystroke made the header flicker for the
+            // whole time somebody was typing a statement.
+            <span aria-live="polite" style={{ display: 'flex', alignItems: 'center' }}>
+              {check?.valid && (
                 <Chip tone="green">
-                  Valid · {check.referenced_tables.join(', ') || 'no tables'}
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                    <Dot color="var(--green)" />
+                    Valid
+                  </span>
                 </Chip>
               )}
-              {!checking && check && !check.valid && <Chip tone="red">Rejected</Chip>}
+              {check && !check.valid && <Chip tone="red">Rejected</Chip>}
             </span>
-          </div>
-          <TextArea
-            dir="ltr"
-            value={sql}
-            placeholder="SELECT …"
-            onChange={(e) => setSql(e.target.value)}
-            style={{ ...CODE, minHeight: 150, whiteSpace: 'pre-wrap' }}
-          />
-          {marked.some((s) => s.slot) && (
-            <pre
-              aria-hidden
-              style={{ ...CODE, margin: '6px 0 0', padding: 10, borderRadius: 8,
-                       whiteSpace: 'pre-wrap' }}
-            >
-              {marked.map((span, i) => (
-                <span
-                  key={i}
-                  style={
-                    span.slot
-                      ? {
-                          background:
-                            hovered === span.slot ? 'var(--accent)' : 'var(--accent-bg)',
-                          color: hovered === span.slot ? 'var(--bg)' : 'var(--accent)',
-                          borderRadius: 3,
-                        }
-                      : undefined
-                  }
-                >
-                  {span.text}
-                </span>
-              ))}
-            </pre>
-          )}
-          {check && !check.valid && check.issue && <ErrorNote>{check.issue}</ErrorNote>}
-        </div>
-
-        {proposals.length > 0 && (
-          <div>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-              <Label>Parameters</Label>
-              <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
-                found by reading your SQL — nothing was sent
+          }
+        >
+          {/* The same shell the report and tile editors use: a statement and
+              the verdict on it are one object, so they share one border. */}
+          <div className="rm-sqlbox">
+            <TextArea
+              className="mono"
+              dir="ltr"
+              value={sql}
+              spellCheck={false}
+              placeholder="SELECT …"
+              onChange={(e) => setSql(e.target.value)}
+              // `.rm-sqlbox` owns the surface now, so the statement gives up
+              // the code background it used to draw for itself — two shades
+              // inside one border read as a box inside a box.
+              style={{
+                ...CODE, background: 'transparent', minHeight: 150,
+                whiteSpace: 'pre-wrap',
+              }}
+            />
+            <div className="rm-sqlbox-bar">
+              <span
+                className={`rm-sqlbox-hint${
+                  check && !check.valid && !checking ? ' is-error' : ''
+                }`}
+                style={{ whiteSpace: 'normal' }}
+              >
+                {checking && <Spinner size={11} />}
+                {boxStatus}
               </span>
             </div>
+          </div>
+          {marked.some((s) => s.slot) && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 11, color: 'var(--text-faint)', marginBottom: 4 }}>
+                Stored like this — the highlighted values become parameters:
+              </div>
+              <pre
+                aria-hidden
+                style={{ ...CODE, margin: 0, padding: 10, borderRadius: 8,
+                         background: 'var(--code-bg)', whiteSpace: 'pre-wrap' }}
+              >
+                {marked.map((span, i) => (
+                  <span
+                    key={i}
+                    style={
+                      span.slot
+                        ? {
+                            background:
+                              hovered === span.slot ? 'var(--accent)' : 'var(--accent-bg)',
+                            color: hovered === span.slot ? 'var(--bg)' : 'var(--accent)',
+                            borderRadius: 3,
+                          }
+                        : undefined
+                    }
+                  >
+                    {span.text}
+                  </span>
+                ))}
+              </pre>
+            </div>
+          )}
+        </Field>
+
+        {proposals.length > 0 && (
+          <Field
+            label="Parameters"
+            hint="Found by reading your SQL — nothing was sent anywhere."
+            status={
+              <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+                {accepted.length} of {eligible.length} used
+              </span>
+            }
+          >
             <div
               style={{
                 border: '1px solid var(--border)', borderRadius: 8,
+                overflow: 'hidden',
                 display: 'flex', flexDirection: 'column',
               }}
             >
-              {proposals.map((proposal) => (
+              {proposals.map((proposal, index) => (
                 <Proposal
                   key={`${proposal.name}-${proposal.occurrence}`}
                   proposal={proposal}
+                  first={index === 0}
                   checked={accepted.includes(proposal.name)}
                   onToggle={() => toggle(proposal.name)}
                   onHover={setHovered}
                 />
               ))}
             </div>
-          </div>
+          </Field>
         )}
 
         <Field
@@ -1095,19 +1602,36 @@ export function TemplateEditor({
           />
         </Field>
 
-        <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12,
-                        color: 'var(--text-dim)' }}>
+        {/* An option with its consequence attached, rather than a bare
+            checkbox and a sentence the reader has to finish themselves. */}
+        <label
+          style={{
+            display: 'flex', gap: 10, alignItems: 'flex-start', cursor: 'pointer',
+            padding: '10px 12px', borderRadius: 8,
+            border: `1px solid ${benchmark ? 'var(--accent-border)' : 'var(--border)'}`,
+            background: benchmark ? 'var(--accent-bg)' : 'transparent',
+            transition: 'border-color .12s ease, background .12s ease',
+          }}
+        >
           <input
             type="checkbox"
             checked={benchmark}
             onChange={(e) => setBenchmark(e.target.checked)}
+            style={{ accentColor: 'var(--accent)', cursor: 'pointer', marginTop: 1 }}
           />
-          Use this to measure accuracy, not to answer questions
+          <span style={{ minWidth: 0 }}>
+            <span style={{ display: 'block', fontSize: 12.5, color: 'var(--text)' }}>
+              Use this to measure accuracy, not to answer questions
+            </span>
+            <span
+              style={{
+                display: 'block', fontSize: 11, color: 'var(--text-faint)', marginTop: 2,
+              }}
+            >
+              It joins the benchmark set. Questions are never answered from it.
+            </span>
+          </span>
         </label>
-
-        {ready.issue && (
-          <div style={{ fontSize: 12, color: 'var(--amber)' }}>{ready.issue}</div>
-        )}
       </div>
     </Modal>
   )
@@ -1121,21 +1645,32 @@ export function TemplateEditor({
  * it, and the curator occasionally knows better.
  */
 function Proposal({
-  proposal, checked, onToggle, onHover,
+  proposal, first, checked, onToggle, onHover,
 }: {
   proposal: ParamProposal
+  /** No rule above the first row: the container already draws that edge. */
+  first: boolean
   checked: boolean
   onToggle: () => void
   onHover: (name: string | null) => void
 }) {
+  const [hover, setHover] = useState(false)
   return (
     <label
-      onMouseEnter={() => onHover(proposal.name)}
-      onMouseLeave={() => onHover(null)}
+      onMouseEnter={() => {
+        setHover(true)
+        onHover(proposal.name)
+      }}
+      onMouseLeave={() => {
+        setHover(false)
+        onHover(null)
+      }}
       style={{
-        display: 'flex', gap: 10, alignItems: 'baseline', padding: '8px 10px',
-        borderTop: '1px solid var(--border)', fontSize: 12,
-        opacity: proposal.eligible ? 1 : 0.75,
+        display: 'flex', gap: 9, alignItems: 'center', padding: '9px 11px',
+        borderTop: first ? 'none' : '1px solid var(--border)', fontSize: 12,
+        cursor: proposal.eligible ? 'pointer' : 'default',
+        background: hover && proposal.eligible ? 'var(--panel-alt)' : 'transparent',
+        transition: 'background .12s ease',
       }}
     >
       <input
@@ -1143,15 +1678,41 @@ function Proposal({
         checked={checked}
         disabled={!proposal.eligible}
         onChange={onToggle}
+        style={{
+          accentColor: 'var(--accent)',
+          cursor: proposal.eligible ? 'pointer' : 'default',
+          flexShrink: 0,
+        }}
       />
-      <code style={{ ...CODE, background: 'var(--accent-bg)', color: 'var(--accent)',
-                     padding: '1px 5px', borderRadius: 3 }}>
-        {proposal.literal}
-      </code>
-      <span aria-hidden style={{ color: 'var(--text-faint)' }}>→</span>
-      <code style={{ ...CODE, background: 'none', padding: 0 }}>:{proposal.name}</code>
-      <span style={{ color: 'var(--text-faint)' }}>{proposal.type}</span>
-      <span style={{ flex: 1, color: 'var(--text-dim)', minWidth: 0 }}>
+      {/* The substitution, read left to right as one phrase: this literal
+          becomes this name. The arrow is the only thing between them. */}
+      <span
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0,
+          opacity: proposal.eligible ? 1 : 0.6,
+        }}
+      >
+        <code style={{ ...CODE, background: 'var(--accent-bg)', color: 'var(--accent)',
+                       padding: '1px 5px', borderRadius: 3, maxWidth: 160,
+                       overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {proposal.literal}
+        </code>
+        <Icon.ArrowRight size={12} stroke="var(--text-faint)" />
+        <code style={{ ...CODE, background: 'none', padding: 0,
+                       color: 'var(--text)' }}>
+          :{proposal.name}
+        </code>
+        <Chip small>{proposal.type}</Chip>
+      </span>
+      {/* A refusal is rendered rather than hidden, unticked and with its reason
+          beside it — showing the rejected candidate teaches the rule better
+          than hiding it, and the curator occasionally knows better. */}
+      <span
+        style={{
+          flex: 1, minWidth: 0, textAlign: 'right', fontSize: 11.5,
+          color: proposal.eligible ? 'var(--text-faint)' : 'var(--amber)',
+        }}
+      >
         {proposal.comment || proposal.reason}
       </span>
     </label>
@@ -1192,7 +1753,105 @@ function asRow(t: KnowledgeTemplate): TemplateRow {
     hit_count: t.hit_count,
     last_hit_at: t.last_hit_at,
     verified_at: t.verified_at,
+    conflicts_with: t.conflicts_with,
+    conflict_evidence: t.conflict_evidence,
   }
+}
+
+/**
+ * What a sweep did, in one sentence a curator can act on.
+ *
+ * Reported rather than left to a silent refresh: a button that appears to do
+ * nothing is a button people press twice and then stop trusting. The "was not
+ * allowed to look" case is named explicitly, because printing *"found no
+ * conflicts"* for a connection whose checks are switched off would be a lie.
+ */
+/** How this store is searched, and the one control that changes it.
+ *
+ * §4.10's quietest treatment, and deliberately so: **word matching is not a
+ * degraded state.** `pg_trgm` needs no provider, no key and no budget, and a
+ * connection that stays there has lost nothing. So the off state gets a plain
+ * sentence describing what the *other* mode adds rather than a warning about
+ * what this one lacks, and the button reads as an upgrade rather than a fix.
+ *
+ * The four tones come from `embeddingView`, which is where the reasoning is.
+ * The one worth naming here is `indexing`: a model can be pinned with vectors
+ * still missing, and calling that "on" would promise a behaviour the next
+ * question will not show.
+ */
+function MatchingMode({
+  status, canCurate, busy, onToggle,
+}: {
+  status: EmbeddingStatus
+  canCurate: boolean
+  busy: boolean
+  onToggle: (enabled: boolean) => void
+}) {
+  const view = embeddingView(status)
+  const tint: Record<string, string> = {
+    off: 'var(--text-faint)',
+    indexing: 'var(--text-muted)',
+    on: 'var(--accent)',
+    problem: 'var(--warn)',
+  }
+  return (
+    <div
+      style={{
+        display: 'flex', alignItems: 'flex-start', gap: 12,
+        padding: '8px 10px', borderRadius: 8,
+        border: '1px solid var(--border-subtle)',
+      }}
+    >
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12, color: tint[view.tone], fontWeight: 500 }}>
+          {view.label}
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 2 }}>
+          {view.detail}
+        </div>
+      </div>
+      {canCurate && (
+        <GhostButton onClick={() => onToggle(!status.enabled)} disabled={busy}>
+          {busy ? <Spinner size={13} /> : null}
+          {status.enabled ? 'Use word matching' : 'Use embedding search'}
+        </GhostButton>
+      )}
+    </div>
+  )
+}
+
+function sweepSummary(result: MaintenanceResult): string {
+  const parts: string[] = []
+  if (result.staled.length) {
+    parts.push(`${result.staled.length} stopped working`)
+  }
+  if (result.revived.length) {
+    parts.push(`${result.revived.length} started working again`)
+  }
+  if (result.conflicted.length) {
+    parts.push(`${result.conflicted.length} disagree with another template`)
+  }
+  if (result.cleared.length) {
+    parts.push(`${result.cleared.length} no longer disagree`)
+  }
+
+  const checked = `Checked ${result.checked} ${
+    result.checked === 1 ? 'template' : 'templates'
+  }`
+  if (!result.conflicts_checked) {
+    return `${checked}${parts.length ? `: ${parts.join(', ')}` : ' — nothing changed'}. ` +
+      'Conflict checks are switched off for this connection, so no statements were run.'
+  }
+  const skipped = result.skipped.length
+    ? ` ${result.skipped.length} pair${result.skipped.length === 1 ? '' : 's'} could ` +
+      'not be checked — a parameter had no values to try.'
+    : ''
+  if (!parts.length) {
+    return `${checked} and ${result.pairs_executed} pair${
+      result.pairs_executed === 1 ? '' : 's'
+    }. Nothing changed.${skipped}`
+  }
+  return `${checked}: ${parts.join(', ')}.${skipped}`
 }
 
 function messageOf(err: unknown): string {

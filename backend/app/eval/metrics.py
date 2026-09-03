@@ -10,24 +10,33 @@ tested without a database or a model:
 5. latency p50/p95 (llm/validate/db), tokens, cost per question
 
 `exact_match` is computed as a diagnostic only and is never a gate.
+
+**The result-set comparator lives in `app/knowledge/compare.py`, not here.**
+It was written here and moved down a layer in Phase 4, because the conflict
+checker and the in-product benchmark need exactly these tolerances and this
+package is offline-only by contract — `app.eval -> app.knowledge` is a
+permitted direction, and nothing on the request path gained an import of
+`app.eval`. It is re-exported below so every existing caller and test keeps
+working against one implementation.
 """
 from __future__ import annotations
 
-import math
 import re
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
-Row = list[Any]
-# Relative tolerance soaks up float noise on large magnitudes (a million-scale
-# SUM summed in a different order). The absolute tolerance matches the golden
-# set's own precision: golds report figures with round(x, 2), so any value
-# within half a cent of the gold is the *same* answer at the precision the gold
-# states. Without this, a correct `AVG(x)` (957.416) is scored wrong against a
-# gold `round(sum/count, 2)` (957.42) — a presentation gap, not an error.
-NUMERIC_REL_TOLERANCE = 1e-6
-NUMERIC_ABS_TOLERANCE = 5e-3
+# Re-exported, not re-implemented. Every existing caller — `runner.py`, and
+# `tests/eval/test_metrics.py`, which is where the tolerances are pinned —
+# keeps importing them from here.
+from app.knowledge.compare import (  # noqa: F401
+    NUMERIC_ABS_TOLERANCE,
+    NUMERIC_REL_TOLERANCE,
+    Row,
+    result_sets_match,
+    rows_equal,
+    values_equal,
+)
 
 # Outcome labels, most-desirable first. `MATCH` is the only success.
 OUTCOME_MATCH = "MATCH"
@@ -36,73 +45,6 @@ OUTCOME_EXEC_FAILED = "EXEC_FAILED"    # valid SQL the database still rejected
 OUTCOME_VALIDATION_FAILED = "VALIDATION_FAILED"  # guard rejected every attempt
 OUTCOME_NO_SQL = "NO_SQL"              # routed away from SQL (metadata/chitchat/…)
 OUTCOME_ERROR = "ERROR"                # pipeline/gold crash
-
-
-# ── value & result-set comparison (execution accuracy) ──────────────────────
-
-
-def _as_number(value: Any) -> float | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        try:
-            return float(value)
-        except ValueError:
-            return None
-    # Decimal, date, etc. — try str->float, else not numeric.
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def values_equal(
-    a: Any,
-    b: Any,
-    rel_tol: float = NUMERIC_REL_TOLERANCE,
-    abs_tol: float = NUMERIC_ABS_TOLERANCE,
-) -> bool:
-    if a is None or b is None:
-        return a is None and b is None
-    na, nb = _as_number(a), _as_number(b)
-    if na is not None and nb is not None:
-        return math.isclose(na, nb, rel_tol=rel_tol, abs_tol=abs_tol)
-    return str(a).strip() == str(b).strip()
-
-
-def _rows_equal(a: Row, b: Row) -> bool:
-    return len(a) == len(b) and all(values_equal(x, y) for x, y in zip(a, b, strict=False))
-
-
-def result_sets_match(gold: list[Row], candidate: list[Row], equivalence: str) -> bool:
-    """Execution accuracy: compare by position within each row.
-
-    * `ordered_rows` — row order is part of the answer (rankings, time series).
-    * everything else — unordered multiset of rows.
-
-    Column names are ignored; the match is positional and tolerance-aware (see
-    the tolerance constants). The unordered case is a greedy multiset match
-    rather than a hash on rounded keys, so two rows equal *within tolerance*
-    match even when they would round to different keys at a bucket boundary.
-    Result sets here are small, so the O(n^2) match is not a concern. Two
-    correct queries are rarely string-identical, which is why string equality
-    is never the gate.
-    """
-    if len(gold) != len(candidate):
-        return False
-    if equivalence == "ordered_rows":
-        return all(_rows_equal(g, c) for g, c in zip(gold, candidate, strict=False))
-    remaining = list(candidate)
-    for g in gold:
-        for i, c in enumerate(remaining):
-            if _rows_equal(g, c):
-                remaining.pop(i)
-                break
-        else:
-            return False
-    return True
 
 
 _WS = re.compile(r"\s+")
@@ -180,6 +122,25 @@ class RecordOutcome:
     repair_count: int = 0
     succeeded_on_attempt: int | None = None
 
+    # ── the templates arm (Phase 5) ─────────────────────────────────────
+    #: How many taught questions reached the generate prompt as examples. Zero
+    #: on the templates-off arm and on every question the matcher found nothing
+    #: for, which is what makes the split reportable: the questions that were
+    #: shown examples and the questions that were not are different populations
+    #: and only one of them can move for a reason.
+    examples_offered: int = 0
+    #: True when the run was *answered* from a stored template rather than
+    #: generated. Recorded because it must be near zero for the arm's accuracy
+    #: number to be about the prompt at all — an answer that came from the
+    #: store is not a measurement of few-shot injection.
+    short_circuited: bool = False
+    #: Which matcher produced the candidates this run saw — `LEXICAL`,
+    #: `EMBEDDING`, or empty when the store was not consulted. Phase 7's
+    #: `FallbackMatcher` means an embedding arm still answers lexically
+    #: whenever the embedding half found nothing, so the arm's *label* and what
+    #: actually retrieved are different facts and the report prints the second.
+    matcher: str = ""
+
     llm_ms: int = 0
     validate_ms: int = 0
     db_ms: int = 0
@@ -250,6 +211,16 @@ class SuiteReport:
     cost_by_model: dict[str, float]
     # diagnostic, never a gate
     exact_match_rate: float
+    # 6. the templates arm (Phase 5). All zero on every other arm, so a
+    #    scorecard from before this existed reads the same way.
+    examples_offered_rate: float
+    examples_per_question: float
+    short_circuit_rate: float
+    # 7. the embedding matcher (Phase 7). `embedding_share` is the fraction of
+    #    questions the embedding half actually retrieved for — not the fraction
+    #    the arm was launched with. On a lexical arm it is 0.0 and the whole
+    #    line is suppressed.
+    embedding_share: float
     # breakdowns
     per_tag: list[TagBreakdown]
     outcome_counts: dict[str, int]
@@ -339,6 +310,18 @@ def aggregate(outcomes: list[RecordOutcome]) -> SuiteReport:
         cost_per_question=round(sum(costed) / len(costed), 6) if costed else None,
         cost_by_model=cost_by_model,
         exact_match_rate=round(_rate(sum(o.exact_match for o in outcomes), n), 4),
+        examples_offered_rate=round(
+            _rate(sum(1 for o in outcomes if o.examples_offered), n), 4
+        ),
+        examples_per_question=round(
+            sum(o.examples_offered for o in outcomes) / n if n else 0.0, 2
+        ),
+        short_circuit_rate=round(
+            _rate(sum(1 for o in outcomes if o.short_circuited), n), 4
+        ),
+        embedding_share=round(
+            _rate(sum(1 for o in outcomes if o.matcher == "EMBEDDING"), n), 4
+        ),
         per_tag=per_tag,
         outcome_counts=dict(Counter(o.outcome for o in outcomes).most_common()),
     )
@@ -399,6 +382,29 @@ def format_report(report: SuiteReport, *, title: str = "") -> str:
         by = "  ".join(f"{m}=${c:.5f}" for m, c in report.cost_by_model.items())
         lines.append(f"   cost/q by model: {by}")
     lines.append(f"   exact_match (diagnostic, not a gate): {pct(report.exact_match_rate)}")
+    if report.examples_offered_rate or report.short_circuit_rate:
+        # Only on the templates arm. Printed beside the headline because an
+        # accuracy number from this arm is uninterpretable without knowing how
+        # many questions were actually shown an example — and whether any were
+        # *answered* from the store rather than generated.
+        lines.append(
+            f"6. templates: {pct(report.examples_offered_rate)} of questions were "
+            f"shown an example ({report.examples_per_question:.2f} per question); "
+            f"short-circuited {pct(report.short_circuit_rate)}"
+        )
+        # Phase 7's two numbers, printed on one line and in this order on
+        # purpose. §3.8: FK-neighbour expansion once lifted retrieval recall
+        # 70% -> 86% with **flat** execution accuracy, and the lesson is that a
+        # retrieval improvement is not an answer improvement until the second
+        # number moves too. Printing them apart is how somebody quotes the
+        # first one alone.
+        lines.append(
+            f"7. matcher: {pct(report.embedding_share)} of questions were "
+            f"retrieved by embedding "
+            f"(the rest fell back to lexical) — against execution accuracy "
+            f"{pct(report.execution_accuracy)}. Retrieval moving is not "
+            f"accuracy moving; compare BOTH against the lexical arm."
+        )
     lines.append("")
     lines.append("per-tag breakdown (exec-accuracy | retrieval-recall | n):")
     for tb in sorted(report.per_tag, key=lambda t: t.execution_accuracy):

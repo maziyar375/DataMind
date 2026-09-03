@@ -42,6 +42,8 @@ const connection = (id: string, name: string, engine = 'postgres'): Connection =
   semantic_layer_enabled: true,
   clarify_enabled: true,
   include_db_comments: true,
+  conflict_checks_enabled: true,
+  knowledge_examples_enabled: false,
   status: 'READY',
   readonly_confirmed: true,
   server_version: null,

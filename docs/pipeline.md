@@ -324,9 +324,13 @@ connection's disclosure policy like every other prompt — see §3.9.
 ### 2. `match` — has somebody already answered this?
 
 > Phase 2 of [learning-loop-plan.md](learning-loop-plan.md). **The first node
-> that can change an answer — and it does so without changing a byte of the
-> prompt.** `PROMPT_VERSION` is still `v8`; if it moved, something in this node
-> was built wrong.
+> that can change an answer — and on the short-circuit path it does so without
+> changing a byte of the prompt.** Phase 5 gave this node a second job: on a
+> *miss*, near matches are collected onto `state.examples` and `retrieve`
+> carries them into `RetrievedContext.examples`, which is where
+> `PROMPT_VERSION` v9's `{examples}` slot gets its content. That half is off
+> unless `connections.knowledge_examples_enabled` says otherwise, and off
+> renders the v8 bytes exactly.
 
 No model call. `LexicalMatcher` normalises the question with the same function
 the store used for its own, scores it with trigram similarity, and returns the
@@ -922,7 +926,7 @@ scrolls away. The step trail keeps whatever succeeded before it.
 
 ## 5. Prompt versioning
 
-`PROMPT_VERSION` (currently **v8**) is recorded on every run.
+`PROMPT_VERSION` (currently **v9**) is recorded on every run.
 [prompts/__init__.py](../backend/app/pipeline/prompts/__init__.py) is the only
 place run prompts live — except the semantic-layer *generation* prompts, which
 live in `app/semantic/prompts.py` under `SEMANTIC_PROMPT_VERSION`, because
@@ -935,7 +939,7 @@ the pipeline cannot be versioned by it:
 
 | Constant | Lives in | Recorded on | Covers |
 |---|---|---|---|
-| `PROMPT_VERSION` = **v8** | `app/pipeline/prompts/` | `runs.prompt_version` | route, describe, clarify, generate/review/repair, answer, chart |
+| `PROMPT_VERSION` = **v9** | `app/pipeline/prompts/` | `runs.prompt_version` | route, describe, clarify, generate/review/repair, answer, chart |
 | `SEMANTIC_PROMPT_VERSION` | `app/semantic/prompts.py` | the generated layer | overview, per-table, glossary |
 | `REPORT_PROMPT_VERSION` = **r4** | `app/reports/prompts.py` | `report_runs.prompt_version` | outline, section prose, executive summary |
 
@@ -957,14 +961,34 @@ replaced another would be found only by reading a prompt nobody prints.
 **Move `PROMPT_VERSION` when the bytes the SQL-producing path sends change.**
 That's why v3 → v4 for the semantic block, v4 → v5 for the shared rules and
 history on repairs, v5 → v6 for `ROUTE_SYSTEM_WITH_HISTORY` plus the disclosure
-filter over the history, v6 → v7 for the runaway-reply fix (§3.5), and v7 → v8
+filter over the history, v6 → v7 for the runaway-reply fix (§3.5), v7 → v8
 for the semantic block's trim — no wording changed there, but the bytes that
 reach the model on a connection with a layer did, which is the rule as written
-— and why clarify, caveats, chart and `DESCRIBE_SYSTEM` changes *don't* move it,
+— and v8 → v9 for the `{examples}` slot (below) — and why clarify, caveats,
+chart and `DESCRIBE_SYSTEM` changes *don't* move it,
 since
 the eval scores generated SQL and none of those touch it. `DESCRIBE_SYSTEM` is
 the clearest case of the rule: the question it answers never produces SQL at
 all, so no suite question is measured through it.
+
+v9 is the same shape and worth the same care. The slot is written
+`{schema}\n{examples}\n{history}` and `RetrievedContext.render_examples`
+returns the empty string when there is nothing to show, so:
+
+| connection | v9 vs v8 |
+|---|---|
+| no templates, or `knowledge_examples_enabled` off (the default) | **byte-identical** — the slot collapses to the newline that was already there |
+| examples on, nothing above `FEW_SHOT_THRESHOLD` | byte-identical, for the same reason |
+| examples on, near matches found | the generate prompt gains up to four `Q:`/`A:` pairs, **last**, after the schema and the semantic layer |
+| examples on, a `MODEL_DERIVED` template, `NONE`/`AGGREGATE` policy | withheld — a template's literals are a rung of the disclosure ladder, gated at render time |
+
+The version moves anyway, on the rule as written: two runs either side are
+otherwise indistinguishable from the outside, and the difference is whether the
+connection's taught questions were in the prompt.
+`tests/unit/test_knowledge_few_shot.py` asserts the byte-identity, and
+`--templates on|off` on the eval runner is how the two numbers get reported.
+**Off is the default until [eval.md §6.1](eval.md) has both of them**: this is
+the one change in the learning loop that can lower accuracy.
 
 v6 is worth reading closely before you compare numbers across it, because it
 moves for two changes that are each conditional:
