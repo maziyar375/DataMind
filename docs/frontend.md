@@ -15,15 +15,38 @@ which is dark-only. The light palette was designed afterwards against it.
 
 ## 1. The shell
 
-[`main.tsx`](../frontend/src/main.tsx) mounts
+[`main.tsx`](../frontend/src/main.tsx) mounts a **data router**
+(`createBrowserRouter`) whose one catch-all route renders
 [`App.tsx`](../frontend/src/App.tsx), which is the whole shell: an auth gate, a
 232px rail, and one page filling the rest.
 
-**There is no router.** `react-router-dom` is a dependency and is imported
-nowhere. Navigation is the `View` union in `App.tsx` and one `useState`; the
-rail sets it and the shell renders a branch. Adding a section means a member of
-that union, a rail entry and a branch — not a `<Route>`. The signed-out side
-has no router either, which is why About is reached there through a boolean.
+**Every screen has a URL.** The rail is `NAV` in `App.tsx` — a path, a label
+and a glyph each — and the route table beside it gives each section a `/*`
+path: `/chat` · `/dashboards` · `/reports` · `/sources` · `/providers` ·
+`/users` (admin only; anyone else falls through) · `/about`, and anything
+unrecognised redirects to `/chat`. Adding a section means a `NAV` entry and a
+`<Route>`.
+
+**A section owns the routes under it, and reads them with `useMatch` rather
+than nesting a second `<Routes>`.** `/chat` → `/chat/:conversationId`,
+`/dashboards/:id`, `/reports/:id` and its `/history` and `/runs/:runId`,
+`/sources/:id/:tab` (`settings|schema|semantic|knowledge`, with `/sources/new`
+for the create form), `/providers/:id`. The switch is inside the page because
+the page must **stay mounted** across it: remounting a section on every open
+and close would drop a chat's live stream and re-read a list the reader is
+looking at. A `:id` that is not in a list the page has already loaded is
+fetched on its own — a document reached by its own link has no index behind it.
+
+`createBrowserRouter` rather than `<BrowserRouter>` for one reason:
+`useBlocker` exists only on a data router, and it is what makes the
+unsaved-work guard possible. Nothing here uses loaders or actions.
+
+> **Wherever this is served, unknown paths must return `index.html`.** The Vite
+> dev server and `vite preview` both do; a static host has to be told.
+
+The signed-out side is routed too: `/about` is the credits page from either
+side of the sign-in wall, and a deep link survives signing in — the location
+does not change, only the gate in front of it.
 
 The rail is **one flat list in the order the product is used**, not grouped:
 captions over six items are furniture, and a split invites a "which half is
@@ -120,6 +143,18 @@ component.** Two editors are two chances to get one of them wrong.
 **Two screens never poll a hidden tab.** The dashboard scheduler and the report
 generation poll both pause on `document.hidden`. A forgotten background tab is
 how a feature becomes the reason someone's production database is slow.
+
+**What a page may ask of the shell is one module**
+([`shell.tsx`](../frontend/src/shell.tsx)), and both entries in it exist
+because a page was reaching past its own edge:
+
+| Hook | For |
+| --- | --- |
+| `useThemeOverride(theme \| null)` | a dashboard pinned to DARK or LIGHT. `App` resolves `override ?? the user's own choice` and is the **only** caller of `applyTheme`, so a rail toggle made during an override is still there when it clears |
+| `useUnsavedWork(key, reason \| null)` | a dirty form. One `useBlocker` in the shell stops every navigation out of one — the rail, a row in the master column, browser Back — and asks. The hook returns a release, because a form that has just saved itself and is navigating as part of that save must let go before it goes |
+
+Both are *requests*: the shell stays the single owner, so two components can
+never disagree about what the theme is or about whether it is safe to leave.
 
 ---
 

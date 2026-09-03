@@ -443,14 +443,14 @@ order unless noted.
 - [x] **F12** `Modal`: initial focus, focus trap, focus restore, `aria-labelledby`
 
 ## Phase 1 — Foundation
-- [ ] **F1** `BrowserRouter` mounted; `View` union removed
-- [ ] **F1** Routes for chat, dashboards, reports, sources, providers, users
-- [ ] **F1** Index/detail state converted to nested routes (all 4 pages)
-- [ ] **F1** Unknown paths redirect to `/chat`; refresh preserves the screen
-- [ ] **F9** Theme override lifted into shell state
-- [ ] **F9** `applyTheme` has one call site outside `theme/tokens.ts`
-- [ ] **F14** Route-level guard blocks navigation away from a dirty form
-- [ ] **F14** Confirm dialog: stay / discard, wired to the connection form
+- [x] **F1** `BrowserRouter` mounted; `View` union removed
+- [x] **F1** Routes for chat, dashboards, reports, sources, providers, users
+- [x] **F1** Index/detail state converted to nested routes (all 4 pages)
+- [x] **F1** Unknown paths redirect to `/chat`; refresh preserves the screen
+- [x] **F9** Theme override lifted into shell state
+- [x] **F9** `applyTheme` has one call site outside `theme/tokens.ts`
+- [x] **F14** Route-level guard blocks navigation away from a dirty form
+- [x] **F14** Confirm dialog: stay / discard, wired to the connection form
 
 ## Phase 2 — The core loop
 - [ ] **F10** Tile editor converted from `Modal` to drawer over the grid

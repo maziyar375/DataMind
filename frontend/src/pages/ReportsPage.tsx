@@ -18,6 +18,7 @@
  * accepting the choice and apologising after the fact (§7).
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useMatch, useNavigate } from 'react-router-dom'
 
 import { ApiError, connections as connectionsApi, llmConfigs as modelsApi, reports as api } from '../api/client'
 import type { Connection, LlmConfig, Report, ReportSummary } from '../api/types'
@@ -60,15 +61,19 @@ function sortCards(cards: ReportSummary[], key: SortKey): ReportSummary[] {
 }
 
 export default function ReportsPage() {
-  const [openId, setOpenId] = useState<string | null>(null)
-  // Which of the report's runs is being read, if any. The outline and the
-  // document are two views of one open report, not two pages: Generate goes
-  // from the first to the second, and Back comes home.
-  const [runId, setRunId] = useState<string | null>(null)
-  // …and the third view: every generation this report has produced. It is a
-  // view of the open report rather than a page of its own, so it clears with
-  // the report the way the run does.
-  const [history, setHistory] = useState(false)
+  // Three views of one open report, and each has its own URL. The outline is
+  // the report itself; a run is a document it produced, which is the thing
+  // someone is sent a link to; history is the list of them. Read here from the
+  // three patterns rather than switched by nested routes, so the section is
+  // not remounted on the way between them — see the route table in `App.tsx`.
+  const outline = useMatch('/reports/:id')
+  const historyRoute = useMatch('/reports/:id/history')
+  const runRoute = useMatch('/reports/:id/runs/:runId')
+  const openId = outline?.params.id ?? historyRoute?.params.id ?? runRoute?.params.id ?? null
+  const runId = runRoute?.params.runId ?? null
+  const history = historyRoute !== null
+  const navigate = useNavigate()
+
   // The index's own copy of the list, held here so an edit made inside the
   // editor is spliced into the card the user comes back to rather than costing
   // a re-read of every report.
@@ -76,11 +81,28 @@ export default function ReportsPage() {
 
   const card = openId ? (cards?.find((entry) => entry.id === openId) ?? null) : null
 
+  // A document reached by its own link — sent to someone, or a refresh — has
+  // no index behind it, and the card is what names the report and says which
+  // database it describes. Read that one report rather than the whole list:
+  // the index will fetch the rest if the reader ever goes there.
+  useEffect(() => {
+    if (!openId || card) return
+    let cancelled = false
+    api
+      .get(openId)
+      .then((report) => {
+        if (!cancelled) setCards((current) => [...(current ?? []), toCard(report)])
+      })
+      // The outline and the run viewer each report their own failure to load;
+      // a missing card costs a name, not the screen.
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [openId, card])
+
   /** Home is the outline: it is the report, and the other two are views of it. */
-  function toOutline() {
-    setRunId(null)
-    setHistory(false)
-  }
+  const toOutline = () => navigate(`/reports/${openId}`)
 
   if (openId && runId) {
     return (
@@ -92,10 +114,7 @@ export default function ReportsPage() {
         report={card}
         reportName={card?.name ?? 'Report'}
         onBack={toOutline}
-        onHistory={() => {
-          setRunId(null)
-          setHistory(true)
-        }}
+        onHistory={() => navigate(`/reports/${openId}/history`)}
       />
     )
   }
@@ -106,10 +125,7 @@ export default function ReportsPage() {
         reportId={openId}
         reportName={card?.name ?? 'Report'}
         currentRunId={runId}
-        onOpenRun={(id) => {
-          setHistory(false)
-          setRunId(id)
-        }}
+        onOpenRun={(id) => navigate(`/reports/${openId}/runs/${id}`)}
         onBack={toOutline}
       />
     )
@@ -118,9 +134,9 @@ export default function ReportsPage() {
   return openId ? (
     <ReportOutlineEditor
       reportId={openId}
-      onBack={() => setOpenId(null)}
-      onOpenRun={setRunId}
-      onHistory={() => setHistory(true)}
+      onBack={() => navigate('/reports')}
+      onOpenRun={(id) => navigate(`/reports/${openId}/runs/${id}`)}
+      onHistory={() => navigate(`/reports/${openId}/history`)}
       onChanged={(report) =>
         setCards((current) =>
           (current ?? []).map((card) => (card.id === report.id ? toCard(report) : card)),
@@ -131,12 +147,8 @@ export default function ReportsPage() {
     <ReportsIndex
       cards={cards}
       setCards={setCards}
-      onOpen={(id) => {
-        // A report opens on its outline, whatever view the last one was left in.
-        setRunId(null)
-        setHistory(false)
-        setOpenId(id)
-      }}
+      // A report opens on its outline, whatever view the last one was left in.
+      onOpen={(id) => navigate(`/reports/${id}`)}
     />
   )
 }

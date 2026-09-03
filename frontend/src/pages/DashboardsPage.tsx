@@ -11,9 +11,10 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Layout } from 'react-grid-layout'
+import { useMatch, useNavigate } from 'react-router-dom'
 
 import { ApiError, dashboards as api } from '../api/client'
-import { applyTheme, type ThemeName } from '../theme/tokens'
+import { useThemeOverride } from '../shell'
 import type { Dashboard, DashboardSummary, DashboardTile } from '../api/types'
 import {
   DashboardCard, DashboardGrid, DashboardRow, DashboardSettings, STACK_BELOW_PX,
@@ -27,12 +28,17 @@ import {
 } from '../components/ui'
 
 export default function DashboardsPage() {
-  const [openId, setOpenId] = useState<string | null>(null)
+  // The open dashboard is the URL, not state: a board exists to be sent to
+  // someone, and `/dashboards/:id` is what they receive. The switch stays here
+  // rather than becoming two routes so the section is not remounted — see the
+  // route table in `App.tsx`.
+  const openId = useMatch('/dashboards/:id')?.params.id ?? null
+  const navigate = useNavigate()
 
   return openId ? (
-    <DashboardView id={openId} onBack={() => setOpenId(null)} />
+    <DashboardView id={openId} onBack={() => navigate('/dashboards')} />
   ) : (
-    <DashboardIndex onOpen={setOpenId} />
+    <DashboardIndex onOpen={(id) => navigate(`/dashboards/${id}`)} />
   )
 }
 
@@ -713,15 +719,15 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
   // A dashboard pinned to DARK or LIGHT forces the app theme while it is
   // open, and hands it back on the way out. Storing the preference and then
   // ignoring it would make the setting a decoration.
+  //
+  // Asked of the shell rather than written here: this used to capture the
+  // theme at mount and restore *that* on the way out, which was already wrong
+  // if the rail had been toggled in between. The shell resolves
+  // `override ?? the user's choice`, so there is nothing to capture.
   const override = dashboard?.theme_override
-  useEffect(() => {
-    if (!override || override === 'INHERIT') return
-    const previous = (document.documentElement.getAttribute('data-theme') as ThemeName) || 'dark'
-    const wanted = override === 'DARK' ? 'dark' : 'light'
-    if (previous === wanted) return
-    applyTheme(wanted)
-    return () => applyTheme(previous)
-  }, [override])
+  useThemeOverride(
+    override === 'DARK' ? 'dark' : override === 'LIGHT' ? 'light' : null,
+  )
 
   // react-grid-layout needs a pixel width. Measured rather than guessed so the
   // grid reflows when the settings drawer opens or the window changes.

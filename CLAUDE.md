@@ -391,10 +391,20 @@ below is held up by the code agreeing with itself. Breaking one costs nothing
 at commit time and shows up as drift a release later. Full tour:
 [docs/frontend.md](docs/frontend.md).
 
-- **There is no router.** `react-router-dom` is in `package.json` and is
-  imported *nowhere*. Navigation is the `View` union in `App.tsx` plus one
-  `useState`; the rail sets it, and the shell renders one page. A new section
-  is a member of that union, a rail entry, and a branch — not a `<Route>`.
+- **Every screen has a URL, and the router is a *data* router.** `main.tsx`
+  mounts `createBrowserRouter` — not `<BrowserRouter>` — because `useBlocker`
+  exists only on that one, and it is what stops a navigation out of a dirty
+  form. `App.tsx` holds the rail (`NAV`) and the route table; each section owns
+  a `/*` path and reads its own sub-routes with `useMatch` rather than nesting
+  a second `<Routes>`, so the section stays mounted across open and close (a
+  remount would drop a chat's live stream). A new section is a `NAV` entry and
+  a `<Route>`. Unknown paths redirect to `/chat`, and **whatever serves the
+  build must return `index.html` for unknown paths.**
+- **A page asks the shell for what is not its own.** `shell.tsx`:
+  `useThemeOverride` (a dashboard pinned to a theme — `App` resolves
+  `override ?? the user's choice` and is the only caller of `applyTheme`) and
+  `useUnsavedWork` (a dirty form, which the shell's one blocker asks about
+  before letting a navigation through).
 - **Styling is two places, and which one is not a preference.** Layout,
   spacing and one-off values are inline `style={}` in the JSX. Anything a
   style attribute cannot express — `:hover`, `:focus-visible`, selection,

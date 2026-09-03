@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Navigate, Route, Routes, useBlocker, useLocation, useNavigate,
+  type BlockerFunction,
+} from 'react-router-dom'
 import { auth, getAccessToken, onAuthChange } from './api/client'
 import type { User } from './api/types'
-import { Icon, Logo, initialOf } from './components/ui'
+import { DangerButton, GhostButton, Icon, Logo, Modal, initialOf } from './components/ui'
 import AboutPage from './pages/AboutPage'
 import ChatPage from './pages/ChatPage'
 import DashboardsPage from './pages/DashboardsPage'
@@ -10,28 +14,82 @@ import LlmProvidersPage from './pages/LlmProvidersPage'
 import LoginPage from './pages/LoginPage'
 import ReportsPage from './pages/ReportsPage'
 import UsersPage from './pages/UsersPage'
+import { ShellProvider, type Shell } from './shell'
 import { applyTheme, type ThemeName } from './theme/tokens'
 
-export type View =
-  | 'chat' | 'dashboards' | 'reports' | 'connections' | 'settings' | 'users' | 'about'
+/**
+ * The rail's destinations, in the order the product is used.
+ *
+ * The paths are the product's vocabulary now that there is a router, so they
+ * are written once, here, and both the rail and the route table read them.
+ * `/providers` rather than `/settings` for the model providers: it says what
+ * the page is, and it leaves `/settings` free for the account screen.
+ */
+const NAV = [
+  { path: '/chat', label: 'Chat', icon: <Icon.Chat /> },
+  { path: '/dashboards', label: 'Dashboards', icon: <Icon.Grid /> },
+  { path: '/reports', label: 'Reports', icon: <Icon.Doc /> },
+  { path: '/sources', label: 'Data sources', icon: <Icon.Database /> },
+  { path: '/providers', label: 'LLM providers', icon: <Icon.Sparkle /> },
+  { path: '/users', label: 'Users', icon: <Icon.Users />, adminOnly: true },
+]
+
+/** Does `pathname` sit inside the section rooted at `path`? */
+function isInSection(pathname: string, path: string): boolean {
+  return pathname === path || pathname.startsWith(`${path}/`)
+}
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null)
   const [booting, setBooting] = useState(true)
-  const [view, setView] = useState<View>('chat')
-  // The one signed-out destination other than the form itself. It is local
-  // state rather than a route because the signed-out shell has no router: the
-  // whole product is one view swap deep, and About is not worth being the
-  // exception that introduces a second mechanism.
-  const [aboutSignedOut, setAboutSignedOut] = useState(false)
+  const location = useLocation()
+  const navigate = useNavigate()
   const [theme, setTheme] = useState<ThemeName>(
     () => (localStorage.getItem('raymand.theme') as ThemeName) || 'dark',
   )
+  // A surface — today only a dashboard pinned to DARK or LIGHT — holding the
+  // theme while it is open. The shell resolves `override ?? theme` and is the
+  // only caller of `applyTheme`, so nothing can restore a stale value it
+  // captured at mount while the rail was toggled behind its back.
+  const [themeOverride, setThemeOverride] = useState<ThemeName | null>(null)
 
   useEffect(() => {
-    applyTheme(theme)
+    applyTheme(themeOverride ?? theme)
+  }, [theme, themeOverride])
+
+  // The user's own choice is what persists. An override belongs to the
+  // surface that asked for it and dies with it.
+  useEffect(() => {
     localStorage.setItem('raymand.theme', theme)
   }, [theme])
+
+  // Which surfaces are holding unsaved work, and what would be lost. A ref
+  // rather than state: the blocker reads it at navigation time, and a form
+  // going dirty is not a reason to re-render the shell around it.
+  const unsaved = useRef(new Map<string, string>())
+  const shell = useMemo<Shell>(
+    () => ({
+      requestThemeOverride: setThemeOverride,
+      setUnsaved: (key, reason) => {
+        if (reason) unsaved.current.set(key, reason)
+        else unsaved.current.delete(key)
+      },
+    }),
+    [],
+  )
+
+  // One guard for the whole app rather than a check per page: every way out of
+  // a dirty form — the rail, a row in the master column, browser Back — is a
+  // navigation, and this is where they all pass through.
+  const shouldBlock = useCallback<BlockerFunction>(
+    ({ currentLocation, nextLocation }) =>
+      unsaved.current.size > 0 && currentLocation.pathname !== nextLocation.pathname,
+    [],
+  )
+  const blocker = useBlocker(shouldBlock)
+  const blockedReason = blocker.state === 'blocked'
+    ? [...unsaved.current.values()][0]
+    : null
 
   // A live refresh cookie means the user is still signed in across reloads.
   useEffect(() => {
@@ -64,9 +122,8 @@ export default function App() {
   const handleLogout = useCallback(async () => {
     await auth.logout()
     setUser(null)
-    setView('chat')
-    setAboutSignedOut(false)
-  }, [])
+    navigate('/chat')
+  }, [navigate])
 
   if (booting) {
     return (
@@ -88,61 +145,103 @@ export default function App() {
     )
   }
 
+  // The signed-out side has one destination other than the form itself, and
+  // it is the same URL it has when signed in — the credits page is reachable
+  // from both sides of the wall and should be linkable from either.
   if (!user) {
-    return aboutSignedOut
-      ? <AboutPage onBack={() => setAboutSignedOut(false)} />
-      : <LoginPage onSignedIn={setUser} onAbout={() => setAboutSignedOut(true)} />
+    return location.pathname === '/about'
+      ? <AboutPage onBack={() => navigate('/')} />
+      : <LoginPage onSignedIn={setUser} onAbout={() => navigate('/about')} />
   }
 
   return (
-    <div
-      className="rm-app"
-      style={{
-        position: 'relative',
-        height: '100vh',
-        width: '100%',
-        background: 'var(--bg)',
-        color: 'var(--text)',
-        fontFamily: 'Inter, system-ui, sans-serif',
-        overflow: 'hidden',
-      }}
-    >
-      {/* The first thing in the tab order, and invisible until it has focus:
-          the rail is six destinations plus a footer group, and a keyboard user
-          should not have to walk them to reach the page they opened. */}
-      <a className="rm-skip" href="#main">Skip to content</a>
-      {/* The two shell boxes carry classes so the print stylesheet can reach
-          them: both are viewport-sized scroll containers, and on paper there
-          is no viewport to be sized to — see `@media print`. The inner one is
-          also the document's <main>, which is what the skip link targets. */}
-      <div className="rm-app-row" style={{ display: 'flex', height: '100vh', width: '100%' }}>
-        <Sidebar
-          user={user}
-          view={view}
-          onNavigate={setView}
-          theme={theme}
-          onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-          onLogout={handleLogout}
-        />
-        <main
-          id="main"
-          // Not focusable in the tab order — only as the skip link's target,
-          // which is how the focus actually lands inside the page rather than
-          // merely scrolling it there.
-          tabIndex={-1}
-          className="rm-app-view"
-          style={{ flex: 1, display: 'flex', minWidth: 0 }}
-        >
-          {view === 'chat' && <ChatPage />}
-          {view === 'dashboards' && <DashboardsPage />}
-          {view === 'reports' && <ReportsPage />}
-          {view === 'connections' && <DataSourcesPage />}
-          {view === 'settings' && <LlmProvidersPage />}
-          {view === 'users' && <UsersPage currentUser={user} />}
-          {view === 'about' && <AboutPage />}
-        </main>
+    <ShellProvider value={shell}>
+      <div
+        className="rm-app"
+        style={{
+          position: 'relative',
+          height: '100vh',
+          width: '100%',
+          background: 'var(--bg)',
+          color: 'var(--text)',
+          fontFamily: 'Inter, system-ui, sans-serif',
+          overflow: 'hidden',
+        }}
+      >
+        {/* The first thing in the tab order, and invisible until it has focus:
+            the rail is six destinations plus a footer group, and a keyboard user
+            should not have to walk them to reach the page they opened. */}
+        <a className="rm-skip" href="#main">Skip to content</a>
+        {/* The two shell boxes carry classes so the print stylesheet can reach
+            them: both are viewport-sized scroll containers, and on paper there
+            is no viewport to be sized to — see `@media print`. The inner one is
+            also the document's <main>, which is what the skip link targets. */}
+        <div className="rm-app-row" style={{ display: 'flex', height: '100vh', width: '100%' }}>
+          <Sidebar
+            user={user}
+            pathname={location.pathname}
+            onNavigate={navigate}
+            theme={theme}
+            onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            onLogout={handleLogout}
+          />
+          <main
+            id="main"
+            // Not focusable in the tab order — only as the skip link's target,
+            // which is how the focus actually lands inside the page rather than
+            // merely scrolling it there.
+            tabIndex={-1}
+            className="rm-app-view"
+            style={{ flex: 1, display: 'flex', minWidth: 0 }}
+          >
+            {/* Each section owns the routes under it and stays mounted across
+                them (`/chat` → `/chat/:id` is one screen deciding what to show,
+                not two). That is why the paths end in `*` and the switch lives
+                inside the page: remounting a section on every open and close
+                would drop a chat's live stream and re-read a list the reader
+                was just looking at. Anything unrecognised lands on Chat, which
+                is where the app used to open. */}
+            <Routes>
+              <Route path="/chat/*" element={<ChatPage />} />
+              <Route path="/dashboards/*" element={<DashboardsPage />} />
+              <Route path="/reports/*" element={<ReportsPage />} />
+              <Route path="/sources/*" element={<DataSourcesPage />} />
+              <Route path="/providers/*" element={<LlmProvidersPage />} />
+              {/* Not a hidden rail item: a member who types the path lands on
+                  Chat like any other unknown address. */}
+              {user.role === 'ADMIN' && (
+                <Route path="/users" element={<UsersPage currentUser={user} />} />
+              )}
+              <Route path="/about" element={<AboutPage />} />
+              <Route path="*" element={<Navigate to="/chat" replace />} />
+            </Routes>
+          </main>
+        </div>
+
+        {/* The app knew the work was unsaved and used to discard it without a
+            word. Rendered here rather than in the page that is dirty, because
+            the navigation it interrupts has already left that page's hands. */}
+        {blocker.state === 'blocked' && (
+          <Modal
+            title="You have unsaved changes"
+            onClose={() => blocker.reset?.()}
+            width={420}
+            footer={
+              <>
+                <GhostButton onClick={() => blocker.reset?.()}>Keep editing</GhostButton>
+                <DangerButton onClick={() => blocker.proceed?.()}>
+                  Discard and leave
+                </DangerButton>
+              </>
+            }
+          >
+            <p style={{ margin: 0, fontSize: 13, color: 'var(--text-dim)', lineHeight: 1.55 }}>
+              {blockedReason ?? 'Your edits have not been saved.'}
+            </p>
+          </Modal>
+        )}
       </div>
-    </div>
+    </ShellProvider>
   )
 }
 
@@ -170,27 +269,17 @@ export default function App() {
  * (`.rm-nav-btn`), so the rail holds no React state per button.
  */
 function Sidebar({
-  user, view, onNavigate, theme, onToggleTheme, onLogout,
+  user, pathname, onNavigate, theme, onToggleTheme, onLogout,
 }: {
   user: User
-  view: View
-  onNavigate: (view: View) => void
+  pathname: string
+  onNavigate: (path: string) => void
   theme: ThemeName
   onToggleTheme: () => void
   onLogout: () => void
 }) {
   const items = useMemo(
-    () =>
-      [
-        { key: 'chat' as const, label: 'Chat', icon: <Icon.Chat /> },
-        { key: 'dashboards' as const, label: 'Dashboards', icon: <Icon.Grid /> },
-        { key: 'reports' as const, label: 'Reports', icon: <Icon.Doc /> },
-        { key: 'connections' as const, label: 'Data sources', icon: <Icon.Database /> },
-        { key: 'settings' as const, label: 'LLM providers', icon: <Icon.Sparkle /> },
-        ...(user.role === 'ADMIN'
-          ? [{ key: 'users' as const, label: 'Users', icon: <Icon.Users /> }]
-          : []),
-      ],
+    () => NAV.filter((item) => !item.adminOnly || user.role === 'ADMIN'),
     [user.role],
   )
 
@@ -217,11 +306,11 @@ function Sidebar({
       <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 18 }}>
         {items.map((item) => (
           <NavButton
-            key={item.key}
-            active={view === item.key}
+            key={item.path}
+            active={isInSection(pathname, item.path)}
             icon={item.icon}
             label={item.label}
-            onClick={() => onNavigate(item.key)}
+            onClick={() => onNavigate(item.path)}
           />
         ))}
       </div>
@@ -322,11 +411,11 @@ function Sidebar({
             stands in for it, which is why both are rendered. */}
         <button
           type="button"
-          onClick={() => onNavigate('about')}
-          aria-current={view === 'about' ? 'page' : undefined}
+          onClick={() => onNavigate('/about')}
+          aria-current={pathname === '/about' ? 'page' : undefined}
           aria-label="Creators"
           title="Creators"
-          className={`rm-sidebar-about${view === 'about' ? ' is-on' : ''}`}
+          className={`rm-sidebar-about${pathname === '/about' ? ' is-on' : ''}`}
         >
           <span className="rm-sidebar-text">Creators</span>
           <span className="rm-sidebar-about-icon" aria-hidden>

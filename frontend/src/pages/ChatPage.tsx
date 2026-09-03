@@ -40,6 +40,7 @@
  * editors are two chances to get one of them wrong.
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation, useMatch, useNavigate } from 'react-router-dom'
 import {
   conversations, connections as connectionsApi, llmConfigs,
   isRunInFlight, runs, streamRun,
@@ -81,7 +82,23 @@ function glideBehavior(): ScrollBehavior {
 
 export default function ChatPage() {
   const [conversationList, setConversationList] = useState<ConversationSummary[]>([])
-  const [activeId, setActiveId] = useState<string | null>(null)
+  // The open thread is the URL. Everything below still reads `activeId` the
+  // way it did when this was `useState`, so the effects that clear a stream on
+  // a thread change did not have to move; what changed is where the value
+  // comes from and that a refresh keeps the conversation open.
+  const navigate = useNavigate()
+  const { pathname } = useLocation()
+  const activeId = useMatch('/chat/:conversationId')?.params.conversationId ?? null
+  const setActiveId = useCallback(
+    (id: string | null, { replace = false } = {}) => {
+      const next = id ? `/chat/${id}` : '/chat'
+      // New chat pressed while already on an empty one is not a navigation:
+      // pushing the same address again gives Back a step that does nothing.
+      if (next === pathname) return
+      navigate(next, { replace })
+    },
+    [navigate, pathname],
+  )
   const [messages, setMessages] = useState<MessageWithRun[]>([])
   // Read by `regenerate`, which is given a stable identity so a transcript of
   // memoised turns does not re-render on every streamed token. It needs the
@@ -582,7 +599,9 @@ export default function ChatPage() {
         })
         conversationId = created.id
         justCreatedRef.current = created.id
-        setActiveId(created.id)
+        // Replace: the empty composer this thread was started from is not a
+        // screen Back should return to — it no longer exists.
+        setActiveId(created.id, { replace: true })
         setConversationList((prev) => [created, ...prev])
       }
 
@@ -742,7 +761,9 @@ export default function ChatPage() {
       setLiveSteps([])
       clearText()
       setMessages([])
-      setActiveId(remaining[0]?.id ?? null)
+      // Replace, for the same reason: the deleted thread's URL is not
+      // somewhere Back should be able to go.
+      setActiveId(remaining[0]?.id ?? null, { replace: true })
     }
     try {
       await conversations.remove(id)

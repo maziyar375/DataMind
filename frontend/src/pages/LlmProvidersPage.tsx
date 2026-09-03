@@ -29,6 +29,7 @@
  * look like one.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useMatch, useNavigate } from 'react-router-dom'
 import { llmConfigs as api } from '../api/client'
 import type { LlmConfig, TestResult } from '../api/types'
 import {
@@ -40,6 +41,7 @@ import {
   StatusLine, UnsavedNote,
 } from '../components/settings'
 import { PROVIDER_URLS } from '../theme/tokens'
+import { useUnsavedWork } from '../shell'
 
 const BLANK = {
   name: 'New model',
@@ -78,10 +80,20 @@ export default function LlmProvidersPage() {
   const [list, setList] = useState<LlmConfig[]>([])
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  // The open provider is the URL, on the same terms as Data sources — the two
+  // pages are meant to be one screen with different fields, and that includes
+  // how they are addressed. `/providers/new` is the create form.
+  const navigate = useNavigate()
+  const routeId = useMatch('/providers/:id')?.params.id ?? null
+  const creating = routeId === 'new'
+  const selectedId = creating ? null : routeId
+  const setSelectedId = useCallback(
+    (id: string | null, { replace = false } = {}) =>
+      navigate(id ? `/providers/${id}` : '/providers', { replace }),
+    [navigate],
+  )
   const [draft, setDraft] = useState<Record<string, any>>(BLANK)
   const [apiKey, setApiKey] = useState('')
-  const [creating, setCreating] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<TestResult | null>(null)
   const [saving, setSaving] = useState(false)
@@ -116,6 +128,26 @@ export default function LlmProvidersPage() {
     })
   }, [selected, draft, apiKey])
 
+  // The same rule Data sources follows: a create form counts as unsaved work
+  // only once something has been typed into it.
+  const touchedNew = useMemo(
+    () =>
+      creating
+      && (apiKey !== ''
+        || Object.keys(BLANK).some(
+          (key) => draft[key] !== (BLANK as Record<string, unknown>)[key],
+        )),
+    [creating, draft, apiKey],
+  )
+  const releaseUnsaved = useUnsavedWork(
+    'provider-form',
+    creating
+      ? (touchedNew ? 'This new model has not been saved yet.' : null)
+      : (isDirty
+        ? `Your changes to “${selected?.name ?? 'this model'}” have not been saved.`
+        : null),
+  )
+
   const refresh = useCallback(async () => {
     const items = await api.list()
     setList(items)
@@ -125,15 +157,18 @@ export default function LlmProvidersPage() {
   useEffect(() => {
     refresh()
       .then((items) => {
-        if (items.length > 0) setSelectedId(items[0].id)
+        // Landing on `/providers` opens the first one, as this screen has
+        // always done — as a redirect, so the address says which.
+        if (!routeId && items.length > 0) setSelectedId(items[0].id, { replace: true })
       })
       .catch(() => setError('Could not load your model configurations.'))
       .finally(() => setLoading(false))
-  }, [refresh])
+    // Once, on mount: this is the landing redirect, not a reaction to the URL.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     if (!selected) return
-    setCreating(false)
     setApiKey('')
     setTestResult(null)
     setError(null)
@@ -148,12 +183,11 @@ export default function LlmProvidersPage() {
   }, [selectedId])
 
   function startCreate() {
-    setCreating(true)
-    setSelectedId(null)
     setDraft(BLANK)
     setApiKey('')
     setTestResult(null)
     setError(null)
+    navigate('/providers/new')
   }
 
   function changeProvider(provider: string) {
@@ -171,8 +205,10 @@ export default function LlmProvidersPage() {
       if (creating) {
         const created = await api.create({ ...draft, api_key: apiKey || undefined })
         await refresh()
-        setSelectedId(created.id)
-        setCreating(false)
+        // Let go before navigating, or the guard stops a saved form leaving
+        // itself; replace, because `/providers/new` no longer describes it.
+        releaseUnsaved()
+        setSelectedId(created.id, { replace: true })
       } else if (selected) {
         const payload: Record<string, unknown> = { ...draft }
         if (apiKey) payload.api_key = apiKey
@@ -232,9 +268,12 @@ export default function LlmProvidersPage() {
       setError(err instanceof Error ? err.message : 'Could not delete this configuration.')
       return
     }
+    // Only once the row is actually gone: a refused delete leaves the form,
+    // and its edits, where they were.
+    releaseUnsaved()
     setError(null)
     const items = await refresh()
-    setSelectedId(items[0]?.id ?? null)
+    setSelectedId(items[0]?.id ?? null, { replace: true })
   }
 
   const editing = creating || !!selected

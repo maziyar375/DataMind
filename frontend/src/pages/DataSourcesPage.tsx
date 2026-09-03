@@ -35,7 +35,9 @@
  * graph is the reason schema sync records foreign keys at all.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useMatch, useNavigate } from 'react-router-dom'
 import { connections as api } from '../api/client'
+import { useUnsavedWork } from '../shell'
 import type { Connection, SchemaSnapshot, SchemaTable, TestResult } from '../api/types'
 import {
   Chip, DangerButton, DisclosureBadge, EmptyState, ErrorNote, Field, GhostButton,
@@ -79,18 +81,41 @@ const BLANK = {
   knowledge_examples_enabled: false,
 }
 
+/** The detail pane's tabs, and the segment each one is written as. */
+const TABS = ['settings', 'schema', 'semantic', 'knowledge'] as const
+type Tab = (typeof TABS)[number]
+
 export default function DataSourcesPage() {
   const [list, setList] = useState<Connection[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('')
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  // Which connection, and which of its tabs — both in the URL, so a colleague
+  // asking "where do I set the disclosure policy?" can be sent the tab rather
+  // than told how to reach it. `/sources/new` is the create form: it is a
+  // state of this screen like any other, and it has an address like any other.
+  const navigate = useNavigate()
+  const withTab = useMatch('/sources/:id/:tab')
+  const plain = useMatch('/sources/:id')
+  const routeId = withTab?.params.id ?? plain?.params.id ?? null
+  const creating = routeId === 'new'
+  const selectedId = creating ? null : routeId
+  const setSelectedId = useCallback(
+    (id: string | null, { replace = false } = {}) =>
+      navigate(id ? `/sources/${id}` : '/sources', { replace }),
+    [navigate],
+  )
+  // An unknown tab is not an error worth a screen — it reads as the page's
+  // front door, which is what a mistyped or renamed segment most likely meant.
+  const tab: Tab = TABS.includes(withTab?.params.tab as Tab)
+    ? (withTab!.params.tab as Tab)
+    : 'settings'
+  const setTab = useCallback(
+    (next: Tab) => navigate(`/sources/${routeId}/${next}`),
+    [navigate, routeId],
+  )
   const [draft, setDraft] = useState<Record<string, any>>(BLANK)
   const [password, setPassword] = useState('')
-  const [creating, setCreating] = useState(false)
   const [schema, setSchema] = useState<SchemaSnapshot | null>(null)
-  const [tab, setTab] = useState<'settings' | 'schema' | 'semantic' | 'knowledge'>(
-    'settings',
-  )
   const [schemaView, setSchemaView] = useState<'tables' | 'graph'>('tables')
   const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -149,12 +174,38 @@ export default function DataSourcesPage() {
     })
   }, [creating, selected, draft, password])
 
+  // What the navigation guard stops for. A brand-new form counts only once
+  // something has been typed into it: `hasChanges` is true from the moment
+  // Add is clicked (there is nothing saved to differ from), and asking someone
+  // to confirm the loss of a form they have not filled in is how a guard
+  // becomes a thing people click through without reading.
+  const touchedNew = useMemo(
+    () =>
+      creating
+      && (password !== ''
+        || Object.keys(BLANK).some(
+          (key) => JSON.stringify(draft[key]) !== JSON.stringify((BLANK as Record<string, unknown>)[key]),
+        )),
+    [creating, draft, password],
+  )
+  const releaseUnsaved = useUnsavedWork(
+    'connection-form',
+    creating
+      ? (touchedNew ? 'This new connection has not been saved yet.' : null)
+      : (hasChanges
+        ? `Your changes to “${selected?.name ?? 'this connection'}” have not been saved.`
+        : null),
+  )
+
   const refresh = useCallback(async () => {
     const items = await api.list()
     setList(items)
-    if (!selectedId && items.length > 0) setSelectedId(items[0].id)
+    // Landing on `/sources` opens the first connection, which is what this
+    // screen has always done — as a redirect now, so the address bar says
+    // which one is open and a refresh returns to it.
+    if (!routeId && items.length > 0) setSelectedId(items[0].id, { replace: true })
     return items
-  }, [selectedId])
+  }, [routeId, setSelectedId])
 
   useEffect(() => {
     refresh()
@@ -164,7 +215,6 @@ export default function DataSourcesPage() {
 
   useEffect(() => {
     if (!selected) return
-    setCreating(false)
     setPassword('')
     setTestResult(null)
     setError(null)
@@ -192,14 +242,12 @@ export default function DataSourcesPage() {
   }, [selectedId])
 
   function startCreate() {
-    setCreating(true)
-    setSelectedId(null)
     setSchema(null)
     setDraft(BLANK)
     setPassword('')
     setTestResult(null)
     setError(null)
-    setTab('settings')
+    navigate('/sources/new')
   }
 
   async function save() {
@@ -209,8 +257,11 @@ export default function DataSourcesPage() {
       if (creating) {
         const created = await api.create({ ...draft, password })
         await refresh()
-        setSelectedId(created.id)
-        setCreating(false)
+        // Let go before navigating: the form has just been saved, and the
+        // guard would otherwise stop this page from leaving itself.
+        releaseUnsaved()
+        // Replace: `/sources/new` describes a form that no longer exists.
+        setSelectedId(created.id, { replace: true })
       } else if (selected) {
         const payload: Record<string, unknown> = { ...draft }
         if (password) payload.password = password
@@ -304,12 +355,16 @@ export default function DataSourcesPage() {
       setError(err instanceof Error ? err.message : 'Could not delete this connection.')
       return
     }
-    setSelectedId(null)
+    // Only once the row is actually gone: a refused delete leaves the form,
+    // and its edits, exactly where they were.
+    releaseUnsaved()
     setSchema(null)
     setError(null)
     const items = await api.list()
     setList(items)
-    if (items.length > 0) setSelectedId(items[0].id)
+    // Replace: the deleted connection's address is not somewhere Back should
+    // be able to return to.
+    setSelectedId(items[0]?.id ?? null, { replace: true })
   }
 
   const filteredTables = useMemo(() => {
@@ -406,7 +461,12 @@ export default function DataSourcesPage() {
                   <Icon.Database size={15} />
                 </GlyphBadge>
               }
-              onClick={() => setSelectedId(connection.id)}
+              // Carrying the open tab across: someone comparing two schemas
+              // (or two knowledge stores) is switching the connection, not
+              // asking to start again at Settings.
+              onClick={() =>
+                navigate(`/sources/${connection.id}${tab === 'settings' ? '' : `/${tab}`}`)
+              }
             />
           )
         })}
@@ -509,7 +569,7 @@ export default function DataSourcesPage() {
               <Tabs
                 value={tab}
                 onChange={(v) =>
-                  setTab(v as 'settings' | 'schema' | 'semantic' | 'knowledge')
+                  setTab(v as Tab)
                 }
                 items={[
                   { value: 'settings', label: 'Settings' },
