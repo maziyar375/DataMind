@@ -223,7 +223,7 @@ shown**, so without this check the block goes green and reaches a run as a
 figure nobody asked for.
 
 The refusals are written for a stored verdict, not for a chat reply
-(`_OUT_OF_SCOPE`, [sql_draft_service.py:75-91](../backend/app/services/sql_draft_service.py#L75-L91)):
+(`_OUT_OF_SCOPE`, [sql_draft_service.py:99-121](../backend/app/services/sql_draft_service.py#L99-L121)):
 CHITCHAT, UNSUPPORTED and **METADATA** each get their own sentence — a schema
 question is refused because "a list of table names is not a figure".
 
@@ -417,7 +417,7 @@ mirrors `workers/semantic.py`, deliberately does not share it:
 - `MAX_CONCURRENT_JOBS = 2`. A generation already runs its blocks concurrently
   against the customer's database; two whole reports at once is a load test of
   it, not a speed-up.
-- **No heartbeat, and since Phase 4 no loss either.** Durability is the
+- **No checkpoint, and since Phase 4 no loss either.** Durability is the
   `report_runs` row plus the result rows themselves. `stranded_runs()` at
   startup *names* the runs a dead process interrupted and writes nothing;
   each is handed to `submit_resume`, and the resumed run does only what is
@@ -428,6 +428,12 @@ mirrors `workers/semantic.py`, deliberately does not share it:
   progress record, written in the same transaction as the work, so a resume
   cannot disagree with the document. See
   [langgraph-migration.md](langgraph-migration.md) §4 Phase 4.
+- **It does keep a heartbeat**, added in Phase 6 and load-bearing for exactly
+  the resume above: `_watch` writes `report_runs.heartbeat_at` every
+  `run_heartbeat_seconds`, and `stranded_runs` filters on it. Without that a
+  second replica booting mid-generation cannot tell a run being generated
+  *right now* from one whose process died, and would resume a live run and
+  write its sections twice. See [cross-replica.md](cross-replica.md) §1.
 - **Cancellation is cooperative *then* hard**: the flag is checked between
   phases so an in-flight query finishes rather than being abandoned; the task is
   cancelled outright `llm_request_timeout_seconds + 5` later if it has not
@@ -445,8 +451,9 @@ phases; the ordering is the design.
 
 Since Phase 3 of [langgraph-migration.md](langgraph-migration.md) those phases
 are **nodes of a compiled graph** —
-`check_disclosure → resolve_outline → execute_blocks → write_results →
-narrate_section (loop) → summarise → finish` — and §5's retry is a second
+`check_disclosure → resolve_outline → [clear_section] → execute_blocks →
+write_results → narrate_section (loop) → summarise → finish` — with
+`clear_section` on the retry entry only (§5) — and §5's retry is a second
 *entry* into the same graph rather than a second driver over the same
 functions. The nodes are thin: each delegates to the helper in
 `workers/report.py` that always did the work, so the prompts, the disclosure
@@ -514,7 +521,7 @@ cancelled run that threw them away would be a slower way of doing nothing.
 #### C5 · Per section, in order — the paragraph
 
 For each non-summary section (`_narrate`,
-[workers/report.py:825-917](../backend/app/workers/report.py#L825-L917)):
+[workers/report.py:687-779](../backend/app/workers/report.py#L687-L779)):
 
 **1. Disclose.** `_narration(result, policy)` runs each stored result through
 `disclose()` — at *narration* time, under the policy in force **now**, not the

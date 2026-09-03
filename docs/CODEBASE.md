@@ -15,8 +15,8 @@ Oracle** through one connector interface.
 Three surfaces sit on that one guarded path: **Chat** (one question),
 **Dashboards** (numbers kept current), and **Reports** (a document).
 
-Size, as of 2026-08-15: **31k lines of Python** under `backend/app/` plus 22k
-lines of backend tests, and **27k lines of TypeScript/TSX** under
+Size, as of 2026-09-03: **41k lines of Python** under `backend/app/` plus 29k
+lines of backend tests, and **33k lines of TypeScript/TSX** under
 `frontend/src/`.
 
 ---
@@ -66,30 +66,40 @@ lines of backend tests, and **27k lines of TypeScript/TSX** under
 | Charts | **Vega-Lite** via `vega` / `vega-lite` / `vega-embed` |
 | Dashboard grid | **react-grid-layout** — a layout engine, not a component library |
 | Styling | Custom design system on **oklch CSS variables** — *no* component library |
-| Fonts | Inter and JetBrains Mono from Google Fonts; **Vazirmatn** (Persian) self-hosted from `public/fonts` — a printed Persian report is a deliverable and must not depend on a CDN a firewalled deployment cannot reach |
+| Fonts | **All three self-hosted** from `public/fonts` — Inter, JetBrains Mono and **Vazirmatn** (Persian), declared as `@font-face` in `styles.css`. A BI tool pointed at a production database is routinely deployed behind a firewall that cannot reach `fonts.gstatic.com`, and there a printed Persian report — a deliverable — would come out in a fallback face with the wrong metrics. `report-print.test.ts` asserts no `googleapis`/`gstatic` reference survives anywhere |
 
-The design tokens in `src/theme/tokens.ts` are copied verbatim from the design
-concept (`docs/assets/ui-design-concept.html`); both dark and light palettes ship.
+Both dark and light palettes ship, but only one of them came from the design
+concept: the **dark** tokens in `src/theme/tokens.ts` are copied verbatim from
+`docs/assets/ui-design-concept.html`, which is dark-only. The **light** palette
+was designed afterwards against it — warm "paper" neutrals at hue ~80, with a
+plum accent (~315) drawn from the logo rather than the dark theme's blue.
 
-There is **no test runner**: the nine logic suites are plain `node
+There is **no test runner**: the eleven logic suites are plain `node
 --experimental-strip-types` scripts over DOM-free modules. That is a deliberate
 consequence of where the risk is — see §7.
 
 ### Infrastructure
 
-**Docker Compose.** Five services, all of which start with the stack:
+**Docker Compose.** Six services, all of which start with the stack:
 
 | Service | Image / build | Host port | Role |
 | --- | --- | --- | --- |
 | `db` | postgres:16-alpine | 5432 | DataMind's own application store |
-| `sales` | postgres:16-alpine | 5433 | the **demo target** DB — the 42-table commerce schema, seeded read-only |
+| `sales` | postgres:16-alpine | 5433 | the **eval fixture** — the 42-table commerce schema, seeded read-only and messy on purpose |
 | `sakila` | mysql:8.0 | 3307 | the second demo target — the classic Sakila sample |
+| `aurora` | postgres:16-alpine | 5434 | the **demo** target — 13 clean tables whose cardinalities are tuned to the chart budgets in `app/charts/__init__.py`, so the obvious question yields an untrimmed chart |
 | `api` | `./backend` | 8000 | runs migrations then Uvicorn |
 | `web` | `./frontend` | 5173 | Vite dev server, proxies `/api` → `api:8000` |
 
 The separate target instances exist on purpose: the whole point is that
 DataMind reaches customer data *over a connector with a read-only role*, not by
 sharing a database.
+
+**`aurora` and `sales` are not interchangeable.** `aurora` is the *demo* — clean,
+one obvious join path per question, `COMMENT ON` throughout. `sales` is the
+*eval fixture* and its messiness is the point (near-duplicate names, soft-delete
+traps, a stale rollup that gives wrong answers). Do not "clean up" `sales`: an
+eval that never fails measures nothing.
 
 **Oracle and SQL Server have no demo service.** Both were compose services
 behind a `targets` profile and were removed — ~2 GB of RAM each for something
@@ -123,7 +133,7 @@ infra     →  Adapters that implement the Protocols.
    api → services → pipeline → reports → semantic → domain ← infra
 ```
 
-Seven contracts hold that shape (`[tool.importlinter]` in
+Eight contracts hold that shape (`[tool.importlinter]` in
 `backend/pyproject.toml`), and the layer order is not decoration — it buys
 something concrete. `reports/narrate.py` **cannot** call `disclose()`, because
 that lives in `app.pipeline` above it, so the report worker has to disclose
@@ -144,20 +154,24 @@ Plus `IdentityProvider` (auth) and `EventPublisher` (SSE). The domain is pure:
 it imports no framework and no infra, so it can be unit-tested in isolation and
 reasoned about without a database.
 
-Two packages are additionally **self-contained** by contract — `sqlguard` and
-`semantic`, joined by `reports` — meaning no fastapi, no sqlalchemy, no litellm,
-no `app.infra`, no `app.api`, no `app.services`. Each is therefore a pure
-function of its inputs and runs in a test against a dict and a fake gateway.
+Four packages are additionally **self-contained** by contract — `sqlguard`,
+`semantic`, `reports` and `knowledge` — meaning no fastapi, no sqlalchemy, no
+litellm, no `app.infra`, no `app.api`, no `app.services`. Each is therefore a
+pure function of its inputs and runs in a test against a dict and a fake
+gateway. `knowledge` carries one deliberate exception: `app.sqlguard` is *not*
+on its forbidden list, because validating a taught template **is** calling the
+guard, and the fifth entry point exists precisely so it reuses the same
+`guard()` the other four do.
 
 ---
 
 ## 3. Directory-by-directory
 
 ### `backend/app/api` — the edge
-Nine routers under `v1/`: `auth`, `users`, `llm_configs`, `connections`,
-`semantic`, `conversations`, `drafts`, `dashboards`, `reports`. Each router only
-shapes HTTP: extracts the identity, validates the DTO (`schemas.py`, 1.2k
-lines), and calls a service. Errors map to RFC 7807 `problem+json`
+Eleven routers under `v1/`: `auth`, `users`, `llm_configs`, `connections`,
+`semantic`, `knowledge`, `conversations`, `drafts`, `dashboards`, `reports`,
+`audit`. Each router only shapes HTTP: extracts the identity, validates the DTO
+(`schemas.py`, 1.7k lines), and calls a service. Errors map to RFC 7807 `problem+json`
 (`errors.py`). `main.py` is the ASGI factory — it wires CORS, a correlation-id
 middleware (every response carries `X-Correlation-ID`), health probes, and a
 lifespan that on boot bootstraps the admin user, reconciles orphaned runs, fails
@@ -188,6 +202,8 @@ deliberately speaks in value objects, not ORM.
 Where transactions and authorization live. `run_service.py` (1k lines)
 orchestrates creating, claiming and driving a run; `report_service.py` (1.2k)
 and `dashboard_service.py` do the same for their features.
+`knowledge_service.py` (1.5k) owns taught questions — guarded on save and
+re-guarded on every use.
 `query_service.py` owns `execute_saved_sql` — the tile and report-block entry
 point into guarded execution. `sql_draft_service.py` drafts a statement by
 re-entering the pipeline's own nodes. `dashboard_transfer.py` is a dashboard as
@@ -209,16 +225,19 @@ turns a node function into a graph node while keeping the old executor's duties
 calls). `pipeline.py` is now a 21-line facade re-exporting `AnalyticsPipeline`
 and `ORDER` so nothing above the pipeline had to change.
 
-`nodes/__init__.py` holds all **ten** nodes:
+`nodes/__init__.py` holds all **eleven** nodes:
 
 ```
-route → retrieve → describe → clarify → generate → validate → execute →
+route → match → retrieve → describe → clarify → generate → validate → execute →
 inspect → present → chart
 ```
 
-linear with **five non-chain edges**: three repairs *back* into `generate` (from
-`validate`, `execute`, `inspect`) and two restores *forward* into `present`. A
-hard ceiling of 24 transitions and a per-run deadline bound it. `describe`
+linear with **six non-chain edges**: three repairs *back* into `generate` (from
+`validate`, `execute`, `inspect`), two restores *forward* into `present`, and
+`match`'s short-circuit to `validate`. A hard ceiling of 24 transitions and a
+per-run deadline bound it. `match` answers a question somebody already taught —
+no model call, trigram similarity plus a deterministic binder, landing on the
+guard's own entry point so a stored template gets no exemption. `describe`
 answers a schema question from the schema block plus the semantic layer and
 halts before any SQL is written. `prompts/` holds versioned prompt templates
 (`PROMPT_VERSION`, currently **v9**); `disclosure.py` is the result gate;
@@ -239,6 +258,22 @@ connection can query nothing. The hostile corpus in
 `tests/unit/test_sqlguard_hostile.py` is the build's hard gate — and it is
 replayed through the other two entry points as well
 (`test_query_service.py`, `test_report_guard.py`).
+
+### `backend/app/knowledge` — what somebody already answered
+A taught question is a **parameterized question→SQL template**, scoped to a
+connection. `models.py` (the template, its three roles, and
+`may_render_literals` — the disclosure rule its literals ride), `normalize.py`
+(the match key), `params.py` (the AST walk that *offers* parameters from the
+tree the guard already produced, and refuses the ones that are part of a
+definition), `validate.py` (**the guard's fifth entry point**), `matcher.py` +
+`bind.py` (the short-circuit, and the rule that any slot which will not bind
+cancels the hit), `backlog.py` (what to teach next), `compare.py` (the
+result-set comparator, shared with the eval and the benchmark),
+`conflict.py` (which near-duplicate pairs are worth running), `embed.py`
+(masked-question similarity — the vocabulary, the cosine, and the fingerprint
+that makes staleness derived rather than tracked). Self-contained like
+`sqlguard`, and allowed to call it. See
+[learning-loop-plan.md](learning-loop-plan.md).
 
 ### `backend/app/semantic` — what the schema *means*
 `models.py` (the document), `validate.py` (bind it to a snapshot, parse metric
@@ -275,7 +310,7 @@ money — so it is not in `make test`, and an import-linter contract keeps it of
 the request path entirely. See [eval.md](eval.md).
 
 ### `backend/app/infra` — the adapters
-- `db/` — SQLAlchemy models (**27 tables**, §4), 14 Alembic migrations, async
+- `db/` — SQLAlchemy models (**33 tables**, §4), 21 Alembic migrations, async
   session factory.
 - `repositories/` — query helpers over the ORM models.
 - `connectors/` — `factory.py` maps each `DatabaseKind` to a connector; each of
@@ -303,10 +338,16 @@ claiming a run before executing it so two replicas cannot both run one;
 advisory lock, so none is stuck `RUNNING`. `semantic.py` and `report.py` are the
 minutes-long generation jobs — polled, not streamed, with cooperative-then-hard
 cancel. `report_graph.py` is the compiled report graph; a full generation and a
-per-section retry are two entries into it.
+per-section retry are two entries into it. `knowledge_maintenance.py` keeps the
+taught store from rotting — the staleness sweep (a parse) and the conflict
+checker (which runs two near-duplicate templates through `execute_saved_sql`
+and compares the rows; the one thing here that runs SQL without a person having
+asked a question, and switchable off per connection). `benchmark.py` is the
+customer's own accuracy number, scored by the deterministic comparator and
+never by a model.
 
 ### `backend/tests`, `backend/fixtures`, `backend/scripts`
-Siblings of `app/`, not inside it. `tests/` is unit + integration + eval (22k
+Siblings of `app/`, not inside it. `tests/` is unit + integration + eval (29k
 lines). `fixtures/` holds the 42-table `sales` schema in three dialects, the
 Oracle four-table comment fixture, the Sakila seed, `sales_comments.sql` (the
 eval's commented arm) and `rebuild_fixtures.sh` (`make fixtures`).
@@ -325,20 +366,23 @@ fallback and `Last-Event-ID` replay. `theme/tokens.ts` holds design tokens and
 the puzzle-piece `Logo`, `ResultTable`, `Kpi`), chat (`chat.tsx` + the DOM-free
 `chat-format.ts`), the Vega renderer and chart picker, dashboards
 (`dashboard.tsx`, `tile-editor.tsx`, `dashboard-transfer.tsx`), the semantic
-layer editor (`semantic.tsx`, 2.7k lines), reports (`report.tsx`, 4k lines, plus
-`report-history.tsx`), and settings scaffolding. `pages/` are Login, Chat,
-DataSources, LlmProviders, Users, Dashboards, Reports.
+layer editor (`semantic.tsx`, 2.9k lines), the knowledge/curation surface
+(`knowledge.tsx`, 1.9k lines, plus the DOM-free `knowledge-template.ts`),
+reports (`report.tsx`, 4k lines, plus `report-history.tsx`), and settings
+scaffolding. `pages/` are Login, Chat, DataSources, LlmProviders, Users,
+Dashboards, Reports and About.
 
-**Nine modules are deliberately DOM-free and carry their own tests**, because
+**Eleven modules are deliberately DOM-free and carry their own tests**, because
 every way they can be wrong is quiet: `dashboard-schedule.ts`, `table-format.ts`,
 `dashboard-document.ts`, `palette.ts`, `chat-format.ts`, `report-document.ts`,
-`report-readiness.ts`, `report-print.ts`, `semantic-drift.ts`.
+`report-readiness.ts`, `report-print.ts`, `semantic-drift.ts`,
+`knowledge-template.ts`, `thinking.ts`.
 
 ---
 
 ## 4. Data model (ORM tables, `infra/db/models.py`)
 
-**27 tables**, in seven groups.
+**33 tables**, in nine groups.
 
 | Group | Tables |
 | --- | --- |
@@ -348,7 +392,16 @@ every way they can be wrong is quiet: `dashboard-schedule.ts`, `table-format.ts`
 | Chat | `conversations`, `messages`, `runs`, `run_steps`, `generated_queries`, `query_executions`, `artifacts`, `run_events` |
 | Dashboards | `dashboards`, `dashboard_tiles`, `dashboard_tile_cache` |
 | Reports | `reports`, `report_sections`, `report_blocks`, `report_runs`, `report_block_results`, `report_section_results` |
+| Knowledge | `knowledge_templates`, `knowledge_template_hits`, `answer_feedback` |
+| Benchmarks | `benchmark_sets`, `benchmark_runs`, `benchmark_results` |
 | Eval | `eval_runs`, `eval_results` |
+
+The last two groups are separate on purpose. `benchmark_*` is the *customer's*
+accuracy number over their own taught questions; `eval_*` is the frozen
+developer suite. They share a vocabulary and one comparator
+(`app/knowledge/compare.py`) — they share no table and no import, and a test
+asserts the second on the parse, because the two would otherwise contaminate
+each other within a month.
 
 The ones worth knowing:
 
@@ -371,6 +424,14 @@ The ones worth knowing:
 - `report_runs` + the two result tables — a run's status is **derived** from its
   sections, which is what makes progressive rendering and per-section retry need
   no resume machinery.
+- `knowledge_templates` — a taught question as a *parameterized* question→SQL
+  template, scoped to a connection and dying with it. `literal_provenance`
+  decides whether its literals are structure or a disclosure;
+  `knowledge_template_hits` logs every verdict including `OVERRIDDEN_BY_USER`,
+  which is the honest measure of whether the short-circuit is trusted.
+- `audit_logs` — defined in migration `0001` and written to by nothing until
+  Phase 8 of the learning loop. `detail` holds identifiers and counts, never
+  SQL, question text or result rows.
 
 ---
 
@@ -382,6 +443,11 @@ The ones worth knowing:
    before executing it.
 2. **Route.** Classify intent, reading the recent turns once a thread has any.
    CHITCHAT and UNSUPPORTED halt here with a canned reply; METADATA continues.
+2b. **Match.** Has somebody already answered this? No model call. A taught
+   template above `SHORT_CIRCUIT_THRESHOLD` whose every slot binds jumps
+   straight to Validate — the guard's own entry point, so it is re-validated,
+   rewritten and row-capped like generated SQL. A miss changes nothing and the
+   prompt is byte-identical.
 3. **Retrieve.** Select tables (no model call), attach the semantic layer, build
    the block every downstream prompt embeds — gated by `HintBudget`.
 4. **Describe.** A METADATA question is answered from that block — schema *and*
@@ -415,11 +481,13 @@ this is a deliberate product feature, not debug output.
 
 - **SQL validation fails closed** — an unrecognized AST node is rejected, so a
   new SQLGlot release can only cause a false *rejection*, never a bypass.
-- **Three entry points to the guard, none privileged** — the `validate` node, a
-  dashboard tile, and a report block, with `execute_saved_sql` re-validating
-  stored SQL against the *current* snapshot on every execution. (Import of a
-  dashboard file is a fourth door into the same check.) `sql_origin` is
-  provenance, never trust.
+- **Five entry points to the guard, none privileged** — the `validate` node
+  (chat, and a taught template's short-circuit), `execute_saved_sql` (a
+  dashboard tile and a report block, re-validating stored SQL against the
+  *current* snapshot on every execution), `sql_draft_service` (the draft and
+  hand-written roads), dashboard import, and a **knowledge template** (on save,
+  and again on every use). The hostile corpus is replayed through each.
+  `sql_origin` is provenance, never trust.
 - **Read-only containment** per engine, verified by attempting a write inside a
   rolled-back transaction at connect time.
 - **Credential encryption bound to row identity** — a ciphertext copied between
@@ -449,8 +517,9 @@ make db-repair # recreate the empty PGDATA runtime dirs the studio drive strips
 ```
 
 Frontend (from `frontend/`): `npm run dev`, `npm run build` (`tsc -b && vite
-build`), `npm run typecheck` (`tsc --noEmit`), `npm run lint`, `npm test` (all
-nine DOM-free logic suites, listed in §3).
+build`), `npm run typecheck` (`tsc --noEmit`), `npm test` (all eleven DOM-free logic
+suites, listed in §3). **`npm run lint` does not work** — the script exists but
+eslint is neither a devDependency nor configured.
 
 **Without Docker**, if you would rather run the two processes yourself — you
 still need a PostgreSQL for the app store, and `DATABASE_URL` pointed at it:
@@ -470,7 +539,7 @@ The eval harness is separate and calls a real provider, so it is not part of
 `make test` — see [eval.md](eval.md).
 
 **CI's non-negotiables** (`.github/workflows/ci.yml`): the hostile SQL corpus
-passes with zero bypasses; the seven import-linter contracts hold; `import
+passes with zero bypasses; the eight import-linter contracts hold; `import
 litellm` appears only under `infra/llm/`; and `import langgraph` /
 `langchain_core` appear only under `app/pipeline/` and `app/workers/`. The
 frontend job runs `tsc --noEmit` and `vite build`.
@@ -492,10 +561,11 @@ charts (`app/charts/`), FK-neighbour retrieval expansion, the eval harness
 **LangGraph is no longer deferred.** The chat pipeline is a compiled graph
 (`app/pipeline/graph.py`), the repair region is one subgraph with two callers,
 and the report worker is a graph too (`app/workers/report_graph.py`). The bet
-that the node signatures were already the right shape paid: the ten node
-functions were not modified. Two phases were argued and **declined** on
-measurement rather than skipped — checkpointing (88 KB per node, 97% of it the
-schema block, for a run of 5–60 seconds) and durable clarification. See
+that the node signatures were already the right shape paid: the node functions
+were not modified — and `match`, added afterwards, cost the wiring nothing.
+Two phases were argued and **declined** on measurement rather than skipped —
+checkpointing (88 KB per node, 97% of it the schema block, for a run of 5–60
+seconds) and durable clarification. See
 [langgraph-migration.md](langgraph-migration.md) for both arguments and the
 gates.
 

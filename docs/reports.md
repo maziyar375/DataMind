@@ -203,10 +203,20 @@ against the connection's *current* snapshot on every execution, and
 ## 6. Generation
 
 `app/workers/report.py` mirrors `workers/semantic.py`: minutes rather than
-seconds, so `MAX_CONCURRENT_JOBS = 2`, no heartbeat, durability from the row,
-`sweep_orphans` at startup, and **cooperative-then-hard cancellation** — the
-flag is checked between sections so an in-flight provider call finishes rather
-than being abandoned, with a hard cancel `llm_request_timeout + 5s` later.
+seconds, so `MAX_CONCURRENT_JOBS = 2`, durability from the **result rows
+themselves**, and **cooperative-then-hard cancellation** — the flag is checked
+between sections so an in-flight provider call finishes rather than being
+abandoned, with a hard cancel `llm_request_timeout + 5s` later.
+
+It also keeps a **heartbeat**, added in Phase 6 for the reason
+[cross-replica.md](cross-replica.md) gives: `_watch` writes
+`report_runs.heartbeat_at`, and `stranded_runs` at startup reads it to tell a
+run being generated *right now* from one whose process died mid-sentence.
+Without that filter a second replica booting mid-generation would resume a run
+that was never stranded and write the same sections twice. Each stranded run is
+handed to `submit_resume`, which writes only what is missing.
+(`sweep_orphans` is `workers/semantic.py`'s equivalent, and fails its rows
+rather than resuming them — the two workers differ here on purpose.)
 
 ```
 1. re-check disclosure                     → fail the run if narrow (§7)
@@ -674,7 +684,7 @@ self-contained` import-linter contract, not by discipline.
 
 ```
 app/reports/
-  prompts.py    REPORT_PROMPT_VERSION (r3) + the four prompts
+  prompts.py    REPORT_PROMPT_VERSION (r4) + the four prompts
   outline.py    the proposed-outline document: parse, validate, bind, and the
                 section-count bounds the API and the prompt both read
   language.py   which language the request is written in — pure, token-free

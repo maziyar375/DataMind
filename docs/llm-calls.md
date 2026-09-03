@@ -8,7 +8,7 @@
 > dumped from the live constants in `app/pipeline/prompts/__init__.py`,
 > `app/reports/prompts.py` and `app/semantic/prompts.py`, so what you read here
 > is byte-for-byte what leaves the process. Prompt versions at time of writing:
-> pipeline **v8**, reports **r4**,
+> pipeline **v9**, reports **r4**,
 > semantic **s4**.
 >
 > Companion documents: [security.md §2](security.md) owns the *inventory* of
@@ -56,7 +56,7 @@ fires, end to end — are in §15.
 
 Every call goes through `LLMGateway` (`app/domain/ports/llm.py`), implemented by
 `LiteLLMGateway` (`app/infra/llm/litellm_gateway.py`), the only module allowed
-to import `litellm`. Four methods:
+to import `litellm`. Six methods:
 
 | Method | Returns | Used by |
 |---|---|---|
@@ -444,7 +444,7 @@ Rules, all mandatory:
 
 Schema:
 {schema}
-
+{examples}
 {history}
 
 Reply with the JSON object only. Put the statement in `sql` and nothing else —
@@ -459,6 +459,24 @@ Question: {question}
 
 Return JSON with keys: sql, reasoning.
 ```
+
+| Placeholder | Filled with |
+|---|---|
+| `{schema}` | `state.context.render(state.disclosure_policy)` — §1.6 |
+| `{examples}` | `state.context.render_examples(policy)` — **v9's slot**, and empty on a stock connection |
+| `{history}` | `_render_history(deps.history, state.disclosure_policy)` — §1.6 |
+
+**`{examples}` is the only difference between v8 and v9, and it is usually the
+empty string.** It carries the connection's own taught questions, offered to the
+generator as up to four `Q:`/`A:` pairs — **last**, after the schema and the
+semantic layer, because eval Round 2 measured what crowding this prompt costs
+(the NB below). `render_examples` returns `""` when there is nothing to show, so
+`{schema}\n{examples}\n{history}` collapses back to `{schema}\n\n{history}` —
+**byte-identical to v8** — for a connection with no store, a connection with
+`knowledge_examples_enabled` off (the default), the draft graph and the eval
+runner. A `MODEL_DERIVED` template is withheld whole under `NONE`/`AGGREGATE`
+([security.md §3.3](security.md)). `tests/unit/test_knowledge_few_shot.py`
+asserts the byte-identity.
 
 > **NB (eval Round 2, reverted):** adding a "getting the answer right" block of
 > general SQL guidance here *lowered* execution accuracy on the small eval model

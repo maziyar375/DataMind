@@ -57,7 +57,7 @@ tile. That test is what proves dashboards did not open a bypass.
 ```python
 async def execute_saved_sql(
     db, settings, *, sql, connection, owner_id,
-    chart_intent=None, max_rows=None, connector=None, snapshot=None,
+    chart_intent=None, want_kpi=False, max_rows=None, connector=None, snapshot=None,
 ) -> TileResult
 ```
 
@@ -86,8 +86,9 @@ Six rules, each with a test:
 Error codes the UI branches on: `E_SCHEMA_CHANGED` (the guard refused a name
 the snapshot no longer has), `E_NO_SNAPSHOT` (never synced), `E_FORBIDDEN` (not
 the caller's connection — nothing is decrypted or dialled),
-`E_CONNECTION_REMOVED`, `E_QUERY_FAILED`, `E_INTERNAL`, and otherwise the
-guard's own `rule_id` verbatim.
+`E_CONNECTION_REMOVED`, `E_SQL_REJECTED` (empty statement, or a rejection with
+no stated rule), `E_QUERY_FAILED`, `E_CONNECTOR` (the connector could not be
+built), `E_INTERNAL`, and otherwise the guard's own `rule_id` verbatim.
 
 **Batching.** `execute_many` groups tiles by `connection_id` and builds **one
 connector per connection**, running under a semaphore capped at 4. Twelve tiles

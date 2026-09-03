@@ -1,7 +1,7 @@
 # Documentation index
 
 Eighteen documents plus five research notes. This page exists so you don't have
-to open `architecture.md` (1,500 lines) to answer a question about charts.
+to open `architecture.md` (1,600 lines) to answer a question about charts.
 
 The three `pipeline*.md` files are one set: [pipeline.md](pipeline.md) holds the
 chat run **and** the map of all three pipelines (§0), with
@@ -34,14 +34,17 @@ chat run **and** the map of all three pipelines (§0), with
 | A connector's catalog reads, or what a DDL comment does to a prompt | [catalog-metadata-plan.md](catalog-metadata-plan.md) | Each engine's comment SQL as actually executed, the layer-wins suppression rule, and the per-engine hazards |
 | Orchestration — moving anything else onto LangGraph | [langgraph-migration.md](langgraph-migration.md) | Which surfaces moved and which didn't, the two phases declined on measurement, and the checklist |
 | Knowledge templates — the store, the matcher, the badge, feedback | [learning-loop-plan.md](learning-loop-plan.md) | What a taught question *is*, the guard's fifth entry point, the disclosure rung its literals need, and the phase ledger |
+| Users, groups, roles, grants — anything about *who may* | [access-control-plan.md](access-control-plan.md) | The proposed model, and what this repo currently believes about its own authorization that is not true |
 
-Those last two are also **plans**, in the sense below — they are the reference
-for their subject *and* the record of how it was built. Read the §-pointers in
-the status table before starting anywhere else in them.
+`catalog-metadata-plan.md` and `learning-loop-plan.md` are also **plans**, in
+the sense below — they are the reference for their subject *and* the record of
+how it was built. `access-control-plan.md` is the odd one out: it is a plan for
+something **not built**, so read it as a proposal and not as a description.
+Read the §-pointers in the status table before starting anywhere else in them.
 
 ## Plans and records
 
-These five are **narratives of work**, not references: each was written to be
+These six are **narratives of work**, not references: each was written to be
 executed against, and each carries a dated ledger of what changed while it was
 being executed. They stay in `docs/` rather than in a `plans/` subfolder because
 the cross-links point at them from the reference docs — the classification below
@@ -54,6 +57,7 @@ is the organisation, not the directory.
 | [learning-loop-plan.md](learning-loop-plan.md) | **Live.** Teaching the system a question and measuring whether it helped. All nine phases are in the tree — the store and the curation surface, match/short-circuit/badge, feedback and the backlog, store health, few-shot, the in-product benchmark, the embedding matcher, permissions — but **three of them ship *off***: the few-shot block, the embedding matcher and Phase 0's own baselines all wait on the same thing, a provider key this environment does not have. §13 is the ledger, one checkbox per deliverable with the check that proves its state, and §13.13 is the dated record of each landing. Read §0.2 before arguing with any of it — four decisions are recorded there rather than re-argued. |
 | [mvp2-plan.md](mvp2-plan.md) | **Live.** The wider second-milestone plan the learning loop is one strand of. Where it and `learning-loop-plan.md` disagree about the knowledge store, §1.3 of the latter is the correction. |
 | [reports-plan.md](reports-plan.md) | **Superseded.** The phase-by-phase plan for Reports, kept as the record of what was intended. [reports.md](reports.md) describes what was built — where they disagree, reports.md is right. |
+| [access-control-plan.md](access-control-plan.md) | **Proposed, not built.** Users, groups, roles and grants, argued from [research/access-control.md](research/access-control.md). Nothing in it ships yet — the product is still owner-only, as [dashboards.md §9](dashboards.md) and [reports.md §14](reports.md) both say. Read §0 of the research note first: it corrects two things this repo believes about its own authorization. |
 
 ## Research
 
@@ -83,5 +87,6 @@ does.
 
 `assets/` holds the original UI design concept (`ui-design-concept.html`) and
 its generated runtime bundle (`support.js`). The frontend's `theme/tokens.ts`
-takes its colour values from that file verbatim. Nothing in `assets/` is prose —
-skip it when searching.
+takes its **dark** colour values from that file verbatim; the light palette is
+not in it — the concept is dark-only. Nothing in `assets/` is prose — skip it
+when searching.

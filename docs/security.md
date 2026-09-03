@@ -61,19 +61,19 @@ greps for violations, so this list cannot silently grow.
 
 | # | Use case | Trigger | Call site |
 |---|----------|---------|-----------|
-| 1 | Route the question | every run | `pipeline/nodes/__init__.py` — `route()`:123 |
-| 2 | Describe the schema | a run classified METADATA | `pipeline/nodes/__init__.py` — `describe()`:438 |
-| 3 | Ask a clarifying question | every run, if enabled | `pipeline/nodes/__init__.py` — `clarify()`:517 |
-| 4 | Generate SQL | every run | `pipeline/nodes/__init__.py` — `generate()`:655 |
-| 5 | Write the answer | every run | `pipeline/nodes/__init__.py` — `present()`:888 |
-| 6 | Choose a chart | every run, if chartable; **every tile draft**, if chartable | `pipeline/nodes/__init__.py` — `propose_chart_intent()`:967 |
-| 7 | Suggest follow-up questions | SPA opens a thread | `services/run_service.py` — `suggest_followups()`:943 |
+| 1 | Route the question | every run | `pipeline/nodes/__init__.py` — `route()`:126 |
+| 2 | Describe the schema | a run classified METADATA | `pipeline/nodes/__init__.py` — `describe()`:634 |
+| 3 | Ask a clarifying question | every run, if enabled | `pipeline/nodes/__init__.py` — `clarify()`:747 |
+| 4 | Generate SQL | every run | `pipeline/nodes/__init__.py` — `generate()`:831 |
+| 5 | Write the answer | every run | `pipeline/nodes/__init__.py` — `present()`:1159 |
+| 6 | Choose a chart | every run, if chartable; **every tile draft**, if chartable | `pipeline/nodes/__init__.py` — `propose_chart_intent()`:1223 |
+| 7 | Suggest follow-up questions | SPA opens a thread | `services/run_service.py` — `suggest_followups()`:1016 |
 | 8 | Draft SQL for a tile or a report block | user asks for a tile, or checks a block | `services/sql_draft_service.py` — **no call site of its own**: it re-enters #4 (and #1 for a report block, #6 for a tile) with a different `NodeDeps` |
-| 9 | Generate a semantic layer | user clicks Generate | `semantic/generator.py` — `_overview()`:400, `_describe_table()`:435, `_glossary()`:474 |
-| 10 | Propose a report outline | user proposes an outline | `reports/outline.py` — `propose()`:203 |
-| 11 | Write a report section | once per section, per generation; **also a per-section retry** | `workers/report.py` — `_narrate()`:742 |
-| 12 | Write the executive summary | once per generation | `workers/report.py` — `_summarise()`:823 |
-| 13 | Embed a question | the six-hourly index pass; **every analytical question**, on a connection with an embedding model pinned | `services/knowledge_service.py` — `_embedder()`:719, `index_embeddings()`:839 |
+| 9 | Generate a semantic layer | user clicks Generate | `semantic/generator.py` — `_overview()`:380, `_describe_table()`:422, `_glossary()`:461 |
+| 10 | Propose a report outline | user proposes an outline | `reports/outline.py` — `propose()`:179 |
+| 11 | Write a report section | once per section, per generation; **also a per-section retry** | `workers/report.py` — `_narrate()`:687 |
+| 12 | Write the executive summary | once per generation | `workers/report.py` — `_summarise()`:782 |
+| 13 | Embed a question | the six-hourly index pass; **every analytical question**, on a connection with an embedding model pinned | `services/knowledge_service.py` — `_embedder()`:708, `index_embeddings()`:839 |
 
 **Thirteen and not fourteen** because #8 is a use case without a call site: a
 draft reuses the *node* that would have made the call anyway, which is the whole
@@ -102,7 +102,7 @@ a provider's vector width rather than assume it from a model name.
 > a tile written from a sentence is drawn as what the sentence meant rather
 > than as whatever a shape heuristic defaults to. It is the *same* call site —
 > `propose_chart_intent`, one function, sent from two places — which is what
-> keeps the count above at twelve and fourteen. **Nothing new leaves the
+> keeps the count above at thirteen and fifteen. **Nothing new leaves the
 > process, and less does than on the chat path:** the tile call passes no
 > policy argument at all, so `ResultProfile.describe` renders at the narrowest
 > budget under *every* policy including `FULL`, withholding the one row value
@@ -186,7 +186,7 @@ receives result data under any policy — it works from schema, question, and
 transcript alone. That holds for every caller of it, including a tile draft and
 a report block.
 
-**Result values reach exactly two of the twelve**: `present` (#5) and a report
+**Result values reach exactly two of the thirteen**: `present` (#5) and a report
 section (#11). Both go through the same `disclose()`, and neither is reachable
 without it — a report additionally refuses to run at all under `NONE` or
 `AGGREGATE` (§2.3). Everything else works from structure, shape, or prose.
@@ -392,7 +392,7 @@ This is the part most easily got wrong, so it is enforced in four places:
 2. **`HintBudget`** gates per-column content hints in the schema block.
 3. **`disclose_history()`** gates the **conversation**.
 4. **`may_render_literals()`** gates a knowledge template's **literals** —
-   §3.5, added with the learning loop's store.
+   §3.3, added with the learning loop's store.
 
 The third exists because an assistant message is prose the model wrote *from*
 result rows — *"Revenue was $1.24M across 812 orders"* — and the next turn
@@ -400,7 +400,7 @@ sends it back as context. Without filtering, a connection tightened from `FULL`
 to `NONE` would keep replaying yesterday's figures under a policy whose entire
 meaning is that no result data reaches the model.
 
-All three filter at **render time, never at write time**. Tightening a policy
+All four filter at **render time, never at write time**. Tightening a policy
 takes effect on the very next question, with no re-sync and no leak from the
 transcript.
 

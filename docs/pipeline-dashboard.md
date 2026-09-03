@@ -59,7 +59,7 @@ nothing but a query.
 ### A1 · The plain-language road: `POST /sql/drafts`
 
 `draft_sql(db, settings, connection_id, llm_config_id, question, owner_id)`
-([sql_draft_service.py:115-205](../backend/app/services/sql_draft_service.py#L115-L205)).
+([sql_draft_service.py:182-300](../backend/app/services/sql_draft_service.py#L182-L300)).
 
 **It is deliberately not a run.** No conversation, no `messages` row, no `runs`
 row, no SSE, no step trail. A draft is a thing the user is looking at, and
@@ -223,7 +223,7 @@ same thing.
 ### A3 · Saving is a second guard, not a receipt
 
 `_validated_tile_fields`
-([dashboard_service.py:314-363](../backend/app/services/dashboard_service.py#L314-L363))
+([dashboard_service.py:337-400](../backend/app/services/dashboard_service.py#L337-L400))
 runs on add **and** on update, and validates the *resulting* tile rather than the
 field that changed — switching a TEXT tile to a CHART is legal, and it is the
 whole tile that has to make sense:
@@ -275,7 +275,7 @@ dashboard is the *exception* (first paint), not the normal call.
 
 ### B2 · `DashboardService.refresh` — the cache gate
 
-([dashboard_service.py:421-479](../backend/app/services/dashboard_service.py#L421-L479))
+([dashboard_service.py:592-660](../backend/app/services/dashboard_service.py#L592-L660))
 
 1. Load the dashboard (404 if not the caller's) and the tiles asked for.
 2. Skip tiles with nothing to compute (TEXT, or blank SQL).

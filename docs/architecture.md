@@ -20,20 +20,22 @@
 > - **Multiple API replicas are supported** — §17 deferred the shared queue and
 >   named the trigger; the trigger fired. See
 >   [cross-replica.md](cross-replica.md).
-> - **The pipeline is ten nodes and §5's diagram is nine**, differently ordered
->   and partly renamed: `retrieve` precedes `clarify`, `describe` was added,
->   `analyze` shipped as `inspect` and `answer` as `present`.
->   [pipeline.md](pipeline.md) is the node-by-node reference.
+> - **The pipeline is eleven nodes and §5's diagram is nine**, differently
+>   ordered and partly renamed: `retrieve` precedes `clarify`, `describe` and
+>   `match` were added, `analyze` shipped as `inspect` and `answer` as
+>   `present`. [pipeline.md](pipeline.md) is the node-by-node reference.
 > - **The SPA is not MUI**, wherever this document says it is — the architecture
 >   diagram, the directory tree, and the chart-renderer trade-off all assume it.
 >   The design concept it was built to is a custom system on oklch
 >   CSS variables with its own visual language; reproducing that through MUI
 >   would have meant fighting MUI's defaults to arrive back at the same place,
 >   so the SPA uses the design tokens directly with a small component kit. Every
->   colour reads from a CSS variable in `frontend/src/theme/tokens.ts`, copied
->   verbatim from `assets/ui-design-concept.html` rather than re-derived, in both
->   the dark and light palettes. There is **no component library** — see
->   [CODEBASE.md](CODEBASE.md) §1.
+>   colour reads from a CSS variable in `frontend/src/theme/tokens.ts`. The
+>   **dark** palette is copied verbatim from `assets/ui-design-concept.html`
+>   rather than re-derived; the **light** palette is not in that file at all —
+>   the concept is dark-only — and was designed against it afterwards as warm
+>   "paper" neutrals with a plum accent drawn from the logo. There is **no
+>   component library** — see [CODEBASE.md](CODEBASE.md) §1.
 >
 > The example sections — **§26 endpoints, §27 models, §28 protocols, §29
 > directory layout, §30 deployment** — are the most divergent and should be

@@ -46,7 +46,9 @@ port), `nodes/__init__.py` (all eleven nodes), `state.py` (typed state),
 Four pieces of machinery are shared, and every claim about safety in this
 product is a claim about one of them:
 
-1. **`LLMGateway`** — three methods, one adapter
+1. **`LLMGateway`** — six methods, one adapter (nodes see only the first
+   three: `complete`, `stream`, `structured`; `probe`, `embed` and
+   `probe_embedding` are reached from services)
    ([`app/infra/llm/`](../backend/app/infra/llm/)). `import litellm` outside
    that package fails CI. Before any node sees an error, the gateway has
    already: retried transient failures (429/5xx/connection/timeout) up to
@@ -63,9 +65,12 @@ product is a claim about one of them:
 2. **The SQL guard** ([`app/sqlguard/`](../backend/app/sqlguard/)) — parse with
    SQLGlot, walk the AST against an allowlist, resolve every name against the
    connection's stored snapshot, rewrite with the row `LIMIT`. **Fails closed:
-   an unknown node type is a rejection, not a warning.** Three entry points —
-   `validate` (chat), `execute_saved_sql` (tiles and report blocks), tile save —
-   and **none of them is privileged**. `sql_origin` is provenance, never trust.
+   an unknown node type is a rejection, not a warning.** Five entry points —
+   `validate` (chat), `execute_saved_sql` (tiles and report blocks),
+   `sql_draft_service` (the draft and hand-written roads), `dashboard_service`
+   (tile save, and importing a dashboard file), and `knowledge/validate`
+   (a taught template, on save and on every use) — and **none of them is
+   privileged**. `sql_origin` is provenance, never trust.
 3. **Disclosure** — the same policy governs three things at *render* time, never
    only at write time: `disclose()` (the result), `HintBudget` (per-column
    content hints in the schema block), `disclose_history()` (the transcript).
@@ -174,7 +179,7 @@ key is revoked.
   loop that did index arithmetic over an ordered node list — see §6 for what
   moved and what did not.
 
-- **The ten node functions were not modified.** They still take
+- **The eleven node functions were not modified.** They still take
   `(RunState, NodeDeps)`, still mutate the state in place, and still report a
   `NodeResult`; a thin adapter turns each into a graph node and keeps the
   executor's duties — the deadline check, the `seq` counter, `on_step`, and
@@ -244,7 +249,7 @@ see [langgraph-migration.md](langgraph-migration.md) Phase 3.
   chart    (data veto → model → plan_chart → Vega-Lite)
 ```
 
-`ORDER` in [graph.py:91-110](../backend/app/pipeline/graph.py#L91-L110) is the
+`ORDER` in [graph.py:102-125](../backend/app/pipeline/graph.py#L102-L125) is the
 single source of truth for sequence. Nodes never decide what runs next beyond an
 optional `goto`. (It moved there with the LangGraph port — `pipeline.py` is now
 a 21-line re-export that keeps `from app.pipeline.pipeline import ORDER`
@@ -376,7 +381,7 @@ runner both take it.
 
 **No LLM call.** Cost: zero tokens, sub-millisecond.
 
-**Logic** ([nodes/__init__.py:252-328](../backend/app/pipeline/nodes/__init__.py#L252-L328)):
+**Logic** ([nodes/__init__.py:429-510](../backend/app/pipeline/nodes/__init__.py#L429-L510)):
 1. `approx_chars = sum(60 + 40 * len(columns))` over all snapshot tables,
    against `_RETRIEVE_BUDGET_CHARS = 50_000`. (The `sales` fixture sits at
    26,480 — under the ceiling, so it takes step 2.)
@@ -1028,18 +1033,21 @@ did, in [graph.py](../backend/app/pipeline/graph.py):
 | `async def node(state, deps) -> NodeResult` | **unchanged** — `_adapt` wraps each one; `deps` arrives via `config["configurable"]`, never in state (it holds a live connector and an `emit` callable) |
 | `RunState` (Pydantic, `extra="forbid"`) | carried whole as the one key of the state schema, not decomposed into reducers |
 | `ORDER` list + `index += 1` | an edge per node; `ORDER` survives as the linear-successor table `_next` reads |
-| `NodeResult.goto` | `Command(goto=…)`, one expression for all five jumps |
+| `NodeResult.goto` | `Command(goto=…)`, one expression for every jump |
 | `status="HALT"` / `"FAILED"` | edge to `END` |
 | `_MAX_TRANSITIONS = 24` | `recursion_limit = 25` — the same 25 node executions — **plus a handler**, because the old loop wrote `E_PIPELINE_LOOP` and returned while LangGraph raises, and an unhandled `GraphRecursionError` would reach `run_service` as a 500 |
 | `deps.emit(...)` + `on_step(...)` | **still `deps.emit` and `on_step`, from the adapter.** Deliberately *not* `astream_events`: routing prose through LangGraph's streaming model would change the SSE contract underneath the SPA |
 | `clarify` HALT + new run | unchanged — that is Phase 5, and it is a product change |
 
-The five edges that are not the linear chain are the reason the port is
-interesting at all: three repairs *back* into `generate` (from `validate`,
-`execute` and `inspect`) and two restores *forward* into `present` (from
-`validate` and `execute`, via `_restore_superseded`, skipping `execute` and
-`inspect`). `result.goto or _next(name)` reads a *label*, not a direction, so
-all five are carried by one expression and none can be forgotten.
+The edges that are not the linear chain are the reason the port is
+interesting at all. At the time of the port there were five: three repairs
+*back* into `generate` (from `validate`, `execute` and `inspect`) and two
+restores *forward* into `present` (from `validate` and `execute`, via
+`_restore_superseded`, skipping `execute` and `inspect`). `match`'s
+short-circuit to `validate` (§3.2) later made it six, and cost the wiring
+nothing — which is the point: `result.goto or _next(name)` reads a *label*, not
+a direction, so every one of them is carried by that one expression and none
+can be forgotten.
 
 **Still to come** is the payoff: checkpointing (Phase 4), which is what makes
 a minutes-long report run survive a process death. And clarification — today a
@@ -1054,7 +1062,7 @@ optional, and [langgraph-migration.md](langgraph-migration.md) argues it is
 ## 7. Known gaps (1–9 verified in code 2026-07-31; 10 added 2026-08-12)
 
 1. **Token accounting only counts `route`.** `state.prompt_tokens` is written
-   in exactly one place — [nodes/__init__.py:120-121](../backend/app/pipeline/nodes/__init__.py#L120-L121)
+   in exactly one place — [nodes/__init__.py:157-158](../backend/app/pipeline/nodes/__init__.py#L157-L158)
    — because `complete()` returns a `Completion` with usage while
    `structured()` and `stream()` return the parsed model / a delta iterator and
    drop it. So `runs.prompt_tokens` and the eval's `estimate_cost_usd` count

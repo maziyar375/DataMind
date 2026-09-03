@@ -67,9 +67,9 @@ triggers) and [eval.md](eval.md) (which is how each phase is proved safe).
 **This table counts orchestration positions, not prompts.** #6 and #9 are the
 same function reached from two places; #12 and #14 are the same two functions
 driven by two executors. [pipeline.md §0.4](pipeline.md) counts *prompts* — 11
-plus the probe — and [security.md §2](security.md) counts *use cases* — twelve,
-across fourteen sites. Nothing below adds to either count, and no phase may:
-see non-negotiable #6.
+plus the probe — and [security.md §2](security.md) counts *use cases* —
+thirteen, across fifteen sites. Nothing below adds to either count, and no
+phase may: see non-negotiable #6.
 
 ### Why the three that move, move
 
