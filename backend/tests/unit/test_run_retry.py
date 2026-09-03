@@ -15,11 +15,10 @@ database has been deleted since cannot be reproduced at all.
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
-
-from types import SimpleNamespace
 
 from app.core.errors import ConflictError, NotFoundError
 from app.domain.value_objects import RunStatus

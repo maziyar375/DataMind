@@ -33,7 +33,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.clock import utcnow
 from app.core.config import Settings
 from app.core.errors import (
-    ConflictError, NotFoundError, RunTimeoutError, ValidationError,
+    ConflictError,
+    NotFoundError,
+    RunTimeoutError,
+    ValidationError,
 )
 from app.core.logging import get_logger
 from app.domain.ports.llm import ChatMessage
