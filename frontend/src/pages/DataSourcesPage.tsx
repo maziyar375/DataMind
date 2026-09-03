@@ -48,6 +48,7 @@ import {
   DetailBody, DetailHeader, FieldRow, MasterColumn, MasterItem, Section,
   StatusLine, Tabs, UnsavedNote,
 } from '../components/settings'
+import { ListScrim, ListToggle, useListDrawer } from '../components/list-drawer'
 import { KnowledgeTab } from '../components/knowledge'
 import { forConnection } from '../components/knowledge-queue'
 import { SemanticLayerTab } from '../components/semantic'
@@ -129,6 +130,8 @@ export default function DataSourcesPage() {
   // than told how to reach it. `/sources/new` is the create form: it is a
   // state of this screen like any other, and it has an address like any other.
   const navigate = useNavigate()
+  // Below 700px the index is an overlay; above it this does nothing.
+  const listDrawer = useListDrawer()
   const withTab = useMatch('/sources/:id/:tab')
   const plain = useMatch('/sources/:id')
   const routeId = withTab?.params.id ?? plain?.params.id ?? null
@@ -654,8 +657,10 @@ export default function DataSourcesPage() {
 
   return (
     <div style={{ display: 'flex', height: '100%', width: '100%', minWidth: 0 }}>
+      <ListScrim open={listDrawer.open} onClick={listDrawer.close} />
       <MasterColumn
         title="Data sources"
+        open={listDrawer.open}
         icon={<Icon.Database size={15} />}
         note="Yours only — connections are not shared with your team."
         count={list.length}
@@ -730,6 +735,9 @@ export default function DataSourcesPage() {
         ) : (
           <>
             <DetailHeader
+              leading={
+                <ListToggle open={listDrawer.open} label="Data sources" onClick={listDrawer.toggle} />
+              }
               glyph={
                 <GlyphBadge size={40} hue={engineHue(draft.database_type)}>
                   <Icon.Database size={19} />

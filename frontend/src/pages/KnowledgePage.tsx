@@ -26,6 +26,7 @@ import {
   Chip, EmptyState, GlyphBadge, Icon, PrimaryButton, engineHue,
 } from '../components/ui'
 import { DetailHeader, MasterColumn, MasterItem } from '../components/settings'
+import { ListScrim, ListToggle, useListDrawer } from '../components/list-drawer'
 import { KnowledgeTab } from '../components/knowledge'
 import { byUrgency, forConnection, queueSentence } from '../components/knowledge-queue'
 import type { QueueRow } from '../components/knowledge-queue'
@@ -35,6 +36,8 @@ export default function KnowledgePage() {
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState('')
   const navigate = useNavigate()
+  // Below 700px the index is an overlay; above it this does nothing.
+  const listDrawer = useListDrawer()
   const match = useMatch('/knowledge/:id')
   const routeId = match?.params.id ?? null
   const { rows: queue } = useQueue()
@@ -90,8 +93,10 @@ export default function KnowledgePage() {
 
   return (
     <div style={{ display: 'flex', height: '100%', width: '100%', minWidth: 0 }}>
+      <ListScrim open={listDrawer.open} onClick={listDrawer.close} />
       <MasterColumn
         title="Knowledge"
+        open={listDrawer.open}
         icon={<Icon.Flag size={15} />}
         note={loading ? undefined : queueSentence(
           list.map(
@@ -155,6 +160,9 @@ export default function KnowledgePage() {
                 Data sources this is already there, which is why the tab
                 itself does not carry one. */}
             <DetailHeader
+              leading={
+                <ListToggle open={listDrawer.open} label="Knowledge" onClick={listDrawer.toggle} />
+              }
               glyph={
                 <GlyphBadge size={40} hue={engineHue(selected.database_type)}>
                   <Icon.Database size={19} />

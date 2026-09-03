@@ -363,7 +363,21 @@ need to give way differ by screen. The set, and what each does:
 | ≤820px | The live-refresh label goes, leaving the dot |
 | ≤760px | The dashboard's edit-mode hint is dropped |
 | ≤720px | Report figures go single-column; dashboard row metadata is dropped |
-| ≤640px | Page padding tightens and two-column form rows stack rather than crush |
+| ≤700px | **The second column becomes an overlay** — the chat list and the master column go off-canvas beside the rail, with a toggle in each page header, a scrim, Escape, and a close on every navigation; the chat header wraps its two pickers onto their own line; tab strips scroll; the dashboard toolbar keeps its shape and hides its labels (visually — they are still the buttons' names) |
+| ≤640px | Page padding tightens; two- and three-column form rows stack rather than crush |
+| ≤620px | The dashboard grid stops being a grid: tiles stack full-width in order (`STACK_BELOW_PX`) |
+
+**Nothing below 700px has two fixed columns.** That was the whole finding: the
+rail already collapsed to 66px at 860px, but the second column did not give
+ground with it, so a 375px screen had about a hundred pixels left for the
+transcript, the form or the document. The mechanism is one module —
+[`list-drawer.tsx`](../frontend/src/components/list-drawer.tsx) — shared by
+Chat, Data sources, LLM providers and Knowledge, and it closes on the path
+changing rather than on each page remembering to call back: every one of those
+lists navigates when you pick something, and a drawer left open over the thing
+you just chose is how this pattern is usually got wrong. The drawer sits
+*beside* the collapsed rail rather than over it, because the rail is how you
+leave the page.
 
 `@media print` is a report feature, not a general one: it forces the light
 token set over `applyTheme`'s inline styles, hides the shell, keeps a figure

@@ -60,6 +60,7 @@ import {
   DisclosureBadge, ErrorNote, GlyphBadge, Icon, PrimaryButton, SearchField, Spinner,
   dirOf, engineHue,
 } from '../components/ui'
+import { LIST_DRAWER_ID, ListScrim, ListToggle, useListDrawer } from '../components/list-drawer'
 
 /**
  * How long streamed tokens are collected before they are painted.
@@ -127,6 +128,8 @@ export default function ChatPage() {
   // a thread change did not have to move; what changed is where the value
   // comes from and that a refresh keeps the conversation open.
   const navigate = useNavigate()
+  // Below 700px the thread list is an overlay; above it this does nothing.
+  const listDrawer = useListDrawer()
   const { pathname } = useLocation()
   const activeId = useMatch('/chat/:conversationId')?.params.conversationId ?? null
   const setActiveId = useCallback(
@@ -932,13 +935,16 @@ export default function ChatPage() {
         activeId={activeId}
         onSelect={setActiveId}
         onNew={newChat}
+        open={listDrawer.open}
         onDelete={deleteConversation}
         onRename={renameConversation}
       />
+      <ListScrim open={listDrawer.open} onClick={listDrawer.close} />
 
       {/* main column */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         <header
+          className="rm-chat-header"
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -948,6 +954,9 @@ export default function ChatPage() {
             flexShrink: 0,
           }}
         >
+          {/* Before the title: the way back to the list, on the left, where
+              back has always been. */}
+          <ListToggle open={listDrawer.open} label="Chats" onClick={listDrawer.toggle} />
           <HeaderTitle
             key={activeId ?? 'none'}
             title={activeTitle}
@@ -956,6 +965,7 @@ export default function ChatPage() {
           />
 
           <div
+            className="rm-chat-pickers"
             style={{
               marginLeft: 'auto',
               display: 'flex',
@@ -1764,12 +1774,15 @@ function bucketOf(iso: string, now: number): string {
 const BUCKETS = ['Today', 'Previous 7 days', 'Previous 30 days', 'Older']
 
 function ConversationSidebar({
-  conversations: list, connections, activeId, onSelect, onNew, onDelete, onRename,
+  conversations: list, connections, activeId, open, onSelect, onNew, onDelete,
+  onRename,
 }: {
   conversations: ConversationSummary[]
   /** To name the data source each thread is bound to, on its row. */
   connections: Connection[]
   activeId: string | null
+  /** Below 700px this list is an overlay — see `list-drawer.tsx`. */
+  open?: boolean
   onSelect: (id: string) => void
   onNew: () => void
   onDelete: (id: string) => void
@@ -1805,7 +1818,8 @@ function ConversationSidebar({
 
   return (
     <aside
-      className="rm-chats"
+      id={LIST_DRAWER_ID}
+      className={`rm-chats${open ? ' is-open' : ''}`}
       style={{
         width: 252,
         flexShrink: 0,
@@ -2365,7 +2379,10 @@ function HeaderSelect({
   }, [open])
 
   return (
-    <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
+    // `rm-picker`: below 700px the header wraps onto its own line and the two
+    // pickers share it, so the fixed trigger width — which exists to stop them
+    // jumping on every change — has to give way to an equal share.
+    <div ref={ref} className="rm-picker" style={{ position: 'relative', flexShrink: 0 }}>
       <button
         onClick={() => !disabled && setOpen((v) => !v)}
         disabled={disabled}

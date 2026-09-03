@@ -1116,14 +1116,14 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
                     className={presenting ? 'is-on' : undefined}
                     onClick={() => setPresenting((open) => !open)}
                   >
-                    <Icon.Play size={12} /> Present
+                    <Icon.Play size={12} /> <span className="rm-toolgroup-text">Present</span>
                   </button>
                   <button
                     type="button"
                     aria-pressed={editing}
                     onClick={() => setEditing(true)}
                   >
-                    <Icon.Grid size={13} /> Edit grid
+                    <Icon.Grid size={13} /> <span className="rm-toolgroup-text">Edit grid</span>
                   </button>
                   <button
                     type="button"
@@ -1131,7 +1131,7 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
                     className={showSettings ? 'is-on' : undefined}
                     onClick={() => setShowSettings((open) => !open)}
                   >
-                    <Icon.Gear size={13} /> Settings
+                    <Icon.Gear size={13} /> <span className="rm-toolgroup-text">Settings</span>
                   </button>
                   {/* The one action in a group of modes, and it earns the
                       place: "give me this dashboard as a file" is something
@@ -1150,7 +1150,7 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
                       )
                     }
                   >
-                    <Icon.ArrowDown size={13} /> Export
+                    <Icon.ArrowDown size={13} /> <span className="rm-toolgroup-text">Export</span>
                   </button>
                 </div>
                 <PrimaryButton style={{ padding: '8px 14px' }} onClick={() => openEditor(null)}>

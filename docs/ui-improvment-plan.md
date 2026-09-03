@@ -514,11 +514,26 @@ order unless noted.
 > not known until the tab had loaded) is answered by the shell counting it.
 
 ## Phase 6 — Responsive
-- [ ] **F7** `.rm-chats` becomes an overlay drawer below ~700px
-- [ ] **F7** `.rm-master` becomes an overlay drawer below ~700px
-- [ ] **F7** Drawer toggle in each page header; closes on select
-- [ ] **F7** Phase 2–5 surfaces verified at phone width
-- [ ] **F7** Dashboard `STACK_BELOW_PX` stacking re-checked
+- [x] **F7** `.rm-chats` becomes an overlay drawer below ~700px
+- [x] **F7** `.rm-master` becomes an overlay drawer below ~700px
+- [x] **F7** Drawer toggle in each page header; closes on select
+- [x] **F7** Phase 2–5 surfaces verified at phone width
+- [x] **F7** Dashboard `STACK_BELOW_PX` stacking re-checked
+
+> Three things the responsive pass had to fix that the finding did not name,
+> because they were invisible until the second column stopped taking the
+> width: the chat header's two pickers are 232px + 190px of deliberately
+> fixed trigger, wider together than a phone, so below 700px they take a line
+> of their own and share it; a five-tab strip is ~430px, so it scrolls rather
+> than clipping Knowledge off the end; and the dashboard toolbar's Present /
+> Edit grid / Settings keeps its shape and hides its labels *visually* —
+> `display: none` would have left three unnamed glyphs, so it uses `.rm-sr`'s
+> clip instead and the accessible names survive.
+>
+> The tile-editor drawer (F10) needed no change: it was already
+> `min(420px, 92vw)` below 900px. The account screen (F6), the split settings
+> tabs (F8) and the notification card (F13) were all checked at 375px and
+> none of them overflows.
 
 ---
 

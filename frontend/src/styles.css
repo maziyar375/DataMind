@@ -2926,3 +2926,135 @@ code, pre, .mono {
 @media print {
   .rm-notices { display: none !important; }
 }
+
+/* ── the second column, below 700px ───────────────────────────────────────
+   Every working page here is a list beside a thing. The rail collapses to
+   66px at 860px, but the *second* column did not give ground with it, so on a
+   375px screen about a hundred pixels were left for the transcript, the form
+   or the report — not cramped, unusable.
+
+   So below 700px the list becomes an overlay in the same treatment
+   `.rm-drawer` gives the dashboard's settings panel, sitting beside the rail
+   rather than over it: the rail is how you leave the page, and covering it
+   would make the drawer a trap. `!important` throughout because both columns
+   declare their width and layout inline.
+
+   The toggle exists at exactly the widths the drawer does, which is why the
+   two rules are written together — a button that opens what is already open
+   is furniture, and the pair drifting apart is how that happens. */
+.rm-list-toggle { display: none; }
+
+@media (max-width: 700px) {
+  .rm-list-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text-dim);
+    cursor: pointer;
+  }
+  .rm-list-toggle:hover { background: var(--panel-hover); color: var(--text); }
+  .rm-list-toggle[aria-expanded='true'] {
+    background: var(--accent-bg);
+    border-color: var(--accent-border, var(--border));
+    color: var(--accent);
+  }
+
+  .rm-chats,
+  .rm-master {
+    position: fixed !important;
+    top: 0;
+    bottom: 0;
+    /* Beside the collapsed rail, never over it. */
+    left: 66px;
+    z-index: 55;
+    width: min(280px, calc(100vw - 76px)) !important;
+    border-right: 1px solid var(--border-strong) !important;
+    box-shadow: 18px 0 50px rgba(0, 0, 0, 0.4);
+    transform: translateX(calc(-100% - 70px));
+    transition: transform 0.18s ease;
+  }
+  .rm-chats.is-open,
+  .rm-master.is-open { transform: none; }
+
+  .rm-list-scrim {
+    position: fixed;
+    inset: 0 0 0 66px;
+    z-index: 50;
+    background: rgba(0, 0, 0, 0.45);
+  }
+
+  /* The detail header stops being a row of chips and a title on one line:
+     at this width the record's name and its Save button both matter, and
+     the header is the only place either of them lives. */
+  .rm-detail-header { padding: 12px 14px !important; gap: 10px !important; }
+  .rm-dash-header { flex-wrap: wrap; }
+
+  /* The chat header's two pickers move onto their own line and share it.
+     `width` is declared inline on each trigger (232px and 190px, so they do
+     not jump width as the choice changes) — a promise worth keeping on a
+     laptop and impossible to keep on a phone, where together they are wider
+     than the screen. */
+  .rm-chat-header { flex-wrap: wrap; padding: 10px 14px !important; gap: 10px !important; }
+  .rm-chat-pickers { width: 100%; margin-left: 0 !important; }
+  .rm-chat-pickers .rm-picker { flex: 1 1 0; min-width: 0; }
+  .rm-chat-pickers .rm-picker > button { width: 100% !important; }
+
+  /* Five tabs are wider than a phone. Scrolled, not wrapped: a tab strip on
+     two lines stops reading as one strip, and the scrollbar is hidden
+     because the tabs themselves are the affordance. */
+  .rm-tabs {
+    padding: 0 14px !important;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .rm-tabs::-webkit-scrollbar { display: none; }
+  .rm-tab { white-space: nowrap; }
+
+  .rm-detail-pane .rm-page-pad,
+  .rm-index.rm-page-pad { padding: 16px 14px; }
+
+  /* The dashboard toolbar keeps its shape and loses its labels. The group is
+     one segmented switch — wrapping it onto two lines would stop it reading
+     as one control, and shrinking the caps clips the last verb off the edge —
+     so below this width the verbs go and the glyphs stand in, which is the
+     same trade the rail makes at 860px. Present / Edit grid / Settings are
+     the three modes of this screen and all three must stay reachable. */
+  .rm-toolgroup button { padding: 6px 8px !important; }
+  /* Visually hidden rather than `display: none`: these labels *are* the
+     buttons' accessible names, and removing them from the tree would leave
+     three unlabelled glyphs on the screen where a label matters most. Same
+     technique as `.rm-sr`, applied only at this width. */
+  .rm-toolgroup-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  /* Host / Port / Database at ~85px a column is a port field showing three
+     of five digits. !important because the columns are declared inline. */
+  .rm-fieldrow { grid-template-columns: 1fr !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rm-chats, .rm-master { transition: none; }
+}
+
+/* On paper there is no viewport, so there is no off-canvas either. */
+@media print {
+  .rm-list-toggle, .rm-list-scrim { display: none !important; }
+}

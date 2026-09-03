@@ -40,6 +40,7 @@ import {
   DetailBody, DetailHeader, FieldRow, MasterColumn, MasterItem, Section,
   StatusLine, UnsavedNote,
 } from '../components/settings'
+import { ListScrim, ListToggle, useListDrawer } from '../components/list-drawer'
 import { PROVIDER_URLS } from '../theme/tokens'
 import { useUnsavedWork } from '../shell'
 
@@ -84,6 +85,8 @@ export default function LlmProvidersPage() {
   // pages are meant to be one screen with different fields, and that includes
   // how they are addressed. `/providers/new` is the create form.
   const navigate = useNavigate()
+  // Below 700px the index is an overlay; above it this does nothing.
+  const listDrawer = useListDrawer()
   const routeId = useMatch('/providers/:id')?.params.id ?? null
   const creating = routeId === 'new'
   const selectedId = creating ? null : routeId
@@ -296,8 +299,10 @@ export default function LlmProvidersPage() {
 
   return (
     <div style={{ display: 'flex', height: '100%', width: '100%', minWidth: 0 }}>
+      <ListScrim open={listDrawer.open} onClick={listDrawer.close} />
       <MasterColumn
         title="LLM providers"
+        open={listDrawer.open}
         icon={<Icon.Sparkle size={15} />}
         note="Yours only — models are not shared with your team."
         count={list.length}
@@ -361,6 +366,9 @@ export default function LlmProvidersPage() {
         ) : (
           <>
             <DetailHeader
+              leading={
+                <ListToggle open={listDrawer.open} label="LLM providers" onClick={listDrawer.toggle} />
+              }
               glyph={
                 <GlyphBadge size={40} hue={providerHue(draft.provider)}>
                   <Icon.Sparkle size={19} />

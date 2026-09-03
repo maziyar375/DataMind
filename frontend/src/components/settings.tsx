@@ -7,6 +7,7 @@
  * fields.
  */
 import React from 'react'
+import { LIST_DRAWER_ID } from './list-drawer'
 import { GlyphBadge, Icon } from './ui'
 
 // ── left column ───────────────────────────────────────────────────────────
@@ -20,7 +21,8 @@ import { GlyphBadge, Icon } from './ui'
  * follows for its archived filter.
  */
 export function MasterColumn({
-  title, icon, note, count, onNew, newLabel, empty, query, onQuery, loading, children,
+  title, icon, note, count, onNew, newLabel, empty, query, onQuery, loading, open,
+  children,
 }: {
   title: string
   /** The section's own glyph — the same mark the sidebar uses for this page. */
@@ -43,11 +45,18 @@ export function MasterColumn({
   onQuery?: (next: string) => void
   /** Outline rows while the first read is in flight, so the column has shape. */
   loading?: boolean
+  /**
+   * Below 700px this column is an overlay rather than a column — see
+   * `list-drawer.tsx`. Above it the flag does nothing at all, because the
+   * stylesheet only gives `.is-open` a meaning inside that media query.
+   */
+  open?: boolean
   children: React.ReactNode
 }) {
   return (
     <div
-      className="rm-master"
+      id={LIST_DRAWER_ID}
+      className={`rm-master${open ? ' is-open' : ''}`}
       style={{
         width: 274,
         flexShrink: 0,
@@ -280,13 +289,19 @@ export function MasterItem({
  * which is the equivalent strip on the pages next door.
  */
 export function DetailHeader({
-  title, subtitle, chips, actions, glyph,
+  title, subtitle, chips, actions, glyph, leading,
 }: {
   title: string
   subtitle: React.ReactNode
   chips?: React.ReactNode
   actions: React.ReactNode
   glyph?: React.ReactNode
+  /**
+   * Before the glyph: the control that opens the list column when it is an
+   * overlay. It goes here rather than beside the actions because it is a way
+   * *back*, and back is on the left of every screen anyone has ever used.
+   */
+  leading?: React.ReactNode
 }) {
   return (
     <div
@@ -301,6 +316,7 @@ export function DetailHeader({
         flexShrink: 0,
       }}
     >
+      {leading}
       {glyph}
       {/* A basis, not just `minWidth: 0`: with the actions unshrinkable beside
           it, a pure `min-width: 0` column collapses to nothing on a narrow
@@ -343,8 +359,12 @@ export function DetailHeader({
           marginLeft: 'auto',
           display: 'flex',
           alignItems: 'center',
+          justifyContent: 'flex-end',
+          // Wrapping, not shrinking: two buttons and an "Unsaved changes"
+          // note are ~330px, which is wider than a phone's content column.
+          // Unshrinkable *and* unwrappable is how Save left the screen.
+          flexWrap: 'wrap',
           gap: 8,
-          flexShrink: 0,
         }}
       >
         {actions}
@@ -399,6 +419,10 @@ export function Tabs({
 }) {
   return (
     <div
+      // Five tabs are ~430px, and a connection's Knowledge tab must be
+      // reachable on a phone — silently clipping the last two is the failure
+      // this class prevents.
+      className="rm-tabs"
       style={{
         display: 'flex',
         gap: 2,
@@ -539,6 +563,10 @@ export function FieldRow({
 }) {
   return (
     <div
+      // Host / Port / Database is three columns of ~85px on a phone, which is
+      // a port field showing three of five digits. The stylesheet collapses
+      // this to one column below 640px, the same rule `.rm-col-2` follows.
+      className="rm-fieldrow"
       style={{
         display: 'grid',
         gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,

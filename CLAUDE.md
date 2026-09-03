@@ -446,6 +446,13 @@ at commit time and shows up as drift a release later. Full tour:
   router that is not used. Primitives live in `components/ui.tsx`; the
   master–detail frame that Data sources and LLM providers share is
   `components/settings.tsx`. Compose from those before writing a new one.
+- **Below 700px no page has two fixed columns.** The chat list and the
+  settings master column become off-canvas drawers beside the collapsed rail
+  (`components/list-drawer.tsx`: `useListDrawer`, `ListToggle`, `ListScrim`),
+  closing on Escape, on the scrim, and on any navigation — which is what
+  "close on select" means when every list here navigates. A page with a
+  second column gets a `ListToggle` in its header and passes `open` to the
+  column; that is the whole contract.
 - **Never hardcode a colour.** Every value comes from a CSS variable defined in
   `theme/tokens.ts`, which ships a **dark and a light** definition for each.
   A literal hex or `oklch()` in a component is a bug in both themes — one of
