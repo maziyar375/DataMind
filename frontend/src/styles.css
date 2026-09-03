@@ -2844,8 +2844,11 @@ code, pre, .mono {
 /* The rail's one count. It sits at the end of the row on the wide rail and
    rides the glyph's corner on the 66px one, where the label it belonged
    beside is hidden — a number floating in the middle of an icon strip reads
-   as part of the icon. Red rather than the accent: this is work waiting, not
-   the page you are on, and the accent already means "here". */
+   as part of the icon. Not the accent: this is work waiting, not the page you
+   are on, and the accent already means "here". Red is reserved for a flag
+   somebody raised on a wrong answer; a backlog of unanswered questions is
+   `.is-amber`, because a mark that cries wolf about a backlog is one people
+   stop looking at. */
 .rm-nav-badge {
   margin-left: auto;
   flex-shrink: 0;
@@ -2859,6 +2862,7 @@ code, pre, .mono {
   line-height: 1.5;
   text-align: center;
 }
+.rm-nav-badge.is-amber { background: var(--amber-bg); color: var(--amber); }
 
 @media (max-width: 860px) {
   .rm-sidebar .rm-nav-btn { position: relative; }

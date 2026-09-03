@@ -385,7 +385,8 @@ frontend/src/
                             curation console promoted out of a connection's
                             fourth tab; the same `KnowledgeTab` with a
                             connection picker in front of it, and the rail's
-                            only count badge), Account (`/settings` — your own
+                            only count badge — red for a flag somebody raised,
+                            amber for a backlog), Account (`/settings` — your own
                             display name and password, the only two things a
                             member may change about themselves; every route
                             under /users is admin-only), About (who built it — the one

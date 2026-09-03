@@ -512,6 +512,28 @@ order unless noted.
 > number is noise. The per-connection count on the Knowledge tab is unchanged
 > from step 1 and is now live — the objection that kept it off (the number was
 > not known until the tab had loaded) is answered by the shell counting it.
+>
+> **Corrected after review.** The first cut of the console reused the settings
+> column wholesale and inherited three things that do not belong on it:
+>
+> - *Add a connection* as the column's primary action, which made the loudest
+>   control on the curation screen a way out of the section into a create form
+>   for something else. `MasterColumn`'s new-verb is optional now, and the one
+>   place that offer belongs is the empty state beside it.
+> - The column's count pill, which showed the number of **connections** (`2`)
+>   under the word "Knowledge" while the rail showed the size of the **queue**
+>   (`42`) three inches away. Two different numbers under one word is worse
+>   than no number; the pill is optional now and the console omits it.
+> - A summary line restating the rows underneath it. The list is sorted
+>   busiest-first and each row carries its own count, so the sentence answered
+>   nothing the rows did not. It and its `queueSentence` helper are gone.
+>
+> And the badge's colour was wrong: red over a queue that is entirely
+> *suggestions* says something is broken on a connection where nothing is.
+> Red is now reserved for a flag somebody raised on a wrong answer, amber for a
+> backlog — `queueTone`, followed by the rail, the rows and the detail chips
+> alike. A mark that cries wolf about a backlog is one people stop looking at,
+> which is the failure this badge exists to prevent.
 
 ## Phase 6 — Responsive
 - [x] **F7** `.rm-chats` becomes an overlay drawer below ~700px

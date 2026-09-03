@@ -16,7 +16,7 @@ import LlmProvidersPage from './pages/LlmProvidersPage'
 import LoginPage from './pages/LoginPage'
 import ReportsPage from './pages/ReportsPage'
 import UsersPage from './pages/UsersPage'
-import { badge, totalWaiting } from './components/knowledge-queue'
+import { badge, queueTone, totalWaiting } from './components/knowledge-queue'
 import type { QueueRow } from './components/knowledge-queue'
 import { Notifications, type ShownNotice } from './components/notifications'
 import { ShellProvider, isWithin, type BackgroundTask, type Shell } from './shell'
@@ -331,6 +331,7 @@ export default function App() {
           <Sidebar
             user={user}
             queueBadge={badge(totalWaiting(queue))}
+            queueTone={queueTone(queue)}
             pathname={location.pathname}
             onNavigate={navigate}
             theme={theme}
@@ -438,11 +439,13 @@ export default function App() {
  * (`.rm-nav-btn`), so the rail holds no React state per button.
  */
 function Sidebar({
-  user, queueBadge, pathname, onNavigate, theme, onToggleTheme, onLogout,
+  user, queueBadge, queueTone, pathname, onNavigate, theme, onToggleTheme, onLogout,
 }: {
   user: User
   /** The curation queue's size, or nothing when there is nothing waiting. */
   queueBadge?: string
+  /** Red for a flag somebody raised, amber for a backlog of questions. */
+  queueTone?: 'red' | 'amber' | 'neutral'
   pathname: string
   onNavigate: (path: string) => void
   theme: ThemeName
@@ -482,6 +485,7 @@ function Sidebar({
             icon={item.icon}
             label={item.label}
             badge={item.path === '/knowledge' ? queueBadge : undefined}
+            badgeTone={queueTone}
             onClick={() => onNavigate(item.path)}
           />
         ))}
@@ -616,13 +620,20 @@ function Sidebar({
 }
 
 function NavButton({
-  active, icon, label, badge, onClick,
+  active, icon, label, badge, badgeTone, onClick,
 }: {
   active: boolean
   icon: React.ReactNode
   label: string
   /** A count worth interrupting for. Absent, never "0". */
   badge?: string
+  /**
+   * How loudly to say it. Red is reserved for a defect somebody reported;
+   * a backlog of unanswered questions is amber, because a mark that cries
+   * wolf about a backlog is one people stop looking at — which is the exact
+   * failure this badge was added to fix.
+   */
+  badgeTone?: 'red' | 'amber' | 'neutral'
   onClick: () => void
 }) {
   return (
@@ -639,7 +650,12 @@ function NavButton({
       <span className="rm-sidebar-text">{label}</span>
       {badge && (
         <>
-          <span aria-hidden className="rm-nav-badge">{badge}</span>
+          <span
+            aria-hidden
+            className={`rm-nav-badge${badgeTone === 'amber' ? ' is-amber' : ''}`}
+          >
+            {badge}
+          </span>
           {/* The number means nothing read aloud on its own. */}
           <span className="rm-sr">{badge} waiting</span>
         </>

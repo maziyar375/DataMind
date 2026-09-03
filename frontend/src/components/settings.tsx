@@ -21,8 +21,8 @@ import { GlyphBadge, Icon } from './ui'
  * follows for its archived filter.
  */
 export function MasterColumn({
-  title, icon, note, count, onNew, newLabel, empty, query, onQuery, loading, open,
-  children,
+  title, icon, note, count, showCount = true, onNew, newLabel, empty, query,
+  onQuery, loading, open, children,
 }: {
   title: string
   /** The section's own glyph — the same mark the sidebar uses for this page. */
@@ -37,9 +37,29 @@ export function MasterColumn({
    * actually read, and worth no more than one.
    */
   note?: string
+  /** How many rows the list holds. Drives the skeleton and the empty text. */
   count: number
-  onNew: () => void
-  newLabel: string
+  /**
+   * Whether to show that number beside the title.
+   *
+   * True where the count *is* the list's subject — Data sources has two data
+   * sources. False where the list is a filter rather than the thing being
+   * counted: the Knowledge console lists connections, so a pill reading `2`
+   * under the word "Knowledge" contradicts the rail's badge reading `42`
+   * three inches away. Two different numbers under one word is worse than no
+   * number at all.
+   */
+  showCount?: boolean
+  /**
+   * The list's own new-verb, if it has one.
+   *
+   * Optional because not every column adds to itself. A page whose primary
+   * action would navigate *out of the section* should not put it here — this
+   * is the loudest control in the column, and pointing it somewhere else
+   * makes the page's most prominent offer a way to leave.
+   */
+  onNew?: () => void
+  newLabel?: string
   empty: string
   query?: string
   onQuery?: (next: string) => void
@@ -92,18 +112,20 @@ export function MasterColumn({
           >
             {title}
           </h1>
-          <span
-            style={{
-              fontSize: 11,
-              fontWeight: 600,
-              color: 'var(--text-faint)',
-              background: 'var(--panel-alt)',
-              padding: '2px 7px',
-              borderRadius: 20,
-            }}
-          >
-            {loading ? '–' : count}
-          </span>
+          {showCount && (
+            <span
+              style={{
+                fontSize: 11,
+                fontWeight: 600,
+                color: 'var(--text-faint)',
+                background: 'var(--panel-alt)',
+                padding: '2px 7px',
+                borderRadius: 20,
+              }}
+            >
+              {loading ? '–' : count}
+            </span>
+          )}
         </div>
 
         {note && (
@@ -146,10 +168,12 @@ export function MasterColumn({
           </div>
         )}
 
-        <button onClick={onNew} title={newLabel} className="rm-master-new">
-          <Icon.Plus size={14} stroke="var(--accent)" />
-          {newLabel}
-        </button>
+        {onNew && (
+          <button onClick={onNew} title={newLabel} className="rm-master-new">
+            <Icon.Plus size={14} stroke="var(--accent)" />
+            {newLabel}
+          </button>
+        )}
       </div>
 
       <div
@@ -220,14 +244,24 @@ export function MasterItem({
   title: string
   subtitle: string
   active: boolean
-  tone: 'green' | 'red' | 'neutral'
+  /**
+   * `amber` exists because a dot that can only say good / bad / unknown
+   * cannot say *attention*. The knowledge console needs the difference: a
+   * connection with flags raised on it is red, one with only unanswered
+   * questions waiting is amber, and calling the second red says something is
+   * broken when nothing is.
+   */
+  tone: 'green' | 'amber' | 'red' | 'neutral'
   /** What the dot means, in words — a tooltip, and the screen-reader text. */
   toneLabel?: string
   glyph?: React.ReactNode
   onClick: () => void
 }) {
   const dotColor =
-    tone === 'green' ? 'var(--green)' : tone === 'red' ? 'var(--red)' : 'var(--text-faint)'
+    tone === 'green' ? 'var(--green)'
+      : tone === 'amber' ? 'var(--amber)'
+        : tone === 'red' ? 'var(--red)'
+          : 'var(--text-faint)'
 
   return (
     <button

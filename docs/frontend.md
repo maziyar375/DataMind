@@ -72,7 +72,12 @@ target for both is how people sign out by accident.
 **Knowledge is the one rail entry with a count**, and the count is the argument
 for the entry: it exists because a curation queue nobody can see is not a
 queue, so if it is permanently empty on a real install the row has not earned
-its place.
+its place. **Red is reserved for a flag somebody raised** on a wrong answer; a
+backlog of questions nothing answers yet is amber, because that is an
+opportunity rather than a defect — and a mark that cries wolf about a backlog
+is one people stop looking at, which is the exact failure the badge was added
+to fix. `queueTone` in `knowledge-queue.ts` is the rule, and the console's rows
+and its detail chips both follow it.
 
 The view area is the document's `<main id="main">`, and a `.rm-skip` link
 before the rail is the first thing in the tab order — the rail is seven
@@ -115,6 +120,16 @@ share the frame in
 `FieldRow`, `Tabs`, `StatusLine`, `UnsavedNote`). Two pages that configure a
 credential and probe it should not each invent their own shape, and the third
 picks a connection for the same reason.
+
+`MasterColumn`'s new-verb and its count pill are both **optional**, and
+Knowledge is why. That column lists connections as a *filter*, not as the thing
+being counted: a pill reading `2` under the word "Knowledge" contradicts the
+rail's badge reading `42` three inches away, and the column's loudest control
+pointing at *Add a connection* would make the curation console's most prominent
+offer a way out of the section into a create form for something else. So the
+console shows neither — the rows carry the per-connection counts, the rail
+carries the total, and the one place *Add a connection* belongs is the empty
+state beside it, where it is the single thing that unblocks the page.
 
 **Knowledge is deliberately not a new screen.** `/knowledge` renders
 `KnowledgeTab` — the same component `/sources/:id/knowledge` renders — with a

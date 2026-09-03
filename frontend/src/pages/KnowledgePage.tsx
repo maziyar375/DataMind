@@ -28,7 +28,7 @@ import {
 import { DetailHeader, MasterColumn, MasterItem } from '../components/settings'
 import { ListScrim, ListToggle, useListDrawer } from '../components/list-drawer'
 import { KnowledgeTab } from '../components/knowledge'
-import { byUrgency, forConnection, queueSentence } from '../components/knowledge-queue'
+import { byUrgency, forConnection, toneOf } from '../components/knowledge-queue'
 import type { QueueRow } from '../components/knowledge-queue'
 
 export default function KnowledgePage() {
@@ -98,19 +98,22 @@ export default function KnowledgePage() {
         title="Knowledge"
         open={listDrawer.open}
         icon={<Icon.Flag size={15} />}
-        note={loading ? undefined : queueSentence(
-          list.map(
-            (item) =>
-              queue.find((row) => row.connectionId === item.id)
-              ?? { connectionId: item.id, name: item.name, reviews: 0, suggestions: 0 },
-          ),
-        )}
         count={list.length}
+        // The count here would be the number of *connections*, and the word
+        // above it is "Knowledge" — which the rail is at that moment labelling
+        // with the size of the queue. Two different numbers under one word,
+        // three inches apart, is worse than no number: the rows below carry
+        // the per-connection counts and the rail carries the total, each once.
+        showCount={false}
         loading={loading}
         query={filter}
         onQuery={setFilter}
-        onNew={() => navigate('/sources/new')}
-        newLabel="Add a connection"
+        // Deliberately no new-verb. This column lists connections as a filter;
+        // it is not a list you add to, and adding a connection is Data
+        // sources' job. Putting it here would make the loudest control on the
+        // curation console a way out of the section, into a create form for
+        // something else. The one place it belongs is the empty state beside
+        // it, where it is the single thing that unblocks the page.
         empty="Nothing to curate yet — the store belongs to a connection, and you have not added one."
       >
         {ordered.map((row) => {
@@ -129,12 +132,22 @@ export default function KnowledgePage() {
                   : 'nothing waiting'
               }
               active={row.connectionId === routeId}
-              tone={waiting ? 'red' : 'neutral'}
+              // Red only for a flag somebody raised on a wrong answer; amber
+              // for a backlog of unanswered questions, which is an
+              // opportunity rather than a fault. The same rule the detail
+              // header's chips use, so the row and the pane agree.
+              tone={toneOf(row)}
               // What the *dot* means, not a repeat of the subtitle beside it:
               // `toneLabel` is read aloud, and the count is already in the
               // line above it. Two identical announcements per row is how a
               // list of twenty becomes unlistenable.
-              toneLabel={waiting ? 'Work waiting' : 'Nothing waiting'}
+              toneLabel={
+                row.reviews > 0
+                  ? 'Flags raised'
+                  : row.suggestions > 0
+                    ? 'Questions waiting'
+                    : 'Nothing waiting'
+              }
               glyph={
                 <GlyphBadge size={30} hue={engineHue(connection.database_type)}>
                   <Icon.Database size={15} />

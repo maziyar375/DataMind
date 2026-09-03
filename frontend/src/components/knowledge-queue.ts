@@ -80,32 +80,27 @@ export function byUrgency(rows: QueueRow[]): QueueRow[] {
 }
 
 /**
- * What the console's header says about the whole queue.
+ * What colour a queue is, which is not the same question as how big it is.
  *
- * Names the connections rather than only totalling them, up to two of them:
- * "6 waiting" tells a curator to start looking, "4 on sales, 2 on Aurora
- * Coffee" tells them where.
+ * A flag is a person saying an answer was wrong; a suggestion is a question
+ * nothing here answers yet. The first is a defect and the second is an
+ * opportunity, and a single alarming mark over both tells a curator that
+ * something is broken on a connection where nothing is. Twenty-two unanswered
+ * questions is a backlog, not a fault — and a badge that cries wolf about a
+ * backlog is one people stop looking at, which is the exact failure the badge
+ * was added to fix.
  *
- * Sorted by count here, unlike `byUrgency` — and the difference is the point.
- * A *list* must hold still between visits or rows jump under the cursor, so
- * it orders alphabetically within the busy half; a sentence that names two of
- * twenty connections has to name the two worth opening first.
+ * `neutral` at zero, so a caller cannot draw an alarming mark over nothing.
  */
-export function queueSentence(rows: QueueRow[]): string {
-  const busy = rows
-    .filter((row) => waiting(row) > 0)
-    .sort((a, b) => waiting(b) - waiting(a) || a.name.localeCompare(b.name))
-  const total = totalWaiting(rows)
-  if (total === 0) {
-    return rows.length === 0
-      ? 'Nothing connected yet.'
-      : 'Nothing is waiting for you.'
-  }
-  // Trimmed for the sentence and only for the sentence: a name stored with a
-  // stray space is still that record's name and the list shows it as stored,
-  // but "22 on Aurora Coffee , 20 on sales" reads as a typo in the product.
-  const named = busy.slice(0, 2).map((row) => `${waiting(row)} on ${row.name.trim()}`)
-  const rest = busy.length - named.length
-  if (rest > 0) named.push(`${rest} more ${rest === 1 ? 'connection' : 'connections'}`)
-  return `${total} waiting — ${named.join(', ')}.`
+export type QueueTone = 'red' | 'amber' | 'neutral'
+
+export function toneOf(row: QueueRow): QueueTone {
+  if (row.reviews > 0) return 'red'
+  return row.suggestions > 0 ? 'amber' : 'neutral'
+}
+
+/** The same rule over every connection: any flag anywhere makes it red. */
+export function queueTone(rows: QueueRow[]): QueueTone {
+  if (rows.some((row) => row.reviews > 0)) return 'red'
+  return rows.some((row) => row.suggestions > 0) ? 'amber' : 'neutral'
 }

@@ -10,7 +10,7 @@
  * reshuffles under the cursor.
  */
 import {
-  badge, byUrgency, forConnection, queueSentence, totalWaiting, waiting,
+  badge, byUrgency, forConnection, queueTone, toneOf, totalWaiting, waiting,
 } from './knowledge-queue.ts'
 import type { QueueRow } from './knowledge-queue.ts'
 
@@ -69,39 +69,27 @@ check(
 )
 check('the input is not mutated', rows.map((r) => r.name), ['sales', 'Aurora Coffee', 'warehouse'])
 
-console.log('\n— the sentence —')
+console.log('\n— what colour it is —')
+check('nothing waiting draws no alarm', toneOf(row()), 'neutral')
+check('a backlog is attention, not a fault', toneOf(row({ suggestions: 9 })), 'amber')
+check('a flag someone raised is a fault', toneOf(row({ reviews: 1 })), 'red')
 check(
-  'it says where, not only how many',
-  queueSentence(rows),
-  '6 waiting — 4 on sales, 2 on Aurora Coffee.',
+  'a flag outranks any number of suggestions',
+  toneOf(row({ reviews: 1, suggestions: 40 })),
+  'red',
+)
+check('a quiet workspace is neutral', queueTone([row(), row({ connectionId: 'b' })]), 'neutral')
+check('no connections at all is neutral', queueTone([]), 'neutral')
+check(
+  'suggestions anywhere and flags nowhere is amber',
+  queueTone([row({ suggestions: 3 }), row({ connectionId: 'b' })]),
+  'amber',
 )
 check(
-  'the sentence names the busiest, where the list stays alphabetical',
-  [queueSentence(rows).includes('4 on sales, 2 on'), byUrgency(rows)[0].name],
-  [true, 'Aurora Coffee'],
+  'one flag on one connection reddens the whole badge',
+  queueTone([row({ suggestions: 30 }), row({ connectionId: 'b', reviews: 1 })]),
+  'red',
 )
-check(
-  'a third busy connection is counted, not listed',
-  queueSentence([
-    row({ connectionId: 'a', name: 'sales', reviews: 3 }),
-    row({ connectionId: 'b', name: 'aurora', reviews: 2 }),
-    row({ connectionId: 'c', name: 'warehouse', reviews: 1 }),
-    row({ connectionId: 'd', name: 'ledger', reviews: 1 }),
-  ]),
-  '7 waiting — 3 on sales, 2 on aurora, 2 more connections.',
-)
-check(
-  'a name stored with a stray space does not put one before the comma',
-  queueSentence([
-    row({ connectionId: 'a', name: 'Aurora Coffee ', reviews: 2 }),
-    row({ connectionId: 'b', name: 'sales', reviews: 1 }),
-  ]),
-  '3 waiting — 2 on Aurora Coffee, 1 on sales.',
-)
-check('a quiet workspace says so', queueSentence([row(), row({ connectionId: 'b' })]),
-      'Nothing is waiting for you.')
-check('no connections at all is a different sentence', queueSentence([]),
-      'Nothing connected yet.')
 
 console.log(failures === 0 ? '\nall passed' : `\n${failures} failed`)
 // `throw`, not `process.exit`: `@types/node` is not a dependency here, and
