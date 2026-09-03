@@ -97,7 +97,7 @@ export default function KnowledgePage() {
       <MasterColumn
         title="Knowledge"
         open={listDrawer.open}
-        icon={<Icon.Flag size={15} />}
+        icon={<Icon.Book size={15} />}
         count={list.length}
         // The count here would be the number of *connections*, and the word
         // above it is "Knowledge" — which the rail is at that moment labelling

@@ -2217,14 +2217,17 @@ function Composer({
             }}
           />
           {/*
-            One slot, two controls — and while a run is going it is *labelled*.
-            An icon-only stop in the same circle, in the same corner, as the
-            send button it replaced was a control nobody noticed had changed:
-            same size, same place, and a 13px square is not a strong enough
-            difference to catch an eye that is reading the answer above it.
-            A pill that says Stop cannot be mistaken for anything else, and the
-            width change is itself the signal that the composer has changed
-            mode. The accent ring around it is the run, breathing.
+            One slot, two controls, one disc — the arrow becomes a square while
+            a run is in flight, which is the convention every chat product has
+            settled on and therefore the one people arrive already knowing.
+            It was a labelled pill for a while, on the worry that a 13px glyph
+            swap in the same circle is too quiet to notice. Three things carry
+            that signal without a word: the square is now a third of the disc
+            rather than a detail in the middle of it, the accent ring around
+            the button breathes for as long as the run lasts, and the hint
+            line directly underneath says `Esc` to stop. The word inside the
+            button was the fourth telling of the same thing — and the only one
+            that cost a control its shape.
           */}
           <button
             className={`rm-send-btn${canStop ? ' is-running' : ''}`}
@@ -2236,18 +2239,16 @@ function Composer({
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              gap: 7,
               height: 38,
-              width: busy ? undefined : 38,
-              padding: busy ? '0 15px 0 13px' : 0,
-              fontSize: 13,
-              fontWeight: 600,
+              width: 38,
+              padding: 0,
               borderRadius: 999,
               border: busy ? '1px solid var(--border-strong)' : 'none',
               flexShrink: 0,
               // Stopping is not the accent action — it undoes one — so the
-              // pill stays a neutral surface and lets the answer above it keep
-              // the only accent on the screen.
+              // disc goes neutral and lets the answer above it keep the only
+              // accent on the screen. The ring around it stays accent: that
+              // is the run, not the button.
               background: busy
                 ? 'var(--panel-alt)'
                 : canSend
@@ -2263,17 +2264,10 @@ function Composer({
             }}
           >
             {busy ? (
-              stopping ? (
-                <>
-                  <Spinner size={13} />
-                  Stopping
-                </>
-              ) : (
-                <>
-                  <Icon.Stop size={13} />
-                  Stop
-                </>
-              )
+              // 24 draws a 12px square inside a 38px disc — the same third of
+              // the button the products this borrows from use, and enough to
+              // read as a shape rather than as a dot.
+              stopping ? <Spinner size={15} /> : <Icon.Stop size={24} />
             ) : (
               <Icon.Send size={16} />
             )}

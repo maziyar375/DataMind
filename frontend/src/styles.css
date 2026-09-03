@@ -594,8 +594,10 @@ code, pre, .mono {
 }
 .rm-send-btn.is-running {
   animation: rm-run-ring 1.9s ease-in-out infinite;
-  /* The pill is wider than the disc it replaces, and the composer's row is
-     `align-items: flex-end`, so without this the swap moves the text box. */
+  /* No lift while running: the hover transform on a button someone is aiming
+     at to *stop* something should not move it. (It also used to stop a wider
+     stop-pill from nudging the composer row, which is `align-items:
+     flex-end` — the pill is gone and the disc is one size in both modes.) */
   transform: none;
 }
 .rm-send-btn.is-running:hover:not(:disabled) {

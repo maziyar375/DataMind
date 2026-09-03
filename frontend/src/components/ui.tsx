@@ -366,6 +366,19 @@ export const Icon = {
       <path d="M9 13h6M9 17h4" />
     </svg>
   ),
+  /** An open book, for the Knowledge section — the store of taught questions.
+   *  Not the flag it used to be: a flag is one of the three things in that
+   *  queue (a wrong answer somebody raised), and putting it over the section
+   *  makes the whole store look like a fault report, which is the opposite of
+   *  what the amber-not-red badge decision says about a backlog. Not a
+   *  lightbulb either: `Sparkle` is two rows below it and a bulb is the
+   *  universal glyph for a *hint*, which is the queue's other half. */
+  Book: ({ size = 17, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <path d="M12 6.6v13.2" />
+      <path d="M12 6.6C10.4 5 7.9 4.2 3.4 4.5v12.9c4.5-.3 7 .5 8.6 2 1.6-1.5 4.1-2.3 8.6-2V4.5c-4.5-.3-7 .5-8.6 2.1z" />
+    </svg>
+  ),
   /** A stop control, drawn filled: the one square in an outlined icon set,
    *  because "stop" has to read at a glance inside a 38px circle. */
   Stop: ({ size = 14, stroke = 'currentColor' }: IconProps) => (

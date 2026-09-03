@@ -54,7 +54,7 @@ const NAV = [
   // console three clicks inside one connection's fourth tab cannot ask for
   // anything. The count is the argument for the row — if it is permanently
   // empty on a real install, this row has not earned its place.
-  { path: '/knowledge', label: 'Knowledge', icon: <Icon.Flag /> },
+  { path: '/knowledge', label: 'Knowledge', icon: <Icon.Book /> },
   // Then the three you configure, in the order their frequency falls away: a
   // connection is edited occasionally — a policy, a schema sync after a
   // migration — a provider key almost never once it works, and Users is
