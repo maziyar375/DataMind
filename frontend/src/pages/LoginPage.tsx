@@ -1,3 +1,25 @@
+/**
+ * Login: the only screen an unauthenticated visitor can reach.
+ *
+ * A single centred card over the `.rm-auth` ambient in `styles.css` — the
+ * brand's neon orbs and the grid motif, written once there and echoed by the
+ * Creators page rather than borrowed from this file.
+ *
+ * Three things worth keeping:
+ *
+ *  - **Email is the identifier, not a username.** One concept, and it maps
+ *    cleanly onto an OIDC `email` claim the day this grows a second sign-in
+ *    method; carrying both would guarantee a migration later.
+ *  - **"Wrong password" and "the API is down" are different sentences.** An
+ *    `ApiError` carries the server's own message and is rendered verbatim;
+ *    anything else means the request never arrived, and says so. Collapsing
+ *    the two sends someone hunting for a typo in a password while the backend
+ *    is not running.
+ *  - **About is reachable from here.** It is the one page that exists on both
+ *    sides of the sign-in wall, and this is the only public surface there is,
+ *    so `onAbout` is what the shell passes to make the link appear. Absent, it
+ *    does not render.
+ */
 import { useState } from 'react'
 import { ApiError, auth } from '../api/client'
 import type { User } from '../api/types'

@@ -1,3 +1,44 @@
+/**
+ * Chat: the section the product opens on, and the one a question is asked in.
+ *
+ * Three columns of responsibility. A rail of saved threads on the left; a
+ * transcript in the middle capped at a readable measure rather than stretched
+ * across the pane; a composer under it. This file owns all three, the run in
+ * flight, and the pickers in the header. An individual turn — the step chips,
+ * the "Generated SQL" disclosure, the result table, the metadata chips — is
+ * `components/chat.tsx`, which renders a finished turn and a streaming one
+ * with the same component on purpose (see its own header).
+ *
+ * Four decisions carry the screen:
+ *
+ *  - **A thread is bound to one database and one model.** Both are chosen in
+ *    the header before the first message and lock the moment the transcript is
+ *    non-empty, because every run in a thread has to stay explainable against
+ *    a single pair — the same reason `runs.model_snapshot` exists on the
+ *    backend. The database picker also carries the disclosure policy, so what
+ *    leaves the customer's database is visible at the moment the question is
+ *    asked and not by reading documentation.
+ *  - **Live run state is kept apart from persisted messages.** `liveSteps`,
+ *    `liveText`, `thinking` and `livePreview` are this component's; the
+ *    transcript is the server's. That split is what lets a refresh mid-run
+ *    recover from `GET /runs/{id}` rather than from React, and it is why
+ *    reopening an old conversation replays the whole trail of how an answer
+ *    was reached instead of showing a bare paragraph.
+ *  - **The stream is the fast path, not the only one.** `attachStream` degrades
+ *    to polling, replays by `Last-Event-ID`, and reattaches to a run still in
+ *    flight when a thread is opened. Tokens are batched on a fixed cadence
+ *    (`TEXT_FLUSH_MS`) rather than painted per token.
+ *  - **Nothing is preselected at boot.** No thread, and the three bootstrap
+ *    requests are `allSettled` so one failure cannot empty the other two
+ *    pickers. Landing at the bottom of whatever was asked last makes the
+ *    composer read as a follow-up to a conversation that may be days old.
+ *
+ * What this page deliberately does *not* own: the template editor opened from
+ * an answer is the Knowledge tab's own `TemplateEditor`, reused rather than
+ * reimplemented — the parameter proposals, the guard verdict and the
+ * disclosure rule for a statement's literals must be identical, and two
+ * editors are two chances to get one of them wrong.
+ */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   conversations, connections as connectionsApi, llmConfigs,

@@ -384,6 +384,45 @@ frontend/src/
 
 ---
 
+## Frontend conventions (nothing enforces these — the tree is just consistent)
+
+`npm run lint` is a dead script and `npm test` is not in CI, so every rule
+below is held up by the code agreeing with itself. Breaking one costs nothing
+at commit time and shows up as drift a release later. Full tour:
+[docs/frontend.md](docs/frontend.md).
+
+- **There is no router.** `react-router-dom` is in `package.json` and is
+  imported *nowhere*. Navigation is the `View` union in `App.tsx` plus one
+  `useState`; the rail sets it, and the shell renders one page. A new section
+  is a member of that union, a rail entry, and a branch — not a `<Route>`.
+- **Styling is two places, and which one is not a preference.** Layout,
+  spacing and one-off values are inline `style={}` in the JSX. Anything a
+  style attribute cannot express — `:hover`, `:focus-visible`, selection,
+  keyframes, `@media print`, the responsive reflow — is an `.rm-*` class in
+  `styles.css`. There are no CSS modules and no utility classes.
+- **No component library, and no new dependency to get one.** The whole list is
+  React, `react-grid-layout` (a layout engine, not components), Vega, and the
+  router that is not used. Primitives live in `components/ui.tsx`; the
+  master–detail frame that Data sources and LLM providers share is
+  `components/settings.tsx`. Compose from those before writing a new one.
+- **Never hardcode a colour.** Every value comes from a CSS variable defined in
+  `theme/tokens.ts`, which ships a **dark and a light** definition for each.
+  A literal hex or `oklch()` in a component is a bug in both themes — one of
+  them just has not been looked at yet. Chart colours are the one exception and
+  they live in `components/palette.ts`, tested apart from React.
+- **The eleven DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
+  `table-format.ts`, `dashboard-document.ts`, `palette.ts`, `chat-format.ts`,
+  `report-document.ts`, `report-readiness.ts`, `report-print.ts`,
+  `semantic-drift.ts`, `knowledge-template.ts`, `thinking.ts` — they hold the
+  logic whose failures are quiet, they are the *only* tested code in the
+  frontend, and their suites are plain `node --experimental-strip-types`
+  scripts. One React import turns a suite into a thing that cannot run.
+- **Text a person wrote gets `dir={dirOf(value)}`.** The product ships Persian.
+  SQL is always `dir="ltr"`, in both themes and both directions — a
+  bidi-reordered statement is unreadable and, worse, ambiguous.
+- **Status is never colour alone**: every state carries a glyph and a word, so
+  the screen survives greyscale and the print stylesheet.
+
 ## The dependency rule (enforced, not documented)
 
 ```

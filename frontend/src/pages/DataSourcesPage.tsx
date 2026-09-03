@@ -1,3 +1,39 @@
+/**
+ * Data sources: the connections DataMind may read, and everything known about
+ * each one.
+ *
+ * Master–detail, on the frame in `components/settings.tsx` that LLM providers
+ * also uses — the two pages are meant to be the same screen with different
+ * fields, and sharing the furniture is what keeps them from quietly drifting
+ * apart.
+ *
+ * **The detail is four tabs, and only the first owns a form.** `Settings ·
+ * Schema · Semantic layer · Knowledge` — Schema saves nothing, and Semantic
+ * layer and Knowledge save themselves, so the header's Test and Save buttons
+ * appear on Settings alone. Leaving them up on every tab offered to save a
+ * form the reader could not see. The Knowledge tab carries no count either:
+ * its badge is *only* the number of things needing a human, which is not known
+ * until the tab has loaded, and a badge that always shows a total is
+ * decoration rather than a signal.
+ *
+ * Two things here are load-bearing and are not obvious from the layout:
+ *
+ *  - **Test probes the form, not the saved row.** While creating, or whenever
+ *    the form is dirty, `test()` posts the typed values to `testDraft` and
+ *    persists nothing — credentials can be checked without leaving a broken
+ *    row behind, and a clean row's test records its status instead. The
+ *    verdict says whether the role is genuinely read-only, because that is the
+ *    backstop the whole guard is written against.
+ *  - **Sync is not a refresh button.** The snapshot it writes is the guard's
+ *    source of truth: every table and column in a generated statement is
+ *    resolved against it, so an unsynced connection can answer nothing at all.
+ *    Since migration `0012` the snapshot also carries `catalog_meta` — the
+ *    descriptions the target database's own catalog holds — which is why the
+ *    table list renders comments beside names and the search matches them.
+ *
+ * The schema tab has two views of one snapshot, `tables` and `graph`; the FK
+ * graph is the reason schema sync records foreign keys at all.
+ */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { connections as api } from '../api/client'
 import type { Connection, SchemaSnapshot, SchemaTable, TestResult } from '../api/types'

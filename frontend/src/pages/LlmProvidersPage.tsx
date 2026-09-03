@@ -1,3 +1,33 @@
+/**
+ * LLM providers: the models DataMind may call, and the keys it calls them with.
+ *
+ * Deliberately the same screen as Data sources — the same `MasterColumn` /
+ * `DetailHeader` / `Section` / `FieldRow` furniture from
+ * `components/settings.tsx`, the same test-before-save bargain, the same
+ * status vocabulary. Two pages that configure a credential and probe it should
+ * not each invent their own shape; where this one parts company is stated
+ * below and nowhere else.
+ *
+ * **Test probes the form, not the saved row**, exactly as connections do:
+ * while creating, or while the form is dirty, `testDraft` takes the typed
+ * values and persists nothing, so a key can be checked before a broken row
+ * exists. A clean row's test hits the stored config and records what it found
+ * — the probe is a real completion, so what comes back is the model's actual
+ * capabilities rather than a reachability ping.
+ *
+ * **The provider list is not open.** The picker maps over `PROVIDER_URLS` in
+ * `theme/tokens.ts`, which holds exactly two keys — `OpenAI-compatible` (which
+ * covers OpenAI itself and anything speaking its API: OpenRouter, Ollama,
+ * vLLM, a local gateway) and `Anthropic`. Removing a key removes the choice;
+ * adding one requires the gateway to know what to do with it. A legacy
+ * `"Custom"` value still exists on rows created before it was dropped and is
+ * handled in `litellm_gateway.py`, but nothing creates one now.
+ *
+ * The one departure from the master–detail pages' visual rules is
+ * `PROVIDER_HUES` below: the colour is keyed on the provider rather than on
+ * the record, because three models behind one endpoint are a family and should
+ * look like one.
+ */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { llmConfigs as api } from '../api/client'
 import type { LlmConfig, TestResult } from '../api/types'

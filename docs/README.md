@@ -1,6 +1,6 @@
 # Documentation index
 
-Eighteen documents plus five research notes. This page exists so you don't have
+Nineteen documents plus five research notes. This page exists so you don't have
 to open `architecture.md` (1,600 lines) to answer a question about charts.
 
 The three `pipeline*.md` files are one set: [pipeline.md](pipeline.md) holds the
@@ -21,6 +21,7 @@ chat run **and** the map of all three pipelines (§0), with
 
 | Touching | Read first | Why |
 | --- | --- | --- |
+| Anything under `frontend/src/` — a page, a component, a token, a class | [frontend.md](frontend.md) | The shell and every section in it, what each owns, the four components they share, and the design-system rules nothing in CI enforces |
 | `sqlguard/`, `disclosure.py`, `HintBudget`, or adding an LLM call site | [security.md](security.md) | Every claim names the module that enforces it, and states its limits |
 | A prompt, or anything a model is sent | [llm-calls.md](llm-calls.md) | Every unique LLM call: trigger, gateway method, the verbatim system and user prompt, what fills each placeholder, and what happens when it fails |
 | A pipeline node, a prompt, the routing | [pipeline.md](pipeline.md) | The chat run node by node — plus §0, which maps all three pipelines and lists every LLM call site |
