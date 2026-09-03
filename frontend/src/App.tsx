@@ -320,7 +320,7 @@ export default function App() {
         }}
       >
         {/* The first thing in the tab order, and invisible until it has focus:
-            the rail is six destinations plus a footer group, and a keyboard user
+            the rail is seven destinations plus a footer group, and a keyboard user
             should not have to walk them to reach the page they opened. */}
         <a className="rm-skip" href="#main">Skip to content</a>
         {/* The two shell boxes carry classes so the print stylesheet can reach
@@ -419,7 +419,7 @@ export default function App() {
  *
  * One flat list of destinations, in the order the product is used. It was
  * briefly cut into "Workspace" and "Configure" groups and that was worse:
- * captions over six items are furniture, and the split invited a decision
+ * captions over seven items are furniture, and the split invited a decision
  * ("which half is this in?") on every glance at a list short enough to read
  * whole.
  *

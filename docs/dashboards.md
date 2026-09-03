@@ -214,7 +214,10 @@ tile shell, scheduler), [`tile-editor.tsx`](../frontend/src/components/tile-edit
 
 **Index → open.** A searchable, sortable index of cards or rows — filterable by
 status, since archiving is otherwise a verb with nowhere for the result to go.
-Then one dashboard filling the page.
+Then one dashboard filling the page, at `/dashboards/:id`, with the tile editor
+at `/dashboards/:id/tiles/new` and `…/tiles/:tileId` under it. The section stays
+mounted across all three: opening a tile must not reload the board it is being
+placed on, and a refresh has to come back to the tile.
 
 **View mode vs edit mode.** The header's *Edit grid* toggle governs the
 **layout** only — drag, resize, add, the inline name. A tile's own
@@ -339,9 +342,29 @@ properties keep it safe:
   default from "hide anything not on the list", and the one that cannot lose
   data. A configured column the result loses is greyed rather than deleted.
 
+Two things a *reader* does sit on top of that, in the same module and under the
+same rule — **neither re-runs the query**:
+
+- **Clicking a heading sorts.** Ascending → descending → back to the stored
+  order, with `aria-sort` on the header cell. The author's default sort is not
+  overwritten; the reader's choice layers over it and dies with the page. A
+  tile whose stored sort a reader could silently replace is a tile that shows
+  two people different things.
+- **Downloading gives CSV.** The *resolved* column config — hidden columns
+  gone, columns in the author's order, headers relabelled — over the **raw**
+  values rather than the formatted ones, because a currency-formatted string is
+  not a number to a spreadsheet. RFC 4180 quoting, a UTF-8 BOM so Excel reads
+  Persian correctly, and a leading apostrophe on any value starting `=`, `+`,
+  `@` or a control character, which is the spreadsheet formula-injection guard.
+
 Rules live in [`table-format.ts`](../frontend/src/components/table-format.ts),
 DOM-free for the same reason as the scheduler: every way they can be wrong is
 quiet. `npm run test:format`.
+
+Past ~200 rows only the visible window is rendered, with spacer rows holding the
+scroll height. That is a rendering decision and nothing else: the rows are
+already in memory, the sort and the CSV both see all of them, and no request is
+made.
 
 > **Hiding a column hides it; it does not withhold it.** The value is in the
 > payload that reached the browser. Anything that must not be sent belongs to

@@ -860,8 +860,20 @@ somebody else, and a test walks the route table to keep it that way.
 The defaults are development defaults. Before real data:
 
 - [ ] **Change `ADMIN_PASSWORD`.** The bootstrap admin is
-      `admin@raymand.local` / `raymand`, and the API logs a loud warning while
-      it stays that way.
+      `admin@raymand.local` / `raymand`, and the API logs a loud warning about
+      it — **on the boot that creates the account, and only that one.**
+      `ensure_admin` returns early once the user exists
+      ([`services/bootstrap.py`](../backend/app/services/bootstrap.py)), so a
+      deployment left on the default gets no reminder after its first start.
+      Change it *in the product* — the account screen at `/settings`, which
+      asks for the current password — rather than only in `.env`: the variable
+      seeds the account and is never read again, so an edited `.env` beside an
+      unchanged account is a password that still works and is no longer written
+      down anywhere you are looking.
+- [ ] **Tell invited members to set their own password.** An admin-created
+      account starts on a one-time password the administrator can read, and
+      `/settings` is where the holder replaces it — which also revokes every
+      session that password opened.
 - [ ] **Generate fresh secrets** with `make secrets` — `SECRET_BOX_KEY` and
       `JWT_SECRET` — and back up the box key separately.
 - [ ] **Grant read-only database roles.** Confirm each connection reports

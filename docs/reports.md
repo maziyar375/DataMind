@@ -478,6 +478,14 @@ components/report-document.ts   merging a run into a document (+ .test.ts)
 components/report-print.ts      the print handoff (+ .test.ts)
 ```
 
+**Every one of those screens has an address.** `/reports`, `/reports/:id`,
+`/reports/:id/history` and `/reports/:id/runs/:runId` — which matters more here
+than anywhere else in the product, because a finished run is the thing people
+send each other. A run opened cold fetches its own report rather than depending
+on the index being loaded, so a link works for someone who has never opened the
+list. The section stays mounted across all four, so opening the history of a
+report that is mid-generation does not restart the poll.
+
 **The outline editor is a workflow, not a form.** `OutlineStatus` names the
 sequence the API already enforces — **Describe → Structure → Check →
 Generate** — with a count under each read off the outline, so the panel is also
@@ -511,6 +519,12 @@ numbers arrive before the prose (so a section renders half-drawn, which is the
 point), a block result's `position` counts across the whole run while a section
 result's counts the outline, and the executive summary has no blocks at all —
 it arrives last and belongs first.
+
+A figure's table is the shared `ResultTable`, so it sorts by clicking a heading
+and downloads as CSV like every other table in the product — over the rows the
+run already stored, never a re-query. A generated document is a snapshot, and
+sorting or exporting one must not go back to the database months later and get
+different numbers.
 
 The poll **pauses on `document.hidden`**, as the dashboard scheduler does.
 
@@ -729,15 +743,34 @@ feature.
 ## 15. Not built
 
 Sharing, scheduled generation and email delivery, run-to-run **comparison**,
-export to Word/PowerPoint, Tier-3 structural number substitution, and "add to
-report" from a chat run.
+export to Word/PowerPoint, and Tier-3 structural number substitution.
 
-Two are cheap once the rest exists, and are the natural next step:
+One is cheap once the rest exists, and is the natural next step:
 
 - **Run comparison.** `sql_hash` is on every block result precisely so this is
   possible, and `sql_changed` already answers "are these two figures the same
   measurement" per figure. Nobody generates the same report twice without
   wanting the delta.
-- **"Add to report" from chat.** A succeeded run already has validated SQL, a
-  connection and a chart spec to copy into a block. Users explore in chat, then
-  want the good turns collected into a document.
+
+**"Add to report" from a chat run is built.** People explore in chat and then
+want the good turns collected into a document, and a succeeded run already
+carries everything a block needs. The answer's action row picks a report on the
+same connection — or creates one — appends a block from the question, and then
+`PUT`s the run's own statement onto it.
+
+Three things about that path are load-bearing:
+
+- **The block is created question-first, then given its SQL.** That second call
+  is what stamps `sql_origin = HANDWRITTEN`, which is exactly right: a human
+  chose this statement. It also puts the block out of reach of *Check all*,
+  which sweeps only blocks with no query — a block promoted from chat must
+  never have its approved statement overwritten by a fresh generation.
+- **No model call and no re-execution.** The SQL that lands is the SQL that
+  ran. A block built by retyping the question is a block whose query nobody
+  approved.
+- **The disclosure policy is checked first, on the page.** A report refuses
+  `NONE` and `AGGREGATE` outright (§7), so the action is disabled with the
+  reason next to it rather than failing at generation time — the connection is
+  fixed once a report exists, and finding out then is finding out too late.
+  This is the same rule the creation picker applies, in the one other place a
+  report acquires a connection.

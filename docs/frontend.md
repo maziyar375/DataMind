@@ -60,14 +60,22 @@ side of the sign-in wall, and a deep link survives signing in — the location
 does not change, only the gate in front of it.
 
 The rail is **one flat list in the order the product is used**, not grouped:
-captions over six items are furniture, and a split invites a "which half is
+captions over seven items are furniture, and a split invites a "which half is
 this in?" decision on every glance. Under it sits a quieter footer group — the
 theme pair, the account, sign out, and Creators, which marks itself with colour
 alone rather than the accent rail a nav row gets, because a credit given the
-same weight as Chat reads as a sixth place to work.
+same weight as Chat reads as another place to work. The account block is the
+name and avatar themselves — a button to `/settings` — with sign out kept as a
+separate target beside it: leaving and editing are two intentions, and one
+target for both is how people sign out by accident.
+
+**Knowledge is the one rail entry with a count**, and the count is the argument
+for the entry: it exists because a curation queue nobody can see is not a
+queue, so if it is permanently empty on a real install the row has not earned
+its place.
 
 The view area is the document's `<main id="main">`, and a `.rm-skip` link
-before the rail is the first thing in the tab order — the rail is six
+before the rail is the first thing in the tab order — the rail is seven
 destinations plus a footer group, and a keyboard user should not have to walk
 them to reach the page they opened.
 
@@ -415,7 +423,8 @@ eslint is neither a dependency nor configured. Run `npm test` yourself.
 | A tile, the grid, the refresh clock | [dashboards.md §6](dashboards.md) |
 | The outline editor, the viewer, the PDF | [reports.md §11–§12](reports.md) |
 | A chart, the picker, a colour in one | [charts.md](charts.md) |
-| The Knowledge tab, the badge, the copy | [learning-loop-plan.md §4](learning-loop-plan.md) — the one full design brief in the repo |
+| The knowledge console, the badge, the copy | [learning-loop-plan.md §4](learning-loop-plan.md) — the one full design brief in the repo; §4.2's information architecture is superseded and says so where it stands, since the console is now a rail entry as well as a tab |
+| Why a surface is shaped the way it is | [ui-improvment-plan.md](ui-improvment-plan.md) — the audit this shell was rebuilt from, sixteen findings in seven phases, with the decisions taken while executing recorded inline |
 | The schema browser, catalog descriptions | [catalog-metadata-plan.md](catalog-metadata-plan.md) |
 | What a step chip means | [pipeline.md](pipeline.md) — the nodes behind `NODE_META` |
 | What may be shown to whom | [security.md](security.md) — the disclosure policy the header badge names |

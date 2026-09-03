@@ -60,6 +60,10 @@ same, the dialect is the connector's problem.
   over your own data — with every headline figure computed from the rows rather
   than by a model. Printable, and re-runnable months later against fresh data.
 
+They are one path, so they connect: an answer worth keeping becomes a dashboard
+tile or a report figure in a click, carrying the statement that already ran
+rather than asking the question again.
+
 
 ## Two things are never left to the model
 
@@ -388,27 +392,58 @@ generation reads the same schema block a run reads, under the same budget.
 
 ### Frontend
 
+**Every screen has a URL.** A conversation, a dashboard, a report run, a
+connection's policy tab, a half-written tile — each is an address you can
+bookmark, send to a colleague, and return to with the browser's Back button.
+Leaving a form with unsaved edits asks first.
+
 Chat with the live step trail, the "Generated SQL" panel, result tables and
 charts, a chart-type picker that redraws an answer's chart without re-querying,
 and metadata chips. Each conversation is pinned to one database and model,
 chosen in the header — which also shows the disclosure policy in force — and
 locked once the first message is sent. Copy buttons, conversation rename and
 delete, suggested follow-up questions, and right-to-left support for Persian and
-other RTL scripts.
+other RTL scripts. A first-run checklist stands in for the starter questions
+until the product can actually answer one.
+
+**An answer you like becomes a tile or a figure** without being asked again:
+the action row under a result adds it to a dashboard or to a report, carrying
+the run's own SQL, connection and chart type. No model call, no re-execution —
+the statement that lands is the statement that ran.
+
+Every result table sorts by clicking a heading and downloads as CSV (Excel-safe,
+with spreadsheet formulas defused), and neither re-runs the query. Past 200 rows
+only the visible window is drawn.
 
 Data sources with an engine picker, a table list, an FK graph view, and the
 semantic-layer editor (metric expressions validated live by the *same parser*
 the save path uses, so the editor never promises something the backend will
-reject). LLM providers. A user-management panel with per-user editing.
+reject). A connection's **credentials and its governance are separate tabs with
+separate Save buttons** — changing a disclosure policy never opens a form
+containing a password. LLM providers. A user-management panel with per-user
+editing, and an account screen where anyone can change their own display name
+and password without asking an administrator.
+
+**Knowledge** is the curation console: flags people raised on wrong answers,
+questions nothing answers yet, taught templates, accuracy scoring and a
+maintenance sweep — across every connection, with the size of the queue on the
+rail so work that is waiting can be seen without opening anything.
+
 Dashboards with drag-and-resize tiles, per-tile refresh, and import/export of a
-whole board as a file. Reports get three
+whole board as a file; the tile editor is a drawer beside the live grid rather
+than a dialog over it. Reports get three
 screens of their own: an outline editor that walks Describe → Structure → Check
 → Generate with the guard's verdict on every question, a viewer that watches
 the document write itself and lets any paragraph or chart be refined
 afterwards, and the run history a regeneration adds to. An About page, the one
-screen reachable from both sides of the sign-in wall. Dark and light themes,
-built on a custom design system of oklch CSS variables — there is **no component
-library**.
+screen reachable from both sides of the sign-in wall.
+
+Work that takes minutes — writing a semantic layer, scoring a benchmark set,
+sweeping a knowledge store — announces itself when it finishes, on whatever
+screen you have moved to since. Dark and light themes, built on a custom design
+system of oklch CSS variables — there is **no component library** — a `<main>`
+landmark, a skip link, focus-managed dialogs, and a phone layout where the list
+column becomes a drawer instead of leaving a hundred pixels for the content.
 
 **Not built yet:** rolling conversation summaries, sharing a dashboard or a
 report with another user, and scheduled report generation. Each is deferred
