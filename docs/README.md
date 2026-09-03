@@ -1,6 +1,6 @@
 # Documentation index
 
-Nineteen documents plus five research notes. This page exists so you don't have
+Twenty documents plus five research notes. This page exists so you don't have
 to open `architecture.md` (1,600 lines) to answer a question about charts.
 
 The three `pipeline*.md` files are one set: [pipeline.md](pipeline.md) holds the
@@ -45,7 +45,7 @@ Read the §-pointers in the status table before starting anywhere else in them.
 
 ## Plans and records
 
-These six are **narratives of work**, not references: each was written to be
+These seven are **narratives of work**, not references: each was written to be
 executed against, and each carries a dated ledger of what changed while it was
 being executed. They stay in `docs/` rather than in a `plans/` subfolder because
 the cross-links point at them from the reference docs — the classification below
@@ -59,6 +59,7 @@ is the organisation, not the directory.
 | [mvp2-plan.md](mvp2-plan.md) | **Live.** The wider second-milestone plan the learning loop is one strand of. Where it and `learning-loop-plan.md` disagree about the knowledge store, §1.3 of the latter is the correction. |
 | [reports-plan.md](reports-plan.md) | **Superseded.** The phase-by-phase plan for Reports, kept as the record of what was intended. [reports.md](reports.md) describes what was built — where they disagree, reports.md is right. |
 | [access-control-plan.md](access-control-plan.md) | **Proposed, not built.** Users, groups, roles and grants, argued from [research/access-control.md](research/access-control.md). Nothing in it ships yet — the product is still owner-only, as [dashboards.md §9](dashboards.md) and [reports.md §14](reports.md) both say. Read §0 of the research note first: it corrects two things this repo believes about its own authorization. |
+| [ui-improvment-plan.md](ui-improvment-plan.md) | **Live, not started.** The remediation plan for the frontend's information architecture — sixteen findings from a whole-app UI/UX audit, in seven phases ordered by dependency first and importance second. The two load-bearing ones are Phase 1's routing (`react-router-dom` is a declared dependency imported nowhere, so nothing in the product has a URL) and Phase 2's Chat→Dashboard/Report bridge (the backend treats all three as one guarded path; the UI exposes no route between them). Ends in a 55-item checklist. Four Low-priority findings are listed under *Out of scope* rather than dropped. |
 
 ## Research
 
