@@ -51,6 +51,10 @@ F7  ── last: it re-flows layouts that phases 2–5 are still changing
 
 ## Phase 0 — Groundwork
 
+> **Landed 2026-09-03** — `ea26f66`, 10 files, +265/−147. All 6 of this
+> phase's checklist items are ticked. [The ledger](#the-ledger) has the
+> detail.
+
 Zero feature risk, touches shared scaffolding, makes every later phase safer.
 Do this first so the phases that follow inherit correct structure.
 
@@ -96,6 +100,10 @@ and the skip link is reachable as the first Tab stop.
 ---
 
 ## Phase 1 — Foundation: routing and shell state ownership
+
+> **Landed 2026-09-03** — `1905538`, 11 files, +544/−175. All 8 of this
+> phase's checklist items are ticked. [The ledger](#the-ledger) has the
+> detail.
 
 The phase everything else leans on. Nothing user-facing changes shape; what
 changes is that the app becomes addressable.
@@ -172,6 +180,10 @@ column row, or by browser Back — asks first.
 
 ## Phase 2 — The core loop: connect the three pillars
 
+> **Landed 2026-09-03** — `0b90fac`, 11 files, +1005/−83. All 7 of this
+> phase's checklist items are ticked. [The ledger](#the-ledger) has the
+> detail.
+
 The Critical product finding. The backend already treats Chat, Dashboards and
 Reports as one guarded query path; this phase makes the frontend agree.
 
@@ -226,6 +238,10 @@ without retyping the question, and the SQL that lands is the SQL that ran.
 ---
 
 ## Phase 3 — Getting started, and getting data out
+
+> **Landed 2026-09-03** — `aacb229`, 11 files, +858/−93. All 11 of this
+> phase's checklist items are ticked. [The ledger](#the-ledger) has the
+> detail.
 
 Two ends of the same journey: a new user can reach a first answer, and any user
 can take a result away with them.
@@ -297,6 +313,11 @@ question, and expanding a 1000-row result does not stall the page.
 
 ## Phase 4 — Configuration clarity
 
+> **Landed 2026-09-03** — `087eafa`, 18 files, +1254/−208. All 10 of this
+> phase's checklist items are ticked. Backend included, so `make test`,
+> `make guard` and `make lint` ran too. [The ledger](#the-ledger) has the
+> detail.
+
 Three findings about surfaces that currently misrepresent who owns what and who
 may change it.
 
@@ -365,6 +386,10 @@ administrator, and the admin path is unchanged.
 
 ## Phase 5 — Background work made visible
 
+> **Landed 2026-09-03** — `ca3bda8`, 14 files, +1173/−38. All 8 of this
+> phase's checklist items are ticked. Three corrections followed review —
+> `7d4fc41`, `91f3f8b`, `03af4b0`. [The ledger](#the-ledger) has the detail.
+
 `F13` first: `F5`'s queue badges need somewhere to live.
 
 ### F13 · Notification layer — *size: M*
@@ -414,6 +439,10 @@ connection, and the console is reachable in one click from wherever they are.
 
 ## Phase 6 — Responsive layout
 
+> **Landed 2026-09-03** — `e9d5301`, 11 files, +360/−17. All 5 of this
+> phase's checklist items are ticked. [The ledger](#the-ledger) has the
+> detail.
+
 Deliberately last: this reflows layouts that phases 2–5 are still changing.
 Doing it earlier means doing it twice.
 
@@ -441,8 +470,10 @@ page has two fixed columns below 700px.
 
 # Checklist
 
-Tick as you go. Phases are ordered; items inside a phase can be done in any
-order unless noted.
+**All 55 boxes below are ticked** — 6, 8, 7, 11, 10, 8 and 5 across the
+seven phases. Each phase heading above carries the commit it landed in, and
+[the ledger](#the-ledger) says what that commit actually contained. Phases
+were ordered; items inside a phase could be done in any order unless noted.
 
 ## Phase 0 — Groundwork
 - [x] **F15** `PageHeader` adopted by DashboardsPage
