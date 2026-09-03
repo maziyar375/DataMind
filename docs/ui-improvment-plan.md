@@ -462,17 +462,17 @@ order unless noted.
 - [x] **F2** Both disabled with an on-page reason when the connection is gone
 
 ## Phase 3 — Getting started & getting data out
-- [ ] **F3** Empty `HeaderSelect` menus navigate to `/providers` / `/sources`
-- [ ] **F3** Setup checklist on the Chat welcome screen
-- [ ] **F3** Checklist state derived from existing boot data (no new endpoint)
-- [ ] **F3** Checklist hides once the four steps are satisfied
-- [ ] **F4** CSV download control on `ResultTable`
-- [ ] **F4** Export respects resolved column config; escaping verified
-- [ ] **F4** Live at all three call sites (chat, tiles, reports)
-- [ ] **F11** Click-to-sort headers with `aria-sort`
-- [ ] **F11** Stored tile sort still the default; user sort layers over it
-- [ ] **F11** Windowed rendering past ~200 rows
-- [ ] **F11** Sorting never re-runs the query
+- [x] **F3** Empty `HeaderSelect` menus navigate to `/providers` / `/sources`
+- [x] **F3** Setup checklist on the Chat welcome screen
+- [x] **F3** Checklist state derived from existing boot data (no new endpoint)
+- [x] **F3** Checklist hides once the four steps are satisfied
+- [x] **F4** CSV download control on `ResultTable`
+- [x] **F4** Export respects resolved column config; escaping verified
+- [x] **F4** Live at all three call sites (chat, tiles, reports)
+- [x] **F11** Click-to-sort headers with `aria-sort`
+- [x] **F11** Stored tile sort still the default; user sort layers over it
+- [x] **F11** Windowed rendering past ~200 rows
+- [x] **F11** Sorting never re-runs the query
 
 ## Phase 4 — Configuration clarity
 - [ ] **F8** Settings tab split into Connection / Policy

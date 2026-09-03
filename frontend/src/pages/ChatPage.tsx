@@ -777,6 +777,15 @@ export default function ChatPage() {
   const addToDashboard = useMemo(() => handOff('dashboard'), [handOff])
   const addToReport = useMemo(() => handOff('report'), [handOff])
 
+  // How far setup has got, and whether the reader has waved the list away.
+  const setup = useMemo(() => setupStateOf(connections, models), [connections, models])
+  const [dismissedSetup, setDismissedSetup] = useState(
+    () => localStorage.getItem(SETUP_DISMISSED) === '1',
+  )
+  const dismissSetup = useCallback(() => {
+    localStorage.setItem(SETUP_DISMISSED, '1')
+    setDismissedSetup(true)
+  }, [])
 
   // The connection this thread is bound to, as it stands *now*. A saved thread
   // reads it from the conversation rather than from the picker, because the
@@ -963,6 +972,8 @@ export default function ChatPage() {
               options={connections.map((c) => ({ value: c.id, label: c.name }))}
               width={232}
               disabled={locked}
+              emptyLabel="Connect a database…"
+              onEmpty={() => navigate('/sources')}
               badge={
                 <DisclosureBadge
                   policy={connections.find((c) => c.id === connectionId)?.disclosure_policy}
@@ -976,6 +987,8 @@ export default function ChatPage() {
               onChange={setModelId}
               options={models.map((m) => ({ value: m.id, label: m.name }))}
               disabled={locked}
+              emptyLabel="Add a model provider…"
+              onEmpty={() => navigate('/providers')}
             />
           </div>
         </header>
@@ -999,10 +1012,17 @@ export default function ChatPage() {
               {error && <ErrorNote>{error}</ErrorNote>}
 
               {messages.length === 0 && !activeRunId && (
-                <Welcome ready={ready} onPick={(text) => void send(text)} />
+                <Welcome
+                  ready={ready}
+                  setup={setup}
+                  connections={connections}
+                  dismissedSetup={dismissedSetup}
+                  onDismissSetup={dismissSetup}
+                  onPick={(text) => void send(text)}
+                />
               )}
 
-              {messages.map((message) => {
+              {messages.map((message, index) => {
                 if (message.role === 'USER') {
                   // A run that died before writing an answer has no assistant
                   // message to hang off, so the server attaches it here.
@@ -1045,6 +1065,9 @@ export default function ChatPage() {
                     onAddToDashboard={addToDashboard}
                     onAddToReport={addToReport}
                     blocked={blocked}
+                    // The turn before this one is the question it answered —
+                    // what a downloaded result should be called.
+                    title={messages[index - 1]?.content ?? ''}
                   />
                 )
               })}
@@ -1178,6 +1201,210 @@ export default function ChatPage() {
 }
 
 /**
+ * How far a fresh install has got, read off what is already on screen.
+ *
+ * No new endpoint and no extra request: the chat page fetches connections and
+ * providers at boot for its own pickers, and every fact this needs is on those
+ * two lists. The real order — provider, connection, schema sync, semantic
+ * layer — lived only in the README, and the third step is not optional in the
+ * way it looks: **an unsynced connection can answer nothing at all**, because
+ * the guard resolves every name in a generated statement against the stored
+ * snapshot.
+ */
+interface SetupState {
+  provider: boolean
+  connection: boolean
+  synced: boolean
+  /** Every step that gates asking a question is done. */
+  usable: boolean
+}
+
+function setupStateOf(connections: Connection[], models: LlmConfig[]): SetupState {
+  const provider = models.length > 0
+  const connection = connections.length > 0
+  const synced = connections.some((c) => Boolean(c.last_synced_at))
+  return { provider, connection, synced, usable: provider && connection && synced }
+}
+
+/** Remembered per browser: a checklist dismissed once should stay dismissed. */
+const SETUP_DISMISSED = 'raymand.setup.dismissed'
+
+/**
+ * The four steps, while any of the first three is outstanding.
+ *
+ * It replaces the starter questions rather than joining them: a chip that
+ * cannot be clicked is worse than no chip, and until a connection is synced
+ * none of them can be answered. The moment the product works, this goes and
+ * the starters come back — which is also why the fourth step, the semantic
+ * layer, is marked optional and does not hold the list open. It improves
+ * answers; it does not gate them.
+ */
+function SetupChecklist({
+  state, connections, onDismiss,
+}: {
+  state: SetupState
+  connections: Connection[]
+  onDismiss: () => void
+}) {
+  const navigate = useNavigate()
+  const first = connections[0]
+  const steps = [
+    {
+      done: state.provider,
+      label: 'Add a model provider',
+      hint: 'The model that writes the SQL. OpenAI-compatible or Anthropic.',
+      action: 'LLM providers',
+      to: '/providers',
+    },
+    {
+      done: state.connection,
+      label: 'Connect a database',
+      hint: 'Read-only credentials. DataMind proves the role cannot write before it uses it.',
+      action: 'Data sources',
+      to: '/sources',
+    },
+    {
+      done: state.synced,
+      label: 'Sync its schema',
+      hint: 'Not optional: every table and column in a generated query is resolved against this snapshot.',
+      action: 'Schema',
+      to: first ? `/sources/${first.id}/schema` : '/sources',
+    },
+    {
+      done: false,
+      optional: true,
+      label: 'Describe what it means',
+      hint: 'A semantic layer — grain, metrics, time conventions. Better answers, not a requirement.',
+      action: 'Semantic layer',
+      to: first ? `/sources/${first.id}/semantic` : '/sources',
+    },
+  ]
+
+  return (
+    <div
+      style={{
+        width: '100%',
+        maxWidth: 520,
+        marginTop: 6,
+        padding: '14px 16px 12px',
+        textAlign: 'left',
+        background: 'var(--panel)',
+        border: '1px solid var(--border)',
+        borderRadius: 12,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-strong)' }}>
+          Four steps to your first answer
+        </span>
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Dismiss the setup checklist"
+          title="Dismiss"
+          className="rm-icon-btn"
+          style={{
+            marginLeft: 'auto',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 24,
+            height: 24,
+            borderRadius: 6,
+            border: 'none',
+            background: 'transparent',
+            color: 'var(--text-faint)',
+            cursor: 'pointer',
+            ['--rm-hover-bg' as string]: 'var(--panel-alt)',
+          }}
+        >
+          <Icon.Close size={13} />
+        </button>
+      </div>
+
+      <ol style={{ display: 'flex', flexDirection: 'column', gap: 9, margin: 0, padding: 0, listStyle: 'none' }}>
+        {steps.map((step, index) => (
+          <li key={step.label} style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
+            {/* Done is a tick; not-done is its number, so the list reads as an
+                order of work rather than a set of empty boxes. */}
+            <span
+              aria-hidden
+              style={{
+                display: 'grid',
+                placeItems: 'center',
+                width: 18,
+                height: 18,
+                flexShrink: 0,
+                marginTop: 1,
+                borderRadius: 999,
+                fontSize: 10.5,
+                fontWeight: 700,
+                background: step.done ? 'var(--green-bg)' : 'var(--panel-alt)',
+                border: `1px solid ${step.done ? 'var(--green-border)' : 'var(--border)'}`,
+                color: step.done ? 'var(--green)' : 'var(--text-faint)',
+              }}
+            >
+              {step.done ? <Icon.Check size={11} /> : index + 1}
+            </span>
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <span
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  color: step.done ? 'var(--text-dim)' : 'var(--text-strong)',
+                }}
+              >
+                {step.label}
+                {step.optional && (
+                  <span style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--text-faint)' }}>
+                    optional
+                  </span>
+                )}
+                <span className="rm-sr">{step.done ? ' — done' : ' — still to do'}</span>
+              </span>
+              <span style={{ display: 'block', fontSize: 11.5, color: 'var(--text-faint)', lineHeight: 1.5 }}>
+                {step.hint}
+              </span>
+            </span>
+            {/* Drawn as a link rather than a quiet action: the finding this
+                list answers is that the empty pickers said "None configured"
+                and *were not links*, and an action faint until hovered would
+                repeat it for anyone who never hovers. */}
+            {!step.done && (
+              <button
+                type="button"
+                onClick={() => navigate(step.to)}
+                className="rm-step-go"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 3,
+                  flexShrink: 0,
+                  padding: '2px 0 2px 8px',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  fontFamily: 'inherit',
+                  color: 'var(--accent)',
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                }}
+              >
+                {step.action}
+                <Icon.ArrowRight size={12} />
+              </button>
+            )}
+          </li>
+        ))}
+      </ol>
+    </div>
+  )
+}
+
+/**
  * The opening screen. An empty transcript is the worst place to be told only
  * what the product does, so it also offers questions that are safe to ask of
  * any schema — the first one routes as METADATA and never touches SQL.
@@ -1189,7 +1416,19 @@ const STARTERS = [
   'Show me a sample of rows',
 ]
 
-function Welcome({ ready, onPick }: { ready: boolean; onPick: (text: string) => void }) {
+function Welcome({
+  ready, setup, connections, dismissedSetup, onDismissSetup, onPick,
+}: {
+  ready: boolean
+  setup: SetupState
+  connections: Connection[]
+  dismissedSetup: boolean
+  onDismissSetup: () => void
+  onPick: (text: string) => void
+}) {
+  // The checklist replaces the starters while the product cannot answer
+  // anything, and gives them back the moment it can.
+  const showChecklist = !setup.usable && !dismissedSetup
   return (
     <div
       className="rm-welcome"
@@ -1234,26 +1473,34 @@ function Welcome({ ready, onPick }: { ready: boolean; onPick: (text: string) => 
         read-only connection, and shows you exactly what it did.
       </p>
 
-      <div
-        style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 8,
-          justifyContent: 'center',
-          marginTop: 6,
-        }}
-      >
-        {STARTERS.map((text) => (
-          <StarterChip
-            key={text}
-            text={text}
-            disabled={!ready}
-            onClick={() => onPick(text)}
-          />
-        ))}
-      </div>
+      {showChecklist ? (
+        <SetupChecklist
+          state={setup}
+          connections={connections}
+          onDismiss={onDismissSetup}
+        />
+      ) : (
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 8,
+            justifyContent: 'center',
+            marginTop: 6,
+          }}
+        >
+          {STARTERS.map((text) => (
+            <StarterChip
+              key={text}
+              text={text}
+              disabled={!ready}
+              onClick={() => onPick(text)}
+            />
+          ))}
+        </div>
+      )}
 
-      {!ready && (
+      {!ready && !showChecklist && (
         <div style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 2 }}>
           Choose a database and model in the header to begin.
         </div>
@@ -2075,6 +2322,7 @@ function Composer({
  */
 function HeaderSelect({
   icon, label, value, onChange, options, badge, width = 190, disabled = false,
+  emptyLabel, onEmpty,
 }: {
   icon: React.ReactNode
   label: string
@@ -2086,6 +2334,9 @@ function HeaderSelect({
   width?: number
   /** Read-only: once a thread has started, its database/model can't change. */
   disabled?: boolean
+  /** What to offer when there is nothing to choose — "Add a database…". */
+  emptyLabel?: string
+  onEmpty?: () => void
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -2202,15 +2453,48 @@ function HeaderSelect({
           }}
         >
           {options.length === 0 ? (
-            <div
-              style={{
-                fontSize: 12.5,
-                color: 'var(--text-faint)',
-                padding: '9px 10px',
-              }}
-            >
-              None configured
-            </div>
+            /* An empty menu used to say "None configured" and stop there — a
+               dead end at the exact moment a new user needs a door. The row
+               that says nothing exists is now the row that goes and makes
+               one. */
+            onEmpty ? (
+              <button
+                type="button"
+                className="rm-menu-item"
+                onClick={() => {
+                  setOpen(false)
+                  onEmpty()
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  width: '100%',
+                  padding: '9px 10px',
+                  borderRadius: 7,
+                  border: 'none',
+                  background: 'transparent',
+                  color: 'var(--accent)',
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <Icon.Plus size={13} />
+                {emptyLabel ?? 'Set one up'}
+              </button>
+            ) : (
+              <div
+                style={{
+                  fontSize: 12.5,
+                  color: 'var(--text-faint)',
+                  padding: '9px 10px',
+                }}
+              >
+                None configured
+              </div>
+            )
           ) : (
             options.map((option) => {
               const active = option.value === value

@@ -7,8 +7,8 @@
 import React, { useEffect, useId, useMemo, useRef, useState } from 'react'
 
 import {
-  formatCell, resolveColumns, sortRows,
-  type ResultTableConfig,
+  csvFileName, formatCell, nextSort, resolveColumns, sortRows, toCsv, withSort,
+  type ResolvedColumn, type ResultTableConfig, type UserSort,
 } from './table-format'
 
 // ── logo ──────────────────────────────────────────────────────────────────
@@ -1852,18 +1852,157 @@ export interface ResultTableSpec {
   rows: unknown[][]
 }
 
-export function ResultTable({ spec, previewRows = 5, maxHeight = 420, config }: {
+/** Past this many rows the expanded table renders a window, not all of it. */
+const WINDOW_FROM = 200
+/** Rows kept either side of the viewport, so a fast scroll finds them drawn. */
+const OVERSCAN = 10
+
+/** The nearest ancestor that actually scrolls — the one whose offset decides
+ *  which rows are on screen. */
+function scrollerOf(el: HTMLElement | null): HTMLElement | null {
+  for (let node = el?.parentElement ?? null; node; node = node.parentElement) {
+    if (/(auto|scroll|overlay)/.test(getComputedStyle(node).overflowY)) return node
+  }
+  return null
+}
+
+/**
+ * Which slice of a long result is worth putting in the DOM.
+ *
+ * "Show all" used to mount every row a query returned — up to the connection's
+ * cap, 1,000 by default — and a thousand rows of six cells is six thousand
+ * elements that all have to be laid out before the click feels finished. Here
+ * the rows outside the viewport become two spacer rows of exactly their
+ * height, so the scrollbar and the scroll position stay honest.
+ *
+ * It measures the first drawn row rather than assuming a height: cells are
+ * `nowrap`, so every row is one line, and one measurement holds for all of
+ * them. Below `WINDOW_FROM` this returns null and the table renders normally —
+ * virtualisation costs a screen reader the rows it cannot see, and that is
+ * only worth paying where the alternative is a page that stalls.
+ */
+function useRowWindow(
+  body: React.RefObject<HTMLTableSectionElement | null>,
+  count: number,
+): { start: number; end: number; rowPx: number } | null {
+  const [range, setRange] = useState<{ start: number; end: number } | null>(null)
+  const rowPx = useRef(33)
+  const on = count > WINDOW_FROM
+
+  useEffect(() => {
+    if (!on) {
+      setRange(null)
+      return
+    }
+    const el = body.current
+    const scroller = scrollerOf(el)
+    if (!el || !scroller) return
+
+    function measure() {
+      if (!el || !scroller) return
+      const first = el.rows[el.rows[0]?.hasAttribute('aria-hidden') ? 1 : 0]
+      if (first && first.offsetHeight > 0) rowPx.current = first.offsetHeight
+      // How far the body's own top edge has travelled above the viewport.
+      const top = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+      const above = Math.max(0, Math.floor(-top / rowPx.current))
+      const fits = Math.ceil(scroller.clientHeight / rowPx.current)
+      const start = Math.max(0, above - OVERSCAN)
+      const end = Math.min(count, above + fits + OVERSCAN)
+      setRange((current) =>
+        current && current.start === start && current.end === end
+          ? current
+          : { start, end },
+      )
+    }
+
+    measure()
+    scroller.addEventListener('scroll', measure, { passive: true })
+    window.addEventListener('resize', measure)
+    return () => {
+      scroller.removeEventListener('scroll', measure)
+      window.removeEventListener('resize', measure)
+    }
+  }, [on, count, body])
+
+  return on && range ? { ...range, rowPx: rowPx.current } : null
+}
+
+/** The mark on a sortable heading: faint on approach, lit when it is the sort. */
+function SortGlyph({ direction }: { direction: 'asc' | 'desc' | null }) {
+  return (
+    <svg
+      className={`rm-sort-glyph${direction ? ' is-on' : ''}`}
+      width={9}
+      height={11}
+      viewBox="0 0 9 11"
+      aria-hidden
+      style={{ flexShrink: 0 }}
+    >
+      <path
+        d="M4.5 0.5 L7.5 4 H1.5 Z"
+        fill="currentColor"
+        opacity={direction === 'desc' ? 0.25 : 1}
+      />
+      <path
+        d="M4.5 10.5 L1.5 7 H7.5 Z"
+        fill="currentColor"
+        opacity={direction === 'asc' ? 0.25 : 1}
+      />
+    </svg>
+  )
+}
+
+/** Hands the browser a file it saves rather than opens. */
+function saveCsv(title: string, text: string): void {
+  // The BOM is not decoration: without it Excel reads a UTF-8 CSV as the local
+  // 8-bit codepage, and every Persian heading in this product arrives as
+  // mojibake in the one place the user cannot fix it.
+  const blob = new Blob([`\ufeff${text}`], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = csvFileName(title)
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+export function ResultTable({
+  spec, previewRows = 5, maxHeight = 420, config, download,
+}: {
   spec: ResultTableSpec
   /** How many rows before "show all". */
   previewRows?: number
   maxHeight?: number | 'none'
   /** Omitted: every column, in query order, unsorted — as the query returned it. */
   config?: ResultTableConfig | null
+  /**
+   * Offer the rows as a file, named after this. Opt-in: the tile editor's
+   * preview is a verdict about a statement, not a result anyone takes away.
+   */
+  download?: string
 }) {
   const [expanded, setExpanded] = useState(false)
-  const columns = useMemo(() => resolveColumns(spec, config), [spec, config])
-  const sorted = useMemo(() => sortRows(spec.rows, spec, config), [spec, config])
+  /**
+   * The sort the reader asked for by clicking a heading, over the stored one.
+   *
+   * Client-side, always: the rows are already here, and a re-query would spend
+   * a round trip on the customer's database to answer a question the browser
+   * can answer — the same reasoning that has the chart picker redraw from rows
+   * already returned. A third click gives the tile's own ordering back.
+   */
+  const [userSort, setUserSort] = useState<UserSort | null>(null)
+  const effective = useMemo(() => withSort(config, userSort), [config, userSort])
+  const columns = useMemo(() => resolveColumns(spec, effective), [spec, effective])
+  const sorted = useMemo(() => sortRows(spec.rows, spec, effective), [spec, effective])
   const rows = expanded ? sorted : sorted.slice(0, previewRows)
+
+  const bodyRef = useRef<HTMLTableSectionElement | null>(null)
+  const win = useRowWindow(bodyRef, rows.length)
+  const drawn = win ? rows.slice(win.start, win.end) : rows
+  const sortOf = (column: ResolvedColumn): 'asc' | 'desc' | null =>
+    userSort?.column === column.name ? userSort.direction : null
 
   if (spec.columns.length === 0) {
     return (
@@ -1894,31 +2033,85 @@ export function ResultTable({ spec, previewRows = 5, maxHeight = 420, config }: 
         >
           <thead>
             <tr>
-              {columns.map((column) => (
-                <th
-                  key={column.name}
-                  style={{
-                    position: 'sticky',
-                    top: 0,
-                    textAlign: column.align,
-                    padding: '9px 12px',
-                    background: 'var(--panel-alt)',
-                    color: 'var(--text-dim)',
-                    fontWeight: 600,
-                    fontSize: 11,
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.04em',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {column.heading}
-                </th>
-              ))}
+              {columns.map((column) => {
+                const direction = sortOf(column)
+                return (
+                  <th
+                    key={column.name}
+                    aria-sort={
+                      direction === 'asc' ? 'ascending'
+                      : direction === 'desc' ? 'descending'
+                      : 'none'
+                    }
+                    style={{
+                      position: 'sticky',
+                      top: 0,
+                      textAlign: column.align,
+                      padding: 0,
+                      background: 'var(--panel-alt)',
+                      color: 'var(--text-dim)',
+                      fontWeight: 600,
+                      fontSize: 11,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.04em',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {/* A button inside the cell rather than a click handler on
+                        it: a heading that reorders a table is a control, and a
+                        control has to be reachable by keyboard and say what it
+                        does. The padding moves here so the whole cell is the
+                        hit area. */}
+                    <button
+                      type="button"
+                      className="rm-th-sort"
+                      onClick={() => setUserSort((current) => nextSort(current, column.name))}
+                      title={
+                        direction === 'asc' ? `Sort by ${column.heading}, descending`
+                        : direction === 'desc' ? `Stop sorting by ${column.heading}`
+                        : `Sort by ${column.heading}`
+                      }
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 5,
+                        width: '100%',
+                        padding: '9px 12px',
+                        justifyContent:
+                          column.align === 'right' ? 'flex-end'
+                          : column.align === 'center' ? 'center'
+                          : 'flex-start',
+                        font: 'inherit',
+                        letterSpacing: 'inherit',
+                        textTransform: 'inherit',
+                        color: direction ? 'var(--text-strong)' : 'inherit',
+                        background: 'transparent',
+                        border: 'none',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {column.heading}
+                      <SortGlyph direction={direction} />
+                    </button>
+                  </th>
+                )
+              })}
             </tr>
           </thead>
-          <tbody>
-            {rows.map((row, rowIndex) => (
-              <tr key={rowIndex} style={{ borderTop: '1px solid var(--border)' }}>
+          <tbody ref={bodyRef}>
+            {/* The rows above and below the window, as the exact height they
+                would have taken: the scrollbar stays the length of the result
+                rather than the length of what happens to be drawn. */}
+            {win && win.start > 0 && (
+              <tr aria-hidden style={{ height: win.start * win.rowPx }}>
+                <td colSpan={columns.length} style={{ padding: 0, border: 'none' }} />
+              </tr>
+            )}
+            {drawn.map((row, index) => (
+              <tr
+                key={(win?.start ?? 0) + index}
+                style={{ borderTop: '1px solid var(--border)' }}
+              >
                 {columns.map((column) => (
                   <td
                     key={column.name}
@@ -1935,31 +2128,52 @@ export function ResultTable({ spec, previewRows = 5, maxHeight = 420, config }: 
                 ))}
               </tr>
             ))}
+            {win && win.end < rows.length && (
+              <tr aria-hidden style={{ height: (rows.length - win.end) * win.rowPx }}>
+                <td colSpan={columns.length} style={{ padding: 0, border: 'none' }} />
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
 
-      {spec.rows.length > previewRows && (
-        <button
-          onClick={() => setExpanded(!expanded)}
-          style={{
-            alignSelf: 'flex-start',
-            fontSize: 12,
-            color: 'var(--accent)',
-            background: 'transparent',
-            border: 'none',
-            cursor: 'pointer',
-            padding: 0,
-          }}
-        >
-          {expanded
-            ? 'Show fewer rows'
-            : `Show all ${spec.rows.length.toLocaleString()} rows`}
-        </button>
+      {(spec.rows.length > previewRows || download) && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          {spec.rows.length > previewRows && (
+            <button
+              onClick={() => setExpanded(!expanded)}
+              style={{
+                fontSize: 12,
+                color: 'var(--accent)',
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                padding: 0,
+              }}
+            >
+              {expanded
+                ? 'Show fewer rows'
+                : `Show all ${spec.rows.length.toLocaleString()} rows`}
+            </button>
+          )}
+          {/* Every row the result has, not the page on screen — the file is
+              for the arithmetic the screen cannot do, and a download that
+              silently stops at the preview is worse than none. */}
+          {download && (
+            <QuietAction
+              onClick={() => saveCsv(download, toCsv(columns, sorted))}
+              title={`Download ${sorted.length.toLocaleString()} rows as a CSV file`}
+            >
+              <Icon.ArrowDown size={12} />
+              CSV
+            </QuietAction>
+          )}
+        </div>
       )}
     </div>
   )
 }
+
 
 // ── index chrome ──────────────────────────────────────────────────────────
 /**

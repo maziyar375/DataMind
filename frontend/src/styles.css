@@ -2176,6 +2176,21 @@ code, pre, .mono {
 .rm-tab { transition: color .12s ease, background .12s ease; }
 .rm-tab:hover { color: var(--text-strong); }
 
+/* The way into a setup step. Underlined on approach rather than always, so
+   four of them in a column do not read as a paragraph of links. */
+.rm-step-go:hover { text-decoration: underline; }
+
+/* A result table's headings are controls: click to sort, click again to
+   reverse, once more to give the table's own ordering back. The mark is drawn
+   at every heading and only *shown* where the pointer is or where the sort
+   actually is — a column of permanent arrows reads as decoration, and a
+   heading with no arrow at all never gets clicked. */
+.rm-th-sort .rm-sort-glyph { opacity: 0; transition: opacity .12s ease; }
+.rm-th-sort:hover .rm-sort-glyph,
+.rm-th-sort:focus-visible .rm-sort-glyph { opacity: 0.5; }
+.rm-th-sort .rm-sort-glyph.is-on { opacity: 1; color: var(--accent); }
+.rm-th-sort:hover { color: var(--text-strong); }
+
 /* A schema table, which is a disclosure rather than a link: it fills on
    approach instead of lifting, the way the dense dashboard rows do. */
 .rm-table-card {

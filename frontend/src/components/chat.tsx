@@ -1495,7 +1495,7 @@ function FeedbackReceipt({ given }: { given: NonNullable<RunKnowledge['feedback'
 export const AssistantTurn = memo(function AssistantTurn({
   text, run, streaming, steps, thinking, preview, onPickOption, optionsDisabled,
   onRegenerate, onFeedback, onSaveAsTemplate, onAddToDashboard, onAddToReport,
-  blocked,
+  blocked, title,
 }: {
   text: string
   run: RunDetail | null
@@ -1534,6 +1534,8 @@ export const AssistantTurn = memo(function AssistantTurn({
   onAddToReport?: (run: RunDetail) => void
   /** Why either destination is refused, said on the page. */
   blocked?: { dashboard: string | null; report: string | null }
+  /** The question this answered — the name a downloaded result is given. */
+  title?: string
 }) {
   const table = run?.artifacts.find((a) => a.kind === 'TABLE')
   const spec = table?.spec as TableArtifactSpec | undefined
@@ -1642,7 +1644,9 @@ export const AssistantTurn = memo(function AssistantTurn({
           a result appearing and a result being dumped, not an effect. */}
       {spec && (
         <div className="rm-artifact" style={{ animationDelay: '.06s' }}>
-          <ResultTable spec={spec} />
+          {/* Named after the question, which is what the reader will look for
+              in their downloads folder a week later. */}
+          <ResultTable spec={spec} download={title || 'answer'} />
         </div>
       )}
       {/* The same table, twenty seconds earlier. It sits exactly where the

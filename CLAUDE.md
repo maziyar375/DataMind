@@ -357,8 +357,10 @@ frontend/src/
                             one-tick refresh scheduler), dashboard-schedule.ts
                             (the due-tile rule, DOM-free, + its .test.ts —
                             `npm run test:schedule`), table-format.ts (how a
-                            configured table resolves/sorts/formats, also
-                            DOM-free — `npm run test:format`),
+                            configured table resolves/sorts/formats, the sort a
+                            reader layers over that by clicking a heading, and
+                            the CSV it downloads — DOM-free,
+                            `npm run test:format`),
                             dashboard-document.ts (reading an exported file:
                             what it is, and which connection each of its
                             databases is here — `npm run test:document`) +

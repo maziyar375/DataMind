@@ -98,6 +98,7 @@ credential and probe it should not each invent their own shape.
 ```
 Chat            rail of threads (date-bucketed) │ header: database · model · disclosure
                 transcript │ composer │ the template editor, borrowed from Knowledge
+                welcome: the setup checklist while unusable, the starters once not
 
 Dashboards      index (cards│rows) → one board
                   view mode ⇄ edit-grid mode · tile kebab in both
@@ -134,6 +135,24 @@ at the first request.
 | [`VegaChart.tsx`](../frontend/src/components/VegaChart.tsx) | a chat turn, a `CHART` tile, a report figure, and the print redraw |
 | [`chart-picker.tsx`](../frontend/src/components/chart-picker.tsx) | chat (redraws the stored artifact — never re-queries), report, tile editor |
 | `ResultTable` / `Kpi` ([`ui.tsx`](../frontend/src/components/ui.tsx)) | chat results, `TABLE` and `METRIC` tiles, report figures and `plan_kpi` bands |
+
+`ResultTable` carries three behaviours worth naming, all of them client-side
+over rows it already has — **none of them ever re-runs a query**, for the same
+reason the chart picker redraws from rows already returned:
+
+- **Click a heading to sort**: ascending, descending, then *away*, back to
+  whatever the tile stored — a two-state toggle would leave no way back to a
+  configured ordering. `aria-sort` says which, and the mark is drawn on every
+  heading but only shown under the pointer or where the sort is.
+- **Past 200 rows the expanded table renders a window**, with spacer rows of
+  exactly the height of what is not drawn, so the scrollbar stays honest. A
+  thousand rows — the default row cap — used to mount as six thousand cells.
+- **Download as CSV**, opt-in per call site (`download` names the file). The
+  file has the columns the reader can see, in their order, under their
+  headings, and **raw values rather than the formatted text on screen**: a
+  spreadsheet has to compute with them. Escaping is RFC 4180, plus a leading
+  apostrophe on anything starting `=`, `+` or `@`, which Excel would otherwise
+  treat as a formula.
 | `TemplateEditor` ([`knowledge.tsx`](../frontend/src/components/knowledge.tsx)) | the Knowledge tab, and *Save as template* on a chat answer |
 
 That last one is the rule stated generally: **when two screens must agree about
@@ -153,6 +172,17 @@ with the reason on the page rather than in a `title`, when the thread's
 connection is gone; the report alone is refused under a `NONE`/`AGGREGATE`
 policy, because a report's prose is written from result values and a tile never
 sends one to a model.
+
+**A fresh install is told what to do next, from what it already knows.** The
+chat welcome screen shows a four-step checklist — provider · connection ·
+schema sync · semantic layer (optional) — derived from the two lists the page
+already fetches for its own pickers, with **no new endpoint**. It replaces the
+starter questions rather than joining them (a chip that cannot be answered is
+worse than no chip) and disappears the moment the three gating steps are done;
+it is dismissible, and that sticks. The third step is not the formality it
+looks: an unsynced connection can answer nothing, because the guard resolves
+every name against the stored snapshot. An empty picker in the header offers
+the way in rather than saying *None configured* at a dead end.
 
 **Two screens never poll a hidden tab.** The dashboard scheduler and the report
 generation poll both pause on `document.hidden`. A forgotten background tab is

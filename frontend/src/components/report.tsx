@@ -3671,7 +3671,12 @@ function BlockView({
           {block.chart_note && (
             <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>{block.chart_note}</span>
           )}
-          <ResultTable spec={block} previewRows={12} maxHeight={420} />
+          <ResultTable
+            spec={block}
+            previewRows={12}
+            maxHeight={420}
+            download={caption || 'figure'}
+          />
         </>
       )}
 

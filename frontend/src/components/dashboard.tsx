@@ -723,6 +723,7 @@ function TileBody({
         previewRows={Number.POSITIVE_INFINITY}
         maxHeight="none"
         config={tile.tile_type === 'TABLE' ? tile.table_config : null}
+        download={tile.title || 'tile'}
       />
     </div>
   )
