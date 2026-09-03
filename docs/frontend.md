@@ -101,7 +101,7 @@ Chat            rail of threads (date-bucketed) │ header: database · model ·
 
 Dashboards      index (cards│rows) → one board
                   view mode ⇄ edit-grid mode · tile kebab in both
-                  tile editor (modal, 2 tabs over one SQL box)
+                  tile editor (drawer beside the grid, own URL, 2 tabs over one SQL box)
                   focus mode · presentation mode · import/export
 
 Reports         index → outline editor → run viewer → run history
@@ -139,6 +139,20 @@ at the first request.
 That last one is the rule stated generally: **when two screens must agree about
 a guard verdict, a disclosure rule or a parameter proposal, they share the
 component.** Two editors are two chances to get one of them wrong.
+
+**An answer can leave Chat.** Its action row offers *Add to dashboard* and
+*Add to report* beside *Save as template*, all three guarded on the same fact —
+the run produced a statement (`run.queries.length > 0`). What travels is the
+run's own work: the question, the statement that ran, the connection, and the
+chart type read from the spec's `usermeta`. **No model call, no re-execution.**
+The dashboard road ends in the tile editor, prefilled and one screen further
+on; the report road writes the block itself — created from the question, then
+`PUT .../sql` — which is what marks the SQL `HANDWRITTEN`, so *Check all* (a
+sweep over blocks with **no** query) can never overwrite it. Both are refused,
+with the reason on the page rather than in a `title`, when the thread's
+connection is gone; the report alone is refused under a `NONE`/`AGGREGATE`
+policy, because a report's prose is written from result values and a tile never
+sends one to a model.
 
 **Two screens never poll a hidden tab.** The dashboard scheduler and the report
 generation poll both pause on `document.hidden`. A forgotten background tab is
@@ -191,7 +205,7 @@ every dimension lifted from the design concept rather than invented: `Logo`,
 `NumberStepper` / `InlineEdit`, `PrimaryButton` / `GhostButton` / `QuietAction`
 / `DangerButton`, `Chip` / `Dot` / `GlyphBadge` / `DisclosureBadge`, `Modal` /
 `EmptyState` / `ErrorNote` / `Spinner` / `ProgressBar` / `Segmented` /
-`SearchField` / `PageHeader`, `ResultTable`, `Kpi`, `CopyButton`, and the
+`SearchField` / `PageHeader`, `Drawer`, `ResultTable`, `Kpi`, `CopyButton`, and the
 helpers `relativeTime`, `initialOf`, `identityHue`, `glyphTint`, `dirOf`.
 Compose from these before writing a new one. **There is no component library**
 and adding one is not on the table; `react-grid-layout` is a layout engine, not

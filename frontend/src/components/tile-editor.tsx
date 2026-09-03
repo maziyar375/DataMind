@@ -1,5 +1,12 @@
 /**
- * The tile editor — one modal, two ways to write the same SQL.
+ * The tile editor — one drawer beside the grid, two ways to write the same SQL.
+ *
+ * It was an 880px modal over the dashboard, which hid the grid the tile was
+ * joining: the one thing a person authoring a tile is placing it *among*. As a
+ * drawer the board stays on screen and keeps working — no scrim, no scroll
+ * lock, no focus trap — and the editor has a URL of its own
+ * (`/dashboards/:id/tiles/new` and `…/tiles/:tileId`), so a half-written tile
+ * survives a refresh and can be linked to.
  *
  * The tab chooses how the text got into the textarea, **not** what happens to
  * it afterwards. Both paths land in the same box, both are re-checked by the
@@ -44,9 +51,33 @@ import type {
 import { ChartTypePicker } from './chart-picker'
 import { REFRESH_OPTIONS, rateLabel } from './dashboard'
 import {
-  Chip, ErrorNote, Field, GhostButton, Icon, Kpi, Modal, PrimaryButton, ResultTable,
+  Chip, Drawer, ErrorNote, Field, GhostButton, Icon, Kpi, PrimaryButton, ResultTable,
   Select, Spinner, TextArea, TextInput,
 } from './ui'
+
+/**
+ * What another surface can hand this editor to start from.
+ *
+ * The contract F2's *Add to dashboard* writes and this reads: an answer the
+ * reader is looking at, carried across as the question that was asked, the
+ * statement that actually ran, the connection it ran against, and the chart it
+ * was drawn as. Nothing is re-asked and nothing is re-run — the whole point is
+ * that this is the SQL the reader already watched succeed.
+ *
+ * It travels as route state, so the editor's URL keeps working on a refresh.
+ */
+export interface TilePrefill {
+  question?: string
+  sql?: string
+  connectionId?: string
+  /**
+   * A `ChartIntent` fragment — in practice `{ chart_type, orientation?, stack? }`,
+   * which is what a rendered chart can honestly say about itself. The columns
+   * are left to the editor's own check of the same statement, because those
+   * are the fields this result actually has.
+   */
+  chartConfig?: Record<string, unknown> | null
+}
 
 /**
  * The shortcut, spelled the way this keyboard spells it. `⌘⏎` on a Mac is a
@@ -194,11 +225,13 @@ function axisStateFrom(config: Record<string, unknown> | null | undefined): Axis
 }
 
 export function TileEditor({
-  dashboard, tile, onClose, onSaved,
+  dashboard, tile, prefill, onClose, onSaved,
 }: {
   dashboard: Dashboard
   /** null for "Add tile"; a tile for "Edit". */
   tile: DashboardTile | null
+  /** Where a new tile starts from, when it was begun somewhere else. */
+  prefill?: TilePrefill | null
   onClose: () => void
   onSaved: (tile: DashboardTile) => void
 }) {
@@ -208,18 +241,32 @@ export function TileEditor({
   const [tab, setTab] = useState<'ask' | 'sql'>(
     tile && tile.sql_origin === 'HANDWRITTEN' ? 'sql' : 'ask',
   )
-  const [title, setTitle] = useState(tile?.title ?? '')
+  // A prefilled title, from the question that produced the statement. The
+  // tile's caption is what the grid shows, and a tile carried over from an
+  // answer arriving untitled would be a blank card on the board — this is a
+  // draft the author is about to read anyway, not a name chosen for them.
+  const [title, setTitle] = useState(tile?.title ?? prefill?.question?.slice(0, 200) ?? '')
   const [tileType, setTileType] = useState<TileType>(tile?.tile_type ?? 'CHART')
-  const [connectionId, setConnectionId] = useState(tile?.connection_id ?? '')
+  const [connectionId, setConnectionId] = useState(
+    tile?.connection_id ?? prefill?.connectionId ?? '',
+  )
   const [llmConfigId, setLlmConfigId] = useState(tile?.llm_config_id ?? '')
-  const [question, setQuestion] = useState(tile?.question ?? '')
-  const [sql, setSql] = useState(tile?.sql ?? '')
-  const [origin, setOrigin] = useState<SqlOrigin>(tile?.sql_origin ?? 'HANDWRITTEN')
+  const [question, setQuestion] = useState(tile?.question ?? prefill?.question ?? '')
+  const [sql, setSql] = useState(tile?.sql ?? prefill?.sql ?? '')
+  // A model wrote a prefilled statement, in the chat run the reader is coming
+  // from. `sql_origin` is provenance and never a trust signal, so it records
+  // that honestly; with no `llm_config_id` on this side the save writes none,
+  // and the tile carries no model chip it cannot substantiate.
+  const [origin, setOrigin] = useState<SqlOrigin>(
+    tile?.sql_origin ?? (prefill?.sql ? 'GENERATED' : 'HANDWRITTEN'),
+  )
   const [maxRows, setMaxRows] = useState(tile?.max_rows == null ? '' : String(tile.max_rows))
   const [refresh, setRefresh] = useState(
     tile?.refresh_interval_seconds == null ? '' : String(tile.refresh_interval_seconds),
   )
-  const [axes, setAxes] = useState<AxisState>(() => axisStateFrom(tile?.chart_config))
+  const [axes, setAxes] = useState<AxisState>(
+    () => axisStateFrom(tile?.chart_config ?? prefill?.chartConfig ?? null),
+  )
   // Which draft's suggestion has already been adopted into `axes`. A ref, not
   // state: adopting must not itself schedule a render, and comparing object
   // identity is what makes "once per draft" mean once per round trip.
@@ -252,7 +299,9 @@ export function TileEditor({
         setModels(loadedModels)
         // One connection and no choice to make: pick it, so the common case
         // opens ready to type.
-        if (!tile && loadedConnections.length === 1) setConnectionId(loadedConnections[0].id)
+        if (!tile && !prefill?.connectionId && loadedConnections.length === 1) {
+          setConnectionId(loadedConnections[0].id)
+        }
         if (!tile && loadedModels.length === 1) setLlmConfigId(loadedModels[0].id)
         // Asking is the primary path, but it is not the only one: with no
         // provider configured the editor opens on the tab that needs none.
@@ -264,6 +313,8 @@ export function TileEditor({
     return () => {
       cancelled = true
     }
+    // `prefill` is route state, stable for the life of this editor.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tile])
 
   // One check when the editor opens on a tile that already has SQL.
@@ -276,8 +327,11 @@ export function TileEditor({
   // draft, Edit tile opened offering every chart type on a result that can
   // carry three of them. The column pickers come from the same preview.
   useEffect(() => {
-    const existing = tile?.sql ?? ''
+    const existing = tile?.sql ?? prefill?.sql ?? ''
     if (existing.trim()) setCheckTarget(existing)
+    // Once, on open: `prefill` is route state and stable for the life of this
+    // editor, and re-running here would re-check a statement mid-edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tile])
 
   // ── the guard, when you ask for it ──────────────────────────────────────
@@ -580,14 +634,19 @@ export function TileEditor({
   )})`
 
   return (
-    <Modal
-      title={tile ? 'Edit tile' : 'Add tile'}
+    <Drawer
+      className="rm-tile-drawer"
+      icon={<Icon.Plus size={14} />}
+      title={tile ? 'Edit tile' : prefill ? 'Add tile from this answer' : 'Add tile'}
       subtitle={
-        needsSql
-          ? 'Ask for the SQL or write it yourself — both are checked the same way.'
-          : 'A note on the grid. Nothing runs.'
+        !needsSql
+          ? 'A note on the grid. Nothing runs.'
+          : prefill
+            ? 'The statement that answered the question, on its way to the grid. Nothing is re-asked and nothing is re-run.'
+            : 'Ask for the SQL or write it yourself — both are checked the same way.'
       }
-      width={880}
+      closeLabel="Close the tile editor"
+      width={520}
       onClose={onClose}
       footer={
         <>
@@ -771,7 +830,7 @@ export function TileEditor({
           {error && <ErrorNote>{error}</ErrorNote>}
         </>
       )}
-    </Modal>
+    </Drawer>
   )
 }
 

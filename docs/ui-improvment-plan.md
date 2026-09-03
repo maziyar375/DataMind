@@ -453,13 +453,13 @@ order unless noted.
 - [x] **F14** Confirm dialog: stay / discard, wired to the connection form
 
 ## Phase 2 — The core loop
-- [ ] **F10** Tile editor converted from `Modal` to drawer over the grid
-- [ ] **F10** Tile editor routed (`/dashboards/:id/tiles/new` + `/:tileId`)
-- [ ] **F10** Prefill payload accepted from route state
-- [ ] **F2** "Add to dashboard" on the answer action row
-- [ ] **F2** "Add to report" on the answer action row
-- [ ] **F2** Prefill carries the run's own SQL — no re-ask, no re-run
-- [ ] **F2** Both disabled with an on-page reason when the connection is gone
+- [x] **F10** Tile editor converted from `Modal` to drawer over the grid
+- [x] **F10** Tile editor routed (`/dashboards/:id/tiles/new` + `/:tileId`)
+- [x] **F10** Prefill payload accepted from route state
+- [x] **F2** "Add to dashboard" on the answer action row
+- [x] **F2** "Add to report" on the answer action row
+- [x] **F2** Prefill carries the run's own SQL — no re-ask, no re-run
+- [x] **F2** Both disabled with an on-page reason when the connection is gone
 
 ## Phase 3 — Getting started & getting data out
 - [ ] **F3** Empty `HeaderSelect` menus navigate to `/providers` / `/sources`

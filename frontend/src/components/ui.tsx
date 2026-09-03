@@ -1115,6 +1115,48 @@ function focusablesIn(root: HTMLElement): HTMLElement[] {
 }
 
 /**
+ * Focus in on open, and back to the opener when the surface really closes.
+ *
+ * Shared by `Modal` and `Drawer`, which differ about the *keyboard*: a modal
+ * traps Tab because the page behind it is not usable, a drawer does not
+ * because the page behind it is the thing being edited. Everything else about
+ * how focus arrives and where it goes back to is the same, and a second copy
+ * would be a second place for the three rules below to be got wrong.
+ */
+function useSurfaceFocus(surface: React.RefObject<HTMLElement | null>): void {
+  // Read during the first render, before this surface's own DOM exists: by the
+  // time an effect runs, a field carrying `autoFocus` has already taken focus
+  // and `document.activeElement` is inside the surface, not behind it.
+  const openerRef = useRef<HTMLElement | null>(null)
+  if (openerRef.current === null) openerRef.current = document.activeElement as HTMLElement | null
+
+  useEffect(() => {
+    // Only if nothing inside asked for focus first. Half these surfaces open
+    // onto a single field with `autoFocus` on it, and landing on the field you
+    // came to fill beats landing on the box around it.
+    const el = surface.current
+    if (el && !el.contains(document.activeElement)) el.focus()
+
+    return () => {
+      // Only when it has really left the page. In development React runs this
+      // cleanup once on mount without unmounting anything, and handing focus
+      // back there would undo the `autoFocus` above on every surface that has
+      // one — a bug that would exist only in dev, which is the worst kind to
+      // chase.
+      if (el && document.contains(el)) return
+      // And only if the opener is still on the page and is not itself inside
+      // this surface — one that deleted the row it was opened from has
+      // nothing to go back to, and focusing a detached node silently drops
+      // focus onto the body, which is the state this restore prevents.
+      const opener = openerRef.current
+      if (opener && document.contains(opener) && !el?.contains(opener)) opener.focus()
+    }
+    // Once per open: `surface` is a ref and never changes identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+}
+
+/**
  * A centered modal dialog over a scrim. Closes on Escape or a click on the
  * backdrop; locks body scroll while open. The header, scrollable body, and
  * optional footer are laid out so long forms scroll without the chrome moving.
@@ -1139,11 +1181,7 @@ export function Modal({
 }) {
   const dialogRef = useRef<HTMLDivElement | null>(null)
   const titleId = useId()
-  // Read during the first render, before this dialog's own DOM exists: by the
-  // time an effect runs, a field carrying `autoFocus` has already taken focus
-  // and `document.activeElement` is inside the dialog, not behind it.
-  const openerRef = useRef<HTMLElement | null>(null)
-  if (openerRef.current === null) openerRef.current = document.activeElement as HTMLElement | null
+  useSurfaceFocus(dialogRef)
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -1173,34 +1211,13 @@ export function Modal({
     return () => document.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  // Scroll lock and focus, once per open. Deliberately separate from the key
-  // handler above: most call sites pass a fresh `onClose` arrow on every
-  // render, and an effect that both depends on it and moves focus would snatch
-  // focus back to the dialog on every keystroke typed into a field inside it.
+  // Scroll lock, once per open. The page behind a modal is not usable, so it
+  // must not scroll under it either.
   useEffect(() => {
     const prevOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
-
-    // Only if nothing inside asked for focus first. Half these dialogs open
-    // onto a single field with `autoFocus` on it, and landing on the field you
-    // came to fill beats landing on the box around it.
-    const dialog = dialogRef.current
-    if (dialog && !dialog.contains(document.activeElement)) dialog.focus()
-
     return () => {
       document.body.style.overflow = prevOverflow
-      // Only when the dialog has really left the page. In development React
-      // runs this cleanup once on mount without unmounting anything, and
-      // handing focus back there would undo the `autoFocus` above on every
-      // dialog that has one — a bug that would exist only in dev, which is
-      // the worst kind to chase.
-      if (dialog && document.contains(dialog)) return
-      // And only if the opener is still on the page and is not itself inside
-      // this dialog — a dialog that deleted the row it was opened from has
-      // nothing to go back to, and focusing a detached node silently drops
-      // focus onto the body, which is the state this restore prevents.
-      const opener = openerRef.current
-      if (opener && document.contains(opener) && !dialog?.contains(opener)) opener.focus()
     }
   }, [])
 
@@ -1310,6 +1327,149 @@ export function Modal({
         )}
       </div>
     </div>
+  )
+}
+
+/**
+ * A working surface beside the page, rather than over it.
+ *
+ * The same anatomy as `Modal` — header, scrolling body, optional footer — and
+ * deliberately **not** modal: no scrim, no scroll lock, no focus trap. A
+ * drawer is for editing a thing while looking at the thing, so the page next
+ * to it stays readable, scrollable and tabbable. That is the whole difference,
+ * and it is why this is a second component rather than a `variant` prop on the
+ * first: every one of those three behaviours would have to be switched off.
+ *
+ * Escape still closes it, because a surface that opened over your work should
+ * always have one key that gets rid of it. It lays out as a flex item beside
+ * the content (`.rm-drawer` floats it over the page below 900px, where there
+ * is no room for two columns).
+ */
+export function Drawer({
+  title, subtitle, icon, onClose, children, footer, width = 520,
+  closeLabel = 'Close', className,
+}: {
+  title: React.ReactNode
+  subtitle?: React.ReactNode
+  /** A glyph beside the title, in the muted register the settings drawer uses. */
+  icon?: React.ReactNode
+  onClose: () => void
+  children: React.ReactNode
+  footer?: React.ReactNode
+  width?: number
+  /** For the close button's accessible name, e.g. "Close the tile editor". */
+  closeLabel?: string
+  /** Joined to `.rm-drawer`, for rules that belong to one drawer's content. */
+  className?: string
+}) {
+  const drawerRef = useRef<HTMLElement | null>(null)
+  const titleId = useId()
+  useSurfaceFocus(drawerRef)
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <aside
+      ref={drawerRef}
+      role="dialog"
+      aria-labelledby={titleId}
+      tabIndex={-1}
+      className={className ? `rm-drawer ${className}` : 'rm-drawer'}
+      style={{
+        width,
+        flexShrink: 0,
+        outline: 'none',
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 0,
+        borderLeft: '1px solid var(--border)',
+        background: 'var(--sidebar-bg)',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 10,
+          padding: '14px 16px',
+          borderBottom: '1px solid var(--border)',
+          flexShrink: 0,
+        }}
+      >
+        {icon && (
+          <span aria-hidden style={{ display: 'flex', paddingTop: 2, color: 'var(--text-dim)' }}>
+            {icon}
+          </span>
+        )}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div id={titleId} style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-strong)' }}>
+            {title}
+          </div>
+          {subtitle && (
+            <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2, lineHeight: 1.45 }}>
+              {subtitle}
+            </div>
+          )}
+        </div>
+        <button
+          onClick={onClose}
+          aria-label={closeLabel}
+          className="rm-icon-btn"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 28,
+            height: 28,
+            flexShrink: 0,
+            background: 'transparent',
+            color: 'var(--text-dim)',
+            border: 'none',
+            borderRadius: 7,
+            cursor: 'pointer',
+            ['--rm-hover-bg' as string]: 'var(--panel-alt)',
+          }}
+        >
+          <Icon.Close size={15} />
+        </button>
+      </div>
+
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          padding: 16,
+          overflowY: 'auto',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 14,
+        }}
+      >
+        {children}
+      </div>
+
+      {footer && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+            gap: 10,
+            padding: '12px 16px',
+            borderTop: '1px solid var(--border)',
+            flexShrink: 0,
+          }}
+        >
+          {footer}
+        </div>
+      )}
+    </aside>
   )
 }
 
@@ -1800,7 +1960,6 @@ export function ResultTable({ spec, previewRows = 5, maxHeight = 420, config }: 
     </div>
   )
 }
-
 
 // ── index chrome ──────────────────────────────────────────────────────────
 /**

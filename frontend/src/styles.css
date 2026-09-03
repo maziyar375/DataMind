@@ -854,6 +854,20 @@ code, pre, .mono {
     border-left: 1px solid var(--border-strong);
     box-shadow: -18px 0 50px rgba(0, 0, 0, 0.4);
   }
+  /* The tile editor is a form, not a settings list: at floating width its
+     two-column rows have ~150px a side, which is a select showing four
+     characters. It gets the same stacking the 640px rule gives every other
+     form, one breakpoint earlier, because the drawer narrows before the page
+     does. !important because the columns are declared inline. */
+  .rm-tile-drawer .rm-col-2 { grid-template-columns: 1fr !important; }
+}
+
+/* Wider than the settings drawer because it is a working surface rather than
+   a list of switches — but still a third of a laptop screen, so the grid it is
+   placing a tile on stays readable beside it. */
+.rm-tile-drawer { width: min(520px, 42vw) !important; }
+@media (max-width: 900px) {
+  .rm-tile-drawer { width: min(420px, 92vw) !important; }
 }
 
 @media (max-width: 640px) {

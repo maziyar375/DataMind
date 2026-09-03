@@ -272,8 +272,14 @@ Rates: `Manual / 15s / 30s / 1m / 5m / 15m / 1h / 6h / 24h`, plus "inherit".
 
 ### The tile editor
 
-One modal, two tabs over **one shared SQL textarea** — the tab chooses how the
-text got there, not what happens to it afterwards. The debounced guard check
+**A drawer beside the grid, at its own URL** — `/dashboards/:id/tiles/new` and
+`…/tiles/:tileId`. It was an 880px modal, which hid the one thing an author is
+placing a tile *among*; as a drawer the board stays on screen and stays live,
+and a half-written tile survives a refresh. It is deliberately not modal: no
+scrim, no scroll lock, no focus trap (`Drawer` in `ui.tsx`, beside `Modal`).
+
+Two tabs over **one shared SQL textarea** — the tab chooses how the text got
+there, not what happens to it afterwards. The debounced guard check
 watches the textarea whatever put text in it, so editing what the model wrote
 is checked exactly like typing it yourself.
 
@@ -401,14 +407,23 @@ Worth knowing what a few of them pin:
 
 ## 10. Not built
 
-Filters, sharing, "add to dashboard" from a chat run, and scheduled
-server-side warm refresh. (Export and import are built — §11.)
+Filters, sharing, and scheduled server-side warm refresh. (Export and import
+are built — §11.)
 
-"Add to dashboard" is the cheapest of these — a succeeded run already has
-validated SQL, a connection and a chart spec to copy into a tile. It was left
-out so the dashboard would stand on its own: a user who never opens chat still
-builds one, and promotion is a shortcut on top of a feature that has to exist
-first.
+**"Add to dashboard" from a chat run is built.** It was left out first so the
+dashboard would stand on its own — a user who never opens chat still builds one
+— and promotion is a shortcut on top of a feature that has to exist first. That
+feature exists, so the shortcut is here: the answer's action row picks a board
+and opens the tile editor at `/dashboards/:id/tiles/new` with
+`{ question, sql, connectionId, chartConfig }` in route state.
+
+Nothing about the tile path is special-cased for it. The prefilled statement is
+checked by the same `POST /sql/drafts/validate` a typed one is, saved through
+the same route, and re-guarded on every refresh; `sql_origin` records
+`GENERATED`, because a model did write it, and that is provenance rather than
+trust. **No model call and no re-execution happen on the way**: the SQL that
+lands is the SQL that ran, which is the whole point — a tile built by retyping
+the question is a tile whose query nobody approved.
 
 ## 11. Moving a dashboard: export and import
 

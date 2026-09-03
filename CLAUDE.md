@@ -1209,8 +1209,14 @@ The one thing that makes this hard, and everything else is CRUD:
   half-built dashboard.
 
 Not built, on purpose: filters (`QueryExecutor.execute` takes no bind
-parameters — **never** by string interpolation), sharing, and "add to dashboard"
-from a chat run.
+parameters — **never** by string interpolation) and sharing.
+
+**"Add to dashboard" from a chat run is built now** (`docs/dashboards.md` §10):
+the answer's action row picks a board and opens the tile editor prefilled with
+the run's own question, statement, connection and chart type. It re-asks no
+model and re-runs no query — the editor checks the statement it was handed, the
+same one the reader watched succeed, and the guard runs again at save and on
+every refresh as it does for a typed one.
 
 ---
 

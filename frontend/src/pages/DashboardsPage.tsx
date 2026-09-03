@@ -11,7 +11,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Layout } from 'react-grid-layout'
-import { useMatch, useNavigate } from 'react-router-dom'
+import { useLocation, useMatch, useNavigate } from 'react-router-dom'
 
 import { ApiError, dashboards as api } from '../api/client'
 import { useThemeOverride } from '../shell'
@@ -21,18 +21,28 @@ import {
   TileShell, TileSkeleton, rateLabel, type TileAction, useTileScheduler,
 } from '../components/dashboard'
 import { ImportDialog, exportDashboard } from '../components/dashboard-transfer'
-import { TileEditor } from '../components/tile-editor'
+import { TileEditor, type TilePrefill } from '../components/tile-editor'
 import {
   Dot, EmptyState, ErrorNote, GhostButton, Icon, InlineEdit, Modal, PageHeader,
   PrimaryButton, SearchField, Segmented, Spinner, TextInput, relativeTime,
 } from '../components/ui'
+
+/**
+ * The tile editor's own address, under the dashboard it is editing.
+ *
+ * `new` in the tile slot is the add form, the way `/sources/new` is: a state
+ * of this screen like any other, and one with a URL like any other.
+ */
+export const TILE_ROUTE = '/dashboards/:id/tiles/:tileId'
 
 export default function DashboardsPage() {
   // The open dashboard is the URL, not state: a board exists to be sent to
   // someone, and `/dashboards/:id` is what they receive. The switch stays here
   // rather than becoming two routes so the section is not remounted — see the
   // route table in `App.tsx`.
-  const openId = useMatch('/dashboards/:id')?.params.id ?? null
+  const detail = useMatch('/dashboards/:id')
+  const tileRoute = useMatch(TILE_ROUTE)
+  const openId = detail?.params.id ?? tileRoute?.params.id ?? null
   const navigate = useNavigate()
 
   return openId ? (
@@ -674,8 +684,6 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
   const [error, setError] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
-  // `undefined` = closed; `null` = adding; a tile = editing that one.
-  const [editorTile, setEditorTile] = useState<DashboardTile | null | undefined>(undefined)
   /** The tile drawn full-screen, if any. */
   const [focusId, setFocusId] = useState<string | null>(null)
   /** Chrome-free, full-viewport, for a wall display or a meeting. */
@@ -686,6 +694,26 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
 
   const tiles: DashboardTile[] = useMemo(() => dashboard?.tiles ?? [], [dashboard])
   const data = useTileScheduler(id, tiles)
+
+  // Which tile the editor is on, read off the URL: `undefined` = closed,
+  // `null` = adding, a tile = editing that one — the same three states the
+  // component held in `useState` before it had an address.
+  const navigate = useNavigate()
+  const editorParam = useMatch(TILE_ROUTE)?.params.tileId ?? null
+  const editorTile: DashboardTile | null | undefined =
+    editorParam === null ? undefined
+    : editorParam === 'new' ? null
+    : tiles.find((tile) => tile.id === editorParam) ?? undefined
+  const openEditor = useCallback(
+    (tile: DashboardTile | null) => navigate(`/dashboards/${id}/tiles/${tile?.id ?? 'new'}`),
+    [id, navigate],
+  )
+  const closeEditor = useCallback(() => navigate(`/dashboards/${id}`), [id, navigate])
+  // What a tile begun somewhere else starts from. Route state rather than a
+  // query string: it carries a whole statement, and a URL is not the place for
+  // one. It survives a refresh — the browser keeps history state — and is gone
+  // the moment the editor closes, because closing navigates without it.
+  const prefill = (useLocation().state as { prefill?: TilePrefill } | null)?.prefill ?? null
 
   // Undo/redo of tile placement. Refs, not state: the stacks are read inside
   // callbacks and a key handler, and nothing on screen renders from them, so
@@ -867,7 +895,7 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
         // behind it means the editor closes back onto a modal, not the grid.
         if (action === 'edit') {
           setFocusId(null)
-          return setEditorTile(tile)
+          return openEditor(tile)
         }
         // Both of these apply the change locally rather than re-reading, for
         // the same reason the editor does — see `onSaved` below.
@@ -1000,7 +1028,12 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
               display: 'flex',
               flexDirection: 'column',
               gap: 1,
-              minWidth: 0,
+              // A floor, not just a ceiling: with the tile editor open beside
+              // the grid this row has 500px less to spend, and without a floor
+              // the name — the one thing that says which dashboard you are
+              // editing — is the part that gives way. The header wraps
+              // instead, which costs a line and keeps the title readable.
+              minWidth: 170,
               flex: 1,
               maxWidth: 480,
             }}
@@ -1116,7 +1149,7 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
                     <Icon.ArrowDown size={13} /> Export
                   </button>
                 </div>
-                <PrimaryButton style={{ padding: '8px 14px' }} onClick={() => setEditorTile(null)}>
+                <PrimaryButton style={{ padding: '8px 14px' }} onClick={() => openEditor(null)}>
                   <Icon.Plus /> Add tile
                 </PrimaryButton>
               </>
@@ -1146,7 +1179,7 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
               title="This dashboard is empty"
               body="A tile is a saved query on its own clock. Add one by asking a question in plain language, or by writing the SQL yourself."
               action={
-                <PrimaryButton onClick={() => setEditorTile(null)}>
+                <PrimaryButton onClick={() => openEditor(null)}>
                   <Icon.Plus /> Add tile
                 </PrimaryButton>
               }
@@ -1195,9 +1228,10 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
         <TileEditor
           dashboard={dashboard}
           tile={editorTile}
-          onClose={() => setEditorTile(undefined)}
+          prefill={editorTile === null ? prefill : null}
+          onClose={closeEditor}
           onSaved={(saved) => {
-            setEditorTile(undefined)
+            closeEditor()
             // The save response is the tile as stored — clamped row cap,
             // resolved rate, connection and model names and all (§6) — so it
             // is spliced in rather than re-read. A GET fired immediately after

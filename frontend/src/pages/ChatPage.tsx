@@ -55,6 +55,7 @@ import {
 import { absorbThought, endThought } from '../components/thinking'
 import type { ThinkingState } from '../components/thinking'
 import { TemplateEditor } from '../components/knowledge'
+import { AddToDashboardDialog, AddToReportDialog } from '../components/answer-destinations'
 import {
   DisclosureBadge, ErrorNote, GlyphBadge, Icon, PrimaryButton, SearchField, Spinner,
   dirOf, engineHue,
@@ -78,6 +79,45 @@ const TEXT_FLUSH_MS = 40
  */
 function glideBehavior(): ScrollBehavior {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+}
+
+/**
+ * An answer on its way somewhere else — the payload both destinations take.
+ *
+ * The question the reader typed, the statement that actually ran, and the
+ * chart it was drawn as. No model call and no re-execution: this is the run's
+ * own work, carried, which is the difference between *add to dashboard* and
+ * *ask the same question again in a different box*.
+ */
+interface AnswerHandoff {
+  to: 'dashboard' | 'report'
+  question: string
+  sql: string
+  chartConfig: Record<string, unknown> | null
+}
+
+/**
+ * What the picture on screen can honestly say about itself.
+ *
+ * The compiler stamps its decision into the Vega-Lite spec's `usermeta`
+ * (`app/charts`), so the type, orientation and stack are read rather than
+ * guessed from the encoding — a horizontal bar swaps its axes on the way to
+ * the spec, and sniffing them back out is how a tile ends up drawn sideways.
+ * The *columns* are deliberately not carried: the tile editor checks the same
+ * statement itself and fills the axes from that result's own fields.
+ */
+function chartIntentOf(run: RunDetail): Record<string, unknown> | null {
+  const spec = run.artifacts.find((artifact) => artifact.kind === 'CHART')?.spec as
+    | { usermeta?: { datamind?: { chart_type?: string; orientation?: string; stack?: string } } }
+    | undefined
+  const meta = spec?.usermeta?.datamind
+  if (!meta?.chart_type) return null
+  const intent: Record<string, unknown> = { chart_type: meta.chart_type }
+  // Only when they say something: each has a default the backend applies, and
+  // writing it would freeze a decision the planner should keep making.
+  if (meta.orientation && meta.orientation !== 'auto') intent.orientation = meta.orientation
+  if (meta.stack && meta.stack !== 'stacked') intent.stack = meta.stack
+  return intent
 }
 
 export default function ChatPage() {
@@ -113,6 +153,10 @@ export default function ChatPage() {
   const [teaching, setTeaching] = useState<{ question: string; sql: string } | null>(
     null,
   )
+  // Which destination dialog is open, and what it is carrying. One piece of
+  // state rather than two booleans: the two are alternatives, and an answer
+  // goes to exactly one place at a time.
+  const [sending, setSending] = useState<AnswerHandoff | null>(null)
   const [connections, setConnections] = useState<Connection[]>([])
   const [models, setModels] = useState<LlmConfig[]>([])
   const [connectionId, setConnectionId] = useState<string>('')
@@ -709,6 +753,63 @@ export default function ChatPage() {
     setTeaching({ question: askedFor(run), sql })
   }, [askedFor])
 
+  /**
+   * *Add to dashboard* / *Add to report.* The other half of the same idea as
+   * `teach`: the answer in front of the reader already carries validated SQL
+   * and a fitted chart, and until now the only way to a tile was to retype the
+   * question into the tile editor and spend another model call on it.
+   *
+   * This only opens the picker. What travels is assembled here, once, so both
+   * destinations carry identical work.
+   */
+  const handOff = useCallback(
+    (to: 'dashboard' | 'report') => (run: RunDetail) => {
+      // The last attempt is the one that passed the guard and ran; `raw_sql`
+      // rather than the rewritten form, because the row cap and the rewrite
+      // belong to the connection at execution time and both destinations
+      // re-guard from scratch. Same statement `teach` carries.
+      const sql = run.queries.at(-1)?.raw_sql ?? ''
+      if (!sql) return
+      setSending({ to, question: askedFor(run), sql, chartConfig: chartIntentOf(run) })
+    },
+    [askedFor],
+  )
+  const addToDashboard = useMemo(() => handOff('dashboard'), [handOff])
+  const addToReport = useMemo(() => handOff('report'), [handOff])
+
+
+  // The connection this thread is bound to, as it stands *now*. A saved thread
+  // reads it from the conversation rather than from the picker, because the
+  // picker holds whatever was last chosen and the thread's own binding is the
+  // only thing an answer in it can be sent onward under. A deletion sets the
+  // column NULL, which is why a missing row is the test.
+  const threadConnection = useMemo(() => {
+    const conversation = conversationList.find((c) => c.id === activeId) ?? null
+    const id = conversation ? conversation.default_connection_id : connectionId
+    return connections.find((c) => c.id === id) ?? null
+  }, [activeId, connectionId, connections, conversationList])
+
+  // Why an answer cannot be sent onward, in a sentence. Memoised because it is
+  // handed to every memoised turn in the transcript, and a fresh object each
+  // render would re-render all of them on every keystroke.
+  const blocked = useMemo(() => {
+    if (!threadConnection) {
+      const gone = "This conversation's database was removed, so this answer cannot become a tile or a figure. The answer and its SQL stay readable."
+      return { dashboard: gone, report: gone }
+    }
+    // A tile never sends a row to a model, so no policy rules one out. A
+    // report's prose is written from the values, which is why §7 refuses the
+    // two narrow policies — said here rather than at the create call, where it
+    // would arrive as a 422 after the reader had already chosen a name.
+    const narrow = !['SAMPLE', 'FULL'].includes(threadConnection.disclosure_policy)
+    return {
+      dashboard: null,
+      report: narrow
+        ? `Result sharing on ${threadConnection.name} is ${threadConnection.disclosure_policy}, so no values reach the model — and a report's analysis is written from them. A tile has no such limit.`
+        : null,
+    }
+  }, [threadConnection])
+
   const regenerate = useCallback((run: RunDetail) => {
     const question = askedFor(run)
 
@@ -941,6 +1042,9 @@ export default function ChatPage() {
                     onRegenerate={regenerate}
                     onFeedback={leaveFeedback}
                     onSaveAsTemplate={teach}
+                    onAddToDashboard={addToDashboard}
+                    onAddToReport={addToReport}
+                    blocked={blocked}
                   />
                 )
               })}
@@ -1026,6 +1130,47 @@ export default function ChatPage() {
           prefill={{ ...teaching, source: 'CHAT_CONFIRMED' }}
           onClose={() => setTeaching(null)}
           onSaved={() => setTeaching(null)}
+        />
+      )}
+
+      {/* Pick the board, then leave for the tile editor carrying the answer.
+          The editor is where a tile is given its type, its chart and its
+          clock, and it opens over the grid the tile is joining — so this ends
+          one screen further on rather than in a second form here. */}
+      {sending?.to === 'dashboard' && (
+        <AddToDashboardDialog
+          question={sending.question}
+          onClose={() => setSending(null)}
+          onPicked={(dashboardId) => {
+            setSending(null)
+            navigate(`/dashboards/${dashboardId}/tiles/new`, {
+              state: {
+                prefill: {
+                  question: sending.question,
+                  sql: sending.sql,
+                  connectionId: threadConnection?.id,
+                  chartConfig: sending.chartConfig,
+                },
+              },
+            })
+          }}
+        />
+      )}
+
+      {sending?.to === 'report' && threadConnection && (
+        <AddToReportDialog
+          connection={threadConnection}
+          modelId={modelId || null}
+          question={sending.question}
+          sql={sending.sql}
+          onClose={() => setSending(null)}
+          onAdded={(reportId) => {
+            setSending(null)
+            // Into the outline, where the block now is: a figure added to a
+            // document nobody is shown is indistinguishable from one that was
+            // not added at all.
+            navigate(`/reports/${reportId}`)
+          }}
         />
       )}
     </div>

@@ -1136,12 +1136,22 @@ function AnswerBadge({
  * quietly stops learning. At this weight it costs the page nothing.
  */
 function AnswerActions({
-  text, run, onFeedback, onSaveAsTemplate,
+  text, run, blocked, onFeedback, onSaveAsTemplate, onAddToDashboard, onAddToReport,
 }: {
   text: string
   run: RunDetail | null
+  /**
+   * Why a destination is refused, in a sentence, or null when it is not.
+   * Two entries rather than one flag because the two are refused for
+   * different reasons: a removed connection takes both, while a database that
+   * shares no result values takes only the report — a tile never sends a row
+   * to a model, and a report's prose is written from them.
+   */
+  blocked?: { dashboard: string | null; report: string | null }
   onFeedback?: (run: RunDetail, verdict: string, comment: string) => Promise<void>
   onSaveAsTemplate?: (run: RunDetail) => void
+  onAddToDashboard?: (run: RunDetail) => void
+  onAddToReport?: (run: RunDetail) => void
 }) {
   const [pending, setPending] = useState<string | null>(null)
   const [comment, setComment] = useState('')
@@ -1160,8 +1170,16 @@ function AnswerActions({
     }
   }
 
-  const canTeach = onSaveAsTemplate && run && run.queries.length > 0
+  // One test for all three of the *use this answer* actions: they carry the
+  // run's own statement, so they exist exactly when there is one. A METADATA
+  // answer — "what tables do I have?" — ran no SQL and has nothing to carry.
+  const hasQuery = Boolean(run && run.queries.length > 0)
+  const canTeach = Boolean(onSaveAsTemplate && hasQuery)
+  const canSend = Boolean((onAddToDashboard || onAddToReport) && hasQuery)
   const canJudge = Boolean(onFeedback && run)
+  // Deduplicated: when one thing rules out both destinations — the usual case,
+  // a removed connection — it is said once rather than twice.
+  const reasons = [...new Set([blocked?.dashboard, blocked?.report].filter(Boolean))] as string[]
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1190,6 +1208,32 @@ function AnswerActions({
           >
             <Icon.Sparkle size={13} />
             Save as template
+          </QuietAction>
+        )}
+        {/* The two destinations, beside the one that was already here: an
+            answer on screen already carries validated SQL and a fitted chart,
+            and rebuilding it by hand in a different box was the longest road
+            in the product. Disabled rather than hidden when the thread's
+            connection is gone — the reason is a sentence under the row, not a
+            `title` nobody hovers. */}
+        {canSend && onAddToDashboard && (
+          <QuietAction
+            tone="accent"
+            disabled={Boolean(blocked?.dashboard)}
+            onClick={() => onAddToDashboard(run!)}
+          >
+            <Icon.Grid size={13} />
+            Add to dashboard
+          </QuietAction>
+        )}
+        {canSend && onAddToReport && (
+          <QuietAction
+            tone="accent"
+            disabled={Boolean(blocked?.report)}
+            onClick={() => onAddToReport(run!)}
+          >
+            <Icon.Doc size={13} />
+            Add to report
           </QuietAction>
         )}
         {canJudge && <ActionDivider />}
@@ -1260,6 +1304,16 @@ function AnswerActions({
           </span>
         )}
       </div>
+
+      {/* Why a destination is dead, said on the page. A `title` is invisible
+          to anyone who does not hover, which is everyone reading on a phone
+          and everyone using a keyboard. One line when both refusals share a
+          reason, which is the common case. */}
+      {canSend && reasons.length > 0 && (
+        <span style={{ fontSize: 11.5, lineHeight: 1.5, color: 'var(--text-faint)' }}>
+          {reasons.join(' ')}
+        </span>
+      )}
 
       {/* `✗ No` and `Ask for review` expand one note **in place**: no toast, no
           dialog, no confetti — and no second modal over a transcript people are
@@ -1440,7 +1494,8 @@ function FeedbackReceipt({ given }: { given: NonNullable<RunKnowledge['feedback'
 
 export const AssistantTurn = memo(function AssistantTurn({
   text, run, streaming, steps, thinking, preview, onPickOption, optionsDisabled,
-  onRegenerate, onFeedback, onSaveAsTemplate,
+  onRegenerate, onFeedback, onSaveAsTemplate, onAddToDashboard, onAddToReport,
+  blocked,
 }: {
   text: string
   run: RunDetail | null
@@ -1473,6 +1528,12 @@ export const AssistantTurn = memo(function AssistantTurn({
   onFeedback?: (run: RunDetail, verdict: string, comment: string) => Promise<void>
   /** Opens the template editor prefilled with this answer's question and SQL. */
   onSaveAsTemplate?: (run: RunDetail) => void
+  /** Picks a dashboard, then opens the tile editor carrying this answer. */
+  onAddToDashboard?: (run: RunDetail) => void
+  /** Picks a report, then appends this answer as a figure. */
+  onAddToReport?: (run: RunDetail) => void
+  /** Why either destination is refused, said on the page. */
+  blocked?: { dashboard: string | null; report: string | null }
 }) {
   const table = run?.artifacts.find((a) => a.kind === 'TABLE')
   const spec = table?.spec as TableArtifactSpec | undefined
@@ -1595,13 +1656,17 @@ export const AssistantTurn = memo(function AssistantTurn({
       {run && run.queries.length > 0 && <SqlPanel queries={run.queries} />}
       {run && <RunMetadata run={run} />}
 
-      {/* Copy, teach and judge on one quiet line — see `AnswerActions`. */}
+      {/* Copy, keep, send onward and judge, on one quiet line — see
+          `AnswerActions`. */}
       {!streaming && text && (
         <AnswerActions
           text={text}
           run={run}
+          blocked={blocked}
           onFeedback={onFeedback}
           onSaveAsTemplate={onSaveAsTemplate}
+          onAddToDashboard={onAddToDashboard}
+          onAddToReport={onAddToReport}
         />
       )}
     </Turn>
