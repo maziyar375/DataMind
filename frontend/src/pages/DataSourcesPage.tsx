@@ -37,7 +37,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMatch, useNavigate } from 'react-router-dom'
 import { connections as api } from '../api/client'
-import { useUnsavedWork } from '../shell'
+import { useQueue, useUnsavedWork } from '../shell'
 import type { Connection, SchemaSnapshot, SchemaTable, TestResult } from '../api/types'
 import {
   Chip, DangerButton, DisclosureBadge, EmptyState, ErrorNote, Field, GhostButton,
@@ -49,6 +49,7 @@ import {
   StatusLine, Tabs, UnsavedNote,
 } from '../components/settings'
 import { KnowledgeTab } from '../components/knowledge'
+import { forConnection } from '../components/knowledge-queue'
 import { SemanticLayerTab } from '../components/semantic'
 import { DATABASE_TYPES } from '../theme/tokens'
 
@@ -159,6 +160,7 @@ export default function DataSourcesPage() {
   // Which Save is in flight, not merely whether one is: two tabs have two
   // buttons, and a boolean would spin both.
   const [saving, setSaving] = useState<'connection' | 'policy' | null>(null)
+  const { rows: queue } = useQueue()
   const [error, setError] = useState<string | null>(null)
 
   const selected = useMemo(
@@ -814,12 +816,18 @@ export default function DataSourcesPage() {
                   { value: 'policy', label: 'Policy' },
                   { value: 'schema', label: 'Schema', count: schema?.tables.length },
                   { value: 'semantic', label: 'Semantic layer' },
-                  // No count here: the tab's badge is *only* the number of
-                  // things needing a human, and that is not known until the
-                  // tab has loaded. A badge that always shows a total is
-                  // decoration; one that appears when there is work is a
-                  // signal, and showing nothing is the honest third state.
-                  { value: 'knowledge', label: 'Knowledge' },
+                  // It has a count now, and the objection that kept it off
+                  // is answered rather than overruled: the number was not
+                  // known until the tab had loaded, so a badge would have
+                  // appeared a second late or shown a total instead of a
+                  // signal. The shell counts the queue for the rail already,
+                  // so this is the same number, known before the tab opens,
+                  // and still absent rather than zero when there is no work.
+                  {
+                    value: 'knowledge',
+                    label: 'Knowledge',
+                    count: selected ? forConnection(queue, selected.id) : undefined,
+                  },
                 ]}
               />
             )}

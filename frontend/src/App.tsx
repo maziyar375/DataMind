@@ -3,11 +3,12 @@ import {
   Navigate, Route, Routes, useBlocker, useLocation, useNavigate,
   type BlockerFunction,
 } from 'react-router-dom'
-import { auth, getAccessToken, onAuthChange } from './api/client'
+import { auth, connections, getAccessToken, knowledge, onAuthChange } from './api/client'
 import type { User } from './api/types'
 import { DangerButton, GhostButton, Icon, Logo, Modal, initialOf } from './components/ui'
 import AboutPage from './pages/AboutPage'
 import AccountPage from './pages/AccountPage'
+import KnowledgePage from './pages/KnowledgePage'
 import ChatPage from './pages/ChatPage'
 import DashboardsPage from './pages/DashboardsPage'
 import DataSourcesPage from './pages/DataSourcesPage'
@@ -15,7 +16,10 @@ import LlmProvidersPage from './pages/LlmProvidersPage'
 import LoginPage from './pages/LoginPage'
 import ReportsPage from './pages/ReportsPage'
 import UsersPage from './pages/UsersPage'
-import { ShellProvider, isWithin, type Shell } from './shell'
+import { badge, totalWaiting } from './components/knowledge-queue'
+import type { QueueRow } from './components/knowledge-queue'
+import { Notifications, type ShownNotice } from './components/notifications'
+import { ShellProvider, isWithin, type BackgroundTask, type Shell } from './shell'
 import { applyTheme, type ThemeName } from './theme/tokens'
 
 /**
@@ -31,6 +35,12 @@ const NAV = [
   { path: '/dashboards', label: 'Dashboards', icon: <Icon.Grid /> },
   { path: '/reports', label: 'Reports', icon: <Icon.Doc /> },
   { path: '/sources', label: 'Data sources', icon: <Icon.Database /> },
+  // Beside Data sources because that is what it curates, and *in* the rail
+  // because the finding it answers is that its queue was invisible: a console
+  // three clicks inside one connection's fourth tab cannot ask for attention.
+  // It is the one entry that carries a count, and the count is the argument
+  // for the entry — if it is always empty, this row has not earned its place.
+  { path: '/knowledge', label: 'Knowledge', icon: <Icon.Flag /> },
   { path: '/providers', label: 'LLM providers', icon: <Icon.Sparkle /> },
   { path: '/users', label: 'Users', icon: <Icon.Users />, adminOnly: true },
 ]
@@ -68,6 +78,85 @@ export default function App() {
   // rather than state: the blocker reads it at navigation time, and a form
   // going dirty is not a reason to re-render the shell around it.
   const unsaved = useRef(new Map<string, { reason: string; within?: string }>())
+
+  // What finished while the reader was elsewhere, and the long jobs still
+  // being waited on. The tasks are a ref for the same reason `unsaved` is:
+  // one interval reads them, and registering a job is not a reason to
+  // re-render the app around it.
+  const [notices, setNotices] = useState<ShownNotice[]>([])
+  const nextNoticeId = useRef(1)
+  const tasks = useRef(new Map<string, BackgroundTask>())
+
+  // The curation queue, counted here so the rail can show it from any page.
+  //
+  // A fan-out — two reads per connection — because there is no cross-
+  // connection endpoint for either feed, and adding one would have been the
+  // expensive way to answer a question the client can already ask. It is
+  // taken once at sign-in and again after anything that changes the queue,
+  // never on a timer: work arrives at the speed people flag answers, and a
+  // badge that polls every connection every minute would cost more than it
+  // tells anyone. If this list grows past a handful of connections, one
+  // `GET /knowledge/queue` replaces the whole thing.
+  const [queue, setQueue] = useState<QueueRow[]>([])
+  /**
+   * One connection's count, as reported by the console that just read it.
+   *
+   * Two things here are load-bearing, and both are about not chasing your own
+   * tail. The callback is stable (`[]`), because the console derives its data
+   * loader from it — a `noteQueueFor` that changed identity whenever the
+   * queue changed would make the loader change, re-run the effect that calls
+   * it, and fetch forever. And an unchanged count returns the *same array*,
+   * so a screen that re-reads its store and finds nothing new re-renders
+   * nothing above it.
+   */
+  const noteQueueFor = useCallback<Shell['noteQueueFor']>(
+    (connectionId, counts) =>
+      setQueue((current) => {
+        const known = current.find((row) => row.connectionId === connectionId)
+        if (
+          known
+          && known.name === counts.name
+          && known.reviews === counts.reviews
+          && known.suggestions === counts.suggestions
+        ) {
+          return current
+        }
+        const next = { connectionId, ...counts }
+        return known
+          ? current.map((row) => (row.connectionId === connectionId ? next : row))
+          : [...current, next]
+      }),
+    [],
+  )
+
+  const refreshQueue = useCallback(async () => {
+    try {
+      const rows = await connections.list()
+      setQueue(
+        await Promise.all(
+          rows.map(async (row) => {
+            const [reviews, suggestions] = await Promise.all([
+              knowledge.reviews(row.id).catch(() => []),
+              knowledge.suggestions(row.id).catch(() => []),
+            ])
+            return {
+              connectionId: row.id,
+              name: row.name,
+              reviews: reviews.length,
+              // FLAGGED entries are the same items as `reviews`; the tab
+              // filters them out of its backlog list and so does this, or
+              // the badge would show four over a list of two.
+              suggestions: suggestions.filter((s) => s.kind !== 'FLAGGED').length,
+            }
+          }),
+        ),
+      )
+    } catch {
+      // A badge that cannot be counted is absent, never guessed.
+      setQueue([])
+    }
+  }, [])
+
   const shell = useMemo<Shell>(
     () => ({
       requestThemeOverride: setThemeOverride,
@@ -75,9 +164,45 @@ export default function App() {
         if (reason) unsaved.current.set(key, { reason, within })
         else unsaved.current.delete(key)
       },
+      notify: (notice) =>
+        setNotices((current) => [
+          // Newest last, so the stack grows downward and an arriving notice
+          // never pushes the one being read out from under the cursor.
+          ...current.slice(-2),
+          { ...notice, id: nextNoticeId.current++ },
+        ]),
+      watch: (task) => {
+        if (!tasks.current.has(task.key)) tasks.current.set(task.key, task)
+      },
+      queue,
+      refreshQueue,
+      noteQueueFor,
     }),
-    [],
+    [queue, refreshQueue, noteQueueFor],
   )
+
+  // One timer for every background job, rather than one per job: the page
+  // that started a job usually polls it too (that is what draws its progress
+  // bar), and this exists only so the *ending* survives that page being
+  // closed. Five seconds because nothing here is a progress bar.
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      for (const [key, task] of [...tasks.current]) {
+        try {
+          const notice = await task.poll()
+          if (notice) {
+            tasks.current.delete(key)
+            shell.notify(notice)
+          }
+        } catch {
+          // A watcher that reports network weather is worse than one that
+          // gives up: the page that owns this job will say so if it is open.
+          tasks.current.delete(key)
+        }
+      }
+    }, 5000)
+    return () => clearInterval(timer)
+  }, [shell])
 
   // One guard for the whole app rather than a check per page: every way out of
   // a dirty form — the rail, a row in the master column, browser Back — is a
@@ -137,6 +262,13 @@ export default function App() {
     }),
     [],
   )
+
+  // Once, when there is someone to count for. Not in the `restore` effect:
+  // that one also runs for a visitor who turns out not to be signed in.
+  useEffect(() => {
+    if (user) refreshQueue()
+    else setQueue([])
+  }, [user, refreshQueue])
 
   const handleLogout = useCallback(async () => {
     await auth.logout()
@@ -198,6 +330,7 @@ export default function App() {
         <div className="rm-app-row" style={{ display: 'flex', height: '100vh', width: '100%' }}>
           <Sidebar
             user={user}
+            queueBadge={badge(totalWaiting(queue))}
             pathname={location.pathname}
             onNavigate={navigate}
             theme={theme}
@@ -225,6 +358,7 @@ export default function App() {
               <Route path="/dashboards/*" element={<DashboardsPage />} />
               <Route path="/reports/*" element={<ReportsPage />} />
               <Route path="/sources/*" element={<DataSourcesPage />} />
+              <Route path="/knowledge/*" element={<KnowledgePage />} />
               <Route path="/providers/*" element={<LlmProvidersPage />} />
               {/* Not a hidden rail item: a member who types the path lands on
                   Chat like any other unknown address. */}
@@ -243,6 +377,15 @@ export default function App() {
             </Routes>
           </main>
         </div>
+
+        <Notifications
+          notices={notices}
+          onDismiss={(id) => setNotices((current) => current.filter((n) => n.id !== id))}
+          onGo={(to, id) => {
+            setNotices((current) => current.filter((n) => n.id !== id))
+            navigate(to)
+          }}
+        />
 
         {/* The app knew the work was unsaved and used to discard it without a
             word. Rendered here rather than in the page that is dirty, because
@@ -295,9 +438,11 @@ export default function App() {
  * (`.rm-nav-btn`), so the rail holds no React state per button.
  */
 function Sidebar({
-  user, pathname, onNavigate, theme, onToggleTheme, onLogout,
+  user, queueBadge, pathname, onNavigate, theme, onToggleTheme, onLogout,
 }: {
   user: User
+  /** The curation queue's size, or nothing when there is nothing waiting. */
+  queueBadge?: string
   pathname: string
   onNavigate: (path: string) => void
   theme: ThemeName
@@ -336,6 +481,7 @@ function Sidebar({
             active={isInSection(pathname, item.path)}
             icon={item.icon}
             label={item.label}
+            badge={item.path === '/knowledge' ? queueBadge : undefined}
             onClick={() => onNavigate(item.path)}
           />
         ))}
@@ -470,11 +616,13 @@ function Sidebar({
 }
 
 function NavButton({
-  active, icon, label, onClick,
+  active, icon, label, badge, onClick,
 }: {
   active: boolean
   icon: React.ReactNode
   label: string
+  /** A count worth interrupting for. Absent, never "0". */
+  badge?: string
   onClick: () => void
 }) {
   return (
@@ -482,10 +630,20 @@ function NavButton({
       onClick={onClick}
       aria-current={active ? 'page' : undefined}
       className={`rm-nav-btn${active ? ' is-on' : ''}`}
-      title={label}
+      // The count is in the tooltip too: on the 66px rail the label is hidden
+      // and the badge is a number floating beside a glyph, which says how
+      // many of *what* only to someone who already knows.
+      title={badge ? `${label} — ${badge} waiting` : label}
     >
       {icon}
       <span className="rm-sidebar-text">{label}</span>
+      {badge && (
+        <>
+          <span aria-hidden className="rm-nav-badge">{badge}</span>
+          {/* The number means nothing read aloud on its own. */}
+          <span className="rm-sr">{badge} waiting</span>
+        </>
+      )}
     </button>
   )
 }

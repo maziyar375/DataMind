@@ -2840,3 +2840,89 @@ code, pre, .mono {
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 18px);
   mask-image: linear-gradient(to bottom, transparent 0, #000 18px);
 }
+
+/* The rail's one count. It sits at the end of the row on the wide rail and
+   rides the glyph's corner on the 66px one, where the label it belonged
+   beside is hidden — a number floating in the middle of an icon strip reads
+   as part of the icon. Red rather than the accent: this is work waiting, not
+   the page you are on, and the accent already means "here". */
+.rm-nav-badge {
+  margin-left: auto;
+  flex-shrink: 0;
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: 20px;
+  background: var(--red-bg);
+  color: var(--red);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.5;
+  text-align: center;
+}
+
+@media (max-width: 860px) {
+  .rm-sidebar .rm-nav-btn { position: relative; }
+  .rm-nav-badge {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    margin-left: 0;
+    min-width: 0;
+    padding: 1px 4px;
+    font-size: 9.5px;
+    border: 1px solid var(--sidebar-bg);
+  }
+}
+
+/* ── the notification surface ─────────────────────────────────────────────
+   Bottom-right, over everything except a modal, and never in the way of the
+   thing being read: the stack is capped at three in `App`, and each card is
+   its own row so a long body pushes nothing sideways.
+
+   `pointer-events: none` on the container with `auto` on the cards is what
+   keeps the empty column above the stack from swallowing clicks meant for
+   the page — a full-height fixed layer is invisible right up until somebody
+   cannot press a button under it. */
+.rm-notices {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(360px, calc(100vw - 36px));
+  pointer-events: none;
+}
+
+.rm-notice {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 12px 12px 13px;
+  border: 1px solid var(--border);
+  /* The tone is a rail, not a fill: a green card and a red card at this size
+     read as two different components rather than two states of one. */
+  border-left: 3px solid var(--rm-notice-tone, var(--border));
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  animation: rm-notice-in 0.18s ease-out;
+}
+
+@keyframes rm-notice-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* The global reduced-motion opt-out already zeroes durations; this keeps the
+   card from arriving displaced when it does. */
+@media (prefers-reduced-motion: reduce) {
+  .rm-notice { animation: none; }
+}
+
+/* Nothing that announces itself belongs on paper. */
+@media print {
+  .rm-notices { display: none !important; }
+}

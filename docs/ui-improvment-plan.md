@@ -487,14 +487,31 @@ order unless noted.
 - [x] **F6** Admin set-password path unchanged
 
 ## Phase 5 — Background work made visible
-- [ ] **F13** Notification surface at the shell with `aria-live`
-- [ ] **F13** Scoped to background/cross-page events only
-- [ ] **F13** Inline `ErrorNote` usage left untouched
-- [ ] **F13** Wired: semantic generation, benchmark runs, conflict checks
-- [ ] **F5** Cross-connection review/suggestion count badge on the rail
-- [ ] **F5** Knowledge console promoted to a top-level route with a filter
-- [ ] **F5** Per-connection tab retained as a filtered view of the same screen
-- [ ] **F5** Rail-entry decision made with real usage data
+- [x] **F13** Notification surface at the shell with `aria-live`
+- [x] **F13** Scoped to background/cross-page events only
+- [x] **F13** Inline `ErrorNote` usage left untouched
+- [x] **F13** Wired: semantic generation, benchmark runs, conflict checks
+- [x] **F5** Cross-connection review/suggestion count badge on the rail
+- [x] **F5** Knowledge console promoted to a top-level route with a filter
+- [x] **F5** Per-connection tab retained as a filtered view of the same screen
+- [x] **F5** Rail-entry decision made with real usage data
+
+> **The step-4 decision: it earns a rail entry.** Not because the queue is
+> large (on this install it is 42 across two connections), but because the
+> alternative cannot satisfy the finding. "Reachable in one click from
+> wherever they are" means the rail; a badge on Data sources that then needs a
+> second click to reach the console leaves the queue exactly as far away as it
+> was. So `Knowledge` sits in the rail directly after Data sources — what it
+> curates — and carries the product's only count badge. The badge is also the
+> argument for the row: if it is permanently empty on a real install, this
+> entry has not earned its place and should go back to being a tab.
+>
+> Consequently the badge lives on **that** entry rather than on Data sources
+> as step 1 wrote it. Step 1 described the cheapest first move, taken *before*
+> the promotion; once the console has its own destination, two badges for one
+> number is noise. The per-connection count on the Knowledge tab is unchanged
+> from step 1 and is now live — the objection that kept it off (the number was
+> not known until the tab had loaded) is answered by the shell counting it.
 
 ## Phase 6 — Responsive
 - [ ] **F7** `.rm-chats` becomes an overlay drawer below ~700px

@@ -115,7 +115,7 @@ container, and it does not detach — `docker compose up -d` is the backgrounded
 form the README's quick start uses.
 
 Frontend, from `frontend/`: `npm run dev`, `npm run build` (`tsc -b && vite
-build`), `npm run typecheck` (`tsc --noEmit`), `npm test` (all eleven DOM-free
+build`), `npm run typecheck` (`tsc --noEmit`), `npm test` (all twelve DOM-free
 logic suites: schedule, format, dashboard document, palette, chat format, report
 document, report readiness, print, semantic drift, knowledge template,
 thinking). **`npm run lint` does not
@@ -367,6 +367,10 @@ frontend/src/
                             dashboard-transfer.tsx (the download and the import
                             dialog), tile-editor.tsx
                             (ask or write the SQL; one guard check for both),
+                            knowledge-queue.ts (how much curation work is
+                            waiting, per connection and in total — DOM-free,
+                            `npm run test:queue`), notifications.tsx (the
+                            shell's one aria-live surface),
                             report.tsx (the outline editor + the document
                             viewer), report-history.tsx, report-document.ts
                             (merging a run into a document — `npm run
@@ -377,7 +381,11 @@ frontend/src/
                             redrawing charts at page width —
                             `npm run test:print`)
   pages/                    Login, Chat, DataSources, LlmProviders, Users,
-                            Dashboards, Reports, Account (`/settings` — your own
+                            Dashboards, Reports, Knowledge (`/knowledge` — the
+                            curation console promoted out of a connection's
+                            fourth tab; the same `KnowledgeTab` with a
+                            connection picker in front of it, and the rail's
+                            only count badge), Account (`/settings` — your own
                             display name and password, the only two things a
                             member may change about themselves; every route
                             under /users is admin-only), About (who built it — the one
@@ -413,6 +421,13 @@ at commit time and shows up as drift a release later. Full tour:
   address the work survives inside — pass a record's own path when its tabs
   are routes, or the guard stops a form from reaching the tab beside it to
   protect edits a tab switch does not touch.
+- **Long work announces itself; in-page errors stay put.** `shell.tsx`'s
+  `useNotify` raises a `Notice` in the shell's `aria-live` corner, and
+  `useBackgroundWatch` hands the shell a `{key, poll}` so a job outlives the
+  page that started it (semantic generation, benchmark runs). It is for
+  events that outlive their screen — **not** an error channel: a failed save
+  still says so in an `ErrorNote` beside the button that failed, and moving
+  those would make every failure less legible.
 - **Connections are two things, and the screen says so.** `/sources/:id`
   opens **Connection** (host, port, database, user, password, SSL, schema
   allowlist, and the Danger zone) and `/sources/:id/policy` opens **Policy**
@@ -436,10 +451,11 @@ at commit time and shows up as drift a release later. Full tour:
   A literal hex or `oklch()` in a component is a bug in both themes — one of
   them just has not been looked at yet. Chart colours are the one exception and
   they live in `components/palette.ts`, tested apart from React.
-- **The eleven DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
+- **The twelve DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
   `table-format.ts`, `dashboard-document.ts`, `palette.ts`, `chat-format.ts`,
   `report-document.ts`, `report-readiness.ts`, `report-print.ts`,
-  `semantic-drift.ts`, `knowledge-template.ts`, `thinking.ts` — they hold the
+  `semantic-drift.ts`, `knowledge-template.ts`, `thinking.ts`,
+  `knowledge-queue.ts` — they hold the
   logic whose failures are quiet, they are the *only* tested code in the
   frontend, and their suites are plain `node --experimental-strip-types`
   scripts. One React import turns a suite into a thing that cannot run.

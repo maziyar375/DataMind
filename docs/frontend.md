@@ -23,8 +23,8 @@ which is dark-only. The light palette was designed afterwards against it.
 **Every screen has a URL.** The rail is `NAV` in `App.tsx` — a path, a label
 and a glyph each — and the route table beside it gives each section a `/*`
 path: `/chat` · `/dashboards` · `/reports` · `/sources` · `/providers` ·
-`/users` (admin only; anyone else falls through) · `/settings` (your own
-account) · `/about`, and anything unrecognised redirects to `/chat`. Adding a
+`/knowledge` · `/users` (admin only; anyone else falls through) ·
+`/settings` (your own account) · `/about`, and anything unrecognised redirects to `/chat`. Adding a
 section means a `NAV` entry and a `<Route>` — except `/settings` and `/about`,
 which are reached from the rail's footer rather than its list.
 
@@ -33,7 +33,7 @@ than nesting a second `<Routes>`.** `/chat` → `/chat/:conversationId`,
 `/dashboards/:id`, `/reports/:id` and its `/history` and `/runs/:runId`,
 `/sources/:id/:tab` (`connection|policy|schema|semantic|knowledge` — the first
 is the bare `/sources/:id`, and `/sources/new` is the create form),
-`/providers/:id`. The switch is inside the page because
+`/providers/:id`, `/knowledge/:connectionId`. The switch is inside the page because
 the page must **stay mounted** across it: remounting a section on every open
 and close would drop a chat's live stream and re-read a list the reader is
 looking at. A `:id` that is not in a list the page has already loaded is
@@ -87,6 +87,7 @@ colours are chosen in JS, and the print stylesheet.
 | **Reports** | [`ReportsPage.tsx`](../frontend/src/pages/ReportsPage.tsx) | A document whose structure a human approved, generated over real results and kept as a snapshot. |
 | **Data sources** | [`DataSourcesPage.tsx`](../frontend/src/pages/DataSourcesPage.tsx) | The connections DataMind may read, and everything known about each one. |
 | **LLM providers** | [`LlmProvidersPage.tsx`](../frontend/src/pages/LlmProvidersPage.tsx) | The models it may call, and the keys it calls them with. |
+| **Knowledge** | [`KnowledgePage.tsx`](../frontend/src/pages/KnowledgePage.tsx) | The curation console, across every connection: flags raised, questions nothing answers, the maintenance sweep. |
 | **Users** | [`UsersPage.tsx`](../frontend/src/pages/UsersPage.tsx) | Who can sign in and what they may do. Admin only — the rail entry is not rendered otherwise. |
 | **Your account** | [`AccountPage.tsx`](../frontend/src/pages/AccountPage.tsx) | `/settings`: your display name and your password. Reached from the user block in the rail, not from `NAV`. |
 | **Creators** | [`AboutPage.tsx`](../frontend/src/pages/AboutPage.tsx) | Who built it. A colophon, not a destination; the one page on both sides of the sign-in wall. |
@@ -99,11 +100,21 @@ same loading skeleton, the same empty states. Dashboards and Reports offer
 cards *or* rows because their records have a face worth showing; Users is rows
 only, because the facts about an account are a line, not a card.
 
-Two are **master–detail** — Data sources and LLM providers — and share the
-frame in [`components/settings.tsx`](../frontend/src/components/settings.tsx)
+Three are **master–detail** — Data sources, LLM providers and Knowledge — and
+share the frame in
+[`components/settings.tsx`](../frontend/src/components/settings.tsx)
 (`MasterColumn`, `MasterItem`, `DetailHeader`, `DetailBody`, `Section`,
 `FieldRow`, `Tabs`, `StatusLine`, `UnsavedNote`). Two pages that configure a
-credential and probe it should not each invent their own shape.
+credential and probe it should not each invent their own shape, and the third
+picks a connection for the same reason.
+
+**Knowledge is deliberately not a new screen.** `/knowledge` renders
+`KnowledgeTab` — the same component `/sources/:id/knowledge` renders — with a
+connection picker in front of it. The console it shows was always there; what
+was missing was a way to find it, because a work queue three clicks inside one
+connection's fourth tab cannot ask for attention. So the promotion adds a
+column and a rail badge and changes nothing about the console itself. If the
+two renderings ever disagree, one of them is a bug.
 
 ### Sub-sections
 
@@ -128,6 +139,9 @@ Data sources    master → detail, 5 tabs:
 LLM providers   master → detail, one form
 
 Users           rows, inline detail, one-time password panel
+
+Knowledge       master (connections, busiest first) → the same console the
+                  Data sources tab renders, filtered to one connection
 
 Your account    /settings, from the rail's user block: display name, password
 ```
@@ -294,6 +308,20 @@ above.
   its own fields. Nobody should have to open a form containing a password to
   change a disclosure policy, and two people editing two tabs must not
   overwrite each other with values neither of them looked at.
+- **Work that outlives its screen says so; everything else stays put.** The
+  shell has one `aria-live` corner (`components/notifications.tsx`), raised
+  through `useNotify`, and one background watcher (`useBackgroundWatch`) that
+  keeps polling a job after the page that started it has unmounted. It is
+  reserved for exactly that: a four-minute semantic generation, a benchmark
+  run, a sweep that found two templates disagreeing. In-page errors are **not**
+  moved there — an `ErrorNote` beside the thing that failed explains it better
+  than a corner of the screen can — and a notice never duplicates something
+  already visible on the page the reader is on.
+- **A count appears when there is work, never as decoration.** The rail's
+  Knowledge badge and the Knowledge tab's count are the same number
+  (`knowledge-queue.ts`), absent rather than `0`, and they mirror exactly what
+  the console lists: a badge showing four over a list of two is how a reader
+  learns to stop believing badges.
 - **Say who owns a list, where the list is read.** Connections, providers,
   dashboards and reports are scoped to `owner_id`, so two colleagues see the
   same labels and different lists. The master columns carry one quiet line
@@ -348,11 +376,12 @@ each Vega plot at page width in the light palette — are
 
 ## 7. What is tested, and what is not
 
-Eleven modules are deliberately **DOM-free** and carry their own suites, because
+Twelve modules are deliberately **DOM-free** and carry their own suites, because
 every way they can be wrong is quiet: `dashboard-schedule.ts`,
 `table-format.ts`, `dashboard-document.ts`, `palette.ts`, `chat-format.ts`,
 `report-document.ts`, `report-readiness.ts`, `report-print.ts`,
-`semantic-drift.ts`, `knowledge-template.ts`, `thinking.ts`.
+`semantic-drift.ts`, `knowledge-template.ts`, `thinking.ts`,
+`knowledge-queue.ts`.
 
 There is no test runner — each suite is a plain `node
 --experimental-strip-types` script, run by `npm test`. Keeping these modules

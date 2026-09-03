@@ -45,6 +45,7 @@ import {
 } from './ui'
 import type { ChipTone } from './ui'
 import { DetailBody } from './settings'
+import { useBackgroundWatch, useNotify, useQueue } from '../shell'
 import {
   CORRECTION_SHAPES, conflictEvidence, differingCells, embeddingView,
   indexSummary, markLiterals, matches, percent, previewQuestion, questionParts,
@@ -106,6 +107,13 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
   // it — which is how the person who raised it finds out.
   const [resolving, setResolving] = useState<string | null>(null)
   const [openReview, setOpenReview] = useState<Review | null>(null)
+  const notify = useNotify()
+  const watch = useBackgroundWatch()
+  // This screen reads both feeds to draw its own two sections, so telling the
+  // shell what it found keeps the rail's badge exact for free — no second
+  // fan-out, and resolving a flag updates the count while the reader is still
+  // looking at the row they resolved.
+  const { noteFor } = useQueue()
 
   const refresh = useCallback(async () => {
     const body = await api.list(connection.id, true)
@@ -127,8 +135,16 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
     setSuggestions(backlog)
     setScore(benchmarks)
     setEmbeddings(index)
+    noteFor(connection.id, {
+      name: connection.name,
+      reviews: queue.length,
+      // The same filter the backlog section renders with — a FLAGGED
+      // suggestion is the review beside it, and counting both would show a
+      // badge of four over a list of two.
+      suggestions: backlog.filter((s) => s.kind !== 'FLAGGED').length,
+    })
     return body
-  }, [connection.id])
+  }, [connection.id, connection.name, noteFor])
 
   useEffect(() => {
     setLoading(true)
@@ -164,6 +180,23 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
       const result = await api.revalidate(connection.id)
       await refresh()
       setSweepNote(sweepSummary(result) + indexSummary(result))
+      // The inline note stays: it is the full report, next to the list that
+      // has already changed under it. The notice is narrower on purpose —
+      // only a *finding*, never a completion — because a sweep that changed
+      // nothing is not news, and a corner of the screen repeating what is
+      // already on the page is how a notification layer becomes wallpaper.
+      // It survives the curator having walked away, which the note cannot.
+      if (result.conflicted.length > 0) {
+        notify({
+          tone: 'warn',
+          title: `${result.conflicted.length} ${
+            result.conflicted.length === 1 ? 'template disagrees' : 'templates disagree'
+          } with another on ${connection.name}`,
+          body: 'Two near-duplicate templates returned different rows. Until one is fixed, either could be quoted.',
+          to: `/sources/${connection.id}/knowledge`,
+          toLabel: 'Open the store',
+        })
+      }
     } catch (err) {
       setError(messageOf(err))
     } finally {
@@ -224,8 +257,48 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
           overview={score}
           onRun={async (setId) => {
             try {
-              await api.runBenchmark(connection.id, setId)
+              const run = await api.runBenchmark(connection.id, setId)
               await refresh()
+              // 202 and a row: this is minutes of model calls, one per
+              // member of the set. The strip above shows RUNNING while this
+              // tab is open; the shell carries the score to wherever the
+              // curator actually is when it lands.
+              watch({
+                key: `benchmark:${run.id}`,
+                poll: async () => {
+                  const overview = await api.benchmarks(connection.id)
+                  const finished = overview.sets
+                    .flatMap((set) => set.runs)
+                    .find((r) => r.id === run.id)
+                  if (!finished || finished.status === 'QUEUED'
+                      || finished.status === 'RUNNING') {
+                    return null
+                  }
+                  if (finished.status === 'FAILED') {
+                    return {
+                      tone: 'error',
+                      title: `Benchmark run failed on ${connection.name}`,
+                      body: finished.error_message || undefined,
+                      to: `/sources/${connection.id}/knowledge`,
+                      toLabel: 'Open the store',
+                    }
+                  }
+                  return {
+                    tone: 'ok',
+                    title: `Benchmark finished on ${connection.name}`,
+                    // The denominator, always: an accuracy over a shrinking
+                    // set of questions is the classic silent lie, and the
+                    // strip on the tab makes the same point at more length.
+                    body: `${finished.matched} of ${finished.scored} scored `
+                      + `${finished.scored === 1 ? 'question' : 'questions'} matched`
+                      + (finished.scored < finished.total
+                        ? ` — ${finished.total - finished.scored} could not be probed.`
+                        : '.'),
+                    to: `/sources/${connection.id}/knowledge`,
+                    toLabel: 'See the score',
+                  }
+                },
+              })
             } catch (err) {
               setError(messageOf(err))
             }

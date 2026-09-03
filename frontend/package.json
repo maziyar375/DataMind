@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "lint": "eslint src --ext ts,tsx",
     "typecheck": "tsc --noEmit",
-    "test": "npm run test:schedule && npm run test:format && npm run test:document && npm run test:palette && npm run test:chat && npm run test:report && npm run test:readiness && npm run test:print && npm run test:drift && npm run test:template && npm run test:thinking",
+    "test": "npm run test:schedule && npm run test:format && npm run test:document && npm run test:palette && npm run test:chat && npm run test:report && npm run test:readiness && npm run test:print && npm run test:drift && npm run test:template && npm run test:thinking && npm run test:queue",
     "test:drift": "node --experimental-strip-types src/components/semantic-drift.test.ts",
     "test:schedule": "node --experimental-strip-types src/components/dashboard-schedule.test.ts",
     "test:chat": "node --experimental-strip-types src/components/chat-format.test.ts",
@@ -20,7 +20,8 @@
     "test:readiness": "node --experimental-strip-types src/components/report-readiness.test.ts",
     "test:print": "node --experimental-strip-types src/components/report-print.test.ts",
     "test:template": "node --experimental-strip-types src/components/knowledge-template.test.ts",
-    "test:thinking": "node --experimental-strip-types src/components/thinking.test.ts"
+    "test:thinking": "node --experimental-strip-types src/components/thinking.test.ts",
+    "test:queue": "node --experimental-strip-types src/components/knowledge-queue.test.ts"
   },
   "dependencies": {
     "react": "^18.3.1",
