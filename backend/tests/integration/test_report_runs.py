@@ -865,6 +865,45 @@ async def test_a_hallucinated_figure_is_flagged_and_the_section_is_still_saved(
     assert [f["value"] for f in row.numeric_check["findings"]] == [9_900_000]
 
 
+async def test_a_scratchpad_merged_into_the_reply_does_not_reach_the_document(
+    connector: FakeConnector, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A section was asked for one paragraph, so it is saved as one.
+
+    Observed, not hypothesised: a provider that did not keep the model's
+    reasoning channel separate returned the whole trace as the reply, and a
+    published section opened with a finished paragraph, then argued with itself
+    about which figures it was allowed to derive, then wrote the paragraph
+    again. The gateway subtracts a scratchpad that is marked — `<think>`, or a
+    `reasoning_content` duplicated into the content. This is the case where it
+    is marked by nothing at all, and the only thing left that says which half
+    is the reply is the shape the prompt asked for.
+    """
+    leaked = FakeGateway(
+        "درآمد در دوره ۱۲۰ بود.\n\n"
+        "Wait — five sentences? And avoid duplicating the next section. "
+        "Let's redraft.\n\n"
+        "درآمد در این دوره در مجموع ۱۲۰ بود و ۳ وضعیت ثبت شد.",
+        PROSE,
+        "خلاصه‌ی مدیریتی: درآمد ۱۲۰ بود.\n\n- درآمد ۱۲۰ بود.",
+    )
+    monkeypatch.setattr(
+        worker.LiteLLMGateway, "from_settings", classmethod(lambda _c, _s: leaked)
+    )
+    db = _readable()
+
+    await _generate(db)
+
+    row = db.prose[0]
+    assert row.status == "OK"
+    assert row.prose == "درآمد در دوره ۱۲۰ بود."
+
+    # The summary is the one piece of prose asked for a blank line, and keeps
+    # its findings: the cut is a section's contract, not the document's.
+    summary = next(r for r in db.prose if r.section_id == SUMMARY_SECTION_ID)
+    assert summary.prose == "خلاصه‌ی مدیریتی: درآمد ۱۲۰ بود.\n\n- درآمد ۱۲۰ بود."
+
+
 async def test_a_section_with_no_data_is_not_a_failure(
     connector: FakeConnector, gateway: FakeGateway
 ) -> None:

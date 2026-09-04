@@ -368,6 +368,73 @@ async def test_recovers_json_after_an_inlined_reasoning_block() -> None:
     assert out.label == "orders"
 
 
+# ── the scratchpad, in a plain completion ────────────────────────────────
+# `structured()` has always stripped an inlined `<think>` block, because JSON
+# that will not parse is loud. Prose is silent: a scratchpad merged into
+# `content` reads as a paragraph, and a report published it as one. These three
+# say what `complete()` now subtracts, and — the last one — what it must not.
+def _prose_reply(content: str, **fields: Any) -> Any:
+    """A provider response whose message may carry a reasoning channel too."""
+    message = type("_M", (), {"content": content, **fields})()
+    choice = type("_C", (), {"message": message, "finish_reason": "stop"})()
+    return type("_R", (), {"choices": [choice], "usage": None})()
+
+
+@pytest.mark.asyncio
+async def test_a_completion_drops_an_inlined_think_block() -> None:
+    async def thinking(**_: Any) -> Any:
+        return _prose_reply(
+            "<think>Four sentences? Let me redraft.</think>\nRevenue rose 39.8%."
+        )
+
+    with patch("litellm.acompletion", side_effect=thinking):
+        out = await _gateway(0).complete(_LLM, _MSG)
+
+    assert out.text == "Revenue rose 39.8%."
+
+
+@pytest.mark.asyncio
+async def test_a_completion_drops_a_reasoning_channel_the_provider_also_merged() -> None:
+    """The scratchpad in both fields is a subtraction, not a judgement call.
+
+    An upstream that does not implement the split hands the whole trace back in
+    `content` while still reporting it in `reasoning_content`. Same text, two
+    places — so the reply is what is left when one is taken out of the other.
+    """
+    scratch = "Wait — is that ten months or twelve? Ten. Let's craft."
+
+    async def merged(**_: Any) -> Any:
+        return _prose_reply(
+            f"{scratch}\n\nRevenue rose 39.8%.", reasoning_content=scratch
+        )
+
+    with patch("litellm.acompletion", side_effect=merged):
+        out = await _gateway(0).complete(_LLM, _MSG)
+
+    assert out.text == "Revenue rose 39.8%."
+
+
+@pytest.mark.asyncio
+async def test_a_reply_that_merely_quotes_its_own_reasoning_is_left_alone() -> None:
+    """Only a scratchpad *at the front* is subtracted.
+
+    A provider that keeps the channels apart is the normal case, and its
+    `content` is the answer whatever the reasoning happens to say. Nothing here
+    may go looking for the scratchpad's words inside the prose.
+    """
+
+    async def separated(**_: Any) -> Any:
+        return _prose_reply(
+            "Revenue rose 39.8%. Let's craft.",
+            reasoning_content="Let's craft.",
+        )
+
+    with patch("litellm.acompletion", side_effect=separated):
+        out = await _gateway(0).complete(_LLM, _MSG)
+
+    assert out.text == "Revenue rose 39.8%. Let's craft."
+
+
 # ── structured output, streamed ───────────────────────────────────────────
 # `on_reasoning` changes the transport and nothing else. Everything above this
 # line has to keep holding on the streamed path, because the reason to stream a

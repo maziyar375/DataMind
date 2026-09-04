@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import socket
 import uuid
 from collections.abc import Awaitable, Callable
@@ -834,7 +835,12 @@ async def _summarise(
         row.error_message = str(err)[:500]
         return row
 
-    row.prose = _prose(completion, run_id=run.id, what="the executive summary")
+    # `one_paragraph=False`: the summary is the one piece of prose in the
+    # document that is *asked* for a blank line — a paragraph, then its
+    # findings, one per line.
+    row.prose = _prose(
+        completion, run_id=run.id, what="the executive summary", one_paragraph=False
+    )
     if not row.prose:
         row.status = ReportSectionResultStatus.FAILED
         row.error_message = (
@@ -858,8 +864,10 @@ async def _summarise(
 _SENTENCE_ENDS = (".", "!", "?", "؟", "۔", "।", "…")
 
 
-def _prose(completion: Any, *, run_id: UUID, what: str) -> str:
-    """The paragraph, ending where a sentence ends.
+def _prose(
+    completion: Any, *, run_id: UUID, what: str, one_paragraph: bool = True
+) -> str:
+    """The paragraph, one paragraph long, ending where a sentence ends.
 
     A provider that hits `max_tokens` returns what it had written so far, and
     nothing in the text says so — the symptom is a report whose third section
@@ -872,8 +880,16 @@ def _prose(completion: Any, *, run_id: UUID, what: str) -> str:
     finished. When there is no sentence boundary at all the budget is not merely
     tight but far too small, and the empty string returned here becomes
     `_TRUNCATED` — the one message that tells the user which knob to turn.
+
+    `one_paragraph` is the other half of the same job, and it runs first: a
+    section was asked for one paragraph, so anything past the first blank line
+    is not part of the reply it asked for. See `_first_paragraph`. The summary
+    passes it off, being the one piece of prose here that is asked for a blank
+    line.
     """
     text = (completion.text or "").strip()
+    if one_paragraph:
+        text = _first_paragraph(text, run_id=run_id, what=what)
     if not completion.truncated or not text:
         return text
 
@@ -887,6 +903,52 @@ def _prose(completion: Any, *, run_id: UUID, what: str) -> str:
         dropped_chars=len(text) - len(trimmed),
     )
     return trimmed
+
+
+#: A blank line — the one thing a reply asked for a single paragraph cannot
+#: contain, and the only mark an unfenced scratchpad reliably leaves.
+_PARAGRAPH_BREAK = re.compile(r"\n\s*\n")
+
+
+def _first_paragraph(text: str, *, run_id: UUID, what: str) -> str:
+    """One paragraph, which is what a section's prose was asked for.
+
+    `REPORT_SECTION_SYSTEM` asks for "4 to 7 sentences, as ONE paragraph. No
+    heading, no bullet list, no markdown", so a blank line in a section reply
+    is not a stylistic wobble — it is a reply that is not the thing that was
+    asked for. In practice it has one cause, and it is not the model losing
+    its place: a provider that did not keep the reasoning channel separate
+    returns the whole trace as `content`, and the deliberation arrives split
+    into paragraphs around the drafts it is deliberating over. `_answer` in
+    the gateway subtracts that scratchpad wherever it is marked — `<think>`
+    tags, or a `reasoning_content` duplicated into the reply. Where it is
+    marked by nothing at all, this is the line that holds.
+
+    Deliberately a cut and not a search for the best-looking block. Every
+    well-formed section is one paragraph, so this returns it byte-identical;
+    a malformed one loses its tail rather than gaining this module's guess
+    about which of four drafts was meant to be final — and the log says how
+    much went, because a run producing these is a provider problem the numbers
+    should be able to show.
+
+    It keeps the *first* paragraph because that is the one a writer asked for a
+    paragraph starts with, and it is the one both observed cases opened with.
+    A provider that merged its scratchpad in *front* of the answer and marked
+    it as nothing would leave the wrong half here — which is the shape `_answer`
+    exists to catch upstream, where the duplicate `reasoning_content` says
+    exactly where the answer begins.
+    """
+    head = _PARAGRAPH_BREAK.split(text, maxsplit=1)[0].strip()
+    if len(head) == len(text):
+        return text
+    log.warning(
+        "report_prose_not_one_paragraph",
+        run_id=str(run_id),
+        section=what[:120],
+        kept_chars=len(head),
+        dropped_chars=len(text) - len(head),
+    )
+    return head
 
 
 def _narration(result: ReportBlockResult, policy: str) -> BlockNarration:

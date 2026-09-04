@@ -215,7 +215,7 @@ class LiteLLMGateway:
             raise LLMError(_clean(err)) from err
 
         latency_ms = int((time.perf_counter() - started) * 1000)
-        text = (response.choices[0].message.content or "").strip()
+        text = _answer(response.choices[0].message)
         usage = getattr(response, "usage", None)
         return Completion(
             text=text,
@@ -819,6 +819,49 @@ def _finish_reason(response: Any) -> str:
         return str(getattr(response.choices[0], "finish_reason", "") or "")
     except (AttributeError, IndexError):  # pragma: no cover - defensive
         return ""
+
+
+def _answer(message: Any) -> str:
+    """The reply, with the model's scratchpad taken back out of it.
+
+    A reasoning model thinks on a channel of its own, and the providers this
+    product is pointed at *usually* keep the two apart: `reasoning_content`
+    carries the deliberation and `content` carries the answer. `StreamChunk`
+    states why that separation matters and `stream()` relies on it — reasoning
+    is a scratchpad, and publishing it as the reply publishes the model's
+    second thoughts as if they were its first.
+
+    "Usually" is the problem. One model name behind one gateway is served by
+    whichever upstream a router picked for that request, and an upstream that
+    does not implement the split returns the whole trace in `content`: the
+    deliberation, the abandoned drafts, and the finished paragraph, in one
+    string. Nothing downstream can tell that from prose, so a report section
+    gets published as a transcript of the model talking itself into it.
+
+    Two shapes of that are recoverable here, and both are exact rather than
+    guessed:
+
+    * a scratchpad fenced in `<think>` tags — which `_candidates` has always
+      stripped for a structured reply, and which a `complete()` caller had no
+      defence against at all;
+    * a `reasoning_content` the provider *also* left at the front of `content`
+      — the same text in both fields, so removing it is a subtraction and not
+      an opinion.
+
+    An untagged scratchpad that duplicates nothing cannot be told from prose at
+    this layer and is not guessed at. The caller that knows what shape it asked
+    for is the one that can catch that; for report prose it is `_prose` in
+    `workers/report.py`.
+    """
+    text = _THINK_BLOCK.sub("", getattr(message, "content", "") or "").strip()
+    reasoning = (
+        getattr(message, "reasoning_content", None)
+        or getattr(message, "reasoning", None)
+        or ""
+    ).strip()
+    if reasoning and text.startswith(reasoning):
+        text = text[len(reasoning) :].strip()
+    return text
 
 
 def _candidates(raw: str) -> list[str]:
