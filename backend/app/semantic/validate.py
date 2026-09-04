@@ -25,6 +25,7 @@ from app.semantic.models import (
     SemanticDocument,
     SemanticEntity,
     SemanticJoin,
+    SemanticMetric,
 )
 
 # Aggregate nodes that make an expression a *measure* rather than a column
@@ -231,6 +232,8 @@ def validate_document(
                     metric.issue = f"Filter `{predicate}`: {issue}"
                     break
 
+    _refuse_ambiguous_metrics(checked)
+
     # A join to a table that is gone cannot be repaired by a human, so unlike
     # the rest of the document it is simply dropped.
     checked.joins = [
@@ -238,6 +241,53 @@ def validate_document(
         if index.table(j.left) is not None and index.table(j.right) is not None
     ]
     return checked
+
+
+def _refuse_ambiguous_metrics(doc: SemanticDocument) -> None:
+    """A metric name means one thing in a database, or it means nothing.
+
+    Everything else in this file checks a definition against the *schema*. This
+    checks the document against itself, and it is the one rule the per-table
+    shape of the layer cannot express: `revenue` on `orders` and `revenue` on
+    `invoices` are each perfectly valid, each render into the same prompt, and
+    the model then picks one of them — silently, and not always the same one.
+    That is the exact failure a metric layer exists to prevent, so a name that
+    is claimed twice answers nothing until a human decides which is which.
+
+    The same posture the knowledge store takes with two templates that
+    disagree: both stop being used and both say why, because choosing for the
+    curator is how a store becomes untrustworthy rather than merely incomplete.
+
+    Two things it deliberately does not do. An **excluded** entity is not in
+    the prompt at all, so a name it also uses is not a collision — it is a
+    table somebody set aside. And a metric already invalid for a schema reason
+    keeps that reason: it is out of the prompt either way, its problem is the
+    more immediate one, and the collision is reported the moment it is fixed.
+    """
+    homes: dict[str, list[tuple[SemanticEntity, SemanticMetric]]] = {}
+    for entity in doc.entities:
+        if entity.exclude or not entity.valid:
+            continue
+        for metric in entity.metrics:
+            name = metric.name.strip().lower()
+            if name and metric.valid:
+                homes.setdefault(name, []).append((entity, metric))
+
+    for defined in homes.values():
+        if len(defined) < 2:
+            continue
+        for entity, metric in defined:
+            elsewhere = sorted({e.table for e, _ in defined if e.table != entity.table})
+            metric.valid = False
+            metric.issue = (
+                "`" + metric.name + "` is also defined on "
+                + ", ".join("`" + t + "`" for t in elsewhere)
+                + ". A metric name means one thing here, so neither is used "
+                "until one is renamed."
+            ) if elsewhere else (
+                "`" + metric.name + "` is defined twice on this table. "
+                "Rename or remove one of them."
+            )
 
 
 # ── joins, derived rather than asked for ─────────────────────────────────

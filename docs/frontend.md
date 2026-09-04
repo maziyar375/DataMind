@@ -447,12 +447,12 @@ each Vega plot at page width in the light palette — are
 
 ## 7. What is tested, and what is not
 
-Twelve modules are deliberately **DOM-free** and carry their own suites, because
-every way they can be wrong is quiet: `dashboard-schedule.ts`,
+Fourteen modules are deliberately **DOM-free** and carry their own suites,
+because every way they can be wrong is quiet: `dashboard-schedule.ts`,
 `table-format.ts`, `dashboard-document.ts`, `palette.ts`, `chat-format.ts`,
 `report-document.ts`, `report-readiness.ts`, `report-print.ts`,
-`semantic-drift.ts`, `knowledge-template.ts`, `thinking.ts`,
-`knowledge-queue.ts`.
+`semantic-drift.ts`, `semantic-metrics.ts`, `knowledge-template.ts`,
+`thinking.ts`, `knowledge-queue.ts`, `provider-params.ts`.
 
 There is no test runner — each suite is a plain `node
 --experimental-strip-types` script, run by `npm test`. Keeping these modules

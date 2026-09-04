@@ -187,10 +187,10 @@ container, and it does not detach — `docker compose up -d` is the backgrounded
 form the README's quick start uses.
 
 Frontend, from `frontend/`: `npm run dev`, `npm run build` (`tsc -b && vite
-build`), `npm run typecheck` (`tsc --noEmit`), `npm test` (all thirteen DOM-free
+build`), `npm run typecheck` (`tsc --noEmit`), `npm test` (all fourteen DOM-free
 logic suites: schedule, format, dashboard document, palette, chat format, report
-document, report readiness, print, semantic drift, knowledge template,
-thinking, queue, provider params). **`npm run lint` does not
+document, report readiness, print, semantic drift, semantic metrics, knowledge
+template, thinking, queue, provider params). **`npm run lint` does not
 work** — the script exists but eslint is neither a devDependency nor
 configured. Typecheck plus build plus `npm test` is the real gate.
 
@@ -549,11 +549,11 @@ at commit time and shows up as drift a release later. Full tour:
   A literal hex or `oklch()` in a component is a bug in both themes — one of
   them just has not been looked at yet. Chart colours are the one exception and
   they live in `components/palette.ts`, tested apart from React.
-- **The thirteen DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
+- **The fourteen DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
   `table-format.ts`, `dashboard-document.ts`, `palette.ts`, `chat-format.ts`,
   `report-document.ts`, `report-readiness.ts`, `report-print.ts`,
-  `semantic-drift.ts`, `knowledge-template.ts`, `thinking.ts`,
-  `knowledge-queue.ts`, `provider-params.ts` — they hold the
+  `semantic-drift.ts`, `semantic-metrics.ts`, `knowledge-template.ts`,
+  `thinking.ts`, `knowledge-queue.ts`, `provider-params.ts` — they hold the
   logic whose failures are quiet, they are the *only* tested code in the
   frontend, and their suites are plain `node --experimental-strip-types`
   scripts. One React import turns a suite into a thing that cannot run.
@@ -947,6 +947,31 @@ shapes. That is the class this addresses.
   (`frontend/src/components/semantic.tsx`). Metric expressions are validated
   live by `POST .../semantic/check`, which is the *same parser* the save path
   uses — the editor never promises something the backend will reject.
+- **A metric is *defined* on its entity and *browsed* in a list, and those are
+  two different questions.** The definition stays on the table it measures — an
+  aggregate needs a grain, columns and a validator that can resolve them, which
+  is why every product with this feature anchors it somewhere (a dataset in
+  Superset, a home table in Power BI, a source in a Databricks metric view).
+  The **Metrics** panel above the table list is the other reading of the same
+  document: `semantic-metrics.ts` flattens every entity's metrics, sorts by name
+  then table, and a click routes back to that table's own card opened on its
+  metrics section — one editor, two ways in, no second copy and no migration.
+  It exists for the two questions the tree cannot answer: *what does this
+  database measure*, and *does a name mean one thing*. `required_joins` is the
+  tell that the tree was never the whole truth, since a metric already reaches
+  through joins into tables it does not hang off.
+- **A metric name means one thing, and `_refuse_ambiguous_metrics` enforces
+  it.** Every other check in `semantic/validate.py` binds a definition to the
+  *schema*; this one checks the document against itself. `revenue` on `orders`
+  and `revenue` on `invoices` are each valid, each render into the same prompt,
+  and the model then picks one — silently, and not always the same one. Both are
+  refused with a sentence naming the other, the same posture the knowledge store
+  takes with two templates that disagree. Two deliberate exemptions: an
+  **excluded** entity claims nothing, because it is not in the prompt at all;
+  and a metric already invalid for a schema reason keeps that reason, since it
+  is out of the prompt either way and the collision surfaces the moment it is
+  fixed. The panel computes the same collision client-side, so it is visible
+  while it is being typed rather than only after a save.
 
 ---
 

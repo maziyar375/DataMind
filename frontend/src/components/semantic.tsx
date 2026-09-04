@@ -38,6 +38,10 @@ import type { ChipTone } from './ui'
 import { DetailBody, FieldRow } from './settings'
 import { useBackgroundWatch } from '../shell'
 import { explainRekey, rekeyDrift } from './semantic-drift'
+import {
+  collectMetrics, matchesMetric, metricSummary,
+} from './semantic-metrics'
+import type { MetricRow } from './semantic-metrics'
 
 const ACTIVE = ['QUEUED', 'RUNNING']
 
@@ -283,6 +287,35 @@ export function SemanticLayerTab({
     })
   }, [doc, search, filter])
 
+  // Which card the metrics panel sent the reader to, and when. The timestamp
+  // is what makes a second click on the *same* table work: the card has to be
+  // told again, and a value that did not change tells it nothing.
+  const [focus, setFocus] = useState<{ table: string; at: number } | null>(null)
+
+  /** Open a table's card on its metrics section and scroll to it.
+   *
+   *  The filter is cleared first, because the card the reader asked for may be
+   *  one the current filter hides — and a click that appears to do nothing is
+   *  worse than one that changes two things. */
+  const revealMetrics = useCallback((table: string) => {
+    setFilter('all')
+    setSearch('')
+    setOpen((prev) => ({ ...prev, [table]: true }))
+    setFocus({ table, at: Date.now() })
+  }, [])
+
+  // After the card has rendered — it may have been filtered out a frame ago,
+  // in which case there was nothing to scroll to yet.
+  useEffect(() => {
+    if (!focus) return
+    const id = requestAnimationFrame(() => {
+      document
+        .getElementById(entityDomId(focus.table))
+        ?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    })
+    return () => cancelAnimationFrame(id)
+  }, [focus])
+
   const undescribed = useMemo(
     () => (layer?.tables ?? []).filter((t) => !t.described).map((t) => t.table),
     [layer],
@@ -359,6 +392,19 @@ export function SemanticLayerTab({
                 peer of "About this database". It also fell under the filter
                 bar, whose search and filters never applied to it. */}
             <Overview doc={doc!} onChange={patch} />
+            {/* Between the two: what the database *is*, then what it
+                *measures*, then the words people use for both. Metrics sit
+                above the glossary because a term routinely maps to one. */}
+            <MetricsPanel
+              doc={doc!}
+              onOpen={revealMetrics}
+              onAdd={(table) => {
+                const entity = doc!.entities.find((e) => e.table === table)
+                if (!entity) return
+                updateEntity(table, { metrics: [...entity.metrics, blankMetric()] })
+                revealMetrics(table)
+              }}
+            />
             <Glossary doc={doc!} onChange={patch} />
 
             <FilterBar
@@ -381,6 +427,7 @@ export function SemanticLayerTab({
                   key={entity.table}
                   connectionId={connection.id}
                   entity={entity}
+                  focusedAt={focus?.table === entity.table ? focus.at : 0}
                   open={!!open[entity.table]}
                   onToggle={() =>
                     setOpen((prev) => ({ ...prev, [entity.table]: !prev[entity.table] }))
@@ -1422,11 +1469,15 @@ function FilterBar({
 type Section = 'meaning' | 'columns' | 'metrics'
 
 function EntityCard({
-  connectionId, entity, open, onToggle, onChange,
+  connectionId, entity, open, focusedAt = 0, onToggle, onChange,
 }: {
   connectionId: string
   entity: SemanticEntity
   open: boolean
+  /** When the metrics panel last sent a reader here, or 0. A timestamp rather
+   *  than a boolean, so arriving twice at the same card works: the second
+   *  visit has to reopen the metrics section the reader may have left. */
+  focusedAt?: number
   onToggle: () => void
   onChange: (change: Partial<SemanticEntity>) => void
 }) {
@@ -1434,15 +1485,26 @@ function EntityCard({
   const role = ROLE_META[entity.role] ?? ROLE_META.unknown
   const [section, setSection] = useState<Section>('meaning')
 
+  // Arriving from the metrics list lands on metrics. Anything else — opening
+  // the card by hand — still starts on meaning, which is where a table is
+  // read rather than measured.
+  useEffect(() => {
+    if (focusedAt) setSection('metrics')
+  }, [focusedAt])
+
   const badColumns = entity.columns.filter((c) => !c.valid).length
   const badMetrics = entity.metrics.filter((m) => !m.valid).length
 
   return (
     <div
+      id={entityDomId(entity.table)}
       style={{
         border: `1px solid ${broken ? 'var(--red-border)' : 'var(--border)'}`,
         borderRadius: 11,
         background: 'var(--panel)',
+        // Clears the sticky filter bar when the metrics list scrolls a card
+        // to the top, so the row it sent you to is not under it.
+        scrollMarginTop: 64,
         // Deliberately **not** `overflow: hidden`. That is the tidy way to keep
         // children inside a rounded card, and it also makes this card the
         // scrollport for anything sticky inside it — which turned the header
@@ -2379,6 +2441,214 @@ function Glossary({
         </div>
       ))}
     </Panel>
+  )
+}
+
+/** Where a metric row jumps to. One id scheme, so the panel and the card do
+ *  not have to agree about anything except the table's own name. */
+function entityDomId(table: string): string {
+  return `entity-${slug(table)}`
+}
+
+/**
+ * Every measure this database defines, in one list.
+ *
+ * **A lens, not a second home.** The metric still lives on the entity it
+ * measures — an aggregate needs a grain and columns, which is why every
+ * product with this feature anchors the definition somewhere: a dataset in
+ * Superset, a home table in Power BI, a source in a Databricks metric view.
+ * What none of them do is make *browsing* follow *defining*, and this panel is
+ * the difference. Editing still happens in the table's own card: one editor,
+ * two ways in, and no second copy of a metric to keep in agreement.
+ *
+ * It exists for two questions the per-table tree cannot answer:
+ *
+ * * **What does this database measure?** The first question anybody asks of a
+ *   layer, and in the tree it is a walk through forty expandable cards.
+ * * **Does a name mean one thing?** `revenue` on `orders` and `revenue` on
+ *   `invoices` are each valid, sit two screens apart, and are invisible to
+ *   each other. Here they sort adjacent and both say so — the server refuses
+ *   them on save, and this says it while it is still being typed.
+ */
+function MetricsPanel({
+  doc, onOpen, onAdd,
+}: {
+  doc: SemanticDocument
+  /** Reveal a metric where it is edited: its table's card, on its metrics
+   *  section, scrolled to. */
+  onOpen: (table: string) => void
+  onAdd: (table: string) => void
+}) {
+  const rows = useMemo(() => collectMetrics(doc.entities), [doc])
+  const [query, setQuery] = useState('')
+  const [target, setTarget] = useState('')
+  const shown = useMemo(
+    () => rows.filter((row) => matchesMetric(row, query)),
+    [rows, query],
+  )
+  // A table to add to has to be chosen, and the first one is a fine default
+  // for a layer with one table and a poor one for a layer with forty — so it
+  // is a picker either way rather than a guess that is right sometimes.
+  const tables = doc.entities.map((e) => e.table)
+  const addTo = target || tables[0] || ''
+
+  return (
+    <Panel
+      title="Metrics"
+      description="Every measure this database defines, and where each is defined."
+      summary={metricSummary(rows)}
+      defaultOpen={false}
+      action={
+        rows.length > 6 ? (
+          <TextInput
+            value={query}
+            placeholder="Filter metrics…"
+            aria-label="Filter metrics"
+            onChange={(e) => setQuery(e.target.value)}
+            style={{ maxWidth: 200, flexShrink: 0 }}
+          />
+        ) : undefined
+      }
+    >
+      {rows.length === 0 && (
+        <div
+          style={{
+            border: '1px dashed var(--border-strong)',
+            borderRadius: 9,
+            padding: '16px 14px',
+            fontSize: 12.5,
+            color: 'var(--text-faint)',
+            textAlign: 'center',
+          }}
+        >
+          No metrics yet. A metric is the part of this layer that changes
+          answers — “revenue” stops being re-derived per question, filters
+          included.
+        </div>
+      )}
+
+      {rows.length > 0 && shown.length === 0 && (
+        <div style={{ fontSize: 12.5, color: 'var(--text-faint)', padding: '4px 2px' }}>
+          No metric matches “{query.trim()}”.
+        </div>
+      )}
+
+      {shown.map((row) => (
+        <MetricLine
+          key={`${row.table}-${row.index}`}
+          row={row}
+          onOpen={() => onOpen(row.table)}
+        />
+      ))}
+
+      {tables.length > 0 && (
+        <div
+          style={{
+            display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
+            paddingTop: 2,
+          }}
+        >
+          <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+            Add a metric to
+          </span>
+          <Select
+            value={addTo}
+            aria-label="Table to define the metric on"
+            style={{ maxWidth: 260 }}
+            onChange={(e) => setTarget(e.target.value)}
+          >
+            {tables.map((table) => (
+              <option key={table} value={table}>{table}</option>
+            ))}
+          </Select>
+          <GhostButton
+            onClick={() => onAdd(addTo)}
+            disabled={!addTo}
+            style={{ padding: '6px 11px', fontSize: 12.5 }}
+          >
+            <Icon.Plus size={13} />
+            Add metric
+          </GhostButton>
+        </div>
+      )}
+    </Panel>
+  )
+}
+
+/** One metric in that list. The whole row opens it where it is edited. */
+function MetricLine({ row, onOpen }: { row: MetricRow; onOpen: () => void }) {
+  const broken = row.valid === false || row.ambiguous
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="rm-krow"
+      style={{
+        // Wraps on a phone: the table name drops under the expression rather
+        // than squeezing it into four characters and an ellipsis.
+        display: 'flex', gap: 12, rowGap: 4, flexWrap: 'wrap',
+        alignItems: 'baseline', width: '100%',
+        textAlign: 'start', padding: '9px 11px', borderRadius: 9,
+        cursor: 'pointer', font: 'inherit', color: 'inherit',
+        background: 'var(--panel-alt)',
+        border: `1px solid ${broken ? 'var(--red-border)' : 'var(--border)'}`,
+      }}
+    >
+      <span style={{ minWidth: 0, flex: '1 1 200px' }}>
+        <span
+          className="mono"
+          style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-strong)' }}
+        >
+          {row.name || 'unnamed'}
+        </span>
+        {row.label && (
+          <span style={{ fontSize: 12, color: 'var(--text-dim)', marginInlineStart: 8 }}>
+            {row.label}
+          </span>
+        )}
+        <span
+          className="mono"
+          dir="ltr"
+          style={{
+            display: 'block', fontSize: 11.5, color: 'var(--text-faint)',
+            marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {row.expression || 'no expression yet'}
+        </span>
+        {/* Ambiguity first: a valid expression under a contested name is the
+            problem that a per-table view could not show at all. */}
+        {row.ambiguous && (
+          <span style={{ display: 'block', fontSize: 11.5, color: 'var(--red)', marginTop: 3 }}>
+            Another table defines “{row.name}” too — neither is used until one
+            is renamed.
+          </span>
+        )}
+        {!row.ambiguous && row.valid === false && row.issue && (
+          <span style={{ display: 'block', fontSize: 11.5, color: 'var(--red)', marginTop: 3 }}>
+            {row.issue}
+          </span>
+        )}
+      </span>
+      <span
+        className="mono"
+        style={{
+          fontSize: 11.5, color: 'var(--text-faint)', flexShrink: 0,
+          marginInlineStart: 'auto',
+        }}
+      >
+        {row.table}
+      </span>
+      {row.excluded && <Chip tone="neutral" small>Set aside</Chip>}
+      {row.required_joins && row.required_joins.length > 0 && (
+        <Chip tone="neutral" small>
+          {row.required_joins.length === 1
+            ? '1 join'
+            : `${row.required_joins.length} joins`}
+        </Chip>
+      )}
+    </button>
   )
 }
 

@@ -360,3 +360,84 @@ def test_a_quoted_name_written_into_a_document_is_flagged_not_rescued() -> None:
     )
     assert not bound.entities[0].valid
     assert "snapshot" in bound.entities[0].issue
+
+
+# ── a name means one thing ───────────────────────────────────────────────
+def _with_metrics(*pairs: tuple[str, str, str]) -> SemanticDocument:
+    """A document with one metric per (table, name, expression) triple."""
+    entities: dict[str, SemanticEntity] = {}
+    for table, name, expression in pairs:
+        entity = entities.setdefault(table, SemanticEntity(table=table))
+        entity.metrics.append(SemanticMetric(name=name, expression=expression))
+    return SemanticDocument(entities=list(entities.values()))
+
+
+def test_one_name_defined_on_two_tables_answers_nothing() -> None:
+    """The rule the per-table shape of the layer cannot express on its own.
+
+    Two `revenue` metrics are each valid against the schema, each render into
+    the same prompt, and the model then picks one — silently, and not always
+    the same one. Both are refused, and both say where the other lives.
+    """
+    doc = _with_metrics(
+        ("sales.orders", "revenue", "SUM(status)"),
+        ("sales.order_items", "revenue", "SUM(quantity * unit_price)"),
+    )
+    checked = validate_document(doc, INDEX)
+
+    metrics = [m for e in checked.entities for m in e.metrics]
+    assert [m.valid for m in metrics] == [False, False]
+    assert "sales.order_items" in metrics[0].issue
+    assert "sales.orders" in metrics[1].issue
+
+
+def test_the_same_name_twice_on_one_table_says_so_plainly() -> None:
+    """No other table to name, so the sentence cannot pretend there is one."""
+    doc = _with_metrics(
+        ("sales.order_items", "revenue", "SUM(quantity)"),
+        ("sales.order_items", "revenue", "SUM(unit_price)"),
+    )
+    checked = validate_document(doc, INDEX)
+
+    issues = [m.issue for m in checked.entities[0].metrics]
+    assert all("defined twice on this table" in issue for issue in issues)
+
+
+def test_two_different_names_are_not_a_collision() -> None:
+    """The rule is about the name, not about two tables measuring money."""
+    doc = _with_metrics(
+        ("sales.orders", "order_count", "COUNT(id)"),
+        ("sales.order_items", "revenue", "SUM(quantity * unit_price)"),
+    )
+    checked = validate_document(doc, INDEX)
+    assert all(m.valid for e in checked.entities for m in e.metrics)
+
+
+def test_an_excluded_table_does_not_collide_with_anything() -> None:
+    """It is not in the prompt at all, so a name it uses is not claimed —
+    excluding a staging copy must not take the real metric down with it."""
+    doc = _with_metrics(
+        ("sales.orders", "revenue", "COUNT(id)"),
+        ("sales.order_items", "revenue", "SUM(quantity)"),
+    )
+    doc.entities[1].exclude = True
+    checked = validate_document(doc, INDEX)
+
+    assert checked.entities[0].metrics[0].valid
+    assert checked.entities[0].metrics[0].issue == ""
+
+
+def test_a_metric_already_broken_keeps_the_reason_it_is_broken() -> None:
+    """It is out of the prompt either way and its problem is the more
+    immediate one; the collision is reported the moment the expression is
+    fixed, rather than replacing the sentence that says how to fix it."""
+    doc = _with_metrics(
+        ("sales.orders", "revenue", "SUM(does_not_exist)"),
+        ("sales.order_items", "revenue", "SUM(quantity)"),
+    )
+    checked = validate_document(doc, INDEX)
+
+    broken = checked.entities[0].metrics[0]
+    assert not broken.valid and "also defined on" not in broken.issue
+    # And with only one *valid* claim on the name, the other one stands.
+    assert checked.entities[1].metrics[0].valid
