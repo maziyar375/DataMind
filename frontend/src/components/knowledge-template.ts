@@ -528,6 +528,43 @@ export function matches(row: TemplateRow, query: string): boolean {
   )
 }
 
+/**
+ * The same search, over a backlog row.
+ *
+ * A list is searchable or it is not, and which list happens to be on screen is
+ * not a reason for the box to appear and disappear: a connection with nothing
+ * taught and thirty questions waiting showed **no** search at all, while the
+ * one next to it in the same rail showed one. What each list is searched *by*
+ * differs, because a suggestion has no tables and no parameters — it has the
+ * question, the reason it is here, and the words nobody recognised.
+ */
+export function matchesSuggestion(
+  row: Pick<SuggestionRow, 'question' | 'reason' | 'words'>,
+  query: string,
+): boolean {
+  const needle = query.trim().toLowerCase()
+  if (!needle) return true
+  return (
+    row.question.toLowerCase().includes(needle) ||
+    row.reason.toLowerCase().includes(needle) ||
+    row.words.some((w) => w.toLowerCase().includes(needle))
+  )
+}
+
+/** And over a flag: the question, what the person wrote, and who wrote it. */
+export function matchesReview(
+  review: { question: string; comment: string; flagged_by: string },
+  query: string,
+): boolean {
+  const needle = query.trim().toLowerCase()
+  if (!needle) return true
+  return (
+    review.question.toLowerCase().includes(needle) ||
+    review.comment.toLowerCase().includes(needle) ||
+    review.flagged_by.toLowerCase().includes(needle)
+  )
+}
+
 
 // ── the backlog and the queue (Phase 3) ───────────────────────────────────
 export interface SuggestionRow {

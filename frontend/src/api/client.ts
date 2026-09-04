@@ -406,6 +406,14 @@ export const knowledge = {
       `/connections/${connectionId}/knowledge/templates/${id}`,
       { method: 'DELETE' },
     ),
+  // Puts an archived template back in use. The same PATCH the editor saves
+  // with — named here because *restore* is what the button says, and a caller
+  // should not have to know that a status is how it happens.
+  restore: (connectionId: string, id: string) =>
+    patch<KnowledgeTemplate>(
+      `/connections/${connectionId}/knowledge/templates/${id}`,
+      { status: 'ACTIVE' },
+    ),
 }
 
 // ── llm configs ───────────────────────────────────────────────────────────

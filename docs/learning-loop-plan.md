@@ -930,6 +930,28 @@ Read the order top to bottom: **what is broken, what to teach next, what has
 been taught.** The archive is last because it is the least urgent thing on the
 screen, even though it is the thing the feature is named after.
 
+> **Superseded 2026-09-04, and by its own argument.** The sketch above assumes
+> the three sections stay in proportion — `NEEDS YOU · 4`, `SUGGESTED · 12`,
+> `TEMPLATES · 23`. Real stores are not shaped like that. A connection here
+> holds **one** taught question under **eighteen** suggestions, and another
+> holds none under thirty, so "what has been taught" — the subject of the whole
+> screen — rendered last, below a backlog nobody had decided anything about.
+> The stacked order buried the work exactly as sub-tabs were said to, arriving
+> from the other side.
+>
+> So the sections became views: `Taught` (the default) · `Suggested` ·
+> `Flagged` · `Archive`, with the count on each tab and the two optional ones
+> shown only when they hold something. Templates needing attention are **not**
+> a fourth view — they are the same records, sorted first inside `Taught` under
+> a *Needs attention* heading, because a stale template is a taught question
+> and moving it to another tab would be the burying again.
+>
+> The detail pane on the right was never built: it rendered at the *bottom of
+> the page*, under every section, so clicking the third row scrolled the answer
+> somewhere the reader was not looking. It now opens attached to its own row.
+> `§4.3`'s anatomy is unchanged, and it is what still makes the views read as
+> one list.
+
 The search and filter bar **sticks** — the same rule `semantic.tsx` already
 follows, for the same reason: a store of forty templates scrolls past it in a
 second.

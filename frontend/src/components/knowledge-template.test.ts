@@ -11,7 +11,8 @@
  */
 import {
   CORRECTION_SHAPES,
-  conflictEvidence, differingCells, embeddingView, indexSummary, percent,
+  conflictEvidence, differingCells, embeddingView, indexSummary,
+  matchesReview, matchesSuggestion, percent,
   scoreView, sparkHeights,
   isUnused, markLiterals, matches, previewQuestion, questionParts, questionSlots,
   readiness, resolveReadiness, roleLabel, rowSubtitle, sections, statusOf,
@@ -227,6 +228,26 @@ check('search reads the question', matches(row(), 'REVENUE'), true)
 check('search reads the tables it touches', matches(row(), 'stores'), true)
 check('search reads the parameter names', matches(row(), 'region'), true)
 check('and does not match what is not there', matches(row(), 'churn'), false)
+
+// The same box over the other two lists. It used to exist only where templates
+// did, so a connection with nothing taught and thirty questions waiting had no
+// search on screen at all while the one beside it in the rail had one.
+const backlogRow = { question: 'top stores by revenue', reason: 'Asked 9× this month, never matched', words: ['churn'] }
+check('a backlog row is searched by its question',
+      matchesSuggestion(backlogRow, 'STORES'), true)
+check('and by why it is here', matchesSuggestion(backlogRow, 'never matched'), true)
+check('and by the word nobody recognised',
+      matchesSuggestion(backlogRow, 'churn'), true)
+check('an empty search still matches everything',
+      matchesSuggestion(backlogRow, '  '), true)
+check('and a word in none of the three does not',
+      matchesSuggestion(backlogRow, 'refunds'), false)
+
+const flagRow = { question: 'revenue by month', comment: 'this counted refunds', flagged_by: 'Maziyar A.' }
+check('a flag is searched by the question', matchesReview(flagRow, 'revenue'), true)
+check('by what the person wrote', matchesReview(flagRow, 'REFUNDS'), true)
+check('and by who wrote it', matchesReview(flagRow, 'maziyar'), true)
+check('and not by what none of them say', matchesReview(flagRow, 'stores'), false)
 
 // ── the backlog and the queue ─────────────────────────────────────────────
 function suggestion(over: Partial<SuggestionRow> = {}): SuggestionRow {

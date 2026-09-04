@@ -472,7 +472,7 @@ eslint is neither a dependency nor configured. Run `npm test` yourself.
 | A tile, the grid, the refresh clock | [dashboards.md §6](dashboards.md) |
 | The outline editor, the viewer, the PDF | [reports.md §11–§12](reports.md) |
 | A chart, the picker, a colour in one | [charts.md](charts.md) |
-| The knowledge console, the badge, the copy | [learning-loop-plan.md §4](learning-loop-plan.md) — the one full design brief in the repo; §4.2's information architecture is superseded and says so where it stands, since the console is now a rail entry as well as a tab |
+| The knowledge console, the badge, the copy | [learning-loop-plan.md §4](learning-loop-plan.md) — the one full design brief in the repo; §4.2's information architecture is superseded twice and says so where it stands: the console is a rail entry as well as a tab, and its three stacked sections are now four views (Taught · Suggested · Flagged · Archive) with edit and archive on the row itself |
 | Why a surface is shaped the way it is | [ui-improvment-plan.md](ui-improvment-plan.md) — the audit this shell was rebuilt from, sixteen findings in seven phases, with the decisions taken while executing recorded inline |
 | The schema browser, catalog descriptions | [catalog-metadata-plan.md](catalog-metadata-plan.md) |
 | What a step chip means | [pipeline.md](pipeline.md) — the nodes behind `NODE_META` |

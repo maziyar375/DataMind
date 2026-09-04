@@ -31,7 +31,8 @@
  * the sectioning, the status words, the highlight offsets and the readiness
  * rule are unit-tested (`npm run test:template`).
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { knowledge as api } from '../api/client'
 import type {
   BenchmarkOverview, Connection, EmbeddingStatus, KnowledgeHealth,
@@ -40,29 +41,56 @@ import type {
 } from '../api/types'
 import {
   Chip, DangerButton, Dot, EmptyState, ErrorNote, Field, GhostButton, Icon,
-  Modal, PrimaryButton, SearchField, Spinner, TextArea, TextInput, dirOf,
-  relativeTime,
+  Modal, PrimaryButton, SearchField, Segmented, Spinner, TextArea, TextInput,
+  dirOf, relativeTime,
 } from './ui'
-import type { ChipTone } from './ui'
 import { DetailBody } from './settings'
 import { useBackgroundWatch, useNotify, useQueue } from '../shell'
 import {
   CORRECTION_SHAPES, conflictEvidence, differingCells, embeddingView,
-  indexSummary, markLiterals, matches, percent, previewQuestion, questionParts,
-  readiness, resolveReadiness, roleLabel, rowSubtitle, scoreView, sections,
-  sparkHeights, statusOf, suggestionView,
+  indexSummary, markLiterals, matches, matchesReview, matchesSuggestion,
+  percent, previewQuestion, questionParts, readiness, resolveReadiness,
+  roleLabel, rowSubtitle, scoreView, sections, sparkHeights, statusOf,
+  suggestionView,
 } from './knowledge-template'
 import type { CorrectionShape, TemplateRow } from './knowledge-template'
+
+/**
+ * Which of the four things a store holds is on screen.
+ *
+ * They were four stacked sections in one scroll, in build order rather than
+ * reading order, and the consequence was not cosmetic: a store with one taught
+ * question and thirty suggestions showed the question **last**, under thirty
+ * rows of things nobody had decided to teach. What a connection knows is the
+ * subject of this screen, so it is the view that opens and the one a backlog
+ * cannot push off the bottom.
+ */
+export type KnowledgeView = 'taught' | 'suggested' | 'flagged' | 'archived'
+
+/** Four words, each naming what is *in* the view rather than what to do there
+ *  — the tab is a place, and the verbs live on the rows. "Archive" rather than
+ *  "Archived" for the same reason: it is somewhere to look, not a state. */
+const VIEW_LABEL: Record<KnowledgeView, string> = {
+  taught: 'Taught',
+  suggested: 'Suggested',
+  flagged: 'Flagged',
+  archived: 'Archive',
+}
+
+/** What the one search box is searching, said in the box. Four labels rather
+ *  than one generic *Search* because the same control over four different
+ *  lists is only reassuring if it says which one it has. */
+const SEARCH_LABEL: Record<KnowledgeView, string> = {
+  taught: 'Search taught questions',
+  suggested: 'Search what people asked',
+  flagged: 'Search flagged answers',
+  archived: 'Search the archive',
+}
 
 /** How long the editor waits after a keystroke before asking the server.
  *  Long enough not to check every character, short enough that the verdict
  *  lands while the curator is still looking at the SQL box. */
 const CHECK_DEBOUNCE_MS = 400
-
-const TONE: Record<string, ChipTone> = {
-  green: 'green', amber: 'amber', red: 'red', accent: 'accent', neutral: 'neutral',
-  faint: 'neutral',
-}
 
 /** SQL is **always** `dir="ltr"`, in both themes and both directions.
  *  A bidi-reordered statement is unreadable and, worse, ambiguous. */
@@ -94,7 +122,16 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
   const [search, setSearch] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [editing, setEditing] = useState<KnowledgeTemplate | 'new' | null>(null)
-  const [showArchive, setShowArchive] = useState(false)
+  // Which of the four things this store holds is on screen.
+  //
+  // **The fix for the screen's oldest problem.** All four used to be stacked
+  // in one scroll, in the order they were built rather than the order anybody
+  // reads them, so a store with one taught question and thirty suggestions
+  // showed the question last — below thirty rows of things nobody had decided
+  // to teach yet. What the store *knows* is now the default view and cannot be
+  // buried by a backlog, however long the backlog gets.
+  const [view, setView] = useState<KnowledgeView>('taught')
+  const [restoring, setRestoring] = useState<string | null>(null)
   const [reviews, setReviews] = useState<Review[]>([])
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
   // A question and a statement to open the editor with, from a flag or a
@@ -108,6 +145,7 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
   const [resolving, setResolving] = useState<string | null>(null)
   const [openReview, setOpenReview] = useState<Review | null>(null)
   const notify = useNotify()
+  const navigate = useNavigate()
   const watch = useBackgroundWatch()
   // This screen reads both feeds to draw its own two sections, so telling the
   // shell what it found keeps the rail's badge exact for free — no second
@@ -158,7 +196,55 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
     [rows, search],
   )
   const split = useMemo(() => sections(visible.map(asRow), staleIds), [visible, staleIds])
-  const selected = rows.find((r) => r.id === selectedId) ?? null
+  // Counted before the search, deliberately: a tab whose number moved as you
+  // typed would make the store look like it was losing questions.
+  const total = useMemo(() => sections(rows.map(asRow), staleIds), [rows, staleIds])
+  const backlog = useMemo(
+    () => suggestions.filter((s) => s.kind !== 'FLAGGED'),
+    [suggestions],
+  )
+  // Every list on this screen is searched by the same box. It used to exist
+  // only where templates did, so a connection with nothing taught and thirty
+  // questions waiting showed no search at all, while the one beside it in the
+  // same rail showed one — the same control appearing and disappearing by
+  // which connection you clicked.
+  const visibleBacklog = useMemo(
+    () => backlog.filter((item) => matchesSuggestion(item, search)),
+    [backlog, search],
+  )
+  const visibleReviews = useMemo(
+    () => reviews.filter((review) => matchesReview(review, search)),
+    [reviews, search],
+  )
+  const counts: Record<KnowledgeView, number> = {
+    taught: total.needsYou.length + total.taught.length,
+    suggested: backlog.length,
+    flagged: reviews.length,
+    archived: total.archived.length,
+  }
+  // Taught and Suggested are always offered — one is the store, the other is
+  // where the next entry comes from, and a tab that vanishes when it empties
+  // takes the reader's map with it. Flagged and Archive appear only when they
+  // hold something, because neither is a place to go and find nothing.
+  const tabs: KnowledgeView[] = [
+    'taught',
+    'suggested',
+    ...(counts.flagged > 0 ? (['flagged'] as const) : []),
+    ...(counts.archived > 0 ? (['archived'] as const) : []),
+  ]
+  // A view that stops existing under the reader — the last flag resolved, the
+  // last archived row restored — hands them back the store rather than an
+  // empty pane that no longer has a tab.
+  useEffect(() => {
+    if (!tabs.includes(view)) setView('taught')
+  }, [tabs, view])
+  // A query typed against one list carried to the next and filtered it to
+  // nothing, which reads as an empty list rather than as a search still on.
+  useEffect(() => { setSearch('') }, [view])
+  /** Open a row, or close the one that is open. One handler for the row's own
+   *  click and for the detail's Close, because they are the same gesture. */
+  const toggle = (id: string) =>
+    setSelectedId((current) => (current === id ? null : id))
 
   async function archive(row: KnowledgeTemplate) {
     try {
@@ -166,6 +252,24 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
       await refresh()
     } catch (err) {
       setError(messageOf(err))
+    }
+  }
+
+  /** Put an archived template back in use.
+   *
+   *  Archiving is the only delete this store has — a question somebody wrote
+   *  is months of work and the API refuses to destroy one — so the archive is
+   *  a place things come back from, and the row that goes in says so by
+   *  offering the way out on the way in. */
+  async function restore(row: TemplateRow) {
+    setRestoring(row.id)
+    try {
+      await api.restore(connection.id, row.id)
+      await refresh()
+    } catch (err) {
+      setError(messageOf(err))
+    } finally {
+      setRestoring(null)
     }
   }
 
@@ -308,30 +412,61 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
 
       <div
         style={{
-          position: 'sticky', top: 0, zIndex: 2, display: 'flex', gap: 10,
-          alignItems: 'center', padding: '2px 0 10px',
+          position: 'sticky', top: 0, zIndex: 2, display: 'flex',
+          flexDirection: 'column', gap: 10, padding: '2px 0 10px',
           background: 'var(--bg)',
         }}
       >
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          style={{
+            display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap',
+          }}
+        >
+          <Segmented
+            ariaLabel="What to show"
+            value={view}
+            onChange={setView}
+            options={tabs.map((tab) => ({
+              value: tab,
+              label: (
+                <>
+                  {VIEW_LABEL[tab]}
+                  <span
+                    style={{
+                      fontSize: 11, fontWeight: 600,
+                      color: view === tab ? 'var(--text-dim)' : 'var(--text-faint)',
+                    }}
+                  >
+                    {counts[tab]}
+                  </span>
+                </>
+              ),
+            }))}
+          />
+          <span style={{ flex: 1 }} />
+          {canCurate && synced && rows.length > 1 && (
+            <GhostButton onClick={sweep} disabled={sweeping}>
+              {sweeping ? <Spinner size={13} /> : <Icon.Refresh size={13} />}
+              Check the store
+            </GhostButton>
+          )}
+          {canCurate && synced && (
+            <PrimaryButton onClick={() => { setPrefill(null); setEditing('new') }}>
+              <Icon.Plus size={14} />
+              Teach a question
+            </PrimaryButton>
+          )}
+        </div>
+        {/* Wherever the open view has rows in it — which is the only honest
+            rule. Hidden only over an empty list, where the panel underneath is
+            already saying the one thing there is to say. */}
+        {counts[view] > 0 && (
           <SearchField
             value={search}
             onChange={setSearch}
-            placeholder="Search taught questions"
-            ariaLabel="Search taught questions"
+            placeholder={SEARCH_LABEL[view]}
+            ariaLabel={SEARCH_LABEL[view]}
           />
-        </div>
-        {canCurate && synced && rows.length > 1 && (
-          <GhostButton onClick={sweep} disabled={sweeping}>
-            {sweeping ? <Spinner size={13} /> : <Icon.Refresh size={13} />}
-            Check the store
-          </GhostButton>
-        )}
-        {canCurate && synced && (
-          <PrimaryButton onClick={() => setEditing('new')}>
-            <Icon.Plus size={14} />
-            Teach a question
-          </PrimaryButton>
         )}
       </div>
 
@@ -339,7 +474,10 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
         <div style={hint()}>{sweepNote}</div>
       )}
 
-      {health && health.unused.length > 0 && (
+      {/* Store-wide notes, on the view they are about. A line about unused
+          templates over a list of suggestions is a sentence about something
+          the reader cannot see. */}
+      {view === 'taught' && health && health.unused.length > 0 && (
         // The quietest possible treatment, from §4.7: a faint line and no
         // action button. A template written for a question asked once a year
         // is not waste — this is information, not an accusation.
@@ -350,7 +488,7 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
         </div>
       )}
 
-      {embeddings && (
+      {view === 'taught' && embeddings && (
         // **Not** gated on `rows.length`, and that gate was the bug.
         //
         // How a store is searched is a property of the *connection*, not of
@@ -359,14 +497,7 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
         // taught could never be switched to embedding search *before* teaching
         // anything, and a connection that had it switched on lost the only
         // control that turns it off the moment its last template was archived
-        // — pin intact, invisible. `embeddingView` has always had an `off`
-        // state whose whole job is to describe what the other mode adds, and
-        // until now nobody who had not already taught a question could read
-        // it.
-        //
-        // The empty store is not a special case wired in beside this: it is
-        // the `templates === 0` branch of the same view function, which is why
-        // this is one condition shorter rather than one longer.
+        // — pin intact, invisible.
         <MatchingMode
           status={embeddings}
           canCurate={canCurate}
@@ -386,21 +517,25 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
         />
       )}
 
-      {rows.length === 0 && !search && (
+      {/* ── what the store knows ─────────────────────────────────────── */}
+      {view === 'taught' && counts.taught === 0 && (
         <FirstRun
           canCurate={canCurate && synced}
-          reviews={reviews.length}
-          suggestions={suggestions.filter((s) => s.kind !== 'FLAGGED').length}
+          reviews={counts.flagged}
+          suggestions={counts.suggested}
+          onTeach={() => { setPrefill(null); setEditing('new') }}
+          onSuggestions={() => setView('suggested')}
+          onFlagged={() => setView('flagged')}
         />
       )}
 
-      {rows.length > 0 && visible.length === 0 && (
+      {view === 'taught' && counts.taught > 0 && visible.length === 0 && (
         <EmptyState
-          title={`No templates match “${search}”.`}
+          title={`No taught question matches “${search}”.`}
           body="A search that finds nothing is itself a curation signal — this may be a question worth teaching."
           action={
             canCurate && synced ? (
-              <PrimaryButton onClick={() => setEditing('new')}>
+              <PrimaryButton onClick={() => { setPrefill(null); setEditing('new') }}>
                 Teach this question
               </PrimaryButton>
             ) : undefined
@@ -408,58 +543,55 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
         />
       )}
 
-      {reviews.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <SectionHeading>Needs you · {reviews.length}</SectionHeading>
-          {reviews.map((review) => (
-            <ReviewRow
-              key={review.id}
-              review={review}
-              selected={openReview?.id === review.id}
-              onSelect={() =>
-                setOpenReview(openReview?.id === review.id ? null : review)
-              }
-            />
-          ))}
-        </div>
+      {view === 'taught' && (
+        <>
+          {/* Two groups in one list rather than two lists: a template that
+              stopped working is the same record as one that works, and it is
+              first because it is the only one with anything to do. The
+              headings appear only when there is a second group to tell it
+              apart from. */}
+          <TemplateList
+            heading={split.needsYou.length > 0 && split.taught.length > 0
+              ? 'Needs attention' : undefined}
+            rows={split.needsYou}
+            all={rows}
+            staleIds={staleIds}
+            selectedId={selectedId}
+            canCurate={canCurate}
+            onSelect={toggle}
+            onEdit={(t) => setEditing(t)}
+            onArchive={archive}
+          />
+          <TemplateList
+            heading={split.needsYou.length > 0 && split.taught.length > 0
+              ? 'Working' : undefined}
+            rows={split.taught}
+            all={rows}
+            staleIds={staleIds}
+            selectedId={selectedId}
+            canCurate={canCurate}
+            onSelect={toggle}
+            onEdit={(t) => setEditing(t)}
+            onArchive={archive}
+          />
+        </>
       )}
 
-      {openReview && (
-        <ReviewPane
-          review={openReview}
-          canCurate={canCurate}
-          onTeach={() => {
-            setPrefill({
-              question: openReview.question,
-              sql: openReview.sql,
-              source: 'CHAT_CONFIRMED',
-            })
-            setResolving(openReview.id)
-            setEditing('new')
-            setOpenReview(null)
-          }}
-          onDismiss={async (note) => {
-            try {
-              await api.resolve(connection.id, openReview.id, {
-                dismiss: true,
-                note,
-              })
-              setOpenReview(null)
-              await refresh()
-            } catch (err) {
-              setError(messageOf(err))
-            }
-          }}
-          onClose={() => setOpenReview(null)}
-        />
-      )}
-
-      {suggestions.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <SectionHeading>Suggested · {suggestions.length}</SectionHeading>
-          {suggestions
-            .filter((s) => s.kind !== 'FLAGGED')
-            .map((item, i) => (
+      {/* ── questions people asked that nobody has taught ────────────── */}
+      {view === 'suggested' && (
+        backlog.length === 0 ? (
+          <EmptyState
+            title="Nothing waiting."
+            body="Questions people ask that this store cannot answer collect here, so the next thing worth teaching is a list rather than a memory."
+          />
+        ) : visibleBacklog.length === 0 ? (
+          <EmptyState
+            title={`Nothing asked here matches “${search}”.`}
+            body="This list is what people actually asked. A word that is not in it is a word nobody has used here yet."
+          />
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {visibleBacklog.map((item, i) => (
               <SuggestionRowView
                 key={`${item.kind}-${item.origin_id || i}`}
                 item={item}
@@ -472,59 +604,87 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
                   })
                   setEditing('new')
                 }}
+                onDefine={() => navigate(`/sources/${connection.id}/semantic`)}
               />
             ))}
+          </div>
+        )
+      )}
+
+      {/* ── answers somebody flagged ─────────────────────────────────── */}
+      {view === 'flagged' && visibleReviews.length === 0 && (
+        <EmptyState
+          title={`No flag matches “${search}”.`}
+          body="Every answer somebody marked wrong on this connection is in this list."
+        />
+      )}
+
+      {view === 'flagged' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {visibleReviews.map((review) => (
+            <Fragment key={review.id}>
+              <ReviewRow
+                review={review}
+                selected={openReview?.id === review.id}
+                onSelect={() =>
+                  setOpenReview(openReview?.id === review.id ? null : review)
+                }
+              />
+              {openReview?.id === review.id && (
+                <ReviewPane
+                  review={review}
+                  canCurate={canCurate}
+                  onTeach={() => {
+                    setPrefill({
+                      question: review.question,
+                      sql: review.sql,
+                      source: 'CHAT_CONFIRMED',
+                    })
+                    setResolving(review.id)
+                    setEditing('new')
+                    setOpenReview(null)
+                  }}
+                  onDismiss={async (note) => {
+                    try {
+                      await api.resolve(connection.id, review.id, {
+                        dismiss: true,
+                        note,
+                      })
+                      setOpenReview(null)
+                      await refresh()
+                    } catch (err) {
+                      setError(messageOf(err))
+                    }
+                  }}
+                  onClose={() => setOpenReview(null)}
+                />
+              )}
+            </Fragment>
+          ))}
         </div>
       )}
 
-      <SectionList
-        title="Needs you"
-        rows={split.needsYou}
-        staleIds={staleIds}
-        selectedId={selectedId}
-        onSelect={setSelectedId}
-      />
-      <SectionList
-        title="Templates"
-        rows={split.taught}
-        staleIds={staleIds}
-        selectedId={selectedId}
-        onSelect={setSelectedId}
-      />
-      {split.archived.length > 0 && (
-        <>
-          <button
-            type="button"
-            onClick={() => setShowArchive((v) => !v)}
-            style={{
-              alignSelf: 'flex-start', background: 'none', border: 'none',
-              padding: 0, cursor: 'pointer', fontSize: 12, color: 'var(--text-faint)',
-            }}
-          >
-            {showArchive ? 'Hide' : 'Show'} archive · {split.archived.length}
-          </button>
-          {showArchive && (
-            <SectionList
-              title="Archived"
-              rows={split.archived}
-              staleIds={staleIds}
-              selectedId={selectedId}
-              onSelect={setSelectedId}
-            />
-          )}
-        </>
-      )}
-
-      {selected && (
-        <Detail
-          template={selected}
-          drifted={staleIds.includes(selected.id)}
-          canCurate={canCurate}
-          siblings={rows}
-          onEdit={() => setEditing(selected)}
-          onArchive={() => archive(selected)}
-          onClose={() => setSelectedId(null)}
-        />
+      {/* ── what was taken out of use, and the way back ──────────────── */}
+      {view === 'archived' && (
+        split.archived.length === 0 ? (
+          <EmptyState
+            title={`Nothing archived matches “${search}”.`}
+            body="Archiving never destroys a question — everything taken out of use is still here."
+          />
+        ) : (
+          <TemplateList
+            rows={split.archived}
+            all={rows}
+            staleIds={staleIds}
+            selectedId={selectedId}
+            canCurate={canCurate}
+            busyId={restoring}
+            onSelect={toggle}
+            onEdit={(t) => setEditing(t)}
+            onArchive={archive}
+            onRestore={restore}
+          />
+        )
       )}
 
       {editing && (
@@ -579,42 +739,59 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
  * asked is a better first template than one you invent.
  */
 function FirstRun({
-  canCurate, reviews, suggestions,
+  canCurate, reviews, suggestions, onTeach, onSuggestions, onFlagged,
 }: {
   canCurate: boolean
-  /** Flags raised on wrong answers, waiting below this. */
+  /** Flags raised on wrong answers, one tab away. */
   reviews: number
-  /** Questions that went unanswered, waiting below this. */
+  /** Questions that went unanswered, one tab away. */
   suggestions: number
+  onTeach: () => void
+  onSuggestions: () => void
+  onFlagged: () => void
 }) {
   if (!canCurate) {
     return (
       <EmptyState
-        icon={<Icon.Sparkle size={20} />}
-        title="Teach this connection"
-        body="Nothing has been taught here yet."
+        icon={<Icon.Book size={20} />}
+        title="Nothing taught here yet"
+        body="When somebody with curator access teaches this connection a question, it appears here — and the connection answers that question the same way every time it is asked."
       />
     )
   }
 
-  if (reviews > 0 || suggestions > 0) {
-    return (
-      <div style={hint()}>
-        Nothing taught here yet — and you do not have to start from a blank
-        page.{' '}
-        {reviews > 0
-          ? 'Each flag below is an answer somebody marked wrong, and it arrives with the question and the statement already on it.'
-          : 'The questions below were really asked here and went unanswered.'}{' '}
-        Teach one and this connection answers it the same way next time.
-      </div>
-    )
-  }
-
+  // The two doors out of an empty store, and they are not equal: writing one
+  // from scratch is the thing this screen is for, and the backlog is the
+  // shortcut. Both are offered because a first-run panel that only says what
+  // *could* be done is a page nobody leaves.
   return (
     <EmptyState
-      icon={<Icon.Sparkle size={20} />}
+      icon={<Icon.Book size={20} />}
       title="Teach this connection"
-      body="Write a question the way someone would ask it, paste the SQL that answers it, and this connection will answer it the same way next time."
+      body={
+        suggestions > 0 || reviews > 0
+          ? 'Write a question the way someone would ask it, paste the SQL that answers it, and this connection answers it the same way next time. You do not have to start from a blank page — real questions are already waiting.'
+          : 'Write a question the way someone would ask it, paste the SQL that answers it, and this connection answers it the same way next time.'
+      }
+      action={
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap',
+                      justifyContent: 'center' }}>
+          <PrimaryButton onClick={onTeach}>
+            <Icon.Plus size={14} />
+            Teach a question
+          </PrimaryButton>
+          {suggestions > 0 && (
+            <GhostButton onClick={onSuggestions}>
+              {suggestions} already asked
+            </GhostButton>
+          )}
+          {reviews > 0 && (
+            <GhostButton onClick={onFlagged}>
+              {reviews} flagged {reviews === 1 ? 'answer' : 'answers'}
+            </GhostButton>
+          )}
+        </div>
+      }
     />
   )
 }
@@ -824,29 +1001,46 @@ function ReviewPane({
  * to dread opening the tab.
  */
 function SuggestionRowView({
-  item, canCurate, onTeach,
+  item, canCurate, onTeach, onDefine,
 }: {
   item: Suggestion
   canCurate: boolean
   onTeach: () => void
+  /** Where a row that is **not** a question goes. `suggestionView` gives
+   *  `UNKNOWN_WORDS` no action on purpose — the fix for a word nobody here
+   *  recognises is usually a synonym in the semantic layer, not a template —
+   *  and the consequence was a row in a work queue offering nothing at all.
+   *  It has an action; it is just a different one. */
+  onDefine?: () => void
 }) {
   const view = suggestionView({
     kind: item.kind, question: item.question, count: item.count,
     reason: item.reason, sql: item.sql, words: item.words,
   })
   const actionable = Boolean(view.action) && canCurate
+  const definable = !view.action && canCurate && !!onDefine
 
   return (
     <div
+      className="rm-krow"
       style={{
         display: 'flex', gap: 10, alignItems: 'flex-start',
         padding: '10px 12px', borderRadius: 10, background: 'var(--panel)',
         border: '1px solid var(--border)',
       }}
     >
-      <span aria-hidden style={{ color: 'var(--text-faint)', fontSize: 13,
-                                 lineHeight: '20px' }}>
-        {view.glyph}
+      <span
+        aria-hidden
+        style={{ display: 'grid', placeItems: 'center', width: 18, height: 20,
+                 color: view.tone === 'amber' ? 'var(--amber)' : 'var(--text-faint)' }}
+      >
+        {view.glyph === '⚠' ? (
+          <Icon.Alert size={13} />
+        ) : (
+          <svg width="9" height="9" viewBox="0 0 9 9" fill="none" aria-hidden>
+            <circle cx="4.5" cy="4.5" r="3.6" stroke="currentColor" strokeWidth="1.6" />
+          </svg>
+        )}
       </span>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div
@@ -862,40 +1056,228 @@ function SuggestionRowView({
       {actionable && (
         <GhostButton onClick={onTeach}>{view.action} →</GhostButton>
       )}
+      {definable && (
+        <GhostButton onClick={onDefine}>Name these words →</GhostButton>
+      )}
     </div>
   )
 }
 
-function SectionList({
-  title, rows, staleIds, selectedId, onSelect,
+/**
+ * The taught questions, and everything a curator does to one.
+ *
+ * **The detail opens under the row it belongs to.** It used to render once, at
+ * the bottom of the page, below every other section — so clicking the third
+ * row of a store scrolled the answer somewhere the reader was not looking, and
+ * the connection between the row and what it opened had to be remembered
+ * rather than seen. Attached to its own row, the two read as one record.
+ */
+function TemplateList({
+  heading, rows, all, staleIds, selectedId, canCurate, busyId,
+  onSelect, onEdit, onArchive, onRestore,
 }: {
-  title: string
+  /** Only when a second group exists to tell this one apart from. */
+  heading?: string
   rows: TemplateRow[]
+  /** The full records, so an expanded row can show its detail and its actions
+   *  can send the thing the API takes rather than the thing the list draws. */
+  all: KnowledgeTemplate[]
   staleIds: string[]
   selectedId: string | null
+  canCurate: boolean
+  /** The row with a request in flight, so its own control spins rather than
+   *  the page going quiet. */
+  busyId?: string | null
   onSelect: (id: string) => void
+  onEdit: (template: KnowledgeTemplate) => void
+  onArchive: (template: KnowledgeTemplate) => void
+  /** Present only in the archive, which is the one place a row comes back. */
+  onRestore?: (row: TemplateRow) => void
 }) {
   if (rows.length === 0) return null
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      <div
-        style={{
-          fontSize: 11, fontWeight: 700, letterSpacing: 0.6,
-          textTransform: 'uppercase', color: 'var(--text-faint)',
-        }}
-      >
-        {title} · {rows.length}
-      </div>
-      {rows.map((row) => (
-        <Row
-          key={row.id}
-          row={row}
-          drifted={staleIds.includes(row.id)}
-          selected={row.id === selectedId}
-          onSelect={() => onSelect(row.id)}
-        />
-      ))}
+      {heading && <SectionHeading>{heading} · {rows.length}</SectionHeading>}
+      {rows.map((row) => {
+        const full = all.find((t) => t.id === row.id)
+        const open = row.id === selectedId && !!full
+        return (
+          <Fragment key={row.id}>
+            <Row
+              row={row}
+              drifted={staleIds.includes(row.id)}
+              selected={row.id === selectedId}
+              attached={open}
+              onSelect={() => onSelect(row.id)}
+              actions={
+                canCurate && full ? (
+                  <RowActions
+                    busy={busyId === row.id}
+                    onEdit={() => onEdit(full)}
+                    onArchive={() => onArchive(full)}
+                    onRestore={onRestore ? () => onRestore(row) : undefined}
+                  />
+                ) : null
+              }
+            />
+            {open && full && (
+              <Detail
+                attached
+                template={full}
+                drifted={staleIds.includes(full.id)}
+                canCurate={canCurate}
+                siblings={all}
+                onEdit={() => onEdit(full)}
+                onArchive={() => onArchive(full)}
+                onClose={() => onSelect(full.id)}
+              />
+            )}
+          </Fragment>
+        )
+      })}
     </div>
+  )
+}
+
+/**
+ * Edit and archive, on the row itself.
+ *
+ * They were three clicks away — select the row, read the detail, find the
+ * footer — for two actions a curator performs more than any other. Icons
+ * rather than words because the row is dense and the two verbs are the two
+ * every list of records has; the label travels in `aria-label` and the
+ * tooltip, never in colour alone.
+ *
+ * **Archiving asks.** Not a modal, and not an undo toast either: the button
+ * becomes the question, in the place the answer is expected, and the
+ * destructive half is the one wearing the word.
+ */
+function RowActions({
+  busy, onEdit, onArchive, onRestore,
+}: {
+  busy: boolean
+  onEdit: () => void
+  onArchive: () => void
+  onRestore?: () => void
+}) {
+  const [confirming, setConfirming] = useState(false)
+
+  if (onRestore) {
+    return (
+      <GhostButton
+        onClick={onRestore}
+        disabled={busy}
+        style={{ padding: '4px 9px', fontSize: 12 }}
+      >
+        {busy ? <Spinner size={12} /> : <Icon.Refresh size={12} />}
+        Restore
+      </GhostButton>
+    )
+  }
+
+  if (confirming) {
+    return (
+      <>
+        <DangerButton onClick={onArchive} style={{ padding: '4px 9px', fontSize: 12 }}>
+          Archive it
+        </DangerButton>
+        <GhostButton
+          onClick={() => setConfirming(false)}
+          style={{ padding: '4px 9px', fontSize: 12 }}
+        >
+          Cancel
+        </GhostButton>
+      </>
+    )
+  }
+
+  return (
+    <>
+      <GhostButton
+        onClick={onEdit}
+        aria-label="Edit this question"
+        title="Edit this question"
+        style={{ padding: '5px 7px' }}
+      >
+        <Icon.Pencil size={13} />
+      </GhostButton>
+      <GhostButton
+        onClick={() => setConfirming(true)}
+        aria-label="Archive this question"
+        title="Archive this question"
+        style={{ padding: '5px 7px' }}
+      >
+        <Icon.Trash size={13} />
+      </GhostButton>
+    </>
+  )
+}
+
+/**
+ * The mark a status draws, alone.
+ *
+ * `statusOf` still returns `✓ ⚠ ○` and the tests still read them: they are the
+ * *model's* answer, and they are what makes a status legible in greyscale.
+ * What the screen draws is an icon from the same set as every other icon in
+ * the product, at the same stroke, because a typeface's tick beside a drawn
+ * pencil is two icon systems in one row.
+ */
+function StatusMark({ status, size = 13 }: {
+  status: ReturnType<typeof statusOf>
+  size?: number
+}) {
+  return (
+    <>
+      {status.glyph === '✓' && <Icon.Check size={size} />}
+      {status.glyph === '⚠' && <Icon.Alert size={size} />}
+      {status.glyph === '○' && (
+        <svg width={size - 4} height={size - 4} viewBox="0 0 9 9" fill="none" aria-hidden>
+          <circle cx="4.5" cy="4.5" r="3.6" stroke="currentColor" strokeWidth="1.6" />
+        </svg>
+      )}
+    </>
+  )
+}
+
+/** The tinted ground each tone stands on. `faint` has no `--faint-bg` and
+ *  should not invent one: an archived row is not a warning, it is a row set
+ *  aside, and the panel's own alternate surface is what "set aside" looks
+ *  like everywhere else in this product. */
+const FLAG_TONE: Record<string, { fg: string; bg: string }> = {
+  green: { fg: 'var(--green)', bg: 'var(--green-bg)' },
+  amber: { fg: 'var(--amber)', bg: 'var(--amber-bg)' },
+  faint: { fg: 'var(--text-dim)', bg: 'var(--panel-alt)' },
+}
+
+/**
+ * What a template's status looks like when it is *said* rather than marked.
+ *
+ * There were two vocabularies for one fact: a coloured tick at the head of the
+ * row, and — two lines below it, in the detail — a bare word in a
+ * rounded-rectangle chip, sitting beside a square button and agreeing with
+ * nothing. A flag is a mark **and** a word in one pill, at one size, in one
+ * shape, so *Active*, *Stale* and *Archived* are the same object saying
+ * different things rather than three different-looking treatments.
+ *
+ * The word never travels on colour alone: the mark differs in shape too, and
+ * greyscale keeps both.
+ */
+function StatusFlag({ status }: { status: ReturnType<typeof statusOf> }) {
+  const tone = FLAG_TONE[status.tone] ?? FLAG_TONE.faint
+  return (
+    <span
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0,
+        padding: '3px 9px 3px 7px', borderRadius: 999, fontSize: 11,
+        fontWeight: 600, lineHeight: 1.45, whiteSpace: 'nowrap',
+        color: tone.fg, background: tone.bg,
+      }}
+    >
+      <span aria-hidden style={{ display: 'grid', placeItems: 'center' }}>
+        <StatusMark status={status} size={12} />
+      </span>
+      {status.label}
+    </span>
   )
 }
 
@@ -907,67 +1289,117 @@ function SectionList({
  * carrier: the status word travels with it.
  */
 function Row({
-  row, drifted, selected, onSelect,
+  row, drifted, selected, attached, actions, onSelect,
 }: {
   row: TemplateRow
   drifted: boolean
   selected: boolean
+  /** The detail is open directly below, so the row gives up its bottom edge
+   *  and the two draw as one card instead of two stacked ones. */
+  attached?: boolean
+  actions?: React.ReactNode
   onSelect: () => void
 }) {
   const status = statusOf(row, drifted)
   const subtitle = rowSubtitle(row, drifted)
   const role = roleLabel(row.role)
+  // A flag is for an exception. Every taught question is Active, so a pill
+  // saying so on every row is a column of the same word — the mark at the head
+  // of the row already carries it. Stale, Conflicted and Archived are the ones
+  // worth stopping on, and they get the word.
+  const flagged = status.label !== 'Active'
+  // …and it is said once. `rowSubtitle` puts *why you are looking at this row*
+  // in the right slot, which for an archived row is the word "Archived" — the
+  // flag beside it now. Two of the same word in one row reads as two facts.
+  const right = flagged && subtitle.right === status.label ? '' : subtitle.right
 
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-current={selected}
+    // A row, not a button: the actions inside it are buttons of their own, and
+    // a button inside a button is invalid markup that browsers resolve by
+    // dropping one of them. The whole question stays clickable — that is the
+    // inner button — and Tab reaches the row, then Edit, then Archive.
+    <div
+      className="rm-krow"
       style={{
-        display: 'flex', gap: 10, alignItems: 'flex-start', width: '100%',
-        textAlign: 'start', padding: '10px 12px', borderRadius: 10,
-        cursor: 'pointer', background: selected ? 'var(--panel-alt)' : 'var(--panel)',
+        display: 'flex', gap: 8, alignItems: 'flex-start',
+        padding: '4px 6px 4px 4px', borderRadius: 10,
+        background: selected ? 'var(--panel-alt)' : 'var(--panel)',
         border: `1px solid ${selected ? 'var(--border-strong)' : 'var(--border)'}`,
+        ...(attached
+          ? {
+            borderBottomLeftRadius: 0,
+            borderBottomRightRadius: 0,
+            borderBottomColor: 'transparent',
+          }
+          : null),
       }}
     >
-      <span
-        aria-hidden
-        style={{ color: `var(--${status.tone === 'faint' ? 'text-faint' : status.tone})`,
-                 fontSize: 13, lineHeight: '20px' }}
+      <button
+        type="button"
+        onClick={onSelect}
+        aria-current={selected}
+        aria-expanded={selected}
+        style={{
+          display: 'flex', gap: 10, alignItems: 'flex-start', flex: 1,
+          minWidth: 0, textAlign: 'start', padding: '6px 6px 6px 8px',
+          borderRadius: 8, border: 'none', background: 'transparent',
+          color: 'inherit', font: 'inherit', cursor: 'pointer',
+        }}
       >
-        {status.glyph}
-      </span>
-      <span style={{ flex: 1, minWidth: 0 }}>
         <span
-          dir={dirOf(row.question)}
+          aria-hidden
           style={{
-            // Two lines, then clamp. A long question belongs in the detail
-            // pane, not stretched down a scanning list.
-            display: '-webkit-box', fontSize: 13, color: 'var(--text-strong)',
-            overflow: 'hidden', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
-          } as React.CSSProperties}
-        >
-          <Question text={row.question} />
-        </span>
-        <span
-          style={{
-            display: 'flex', gap: 12, marginTop: 3, fontSize: 11,
-            color: 'var(--text-faint)', justifyContent: 'space-between',
+            display: 'grid', placeItems: 'center', width: 18, height: 20,
+            flexShrink: 0,
+            color: `var(--${status.tone === 'faint' ? 'text-faint' : status.tone})`,
           }}
         >
-          <span dir="ltr" style={{ minWidth: 0, overflow: 'hidden',
-                                   textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {subtitle.left}
+          <StatusMark status={status} />
+        </span>
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <span
+            dir={dirOf(row.question)}
+            style={{
+              // Two lines, then clamp. A long question belongs in the detail
+              // pane, not stretched down a scanning list.
+              display: '-webkit-box', fontSize: 13, color: 'var(--text-strong)',
+              overflow: 'hidden', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+            } as React.CSSProperties}
+          >
+            <Question text={row.question} />
           </span>
-          <span style={{ color: subtitle.tone === 'amber' ? 'var(--amber)' : undefined,
-                         flexShrink: 0 }}>
-            {subtitle.right}
+          <span
+            style={{
+              display: 'flex', gap: 12, marginTop: 3, fontSize: 11,
+              color: 'var(--text-faint)', justifyContent: 'space-between',
+            }}
+          >
+            <span dir="ltr" style={{ minWidth: 0, overflow: 'hidden',
+                                     textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {subtitle.left}
+            </span>
+            <span style={{ color: subtitle.tone === 'amber' ? 'var(--amber)' : undefined,
+                           flexShrink: 0 }}>
+              {right}
+            </span>
           </span>
         </span>
-      </span>
-      {role && <Chip tone="neutral" small>{role}</Chip>}
-      <span className="rm-sr-only">{status.label}</span>
-    </button>
+        {role && <Chip tone="neutral" small>{role}</Chip>}
+        {flagged && <StatusFlag status={status} />}
+        <span className="rm-sr-only">{status.label}</span>
+      </button>
+      {actions && (
+        <span
+          className="rm-krow-actions"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0,
+            minHeight: 30,
+          }}
+        >
+          {actions}
+        </span>
+      )}
+    </div>
   )
 }
 
@@ -985,7 +1417,7 @@ function Question({ text }: { text: string }) {
 }
 
 function Detail({
-  template, drifted, canCurate, siblings, onEdit, onArchive, onClose,
+  template, drifted, canCurate, siblings, attached, onEdit, onArchive, onClose,
 }: {
   template: KnowledgeTemplate
   drifted: boolean
@@ -993,6 +1425,9 @@ function Detail({
   /** Every other template on this connection, so a conflict can name the
    *  question it disagrees with rather than printing a uuid. */
   siblings: KnowledgeTemplate[]
+  /** Rendered directly under its own row: square the top edge so the row and
+   *  what it opened are one card, not a card under a card. */
+  attached?: boolean
   onEdit: () => void
   onArchive: () => void
   onClose: () => void
@@ -1005,6 +1440,9 @@ function Detail({
       style={{
         border: '1px solid var(--border-strong)', borderRadius: 12,
         background: 'var(--panel)', overflow: 'hidden',
+        ...(attached
+          ? { marginTop: -6, borderTopLeftRadius: 0, borderTopRightRadius: 0 }
+          : null),
       }}
     >
       <div
@@ -1015,11 +1453,17 @@ function Detail({
         }}
       >
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div dir={dirOf(template.question)}
-               style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-strong)' }}>
-            <Question text={template.question} />
-          </div>
-          <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 3 }}>
+          {/* The row this is attached to is showing the question two lines
+              above, in the same words. Printing it again is not emphasis, it
+              is a reader wondering whether they are two records. */}
+          {!attached && (
+            <div dir={dirOf(template.question)}
+                 style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-strong)' }}>
+              <Question text={template.question} />
+            </div>
+          )}
+          <div style={{ fontSize: 11, color: 'var(--text-faint)',
+                        marginTop: attached ? 0 : 3 }}>
             {template.verified_at
               ? `Verified ${relativeTime(template.verified_at)}`
               : 'Not yet verified'}
@@ -1027,9 +1471,25 @@ function Detail({
             {template.hit_count} {template.hit_count === 1 ? 'hit' : 'hits'}
           </div>
         </div>
-        <Chip tone={TONE[status.tone]}>{status.label}</Chip>
-        <button type="button" aria-label="Close" className="rm-icon-btn"
-                onClick={onClose}>
+        <StatusFlag status={status} />
+        <button
+          type="button"
+          aria-label="Close"
+          title="Close"
+          className="rm-icon-btn"
+          onClick={onClose}
+          style={{
+            // Round, quiet, and the same 24px target as every other icon
+            // button in the product. It used to inherit the browser's default
+            // button chrome — a grey square beside a tinted pill, two shapes
+            // neither of which was chosen.
+            display: 'grid', placeItems: 'center', width: 24, height: 24,
+            flexShrink: 0, border: 'none', borderRadius: 999,
+            background: 'transparent', color: 'var(--text-faint)',
+            cursor: 'pointer',
+            ['--rm-hover-bg' as string]: 'var(--panel)',
+          }}
+        >
           <Icon.Close size={13} />
         </button>
       </div>
@@ -1950,12 +2410,16 @@ function MatchingMode({
   return (
     <div
       style={{
-        display: 'flex', alignItems: 'flex-start', gap: 12,
+        // Wraps rather than squeezing: on a phone the button used to sit
+        // beside the sentence and fold it into a twelve-line column two words
+        // wide. `minWidth` on the text keeps them side by side wherever there
+        // is room for both.
+        display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap',
         padding: '8px 10px', borderRadius: 8,
         border: '1px solid var(--border-subtle)',
       }}
     >
-      <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ flex: 1, minWidth: 230 }}>
         <div style={{ fontSize: 12, color: tint[view.tone], fontWeight: 500 }}>
           {view.label}
         </div>
