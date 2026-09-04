@@ -652,15 +652,17 @@ class EmbeddingWrite(BaseModel):
 
     enabled: bool
     model: str = Field(default="", max_length=200)
-    #: Which provider configuration to embed with. Optional: absent keeps the
-    #: one already pinned on the connection, and failing that takes the
-    #: account's first provider that declares an embedding model. Naming it is
-    #: how an account with two providers says which one indexed this store.
-    llm_config_id: UUID | None = None
 
 
 class EmbeddingProvider(BaseModel):
-    """A provider configuration that can serve vectors, as a picker sees it."""
+    """The provider configuration a store embeds with, as the panel names it.
+
+    Reported, never posted. Which endpoint makes vectors is set up once in LLM
+    providers and resolved by `embedding_provider` for every connection; there
+    is no field on `EmbeddingWrite` that names one, because choosing an
+    embedder per store is a fact to keep straight for no benefit — vectors are
+    only ever compared inside one store.
+    """
 
     id: UUID
     name: str
@@ -688,12 +690,11 @@ class EmbeddingStatus(BaseModel):
     indexed: int = 0
     #: Everything the probe or the last pass had to say. Empty on success.
     message: str = ""
-    #: Which provider configuration produced this index, and every one that
-    #: could. Both are needed on the same screen: with none the control has to
-    #: explain that there is nothing to switch to, and with two the reader has
-    #: to be told which of them is answering.
-    llm_config_id: UUID | None = None
-    providers: list[EmbeddingProvider] = Field(default_factory=list)
+    #: The provider that made this index — or, while the store is still matched
+    #: on words, the one that would make it. `None` is the state where the
+    #: control has nothing to switch to, and saying so is the difference
+    #: between an offer and a button that fails.
+    embedder: EmbeddingProvider | None = None
 
 
 # ── benchmarks and the score (Phase 6) ───────────────────────────────────

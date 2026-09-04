@@ -321,19 +321,15 @@ export const knowledge = {
   // is a store where similarity means nothing.
   embeddings: (connectionId: string) =>
     get<EmbeddingStatus>(`/connections/${connectionId}/knowledge/embeddings`),
-  // `llmConfigId` names which provider embeds. Optional: absent keeps the one
-  // already pinned on the connection, and failing that takes the account's
-  // first provider that declares an embedding model.
-  setEmbeddings: (
-    connectionId: string,
-    enabled: boolean,
-    model = '',
-    llmConfigId?: string,
-  ) =>
+  // Which provider embeds is **not** sent: one embedder serves the whole
+  // deployment, resolved from the account's providers by the server, and the
+  // status this returns names the one it used. The choice a curator makes is
+  // the model that *answers* — that one is on every screen that asks a
+  // question, and it is a different list (`llmConfigs.list('chat')`).
+  setEmbeddings: (connectionId: string, enabled: boolean, model = '') =>
     put<EmbeddingStatus>(`/connections/${connectionId}/knowledge/embeddings`, {
       enabled,
       model,
-      llm_config_id: llmConfigId ?? null,
     }),
   check: (
     connectionId: string,

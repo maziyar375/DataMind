@@ -774,7 +774,7 @@ def _index_source(db: AsyncSession, connection: DatabaseConnection) -> Any:
     return source
 
 
-async def embedding_providers(
+async def _embedding_candidates(
     db: AsyncSession, connection: DatabaseConnection
 ) -> list[LlmConfig]:
     """The owner's provider configurations that can serve vectors, best first.
@@ -784,10 +784,11 @@ async def embedding_providers(
     floor: Anthropic has no embedding endpoint, so an Anthropic row is not an
     option however it was filled in.
 
-    Ordered so the first entry is the one a caller who names nothing gets: a
-    row already pinned on this connection, then the account default, then by
-    age. Deterministic, because "which provider indexed this store?" must not
-    depend on how a list came back.
+    Ordered so the first entry is the one the deployment embeds with: a row
+    already pinned on this connection, then the account default, then by age.
+    Deterministic because **nobody chooses** — `embedding_provider` takes the
+    head of this list and the interface offers no picker, so "which provider
+    indexed this store?" must not depend on how a list came back.
     """
     result = await db.execute(
         select(LlmConfig)
@@ -800,8 +801,9 @@ async def embedding_providers(
     )
     # Filtered again in Python, because `can_embed` is the *decision* and the
     # query is only the narrowing — the same split as `trigram_similarity` and
-    # the GIN index. It is also what lets `_embedding_config` refuse a row
-    # named directly in a request body, which no query ever filtered.
+    # the GIN index. It is also the predicate `resolve_llm` refuses on, so the
+    # row this resolves to and the funnel behind it cannot disagree about what
+    # a configuration is for.
     from app.services.query_service import can_embed
 
     rows = [row for row in result.scalars().all() if can_embed(row)]
@@ -812,58 +814,54 @@ async def embedding_providers(
     )
 
 
-async def _embedding_config(
-    db: AsyncSession,
-    connection: DatabaseConnection,
-    llm_config_id: UUID | None = None,
+async def embedding_provider(
+    db: AsyncSession, connection: DatabaseConnection
 ) -> LlmConfig | None:
-    """Which provider configuration embeds for this connection.
+    """Which provider configuration embeds for this connection — **resolved,
+    never chosen.**
 
-    Three sources, in the order a reader would expect: the one this call names,
-    the one already pinned on the connection, and — failing both — the first
-    configuration the owner has that declares an embedding model.
+    One embedder serves the whole deployment. A curator picks the model that
+    *answers* on every screen that asks a question; the model that makes
+    vectors is set up once in LLM providers and is not a per-connection
+    decision, because two stores indexed by two endpoints is a fact to keep
+    straight for no benefit — vectors are only ever compared inside one store.
 
-    **This is the fix for a dead end, not a new preference order.** It used to
-    read `llm_configs.is_default`, a column **nothing in the product has ever
-    written**: no route, no service, no form sets it. So `_embedding_llm`
-    returned `None` for every connection of every account, `set_embeddings`
-    answered *"Add a default model provider first"* whatever you did, and
-    embedding search could not be switched on by anybody. `is_default` still
-    *sorts* the candidates in `embedding_providers`, so a deployment that had
-    set one keeps the provider it chose.
+    Two sources, and neither is a preference: the pin on the connection, which
+    is what these vectors were actually made with and must keep serving this
+    store or every one of them is silently re-meant, and — before there is a
+    pin — the head of `_embedding_candidates`. There is no third, because the
+    request body no longer carries one.
+
+    Both the switch and the status read go through here, so the panel cannot
+    name one provider while the switch uses another.
+
+    **`is_default` is a tiebreak and was never the answer.** It is a column
+    nothing in this product has ever written — no route, no service, no form —
+    and resolving on it *alone* is what left `set_embeddings` answering "Add a
+    default model provider first" whatever anybody did, for every account,
+    until migration `0022`.
     """
     from app.services.query_service import can_embed
 
-    if llm_config_id is not None:
-        # The id arrives in a request body, so ownership is checked on the row
-        # rather than on the list it was offered from — and `can_embed` again,
-        # because a caller can name a row the picker never showed.
-        row = await db.get(LlmConfig, llm_config_id)
-        if row is None or row.owner_id != connection.owner_id:
-            return None
-        return row if can_embed(row) else None
     if connection.embedding_llm_config_id is not None:
         row = await db.get(LlmConfig, connection.embedding_llm_config_id)
         if row is not None and can_embed(row):
             return row
-    candidates = await embedding_providers(db, connection)
+    candidates = await _embedding_candidates(db, connection)
     return candidates[0] if candidates else None
 
 
 async def _embedding_llm(
-    db: AsyncSession,
-    settings: Settings,
-    connection: DatabaseConnection,
-    llm_config_id: UUID | None = None,
+    db: AsyncSession, settings: Settings, connection: DatabaseConnection
 ) -> Any | None:
     """The credentials the embedding endpoint is called with.
 
-    `None` when the owner has no provider that declares an embedding model — a
-    state, not an error, and one the matcher reads as "lexical".
+    `None` when the deployment has no provider that declares an embedding
+    model — a state, not an error, and one the matcher reads as "lexical".
     """
     from app.services.query_service import EMBEDDING, resolve_llm, secret_box
 
-    config = await _embedding_config(db, connection, llm_config_id)
+    config = await embedding_provider(db, connection)
     if config is None:
         return None
     return resolve_llm(config, secret_box(settings), purpose=EMBEDDING)
@@ -1034,16 +1032,16 @@ async def set_embeddings(
     *,
     enabled: bool,
     model: str = "",
-    llm_config_id: UUID | None = None,
 ) -> tuple[IndexResult, str]:
     """Turn embedding search on or off for a connection, and say what happened.
 
-    On: probe the owner's default provider, **measure** the dimension from a
-    real call, pin both on the connection, and index what is there now — so the
-    feature works on the next question rather than after the next six-hourly
-    pass. A provider that cannot embed leaves the connection exactly as it was
-    and returns the provider's own sentence, because "Anthropic has no
-    embedding endpoint" is a fix somebody can act on and "unavailable" is not.
+    On: probe the deployment's embedder — `embedding_provider`, resolved rather
+    than passed in — **measure** the dimension from a real call, pin both on
+    the connection, and index what is there now, so the feature works on the
+    next question rather than after the next six-hourly pass. A provider that
+    cannot embed leaves the connection exactly as it was and returns the
+    provider's own sentence, because "Anthropic has no embedding endpoint" is a
+    fix somebody can act on and "unavailable" is not.
 
     Off: clear the pin *and* the vectors. Keeping them would leave a store that
     looks indexed to anyone reading the table and is invisible to the matcher,
@@ -1061,16 +1059,11 @@ async def set_embeddings(
         await db.flush()
         return IndexResult(), ""
 
-    config = await _embedding_config(db, connection, llm_config_id)
+    config = await embedding_provider(db, connection)
     if config is None:
-        # Two different refusals, because they have two different fixes — and
-        # the named one deliberately says nothing about whether the row exists.
-        if llm_config_id is not None:
-            return IndexResult(), (
-                "That provider cannot embed. Give it an embedding model in LLM "
-                "providers, or choose another — Anthropic has no embedding "
-                "endpoint at all."
-            )
+        # One refusal, because there is now one fix. Nothing here asks the
+        # reader to choose a provider — the sentence names the single setup
+        # step that makes embedding search possible anywhere in the deployment.
         return IndexResult(), (
             "No model provider is set up to embed. Open LLM providers, give an "
             "OpenAI-compatible provider an embedding model, and come back."
@@ -1081,10 +1074,10 @@ async def set_embeddings(
 
     llm = resolve_llm(config, secret_box(settings), purpose=EMBEDDING)
     gateway = LiteLLMGateway.from_settings(settings)
-    # An explicit model wins over the provider's own, which is what makes a
-    # deployment able to index one store at a different width from another
-    # without a second set of credentials. Empty falls through to the
-    # provider's configured model inside the gateway.
+    # An explicit model still wins over the provider's own — the one thing a
+    # caller may still name, and the escape hatch for a self-hosted endpoint
+    # serving a model the row does not declare. The interface never sends it;
+    # empty falls through to the embedder's configured model in the gateway.
     capability = await gateway.probe_embedding(llm, model=model.strip())
     if not capability.available:
         return IndexResult(), capability.reason or (
@@ -1099,7 +1092,9 @@ async def set_embeddings(
     connection.embedding_dimension = capability.dimension
     # Which provider produced the index, recorded beside what it produced. The
     # third leg of the same pin: a store is only reproducible if the endpoint
-    # is known, not just the model name and the width.
+    # is known, not just the model name and the width — and it is what keeps
+    # *this* store on the endpoint that made it when a deployment later sets
+    # up a second one.
     connection.embedding_llm_config_id = config.id
     await db.flush()
     return await index_embeddings(db, settings, connection), ""

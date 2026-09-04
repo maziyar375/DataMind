@@ -40,7 +40,7 @@ import type {
 } from '../api/types'
 import {
   Chip, DangerButton, Dot, EmptyState, ErrorNote, Field, GhostButton, Icon,
-  Modal, PrimaryButton, SearchField, Select, Spinner, TextArea, TextInput, dirOf,
+  Modal, PrimaryButton, SearchField, Spinner, TextArea, TextInput, dirOf,
   relativeTime,
 } from './ui'
 import type { ChipTone } from './ui'
@@ -371,13 +371,11 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
           status={embeddings}
           canCurate={canCurate}
           busy={switching}
-          onToggle={async (enabled, llmConfigId) => {
+          onToggle={async (enabled) => {
             setSwitching(true)
             setSweepNote(null)
             try {
-              const next = await api.setEmbeddings(
-                connection.id, enabled, '', llmConfigId,
-              )
+              const next = await api.setEmbeddings(connection.id, enabled)
               setEmbeddings(next)
             } catch (err) {
               setError(messageOf(err))
@@ -1918,6 +1916,14 @@ function asRow(t: KnowledgeTemplate): TemplateRow {
  * The one worth naming here is `indexing`: a model can be pinned with vectors
  * still missing, and calling that "on" would promise a behaviour the next
  * question will not show.
+ *
+ * **There is no provider to pick here, and that is the point.** One embedder
+ * serves the whole deployment — set up once in LLM providers, resolved by the
+ * server for every connection — so this control is a switch and not a form.
+ * The model a curator *does* choose is the one that answers, and it is offered
+ * where a question is asked: chat, a dashboard tile, a report. `embedder` is
+ * still reported, because "what made these vectors?" is a question a store has
+ * to be able to answer; it is a sentence here rather than a dropdown.
  */
 function MatchingMode({
   status, canCurate, busy, onToggle,
@@ -1925,23 +1931,21 @@ function MatchingMode({
   status: EmbeddingStatus
   canCurate: boolean
   busy: boolean
-  onToggle: (enabled: boolean, llmConfigId?: string) => void
+  onToggle: (enabled: boolean) => void
 }) {
-  const view = embeddingView({ ...status, providers: status.providers.length })
+  const view = embeddingView({ ...status, hasEmbedder: status.embedder !== null })
   const tint: Record<string, string> = {
     off: 'var(--text-faint)',
     indexing: 'var(--text-muted)',
     on: 'var(--accent)',
     problem: 'var(--warn)',
   }
-  // Which provider would be used, and which is. The picker appears only when
-  // there is a choice to make: with one provider the answer is not a decision,
-  // and with none the button is hidden instead, because an offer that cannot
-  // succeed teaches people to stop pressing things.
-  const pinned = status.llm_config_id ?? status.providers[0]?.id ?? ''
-  const [chosen, setChosen] = useState(pinned)
-  const using = status.providers.find((p) => p.id === (chosen || pinned))
-  const canSwitchOn = status.providers.length > 0
+  // Which provider made these vectors, or would. Never a picker: with one
+  // embedder the answer is not a decision, and with none the button is hidden
+  // instead, because an offer that cannot succeed teaches people to stop
+  // pressing things.
+  const using = status.embedder
+  const canSwitchOn = using !== null
 
   return (
     <div
@@ -1969,30 +1973,10 @@ function MatchingMode({
         )}
       </div>
       {canCurate && (status.enabled || canSwitchOn) && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {!status.enabled && status.providers.length > 1 && (
-            <Select
-              value={chosen || pinned}
-              aria-label="Provider to embed with"
-              style={{ maxWidth: 200 }}
-              onChange={(e) => setChosen(e.target.value)}
-            >
-              {status.providers.map((provider) => (
-                <option key={provider.id} value={provider.id}>
-                  {provider.name} · {provider.model}
-                </option>
-              ))}
-            </Select>
-          )}
-          <GhostButton
-            onClick={() =>
-              onToggle(!status.enabled, status.enabled ? undefined : (chosen || pinned))}
-            disabled={busy}
-          >
-            {busy ? <Spinner size={13} /> : null}
-            {status.enabled ? 'Use word matching' : 'Use embedding search'}
-          </GhostButton>
-        </div>
+        <GhostButton onClick={() => onToggle(!status.enabled)} disabled={busy}>
+          {busy ? <Spinner size={13} /> : null}
+          {status.enabled ? 'Use word matching' : 'Use embedding search'}
+        </GhostButton>
       )}
     </div>
   )

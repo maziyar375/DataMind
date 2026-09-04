@@ -476,8 +476,8 @@ check('and are clamped rather than allowed to overflow', sparkHeights([-1, 2]), 
 // question will not show.
 function index(over: Partial<EmbeddingState> = {}): EmbeddingState {
   return {
-    enabled: true, model: 'text-embedding-3-small', dimension: 1536, providers: 1,
-    templates: 10, indexed: 10, message: '', ...over,
+    enabled: true, model: 'text-embedding-3-small', dimension: 1536,
+    hasEmbedder: true, templates: 10, indexed: 10, message: '', ...over,
   }
 }
 
@@ -509,10 +509,10 @@ check('an on store names the model it was indexed with',
 // below had no reader at all until the gate came off.
 check('an empty store can still be switched, and the off state still reads as a choice',
       embeddingView(index({ enabled: false, templates: 0, indexed: 0 })).tone, 'off')
-check('with no provider able to embed, the sentence names the one thing to do',
-      embeddingView(index({ enabled: false, providers: 0 })).detail.includes(
+check('with no embedder set up, the sentence names the one thing to do',
+      embeddingView(index({ enabled: false, hasEmbedder: false })).detail.includes(
         'give one an embedding model in LLM providers'), true)
-check('and with a provider available it makes no such demand',
+check('and with an embedder available it makes no such demand',
       embeddingView(index({ enabled: false })).detail.includes('LLM providers'), false)
 check('a pinned store with nothing taught yet is not claiming to be on',
       embeddingView(index({ templates: 0, indexed: 0 })).tone, 'indexing')

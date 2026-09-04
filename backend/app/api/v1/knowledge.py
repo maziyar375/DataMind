@@ -70,7 +70,7 @@ from app.services.knowledge_service import (
     UNUSED_AFTER_DAYS,
     FeedbackService,
     KnowledgeService,
-    embedding_providers,
+    embedding_provider,
     set_embeddings,
 )
 from app.services.policy import can_curate
@@ -273,7 +273,6 @@ async def set_embedding_search(
         db, settings, connection,
         enabled=payload.enabled,
         model=payload.model,
-        llm_config_id=payload.llm_config_id,
     )
     await audit.record(
         db, ctx,
@@ -318,26 +317,29 @@ async def _embedding_status(db, connection) -> EmbeddingStatus:
             KnowledgeTemplateRow.embedding_fingerprint != "",
         )
     )
+    # Resolved by the call the switch itself makes, so the panel cannot name
+    # one provider while turning it on uses another. Sent on every read,
+    # including the read that finds the feature off: the control's whole job in
+    # that state is to say what turning it on would use, and `None` is what
+    # makes *"set one up first"* the honest thing to show rather than a button
+    # that fails.
+    embedder = await embedding_provider(db, connection)
     return EmbeddingStatus(
         enabled=bool(connection.embedding_model),
         model=connection.embedding_model or "",
         dimension=connection.embedding_dimension or 0,
         templates=live.scalar_one() or 0,
         indexed=indexed.scalar_one() or 0,
-        llm_config_id=connection.embedding_llm_config_id,
-        # Sent on every read, including the read that finds the feature off:
-        # the control's whole job in that state is to say what turning it on
-        # would use, and an empty list is what makes *"configure one first"*
-        # the honest thing to show rather than a button that fails.
-        providers=[
+        embedder=(
             EmbeddingProvider(
-                id=row.id,
-                name=row.name,
-                provider=row.provider,
-                model=row.embedding_model,
+                id=embedder.id,
+                name=embedder.name,
+                provider=embedder.provider,
+                model=embedder.embedding_model,
             )
-            for row in await embedding_providers(db, connection)
-        ],
+            if embedder is not None
+            else None
+        ),
     )
 
 

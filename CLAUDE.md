@@ -1248,6 +1248,21 @@ node, both thresholds, the binder, the short-circuit and the badge are untouched
   store rather than deleting it — and `is_default` survives only as a sort key.
   `tests/unit/test_embedding_provider.py` asserts on the parse that nothing
   writes it, so the sentence above cannot quietly go stale.
+- **One embedder serves the deployment, and it is resolved rather than chosen.**
+  `embedding_provider(db, connection)` is the only answer to "which endpoint
+  makes vectors here": the connection's pin first — those vectors were made with
+  it and must keep being made with it or every one of them is silently re-meant
+  — then the head of `_embedding_candidates`. **Nothing names one**:
+  `EmbeddingWrite` carries `enabled` and an optional `model` (the escape hatch
+  for a self-hosted endpoint serving a name the row does not declare) and no
+  provider field, `PUT /knowledge/embeddings` reports the resolved row back as
+  `embedder`, and the knowledge panel is a switch rather than a form. The model
+  a **curator** chooses is the one that *answers*, and it is offered where a
+  question is asked — chat, a dashboard tile, a report — because those pick
+  between behaviours a reader can judge, while two stores embedded by two
+  endpoints is a fact to keep straight for no benefit: vectors are only ever
+  compared inside one store. Setting up the embedder is one step in LLM
+  providers, which is what the refusal sentence names.
 - **Indexing is a worker's job.** `index_embeddings` is the third pass of the
   six-hourly sweep, after staleness and conflicts so it never spends a call on a
   row those two just withdrew. Turning the feature on indexes inline, so it

@@ -629,10 +629,11 @@ export interface EmbeddingState {
   templates: number
   indexed: number
   message: string
-  /** How many of the account's model providers declare an embedding model.
-   *  Zero is the state where the control has nothing to switch to — and
-   *  saying so is the difference between an offer and a button that fails. */
-  providers: number
+  /** Whether the deployment has an embedder at all — one provider, resolved by
+   *  the server rather than chosen here. False is the state where the control
+   *  has nothing to switch to, and saying so is the difference between an
+   *  offer and a button that fails. */
+  hasEmbedder: boolean
 }
 
 export interface EmbeddingView {
@@ -667,19 +668,20 @@ export function embeddingView(state: EmbeddingState): EmbeddingView {
   if (!state.enabled) {
     // The off state describes what the *other* mode adds, never what this one
     // lacks — §4.10's rule, and the reason word matching reads as a choice.
-    // With no provider able to embed, the second sentence changes from an
-    // offer to the one action that would make it possible: a button that
-    // cannot succeed is worse than a sentence saying why.
+    // With no embedder set up, the second sentence changes from an offer to
+    // the one action that would make it possible: a button that cannot succeed
+    // is worse than a sentence saying why. One action, not a choice between
+    // providers — that is the whole difference between this and the model that
+    // answers.
     const detail =
       'Questions are matched on the words they share. Embedding search also ' +
       'matches ones that mean the same thing in different words.'
     return {
       label: 'Word matching',
-      detail:
-        state.providers > 0
-          ? detail
-          : `${detail} No model provider is set up to embed yet — give one an ` +
-            'embedding model in LLM providers.',
+      detail: state.hasEmbedder
+        ? detail
+        : `${detail} No model provider is set up to embed yet — give one an ` +
+          'embedding model in LLM providers.',
       tone: 'off',
     }
   }

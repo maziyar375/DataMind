@@ -445,13 +445,12 @@ export interface EmbeddingStatus {
   /** The provider's own sentence when the probe or the last pass refused.
    *  Empty on success. */
   message: string
-  /** Which provider configuration produced this index. Null when the store is
-   *  matched on words, which is the default. */
-  llm_config_id: string | null
-  /** Every configuration that *could* index it — the owner's providers with an
-   *  embedding model set. Empty is the state where the control has nothing to
-   *  switch to and says so instead of offering a button that fails. */
-  providers: EmbeddingProvider[]
+  /** The provider that made this index — or, while the store is still matched
+   *  on words, the one that *would* make it. One embedder serves the whole
+   *  deployment and is set up in LLM providers, so this is reported and never
+   *  posted. Null is the state where the control has nothing to switch to and
+   *  says so instead of offering a button that fails. */
+  embedder: EmbeddingProvider | null
 }
 
 export interface EmbeddingProvider {

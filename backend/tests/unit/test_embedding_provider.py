@@ -17,6 +17,14 @@ The tests below are the fix stated as behaviour:
   made these vectors?"* is a row rather than an invisible global — the third
   leg of the pin beside the model id and the measured width;
 * nothing depends on `is_default`, which still only *sorts* candidates.
+
+And one rule the interface now depends on: **the embedder is resolved, never
+chosen.** One provider serves the whole deployment — `embedding_provider` finds
+it, `EmbeddingWrite` cannot name one, and the knowledge panel is a switch
+rather than a form. The model a curator picks is the one that *answers*, and it
+is offered where a question is asked; a store's vectors are only ever compared
+inside that store, so nothing is bought by letting each connection embed
+somewhere else, and a second endpoint to keep straight is what it would cost.
 """
 from __future__ import annotations
 
@@ -30,8 +38,8 @@ import pytest
 from app.infra.db.models import DatabaseConnection, LlmConfig
 from app.services import knowledge_service
 from app.services.knowledge_service import (
-    _embedding_config,
-    embedding_providers,
+    _embedding_candidates,
+    embedding_provider,
     set_embeddings,
 )
 
@@ -74,8 +82,13 @@ class FakeDb:
     def __init__(self, configs: list[LlmConfig]) -> None:
         self.configs = configs
         self.flushed = 0
+        #: Every statement it was handed. The fake applies no `WHERE`, so the
+        #: narrowing SQL does is asserted on the query itself rather than on
+        #: rows a fake chose to hand back.
+        self.statements: list[Any] = []
 
     async def execute(self, statement: Any) -> _Result:
+        self.statements.append(statement)
         entities = [
             description.get("entity")
             for description in getattr(statement, "column_descriptions", [])
@@ -154,7 +167,7 @@ async def test_only_a_provider_that_declares_an_embedding_model_is_a_candidate()
     without = _config(name="completions only", embedding_model="")
     db = FakeDb([with_model, without])
 
-    assert [row.name for row in await embedding_providers(db, _connection())] == [
+    assert [row.name for row in await _embedding_candidates(db, _connection())] == [
         "openrouter"
     ]
 
@@ -167,7 +180,7 @@ async def test_anthropic_is_never_a_candidate_however_it_was_filled_in() -> None
     db = FakeDb(
         [_config(name="claude", provider="Anthropic", embedding_model="whatever")]
     )
-    assert await embedding_providers(db, _connection()) == []
+    assert await _embedding_candidates(db, _connection()) == []
 
 
 @pytest.mark.asyncio
@@ -180,7 +193,7 @@ async def test_the_pinned_provider_sorts_first_then_a_default_then_by_age() -> N
     db = FakeDb([oldest, default, pinned])
 
     connection = _connection(embedding_llm_config_id=pinned.id)
-    assert [row.name for row in await embedding_providers(db, connection)] == [
+    assert [row.name for row in await _embedding_candidates(db, connection)] == [
         "pinned",
         "default",
         "oldest",
@@ -196,7 +209,7 @@ async def test_a_provider_is_found_even_though_nothing_ever_sets_is_default() ->
     the answer was always `None` — for everyone, on every connection, forever.
     """
     db = FakeDb([_config(name="openrouter", is_default=False)])
-    found = await _embedding_config(db, _connection())
+    found = await embedding_provider(db, _connection())
     assert found is not None and found.name == "openrouter"
 
 
@@ -226,7 +239,7 @@ def test_nothing_in_the_product_writes_is_default_on_a_provider() -> None:
                 ):
                     writers.append(f"{path}:{node.lineno}")
     assert writers == [], (
-        "something now sets is_default; revisit _embedding_config, which "
+        "something now sets is_default; revisit embedding_provider, which "
         f"treats it as a sort key only. Writers: {writers}"
     )
 
@@ -370,38 +383,69 @@ async def test_turning_it_on_records_which_provider_produced_the_index(
 
 
 @pytest.mark.asyncio
-async def test_a_named_provider_wins_over_the_pinned_one(
+async def test_the_pinned_provider_keeps_the_store_it_indexed(
     _no_network: list[Any],
 ) -> None:
-    first = _config(name="first", created_at=1)
-    second = _config(name="second", embedding_model="nomic-embed-text", created_at=2)
-    connection = _connection(embedding_llm_config_id=first.id)
-    db = FakeDb([first, second])
+    """A second endpoint set up later must not silently re-mean vectors that
+    are already sitting in the store. The pin wins over the head of the
+    candidate list for exactly as long as it can still embed."""
+    pinned = _config(name="pinned", embedding_model="nomic-embed-text", created_at=2)
+    older = _config(name="older", created_at=1)
+    connection = _connection(embedding_llm_config_id=pinned.id)
+    db = FakeDb([older, pinned])
 
-    await set_embeddings(
-        db, object(), connection, enabled=True, llm_config_id=second.id
-    )
-    assert connection.embedding_llm_config_id == second.id
+    await set_embeddings(db, object(), connection, enabled=True)
+
+    assert connection.embedding_llm_config_id == pinned.id
     assert connection.embedding_model == "nomic-embed-text"
 
 
 @pytest.mark.asyncio
-async def test_someone_elses_provider_is_not_reachable_by_id(
+async def test_one_embedder_serves_every_connection(
     _no_network: list[Any],
 ) -> None:
-    """Ownership is checked on the row, not on the list it came from — the id
-    arrives in a request body."""
-    mine = _config(name="mine")
-    theirs = _config(name="theirs", owner_id=uuid4())
-    db = FakeDb([mine, theirs])
+    """The rule, stated on two stores: switching embedding search on twice
+    resolves the same provider both times, without anybody naming it."""
+    config = _config(name="the embedder")
+    db = FakeDb([config])
+    first, second = _connection(), _connection()
+
+    await set_embeddings(db, object(), first, enabled=True)
+    await set_embeddings(db, object(), second, enabled=True)
+
+    assert first.embedding_llm_config_id == config.id
+    assert second.embedding_llm_config_id == config.id
+
+
+def test_nothing_in_the_interface_can_name_a_provider_to_embed_with() -> None:
+    """The choice is gone from the wire, not just from the screen.
+
+    A picker removed from a component while the field stays on the request body
+    is a choice that has only become invisible — the next form to be written
+    finds it and offers it again. `EmbeddingWrite` carries `enabled` and an
+    optional `model` (the escape hatch for a self-hosted endpoint serving a
+    name the row does not declare), and nothing that identifies a provider.
+    """
+    import inspect
+
+    from app.api.schemas import EmbeddingWrite
+
+    assert set(EmbeddingWrite.model_fields) == {"enabled", "model"}
+    assert "llm_config_id" not in inspect.signature(set_embeddings).parameters
+
+
+@pytest.mark.asyncio
+async def test_the_candidates_are_scoped_to_the_connections_owner() -> None:
+    """Asserted on the query, because the fake deliberately applies no `WHERE`:
+    with the id path gone, this scoping is the only thing standing between one
+    account's store and another account's key."""
+    db = FakeDb([_config(name="mine")])
     connection = _connection()
 
-    _, message = await set_embeddings(
-        db, object(), connection, enabled=True, llm_config_id=theirs.id
-    )
-    # Says nothing about whether the row exists, only that it cannot be used.
-    assert "cannot embed" in message
-    assert connection.embedding_model == ""
+    await _embedding_candidates(db, connection)
+
+    sql = str(db.statements[-1])
+    assert "owner_id" in sql and "embedding_model" in sql
 
 
 @pytest.mark.asyncio
