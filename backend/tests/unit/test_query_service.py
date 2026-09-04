@@ -177,11 +177,15 @@ class FakeKey:
 
 
 class FakeSettings:
-    """Only the two fields the service reads, with a key of its own.
+    """The fields the service reads, with a key of its own.
 
     Built per call rather than read from `get_settings()`: the real settings
     are process-cached, and a test that has already exercised a missing key
     would otherwise decide whether this one passes.
+
+    The report worker imports it too, which is why `report_narration_concurrency`
+    is here — carrying the *production* default rather than a convenient one, so
+    a generation test exercises the wave size real runs use.
     """
 
     def __init__(self) -> None:
@@ -189,6 +193,7 @@ class FakeSettings:
             base64.urlsafe_b64encode(os.urandom(32)).decode()
         )
         self.secret_box_key_version = 1
+        self.report_narration_concurrency = 4
 
 
 def settings() -> Any:

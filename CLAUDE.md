@@ -1377,6 +1377,22 @@ The things worth knowing before you touch it:
   is a single number is drawn as a callout in the flow of its section rather
   than a numbered exhibit, and `figureNumbers` skips it so "Figure 4" still
   means something a reader can turn to.
+- **Sections are narrated in waves, and the wave size is a quality dial.**
+  A generation's wall clock is almost entirely provider latency — one call per
+  section — so `report_narration_concurrency` (default **4**) writes that many
+  paragraphs at once and commits them in document order. It is a wave and not a
+  fan-out because of `established`: a section is told what the sections *before*
+  it found, which is what stops section five restating section two, and sections
+  inside one wave cannot see each other. So `1` is a strictly sequential
+  document where each section reads every earlier one, and a number at or above
+  the section count writes them all at once with no section reading any other.
+  `other_headings` is unaffected at any setting — it comes off the outline, and
+  every section always had all of it. Two consequences that are not obvious: the
+  cancel check lands **between waves**, and a genuine crash in one section does
+  not cost the paragraphs gathered beside it (`return_exceptions=True`, commit
+  what came back, then re-raise). The whole thing is only legal because
+  `_narrate` touches no session; an `AsyncSession` is not safe for concurrent
+  use, so nothing inside a wave may reach one.
 - **No model is asked to do arithmetic.** `plan_kpi` computes the headline,
   `reports/facts.py` computes what a paragraph needs (and yields *nothing* for
   a partial or capped result, because a total over a prefix is a wrong total),
@@ -1580,7 +1596,7 @@ where someone would otherwise repeat them: a "getting the answer right" block in
 - Commit or branch only when asked. Config keys: `SECRET_BOX_KEY`, `JWT_SECRET`,
   `ADMIN_EMAIL`/`ADMIN_PASSWORD`, `DATABASE_URL`, `CORS_ORIGINS`,
   `MAX_CONCURRENT_RUNS`, `RUN_DEADLINE_SECONDS`,
-  `LLM_REQUEST_TIMEOUT_SECONDS`. The last two default to 120 and 60 in
+  `LLM_REQUEST_TIMEOUT_SECONDS`, `REPORT_NARRATION_CONCURRENCY`. The last two default to 120 and 60 in
   `core/config.py` and are raised to 300 and 120 by `docker-compose.yml`, which
   is headroom for slow hosted models — a chat run makes four or five sequential
   provider calls. Losing `SECRET_BOX_KEY` means re-entering every stored

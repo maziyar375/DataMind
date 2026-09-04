@@ -183,6 +183,18 @@ each one receives `established` prose so section five can contrast with section
 two instead of restating it. **Do not parallelise them.** Fan-out is not the
 reason to migrate this; resume-after-crash and one driver are.
 
+> **Superseded 2026-09-04, and only in part.** Sections are now narrated in
+> **waves** of `settings.report_narration_concurrency` (default 4) rather than
+> one at a time — see `docs/reports.md` §"generation order" and
+> `docs/pipeline-report.md` C5. The reasoning above is why it is a *wave* and
+> not the `Send` fan-out it warns against: `established` is still threaded
+> forward, wave to wave, and the loop edge is still what carries it. What
+> changed is that a section is no longer told about the two or three sections
+> written *beside* it, which is a bounded cost paid for a document that takes
+> a third of the wall clock. `1` restores exactly the behaviour described here.
+> The two arguments this section actually makes — resume-after-crash, and one
+> driver instead of two — are untouched.
+
 ### Why the four that stay, stay
 
 **Follow-up suggestions (7)** — `run_service.suggest_followups`: one prompt, one
@@ -522,6 +534,10 @@ the UI's perspective.
   `established` prose forward, and `other_headings` still comes from the
   headings computed once before the loop. Resist the urge to `Send` these in
   parallel; the document quality depends on the order.
+  *(Superseded 2026-09-04: one pass through the node now writes a wave of
+  `report_narration_concurrency` sections. Still a loop and still not a `Send` —
+  `established` is threaded from wave to wave. See the note in §"Why report
+  generation moves".)*
 - **The executive summary is not just "last".** It is skipped inside the loop,
   written after it, and then placed at *its own* position — usually first. Keep
   that as an explicit edge, not as an ordering accident.
@@ -963,6 +979,8 @@ A phase is done when all five pass, not when the code runs.
 - [x] Narration still **sequential**; `established` and `other_headings` still
       threaded forward. The loop is an edge from `narrate_section` back into
       itself — no `Send`, and a test says so
+      *(sequential until 2026-09-04, waves of `report_narration_concurrency`
+      since; still the same loop edge, and the test still says so)*
 - [x] Executive summary still skipped in the loop, written last, placed at its own position
 - [x] `retry_section` is a **second entry point into the same graph** — queries
       then paragraph, through `clear_section → execute_blocks → write_results`

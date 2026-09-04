@@ -22,12 +22,14 @@
  *    refuses, the guard's own sentence. That sentence is rendered verbatim: a
  *    re-worded rejection is one the user cannot act on, which is the rule
  *    `semantic.tsx` already follows for metric expressions.
- *  - **"Check all" is a loop, not a job.** One check is five to ten seconds of
- *    guard work on one heading. Looping it in the page with per-block progress
- *    reads better than a job with a progress bar, and it needs no extra table
- *    — the reason `api/v1/reports.py` makes the route synchronous and per
- *    block. It can be stopped, because a user who sees the first two answers
- *    is often done reading. It walks only the blocks a check would *fill*:
+ *  - **"Check all" is a pool, not a job.** One check is five to ten seconds of
+ *    guard work on one heading, and the headings are independent — nothing one
+ *    check learns is of use to the next. So the page runs `CHECK_CONCURRENCY`
+ *    of them at a time, in the page with per-block progress, which reads better
+ *    than a job with a progress bar and needs no extra table — the reason
+ *    `api/v1/reports.py` makes the route synchronous and per block. It can be
+ *    stopped between waves, because a user who sees the first four answers is
+ *    often done reading. It walks only the blocks a check would *fill*:
  *    running it over a block whose SQL somebody wrote by hand would replace
  *    that SQL, and a bulk button must not be the thing that does that.
  *  - **Generate says what it is about to produce.** The last click is the
@@ -102,6 +104,18 @@ const BLOCK_TYPES: { value: ReportBlockType; label: string }[] = [
   { value: 'TABLE', label: 'Table' },
   { value: 'METRIC', label: 'One figure' },
 ]
+
+/**
+ * How many questions the "Check all" sweep has in flight at once.
+ *
+ * Each one is an independent `POST .../check` — a model writing a statement
+ * for one question, five to ten seconds, learning nothing the next one needs —
+ * so the only reason to run them one after another is the cost of running them
+ * together. Four is that cost: it matches `MAX_CONCURRENT_TILES` on the
+ * backend, and it is well inside a pool of `db_pool_size + db_max_overflow`
+ * sessions with room for the rest of the app.
+ */
+const CHECK_CONCURRENCY = 4
 
 /**
  * What each verdict is called on screen.
@@ -252,7 +266,9 @@ export function ReportOutlineEditor({
   // asked for last time rather than a default that forgets.
   const [sectionTarget, setSectionTarget] = useState(DEFAULT_SECTIONS)
   const [checking, setChecking] = useState<string[]>([])
-  const [sweep, setSweep] = useState<{ done: number; total: number; label: string } | null>(null)
+  const [sweep, setSweep] = useState<
+    { done: number; total: number; label: string; alongside: number } | null
+  >(null)
   const [previews, setPreviews] = useState<Record<string, string>>({})
   const [latestRun, setLatestRun] = useState<ReportRun | null>(null)
   // How many documents this report has produced. The header shows it because
@@ -476,8 +492,9 @@ export function ReportOutlineEditor({
    * like a thing the tool made you do rather than a thing it was doing.
    *
    * Chained, the order carries the meaning: the questions land first and stay
-   * on screen, and the verdicts arrive under them one at a time. Nothing here
-   * is hidden behind a spinner that could be showing the questions instead.
+   * on screen, and the verdicts arrive under them a wave at a time. Nothing
+   * here is hidden behind a spinner that could be showing the questions
+   * instead.
    *
    * The sweep is interruptible (`Stop`), which is what makes it acceptable to
    * start it without asking: it is one model call per question, and a user who
@@ -694,31 +711,67 @@ export function ReportOutlineEditor({
   )
 
   /**
-   * Every block a check would *fill*, one at a time.
+   * Every block a check would *fill*, `CHECK_CONCURRENCY` at a time.
    *
    * The caller passes `preflight.sweepable`, never "everything unchecked": a
    * block whose SQL somebody wrote by hand is unchecked again the moment its
    * question is reworded, and checking it asks the model for a new statement
    * over the top of theirs. One button that quietly does that to four blocks is
    * the kind of thing a person never forgives a tool for.
+   *
+   * **The blocks are independent, so the sweep is a pool and not a queue.**
+   * One check is five to ten seconds of one model writing one statement about
+   * one question; nothing it learns is of any use to the next one. Twelve of
+   * them end to end is two minutes of watching a spinner move down a page —
+   * the same wall clock the report's own narration used to spend, and for the
+   * same reason. In waves of four it is half a minute, and every row in flight
+   * carries its own spinner, so the page shows more of itself working rather
+   * than less.
+   *
+   * What the pool must not lose is the two things the walk was for:
+   *
+   *  - **It can be stopped**, because a user who has seen the first four
+   *    answers is often done reading. `Stop` lands between waves — the four in
+   *    flight are model calls already paid for, and abandoning them buys
+   *    nothing back.
+   *  - **You can watch it.** The page follows the wave rather than each block,
+   *    and the progress line names the question it scrolled to and counts the
+   *    rest.
    */
   async function checkAll(pending: ReportBlock[]) {
     stopSweep.current = false
-    for (const [index, block] of pending.entries()) {
+    let done = 0
+    for (let at = 0; at < pending.length; at += CHECK_CONCURRENCY) {
       if (stopSweep.current) break
-      setSweep({ done: index, total: pending.length, label: block.question })
-      // Follow the sweep down the page. `nearest` scrolls the least it can and
-      // does nothing at all when the row is already visible, so a user reading
-      // question three is not dragged to question four — a walk you cannot
-      // watch is the thing this whole chain exists to fix, but so is a page
-      // that moves under you.
+      const wave = pending.slice(at, at + CHECK_CONCURRENCY)
+      setSweep({
+        done,
+        total: pending.length,
+        label: wave[0].question,
+        alongside: wave.length - 1,
+      })
+      // Follow the sweep down the page, to the head of the wave. `nearest`
+      // scrolls the least it can and does nothing at all when the row is
+      // already visible, so a user reading question three is not dragged to
+      // question four — a walk you cannot watch is the thing this whole chain
+      // exists to fix, but so is a page that moves under you.
       window.document
-        .querySelector(`[data-block-id="${block.id}"]`)
+        .querySelector(`[data-block-id="${wave[0].id}"]`)
         ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-      const answer = await check(block.id)
+
+      const answers = await Promise.all(
+        wave.map(async (block) => {
+          const answer = await check(block.id)
+          // Counted as it lands rather than at the end of the wave: the bar is
+          // the only thing on screen that says the pool is four wide.
+          done += 1
+          setSweep((current) => (current ? { ...current, done } : current))
+          return answer
+        }),
+      )
       // A failed *request* — not a refusal, which arrives as a verdict — means
       // the next nine will fail the same way. Stop and say so once.
-      if (!answer) break
+      if (answers.some((answer) => !answer)) break
     }
     setSweep(null)
   }
@@ -906,6 +959,7 @@ export function ReportOutlineEditor({
                   label={
                     <span dir="auto">
                       Checking “{sweep.label}”
+                      {sweep.alongside > 0 && ` and ${sweep.alongside} more`}
                     </span>
                   }
                 />

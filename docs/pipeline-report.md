@@ -34,7 +34,7 @@ this quarter's.
 |---|---|---|---|---|
 | **Trigger** | `POST /reports/{id}/outline` | `POST /reports/{id}/blocks/{bid}/check`, or `PUT .../sql` | `POST /reports/{id}/runs` | `POST /reports/{id}/runs/{rid}/sections/{sid}/retry` |
 | **Shape** | synchronous, one request | synchronous, one request per block | **202 + poll** | 202 + the poll already running |
-| **Model calls** | 1 (`complete`) | 2 (`route` + `generate`), +1 per repair · 0 on the hand-written road | 1 per section + 1 summary | 1 |
+| **Model calls** | 1 (`complete`) | 2 (`route` + `generate`), +1 per repair · 0 on the hand-written road | 1 per section (in waves of `report_narration_concurrency`) + 1 summary | 1 |
 | **Database** | none (schema snapshot only) | 1 preview query (≤50 rows) | 1 query per block | 1 query per block of that section |
 | **Writes** | replaces `report_sections` + `report_blocks` | `report_blocks.sql`, `sql_hash`, `feasibility_*` | `report_runs`, `report_block_results`, `report_section_results` | replaces that section's rows |
 | **Failure posture** | raise, nothing written | **store the verdict** — never raise for "no" | per-section; status derived | per-section; status re-derived |
@@ -452,7 +452,8 @@ phases; the ordering is the design.
 Since Phase 3 of [langgraph-migration.md](langgraph-migration.md) those phases
 are **nodes of a compiled graph** —
 `check_disclosure → resolve_outline → [clear_section] → execute_blocks →
-write_results → narrate_section (loop) → summarise → finish` — with
+write_results → narrate_section (loop, one wave per pass) → summarise → finish`
+— with
 `clear_section` on the retry entry only (§5) — and §5's retry is a second
 *entry* into the same graph rather than a second driver over the same
 functions. The nodes are thin: each delegates to the helper in
@@ -518,9 +519,46 @@ and a browser that reloads mid-run resumes exactly where it was.
 Cancellation is checked here: results already paid for are **kept**, because a
 cancelled run that threw them away would be a slower way of doing nothing.
 
-#### C5 · Per section, in order — the paragraph
+#### C5 · Sections in waves, in order — the paragraph
 
-For each non-summary section (`_narrate`,
+The non-summary sections are taken `settings.report_narration_concurrency` at a
+time. Each wave's model calls are `asyncio.gather`ed, and the rows are committed
+in document order as the wave lands. Then the loop edge goes back into the same
+node for the next wave.
+
+**A wave, not a fan-out**, and `established` is the difference. The block below
+is what every section is given; the `{neighbours}` half of it is what makes
+seven independently written paragraphs read as one document, and half of *that*
+— the findings already stated — only exists because a section is written after
+the ones before it. So the wave size is a dial with meaning at both ends:
+
+| `report_narration_concurrency` | round trips for 8 sections | what a section reads |
+|---|---|---|
+| `1` | 8 | every section before it (the pre-wave behaviour) |
+| `4` (default) | 2 | every section in every earlier wave |
+| `≥ 8` | 1 | no other section — headings only |
+
+`other_headings` is unaffected at every setting: it comes off the outline, and
+every section has always been given all of it. What a large wave costs is
+`established` — the findings, not the structure.
+
+Three consequences:
+
+- **Cancellation lands between waves**, the same bargain `execute_blocks`
+  already makes: calls in flight are provider work already paid for.
+- **A crash in one section does not cost its wave.** The gather uses
+  `return_exceptions=True`; every paragraph that came back is committed, and
+  only then is the failure re-raised for the facade to turn into a failed run.
+  (A provider *refusal* never gets this far — `_narrate` catches it and returns
+  a `FAILED` row, which is one section and not the run.)
+- **`_narrate` touches no session**, which is what makes the gather legal at
+  all: an `AsyncSession` is not safe for concurrent use. It is handed
+  already-loaded column data and returns a detached row; only the node touches
+  the session, one `await` at a time. `expire_on_commit=False` on the
+  sessionmaker is the other half — without it, committing one row would turn a
+  sibling task's attribute read into a lazy load on a busy session.
+
+For each section in the wave (`_narrate`,
 [workers/report.py:687-779](../backend/app/workers/report.py#L687-L779)):
 
 **1. Disclose.** `_narration(result, policy)` runs each stored result through
@@ -550,7 +588,8 @@ exact. Quote them rather than working the arithmetic out yourself."*
 | nothing produced rows and something broke (`has_nothing_to_say`) | `FAILED` | the first block error. A paragraph written over three failures would be fiction |
 | the run has no narrator (model config deleted mid-flight; `llm_config_id` is SET NULL) | `FAILED` | `_NO_MODEL` — *"choose a model for the report and generate again"* |
 
-**4. One `complete` call.** `narrate.section_messages`:
+**4. One `complete` call**, concurrent with the rest of its wave.
+`narrate.section_messages`:
 
 - **`REPORT_SECTION_SYSTEM`** — deliberately *not* `ANSWER_SYSTEM`. That prompt
   is tuned for a two-sentence chat bubble leading with the number, and reusing
@@ -567,9 +606,10 @@ exact. Quote them rather than working the arithmetic out yourself."*
 - **`{neighbours}`** is two optional blocks, rendered only when non-empty so a
   one-section report sends no empty scaffolding: `REPORT_SECTION_NEIGHBOURS`
   (the other sections' headings — "which you must not duplicate") and
-  `REPORT_SECTION_ESTABLISHED` (the findings already stated, capped at
-  `MAX_ESTABLISHED = 5` sections × `MAX_ESTABLISHED_CHARS = 240`, each trimmed
-  by `_gist` to its opening sentences). Without these, every section is written
+  `REPORT_SECTION_ESTABLISHED` (the findings already stated **in earlier
+  waves** — a section's wave-mates are in flight and have established nothing
+  yet — capped at `MAX_ESTABLISHED = 5` sections × `MAX_ESTABLISHED_CHARS =
+  240`, each trimmed by `_gist` to its opening sentences). Without these, every section is written
   by a writer who has never seen the rest of the report — three paragraphs each
   opening on total revenue because that was the largest number each was handed.
   Bounded because this text grows with every section written.

@@ -368,8 +368,16 @@ def _settings() -> Any:
     return settings
 
 
-async def _generate(db: FakeDb, cancelled: asyncio.Event | None = None) -> None:
-    await generate_run(db, _settings(), RUN_ID, cancelled or asyncio.Event())
+async def _generate(
+    db: FakeDb,
+    cancelled: asyncio.Event | None = None,
+    *,
+    narration_concurrency: int | None = None,
+) -> None:
+    settings = _settings()
+    if narration_concurrency is not None:
+        settings.report_narration_concurrency = narration_concurrency
+    await generate_run(db, settings, RUN_ID, cancelled or asyncio.Event())
 
 
 async def _retry(
@@ -932,13 +940,11 @@ async def test_a_run_whose_model_was_deleted_still_produces_its_numbers(
     assert all("model configuration" in (r.error_message or "") for r in db.prose)
 
 
-async def test_cancelling_between_sections_stops_before_the_next_call(
-    connector: FakeConnector, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Cooperative: the flag is read between sections so an in-flight provider
-    call finishes rather than being abandoned mid-request."""
-    cancelled = asyncio.Event()
-    stopping = FakeGateway(PROSE, PROSE)
+def _cancels_on_first_call(
+    monkeypatch: pytest.MonkeyPatch, cancelled: asyncio.Event
+) -> FakeGateway:
+    """A gateway that trips the cancel flag as its first call goes out."""
+    stopping = FakeGateway(PROSE, PROSE, PROSE)
 
     async def complete(_llm: Any, messages: Any) -> Completion:
         cancelled.set()
@@ -948,14 +954,50 @@ async def test_cancelling_between_sections_stops_before_the_next_call(
         worker.LiteLLMGateway, "from_settings", classmethod(lambda _c, _s: stopping)
     )
     monkeypatch.setattr(stopping, "complete", complete)
+    return stopping
+
+
+async def test_cancelling_between_sections_stops_before_the_next_call(
+    connector: FakeConnector, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cooperative, and at a wave size of one that is section by section.
+
+    The flag is read between waves so an in-flight provider call finishes
+    rather than being abandoned mid-request. `report_narration_concurrency = 1`
+    is the sequential document, and it must still stop after exactly one
+    paragraph.
+    """
+    cancelled = asyncio.Event()
+    stopping = _cancels_on_first_call(monkeypatch, cancelled)
     db = _readable()
 
-    await _generate(db, cancelled)
+    await _generate(db, cancelled, narration_concurrency=1)
 
     assert db.run is not None and db.run.status == ReportRunStatus.CANCELLED
     # The first section was written and kept; the second was never asked for.
     assert len(db.prose) == 1
     assert len(stopping.calls) == 1
+
+
+async def test_a_cancel_keeps_the_whole_wave_that_was_already_in_flight(
+    connector: FakeConnector, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The wave is the unit of cancellation, exactly as the queries are.
+
+    Both sections go out together, so a flag set as the first call leaves does
+    not stop the second — it is already paid for, and dropping it would be a
+    slower way of doing nothing. What it does stop is the *summary*, which the
+    next check reaches before the call is made.
+    """
+    cancelled = asyncio.Event()
+    stopping = _cancels_on_first_call(monkeypatch, cancelled)
+    db = _readable()
+
+    await _generate(db, cancelled, narration_concurrency=4)
+
+    assert db.run is not None and db.run.status == ReportRunStatus.CANCELLED
+    assert len(stopping.calls) == 2
+    assert [row.heading_snapshot for row in db.prose] == ["روند درآمد", "محصولات"]
 
 
 # ── retrying one section ─────────────────────────────────────────────────

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from uuid import UUID
 
 import pytest
 
@@ -49,12 +50,17 @@ from tests.integration.test_report_runs import (
     _connection,
     _readable,
     _retry,
+    _section,
     _settings,
+    _summary_section,
 )
 from tests.integration.test_report_runs import _generate as _run_generation
 
 END = "__end__"
 START = "__start__"
+
+#: A third normal section, so a document can be longer than one wave.
+THIRD_SECTION_ID = UUID("00000000-0000-0000-0000-0000000000d3")
 
 
 def edges() -> set[tuple[str, str]]:
@@ -389,10 +395,15 @@ def test_retry_is_a_second_entry_into_the_same_graph_not_a_call_on_one_node() ->
     assert (WRITE_RESULTS, SUMMARISE) in edges()
 
 
-def test_narration_loops_back_into_itself_and_is_not_a_fan_out() -> None:
-    """Sequential on purpose. Each iteration passes the prose written so far
-    forward as `established`, which is what lets section five contrast with
-    section two instead of restating it. `Send` would be faster and worse."""
+def test_narration_loops_back_into_itself_and_is_not_a_send_fan_out() -> None:
+    """Waves, not `Send`.
+
+    A pass through this node writes several sections at once, but it is still a
+    *loop*, and the loop is what carries `established` from one wave to the
+    next. A `Send` fan-out would hand every section an empty document — the
+    difference between "sections inside a wave cannot see each other" and "no
+    section ever sees another", which is the whole quality dial.
+    """
     assert (NARRATE_SECTION, NARRATE_SECTION) in edges()
     assert (NARRATE_SECTION, SUMMARISE) in edges()
 
@@ -415,3 +426,154 @@ def test_the_graph_is_compiled_once() -> None:
     from app.workers import report_graph
 
     assert report_graph.REPORT_GRAPH is REPORT_GRAPH
+
+
+# ── narration waves ──────────────────────────────────────────────────────
+"""The wave is a latency/quality trade, and both halves of it are pinned here.
+
+`report_narration_concurrency` decides how many sections are written at once.
+The tests below fix what each end of that dial means, because the whole reason
+the sections are written in *waves* rather than fanned out is that the number
+buys speed by spending cross-section awareness — and a change that quietly took
+the awareness without giving the speed, or the other way round, would look like
+a passing suite.
+"""
+
+
+class OverlapGateway(FakeGateway):
+    """A gateway that records how many calls were ever in flight at once.
+
+    The sleep is what makes the measurement mean anything: without an await
+    inside the call, four coroutines gathered together still run one after
+    another to completion and a sequential implementation would score 4.
+    """
+
+    def __init__(self, *replies: Any) -> None:
+        super().__init__(*replies)
+        self.live = 0
+        self.peak = 0
+
+    async def complete(self, _llm: Any, messages: Any) -> Any:
+        self.live += 1
+        self.peak = max(self.peak, self.live)
+        try:
+            await asyncio.sleep(0.01)
+            return await FakeGateway.complete(self, _llm, messages)
+        finally:
+            self.live -= 1
+
+
+def _overlapping(monkeypatch: pytest.MonkeyPatch, *replies: Any) -> OverlapGateway:
+    fake = OverlapGateway(*replies)
+    monkeypatch.setattr(
+        worker.LiteLLMGateway, "from_settings", classmethod(lambda _cls, _s: fake)
+    )
+    return fake
+
+
+async def test_a_wave_writes_its_sections_at_the_same_time(
+    connector: FakeConnector, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The point of the change: two sections, one provider round trip.
+
+    A generation's wall clock is provider latency, and a document of eight
+    sections used to be eight of them end to end.
+    """
+    fake = _overlapping(monkeypatch)
+    db = _readable()
+
+    await _run_generation(db, narration_concurrency=4)
+
+    # Both sections in flight together; the summary is its own call afterwards,
+    # which is why the peak is 2 rather than 3.
+    assert fake.peak == 2
+    assert len(fake.calls) == 3
+
+
+async def test_concurrency_of_one_is_still_the_sequential_document(
+    connector: FakeConnector, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The dial's other end, and it has to keep meaning what it meant.
+
+    One section at a time, each told what the one before it established — the
+    behaviour every report was written with before the wave existed.
+    """
+    fake = _overlapping(monkeypatch, "بخش یکم این را گفت.", PROSE, PROSE)
+    db = _readable()
+
+    await _run_generation(db, narration_concurrency=1)
+
+    assert fake.peak == 1
+    # The second section reads the first. This is the sentence a fan-out loses.
+    assert "بخش یکم این را گفت." in fake.prompts[1]
+
+
+async def test_sections_in_one_wave_are_not_told_about_each_other(
+    connector: FakeConnector, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stated rather than discovered later: this is what the speed costs.
+
+    Two sections written together are two writers reading the same document,
+    and neither can be shown a paragraph that does not exist yet. What they
+    *are* still both given is `other_headings` — the outline — which is the
+    half of "these paragraphs are one document" that survives the wave.
+    """
+    fake = _overlapping(monkeypatch, "بخش یکم این را گفت.", PROSE, PROSE)
+    db = _readable()
+
+    await _run_generation(db, narration_concurrency=4)
+
+    assert "بخش یکم این را گفت." not in fake.prompts[1]
+    # The neighbour's heading is still there, in both directions.
+    assert "محصولات" in fake.prompts[0]
+    assert "روند درآمد" in fake.prompts[1]
+
+
+async def test_a_later_wave_reads_what_the_earlier_waves_established(
+    connector: FakeConnector, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The chain is coarser, not gone — which is why this is a wave and not a
+    fan-out. Three sections at a wave size of two: the third reads both of the
+    paragraphs written before it."""
+    fake = _overlapping(monkeypatch, "یکم گفت.", "دوم گفت.", PROSE, PROSE)
+    db = _readable(
+        sections=[
+            _summary_section(position=0),
+            _section(position=1),
+            _section(OTHER_SECTION_ID, position=2, heading="محصولات"),
+            _section(THIRD_SECTION_ID, position=3, heading="مناطق"),
+        ]
+    )
+
+    await _run_generation(db, narration_concurrency=2)
+
+    assert fake.peak == 2
+    third = fake.prompts[2]
+    assert "یکم گفت." in third and "دوم گفت." in third
+
+
+async def test_a_crash_in_one_section_keeps_the_paragraphs_beside_it(
+    connector: FakeConnector, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A provider *refusal* is already a FAILED row — `_narrate` catches it.
+
+    This is the other kind: a genuine crash, which fails the run. It must not
+    also throw away the paragraph that was written next to it, because the
+    sequential loop it replaced kept everything it had committed.
+    """
+    real = worker._narrate
+
+    async def narrate(settings: Any, **kwargs: Any) -> Any:
+        if kwargs["section"].id == SECTION_ID:
+            raise RuntimeError("narrator exploded")
+        return await real(settings, **kwargs)
+
+    monkeypatch.setattr(worker, "_narrate", narrate)
+    db = _readable()
+
+    await _run_generation(db, narration_concurrency=4)
+
+    assert db.run is not None and db.run.status == ReportRunStatus.FAILED
+    assert "narrator exploded" in (db.run.error_message or "")
+    # The sibling's paragraph survived the crash it was gathered with.
+    assert [row.heading_snapshot for row in db.prose] == ["محصولات"]

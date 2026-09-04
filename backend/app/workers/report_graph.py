@@ -31,11 +31,42 @@ prompts, the disclosure gating and the numeric checks are what the tests in
 It also keeps `monkeypatch.setattr(worker, "execute_many", …)` working, because
 the lookup still happens in `report.py`'s globals.
 
-**Narration is sequential and must stay so.** The loop is a conditional edge
-back into `narrate_section`, not a `Send` fan-out. Each iteration passes the
-prose written so far forward as `established`, which is what lets section five
-contrast with section two instead of restating it. Parallelising it would be
-faster and would produce a worse document.
+**Narration is written in waves, and the wave is the whole design.** The loop
+is still a conditional edge back into `narrate_section` rather than a `Send`
+fan-out, but each pass through it now writes up to
+`settings.report_narration_concurrency` sections *concurrently* and commits
+them in document order.
+
+The reason it is a wave rather than a fan-out is `established`: every section
+is told what the sections before it found, which is what stops section five
+restating section two. Sections inside one wave cannot see each other — they
+are in flight at the same time — but every wave sees every wave before it, so
+the chain is coarser rather than gone. `other_headings`, the other half of what
+makes independently written paragraphs read as one document, is unaffected: it
+comes off the outline and every section has always had all of it.
+
+The dial is therefore a quality/latency trade with both ends meaning something:
+`1` is the strictly sequential document this used to write, and a number at or
+above the section count writes every paragraph at once with no section reading
+any other. The default sits at 4 — at most two waves for the eight sections
+`outline.MAX_SECTIONS` allows, so the back half of a report still reads the
+front half.
+
+Three consequences worth knowing:
+
+* **The cancel check now lands between waves, not between sections.** Same
+  bargain `execute_blocks` already makes: a wave in flight is provider work
+  already paid for, and dropping it would be a slower way of doing nothing.
+* **A crashing section no longer costs its wave.** The calls are gathered with
+  `return_exceptions=True`, every paragraph that came back is committed, and
+  only then is the failure re-raised for the facade to turn into a failed run.
+  The sequential loop kept what it had written too; this keeps more of it.
+* **`_narrate` touches no session**, which is what makes any of this legal —
+  an `AsyncSession` is not safe for concurrent use. It is handed already-loaded
+  column data and returns a detached row, and the session is touched only by
+  this node, one `await` at a time. The sessionmaker sets
+  `expire_on_commit=False`, so committing one row cannot turn a sibling task's
+  attribute read into a lazy load.
 
 **A node crash is handled at the facade, not in the adapter.** The opposite of
 the chat graph, and on purpose: there a crashing node is one failed *step* in a
@@ -44,6 +75,7 @@ run that continues to a verdict, here it is the run. `generate_run` and
 """
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypedDict
@@ -362,11 +394,22 @@ async def _write_results(work: ReportWork, config: RunnableConfig) -> str:
 
 
 async def _narrate_section(work: ReportWork, config: RunnableConfig) -> str:
-    """One section's paragraph. The loop edge is the last line of this function.
+    """One wave of paragraphs. The loop edge is the last line of this function.
 
-    **Sequential on purpose.** `established` is the prose written so far, and it
-    is what stops section five restating section two. A `Send` fan-out would
-    hand every section an empty document and produce a worse one faster.
+    A retry writes exactly one section and is unchanged — it is one paragraph
+    by definition, and there is nothing to overlap.
+
+    The first pass takes the next `report_narration_concurrency` sections,
+    writes them at the same time, and commits them in document order. The
+    `established` block is frozen before the wave goes out, so every section in
+    it is written into the same document — which is what "sections inside one
+    wave cannot see each other" means in practice, and why the wave size is the
+    quality dial described at the top of this module.
+
+    Committing in document order rather than as each call lands is deliberate:
+    the rows carry an explicit `position`, so completion order would change
+    nothing a reader sees, and keeping it means a run's prose rows are written
+    in the order the document reads however the provider chooses to answer.
     """
     cfg = _cfg(config)
     db, progress = cfg["db"], cfg["progress"]
@@ -410,52 +453,64 @@ async def _narrate_section(work: ReportWork, config: RunnableConfig) -> str:
         await db.commit()
         return FINISH
 
-    # ── the first pass: walk the sections in order ───────────────────────
-    while work.cursor < len(work.sections):
-        position = work.cursor
-        section = work.sections[position]
-        work.cursor += 1
-        if section.kind == ReportSectionKind.EXECUTIVE_SUMMARY:
-            # Written last, from the sections it summarises. Its *position* is
-            # wherever the user put it — usually first, which is the point, and
-            # why it is remembered rather than appended.
-            work.summary = (position, section)
-            continue
+    # ── the first pass: walk the sections in order, a wave at a time ─────
+    wave = _next_wave(work, cfg["settings"])
+    if not wave:
+        return SUMMARISE
 
-        if section.id in work.narrated:
-            # Resume: this paragraph survived the crash that stopped the run.
-            # Rewriting it would spend a model call to replace prose the reader
-            # may already have seen — and would overwrite an edit.
-            continue
-
-        work.done += 1
-        await progress(
-            progress_current=work.done, phase=f"Writing {section.heading}"[:200]
-        )
-        row = await report._narrate(
-            cfg["settings"],
-            run=work.run,
-            report=work.report,
-            section=section,
-            position=position,
-            results=work.written.get(section.id, []),
-            policy=work.connection.disclosure_policy,
-            narrator=work.narrator,
-            other_headings=[h for h in work.headings if h != section.heading],
-            established=list(work.prose),
-        )
-        db.add(row)
-        await db.commit()
-        work.outcomes.append(row.status != ReportSectionResultStatus.FAILED)
-        if row.prose:
-            work.prose.append(
-                WrittenSection(heading=row.heading_snapshot, prose=row.prose)
+    await progress(progress_current=work.done, phase=_wave_phase(wave))
+    # Frozen before anything goes out, and shared by the whole wave: the
+    # alternative is a race over `work.prose` that would hand section four a
+    # different document depending on which provider call returned first.
+    established = list(work.prose)
+    paragraphs = await asyncio.gather(
+        *(
+            report._narrate(
+                cfg["settings"],
+                run=work.run,
+                report=work.report,
+                section=section,
+                position=position,
+                results=work.written.get(section.id, []),
+                policy=work.connection.disclosure_policy,
+                narrator=work.narrator,
+                other_headings=[h for h in work.headings if h != section.heading],
+                established=established,
             )
-        # Back into this node while sections remain — which is also where the
-        # cancel check lands, between sections, exactly as before.
-        return NARRATE_SECTION
+            for position, section in wave
+        ),
+        # A paragraph the provider refused already arrives as a FAILED row —
+        # `_narrate` catches that itself. This is for the other kind: a genuine
+        # crash, which must fail the run without also throwing away the three
+        # paragraphs that were written beside it.
+        return_exceptions=True,
+    )
 
-    return SUMMARISE
+    crash: BaseException | None = None
+    for paragraph in paragraphs:
+        if isinstance(paragraph, BaseException):
+            crash = crash or paragraph
+            continue
+        db.add(paragraph)
+        await db.commit()
+        work.done += 1
+        work.outcomes.append(
+            paragraph.status != ReportSectionResultStatus.FAILED
+        )
+        if paragraph.prose:
+            work.prose.append(
+                WrittenSection(
+                    heading=paragraph.heading_snapshot, prose=paragraph.prose
+                )
+            )
+    await progress(progress_current=work.done)
+    if crash is not None:
+        # The facade owns this: a crashing node is the run, not a step in it.
+        raise crash
+
+    # Back into this node while sections remain — which is also where the
+    # cancel check lands, now between waves rather than between sections.
+    return NARRATE_SECTION
 
 
 async def _summarise(work: ReportWork, config: RunnableConfig) -> str:
@@ -525,6 +580,52 @@ async def _finish_run(work: ReportWork, config: RunnableConfig) -> str:
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
+def _next_wave(
+    work: ReportWork, settings: Any
+) -> list[tuple[int, ReportSection]]:
+    """The next group of sections to write at once, and the cursor moved past it.
+
+    Two kinds of section are stepped over rather than written, and both are
+    stepped over *here* so the wave is only ever real work:
+
+    * the **executive summary**, which is written last from the sections it
+      summarises. Its position is remembered rather than appended because it is
+      wherever the user put it — usually first, which is the whole point.
+    * a section a **resume** found already narrated. Rewriting it would spend a
+      model call to replace prose the reader may already have seen, and would
+      overwrite an edit.
+
+    An empty list means the walk is over: the loop above exhausts `cursor`
+    before it stops filling a wave, so a short wave is the last one and an
+    empty one is past the end.
+    """
+    limit = max(1, int(settings.report_narration_concurrency))
+    wave: list[tuple[int, ReportSection]] = []
+    while work.cursor < len(work.sections) and len(wave) < limit:
+        position = work.cursor
+        section = work.sections[position]
+        work.cursor += 1
+        if section.kind == ReportSectionKind.EXECUTIVE_SUMMARY:
+            work.summary = (position, section)
+        elif section.id not in work.narrated:
+            wave.append((position, section))
+    return wave
+
+
+def _wave_phase(wave: list[tuple[int, ReportSection]]) -> str:
+    """What the poll response says while a wave is in flight.
+
+    One section still names it, because that is what the reader was told before
+    and a wave of one is the sequential case. More than one names them all: a
+    progress line reading "Writing 4 sections" while four headings sit visibly
+    unwritten tells the reader less than the headings would.
+    """
+    if len(wave) == 1:
+        return f"Writing {wave[0][1].heading}"[:200]
+    headings = ", ".join(section.heading for _position, section in wave)
+    return f"Writing {len(wave)} sections: {headings}"[:200]
+
+
 def _fail(work: ReportWork, message: str) -> str:
     work.status = ReportRunStatus.FAILED
     work.error = message
@@ -639,7 +740,8 @@ def _build() -> Any:
     graph.add_node(
         NARRATE_SECTION,
         _adapt(NARRATE_SECTION, _narrate_section),
-        # Back into itself while sections remain. Sequential, not `Send`.
+        # Back into itself while sections remain — one wave per pass, not a
+        # `Send` fan-out: the loop is what carries `established` forward.
         destinations=(NARRATE_SECTION, SUMMARISE, FINISH),
     )
     graph.add_node(
@@ -661,10 +763,12 @@ def _build() -> Any:
 # call on one node is what collapses the two drivers into one.
 REPORT_GRAPH = _build().compile(name="report")
 
-#: A report has as many supersteps as it has sections plus a fixed preamble, so
-#: the ceiling has to scale with the outline rather than sit at the chat graph's
-#: 25. `section_target` is capped at 8 and the summary rides on top; this is
-#: that, with room for the preamble and a wide margin.
+#: A report has as many supersteps as it has narration waves plus a fixed
+#: preamble, so the ceiling has to scale with the outline rather than sit at the
+#: chat graph's 25. `section_target` is capped at 8 and the summary rides on
+#: top; this is that at a wave size of one — the worst case, and the one
+#: `report_narration_concurrency = 1` still reaches — with room for the preamble
+#: and a wide margin.
 RECURSION_LIMIT = 256
 
 

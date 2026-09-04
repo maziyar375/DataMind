@@ -221,14 +221,33 @@ rather than resuming them — the two workers differ here on purpose.)
 ```
 1. re-check disclosure                     → fail the run if narrow (§7)
 2. execute every block                     → execute_many, grouped by connection
-3. per section, in order:
+3. sections in waves of N, in order:       → N = report_narration_concurrency
      compute facts from its rows           → free, exact (§8)
-     narrate                               → one model call
+     narrate                               → one model call, N of them at once
      numeric consistency check             → free, no tokens (§8)
      write report_section_results          → the UI sees it on its next poll
 4. the executive summary, last             → from the finished sections' prose
 5. derive the run status from its sections → SUCCEEDED | PARTIAL | FAILED
 ```
+
+Step 3 is a **wave**, not a fan-out, and the difference is `established`. Every
+section is told what the sections before it found, so section five contrasts
+with section two instead of restating it. Sections written in the *same* wave
+cannot be told about each other — they are in flight together — so the wave size
+is a dial between the fastest document and the most coherent one:
+`report_narration_concurrency = 1` is a strictly sequential document where each
+section reads every section before it; a number at or above the section count
+writes every paragraph at once and none of them read any other. The default is
+4, which is at most two waves for the eight sections `outline.MAX_SECTIONS`
+allows, so the back half of a report still reads the front half. `other_headings`
+— the outline, the other half of what makes independent paragraphs read as one
+document — is unaffected either way: it comes off the structure and every
+section has always had all of it.
+
+A generation's wall clock is almost entirely provider latency, so this is the
+setting that decides whether a nine-section document costs nine round trips or
+three. Blocks were always executed concurrently (`execute_many`, under
+`MAX_CONCURRENT_TILES`); until the wave, the prose was the part that was not.
 
 Every row is written **the moment it lands**. That is the whole progressive
 render: the poll response is a snapshot of what exists so far, so the frontend

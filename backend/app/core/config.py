@@ -62,6 +62,22 @@ class Settings(BaseSettings):
     # the direct hand-off in `post_message`, which costs nothing.
     run_claim_interval_seconds: int = 15
 
+    # ── report generation ────────────────────────────────────────────────
+    # How many section paragraphs are written at once. A generation's wall
+    # clock is almost entirely provider latency — one call per section, five to
+    # twenty seconds each — so this is the dial that turns a nine-call document
+    # from nine round trips into three.
+    #
+    # It is a *wave* size, not a fan-out: sections are written in groups of
+    # this many, and each group is told what the groups before it established.
+    # That is why the number matters rather than just being "as many as
+    # possible". `1` is the old strictly-sequential behaviour, where every
+    # section reads every section before it; a number at or above the section
+    # count writes the whole document at once, and no section reads any other.
+    # 4 keeps the second half of a report aware of the first while costing at
+    # most two waves for the eight sections `outline.MAX_SECTIONS` allows.
+    report_narration_concurrency: int = 4
+
     # ── sql guard / execution defaults ───────────────────────────────────
     default_max_rows: int = 1000
     default_statement_timeout_ms: int = 30_000
