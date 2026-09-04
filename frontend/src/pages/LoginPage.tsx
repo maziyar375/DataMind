@@ -118,16 +118,6 @@ export default function LoginPage({
             >
               Welcome to DataMind
             </h1>
-            <div
-              style={{
-                fontSize: 14.5,
-                color: 'var(--auth-ink-2)',
-                marginTop: 9,
-                lineHeight: 1.5,
-              }}
-            >
-              Sign in to your conversational BI workspace
-            </div>
           </div>
         </div>
 

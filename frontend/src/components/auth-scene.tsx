@@ -29,56 +29,77 @@
 import { useEffect, useRef } from 'react'
 
 /**
- * One dotted sheet, in viewport fractions so it reflows with the window.
+ * One dotted wave field.
  *
- * `a` is the corner it grows from (pushed slightly off-screen so the sheet is
- * cut by the edge instead of ending in mid-air), `u` runs along a strand and
- * `v` steps back across them. The wave displaces along `v`, which is why the
- * two vectors are stored rather than one angle.
+ * A field is a stack of smooth curves, each sampled as loose particles rather
+ * than stroked as a line, and each curve is the sum of three sines — the
+ * `y = baseY + a1·sin(x·f1 + p1) + a2·sin(x·f2 + p2) + …` shape, with a third
+ * harmonic so no layer ever resolves into a recognisable single wave.
+ *
+ * Everything is in viewport fractions, so the field reflows rather than
+ * scaling. The **outer** end of each field is pushed well off the screen: its
+ * edge fade then happens where nobody can see it, and what remains on screen is
+ * a surface cut by the window rather than a rectangle of particles with a
+ * visible boundary. The inner end fades in view, which is what keeps the middle
+ * of the page — where the card is — clear.
  */
-type Field = {
-  ax: number; ay: number
-  ux: number; uy: number
-  vx: number; vy: number
+type Wave = {
+  /** Where the field runs. Outer end off-screen, inner end toward the middle. */
+  x0: number; x1: number
+  /** Baseline of the frontmost layer, and of the backmost. */
+  y0: number; y1: number
+  /** Curves in the stack. Twenty each: the count is bounded from below by the
+      brief and from above by the band, since neighbours closer than about
+      12px stop reading as separate curves and start reading as a cloud. */
+  layers: number
+  /** Cycles across the field for each harmonic, and their heights as a
+      fraction of the viewport. */
+  freq: [number, number, number]
+  amp: [number, number, number]
+  /** Radians per second for each harmonic. Different signs and speeds mean the
+      three never come back into step, so the surface never repeats visibly. */
+  drift: [number, number, number]
+  /** Per-layer amplitude, frequency and phase all vary off this. Two unrelated
+      seeds are most of why the fields are complementary and not copies. */
+  seed: number
   color: '--wave-a' | '--wave-b'
-  /** Flips the travel direction so the two corners do not read as one sheet. */
-  flow: 1 | -1
 }
 
-/*
- * Measured off the reference, not guessed: each sheet covers about a third of
- * the width and a fifth of the height, tucked into its corner. The numbers
- * matter more than they look — the vertical span is `|uy| + |vy| + amplitude`,
- * and an earlier pass at 0.22 + 0.36 + 0.11 put the sheets across two thirds of
- * the screen, which is not a bigger version of this, it is a different picture.
- */
-const FIELDS: Field[] = [
-  { ax: -0.09, ay: 1.03, ux: 0.37, uy: -0.135, vx: 0.06, vy: -0.13, color: '--wave-a', flow: 1 },
-  { ax: 1.09, ay: 1.03, ux: -0.37, uy: -0.135, vx: -0.06, vy: -0.13, color: '--wave-b', flow: -1 },
+const WAVES: Wave[] = [
+  // Out of the bottom-left corner, rising and falling on its way to the lower
+  // centre: the lower harmonic is the tallest, so this one reads as a swell.
+  {
+    x0: -0.18, x1: 0.34, y0: 1.04, y1: 0.80, layers: 20,
+    freq: [1.9, 3.5, 6.1], amp: [0.027, 0.012, 0.0045],
+    drift: [0.055, -0.084, 0.121], seed: 0.31, color: '--wave-a',
+  },
+  // Down to the bottom-right corner. Fewer, flatter layers and a stronger
+  // second harmonic, so it ripples where the left one swells.
+  {
+    x0: 1.18, x1: 0.66, y0: 1.04, y1: 0.825, layers: 20,
+    freq: [1.4, 4.4, 7.3], amp: [0.023, 0.016, 0.004],
+    drift: [-0.069, 0.048, -0.095], seed: 2.74, color: '--wave-b',
+  },
 ]
 
-/*
- * What makes the sheet read as a plane lying in space rather than a pattern
- * printed on the glass. Three effects, all of them one line each:
- *
- *  - `PERSPECTIVE` bunches the strands as they recede, so the near ones are
- *    far apart and the far ones crowd toward a horizon.
- *  - `TAPER` narrows each strand about its own midline with depth, which is
- *    the pair of converging edges the eye actually reads as distance.
- *  - the swell shrinks with depth too, because a wave further away is smaller.
- *
- * Together they turn a flat dotted band into a corner of a moving surface.
+/** Particle spacing on the frontmost layer, and how much it opens up by the
+    back one. Spacing is what makes the surface dense low and sparse high. */
+const STEP_FRONT = 6
+const STEP_BACK = 2.1
+/**
+ * How the layers distribute up the band. This was 1.25 — crowding them toward
+ * the bottom — and it was wrong: at that bias the lowest curves sat 4px apart
+ * while each swung through 40px, so they overlapped into a cloud of dots
+ * instead of reading as separate curves, which is the entire look. Even
+ * spacing keeps roughly 12px between neighbours, and the density still climbs
+ * toward the bottom through the two things that can do it without stacking
+ * curves on top of each other: particle spacing along each curve, and the fade.
  */
-const PERSPECTIVE = 1.7
-const TAPER = 0.3
+const STACK_BIAS = 1
+/** Fraction of a field's width spent fading in at each end. */
+const EDGE = 0.26
 
-/* Dot spacing in CSS pixels, along a strand and between strands. The counts are
-   derived from these and the sheet's measured length rather than picked per
-   breakpoint: a fixed count spreads to 16px apart on a wide window and packs to
-   9px on a phone, which is one sheet that looks like two different materials. */
-const ALONG_STEP = 7.5
-const STRAND_STEP = 12
-/** How far the pointer is felt, and how hard it shoves a dot aside. */
+/** How far the pointer is felt, and how hard it shoves a particle aside. */
 const REACH = 150
 const SHOVE = 20
 /** A click's ring: how fast it travels, how wide it is, how long it lives. */
@@ -86,7 +107,20 @@ const RING_SPEED = 620
 const RING_BAND = 78
 const RING_LIFE = 1.5
 
-const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n))
+/**
+ * Deterministic scatter in [0,1). The particles must not sit on a rigid grid —
+ * a grid is what makes a dot field read as a texture rather than a surface —
+ * but they also must not crawl, so the offset has to be a pure function of
+ * which particle it is and nothing else. No RNG, no stored state.
+ */
+function jitter(a: number, b: number) {
+  const n = Math.sin(a * 127.1 + b * 311.7) * 43758.5453
+  return n - Math.floor(n)
+}
+
+/** Particles one field may draw in a frame. The buffer is sized to this and
+    the sampling loops stop at it, so no window size can outgrow either. */
+const MAX_DOTS = 6000
 
 /**
  * The dots that ride the rings around the mark.
@@ -355,9 +389,9 @@ export default function AuthScene() {
 
     /* Allocated once and reused every frame: a per-frame array here would hand
        the collector two thousand objects sixty times a second, which shows up
-       as stutter rather than as slowness. Sized to the clamps in `dotsAcross`'s
-       constants, so no frame can outgrow it. */
-    const dots = new Float32Array(132 * 16 * 4)
+       as stutter rather than as slowness. Sized to `MAX_DOTS`, which the
+       sampling loops also stop at, so no window can outgrow it. */
+    const dots = new Float32Array(MAX_DOTS * 4)
     const counts = new Uint16Array(BUCKETS)
 
     let raf = 0
@@ -394,51 +428,59 @@ export default function AuthScene() {
 
       while (rings.length && now - rings[0].born > RING_LIFE) rings.shift()
 
-      for (const f of FIELDS) {
-        const ax = f.ax * width, ay = f.ay * height
-        const ux = f.ux * width, uy = f.uy * height
-        const vx = f.vx * width, vy = f.vy * height
-        const vlen = Math.hypot(vx, vy) || 1
-        const nvx = vx / vlen, nvy = vy / vlen
-        const strands = clamp(Math.round(vlen / STRAND_STEP), 8, 22)
-        const across = clamp(Math.round(Math.hypot(ux, uy) / ALONG_STEP), 24, 132)
-        /* Off the sheet's own depth rather than the viewport's, so the ripple
-           stays inside the corner it belongs to at every size. */
-        const amp = vlen * 0.2
+      for (const w of WAVES) {
+        const fx0 = w.x0 * width, fx1 = w.x1 * width
+        const span = fx1 - fx0
+        const fy0 = w.y0 * height, fy1 = w.y1 * height
 
-        /* Pass one solves every dot into `dots` and files it under an opacity
-           bucket. Nothing is painted here. */
+        /* Pass one solves every particle and files it under an opacity bucket;
+           nothing is painted until pass two. */
         let n = 0
         counts.fill(0)
-        for (let s = 0; s < strands; s++) {
-          /* Even in depth, uneven on screen: that difference is the whole of
-             the perspective. */
-          const vRaw = s / (strands - 1)
-          const v = (vRaw * (1 + PERSPECTIVE)) / (1 + PERSPECTIVE * vRaw)
-          const taper = 1 - TAPER * v
-          for (let i = 0; i < across; i++) {
-            /* Narrowed about the strand's own midline, so both edges converge
-               instead of the sheet sliding sideways as it recedes. */
-            const u = 0.5 + (i / (across - 1) - 0.5) * taper
 
-            /* Two harmonics, the second off-tempo, so the sheet never settles
-               into the single clean sine that reads as a screensaver. */
-            const phase = u * 10.5 + v * 1.25 - t * 0.85 * f.flow
-            const swell = amp * (0.4 + 0.6 * Math.sin(Math.PI * v * 0.82 + 0.22)) * (1 - 0.4 * v)
-            const d = Math.sin(phase) * swell + Math.sin(phase * 1.93 + 1.3) * swell * 0.3
+        for (let L = 0; L < w.layers; L++) {
+          const d = L / (w.layers - 1)
+          const baseY = fy0 + (fy1 - fy0) * d ** STACK_BIAS
 
-            let x = ax + ux * u + vx * v + nvx * d
-            let y = ay + uy * u + vy * v + nvy * d
-            /* Both fades are one-sided on purpose. The sheet's outer edge is
-               anchored off-screen, so it is cut by the window like a real thing
-               continuing past it; fading that edge too would draw the taper's
-               own straight diagonal, which reads as a torn sheet rather than a
-               surface. What does fade is the inner edge, toward the middle of
-               the page, and the far edge into its own horizon. */
-            const edge = 1 - u ** 2.6
-            const depth = (1 - v) ** 0.85
-            let a = 0.95 * (edge > 0 ? edge : 0) * depth
-            let r = 0.7 + 1.55 * (1 - v * 0.72)
+          /* Each layer gets its own amplitude, frequency and phase off two
+             out-of-step wobbles, so neighbouring curves never run parallel —
+             which is what a stack of identical sines looks like, and it looks
+             like corduroy. Amplitude also falls with depth: a wave further
+             away is a smaller wave. */
+          const wa = Math.sin(d * 5.3 + w.seed * 3.1)
+          const wb = Math.sin(d * 3.1 + w.seed * 7.7)
+          const scale = height * (1 - 0.5 * d) * (0.78 + 0.22 * wa)
+          const a1 = w.amp[0] * scale, a2 = w.amp[1] * scale, a3 = w.amp[2] * scale
+          const f1 = w.freq[0] * (1 + 0.07 * wa)
+          const f2 = w.freq[1] * (1 + 0.06 * wb)
+          const f3 = w.freq[2] * (1 + 0.05 * wa)
+          const ph = w.seed * 6.2832 + d * 2.7
+
+          const step = STEP_FRONT * (1 + STEP_BACK * d)
+          const count = Math.max(2, Math.ceil(Math.abs(span) / step))
+          const fade = (1 - d) ** 0.8
+          const rad = 1.7 - 0.85 * d
+
+          for (let i = 0; i <= count; i++) {
+            const u = i / count
+            const jx = jitter(L, i), jy = jitter(i, L)
+
+            const th = u * 6.2832
+            let x = fx0 + span * u + (jx - 0.5) * step * 0.6
+            let y = baseY
+              + a1 * Math.sin(th * f1 + ph + t * w.drift[0])
+              + a2 * Math.sin(th * f2 + ph * 1.7 + t * w.drift[1])
+              + a3 * Math.sin(th * f3 + ph * 0.6 + t * w.drift[2])
+              + (jy - 0.5) * 3.4
+
+            /* Smoothstepped at both ends. The outer end's fade is off-screen,
+               so what this actually buys is the inner one: the field thins to
+               nothing before it reaches the card. */
+            const e = Math.min(u, 1 - u) / EDGE
+            const edge = e >= 1 ? 1 : e * e * (3 - 2 * e)
+
+            let a = 1.15 * fade * edge
+            let r = rad
 
             if (grip > 0.004) {
               const dx = x - atX, dy = y - atY
@@ -455,9 +497,9 @@ export default function AuthScene() {
 
             for (const ring of rings) {
               const age = now - ring.born
-              const edge = Math.abs(Math.hypot(x - ring.x, y - ring.y) - age * RING_SPEED)
-              if (edge < RING_BAND) {
-                const k = (1 - edge / RING_BAND) * (1 - age / RING_LIFE)
+              const edgeD = Math.abs(Math.hypot(x - ring.x, y - ring.y) - age * RING_SPEED)
+              if (edgeD < RING_BAND) {
+                const k = (1 - edgeD / RING_BAND) * (1 - age / RING_LIFE)
                 a += k * 0.55
                 r += k * 1.5
               }
@@ -469,14 +511,16 @@ export default function AuthScene() {
             dots[o] = x; dots[o + 1] = y; dots[o + 2] = r; dots[o + 3] = b
             counts[b]++
             n++
+            if (n >= MAX_DOTS) break
           }
+          if (n >= MAX_DOTS) break
         }
 
         /* Pass two paints each bucket as ONE path. `globalAlpha` and `fill` are
-           the expensive calls, and a fill per dot costs about half the frame at
-           this density — twelve of them costs nothing, and twelve opacity steps
-           are indistinguishable on a two-pixel dot. */
-        ctx!.fillStyle = colors[f.color]
+           the expensive calls, and a fill per particle costs about half the
+           frame at this density — twelve of them costs nothing, and twelve
+           opacity steps are indistinguishable on a two-pixel dot. */
+        ctx!.fillStyle = colors[w.color]
         for (let b = 0; b < BUCKETS; b++) {
           if (!counts[b]) continue
           ctx!.globalAlpha = (b + 1) / BUCKETS
@@ -491,6 +535,8 @@ export default function AuthScene() {
           ctx!.fill()
         }
       }
+      ctx!.globalAlpha = 1
+
       // ── the dots around the mark ──
       if (++sinceMeasure >= 10) {
         sinceMeasure = 0

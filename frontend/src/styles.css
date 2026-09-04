@@ -531,19 +531,24 @@ code, pre, .mono {
    and the inks moved *down* rather than up, because on paper a mark is legible
    by being darker, not by being more saturated. */
 :root[data-theme='light'] .rm-auth {
-  --wave-a: oklch(0.48 0.23 318);
-  /* Deeper than it looks like it should be. The paper is a warm neutral at
-     hue 83, so an amber anywhere near it is a tint of the ground rather than a
-     mark on it — at 0.52 this sheet measured 3.9:1 against `--bg` while its
-     plum twin measured 6. Dropping the lightness is what separates them. */
-  --wave-b: oklch(0.47 0.15 55);
-  --auth-ink: oklch(0.38 0.09 318);
+  /* **Both hues are cool, and both are dark.** The amber that used to sit here
+     was the whole problem: the paper is a warm neutral at hue 83, so a warm
+     mark on it is a tint of the ground, and darkening it only made a muddier
+     tint. Dark mode gets its separation from *value* — bright marks on a black
+     field — and light mode has to get it from **hue** instead, so the pair
+     moved to indigo-violet and rose-magenta, both a long way round the wheel
+     from the paper, and both dark enough to read as ink. That keeps the dark
+     theme's relationship (one cool, one pink) with the accent's plum sitting
+     between them. Measured against `--bg`: 5.4:1 and 4.9:1, from 4.3 and 3.8. */
+  --wave-a: oklch(0.42 0.22 288);
+  --wave-b: oklch(0.45 0.21 352);
+  --auth-ink: oklch(0.32 0.06 300);
   --auth-cta: linear-gradient(100deg, oklch(0.5 0.2 322), oklch(0.46 0.22 298));
   background:
     radial-gradient(
       128% 96% at 50% 30%,
-      transparent 34%,
-      color-mix(in oklch, var(--bg) 80%, oklch(0.76 0.08 320)) 100%
+      transparent 40%,
+      color-mix(in oklch, var(--bg) 90%, oklch(0.7 0.1 312)) 100%
     ),
     var(--bg);
 }
@@ -586,15 +591,17 @@ code, pre, .mono {
 
 /* On the pale surface the dark theme's neon pastels wash out, so light mode
    gets its own: deeper hues at higher alpha, same positions. */
-/* Same four corners as dark, at two thirds the strength: enough for the tint
-   to be felt where the waves live, not enough to grey the middle of the page. */
+/* Same four corners as dark, at a third the strength. A glow is a luxury on a
+   black field and a liability on a white one: every point of alpha here is
+   contrast taken away from everything drawn on top of it, so these are just
+   strong enough to tint the corners the waves live in. */
 :root[data-theme='light'] .rm-auth::before {
   background:
-    radial-gradient(26% 22% at 50% 24%, oklch(0.6 0.24 315 / 0.14), transparent 74%),
-    radial-gradient(30% 32% at 4% 10%, oklch(0.58 0.26 302 / 0.16), transparent 74%),
-    radial-gradient(30% 32% at 96% 8%, oklch(0.72 0.17 58 / 0.18), transparent 74%),
-    radial-gradient(34% 34% at 2% 96%, oklch(0.56 0.25 318 / 0.2), transparent 74%),
-    radial-gradient(34% 34% at 98% 96%, oklch(0.7 0.18 60 / 0.2), transparent 74%);
+    radial-gradient(26% 22% at 50% 24%, oklch(0.58 0.24 312 / 0.09), transparent 74%),
+    radial-gradient(30% 32% at 4% 10%, oklch(0.56 0.26 292 / 0.1), transparent 74%),
+    radial-gradient(30% 32% at 96% 8%, oklch(0.58 0.24 352 / 0.09), transparent 74%),
+    radial-gradient(34% 34% at 2% 96%, oklch(0.5 0.26 290 / 0.13), transparent 74%),
+    radial-gradient(34% 34% at 98% 96%, oklch(0.54 0.24 352 / 0.13), transparent 74%);
 }
 
 /* On paper the instruments need more of themselves than they do on navy: a
@@ -602,25 +609,31 @@ code, pre, .mono {
    not guessed — at the dark theme's 0.52 the frames sat under 1.4:1 against
    `--bg` and simply were not there. */
 :root[data-theme='light'] .rm-auth-glyph {
-  opacity: calc(0.72 + var(--lit, 0) * 0.28);
+  opacity: calc(0.88 + var(--lit, 0) * 0.12);
 }
 :root[data-theme='light'] .rm-glyph-frame {
-  fill: color-mix(in oklch, var(--panel) 82%, transparent);
-  stroke: color-mix(in oklch, var(--auth-ink) 46%, transparent);
+  fill: color-mix(in oklch, var(--panel) 94%, transparent);
+  stroke: color-mix(in oklch, var(--auth-ink) 58%, transparent);
 }
 :root[data-theme='light'] .rm-glyph-track {
-  stroke: color-mix(in oklch, var(--auth-ink) 30%, transparent);
+  stroke: color-mix(in oklch, var(--auth-ink) 26%, transparent);
 }
 :root[data-theme='light'] .rm-glyph-rows rect,
 :root[data-theme='light'] .rm-glyph-matrix circle {
-  fill: color-mix(in oklch, var(--auth-ink) 46%, transparent);
+  fill: color-mix(in oklch, var(--auth-ink) 58%, transparent);
 }
 :root[data-theme='light'] .rm-glyph-rule {
-  stroke: color-mix(in oklch, var(--auth-ink) 40%, transparent);
+  stroke: color-mix(in oklch, var(--auth-ink) 48%, transparent);
 }
-:root[data-theme='light'] .rm-auth-orbit { opacity: 0.95; }
-:root[data-theme='light'] .rm-orbit-ring { opacity: 0.5; }
-:root[data-theme='light'] .rm-orbit-dash { opacity: 0.7; }
+/* A wash that reads on navy is invisible on paper — the area fills and the
+   header row both need roughly a third more pigment here. */
+:root[data-theme='light'] .rm-glyph-fill { fill: color-mix(in oklch, var(--wave-a) 28%, transparent); }
+:root[data-theme='light'] .rm-glyph-fill-b { fill: color-mix(in oklch, var(--wave-b) 26%, transparent); }
+:root[data-theme='light'] .rm-glyph-head rect { fill: color-mix(in oklch, var(--wave-b) 66%, transparent); }
+:root[data-theme='light'] .rm-auth-orbit { opacity: 1; }
+:root[data-theme='light'] .rm-orbit-ring { opacity: 0.42; }
+:root[data-theme='light'] .rm-orbit-ring.is-far { opacity: 0.2; }
+:root[data-theme='light'] .rm-orbit-dash { opacity: 0.62; }
 
 /* ── the waves ─────────────────────────────────────────────────────────── */
 /* One canvas for both sheets. It covers the viewport rather than the two
@@ -749,13 +762,13 @@ code, pre, .mono {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 20px;
+  gap: 26px;
 }
 
 @media (max-height: 820px) {
   .rm-auth { padding-block: 22px; }
   .rm-auth-col { gap: 20px; }
-  .rm-auth-head { gap: 14px; }
+  .rm-auth-head { gap: 18px; }
   .rm-auth-logo > * { width: 146px; height: 146px; }
   .rm-auth-orbit { width: min(430px, 96vw); height: min(430px, 96vw); }
 }
