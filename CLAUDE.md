@@ -122,13 +122,23 @@ plus a **React + Vite** SPA. No microservices, no broker, no vector DB.
 > that way sat `RUNNING` until the reconciler killed it as `E_ORPHANED`, which
 > tells the reader nothing. Same posture as `_bind_connection` beside it.
 >
-> **Embedding models live on the same row and the same screen** —
+> **Embedding models live on the same table and the same screen** —
 > `llm_configs.embedding_model` / `.embedding_params`, in the form's
 > *Embeddings* section — because an embedding endpoint needs exactly what a
 > provider row already holds (kind, base URL, encrypted key) and
 > `LLMGateway.embed` already took a resolved provider plus a model *name*. A
-> second section would duplicate the credential form, the `llm_config:{id}` AAD
-> scheme, the probe and the delete guard to hold one string. Anthropic is
+> second screen would duplicate the credential form, the `llm_config:{id}` AAD
+> scheme, the probe and the delete guard to hold one string.
+> **But a row is one job**, and the screen says so: `/providers` lists *Models*
+> and *Embedder* as two groups, creating asks which kind, and the form shows
+> that kind's fields only — an embedder has no temperature or advanced
+> completion parameters, a model has no Embeddings section, and the kind is
+> cleared out of the payload on save (`kindPayload`) so the separation reaches
+> the wire instead of being a hidden field. The kind is **derived**
+> (`kindOf` on the frontend, `can_chat` / `can_embed` on the server), never
+> stored: a `kind` column would be a third answer able to disagree with the two
+> fields it describes. Rows written before this that declare both still work,
+> appear in both groups, and are told what they are rather than migrated. Anthropic is
 > refused an embedding model at save time, for the same reason
 > `probe_embedding` refuses it with no network call.
 > Do **not** confuse this with `database_connections.embedding_model` /

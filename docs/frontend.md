@@ -124,7 +124,7 @@ colours are chosen in JS, and the print stylesheet.
 | **Reports** | [`ReportsPage.tsx`](../frontend/src/pages/ReportsPage.tsx) | A document whose structure a human approved, generated over real results and kept as a snapshot. |
 | **Knowledge** | [`KnowledgePage.tsx`](../frontend/src/pages/KnowledgePage.tsx) | The curation console, across every connection: flags raised, questions nothing answers, the maintenance sweep. |
 | **Data sources** | [`DataSourcesPage.tsx`](../frontend/src/pages/DataSourcesPage.tsx) | The connections DataMind may read, and everything known about each one. |
-| **LLM providers** | [`LlmProvidersPage.tsx`](../frontend/src/pages/LlmProvidersPage.tsx) | The models it may call, and the keys it calls them with. |
+| **LLM providers** | [`LlmProvidersPage.tsx`](../frontend/src/pages/LlmProvidersPage.tsx) | The models it may call, and the keys it calls them with. Two groups: *Models* answer questions, the *Embedder* makes vectors — a row is one or the other, and the form shows that kind's fields only. |
 | **Users** | [`UsersPage.tsx`](../frontend/src/pages/UsersPage.tsx) | Who can sign in and what they may do. Admin only — the rail entry is not rendered otherwise. |
 | **Your account** | [`AccountPage.tsx`](../frontend/src/pages/AccountPage.tsx) | `/settings`: your display name and your password. Reached from the user block in the rail, not from `NAV`. |
 | **Creators** | [`AboutPage.tsx`](../frontend/src/pages/AboutPage.tsx) | Who built it. A colophon, not a destination; the one page on both sides of the sign-in wall. |

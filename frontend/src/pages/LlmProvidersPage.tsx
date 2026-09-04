@@ -33,14 +33,26 @@
  * The translation between what is typed and what is sent lives in
  * `components/provider-params.ts`, tested apart from React.
  *
- * **Embeddings are here rather than in a section of their own**, and that is
- * an architectural decision rather than a placement: an embedding endpoint
- * needs exactly what this screen already stores — a provider kind, a base URL
- * and an encrypted key — and `LLMGateway.embed` already takes a resolved
- * provider plus a model *name*. A second section would duplicate this form,
- * the key handling and the probe to hold one extra string. Which store is
- * indexed with which of these providers is the Knowledge console's question,
- * and it is asked there.
+ * **A row is one thing: a model that answers, or an embedder.** The two are
+ * different jobs — one writes an answer, one turns a question into a vector —
+ * and a row that quietly did both was the screen's most confusing shape: the
+ * Embeddings section sat under every model whether or not that endpoint had
+ * anything to do with vectors. So the list is two groups, creating asks which
+ * kind, and the form shows that kind's fields and no others. An embedder has
+ * no temperature; a model has no embedding section.
+ *
+ * **They still share this screen**, and that is an architectural decision
+ * rather than a placement: an embedding endpoint needs exactly what this form
+ * already stores — a provider kind, a base URL and an encrypted key — and
+ * `LLMGateway.embed` already takes a resolved provider plus a model *name*. A
+ * separate screen would duplicate this form, the key handling and the probe to
+ * hold one extra string. What is separated is the *record*, which is what was
+ * confusing, not the credential form, which was not.
+ *
+ * Rows written before this — one row declaring both — still work and are shown
+ * in both groups. Nothing rewrites them: `can_chat` and `can_embed` are
+ * derived from the two fields, so "what is this for?" stays a question asked
+ * of the row rather than a column that can disagree with it.
  *
  * The one departure from the master–detail pages' visual rules is
  * `PROVIDER_HUES` below: the colour is keyed on the provider rather than on
@@ -53,7 +65,8 @@ import { llmConfigs as api } from '../api/client'
 import type { LlmConfig, ParameterCatalog, TestResult } from '../api/types'
 import {
   Chip, DangerButton, EmptyState, ErrorNote, Field, GhostButton, GlyphBadge, Icon,
-  PrimaryButton, Select, Spinner, TextArea, TextInput, identityHue, relativeTime,
+  PrimaryButton, Segmented, Select, Spinner, TextArea, TextInput, identityHue,
+  relativeTime,
 } from '../components/ui'
 import {
   addable, collectParams, configuredCount, draftsFrom, fieldKind,
@@ -68,18 +81,41 @@ import { ListScrim, ListToggle, useListDrawer } from '../components/list-drawer'
 import { PROVIDER_URLS } from '../theme/tokens'
 import { useUnsavedWork } from '../shell'
 
-const BLANK = {
-  name: 'New model',
-  provider: 'OpenAI-compatible',
-  base_url: PROVIDER_URLS['OpenAI-compatible'],
-  model: 'gpt-4o-mini',
-  temperature: 0,
-  max_tokens: 2048,
-  // The embedding model is a plain field on the draft like any other scalar.
-  // The two parameter *maps* are not: they live in their own state, because
-  // what the form holds is text per field and what the API takes is a typed
-  // JSON object, and `provider-params.ts` is the translation.
-  embedding_model: '',
+/** What a row is for. Derived from the two model fields, never stored:
+ *  `can_chat` and `can_embed` ask the row the same way on the server, and a
+ *  `kind` column would be a third answer able to disagree with both.
+ *
+ *  `both` is not creatable. It is the shape rows had before the two were
+ *  separated, and it is kept readable rather than migrated — a row that
+ *  answers *and* embeds is working, and rewriting somebody's provider without
+ *  being asked is worse than showing it in two groups. */
+type Kind = 'chat' | 'embedding'
+
+function kindOf(config: LlmConfig): Kind | 'both' {
+  if (config.model && config.embedding_model) return 'both'
+  return config.model ? 'chat' : 'embedding'
+}
+
+/** What a new row of each kind starts as.
+ *
+ *  Both carry a plausible model name for the same reason `gpt-4o-mini` was
+ *  always there: the field's *shape* is the hint that matters, and a blank one
+ *  makes the Test button the only way to find out what belongs in it.
+ *
+ *  The embedding model is a plain field on the draft like any other scalar.
+ *  The two parameter *maps* are not: they live in their own state, because
+ *  what the form holds is text per field and what the API takes is a typed
+ *  JSON object, and `provider-params.ts` is the translation. */
+function blankDraft(kind: Kind) {
+  return {
+    name: kind === 'chat' ? 'New model' : 'New embedder',
+    provider: 'OpenAI-compatible',
+    base_url: PROVIDER_URLS['OpenAI-compatible'],
+    model: kind === 'chat' ? 'gpt-4o-mini' : '',
+    temperature: 0,
+    max_tokens: 2048,
+    embedding_model: kind === 'chat' ? '' : 'text-embedding-3-small',
+  }
 }
 
 /**
@@ -110,6 +146,97 @@ function reachability(status: string): { tone: 'green' | 'red' | 'neutral'; labe
 /** Faint explanatory prose, as the "How testing works" section already uses. */
 const faintNote: React.CSSProperties = {
   fontSize: 12.5, color: 'var(--text-dim)', margin: 0, lineHeight: 1.6,
+}
+
+/** A heading over one half of the list, and the button that adds to it.
+ *
+ *  The list stopped being one thing when a row did: reading forty subtitles to
+ *  find which endpoint makes vectors is the work this removes. `count` is on
+ *  the heading rather than only on the column, because the number that matters
+ *  here is per group — one embedder and nine models is the shape a healthy
+ *  deployment has, and a single `10` says none of that.
+ */
+function GroupHeading({
+  label, count, onAdd, addLabel,
+}: {
+  label: string
+  count: number
+  onAdd?: () => void
+  addLabel?: string
+}) {
+  return (
+    <div
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8,
+        padding: '12px 8px 4px',
+      }}
+    >
+      <span
+        style={{
+          fontSize: 10.5, fontWeight: 700, letterSpacing: '0.06em',
+          textTransform: 'uppercase', color: 'var(--text-faint)',
+        }}
+      >
+        {label}
+      </span>
+      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-faint)' }}>
+        {count}
+      </span>
+      <span style={{ flex: 1, height: 1, background: 'var(--border-subtle)' }} />
+      {onAdd && (
+        <button
+          type="button"
+          onClick={onAdd}
+          aria-label={addLabel}
+          title={addLabel}
+          className="rm-icon-btn"
+          style={{
+            display: 'grid',
+            placeItems: 'center',
+            width: 22,
+            height: 22,
+            border: 'none',
+            borderRadius: 7,
+            background: 'transparent',
+            color: 'var(--text-faint)',
+            cursor: 'pointer',
+            ['--rm-hover-bg' as string]: 'var(--panel-alt)',
+          }}
+        >
+          <Icon.Plus size={13} />
+        </button>
+      )}
+    </div>
+  )
+}
+
+/** One row in either group. The subtitle is passed in rather than derived,
+ *  because a row that answers *and* embeds appears in both and must say the
+ *  relevant half in each — the same record read two ways. */
+function ProviderItem({
+  config, subtitle, active, onClick,
+}: {
+  config: LlmConfig
+  subtitle: string
+  active: boolean
+  onClick: () => void
+}) {
+  const state = reachability(config.status)
+  return (
+    <MasterItem
+      title={config.name}
+      subtitle={subtitle}
+      active={active}
+      tone={state.tone}
+      toneLabel={state.label}
+      glyph={
+        <GlyphBadge size={30} hue={providerHue(config.provider)}>
+          <Icon.Sparkle size={15} />
+        </GlyphBadge>
+      }
+      onClick={onClick}
+    />
+  )
 }
 
 /** Whether a provider has an embedding endpoint, per the served catalog.
@@ -286,7 +413,11 @@ export default function LlmProvidersPage() {
       navigate(id ? `/providers/${id}` : '/providers', { replace }),
     [navigate],
   )
-  const [draft, setDraft] = useState<Record<string, any>>(BLANK)
+  const [draft, setDraft] = useState<Record<string, any>>(blankDraft('chat'))
+  // What the open row is for. Set from the row when one is opened and from the
+  // button that started a create — the one place it is a choice rather than an
+  // observation, because a row that declares nothing yet cannot be asked.
+  const [kind, setKind] = useState<Kind | 'both'>('chat')
   const [apiKey, setApiKey] = useState('')
   // What each provider documents, fetched once. `null` means "not known yet",
   // which is **not** the same as "this provider takes nothing": while it is
@@ -358,6 +489,10 @@ export default function LlmProvidersPage() {
     })
   }, [selected, draft, apiKey, catalog, completion.params, embedding.params])
 
+  // The blank *this* form started from. Kind-dependent, so switching what a
+  // new row is for does not read as unsaved work in every field.
+  const blank = useMemo(() => blankDraft(kind === 'both' ? 'chat' : kind), [kind])
+
   // The same rule Data sources follows: a create form counts as unsaved work
   // only once something has been typed into it.
   const touchedNew = useMemo(
@@ -366,10 +501,10 @@ export default function LlmProvidersPage() {
       && (apiKey !== ''
         || configuredCount(paramDrafts) > 0
         || configuredCount(embeddingDrafts) > 0
-        || Object.keys(BLANK).some(
-          (key) => draft[key] !== (BLANK as Record<string, unknown>)[key],
+        || Object.keys(blank).some(
+          (key) => draft[key] !== (blank as Record<string, unknown>)[key],
         )),
-    [creating, draft, apiKey, paramDrafts, embeddingDrafts],
+    [creating, draft, apiKey, paramDrafts, embeddingDrafts, blank],
   )
   const releaseUnsaved = useUnsavedWork(
     'provider-form',
@@ -418,6 +553,8 @@ export default function LlmProvidersPage() {
       max_tokens: selected.max_tokens,
       embedding_model: selected.embedding_model ?? '',
     })
+    // Asked of the row, not remembered from the last one opened.
+    setKind(kindOf(selected))
     // Hydrated against the **row's** provider, not the draft's: the draft is
     // being set in this same pass and the specs decide which stored keys have
     // a field to appear in.
@@ -444,14 +581,36 @@ export default function LlmProvidersPage() {
     // again — the same failure the id-versus-row note above describes.
   }, [selected?.id, catalogs])
 
-  function startCreate() {
-    setDraft(BLANK)
+  function startCreate(next: Kind = 'chat') {
+    setKind(next)
+    setDraft(blankDraft(next))
     setParamDrafts({})
     setEmbeddingDrafts({})
     setApiKey('')
     setTestResult(null)
     setError(null)
     navigate('/providers/new')
+  }
+
+  /** Switch what a *new* row is for, keeping what has been typed that both
+   *  kinds share — the name, the endpoint, the key.
+   *
+   *  Offered while creating only. Turning a saved model into an embedder means
+   *  clearing the model every run of every question points at, and a segmented
+   *  control is far too quiet a place for that: the row is deleted and
+   *  replaced instead, which is one confirmation and no ambiguity. */
+  function changeKind(next: Kind) {
+    const fresh = blankDraft(next)
+    setDraft({
+      ...draft,
+      // The name follows the kind only while it is still the default one.
+      name: draft.name === blank.name ? fresh.name : draft.name,
+      model: fresh.model,
+      embedding_model: fresh.embedding_model,
+    })
+    setParamDrafts({})
+    setEmbeddingDrafts({})
+    setKind(next)
   }
 
   function changeProvider(provider: string) {
@@ -483,6 +642,18 @@ export default function LlmProvidersPage() {
     return { params: completion.params, embedding_params: embedding.params }
   }
 
+  /** The half of the row this kind does not use, cleared on the way out.
+   *
+   *  The separation has to reach the wire or it is only a hidden field: a form
+   *  that stops *showing* the embedding model while still posting the one it
+   *  was hydrated with produces exactly the dual row this screen no longer
+   *  offers to make. A legacy `both` row sends neither and stays as it is. */
+  function kindPayload(): Record<string, unknown> {
+    if (kind === 'chat') return { embedding_model: '', embedding_params: {} }
+    if (kind === 'embedding') return { model: '', params: {} }
+    return {}
+  }
+
   async function save() {
     if (paramErrors > 0) {
       setError('Some parameters are not valid yet — see the fields below.')
@@ -493,7 +664,8 @@ export default function LlmProvidersPage() {
     try {
       if (creating) {
         const created = await api.create({
-          ...draft, ...parameterPayload(), api_key: apiKey || undefined,
+          ...draft, ...parameterPayload(), ...kindPayload(),
+          api_key: apiKey || undefined,
         })
         await refresh()
         // Let go before navigating, or the guard stops a saved form leaving
@@ -501,7 +673,9 @@ export default function LlmProvidersPage() {
         releaseUnsaved()
         setSelectedId(created.id, { replace: true })
       } else if (selected) {
-        const payload: Record<string, unknown> = { ...draft, ...parameterPayload() }
+        const payload: Record<string, unknown> = {
+          ...draft, ...parameterPayload(), ...kindPayload(),
+        }
         if (apiKey) payload.api_key = apiKey
         await api.update(selected.id, payload)
         await refresh()
@@ -574,12 +748,16 @@ export default function LlmProvidersPage() {
 
   const editing = creating || !!selected
 
-  // A row declares a chat model, an embedding model, or both — and a probe
-  // needs whichever it has, not specifically a chat model. An embeddings-only
-  // endpoint is tested by asking it for one vector, which is the whole of what
-  // it claims to do.
-  const declares = Boolean(draft.model || draft.embedding_model)
+  // A row declares the model its kind is *for*, and a probe asks for whichever
+  // that is: an embedder is tested by asking it for one vector, which is the
+  // whole of what it claims to do. A legacy `both` row needs either.
+  const declares =
+    kind === 'chat' ? Boolean(draft.model)
+      : kind === 'embedding' ? Boolean(draft.embedding_model)
+        : Boolean(draft.model || draft.embedding_model)
   const canTest = creating || isDirty ? declares : true
+  const embeds = kind !== 'chat'
+  const answers = kind !== 'embedding'
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -588,9 +766,16 @@ export default function LlmProvidersPage() {
       (config) =>
         config.name.toLowerCase().includes(needle)
         || config.model.toLowerCase().includes(needle)
+        || config.embedding_model.toLowerCase().includes(needle)
         || config.provider.toLowerCase().includes(needle),
     )
   }, [list, query])
+
+  // The two groups the list is read in. A legacy row that does both appears in
+  // both, which is the honest place for it: it really is the answer to both
+  // questions, and hiding it under one would make that list look wrong.
+  const models = useMemo(() => visible.filter((c) => c.model), [visible])
+  const embedders = useMemo(() => visible.filter((c) => c.embedding_model), [visible])
 
   return (
     <div style={{ display: 'flex', height: '100%', width: '100%', minWidth: 0 }}>
@@ -604,7 +789,7 @@ export default function LlmProvidersPage() {
         loading={loading}
         query={query}
         onQuery={setQuery}
-        onNew={startCreate}
+        onNew={() => startCreate('chat')}
         newLabel="Add a model"
         // "No models configured yet" implied a workspace someone else had
         // configured. They are per-account: a second person's first visit is
@@ -612,28 +797,45 @@ export default function LlmProvidersPage() {
         // missing from it.
         empty="You have not added a model yet. Providers belong to the account that made them, so a colleague's will not show up here."
       >
-        {visible.map((config) => {
-          const state = reachability(config.status)
-          return (
-            <MasterItem
-              key={config.id}
-              title={config.name}
-              // An embeddings-only row has no chat model to show, and showing
-              // a blank line would read as a broken record rather than a
-              // deliberate one.
-              subtitle={config.model || `${config.embedding_model} · embeddings`}
-              active={config.id === selectedId}
-              tone={state.tone}
-              toneLabel={state.label}
-              glyph={
-                <GlyphBadge size={30} hue={providerHue(config.provider)}>
-                  <Icon.Sparkle size={15} />
-                </GlyphBadge>
-              }
-              onClick={() => setSelectedId(config.id)}
+        {/* Two groups, because they are two jobs. The heading is what makes
+            "which of these makes vectors?" a glance rather than a reading of
+            every subtitle — and the empty Embedder group is the screen's
+            clearest statement that word matching is what Knowledge is doing. */}
+        {visible.length > 0 && (
+          <>
+            <GroupHeading label="Models" count={models.length} />
+            {models.map((config) => (
+              <ProviderItem
+                key={`chat-${config.id}`}
+                config={config}
+                subtitle={config.model}
+                active={config.id === selectedId}
+                onClick={() => setSelectedId(config.id)}
+              />
+            ))}
+            <GroupHeading
+              label="Embedder"
+              count={embedders.length}
+              onAdd={() => startCreate('embedding')}
+              addLabel="Add an embedder"
             />
-          )
-        })}
+            {embedders.map((config) => (
+              <ProviderItem
+                key={`embed-${config.id}`}
+                config={config}
+                subtitle={`${config.embedding_model} · embeddings`}
+                active={config.id === selectedId}
+                onClick={() => setSelectedId(config.id)}
+              />
+            ))}
+            {embedders.length === 0 && (
+              <p style={{ ...faintNote, fontSize: 11.5, padding: '2px 8px 4px' }}>
+                None yet. Knowledge matches questions on the words they share
+                until one is added.
+              </p>
+            )}
+          </>
+        )}
         {visible.length === 0 && list.length > 0 && (
           <p style={{ fontSize: 12.5, color: 'var(--text-dim)', padding: '4px 6px', margin: 0 }}>
             Nothing matches “{query.trim()}”.
@@ -657,8 +859,17 @@ export default function LlmProvidersPage() {
             <EmptyState
               icon={<Icon.Sparkle size={20} />}
               title="Connect a model"
-              body="DataMind works with any OpenAI-compatible endpoint (including local servers like Ollama) or Anthropic. Testing a model records what it can actually do. The key you add is yours — each person adds their own."
-              action={<PrimaryButton onClick={startCreate}>Add a model</PrimaryButton>}
+              body="DataMind works with any OpenAI-compatible endpoint (including local servers like Ollama) or Anthropic. A model answers questions; an embedder makes the vectors Knowledge matches with. They are separate rows, and one embedder serves the whole app. The key you add is yours — each person adds their own."
+              action={
+                <>
+                  <PrimaryButton onClick={() => startCreate('chat')}>
+                    Add a model
+                  </PrimaryButton>
+                  <GhostButton onClick={() => startCreate('embedding')}>
+                    Add an embedder
+                  </GhostButton>
+                </>
+              }
             />
           </div>
         ) : (
@@ -672,7 +883,11 @@ export default function LlmProvidersPage() {
                   <Icon.Sparkle size={19} />
                 </GlyphBadge>
               }
-              title={creating ? 'New model' : selected!.name}
+              title={
+                creating
+                  ? (kind === 'embedding' ? 'New embedder' : 'New model')
+                  : selected!.name
+              }
               subtitle={`${draft.provider} · ${
                 draft.model || `${draft.embedding_model} (embeddings)` || '—'
               }`}
@@ -698,23 +913,31 @@ export default function LlmProvidersPage() {
                     onClick={test}
                     disabled={testing || !canTest}
                     title={
-                      canTest ? undefined : 'Enter a model name or an embedding model first.'
+                      canTest
+                        ? undefined
+                        : embeds && !answers
+                          ? 'Enter an embedding model first.'
+                          : 'Enter a model name first.'
                     }
                   >
                     {testing ? <Spinner /> : <Icon.Zap size={14} />}
-                    Test model
+                    {embeds && !answers ? 'Test embedder' : 'Test model'}
                   </GhostButton>
                   <PrimaryButton
                     onClick={save}
                     disabled={saving || !(creating || isDirty) || !declares}
                     title={
                       !declares
-                        ? 'Give this provider a model to answer with, an embedding model, or both.'
+                        ? embeds && !answers
+                          ? 'Give this embedder a model to make vectors with.'
+                          : 'Give this provider a model to answer with.'
                         : creating || isDirty ? undefined : 'No changes to save.'
                     }
                   >
                     {saving && <Spinner />}
-                    {creating ? 'Add model' : 'Save changes'}
+                    {creating
+                      ? (kind === 'embedding' ? 'Add embedder' : 'Add model')
+                      : 'Save changes'}
                   </PrimaryButton>
                 </>
               }
@@ -753,9 +976,52 @@ export default function LlmProvidersPage() {
                 </StatusLine>
               )}
 
+              {creating && (
+                // Asked once, at the top, before anything below it makes
+                // sense: the fields under this differ by kind, and a form that
+                // reshapes itself after the endpoint has been typed is a form
+                // that made the reader guess.
+                <Section
+                  title="What is this for?"
+                  description="A row does one job. Answering is what runs a question; embedding is what lets Knowledge match questions that mean the same thing in different words."
+                  icon={<Icon.Sparkle size={14} />}
+                >
+                  <Segmented
+                    ariaLabel="What this provider is for"
+                    value={kind === 'both' ? 'chat' : kind}
+                    onChange={changeKind}
+                    options={[
+                      { value: 'chat', label: 'Answering questions' },
+                      { value: 'embedding', label: 'Making vectors' },
+                    ]}
+                  />
+                </Section>
+              )}
+
+              {!creating && kind === 'both' && (
+                // The shape rows had before the two were separated. Named
+                // rather than migrated: it works, and rewriting somebody's
+                // provider unasked is worse than one sentence.
+                <Section
+                  title="This row does both"
+                  description="It answers questions and makes vectors — the shape rows had before the two were separated. Nothing is wrong with it. To split them, add an embedder in the list and then clear the embedding model here; the key is stored encrypted per row, so it has to be typed once on the new one."
+                  icon={<Icon.Sparkle size={14} />}
+                >
+                  <p style={faintNote}>
+                    Clearing the embedding model here while a store is indexed
+                    with it leaves that store on word matching until embedding
+                    search is switched on again in Knowledge.
+                  </p>
+                </Section>
+              )}
+
               <Section
                 title="Endpoint"
-                description="Where DataMind sends completion requests."
+                description={
+                  answers
+                    ? 'Where DataMind sends completion requests.'
+                    : 'Where DataMind asks for vectors.'
+                }
                 icon={<Icon.Link size={14} />}
               >
                 <FieldRow>
@@ -770,11 +1036,17 @@ export default function LlmProvidersPage() {
                       value={draft.provider}
                       onChange={(e) => changeProvider(e.target.value)}
                     >
-                      {Object.keys(PROVIDER_URLS).map((provider) => (
-                        <option key={provider} value={provider}>
-                          {provider}
-                        </option>
-                      ))}
+                      {/* An embedder can only be a provider that embeds, so
+                          Anthropic is not offered at all rather than offered
+                          and then refused on save. */}
+                      {Object.keys(PROVIDER_URLS)
+                        .filter((provider) =>
+                          answers || providerEmbeds(catalogs, provider))
+                        .map((provider) => (
+                          <option key={provider} value={provider}>
+                            {provider}
+                          </option>
+                        ))}
                     </Select>
                   </Field>
                 </FieldRow>
@@ -786,23 +1058,21 @@ export default function LlmProvidersPage() {
                   />
                 </Field>
 
-                <Field
-                  label="Model"
-                  hint={
-                    // Optional, and the reason is worth one sentence: an
-                    // endpoint that only serves vectors has no chat model to
-                    // name, and naming one anyway gave it a Test button that
-                    // could only fail.
-                    draft.provider === 'OpenAI-compatible'
-                      ? 'Leave blank if this endpoint only serves embeddings. If the model name contains a slash (e.g. lightning-ai/gemma-4-31B-it), prefix it with openai/ — openai/lightning-ai/gemma-4-31B-it — or it will not route correctly.'
-                      : 'Leave blank if this endpoint only serves embeddings.'
-                  }
-                >
-                  <TextInput
-                    value={draft.model}
-                    onChange={(e) => setDraft({ ...draft, model: e.target.value })}
-                  />
-                </Field>
+                {answers && (
+                  <Field
+                    label="Model"
+                    hint={
+                      draft.provider === 'OpenAI-compatible'
+                        ? 'If the model name contains a slash (e.g. lightning-ai/gemma-4-31B-it), prefix it with openai/ — openai/lightning-ai/gemma-4-31B-it — or it will not route correctly.'
+                        : undefined
+                    }
+                  >
+                    <TextInput
+                      value={draft.model}
+                      onChange={(e) => setDraft({ ...draft, model: e.target.value })}
+                    />
+                  </Field>
+                )}
               </Section>
 
               <Section
@@ -830,12 +1100,12 @@ export default function LlmProvidersPage() {
                 </Field>
               </Section>
 
-              {/* Both of these shape a *completion*, so an endpoint that
-                  serves only vectors has nothing to apply them to. Hidden
-                  rather than disabled: a control that cannot reach anything is
-                  noise, and the Embeddings section below carries the settings
-                  that do apply. */}
-              {draft.model ? (
+              {/* Both of these shape a *completion*, so an embedder has
+                  nothing to apply them to. Gated on the row's kind rather than
+                  on whether the model field happens to be filled in, or the
+                  form would rearrange itself under the cursor of anyone
+                  clearing that field to retype it. */}
+              {answers ? (
                 <>
               <Section
                 title="Generation"
@@ -901,9 +1171,10 @@ export default function LlmProvidersPage() {
                 </>
               ) : null}
 
+              {embeds && (
               <Section
                 title="Embeddings"
-                description="Used by Knowledge to match questions that mean the same thing in different words. Leave the model blank if this provider is for answering only."
+                description="One embedder serves the whole app: Knowledge uses it to match questions that mean the same thing in different words, and each store records the model and width it was indexed with."
                 icon={<Icon.Sparkle size={14} />}
               >
                 {catalog && !catalog.embedding_supported ? (
@@ -945,6 +1216,7 @@ export default function LlmProvidersPage() {
                   </>
                 )}
               </Section>
+              )}
 
               {!creating && (
                 <>
