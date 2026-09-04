@@ -468,51 +468,360 @@ code, pre, .mono {
 }
 
 /* ── Auth screen ─────────────────────────────────────────────────────────── */
-/* An ambient field of the brand's four neon hues — the same violet, magenta,
-   blue, and amber that make up the logo's orbs — with a glassy card floating
-   over it. Nothing here competes with content, so the treatment can be rich;
-   it is only ever on the signed-out screen. */
-.rm-auth { position: relative; isolation: isolate; overflow: hidden; }
+/* The signed-out field. Nothing here competes with content — it is only ever
+   on the one screen that has no content — so the treatment can be rich, and
+   the whole of it is built from four values declared right below.
 
-/* The neon orbs, echoing the mark. */
+   `--wave-a` / `--wave-b` are the two hues the canvas in `auth-scene.tsx`
+   draws its dotted sheets with; that file reads these and never names a
+   colour, so both themes are decided here beside the tokens. `--auth-ink` is
+   the stroke every background instrument is drawn in, and `--auth-cta` is the
+   one gradient on the page.
+
+   Dark takes the mark's own blue and magenta. Light does *not* invert them:
+   the app's light theme is warm paper with a plum accent, so the sheets become
+   plum and amber and the ground stays paper. Two themes, one identity — not
+   one theme photographed twice. */
+.rm-auth {
+  position: relative;
+  isolation: isolate;
+  /* `clip`, not `hidden`. `hidden` on this axis makes the element a scroll
+     container, which both swallows the page's own scrollbar — a short window
+     clipped "Meet the creators" off the bottom with no way to reach it — and
+     re-anchors the `fixed` scene layers to this box instead of the viewport.
+     `clip` still trims the glyphs at the edges and does neither of those. */
+  overflow-x: clip;
+  padding: 32px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+
+  --wave-a: oklch(0.72 0.17 255);
+  --wave-b: oklch(0.7 0.21 350);
+  --auth-ink: oklch(0.78 0.06 285);
+  --auth-cta: linear-gradient(100deg, oklch(0.49 0.19 258), oklch(0.46 0.22 300));
+  --auth-cta-ink: oklch(0.99 0.01 280);
+
+  /* Two quiet text tiers, mixed rather than taken whole. `--text-dim` and
+     `--text-faint` are calibrated against a solid panel; over this ground the
+     light theme's paper puts both under 4.5:1, and the fix has to hold in both
+     themes at once — which a mix toward `--text` does and a second literal
+     colour does not. Tier 2 is the subtitle, tier 3 the labels and tagline. */
+  --auth-ink-2: color-mix(in oklch, var(--text-dim) 70%, var(--text));
+  --auth-ink-3: color-mix(in oklch, var(--text-dim) 90%, var(--text));
+
+  /* The ground the whole scene sits on: `--bg`, sunk at the edges so the
+     corners have somewhere to be bright *against*. This is the element's own
+     background, which paints below the negative-z-index scene layers, so the
+     waves ride over it rather than being dimmed by it. */
+  background:
+    radial-gradient(
+      128% 96% at 50% 30%,
+      transparent 20%,
+      color-mix(in oklch, var(--bg) 26%, oklch(0.08 0.03 275)) 100%
+    ),
+    var(--bg);
+}
+
+/* Light is not dark with the values flipped, and the first pass at it made the
+   mistake that follows from thinking it is: a mid-tone wash across the ground
+   AND mid-tone ink on top, so every instrument sank into the paper it was
+   drawn on. The ground is paper again — the edge wash barely leaves `--bg` —
+   and the inks moved *down* rather than up, because on paper a mark is legible
+   by being darker, not by being more saturated. */
+:root[data-theme='light'] .rm-auth {
+  --wave-a: oklch(0.48 0.23 318);
+  /* Deeper than it looks like it should be. The paper is a warm neutral at
+     hue 83, so an amber anywhere near it is a tint of the ground rather than a
+     mark on it — at 0.52 this sheet measured 3.9:1 against `--bg` while its
+     plum twin measured 6. Dropping the lightness is what separates them. */
+  --wave-b: oklch(0.47 0.15 55);
+  --auth-ink: oklch(0.38 0.09 318);
+  --auth-cta: linear-gradient(100deg, oklch(0.5 0.2 322), oklch(0.46 0.22 298));
+  background:
+    radial-gradient(
+      128% 96% at 50% 30%,
+      transparent 34%,
+      color-mix(in oklch, var(--bg) 80%, oklch(0.76 0.08 320)) 100%
+    ),
+    var(--bg);
+}
+
+/* The bloom behind the mark, and four corner orbs in the mark's own hues.
+   Weaker than they used to be: the dotted sheets now carry the colour, and two
+   sources of glow in the same corner cancel each other into haze. */
+/* Fixed, like the canvas and the glyphs above it. As an `absolute` box its
+   `inset: -25%` bled a quarter of the viewport past the bottom edge, and once
+   the clip became axis-scoped that bleed turned into 225px of real page scroll
+   below the fold. A fixed box can overhang the viewport without ever adding to
+   the document's height. */
 .rm-auth::before {
   content: '';
-  position: absolute;
+  position: fixed;
   inset: -25%;
   z-index: -2;
   pointer-events: none;
   background:
-    radial-gradient(30% 34% at 20% 26%, oklch(0.62 0.22 300 / 0.32), transparent 68%),
-    radial-gradient(30% 34% at 82% 20%, oklch(0.66 0.24 350 / 0.30), transparent 68%),
-    radial-gradient(34% 38% at 24% 84%, oklch(0.64 0.2 255 / 0.28), transparent 68%),
-    radial-gradient(30% 34% at 84% 82%, oklch(0.8 0.16 80 / 0.22), transparent 68%);
+    radial-gradient(26% 22% at 50% 24%, oklch(0.6 0.2 300 / 0.2), transparent 72%),
+    radial-gradient(30% 32% at 4% 10%, oklch(0.62 0.22 300 / 0.26), transparent 72%),
+    radial-gradient(30% 32% at 96% 8%, oklch(0.66 0.24 350 / 0.24), transparent 72%),
+    radial-gradient(34% 34% at 2% 96%, oklch(0.64 0.2 255 / 0.3), transparent 72%),
+    radial-gradient(34% 34% at 98% 96%, oklch(0.7 0.2 350 / 0.28), transparent 72%);
 }
 
 /* The grid motif from the welcome screen, faded to the centre. */
 .rm-auth::after {
   content: '';
-  position: absolute;
+  position: fixed;
   inset: 0;
   z-index: -2;
   pointer-events: none;
   background-image: var(--grid-lines);
   background-size: var(--grid-cell) var(--grid-cell);
-  opacity: 0.4;
+  opacity: 0.26;
   -webkit-mask-image: radial-gradient(closest-side at 50% 42%, #000, transparent);
   mask-image: radial-gradient(closest-side at 50% 42%, #000, transparent);
 }
 
-/* On the pale light surface the dark theme's neon pastels wash out, so light
-   mode gets its own orbs: deeper, more saturated hues at higher alpha so the
-   four brand colours actually register. Same positions and hues as dark. */
+/* On the pale surface the dark theme's neon pastels wash out, so light mode
+   gets its own: deeper hues at higher alpha, same positions. */
+/* Same four corners as dark, at two thirds the strength: enough for the tint
+   to be felt where the waves live, not enough to grey the middle of the page. */
 :root[data-theme='light'] .rm-auth::before {
-  opacity: 1;
   background:
-    radial-gradient(30% 34% at 20% 26%, oklch(0.6 0.26 300 / 0.42), transparent 66%),
-    radial-gradient(30% 34% at 82% 20%, oklch(0.62 0.27 350 / 0.4), transparent 66%),
-    radial-gradient(34% 38% at 24% 84%, oklch(0.6 0.24 255 / 0.38), transparent 66%),
-    radial-gradient(30% 34% at 84% 82%, oklch(0.72 0.19 75 / 0.36), transparent 66%);
+    radial-gradient(26% 22% at 50% 24%, oklch(0.6 0.24 315 / 0.14), transparent 74%),
+    radial-gradient(30% 32% at 4% 10%, oklch(0.58 0.26 302 / 0.16), transparent 74%),
+    radial-gradient(30% 32% at 96% 8%, oklch(0.72 0.17 58 / 0.18), transparent 74%),
+    radial-gradient(34% 34% at 2% 96%, oklch(0.56 0.25 318 / 0.2), transparent 74%),
+    radial-gradient(34% 34% at 98% 96%, oklch(0.7 0.18 60 / 0.2), transparent 74%);
 }
+
+/* On paper the instruments need more of themselves than they do on navy: a
+   heavier card edge, a solider fill, and less transparency overall. Measured,
+   not guessed — at the dark theme's 0.52 the frames sat under 1.4:1 against
+   `--bg` and simply were not there. */
+:root[data-theme='light'] .rm-auth-glyph {
+  opacity: calc(0.72 + var(--lit, 0) * 0.28);
+}
+:root[data-theme='light'] .rm-glyph-frame {
+  fill: color-mix(in oklch, var(--panel) 82%, transparent);
+  stroke: color-mix(in oklch, var(--auth-ink) 46%, transparent);
+}
+:root[data-theme='light'] .rm-glyph-track {
+  stroke: color-mix(in oklch, var(--auth-ink) 30%, transparent);
+}
+:root[data-theme='light'] .rm-glyph-rows rect,
+:root[data-theme='light'] .rm-glyph-matrix circle {
+  fill: color-mix(in oklch, var(--auth-ink) 46%, transparent);
+}
+:root[data-theme='light'] .rm-glyph-rule {
+  stroke: color-mix(in oklch, var(--auth-ink) 40%, transparent);
+}
+:root[data-theme='light'] .rm-auth-orbit { opacity: 0.95; }
+:root[data-theme='light'] .rm-orbit-ring { opacity: 0.5; }
+:root[data-theme='light'] .rm-orbit-dash { opacity: 0.7; }
+
+/* ── the waves ─────────────────────────────────────────────────────────── */
+/* One canvas for both sheets. It covers the viewport rather than the two
+   corners because a click at the top of the page still sends a ring through
+   both, and a ring that stopped at a box edge would show the box. */
+/* Fixed, not absolute: on a window too short for the card the page scrolls,
+   and a background that scrolled with it would pull its own corners off the
+   screen. The canvas sizes itself from `innerWidth`/`innerHeight`, which is
+   exactly what a fixed box covers. */
+.rm-auth-waves {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+
+/* ── the instruments ───────────────────────────────────────────────────── */
+.rm-auth-glyphs {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  /* The glyphs are placed by viewport fraction, so the ones near the right edge
+     hang past it. This clips them there rather than letting them widen the page. */
+  overflow: hidden;
+  color: var(--auth-ink);
+}
+
+/* Parallax on the wrapper, idle drift on the child. The wrapper's transform is
+   written from `auth-scene.tsx` every frame; giving the same element a
+   keyframe transform as well would mean the animation simply won it. */
+.rm-auth-glyph {
+  position: absolute;
+  transform: translate3d(var(--tx, 0px), var(--ty, 0px), 0);
+  will-change: transform;
+  opacity: calc(0.52 + var(--lit, 0) * 0.48);
+}
+.rm-auth-glyph-drift { animation: rm-glyph-drift 9s ease-in-out infinite; }
+
+@keyframes rm-glyph-drift {
+  0%, 100% { transform: translate3d(0, 3px, 0); }
+  50% { transform: translate3d(0, -8px, 0); }
+}
+
+/* Every instrument is drawn from the same four inks: the card, the quiet rule
+   and row fills, and the two brand hues the waves use. Nothing here names a
+   colour of its own, so a theme change moves the whole set at once. */
+.rm-glyph-frame {
+  fill: color-mix(in oklch, var(--panel) 62%, transparent);
+  stroke: color-mix(in oklch, var(--auth-ink) 32%, transparent);
+  stroke-width: 1;
+}
+.rm-glyph-fill { fill: color-mix(in oklch, var(--wave-a) 22%, transparent); }
+.rm-glyph-fill-b { fill: color-mix(in oklch, var(--wave-b) 20%, transparent); }
+.rm-glyph-line,
+.rm-glyph-line-b {
+  fill: none;
+  stroke-width: 2.1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.rm-glyph-line { stroke: var(--wave-a); }
+.rm-glyph-line-b { stroke: var(--wave-b); }
+.rm-glyph-node { fill: var(--wave-a); }
+.rm-glyph-node-b { fill: var(--wave-b); }
+.rm-glyph-halo { fill: color-mix(in oklch, var(--wave-a) 26%, transparent); }
+
+/* The donut and the completion ring: one track, one or two live arcs. Round
+   caps, because a segment cut square reads as a bug at this size. */
+.rm-glyph-track {
+  fill: none;
+  stroke: color-mix(in oklch, var(--auth-ink) 24%, transparent);
+  stroke-width: 5;
+}
+.rm-glyph-arc-a,
+.rm-glyph-arc-b {
+  fill: none;
+  stroke-width: 5;
+  stroke-linecap: round;
+}
+.rm-glyph-arc-a { stroke: var(--wave-a); }
+.rm-glyph-arc-b { stroke: var(--wave-b); }
+
+/* The bar series climbs from one brand hue into the other, so it reads as a
+   measure with a direction rather than six identical marks. */
+.rm-glyph-bars rect { fill: color-mix(in oklch, var(--wave-a) 78%, transparent); }
+.rm-glyph-bars rect:nth-child(4) { fill: color-mix(in oklch, var(--wave-a) 60%, var(--wave-b)); }
+.rm-glyph-bars rect:nth-child(5) { fill: color-mix(in oklch, var(--wave-a) 35%, var(--wave-b)); }
+.rm-glyph-bars rect:nth-child(6) { fill: var(--wave-b); }
+
+.rm-glyph-db {
+  fill: none;
+  stroke: var(--wave-a);
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.rm-glyph-db-top { fill: color-mix(in oklch, var(--wave-a) 28%, transparent); }
+
+.rm-glyph-head rect { fill: color-mix(in oklch, var(--wave-b) 46%, transparent); }
+.rm-glyph-rows rect { fill: color-mix(in oklch, var(--auth-ink) 34%, transparent); }
+.rm-glyph-rule {
+  stroke: color-mix(in oklch, var(--auth-ink) 30%, transparent);
+  stroke-width: 1;
+}
+.rm-glyph-matrix circle { fill: color-mix(in oklch, var(--auth-ink) 34%, transparent); }
+
+/* Below the widest breakpoint the margins the instruments live in stop being
+   margins — they are where the card is. They go, the waves stay. */
+@media (max-width: 1100px) {
+  .rm-auth-glyphs { display: none; }
+}
+
+/* The two stacks the page is built from. Their gaps live here rather than
+   inline because a 720p laptop is 20px short of fitting the whole screen, and
+   the fix is to close the gaps and shrink the mark — which a style attribute
+   cannot be told to do at a breakpoint. */
+.rm-auth-col {
+  width: 100%;
+  max-width: 440px;
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+}
+.rm-auth-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+@media (max-height: 820px) {
+  .rm-auth { padding-block: 22px; }
+  .rm-auth-col { gap: 20px; }
+  .rm-auth-head { gap: 14px; }
+  .rm-auth-logo > * { width: 146px; height: 146px; }
+  .rm-auth-orbit { width: min(430px, 96vw); height: min(430px, 96vw); }
+}
+@media (max-height: 690px) {
+  .rm-auth-col { gap: 16px; }
+  .rm-auth-logo > * { width: 112px; height: 112px; }
+  .rm-auth-orbit { width: min(340px, 96vw); height: min(340px, 96vw); }
+}
+
+/* ── the mark ──────────────────────────────────────────────────────────── */
+/* Rings centred on the mark, drawn here rather than in the scene so they get
+   that centring from the page's own layout instead of guessing at it. They sit
+   in the crown, which does not move, while the logo inside it floats. */
+.rm-auth-crown {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+/* The whole plate turns, rather than one ring inside it. Animating an SVG
+   child repaints the 900px box every frame — 10fps of it under software
+   rasterisation — while a transform on the element itself is composited, and
+   turning the plate carries the nodes around their orbits, which is the better
+   reading of the picture anyway. */
+.rm-auth-orbit {
+  position: absolute;
+  z-index: -1;
+  /* Sized so the outermost ring stops short of the card below it. The stack
+     under the mark — its own lower half, the gap, the heading, the subtitle,
+     the gap again — is about 200px, so the plate is capped at 400 and the mask
+     has faded it out well before that. It is also narrower than the 440px card
+     at every width, which is what keeps it off the sides. */
+  width: min(520px, 96vw);
+  height: min(520px, 96vw);
+  pointer-events: none;
+  color: var(--auth-ink);
+  opacity: 0.72;
+  /* The plate is still, and holds the fade: it dissolves below the mark's own
+     centre line, so no ring is ever drawn across "Welcome to DataMind".
+     `auth-scene.tsx` reproduces exactly this falloff for the dots it flies
+     around these rings, so a dot and the ring it rides sink out of view
+     together and rise again on the far side. A radial mask is deliberately
+     absent — a ring sits at one radius the whole way round, so grading by
+     radius was only ever setting a per-ring opacity, which `is-far` now says
+     directly and for free. */
+  -webkit-mask-image: linear-gradient(to bottom, #000 50%, transparent 70%);
+  mask-image: linear-gradient(to bottom, #000 50%, transparent 70%);
+}
+.rm-orbit-ring {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+  opacity: 0.34;
+}
+/* The outer ring is a ghost saying the picture continues past the plate. */
+.rm-orbit-ring.is-far { opacity: 0.15; }
+.rm-orbit-dash {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+  stroke-dasharray: 3 13;
+  opacity: 0.5;
+}
+/* The dots that travel these rings are painted by the canvas, not declared
+   here — see `ORBIT` in `auth-scene.tsx`. It reads this element's box for their
+   centre and scale and its `opacity` for their weight, so the two stay in step
+   without either naming a number the other has to match. */
 
 /* A soft, multi-hue glow cupped behind the enlarged logo — echoing the
    purple / blue / pink of the mark, with a gentle breathing float. */
@@ -554,23 +863,194 @@ code, pre, .mono {
   50% { opacity: 1; transform: scale(1.06); }
 }
 
-/* The glass card. */
+/* ── the card ──────────────────────────────────────────────────────────── */
 .rm-auth-card {
-  background: color-mix(in oklch, var(--panel) 78%, transparent);
-  -webkit-backdrop-filter: blur(14px) saturate(1.15);
-  backdrop-filter: blur(14px) saturate(1.15);
-  border: 1px solid var(--border);
-  border-radius: 18px;
-  box-shadow: 0 26px 70px -30px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  position: relative;
+  background: color-mix(in oklch, var(--panel) 86%, transparent);
+  -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  backdrop-filter: blur(16px) saturate(1.2);
+  border-radius: 20px;
+  /* Three shadows doing three jobs: the cast that lifts the card off the page,
+     a brand-tinted bloom that ties it to the mark above it, and the inset
+     highlight that gives the top edge a thickness. */
+  box-shadow:
+    0 34px 90px -36px rgba(0, 0, 0, 0.74),
+    0 0 60px -22px oklch(0.6 0.2 300 / 0.4),
+    inset 0 1px 0 oklch(1 0 0 / 0.07);
+}
+/* The lit edge. A 1px gradient ring, not a border, because a border takes one
+   colour and the card is lit from two corners — violet at the top left, magenta
+   at the bottom right, and nearly nothing along the sides between them. */
+.rm-auth-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  pointer-events: none;
+  background: linear-gradient(
+    160deg,
+    oklch(0.74 0.21 300 / 0.95),
+    oklch(0.6 0.14 270 / 0.16) 38%,
+    oklch(0.62 0.12 300 / 0.14) 60%,
+    oklch(0.72 0.22 350 / 0.85)
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+:root[data-theme='light'] .rm-auth-card {
+  background: color-mix(in oklch, var(--panel) 94%, transparent);
+  box-shadow:
+    0 34px 76px -38px oklch(0.4 0.08 320 / 0.44),
+    0 0 60px -26px oklch(0.55 0.18 320 / 0.3),
+    0 2px 8px -4px oklch(0.4 0.06 320 / 0.16);
+}
+:root[data-theme='light'] .rm-auth-card::before {
+  background: linear-gradient(
+    160deg,
+    oklch(0.54 0.21 318 / 0.72),
+    oklch(0.6 0.06 320 / 0.2) 42%,
+    oklch(0.62 0.1 340 / 0.16) 60%,
+    oklch(0.62 0.17 62 / 0.6)
+  );
 }
 
-/* The primary action, with a brand-tinted lift on hover. */
-.rm-auth-submit {
-  transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
-  box-shadow: 0 10px 26px -10px var(--accent);
+/* ── the fields ────────────────────────────────────────────────────────── */
+/* The glyph names the field at a glance; the placeholder stays anyway, because
+   it is teaching a *format* rather than repeating the label — and `--text-faint`
+   is not enough contrast to teach anything. Mixed toward `--text` it clears
+   4.5:1 on the input in both themes, which the browser's own placeholder grey
+   does in neither. */
+.rm-auth-field input::placeholder {
+  color: color-mix(in oklch, var(--text-dim) 88%, var(--text));
+  opacity: 1;
 }
-.rm-auth-submit:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.05); }
+.rm-auth-field {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.rm-auth-field input {
+  padding-left: 40px;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+}
+.rm-auth-field:focus-within input {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-bg);
+}
+.rm-auth-field-icon {
+  position: absolute;
+  left: 13px;
+  display: grid;
+  color: var(--text-faint);
+  pointer-events: none;
+  transition: color 0.16s ease;
+}
+.rm-auth-field:focus-within .rm-auth-field-icon { color: var(--accent); }
+
+/* The reveal. It is a real button in the tab order — someone typing a password
+   they cannot see is exactly who needs to reach it from the keyboard. */
+.rm-auth-reveal {
+  position: absolute;
+  right: 7px;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: color 0.14s ease, background 0.14s ease;
+}
+.rm-auth-reveal:hover {
+  color: var(--text);
+  background: color-mix(in oklch, var(--panel-hover) 70%, transparent);
+}
+
+/* ── the action ────────────────────────────────────────────────────────── */
+/* Deeper than the accent chip elsewhere in the app: this gradient carries white
+   text, and the lighter blue the mark is drawn in does not hold 4.5:1 under it. */
+.rm-auth-submit {
+  background: var(--auth-cta);
+  color: var(--auth-cta-ink);
+  transition: transform 0.14s ease, box-shadow 0.14s ease, filter 0.14s ease;
+  box-shadow: 0 12px 30px -12px oklch(0.5 0.2 285 / 0.9);
+}
+.rm-auth-submit:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.12);
+  box-shadow: 0 16px 36px -12px oklch(0.5 0.2 285 / 1);
+}
 .rm-auth-submit:active:not(:disabled) { transform: translateY(0); }
+.rm-auth-submit:disabled { cursor: wait; filter: saturate(0.7) brightness(0.9); }
+
+/* ── the tagline ───────────────────────────────────────────────────────── */
+/* Three sentences about what the product does, one at a time. The marks under
+   them are the control, not decoration: auto-advancing text with no way to hold
+   it still is a WCAG 2.2.2 failure, and clicking one stops the rotation for
+   good — someone who reached for it wants to read, not to be moved on. */
+.rm-auth-taglines {
+  position: relative;
+  display: grid;
+}
+.rm-auth-tagline {
+  grid-area: 1 / 1;
+  transition: opacity 0.5s ease, transform 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  opacity: 0;
+  transform: translateY(4px);
+}
+.rm-auth-tagline.is-on {
+  opacity: 1;
+  transform: none;
+}
+.rm-auth-marks {
+  display: flex;
+  gap: 7px;
+  padding: 0;
+}
+/* The button is the target and the bar is only what you see of it: a 3px-tall
+   control is a sliver nobody on a touchscreen can hit, so the element is 16px
+   tall and transparent, with the mark drawn inside it. */
+.rm-auth-mark {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+.rm-auth-mark::before {
+  content: '';
+  width: 30px;
+  height: 3px;
+  border-radius: 2px;
+  background: color-mix(in oklch, var(--text-faint) 46%, transparent);
+  /* Length is a scale, not a width. Three marks re-laying-out their row every
+     six seconds is layout work for something the eye reads as one bar growing,
+     and the row is centred, so a width change nudges its neighbours too. */
+  transform: scaleX(0.73);
+  transition: transform 0.32s cubic-bezier(0.16, 1, 0.3, 1), background 0.32s ease;
+}
+.rm-auth-mark:hover::before { background: color-mix(in oklch, var(--text-faint) 85%, transparent); }
+.rm-auth-mark.is-on::before {
+  transform: scaleX(1);
+  background: var(--accent);
+}
+
+/* Reduced motion: the scene holds still, and the tagline stops advancing on its
+   own (`auth-scene.tsx` and `LoginPage` both read the same query). The global
+   reset above already freezes the keyframes; what it cannot do is stop the
+   canvas clock or an interval, so those are handled in script. */
+@media (prefers-reduced-motion: reduce) {
+  .rm-auth-tagline { transition: opacity 0.01ms; }
+}
 
 /* Composer send button — a brand-tinted lift when it can fire. */
 .rm-send-btn {

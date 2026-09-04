@@ -432,6 +432,24 @@ export const Icon = {
       <path d="M7 7.5h.01M7 16.5h.01" />
     </svg>
   ),
+  // The password reveal, and the same eye with the world struck through it.
+  // Drawn as a pair rather than one icon under a CSS strike: the slash has to
+  // cut the lashes *and* the pupil to read as "hidden", and an overlay rule
+  // cannot know where those are.
+  Eye: ({ size = 15, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <path d="M2 12s3.7-6.4 10-6.4S22 12 22 12s-3.7 6.4-10 6.4S2 12 2 12z" />
+      <circle cx="12" cy="12" r="2.9" />
+    </svg>
+  ),
+  EyeOff: ({ size = 15, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <path d="M10.7 6.2A10 10 0 0 1 12 6.1c6.3 0 10 5.9 10 5.9a17.3 17.3 0 0 1-3.2 3.9" />
+      <path d="M6.6 7.9A16.9 16.9 0 0 0 2 12s3.7 6.4 10 6.4a9.9 9.9 0 0 0 4-.8" />
+      <path d="M9.9 10.4a3 3 0 0 0 4.2 4.2" />
+      <path d="M3 3l18 18" />
+    </svg>
+  ),
   Mail: ({ size = 13, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
     <svg {...iconBase(size, stroke, strokeWidth)}>
       <rect x="2.5" y="5" width="19" height="14" rx="2.5" />
