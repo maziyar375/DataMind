@@ -944,7 +944,7 @@ function CreateDialog({
       try {
         const [connections, models] = await Promise.all([
           connectionsApi.list(),
-          modelsApi.list(),
+          modelsApi.list('chat'),
         ])
         if (cancelled) return
         setChoices({ connections, models })

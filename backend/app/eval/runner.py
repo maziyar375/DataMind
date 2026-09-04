@@ -882,7 +882,10 @@ async def _resolve_config(
             return None, f"No llm_config with id {chosen}"
         return config, None
 
-    rows = (await session.execute(select(LlmConfig))).scalars().all()
+    # `model != ""` — an embedding-only provider row cannot run a suite.
+    rows = (
+        await session.execute(select(LlmConfig).where(LlmConfig.model != ""))
+    ).scalars().all()
     if len(rows) == 1:
         return rows[0], None
     if not rows:

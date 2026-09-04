@@ -34,6 +34,18 @@ class ResolvedLLM:
     api_key: str = field(repr=False, default="")
     temperature: float = 0.2
     max_tokens: int = 2048
+    #: Extra request parameters in the *provider's* own vocabulary, already
+    #: validated against that provider's API (`value_objects/llm_params.py`).
+    #: The adapter is the only layer allowed to rename one, and it renames
+    #: exactly where litellm spells a documented parameter differently.
+    #: Empty — the default, and every configuration that sets none — leaves the
+    #: request byte-identical to before the field existed.
+    params: dict[str, Any] = field(default_factory=dict)
+    #: The model this endpoint is asked for vectors, and that request's own
+    #: extra parameters. Separate from `model` because one endpoint serves
+    #: both, and an embedding request rejects most of what a chat request needs.
+    embedding_model: str = ""
+    embedding_params: dict[str, Any] = field(default_factory=dict)
     capabilities: ProviderCapabilities = field(default_factory=ProviderCapabilities)
 
     def __repr__(self) -> str:  # pragma: no cover - defensive
@@ -43,14 +55,28 @@ class ResolvedLLM:
         )
 
     def snapshot(self) -> dict[str, Any]:
-        """The model configuration as it was at run time. No secrets."""
-        return {
+        """The model configuration as it was at run time. No secrets.
+
+        `params` is in here for the same reason `temperature` is: it changes
+        the answer, so a past run is only explainable with it. It is a
+        provider's own documented parameters and carries no credential —
+        `logit_bias` and `stop` are as much a setting as `temperature` — and
+        the catalog refuses `api_key` and everything else the gateway owns, so
+        there is no name under which one could arrive here.
+        """
+        snapshot: dict[str, Any] = {
             "provider": self.provider,
             "model": self.model,
             "base_url": self.base_url,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
         }
+        # Absent rather than empty when nothing is configured, so a run
+        # recorded before this field existed and one made by a configuration
+        # that sets no parameters read back the same.
+        if self.params:
+            snapshot["params"] = dict(self.params)
+        return snapshot
 
 
 @dataclass(frozen=True, slots=True)

@@ -70,6 +70,7 @@ from app.pipeline.state import RunState
 from app.services.knowledge_service import build_matcher, record_hit
 from app.services.query_service import (
     bind_connector,
+    can_chat,
     latest_snapshot,
     policy_from_snapshot,
     resolve_llm,
@@ -95,6 +96,39 @@ _RELEASED = (
     "readable, but it cannot be continued — start a new conversation to ask "
     "against another database."
 )
+
+
+def _model_snapshot(llm_config: LlmConfig, connection: DatabaseConnection) -> dict[str, Any]:
+    """What answered this question, recorded so the answer stays explainable.
+
+    Written here rather than at the two call sites it used to be copied into.
+    That duplication was already a latent bug and became a real one the moment
+    `llm_configs.params` existed: `create_run` and `retry` each held their own
+    copy of this dict, `ResolvedLLM.snapshot()` held a third, and a run made
+    with `top_p` and a stop sequence recorded neither — the settings that
+    changed the answer were the ones missing from the record of it.
+
+    `params` is **absent** rather than empty when nothing is configured, so a
+    run made by a configuration that sets none reads back exactly as one
+    recorded before the column existed. No secret can arrive here: the catalog
+    refuses every name the gateway owns, `api_key` among them.
+
+    The two extra keys are why this is not simply `ResolvedLLM.snapshot()` —
+    the names are what the UI shows after the connection or the provider has
+    been deleted, and `ResolvedLLM` knows about neither.
+    """
+    snapshot: dict[str, Any] = {
+        "provider": llm_config.provider,
+        "model": llm_config.model,
+        "base_url": llm_config.base_url,
+        "temperature": llm_config.temperature,
+        "max_tokens": llm_config.max_tokens,
+        "connection_name": connection.name,
+        "llm_config_name": llm_config.name,
+    }
+    if llm_config.params:
+        snapshot["params"] = dict(llm_config.params)
+    return snapshot
 
 
 class RunService:
@@ -156,6 +190,21 @@ class RunService:
         connection = await self._owned(DatabaseConnection, conn_id, owner_id)
         llm_config = await self._owned(LlmConfig, llm_id, owner_id)
 
+        # Refused **before** a run exists, not inside one. A provider row may
+        # declare only an embedding model, and `resolve_llm` refuses it at the
+        # funnel — but by then the question has been written, a run row exists,
+        # and the reader waits for a failure. Every model picker in the SPA asks
+        # for `purpose=chat` so this is unreachable from a current screen; it is
+        # reachable from a stale tab, a bookmarked request, and the API. Same
+        # posture as `_bind_connection` above, which refuses a released
+        # connection here rather than letting the run discover it.
+        if not can_chat(llm_config):
+            raise ValidationError(
+                f"“{llm_config.name}” is configured for embeddings only and "
+                "cannot answer questions. Pick another model for this "
+                "conversation."
+            )
+
         _bind_connection(conversation, connection.id, transcript_empty=transcript_empty)
 
         user_message = Message(
@@ -181,15 +230,7 @@ class RunService:
             owner_id=owner_id,
             connection_id=connection.id,
             llm_config_id=llm_config.id,
-            model_snapshot={
-                "provider": llm_config.provider,
-                "model": llm_config.model,
-                "base_url": llm_config.base_url,
-                "temperature": llm_config.temperature,
-                "max_tokens": llm_config.max_tokens,
-                "connection_name": connection.name,
-                "llm_config_name": llm_config.name,
-            },
+            model_snapshot=_model_snapshot(llm_config, connection),
             prompt_version=self._prompt_version(),
             # Set by *Generate a fresh answer instead*. Durable rather than
             # in-memory because the replica that executes this run is not
@@ -250,15 +291,7 @@ class RunService:
             owner_id=owner_id,
             connection_id=connection.id,
             llm_config_id=llm_config.id,
-            model_snapshot={
-                "provider": llm_config.provider,
-                "model": llm_config.model,
-                "base_url": llm_config.base_url,
-                "temperature": llm_config.temperature,
-                "max_tokens": llm_config.max_tokens,
-                "connection_name": connection.name,
-                "llm_config_name": llm_config.name,
-            },
+            model_snapshot=_model_snapshot(llm_config, connection),
             # Resolved now rather than copied: a retry runs against the prompts
             # this process has, and filing it under the version the abandoned
             # attempt ran is how `runs.prompt_version` started lying the first

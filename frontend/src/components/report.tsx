@@ -299,7 +299,7 @@ export function ReportOutlineEditor({
         // what lets a report that has already been generated offer its document
         // instead of stranding the reader in the editor.
         const [loaded, configs, history] = await Promise.all([
-          api.get(reportId), modelsApi.list(), api.runs(reportId),
+          api.get(reportId), modelsApi.list('chat'), api.runs(reportId),
         ])
         if (cancelled) return
         setReport(loaded)

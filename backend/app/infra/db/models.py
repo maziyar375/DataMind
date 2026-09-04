@@ -95,6 +95,31 @@ class LlmConfig(Base, TimestampMixin):
     model: Mapped[str] = mapped_column(String(200), nullable=False)
     temperature: Mapped[float] = mapped_column(nullable=False, default=0.2)
     max_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=2048)
+    # Extra request parameters, in the selected provider's own vocabulary —
+    # `stop_sequences` and `thinking` for Anthropic, `stop` and `seed` for
+    # anything OpenAI-compatible. One column rather than a field per parameter
+    # because the set is the provider's and moves when the provider moves;
+    # `app/domain/value_objects/llm_params.py` is the catalog that says which
+    # names are legal for which provider, and `api/schemas.py` refuses the rest
+    # **before** the row is written. `{}` — the default and every pre-0022
+    # row — builds byte-identically to the request from before the column
+    # existed.
+    params: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    # The embedding model this endpoint should be asked for vectors, and the
+    # extra parameters that request carries. Empty means this provider is for
+    # completions only, which is every row until somebody says otherwise.
+    #
+    # Configuration, **not** the index pin: what the vectors in a knowledge
+    # store were actually made with lives on `database_connections`, measured
+    # from a real reply rather than typed. See migration 0022.
+    embedding_model: Mapped[str] = mapped_column(
+        String(200), nullable=False, default="", server_default=""
+    )
+    embedding_params: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
     # Encrypted envelope produced by SecretBox. Never serialised outward.
     encrypted_api_key: Mapped[str | None] = mapped_column(Text)
     key_version: Mapped[int] = mapped_column(Integer, default=1)
@@ -180,6 +205,19 @@ class DatabaseConnection(Base, TimestampMixin):
     )
     embedding_dimension: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
+    )
+    # Which provider configuration produced this index, named rather than
+    # inferred. `_embedding_llm` used to resolve the owner's `is_default`
+    # config — a column **nothing in the product ever wrote**, so embedding
+    # search could not be switched on by anybody. Naming the row makes the
+    # answer visible, keeps a store reproducible after the owner adds a second
+    # provider, and completes the pin beside `embedding_model`/`_dimension`.
+    #
+    # `SET NULL`, like every other reference to `llm_configs`: deleting a
+    # provider must not delete a knowledge store. A NULL still falls back to
+    # the old default lookup, so nothing that worked stops working.
+    embedding_llm_config_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("llm_configs.id", ondelete="SET NULL"), nullable=True
     )
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[str] = mapped_column(String(20), default="UNTESTED")

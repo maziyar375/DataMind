@@ -58,6 +58,10 @@ def _world(
     llm = SimpleNamespace(
         id=llm_id, owner_id=OWNER, name="flash", provider="OpenAI-compatible",
         model="m", base_url=None, temperature=0.2, max_tokens=1024,
+        # The provider-parameter column (migration 0022). A retry snapshots
+        # the configuration as it stands *now* — `_model_snapshot` reads it,
+        # and empty is what every row reads as until somebody sets one.
+        params={},
     )
     run = SimpleNamespace(
         id=uuid.uuid4(), owner_id=OWNER,

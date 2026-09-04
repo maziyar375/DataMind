@@ -14,7 +14,8 @@ import type {
   DashboardImportResult, DashboardSummary,
   DashboardTile, EmbeddingStatus, KnowledgeHealth, KnowledgeTemplate,
   KnowledgeTemplateList,
-  LlmConfig, MaintenanceResult, MessageWithRun, ProblemDetail, Report, ReportBlock,
+  LlmConfig, MaintenanceResult, MessageWithRun, ParameterCatalog, ProblemDetail,
+  Report, ReportBlock,
   ReportBlockCheck, ReportChart, ReportRun, ReportRunDetail, ReportSection,
   ReportSectionResult,
   ReportSummary, Review, RunDetail, RunEvent, RunKnowledge, SchemaSnapshot,
@@ -320,10 +321,19 @@ export const knowledge = {
   // is a store where similarity means nothing.
   embeddings: (connectionId: string) =>
     get<EmbeddingStatus>(`/connections/${connectionId}/knowledge/embeddings`),
-  setEmbeddings: (connectionId: string, enabled: boolean, model = '') =>
+  // `llmConfigId` names which provider embeds. Optional: absent keeps the one
+  // already pinned on the connection, and failing that takes the account's
+  // first provider that declares an embedding model.
+  setEmbeddings: (
+    connectionId: string,
+    enabled: boolean,
+    model = '',
+    llmConfigId?: string,
+  ) =>
     put<EmbeddingStatus>(`/connections/${connectionId}/knowledge/embeddings`, {
       enabled,
       model,
+      llm_config_id: llmConfigId ?? null,
     }),
   check: (
     connectionId: string,
@@ -404,7 +414,13 @@ export const knowledge = {
 
 // ── llm configs ───────────────────────────────────────────────────────────
 export const llmConfigs = {
-  list: () => get<LlmConfig[]>('/llm-configs'),
+  // `purpose` narrows the list to rows that can do one job. A configuration
+  // declares a chat model, an embedding model, or both, so **every picker that
+  // chooses a model to answer with must pass `'chat'`** — otherwise an
+  // embeddings-only endpoint is offered as something to ask a question of. The
+  // providers page is the one caller that wants all of them.
+  list: (purpose?: 'chat' | 'embedding') =>
+    get<LlmConfig[]>(`/llm-configs${purpose ? `?purpose=${purpose}` : ''}`),
   create: (payload: Record<string, unknown>) =>
     post<LlmConfig>('/llm-configs', payload),
   update: (id: string, payload: Record<string, unknown>) =>
@@ -413,6 +429,10 @@ export const llmConfigs = {
   test: (id: string) => post<TestResult>(`/llm-configs/${id}/test`),
   testDraft: (payload: Record<string, unknown>) =>
     post<TestResult>('/llm-configs/test', payload),
+  // What each provider documents, so the advanced-parameter form can be
+  // generated rather than written out. Fetched once per session: it is a
+  // description of two public APIs and holds nothing about anybody.
+  parameters: () => get<ParameterCatalog[]>('/llm-configs/parameters'),
 }
 
 // ── conversations ─────────────────────────────────────────────────────────

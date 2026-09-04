@@ -73,7 +73,69 @@ plus a **React + Vite** SPA. No microservices, no broker, no vector DB.
 > gateway — and gets an `openai/` model prefix added in the gateway when the
 > model name carries no `/`) and `Anthropic`. A legacy `"Custom"` value is still
 > handled in `litellm_gateway.py` for rows created before it was dropped, but
-> nothing creates one now. Removing a key from that map removes the choice. **LangChain is not a dependency**: the one `langchain_core` import is
+> nothing creates one now. Removing a key from that map removes the choice.
+>
+> **What each of those two accepts beyond `temperature` and `max_tokens` is a
+> catalog, and the catalog is data**: `app/domain/value_objects/llm_params.py`,
+> one entry per parameter the provider's own API reference documents, under the
+> provider's own name for it — `stop_sequences` and `thinking` for Anthropic,
+> `stop` and `seed` for OpenAI-compatible. Stored in `llm_configs.params`
+> (JSONB), validated against that catalog **before** the row is written, merged
+> into the request by `_kwargs`, and served to the SPA over
+> `GET /llm-configs/parameters` so the form is *generated* rather than written.
+> Adding a parameter is one line there: **no DTO field, no form field, no
+> request-shaping branch.** `{}` — every row before migration `0022` — builds
+> byte-identically to before the column existed.
+>
+> Three rules that are not style:
+> **nothing the gateway owns is configurable** (`RESERVED`: `model`, `messages`,
+> `stream`, `response_format`, `temperature`, `max_tokens`, `api_key`,
+> `api_base`, …, refused inside `extra_body` too);
+> **a parameter the *selected* provider does not document is refused on save**,
+> because `litellm.drop_params` is on and a silently-dropped parameter is a row
+> describing a behaviour that never happens;
+> and **nothing may be catalogued that cannot be shown to reach the wire** —
+> `tests/unit/test_provider_params.py` drives every entry through litellm's own
+> parameter mapping and fails if one is misnamed or unsupported. The gateway
+> renames exactly one thing (`_ANTHROPIC_TO_LITELLM`: Anthropic's documented
+> `metadata.user_id` is litellm's `user`), and a test pins that it is the only
+> one. `extra_body` is the one open door and it is the OpenAI *client's* own
+> documented passthrough, for what an endpoint defines for itself (vLLM's
+> `top_k`, OpenRouter's provider routing).
+>
+> **A provider row declares what it is *for*, and there is no `kind` column.**
+> `model` and `embedding_model` are both optional and a row must have at least
+> one; `query_service.can_chat` / `can_embed` derive the rest, the way vector
+> staleness is derived rather than tracked. That is what lets an endpoint which
+> serves **only** vectors — a self-hosted TEI or Infinity server, an Ollama with
+> one embedding model pulled — be configured at all: it used to need an invented
+> chat model, whose Test button could only fail against something that does not
+> exist. Consequences, all enforced in one place each:
+> `resolve_llm(purpose=...)` refuses at the **funnel** every chat call site goes
+> through (a run, a draft, a semantic layer, a report outline, a report section,
+> a benchmark), so there is no eleventh site to forget;
+> `GET /llm-configs?purpose=chat|embedding` filters with those same two
+> predicates, and **every picker that chooses a model to answer with passes
+> `purpose=chat`**;
+> and `create_run` refuses an embeddings-only row *before* a run row exists —
+> `resolve_llm`'s refusal escapes the executor's failure handling, so a run made
+> that way sat `RUNNING` until the reconciler killed it as `E_ORPHANED`, which
+> tells the reader nothing. Same posture as `_bind_connection` beside it.
+>
+> **Embedding models live on the same row and the same screen** —
+> `llm_configs.embedding_model` / `.embedding_params`, in the form's
+> *Embeddings* section — because an embedding endpoint needs exactly what a
+> provider row already holds (kind, base URL, encrypted key) and
+> `LLMGateway.embed` already took a resolved provider plus a model *name*. A
+> second section would duplicate the credential form, the `llm_config:{id}` AAD
+> scheme, the probe and the delete guard to hold one string. Anthropic is
+> refused an embedding model at save time, for the same reason
+> `probe_embedding` refuses it with no network call.
+> Do **not** confuse this with `database_connections.embedding_model` /
+> `.embedding_dimension`: those are a record of *an index* — what the vectors in
+> a knowledge store were actually made with, measured from a real reply — and
+> `.embedding_llm_config_id` (migration `0022`) names the provider that made
+> them. **LangChain is not a dependency**: the one `langchain_core` import is
 > `RunnableConfig`, a type LangGraph pulls in, used in `pipeline/graph.py` and
 > `workers/report_graph.py` and nowhere else.
 - **Crypto/auth:** argon2-cffi (Argon2id), PyJWT, `cryptography` (AES-256-GCM).
@@ -115,10 +177,10 @@ container, and it does not detach — `docker compose up -d` is the backgrounded
 form the README's quick start uses.
 
 Frontend, from `frontend/`: `npm run dev`, `npm run build` (`tsc -b && vite
-build`), `npm run typecheck` (`tsc --noEmit`), `npm test` (all twelve DOM-free
+build`), `npm run typecheck` (`tsc --noEmit`), `npm test` (all thirteen DOM-free
 logic suites: schedule, format, dashboard document, palette, chat format, report
 document, report readiness, print, semantic drift, knowledge template,
-thinking). **`npm run lint` does not
+thinking, queue, provider params). **`npm run lint` does not
 work** — the script exists but eslint is neither a devDependency nor
 configured. Typecheck plus build plus `npm test` is the real gate.
 
@@ -216,7 +278,10 @@ backend/app/
     schemas.py    Pydantic request/response DTOs (no secrets ever in reads)
     errors.py     RFC 7807 problem+json mapping
   core/           config, logging (with redaction), errors, correlation context, clock
-  domain/         entities, value_objects (enums/kinds), ports — ZERO I/O, no frameworks
+  domain/         entities, value_objects (enums/kinds, plus llm_params.py —
+                  the per-provider catalog of documented request parameters,
+                  read by BOTH the API that validates one and the gateway that
+                  sends it), ports — ZERO I/O, no frameworks
     ports/        Protocols: database, llm, secrets, identity, events, run_executor
   services/       use cases + transaction boundaries: run_service,
                   semantic_service, knowledge_service (taught questions:
@@ -369,7 +434,10 @@ frontend/src/
                             (ask or write the SQL; one guard check for both),
                             knowledge-queue.ts (how much curation work is
                             waiting, per connection and in total — DOM-free,
-                            `npm run test:queue`), notifications.tsx (the
+                            `npm run test:queue`), provider-params.ts (the
+                            translation between a generated form field and the
+                            JSON value a provider's API takes — DOM-free,
+                            `npm run test:params`), notifications.tsx (the
                             shell's one aria-live surface),
                             report.tsx (the outline editor + the document
                             viewer), report-history.tsx, report-document.ts
@@ -471,11 +539,11 @@ at commit time and shows up as drift a release later. Full tour:
   A literal hex or `oklch()` in a component is a bug in both themes — one of
   them just has not been looked at yet. Chart colours are the one exception and
   they live in `components/palette.ts`, tested apart from React.
-- **The twelve DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
+- **The thirteen DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
   `table-format.ts`, `dashboard-document.ts`, `palette.ts`, `chat-format.ts`,
   `report-document.ts`, `report-readiness.ts`, `report-print.ts`,
   `semantic-drift.ts`, `knowledge-template.ts`, `thinking.ts`,
-  `knowledge-queue.ts` — they hold the
+  `knowledge-queue.ts`, `provider-params.ts` — they hold the
   logic whose failures are quiet, they are the *only* tested code in the
   frontend, and their suites are plain `node --experimental-strip-types`
   scripts. One React import turns a suite into a thing that cannot run.
@@ -1087,6 +1155,16 @@ ways, and the two have different costs, so they are two different jobs.
 - **The customer's off switch is `connections.conflict_checks_enabled`**,
   checked *before* a connector is opened. It stops only the half that runs SQL
   on their database; the staleness sweep is a parse and keeps working.
+- **The matching-mode strip is drawn for every connection, taught or not.**
+  It was gated on `rows.length > 0`, which hid the control in the two states
+  that need it most: a connection with nothing taught could not be switched to
+  embedding search *before* teaching anything (`aurora` was in exactly that
+  state, `sales` was not, and that is the whole of why the two screens
+  differed), and a connection that had it on lost the only control that turns
+  it off the moment its last template was archived — pin intact, invisible.
+  `embeddingView` grew a `templates === 0` branch instead, because *"ready,
+  and the first question is indexed as it is saved"* is a true sentence and
+  *"all 0 questions indexed"* is not.
 - **Pruning is surfaced, never enforced.** Ninety days with no hits earns one
   faint line and no action button. Genie caps instructions at 100 per agent;
   DataMind's version of that cap is visibility, because a template written for
@@ -1157,6 +1235,19 @@ node, both thresholds, the binder, the short-circuit and the badge are untouched
   call; anything OpenAI-compatible is *asked*, and the width that comes back is
   **measured** and pinned on the connection — two gateways serving one model
   name at different widths is a thing that happens.
+- **Which provider embeds is a row, and it used to be nothing at all.**
+  `_embedding_llm` resolved the owner's `llm_configs.is_default`, and
+  **nothing in the product has ever written `is_default`** — no route, no
+  service, no form — so the lookup returned `None` for every connection of
+  every account and *"Add a default model provider first"* was the only answer
+  `PUT /knowledge/embeddings` could give. Phase 7 was unreachable from the
+  interface. A provider is now a candidate when it *declares* an
+  `embedding_model` (`knowledge_service.can_embed`, which also refuses
+  Anthropic), the connection records which one indexed it in
+  `embedding_llm_config_id` — `SET NULL`, so deleting a provider releases a
+  store rather than deleting it — and `is_default` survives only as a sort key.
+  `tests/unit/test_embedding_provider.py` asserts on the parse that nothing
+  writes it, so the sentence above cannot quietly go stale.
 - **Indexing is a worker's job.** `index_embeddings` is the third pass of the
   six-hourly sweep, after staleness and conflicts so it never spends a call on a
   row those two just withdrew. Turning the feature on indexes inline, so it

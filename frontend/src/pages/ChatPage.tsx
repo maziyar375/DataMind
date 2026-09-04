@@ -265,7 +265,7 @@ export default function ChatPage() {
         const [convs, conns, llms] = await Promise.allSettled([
           conversations.list(),
           connectionsApi.list(),
-          llmConfigs.list(),
+          llmConfigs.list('chat'),
         ])
         if (cancelled) return
         if (convs.status === 'fulfilled') {

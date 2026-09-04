@@ -629,6 +629,10 @@ export interface EmbeddingState {
   templates: number
   indexed: number
   message: string
+  /** How many of the account's model providers declare an embedding model.
+   *  Zero is the state where the control has nothing to switch to — and
+   *  saying so is the difference between an offer and a button that fails. */
+  providers: number
 }
 
 export interface EmbeddingView {
@@ -661,12 +665,35 @@ export function embeddingView(state: EmbeddingState): EmbeddingView {
     return { label: 'Embedding search', detail: state.message, tone: 'problem' }
   }
   if (!state.enabled) {
+    // The off state describes what the *other* mode adds, never what this one
+    // lacks — §4.10's rule, and the reason word matching reads as a choice.
+    // With no provider able to embed, the second sentence changes from an
+    // offer to the one action that would make it possible: a button that
+    // cannot succeed is worse than a sentence saying why.
+    const detail =
+      'Questions are matched on the words they share. Embedding search also ' +
+      'matches ones that mean the same thing in different words.'
     return {
       label: 'Word matching',
       detail:
-        'Questions are matched on the words they share. Embedding search also ' +
-        'matches ones that mean the same thing in different words.',
+        state.providers > 0
+          ? detail
+          : `${detail} No model provider is set up to embed yet — give one an ` +
+            'embedding model in LLM providers.',
       tone: 'off',
+    }
+  }
+  if (state.templates === 0) {
+    // Pinned, with nothing taught. Not "indexing" (there is nothing to index
+    // and the count would read `0 of 0`) and not "on" either, because nothing
+    // is being matched by meaning yet. The honest sentence is that it is ready
+    // and waiting for the first question.
+    return {
+      label: 'Embedding search',
+      detail:
+        `Ready with ${state.model}. The first question taught here is indexed ` +
+        'as it is saved.',
+      tone: 'indexing',
     }
   }
   const missing = Math.max(0, state.templates - state.indexed)

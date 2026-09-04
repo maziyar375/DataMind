@@ -108,6 +108,13 @@ class FakeLlmConfig:
         self.encrypted_api_key = None
         self.temperature = 0.2
         self.max_tokens = 2048
+        # The provider-parameter columns (migration 0022). A draft configures
+        # none, which is what every row reads as until somebody sets one — and
+        # the empty maps are what keep the request byte-identical to before
+        # they existed.
+        self.params: dict[str, Any] = {}
+        self.embedding_model = ""
+        self.embedding_params: dict[str, Any] = {}
         self.capabilities: dict[str, Any] = {}
 
 

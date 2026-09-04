@@ -40,7 +40,7 @@ import type {
 } from '../api/types'
 import {
   Chip, DangerButton, Dot, EmptyState, ErrorNote, Field, GhostButton, Icon,
-  Modal, PrimaryButton, SearchField, Spinner, TextArea, TextInput, dirOf,
+  Modal, PrimaryButton, SearchField, Select, Spinner, TextArea, TextInput, dirOf,
   relativeTime,
 } from './ui'
 import type { ChipTone } from './ui'
@@ -350,16 +350,34 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
         </div>
       )}
 
-      {embeddings && rows.length > 0 && (
+      {embeddings && (
+        // **Not** gated on `rows.length`, and that gate was the bug.
+        //
+        // How a store is searched is a property of the *connection*, not of
+        // how many questions it happens to hold right now, and the two states
+        // the gate hid are the two that matter most: a connection with nothing
+        // taught could never be switched to embedding search *before* teaching
+        // anything, and a connection that had it switched on lost the only
+        // control that turns it off the moment its last template was archived
+        // — pin intact, invisible. `embeddingView` has always had an `off`
+        // state whose whole job is to describe what the other mode adds, and
+        // until now nobody who had not already taught a question could read
+        // it.
+        //
+        // The empty store is not a special case wired in beside this: it is
+        // the `templates === 0` branch of the same view function, which is why
+        // this is one condition shorter rather than one longer.
         <MatchingMode
           status={embeddings}
           canCurate={canCurate}
           busy={switching}
-          onToggle={async (enabled) => {
+          onToggle={async (enabled, llmConfigId) => {
             setSwitching(true)
             setSweepNote(null)
             try {
-              const next = await api.setEmbeddings(connection.id, enabled)
+              const next = await api.setEmbeddings(
+                connection.id, enabled, '', llmConfigId,
+              )
               setEmbeddings(next)
             } catch (err) {
               setError(messageOf(err))
@@ -1907,15 +1925,24 @@ function MatchingMode({
   status: EmbeddingStatus
   canCurate: boolean
   busy: boolean
-  onToggle: (enabled: boolean) => void
+  onToggle: (enabled: boolean, llmConfigId?: string) => void
 }) {
-  const view = embeddingView(status)
+  const view = embeddingView({ ...status, providers: status.providers.length })
   const tint: Record<string, string> = {
     off: 'var(--text-faint)',
     indexing: 'var(--text-muted)',
     on: 'var(--accent)',
     problem: 'var(--warn)',
   }
+  // Which provider would be used, and which is. The picker appears only when
+  // there is a choice to make: with one provider the answer is not a decision,
+  // and with none the button is hidden instead, because an offer that cannot
+  // succeed teaches people to stop pressing things.
+  const pinned = status.llm_config_id ?? status.providers[0]?.id ?? ''
+  const [chosen, setChosen] = useState(pinned)
+  const using = status.providers.find((p) => p.id === (chosen || pinned))
+  const canSwitchOn = status.providers.length > 0
+
   return (
     <div
       style={{
@@ -1931,12 +1958,41 @@ function MatchingMode({
         <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 2 }}>
           {view.detail}
         </div>
+        {status.enabled && using && (
+          // Which endpoint made these vectors, said rather than implied: a
+          // store is only reproducible if the provider is known as well as the
+          // model name and the width, and that is the sentence somebody needs
+          // when two providers serve one model name at two widths.
+          <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 2 }}>
+            Indexed by {using.name} at {status.dimension} dimensions.
+          </div>
+        )}
       </div>
-      {canCurate && (
-        <GhostButton onClick={() => onToggle(!status.enabled)} disabled={busy}>
-          {busy ? <Spinner size={13} /> : null}
-          {status.enabled ? 'Use word matching' : 'Use embedding search'}
-        </GhostButton>
+      {canCurate && (status.enabled || canSwitchOn) && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {!status.enabled && status.providers.length > 1 && (
+            <Select
+              value={chosen || pinned}
+              aria-label="Provider to embed with"
+              style={{ maxWidth: 200 }}
+              onChange={(e) => setChosen(e.target.value)}
+            >
+              {status.providers.map((provider) => (
+                <option key={provider.id} value={provider.id}>
+                  {provider.name} · {provider.model}
+                </option>
+              ))}
+            </Select>
+          )}
+          <GhostButton
+            onClick={() =>
+              onToggle(!status.enabled, status.enabled ? undefined : (chosen || pinned))}
+            disabled={busy}
+          >
+            {busy ? <Spinner size={13} /> : null}
+            {status.enabled ? 'Use word matching' : 'Use embedding search'}
+          </GhostButton>
+        </div>
       )}
     </div>
   )

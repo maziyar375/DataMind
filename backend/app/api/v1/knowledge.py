@@ -27,6 +27,7 @@ from app.api.schemas import (
     BenchmarkRunRead,
     BenchmarkSetRead,
     BenchmarkSetWrite,
+    EmbeddingProvider,
     EmbeddingStatus,
     EmbeddingWrite,
     KnowledgeCapabilities,
@@ -69,6 +70,7 @@ from app.services.knowledge_service import (
     UNUSED_AFTER_DAYS,
     FeedbackService,
     KnowledgeService,
+    embedding_providers,
     set_embeddings,
 )
 from app.services.policy import can_curate
@@ -268,7 +270,10 @@ async def set_embedding_search(
     _require_curator(ctx, settings, connection)
 
     result, message = await set_embeddings(
-        db, settings, connection, enabled=payload.enabled, model=payload.model
+        db, settings, connection,
+        enabled=payload.enabled,
+        model=payload.model,
+        llm_config_id=payload.llm_config_id,
     )
     await audit.record(
         db, ctx,
@@ -280,6 +285,10 @@ async def set_embedding_search(
             "enabled": payload.enabled,
             "model": connection.embedding_model,
             "dimension": connection.embedding_dimension,
+            # Identifiers and counts, never content — `services/audit.py`'s
+            # third rule. Which provider indexed a store is exactly the kind
+            # of "who did what with what" this log exists to answer.
+            "llm_config_id": str(connection.embedding_llm_config_id or ""),
             "indexed": result.embedded,
             "reason": message or result.error,
         },
@@ -315,6 +324,20 @@ async def _embedding_status(db, connection) -> EmbeddingStatus:
         dimension=connection.embedding_dimension or 0,
         templates=live.scalar_one() or 0,
         indexed=indexed.scalar_one() or 0,
+        llm_config_id=connection.embedding_llm_config_id,
+        # Sent on every read, including the read that finds the feature off:
+        # the control's whole job in that state is to say what turning it on
+        # would use, and an empty list is what makes *"configure one first"*
+        # the honest thing to show rather than a button that fails.
+        providers=[
+            EmbeddingProvider(
+                id=row.id,
+                name=row.name,
+                provider=row.provider,
+                model=row.embedding_model,
+            )
+            for row in await embedding_providers(db, connection)
+        ],
     )
 
 
@@ -677,7 +700,10 @@ async def _default_llm_config(db, ctx) -> UUID | None:
     """
     result = await db.execute(
         select(LlmConfig)
-        .where(LlmConfig.owner_id == ctx.user_id)
+        # A provider row can now declare an embedding model and no chat model.
+        # Falling back to one of those would queue a benchmark that cannot
+        # answer a single question.
+        .where(LlmConfig.owner_id == ctx.user_id, LlmConfig.model != "")
         .order_by(LlmConfig.created_at)
     )
     config = result.scalars().first()

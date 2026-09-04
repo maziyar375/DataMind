@@ -476,7 +476,7 @@ check('and are clamped rather than allowed to overflow', sparkHeights([-1, 2]), 
 // question will not show.
 function index(over: Partial<EmbeddingState> = {}): EmbeddingState {
   return {
-    enabled: true, model: 'text-embedding-3-small', dimension: 1536,
+    enabled: true, model: 'text-embedding-3-small', dimension: 1536, providers: 1,
     templates: 10, indexed: 10, message: '', ...over,
   }
 }
@@ -503,6 +503,22 @@ check('a message on a disabled store still wins',
       embeddingView(index({ enabled: false, message: 'no key' })).tone, 'problem')
 check('an on store names the model it was indexed with',
       embeddingView(index()).detail.includes('text-embedding-3-small'), true)
+
+// A store with nothing taught in it. This is the state Aurora Coffee is in,
+// and the one the strip used to be hidden for entirely — so the two branches
+// below had no reader at all until the gate came off.
+check('an empty store can still be switched, and the off state still reads as a choice',
+      embeddingView(index({ enabled: false, templates: 0, indexed: 0 })).tone, 'off')
+check('with no provider able to embed, the sentence names the one thing to do',
+      embeddingView(index({ enabled: false, providers: 0 })).detail.includes(
+        'give one an embedding model in LLM providers'), true)
+check('and with a provider available it makes no such demand',
+      embeddingView(index({ enabled: false })).detail.includes('LLM providers'), false)
+check('a pinned store with nothing taught yet is not claiming to be on',
+      embeddingView(index({ templates: 0, indexed: 0 })).tone, 'indexing')
+check('and it says what will happen rather than counting zero of zero',
+      embeddingView(index({ templates: 0, indexed: 0 })).detail,
+      'Ready with text-embedding-3-small. The first question taught here is indexed as it is saved.')
 
 // The sweep's indexing sentence. It can report a failure without the sweep
 // having failed — staleness and conflicts both completed, and the vectors are

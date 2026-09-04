@@ -2406,7 +2406,8 @@ function GenerateModal({
 
   useEffect(() => {
     llmApi
-      .list()
+      // Generation asks a model to write; an embeddings-only row cannot.
+      .list('chat')
       .then((items) => {
         setConfigs(items)
         // A model that has been reached is a better default than the first

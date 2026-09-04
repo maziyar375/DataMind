@@ -41,6 +41,7 @@ from app.domain.ports.llm import (
     ResolvedLLM,
     StreamChunk,
 )
+from app.domain.value_objects.llm_params import RESERVED
 
 T = TypeVar("T", bound=BaseModel)
 log = get_logger(__name__)
@@ -196,6 +197,11 @@ class LiteLLMGateway:
             kwargs["api_key"] = llm.api_key
         if llm.base_url:
             kwargs["api_base"] = llm.base_url
+        # Last, and never over the keys above: the catalog refuses every name
+        # in `RESERVED`, so this cannot overwrite the model, the messages or
+        # the credentials — the filter is belt-and-braces against a row written
+        # by an older, laxer validator.
+        kwargs.update(_adapt(llm.provider, llm.params))
         return kwargs
 
     # ── completion ───────────────────────────────────────────────────────
@@ -503,12 +509,57 @@ class LiteLLMGateway:
         )
 
 
+    # ── configured parameters, as the provider will actually see them ────
+    def applied_params(self, llm: ResolvedLLM) -> tuple[dict[str, Any], list[str]]:
+        """Which configured parameters survive to the wire for *this* model.
+
+        `litellm.drop_params` is on, which is what keeps one prompt working
+        across four providers — and it means a parameter a provider does not
+        support is dropped in silence. Silence is fine for a request and wrong
+        for a *test*: a configuration that stores `seed` against a model whose
+        endpoint ignores it should say so on the screen where it was typed,
+        not behave differently from what the form claims.
+
+        So the test path asks litellm the same question the request will ask,
+        and reports both halves. A failure to answer is not a test failure —
+        this is a description of a request, not the request — so it degrades to
+        "everything was sent" rather than raising.
+        """
+        if not llm.params:
+            return {}, []
+        payload = self._kwargs(llm, [ChatMessage(role="user", content="")])
+        try:
+            resolved = litellm.utils.get_optional_params(
+                model=payload["model"],
+                custom_llm_provider=litellm.get_llm_provider(payload["model"])[1],
+                **_adapt(llm.provider, llm.params),
+            )
+        except Exception:  # pragma: no cover - defensive; a description, not a call
+            return dict(llm.params), []
+
+        # Read the result under the name the person **typed**, not the one
+        # litellm was handed. The two differ for exactly one parameter — a
+        # configured Anthropic `metadata` is sent as `user` and arrives in the
+        # body as `metadata` again — so the documented name is the honest key
+        # on both sides, and a message about a dropped parameter names one the
+        # reader can find on the form.
+        applied = {name: resolved[name] for name in llm.params if name in resolved}
+        dropped = sorted(name for name in llm.params if name not in resolved)
+        return applied, dropped
+
     # ── embeddings (Phase 7) ─────────────────────────────────────────────
     def _embedding_kwargs(self, llm: ResolvedLLM, model: str) -> dict[str, Any]:
         """The same credential shaping `_kwargs` does, minus everything a chat
         call needs and an embedding endpoint rejects (temperature, max_tokens,
-        messages)."""
-        name = model or DEFAULT_EMBEDDING_MODEL
+        messages).
+
+        The model falls back through the configuration before the constant: an
+        explicit argument wins (the caller pinned one), then the provider's own
+        `embedding_model`, then `DEFAULT_EMBEDDING_MODEL`. That order is what
+        makes configuring an embedding model on the provider mean anything,
+        and it leaves a config that sets none exactly where it was.
+        """
+        name = model or llm.embedding_model or DEFAULT_EMBEDDING_MODEL
         if llm.provider in {"OpenAI-compatible", "Custom"} and "/" not in name:
             name = f"openai/{name}"
         kwargs: dict[str, Any] = {"model": name, "timeout": self._timeout}
@@ -516,6 +567,7 @@ class LiteLLMGateway:
             kwargs["api_key"] = llm.api_key
         if llm.base_url:
             kwargs["api_base"] = llm.base_url
+        kwargs.update(_adapt(llm.provider, llm.embedding_params))
         return kwargs
 
     async def embed(
@@ -569,7 +621,7 @@ class LiteLLMGateway:
                 ),
             )
 
-        name = model or DEFAULT_EMBEDDING_MODEL
+        name = model or llm.embedding_model or DEFAULT_EMBEDDING_MODEL
         try:
             vectors = await self.embed(llm, ["ok"], model=name)
         except LLMError as err:
@@ -583,6 +635,50 @@ class LiteLLMGateway:
         return EmbeddingCapability(
             available=True, model=name, dimension=len(vectors[0])
         )
+
+
+#: The one place a parameter may be renamed, and it renames exactly two.
+#:
+#: The catalog stores every parameter under the **provider's own** name, which
+#: is the point: a configuration for Anthropic should read like Anthropic's
+#: reference. litellm speaks OpenAI's dialect and translates on the way out, so
+#: two of Anthropic's names have to be spoken to it in OpenAI's:
+#:
+#: * `metadata` — Anthropic documents `metadata.user_id`; litellm reserves the
+#:   `metadata` kwarg for its own logging callbacks and would swallow it, and
+#:   it builds `{"metadata": {"user_id": …}}` from `user`.
+#: * nothing else. `stop_sequences`, `top_k` and `thinking` all reach the
+#:   Anthropic body under their own names, verified in
+#:   `test_provider_params.py` against litellm's own parameter mapping.
+#:
+#: Kept as data with the translation beside it so "does DataMind rename any of
+#: this?" is answered by reading eight lines rather than by trusting a comment.
+_ANTHROPIC_TO_LITELLM: dict[str, str] = {"metadata": "user"}
+
+
+def _adapt(provider: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Configured parameters in the kwargs litellm accepts for this provider.
+
+    `RESERVED` is re-applied here rather than trusted from the write path: this
+    is the last point before a request is built, and a row written by an older
+    validator must not be able to replace the model or the credentials.
+    """
+    if not params:
+        return {}
+    out: dict[str, Any] = {}
+    for name, value in params.items():
+        if name in RESERVED:
+            continue
+        if provider == "Anthropic" and name == "metadata":
+            # Anthropic's own shape is `{"user_id": "…"}`; litellm builds
+            # exactly that from `user`. A value without the documented key is
+            # dropped rather than guessed at — the catalog already refuses it.
+            user_id = value.get("user_id") if isinstance(value, dict) else None
+            if isinstance(user_id, str) and user_id:
+                out["user"] = user_id
+            continue
+        out[name] = value
+    return out
 
 
 def _vectors(response: Any, expected: int) -> list[list[float]]:

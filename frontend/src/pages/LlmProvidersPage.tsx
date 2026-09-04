@@ -23,6 +23,25 @@
  * `"Custom"` value still exists on rows created before it was dropped and is
  * handled in `litellm_gateway.py`, but nothing creates one now.
  *
+ * **The advanced-parameter fields are generated, not written.** The server
+ * serves what each provider documents (`GET /llm-configs/parameters`, from
+ * `app/domain/value_objects/llm_params.py`) and this page renders an input per
+ * entry, choosing the input from the entry's own type. Nothing below names a
+ * parameter: adding `prompt_cache_key` to that catalog puts it on this screen
+ * with no change here, and a parameter the selected provider does not document
+ * cannot be typed at all — which is the half a free JSON box would give away.
+ * The translation between what is typed and what is sent lives in
+ * `components/provider-params.ts`, tested apart from React.
+ *
+ * **Embeddings are here rather than in a section of their own**, and that is
+ * an architectural decision rather than a placement: an embedding endpoint
+ * needs exactly what this screen already stores — a provider kind, a base URL
+ * and an encrypted key — and `LLMGateway.embed` already takes a resolved
+ * provider plus a model *name*. A second section would duplicate this form,
+ * the key handling and the probe to hold one extra string. Which store is
+ * indexed with which of these providers is the Knowledge console's question,
+ * and it is asked there.
+ *
  * The one departure from the master–detail pages' visual rules is
  * `PROVIDER_HUES` below: the colour is keyed on the provider rather than on
  * the record, because three models behind one endpoint are a family and should
@@ -31,11 +50,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMatch, useNavigate } from 'react-router-dom'
 import { llmConfigs as api } from '../api/client'
-import type { LlmConfig, TestResult } from '../api/types'
+import type { LlmConfig, ParameterCatalog, TestResult } from '../api/types'
 import {
   Chip, DangerButton, EmptyState, ErrorNote, Field, GhostButton, GlyphBadge, Icon,
-  PrimaryButton, Select, Spinner, TextInput, identityHue, relativeTime,
+  PrimaryButton, Select, Spinner, TextArea, TextInput, identityHue, relativeTime,
 } from '../components/ui'
+import {
+  addable, collectParams, configuredCount, draftsFrom, fieldKind,
+  parameterVerdict, sameParams, selectOptions, shown,
+} from '../components/provider-params'
+import type { ParamDrafts, ParamSpec } from '../components/provider-params'
 import {
   DetailBody, DetailHeader, FieldRow, MasterColumn, MasterItem, Section,
   StatusLine, UnsavedNote,
@@ -51,6 +75,11 @@ const BLANK = {
   model: 'gpt-4o-mini',
   temperature: 0,
   max_tokens: 2048,
+  // The embedding model is a plain field on the draft like any other scalar.
+  // The two parameter *maps* are not: they live in their own state, because
+  // what the form holds is text per field and what the API takes is a typed
+  // JSON object, and `provider-params.ts` is the translation.
+  embedding_model: '',
 }
 
 /**
@@ -77,6 +106,168 @@ function reachability(status: string): { tone: 'green' | 'red' | 'neutral'; labe
   return { tone: 'neutral', label: 'Untested' }
 }
 
+
+/** Faint explanatory prose, as the "How testing works" section already uses. */
+const faintNote: React.CSSProperties = {
+  fontSize: 12.5, color: 'var(--text-dim)', margin: 0, lineHeight: 1.6,
+}
+
+/** Whether a provider has an embedding endpoint, per the served catalog.
+ *
+ *  Read from the catalog rather than from a list here, so the answer moves
+ *  with the backend — Anthropic's "no" is one fact stated in one place. While
+ *  the catalog is unknown the answer is *yes*, because hiding a field on a
+ *  loading state would look like the feature was removed. */
+function providerEmbeds(
+  catalogs: ParameterCatalog[] | null, provider: string,
+): boolean {
+  const entry = catalogs?.find((c) => c.provider === provider)
+  return entry ? entry.embedding_supported : true
+}
+
+/**
+ * One input per documented parameter, and not one line that names any of them.
+ *
+ * The input is chosen by `fieldKind` from the spec's own type, the hint is the
+ * provider's own description of the parameter, and the placeholder is a valid
+ * value — so a catalog entry is enough to produce a usable field. A parameter
+ * added to `llm_params.py` appears here on the next deploy with no change to
+ * this file, which is the property the whole design is for.
+ *
+ * Blank is *unset* everywhere, including on the pickers, or a parameter could
+ * be switched on and never off again.
+ */
+function ParameterFields({
+  specs, drafts, errors, onChange, onRemove, onAdd, empty,
+}: {
+  specs: ParamSpec[]
+  drafts: ParamDrafts
+  errors: Record<string, string>
+  onChange: (name: string, value: string) => void
+  onRemove: (name: string) => void
+  onAdd: (name: string) => void
+  empty: string
+}) {
+  if (specs.length === 0) {
+    return <p style={faintNote}>{empty}</p>
+  }
+  const rows = shown(specs, drafts)
+  const offer = addable(specs, drafts)
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {rows.map((spec) => {
+        const value = drafts[spec.name] ?? ''
+        const error = errors[spec.name]
+        const kind = fieldKind(spec)
+        return (
+          <div key={spec.name} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <Field
+                label={spec.name}
+                // The provider's own sentence, plus this page's own error
+                // under it — an in-page failure stays beside the field that
+                // caused it, which is the shell's rule for anything that is
+                // not a background job.
+                hint={error ? `${spec.summary} · ${error}` : spec.summary}
+              >
+                {kind === 'select' ? (
+                  <Select
+                    value={value}
+                    onChange={(e) => onChange(spec.name, e.target.value)}
+                  >
+                    {selectOptions(spec).map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </Select>
+                ) : kind === 'textarea' ? (
+                  <TextArea
+                    rows={2}
+                    value={value}
+                    placeholder={spec.example}
+                    spellCheck={false}
+                    // A JSON value is code, and code is always left-to-right —
+                    // the same rule SQL follows everywhere in this product.
+                    dir="ltr"
+                    style={{
+                      fontFamily: 'var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)',
+                      fontSize: 12,
+                      borderColor: error ? 'var(--danger)' : undefined,
+                    }}
+                    onChange={(e) => onChange(spec.name, e.target.value)}
+                  />
+                ) : (
+                  <TextInput
+                    type={kind === 'number' ? 'number' : 'text'}
+                    value={value}
+                    placeholder={spec.example}
+                    min={spec.minimum}
+                    max={spec.maximum}
+                    step={spec.kind === 'integer' ? 1 : 'any'}
+                    dir="ltr"
+                    style={{ borderColor: error ? 'var(--danger)' : undefined }}
+                    onChange={(e) => onChange(spec.name, e.target.value)}
+                  />
+                )}
+              </Field>
+            </div>
+            <GhostButton
+              onClick={() => onRemove(spec.name)}
+              aria-label={`Remove ${spec.name}`}
+              title={`Remove ${spec.name}`}
+              style={{ marginTop: 20 }}
+            >
+              <Icon.Trash />
+            </GhostButton>
+          </div>
+        )
+      })}
+
+      {offer.length > 0 ? (
+        <div style={{ maxWidth: 320 }}>
+          <Field
+            label={rows.length === 0 ? 'Add a parameter' : 'Add another'}
+            hint={
+              rows.length === 0
+                ? 'Everything this provider documents, and nothing it does not.'
+                : undefined
+            }
+          >
+            {/* A picker rather than fourteen always-visible inputs. The
+                catalog supplies the names *and* the summaries, so this stays
+                generated: a parameter added to `llm_params.py` appears in
+                this list on the next deploy. Value resets to '' every time so
+                the same parameter can be re-added after a removal. */}
+            <Select
+              value=""
+              onChange={(e) => {
+                if (e.target.value) onAdd(e.target.value)
+              }}
+            >
+              <option value="">Choose a parameter…</option>
+              {offer.map((spec) => (
+                <option key={spec.name} value={spec.name}>
+                  {spec.name}
+                  {spec.choices?.length
+                    ? ` — ${spec.choices.join(' | ')}`
+                    : spec.minimum !== undefined || spec.maximum !== undefined
+                      ? ` — ${spec.minimum ?? '−∞'} to ${spec.maximum ?? '∞'}`
+                      : ` — ${spec.kind.replace('_', ' ')}`}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+      ) : (
+        <p style={faintNote}>
+          Every parameter this provider documents is already on the form.
+        </p>
+      )}
+    </div>
+  )
+}
+
 export default function LlmProvidersPage() {
   const [list, setList] = useState<LlmConfig[]>([])
   const [loading, setLoading] = useState(true)
@@ -97,6 +288,13 @@ export default function LlmProvidersPage() {
   )
   const [draft, setDraft] = useState<Record<string, any>>(BLANK)
   const [apiKey, setApiKey] = useState('')
+  // What each provider documents, fetched once. `null` means "not known yet",
+  // which is **not** the same as "this provider takes nothing": while it is
+  // null the two parameter maps are left out of every payload entirely, so a
+  // catalog that failed to load cannot silently wipe a saved configuration.
+  const [catalogs, setCatalogs] = useState<ParameterCatalog[] | null>(null)
+  const [paramDrafts, setParamDrafts] = useState<ParamDrafts>({})
+  const [embeddingDrafts, setEmbeddingDrafts] = useState<ParamDrafts>({})
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<TestResult | null>(null)
   const [saving, setSaving] = useState(false)
@@ -106,6 +304,27 @@ export default function LlmProvidersPage() {
     () => list.find((c) => c.id === selectedId) ?? null,
     [list, selectedId],
   )
+
+  const catalog = useMemo(
+    () => catalogs?.find((entry) => entry.provider === draft.provider) ?? null,
+    [catalogs, draft.provider],
+  )
+  const completionSpecs: ParamSpec[] = catalog?.completion ?? []
+  const embeddingSpecs: ParamSpec[] = catalog?.embedding ?? []
+
+  // Collected on every render rather than on submit, because the per-field
+  // errors are shown under the fields while they are being typed — the same
+  // bargain the semantic layer's metric editor makes with its live check.
+  const completion = useMemo(
+    () => collectParams(completionSpecs, paramDrafts),
+    [completionSpecs, paramDrafts],
+  )
+  const embedding = useMemo(
+    () => collectParams(embeddingSpecs, embeddingDrafts),
+    [embeddingSpecs, embeddingDrafts],
+  )
+  const paramErrors
+    = Object.keys(completion.errors).length + Object.keys(embedding.errors).length
 
   // True when the form holds edits not yet saved to `selected`. A new key
   // counts, since a blank key field means "keep the stored one" — see test().
@@ -120,6 +339,14 @@ export default function LlmProvidersPage() {
   const isDirty = useMemo(() => {
     if (!selected) return false
     if (apiKey !== '') return true
+    // The two parameter maps compare by *value*: the drafts are text and the
+    // saved row is JSON, so the only honest comparison is of what would
+    // actually be sent. While the catalog is unknown they cannot have been
+    // edited — there are no fields — so they cannot make a form dirty either.
+    if (catalog) {
+      if (!sameParams(completion.params, selected.params)) return true
+      if (!sameParams(embedding.params, selected.embedding_params)) return true
+    }
     const saved = selected as unknown as Record<string, unknown>
     return Object.keys(draft).some((key) => {
       // `base_url` hydrates a null as '' (the input has no null state), so
@@ -129,7 +356,7 @@ export default function LlmProvidersPage() {
       if (typeof b === 'number') return Number(a) !== b
       return (a ?? null) !== (b ?? null)
     })
-  }, [selected, draft, apiKey])
+  }, [selected, draft, apiKey, catalog, completion.params, embedding.params])
 
   // The same rule Data sources follows: a create form counts as unsaved work
   // only once something has been typed into it.
@@ -137,10 +364,12 @@ export default function LlmProvidersPage() {
     () =>
       creating
       && (apiKey !== ''
+        || configuredCount(paramDrafts) > 0
+        || configuredCount(embeddingDrafts) > 0
         || Object.keys(BLANK).some(
           (key) => draft[key] !== (BLANK as Record<string, unknown>)[key],
         )),
-    [creating, draft, apiKey],
+    [creating, draft, apiKey, paramDrafts, embeddingDrafts],
   )
   const releaseUnsaved = useUnsavedWork(
     'provider-form',
@@ -158,6 +387,11 @@ export default function LlmProvidersPage() {
   }, [])
 
   useEffect(() => {
+    // Beside the list, not after it: they are two readings of one screen, and
+    // a catalog that arrived second would make the parameter fields appear
+    // under the reader's cursor. A failure is silent by design — the rest of
+    // the form works, and the section simply says the catalog is unavailable.
+    api.parameters().then(setCatalogs).catch(() => setCatalogs(null))
     refresh()
       .then((items) => {
         // Landing on `/providers` opens the first one, as this screen has
@@ -182,7 +416,14 @@ export default function LlmProvidersPage() {
       model: selected.model,
       temperature: selected.temperature,
       max_tokens: selected.max_tokens,
+      embedding_model: selected.embedding_model ?? '',
     })
+    // Hydrated against the **row's** provider, not the draft's: the draft is
+    // being set in this same pass and the specs decide which stored keys have
+    // a field to appear in.
+    const entry = catalogs?.find((c) => c.provider === selected.provider)
+    setParamDrafts(draftsFrom(entry?.completion ?? [], selected.params))
+    setEmbeddingDrafts(draftsFrom(entry?.embedding ?? [], selected.embedding_params))
     // Keyed on the **loaded row's** id, not on the id in the URL.
     //
     // Those differ for exactly one arrival, and it is the one routing made
@@ -197,10 +438,16 @@ export default function LlmProvidersPage() {
     // Still the *id* rather than the row itself: `selected` is a fresh object
     // on every list refresh, and depending on it would re-hydrate the form —
     // discarding what the user had typed — every time a save reloaded the list.
-  }, [selected?.id])
+    // `catalogs` is deliberately in the dependency list beside the row's id:
+    // on a deep link the catalog is usually still in flight when the row
+    // arrives, and without this the fields would hydrate blank once and never
+    // again — the same failure the id-versus-row note above describes.
+  }, [selected?.id, catalogs])
 
   function startCreate() {
     setDraft(BLANK)
+    setParamDrafts({})
+    setEmbeddingDrafts({})
     setApiKey('')
     setTestResult(null)
     setError(null)
@@ -212,22 +459,49 @@ export default function LlmProvidersPage() {
       ...draft,
       provider,
       base_url: PROVIDER_URLS[provider] ?? draft.base_url,
+      // Anthropic serves no embedding endpoint, and the server refuses a row
+      // that claims otherwise. Clearing it here means the refusal is never
+      // seen rather than being explained.
+      embedding_model: providerEmbeds(catalogs, provider) ? draft.embedding_model : '',
     })
+    // The parameters are the *other* provider's vocabulary — `seed` means
+    // nothing to Anthropic and `top_k` nothing to OpenAI — so switching drops
+    // them rather than carrying them to a save the server will refuse. The
+    // fields under the picker change with it, which is the whole point of a
+    // generated form.
+    setParamDrafts({})
+    setEmbeddingDrafts({})
+  }
+
+  /** The two maps, or nothing at all while the catalog is unknown.
+   *
+   *  Omitted rather than sent empty: a PATCH that leaves them out keeps what
+   *  is stored, and a PATCH carrying `{}` clears it. Those are different
+   *  intentions and only one of them is ever meant here. */
+  function parameterPayload(): Record<string, unknown> {
+    if (!catalog) return {}
+    return { params: completion.params, embedding_params: embedding.params }
   }
 
   async function save() {
+    if (paramErrors > 0) {
+      setError('Some parameters are not valid yet — see the fields below.')
+      return
+    }
     setSaving(true)
     setError(null)
     try {
       if (creating) {
-        const created = await api.create({ ...draft, api_key: apiKey || undefined })
+        const created = await api.create({
+          ...draft, ...parameterPayload(), api_key: apiKey || undefined,
+        })
         await refresh()
         // Let go before navigating, or the guard stops a saved form leaving
         // itself; replace, because `/providers/new` no longer describes it.
         releaseUnsaved()
         setSelectedId(created.id, { replace: true })
       } else if (selected) {
-        const payload: Record<string, unknown> = { ...draft }
+        const payload: Record<string, unknown> = { ...draft, ...parameterPayload() }
         if (apiKey) payload.api_key = apiKey
         await api.update(selected.id, payload)
         await refresh()
@@ -257,6 +531,11 @@ export default function LlmProvidersPage() {
             api_key: apiKey || undefined,
             temperature: draft.temperature,
             max_tokens: draft.max_tokens,
+            // The probe tests the form, parameters included — otherwise a
+            // configuration could pass its test and fail on the first real
+            // question because of a value nobody probed.
+            ...parameterPayload(),
+            embedding_model: draft.embedding_model || '',
           }),
         )
       } else if (selected) {
@@ -295,10 +574,12 @@ export default function LlmProvidersPage() {
 
   const editing = creating || !!selected
 
-  // Local/custom endpoints need no key, so only the model is required
-  // before a draft probe can say anything useful. Editing an unsaved
-  // change takes the same draft path, so it needs a model name too.
-  const canTest = creating || isDirty ? Boolean(draft.model) : true
+  // A row declares a chat model, an embedding model, or both — and a probe
+  // needs whichever it has, not specifically a chat model. An embeddings-only
+  // endpoint is tested by asking it for one vector, which is the whole of what
+  // it claims to do.
+  const declares = Boolean(draft.model || draft.embedding_model)
+  const canTest = creating || isDirty ? declares : true
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -337,7 +618,10 @@ export default function LlmProvidersPage() {
             <MasterItem
               key={config.id}
               title={config.name}
-              subtitle={config.model}
+              // An embeddings-only row has no chat model to show, and showing
+              // a blank line would read as a broken record rather than a
+              // deliberate one.
+              subtitle={config.model || `${config.embedding_model} · embeddings`}
               active={config.id === selectedId}
               tone={state.tone}
               toneLabel={state.label}
@@ -389,7 +673,9 @@ export default function LlmProvidersPage() {
                 </GlyphBadge>
               }
               title={creating ? 'New model' : selected!.name}
-              subtitle={`${draft.provider} · ${draft.model}`}
+              subtitle={`${draft.provider} · ${
+                draft.model || `${draft.embedding_model} (embeddings)` || '—'
+              }`}
               chips={
                 creating ? undefined : (
                   <>
@@ -411,15 +697,21 @@ export default function LlmProvidersPage() {
                   <GhostButton
                     onClick={test}
                     disabled={testing || !canTest}
-                    title={canTest ? undefined : 'Enter a model name first.'}
+                    title={
+                      canTest ? undefined : 'Enter a model name or an embedding model first.'
+                    }
                   >
                     {testing ? <Spinner /> : <Icon.Zap size={14} />}
                     Test model
                   </GhostButton>
                   <PrimaryButton
                     onClick={save}
-                    disabled={saving || !(creating || isDirty)}
-                    title={creating || isDirty ? undefined : 'No changes to save.'}
+                    disabled={saving || !(creating || isDirty) || !declares}
+                    title={
+                      !declares
+                        ? 'Give this provider a model to answer with, an embedding model, or both.'
+                        : creating || isDirty ? undefined : 'No changes to save.'
+                    }
                   >
                     {saving && <Spinner />}
                     {creating ? 'Add model' : 'Save changes'}
@@ -435,6 +727,29 @@ export default function LlmProvidersPage() {
                   {testResult.ok
                     ? `${testResult.message} · ${testResult.latency_ms}ms`
                     : testResult.message}
+                </StatusLine>
+              )}
+              {testResult?.ok
+                && parameterVerdict(
+                  draft.model, testResult.applied_params, testResult.dropped_params,
+                ) && (
+                // Separate from the reachability line because it answers a
+                // different question, and it is the question the form cannot
+                // answer on its own: an unsupported parameter is dropped in
+                // silence on a real request, so this is the only place a
+                // configuration is told it is claiming something untrue.
+                <StatusLine ok={(testResult.dropped_params ?? []).length === 0}>
+                  {parameterVerdict(
+                    draft.model, testResult.applied_params, testResult.dropped_params,
+                  )}
+                </StatusLine>
+              )}
+              {testResult?.embedding && (
+                <StatusLine ok={testResult.embedding.ok}>
+                  {testResult.embedding.ok
+                    ? `Embeddings: ${testResult.embedding.model} answered at `
+                      + `${testResult.embedding.dimension} dimensions.`
+                    : testResult.embedding.message}
                 </StatusLine>
               )}
 
@@ -474,9 +789,13 @@ export default function LlmProvidersPage() {
                 <Field
                   label="Model"
                   hint={
+                    // Optional, and the reason is worth one sentence: an
+                    // endpoint that only serves vectors has no chat model to
+                    // name, and naming one anyway gave it a Test button that
+                    // could only fail.
                     draft.provider === 'OpenAI-compatible'
-                      ? 'If the model name contains a slash (e.g. lightning-ai/gemma-4-31B-it), prefix it with openai/ — openai/lightning-ai/gemma-4-31B-it — or it will not route correctly.'
-                      : undefined
+                      ? 'Leave blank if this endpoint only serves embeddings. If the model name contains a slash (e.g. lightning-ai/gemma-4-31B-it), prefix it with openai/ — openai/lightning-ai/gemma-4-31B-it — or it will not route correctly.'
+                      : 'Leave blank if this endpoint only serves embeddings.'
                   }
                 >
                   <TextInput
@@ -511,6 +830,13 @@ export default function LlmProvidersPage() {
                 </Field>
               </Section>
 
+              {/* Both of these shape a *completion*, so an endpoint that
+                  serves only vectors has nothing to apply them to. Hidden
+                  rather than disabled: a control that cannot reach anything is
+                  noise, and the Embeddings section below carries the settings
+                  that do apply. */}
+              {draft.model ? (
+                <>
               <Section
                 title="Generation"
                 description="Applied to every request this model serves."
@@ -539,6 +865,85 @@ export default function LlmProvidersPage() {
                     />
                   </Field>
                 </FieldRow>
+              </Section>
+
+              <Section
+                title={
+                  configuredCount(paramDrafts) > 0
+                    ? `Advanced parameters · ${configuredCount(paramDrafts)} set`
+                    : 'Advanced parameters'
+                }
+                description={
+                  catalog
+                    ? `Sent on every request this model serves, exactly as ${draft.provider} documents them. Nothing is set unless you add it.`
+                    : 'The parameter list is loading. Nothing here is changed while it is unavailable.'
+                }
+                icon={<Icon.Sliders size={14} />}
+              >
+                <ParameterFields
+                  specs={completionSpecs}
+                  drafts={paramDrafts}
+                  errors={completion.errors}
+                  onChange={(name, value) =>
+                    setParamDrafts({ ...paramDrafts, [name]: value })}
+                  onAdd={(name) => setParamDrafts({ ...paramDrafts, [name]: '' })}
+                  onRemove={(name) => {
+                    const { [name]: _removed, ...rest } = paramDrafts
+                    setParamDrafts(rest)
+                  }}
+                  empty={
+                    catalog
+                      ? `${draft.provider} takes no further request parameters here.`
+                      : 'Could not load what this provider documents.'
+                  }
+                />
+              </Section>
+                </>
+              ) : null}
+
+              <Section
+                title="Embeddings"
+                description="Used by Knowledge to match questions that mean the same thing in different words. Leave the model blank if this provider is for answering only."
+                icon={<Icon.Sparkle size={14} />}
+              >
+                {catalog && !catalog.embedding_supported ? (
+                  <p style={faintNote}>
+                    {draft.provider} has no embedding endpoint, so it cannot serve
+                    vectors. Point an OpenAI-compatible provider at one — Knowledge
+                    falls back to word matching either way, which needs no provider
+                    at all.
+                  </p>
+                ) : (
+                  <>
+                    <Field
+                      label="Embedding model"
+                      hint="Asked of the same endpoint and the same key. The width is measured from the reply, never typed."
+                    >
+                      <TextInput
+                        value={draft.embedding_model ?? ''}
+                        placeholder="e.g. text-embedding-3-small"
+                        onChange={(e) =>
+                          setDraft({ ...draft, embedding_model: e.target.value })}
+                      />
+                    </Field>
+                    {draft.embedding_model ? (
+                      <ParameterFields
+                        specs={embeddingSpecs}
+                        drafts={embeddingDrafts}
+                        errors={embedding.errors}
+                        onChange={(name, value) =>
+                          setEmbeddingDrafts({ ...embeddingDrafts, [name]: value })}
+                        onAdd={(name) =>
+                          setEmbeddingDrafts({ ...embeddingDrafts, [name]: '' })}
+                        onRemove={(name) => {
+                          const { [name]: _removed, ...rest } = embeddingDrafts
+                          setEmbeddingDrafts(rest)
+                        }}
+                        empty="This provider takes no further embedding parameters."
+                      />
+                    ) : null}
+                  </>
+                )}
               </Section>
 
               {!creating && (

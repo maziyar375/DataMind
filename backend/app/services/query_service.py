@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clock import utcnow
 from app.core.config import Settings
-from app.core.errors import AppError, ConnectorError
+from app.core.errors import AppError, ConnectorError, ValidationError
 from app.core.logging import get_logger
 from app.domain.ports.database import DatabaseConnector, ResultColumn
 from app.domain.ports.llm import ProviderCapabilities, ResolvedLLM
@@ -120,13 +120,72 @@ def policy_from_snapshot(
     )
 
 
-def resolve_llm(config: LlmConfig, box: SecretBox, *, min_max_tokens: int = 0) -> ResolvedLLM:
+#: The two things a provider configuration can be for. A row declares one or
+#: both by filling in `model`, `embedding_model`, or each — there is no `kind`
+#: column, because a stored discriminator is a second thing to keep in
+#: agreement with the fields it describes. Derived, like the vector
+#: fingerprints: ask the row, do not remember an answer about it.
+CHAT = "chat"
+EMBEDDING = "embedding"
+
+
+def can_chat(config: LlmConfig) -> bool:
+    """Whether this configuration can answer a question.
+
+    A chat model is what makes a row usable by the pipeline, and it is
+    **optional** so that an endpoint which serves only vectors — a self-hosted
+    TEI or Infinity server, an Ollama with one embedding model pulled — can be
+    configured without inventing a chat model it does not have. Before that,
+    such a deployment had to name a model that would fail its own Test button.
+    """
+    return bool(config.model)
+
+
+def can_embed(config: LlmConfig) -> bool:
+    """Whether this configuration can be asked for a vector.
+
+    Two conditions failing for different reasons: an empty `embedding_model`
+    means nobody has said what to ask for — a configuration is for completions
+    until somebody opts it in, so adding a provider never quietly enrols it in
+    a feature that spends the owner's budget — and Anthropic has no embedding
+    endpoint at all, which is the fact `probe_embedding` refuses on with no
+    network call and the parameter catalog states by offering it nothing.
+    """
+    return bool(config.embedding_model) and config.provider != "Anthropic"
+
+
+def resolve_llm(
+    config: LlmConfig,
+    box: SecretBox,
+    *,
+    min_max_tokens: int = 0,
+    purpose: str = CHAT,
+) -> ResolvedLLM:
     """Decrypt a provider's key and hand back a callable model description.
 
     `min_max_tokens` raises the floor on the output budget for callers whose
     output is prose rather than SQL (the semantic-layer generator); it defaults
     to no floor, which is the run pipeline's behaviour unchanged.
+
+    `purpose` is checked **here** rather than at the eleven call sites, because
+    this is the one funnel every one of them goes through: a run, a draft, a
+    semantic layer, a report outline, a report section and a benchmark all
+    reach a provider by way of this function. A row that declares only an
+    embedding model must not answer a question, and the refusal has to name the
+    row — *"model configuration not found"* would send somebody looking for a
+    deleted record instead of at the model they picked.
     """
+    if purpose == CHAT and not can_chat(config):
+        raise ValidationError(
+            f"“{config.name}” is configured for embeddings only and has no "
+            "model to answer with. Pick another model, or give this one a "
+            "model name in LLM providers."
+        )
+    if purpose == EMBEDDING and not can_embed(config):
+        raise ValidationError(
+            f"“{config.name}” has no embedding model, so it cannot produce "
+            "vectors."
+        )
     api_key = ""
     if config.encrypted_api_key:
         api_key = box.decrypt(config.encrypted_api_key, aad=f"llm_config:{config.id}")
@@ -139,6 +198,11 @@ def resolve_llm(config: LlmConfig, box: SecretBox, *, min_max_tokens: int = 0) -
         api_key=api_key,
         temperature=config.temperature,
         max_tokens=max(config.max_tokens, min_max_tokens),
+        # Copied, not shared: a `ResolvedLLM` is handed to a gateway that may
+        # mutate its kwargs, and the ORM row is live in this session.
+        params=dict(config.params or {}),
+        embedding_model=config.embedding_model or "",
+        embedding_params=dict(config.embedding_params or {}),
         capabilities=ProviderCapabilities(
             supports_structured_output=caps.get("supports_structured_output", False),
             supports_streaming=caps.get("supports_streaming", True),

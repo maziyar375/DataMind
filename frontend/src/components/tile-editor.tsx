@@ -292,7 +292,7 @@ export function TileEditor({
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([connectionsApi.list(), llmConfigsApi.list()])
+    Promise.all([connectionsApi.list(), llmConfigsApi.list('chat')])
       .then(([loadedConnections, loadedModels]) => {
         if (cancelled) return
         setConnections(loadedConnections)

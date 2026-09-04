@@ -58,9 +58,51 @@ export interface LlmConfig {
   model: string
   temperature: number
   max_tokens: number
+  /** Extra request parameters, in the **selected provider's own** vocabulary —
+   *  `stop_sequences` and `thinking` for Anthropic, `stop` and `seed` for
+   *  anything OpenAI-compatible. Nothing here is typed in TypeScript on
+   *  purpose: the legal set is the provider's, it is served by
+   *  `llmConfigs.parameters()` and validated on save against the same catalog,
+   *  and a second copy of that list in the SPA is a second thing to keep true. */
+  params: Record<string, unknown>
+  /** The model this endpoint is asked for vectors. Empty means this provider
+   *  is for completions only, which is every configuration until somebody
+   *  says otherwise. */
+  embedding_model: string
+  embedding_params: Record<string, unknown>
   status: string
   has_api_key: boolean
   last_tested_at: string | null
+}
+
+/** One documented request parameter, in enough detail to render a field.
+ *
+ *  Mirrors `ParamSpec.as_dict()` in `app/domain/value_objects/llm_params.py`.
+ *  The form is **generated** from these, so adding a parameter to the catalog
+ *  puts it on the screen with no change here. */
+export interface ParamSpec {
+  name: string
+  kind: 'number' | 'integer' | 'boolean' | 'string' | 'string_list' | 'object'
+  /** One line, written for the person configuring the model. */
+  summary: string
+  example: string
+  minimum?: number
+  maximum?: number
+  /** The values the provider documents. Present makes the field a picker. */
+  choices?: string[]
+  /** For an object parameter, the keys the provider documents. Empty means
+   *  the endpoint defines the body itself (`extra_body`, `logit_bias`). */
+  object_keys?: string[]
+}
+
+export interface ParameterCatalog {
+  provider: string
+  completion: ParamSpec[]
+  embedding: ParamSpec[]
+  /** Whether the provider has an embedding endpoint at all. Stated rather than
+   *  inferred from an empty list, so the form can say *why* — Anthropic does
+   *  not offer one, which is a fact and not a gap in the catalog. */
+  embedding_supported: boolean
 }
 
 export interface TestResult {
@@ -70,6 +112,19 @@ export interface TestResult {
   server_version?: string | null
   readonly_confirmed?: boolean
   detected_capabilities?: Record<string, unknown>
+  /** Which configured parameters this model actually accepts, and which it
+   *  does not. An unsupported parameter is dropped silently at request time;
+   *  a test that stayed silent too would let a configuration claim a behaviour
+   *  it never has. */
+  applied_params?: Record<string, unknown>
+  dropped_params?: string[]
+  /** The embedding half, when one is configured. Absent otherwise. */
+  embedding?: {
+    ok: boolean
+    model: string
+    dimension: number
+    message: string
+  } | null
 }
 
 export interface SchemaColumn {
@@ -390,6 +445,20 @@ export interface EmbeddingStatus {
   /** The provider's own sentence when the probe or the last pass refused.
    *  Empty on success. */
   message: string
+  /** Which provider configuration produced this index. Null when the store is
+   *  matched on words, which is the default. */
+  llm_config_id: string | null
+  /** Every configuration that *could* index it — the owner's providers with an
+   *  embedding model set. Empty is the state where the control has nothing to
+   *  switch to and says so instead of offering a button that fails. */
+  providers: EmbeddingProvider[]
+}
+
+export interface EmbeddingProvider {
+  id: string
+  name: string
+  provider: string
+  model: string
 }
 
 export interface KnowledgeTemplateList {
