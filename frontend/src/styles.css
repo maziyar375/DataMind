@@ -503,6 +503,12 @@ code, pre, .mono {
   --auth-cta: linear-gradient(100deg, oklch(0.49 0.19 258), oklch(0.46 0.22 300));
   --auth-cta-ink: oklch(0.99 0.01 280);
 
+  /* The weight of the line the scene is built on — its hairline core and the
+     haze under it. Read by `auth-scene.tsx` once a frame, for the same reason
+     the wave hues are: the canvas should not know which theme is on. */
+  --arc-ink: 0.4;
+  --arc-haze: 0.075;
+
   /* Two quiet text tiers, mixed rather than taken whole. `--text-dim` and
      `--text-faint` are calibrated against a solid panel; over this ground the
      light theme's paper puts both under 4.5:1, and the fix has to hold in both
@@ -518,8 +524,8 @@ code, pre, .mono {
   background:
     radial-gradient(
       128% 96% at 50% 30%,
-      transparent 20%,
-      color-mix(in oklch, var(--bg) 26%, oklch(0.08 0.03 275)) 100%
+      transparent 26%,
+      color-mix(in oklch, var(--bg) 50%, oklch(0.08 0.03 275)) 100%
     ),
     var(--bg);
 }
@@ -544,6 +550,11 @@ code, pre, .mono {
   --wave-b: oklch(0.45 0.21 352);
   --auth-ink: oklch(0.32 0.06 300);
   --auth-cta: linear-gradient(100deg, oklch(0.5 0.2 322), oklch(0.46 0.22 298));
+  /* More core, less haze. A dark hairline on paper needs the extra weight to
+     be a line at all, while the same 9px haze that reads as glow on navy reads
+     as a smudge here — over a pale ground a wide soft stroke is a stain. */
+  --arc-ink: 0.55;
+  --arc-haze: 0.045;
   background:
     radial-gradient(
       128% 96% at 50% 30%,
@@ -553,9 +564,18 @@ code, pre, .mono {
     var(--bg);
 }
 
-/* The bloom behind the mark, and four corner orbs in the mark's own hues.
-   Weaker than they used to be: the dotted sheets now carry the colour, and two
-   sources of glow in the same corner cancel each other into haze. */
+/* A bloom behind the mark, and one glow in each corner in the mark's own hues.
+   These are the coloured shadows the page is lit by; without them the corners
+   go flat and the whole field reads as a rectangle. Each radius is 70% of what
+   it was, which is a little over half the area: the glows now sit *in* the
+   corners rather than washing across the field toward the card.
+
+   **Read the percentages carefully.** This box is `inset: -25%`, so it spans
+   −25%…125% of the viewport, and a background position `p` inside it lands at
+   `p × 1.5 − 0.25` on screen. `4% 10%` is therefore *not* near the top-left
+   corner — it is −19%, −10%, entirely off the page, which is where all four of
+   these spent a revision. To put a glow at viewport `v` the position is
+   `(v + 0.25) / 1.5`; each line below gives the viewport figure it targets. */
 /* Fixed, like the canvas and the glyphs above it. As an `absolute` box its
    `inset: -25%` bled a quarter of the viewport past the bottom edge, and once
    the clip became axis-scoped that bleed turned into 225px of real page scroll
@@ -568,11 +588,16 @@ code, pre, .mono {
   z-index: -2;
   pointer-events: none;
   background:
-    radial-gradient(26% 22% at 50% 24%, oklch(0.6 0.2 300 / 0.2), transparent 72%),
-    radial-gradient(30% 32% at 4% 10%, oklch(0.62 0.22 300 / 0.26), transparent 72%),
-    radial-gradient(30% 32% at 96% 8%, oklch(0.66 0.24 350 / 0.24), transparent 72%),
-    radial-gradient(34% 34% at 2% 96%, oklch(0.64 0.2 255 / 0.3), transparent 72%),
-    radial-gradient(34% 34% at 98% 96%, oklch(0.7 0.2 350 / 0.28), transparent 72%);
+    /* behind the mark — viewport 50%, 22% */
+    radial-gradient(17% 14% at 50% 31%, oklch(0.6 0.2 300 / 0.13), transparent 72%),
+    /* top-left — viewport 8%, 10% */
+    radial-gradient(21% 22.4% at 22% 23%, oklch(0.62 0.24 300 / 0.17), transparent 70%),
+    /* top-right — viewport 92%, 8% */
+    radial-gradient(21% 22.4% at 78% 22%, oklch(0.66 0.24 350 / 0.16), transparent 70%),
+    /* bottom-left — viewport 6%, 92% */
+    radial-gradient(23.8% 23.8% at 21% 78%, oklch(0.64 0.22 255 / 0.19), transparent 70%),
+    /* bottom-right — viewport 94%, 94% */
+    radial-gradient(23.8% 23.8% at 79% 79%, oklch(0.72 0.22 350 / 0.18), transparent 70%);
 }
 
 /* The grid motif from the welcome screen, faded to the centre. */
@@ -589,19 +614,27 @@ code, pre, .mono {
   mask-image: radial-gradient(closest-side at 50% 42%, #000, transparent);
 }
 
-/* On the pale surface the dark theme's neon pastels wash out, so light mode
-   gets its own: deeper hues at higher alpha, same positions. */
-/* Same four corners as dark, at a third the strength. A glow is a luxury on a
-   black field and a liability on a white one: every point of alpha here is
-   contrast taken away from everything drawn on top of it, so these are just
-   strong enough to tint the corners the waves live in. */
+/* The same five places and the same footprint as dark, at roughly twice the
+   alpha — the one number the two themes cannot share.
+
+   Over a near-white ground a tint is `C·a + white·(1−a)`, and its saturation
+   comes out as `a × spread(C) / 255`. The hues below already spend the second
+   term completely: chroma is at the edge of what sRGB can show, at the mid
+   lightness where that edge is furthest out, so each clips to a channel triple
+   like `rgb(139,0,255)` — spread 255, the most there is. Darkening them is the
+   tempting move and it is the wrong one: `rgb(72,10,168)` spreads 158, so a
+   deeper violet lands *less* colour on paper. With the colour term maxed,
+   alpha is the only thing left that can make these more vivid, which is why
+   shrinking these glows had to be done by footprint alone. Dark mode has no
+   such bind — over near black, alpha moves brightness and leaves hue intact,
+   so its values sit where they were and only the radii came in. */
 :root[data-theme='light'] .rm-auth::before {
   background:
-    radial-gradient(26% 22% at 50% 24%, oklch(0.58 0.24 312 / 0.09), transparent 74%),
-    radial-gradient(30% 32% at 4% 10%, oklch(0.56 0.26 292 / 0.1), transparent 74%),
-    radial-gradient(30% 32% at 96% 8%, oklch(0.58 0.24 352 / 0.09), transparent 74%),
-    radial-gradient(34% 34% at 2% 96%, oklch(0.5 0.26 290 / 0.13), transparent 74%),
-    radial-gradient(34% 34% at 98% 96%, oklch(0.54 0.24 352 / 0.13), transparent 74%);
+    radial-gradient(17% 14% at 50% 31%, oklch(0.58 0.34 312 / 0.15), transparent 74%),
+    radial-gradient(21% 22.4% at 22% 23%, oklch(0.56 0.34 292 / 0.2), transparent 74%),
+    radial-gradient(21% 22.4% at 78% 22%, oklch(0.6 0.32 352 / 0.19), transparent 74%),
+    radial-gradient(23.8% 23.8% at 21% 78%, oklch(0.55 0.34 290 / 0.23), transparent 74%),
+    radial-gradient(23.8% 23.8% at 79% 79%, oklch(0.58 0.32 352 / 0.22), transparent 74%);
 }
 
 /* On paper the instruments need more of themselves than they do on navy: a
@@ -609,14 +642,11 @@ code, pre, .mono {
    not guessed — at the dark theme's 0.52 the frames sat under 1.4:1 against
    `--bg` and simply were not there. */
 :root[data-theme='light'] .rm-auth-glyph {
-  opacity: calc(0.88 + var(--lit, 0) * 0.12);
+  opacity: calc((0.88 + var(--lit, 0) * 0.12) * var(--ready, 1));
 }
 :root[data-theme='light'] .rm-glyph-frame {
   fill: color-mix(in oklch, var(--panel) 94%, transparent);
   stroke: color-mix(in oklch, var(--auth-ink) 58%, transparent);
-}
-:root[data-theme='light'] .rm-glyph-track {
-  stroke: color-mix(in oklch, var(--auth-ink) 26%, transparent);
 }
 :root[data-theme='light'] .rm-glyph-rows rect,
 :root[data-theme='light'] .rm-glyph-matrix circle {
@@ -625,15 +655,28 @@ code, pre, .mono {
 :root[data-theme='light'] .rm-glyph-rule {
   stroke: color-mix(in oklch, var(--auth-ink) 48%, transparent);
 }
-/* A wash that reads on navy is invisible on paper — the area fills and the
-   header row both need roughly a third more pigment here. */
-:root[data-theme='light'] .rm-glyph-fill { fill: color-mix(in oklch, var(--wave-a) 28%, transparent); }
-:root[data-theme='light'] .rm-glyph-fill-b { fill: color-mix(in oklch, var(--wave-b) 26%, transparent); }
-:root[data-theme='light'] .rm-glyph-head rect { fill: color-mix(in oklch, var(--wave-b) 66%, transparent); }
+/* A wash that reads on navy is invisible on paper — every tint on these cards
+   needs roughly a third more pigment here. */
+:root[data-theme='light'] .rm-glyph-link {
+  stroke: color-mix(in oklch, var(--auth-ink) 56%, transparent);
+}
+:root[data-theme='light'] .rm-glyph-bubble {
+  fill: color-mix(in oklch, var(--panel) 94%, transparent);
+  stroke: color-mix(in oklch, var(--wave-a) 76%, transparent);
+}
+:root[data-theme='light'] .rm-glyph-spark { fill: var(--wave-b); }
+:root[data-theme='light'] .rm-glyph-badge {
+  fill: color-mix(in oklch, var(--wave-a) 12%, transparent);
+  stroke: var(--wave-a);
+}
 :root[data-theme='light'] .rm-auth-orbit { opacity: 1; }
-:root[data-theme='light'] .rm-orbit-ring { opacity: 0.42; }
-:root[data-theme='light'] .rm-orbit-ring.is-far { opacity: 0.2; }
-:root[data-theme='light'] .rm-orbit-dash { opacity: 0.62; }
+/* Down about a third from where they were. They used to be the only structure
+   around the mark and were weighted to carry that; the line does it now, and
+   two full-strength systems in the same 500px read as clutter rather than as
+   depth. Dark never had the problem — its rings sit at 0.34 and below. */
+:root[data-theme='light'] .rm-orbit-ring { opacity: 0.28; }
+:root[data-theme='light'] .rm-orbit-ring.is-far { opacity: 0.13; }
+:root[data-theme='light'] .rm-orbit-dash { opacity: 0.4; }
 
 /* ── the waves ─────────────────────────────────────────────────────────── */
 /* One canvas for both sheets. It covers the viewport rather than the two
@@ -662,6 +705,16 @@ code, pre, .mono {
   color: var(--auth-ink);
 }
 
+/* Registered rather than left as a plain custom property, for one reason:
+   an unregistered `--ready` is a token substitution, and flipping it would snap
+   the opacity that depends on it. Given a type it interpolates, so the same
+   flip fades. */
+@property --ready {
+  syntax: '<number>';
+  inherits: false;
+  initial-value: 1;
+}
+
 /* Parallax on the wrapper, idle drift on the child. The wrapper's transform is
    written from `auth-scene.tsx` every frame; giving the same element a
    keyframe transform as well would mean the animation simply won it. */
@@ -669,9 +722,30 @@ code, pre, .mono {
   position: absolute;
   transform: translate3d(var(--tx, 0px), var(--ty, 0px), 0);
   will-change: transform;
-  opacity: calc(0.52 + var(--lit, 0) * 0.48);
+  opacity: calc((0.52 + var(--lit, 0) * 0.48) * var(--ready, 1));
 }
 .rm-auth-glyph-drift { animation: rm-glyph-drift 9s ease-in-out infinite; }
+
+/* The four cards on the line have no place in this file at all: their anchors
+   are solved against the curve every frame in `auth-scene.tsx` and arrive as
+   `--tx`/`--ty`, so a `left`/`top` here would only be a second opinion. They
+   start at nothing and are faded in, staggered, once that first solve has
+   happened — a card painted at the origin for one frame is a card seen
+   jumping. */
+.rm-auth-node {
+  left: 0;
+  top: 0;
+  --ready: 0;
+  transition: opacity 0.55s ease;
+}
+
+/* Where the margins stop being margins. The outer pair keep their distance
+   from the centre column at any width, but the inner pair are placed between
+   the two, and below this there is no between: they go first, and the whole
+   layer goes at 1100. */
+@media (max-width: 1260px) {
+  .rm-auth-node.is-inner { display: none; }
+}
 
 @keyframes rm-glyph-drift {
   0%, 100% { transform: translate3d(0, 3px, 0); }
@@ -686,36 +760,46 @@ code, pre, .mono {
   stroke: color-mix(in oklch, var(--auth-ink) 32%, transparent);
   stroke-width: 1;
 }
-.rm-glyph-fill { fill: color-mix(in oklch, var(--wave-a) 22%, transparent); }
-.rm-glyph-fill-b { fill: color-mix(in oklch, var(--wave-b) 20%, transparent); }
-.rm-glyph-line,
-.rm-glyph-line-b {
+.rm-glyph-node { fill: var(--wave-a); }
+.rm-glyph-node-b { fill: var(--wave-b); }
+
+/* The wiring out of the database, and the endpoints it reaches: quiet enough
+   that the cylinder stays the subject of that card. */
+.rm-glyph-link {
   fill: none;
-  stroke-width: 2.1;
+  stroke: color-mix(in oklch, var(--auth-ink) 40%, transparent);
+  stroke-width: 1.5;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-.rm-glyph-line { stroke: var(--wave-a); }
-.rm-glyph-line-b { stroke: var(--wave-b); }
-.rm-glyph-node { fill: var(--wave-a); }
-.rm-glyph-node-b { fill: var(--wave-b); }
-.rm-glyph-halo { fill: color-mix(in oklch, var(--wave-a) 26%, transparent); }
 
-/* The donut and the completion ring: one track, one or two live arcs. Round
-   caps, because a segment cut square reads as a bug at this size. */
-.rm-glyph-track {
-  fill: none;
-  stroke: color-mix(in oklch, var(--auth-ink) 24%, transparent);
-  stroke-width: 5;
+/* The question. The bubble is filled rather than outlined so it reads as a
+   thing said into the product; the caret is the only warm mark on it, which is
+   what makes the prompt look half-typed instead of finished. */
+.rm-glyph-bubble {
+  fill: color-mix(in oklch, var(--panel) 72%, transparent);
+  stroke: color-mix(in oklch, var(--wave-a) 60%, transparent);
+  stroke-width: 1.4;
+  stroke-linejoin: round;
 }
-.rm-glyph-arc-a,
-.rm-glyph-arc-b {
+.rm-glyph-caret { fill: var(--wave-b); }
+.rm-glyph-spark { fill: color-mix(in oklch, var(--wave-b) 74%, transparent); }
+
+/* The check on the query. A ring rather than a filled disc: a solid badge at
+   this size out-weighs the mark it is sitting near. */
+.rm-glyph-key rect { fill: color-mix(in oklch, var(--wave-b) 82%, transparent); }
+.rm-glyph-badge {
+  fill: color-mix(in oklch, var(--wave-a) 18%, transparent);
+  stroke: color-mix(in oklch, var(--wave-a) 68%, transparent);
+  stroke-width: 1.3;
+}
+.rm-glyph-check {
   fill: none;
-  stroke-width: 5;
+  stroke: var(--wave-a);
+  stroke-width: 2.2;
   stroke-linecap: round;
+  stroke-linejoin: round;
 }
-.rm-glyph-arc-a { stroke: var(--wave-a); }
-.rm-glyph-arc-b { stroke: var(--wave-b); }
 
 /* The bar series climbs from one brand hue into the other, so it reads as a
    measure with a direction rather than six identical marks. */
@@ -733,7 +817,6 @@ code, pre, .mono {
 }
 .rm-glyph-db-top { fill: color-mix(in oklch, var(--wave-a) 28%, transparent); }
 
-.rm-glyph-head rect { fill: color-mix(in oklch, var(--wave-b) 46%, transparent); }
 .rm-glyph-rows rect { fill: color-mix(in oklch, var(--auth-ink) 34%, transparent); }
 .rm-glyph-rule {
   stroke: color-mix(in oklch, var(--auth-ink) 30%, transparent);

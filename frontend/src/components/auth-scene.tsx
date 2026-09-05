@@ -2,17 +2,20 @@
  * The field behind the sign-in card — the one surface a visitor can play with
  * before they have an account.
  *
- * Two layers, both `aria-hidden` and both `pointer-events: none`, so none of
- * it is ever between someone and the form:
+ * Three layers, all `aria-hidden` and none of them able to take a pointer
+ * event, so nothing here is ever between someone and the form:
  *
+ *  - **The line.** One long curve that crests under the mark and falls away
+ *    past both edges of the window. It is the scene's spine: the mark sits on
+ *    its crest, four cards hang off it at measured points, and slow motes
+ *    travel it left to right — the path a question takes through the product.
  *  - **The waves.** Two dotted sheets growing out of the bottom corners, drawn
- *    on a single canvas. They flow on their own, part around the pointer, and
+ *    on the same canvas. They flow on their own, part around the pointer, and
  *    carry a ring outward from a click anywhere on the page.
- *  - **The instruments.** Chart, table and database glyphs scattered down both
- *    margins, on a parallax against the pointer, brightening as it passes.
- *    They are the product's own objects — a bar chart, a donut, a result
- *    table, a database — rather than abstract shapes, because the thing being
- *    signed into reads databases and draws charts.
+ *  - **The cards.** Four of them, one per thing this product actually does:
+ *    the databases it reads, the question asked in plain language, the SQL
+ *    checked before it runs, the answer that comes back. Left to right through
+ *    the mark they are in that order, which is the order they happen in.
  *
  * The orbit rings are *not* here: they are centred on the mark, the page lays
  * the mark out, so they live in `LoginPage` where that centring is free.
@@ -21,12 +24,55 @@
  * `--wave-b` off `.rm-auth`, so both themes are decided in `styles.css` beside
  * the tokens, and a theme switch is picked up on the next frame.
  *
- * `prefers-reduced-motion` stops the clock — the sheets hold a still frame and
- * the glyphs stop drifting — but the pointer still moves both. What that
- * setting asks us to stop is motion the visitor did not cause; a wake that
- * follows a hand already in flight is not that.
+ * `prefers-reduced-motion` stops the clock — the sheets hold a still frame, the
+ * motes hold their places, the cards stop drifting — but the pointer still
+ * moves all three. What that setting asks us to stop is motion the visitor did
+ * not cause; a wake that follows a hand already in flight is not that.
  */
 import { useEffect, useRef } from 'react'
+
+/* ── the line ──────────────────────────────────────────────────────────── */
+
+/**
+ * The curve everything in the margins is organised on.
+ *
+ * A parabola: `y = apexY + drop · s²` for `s` running −1 … 1 across the span.
+ * It is drawn as a quadratic Bézier, which is not an approximation of that —
+ * a quadratic Bézier *is* a parabola, so the curve the canvas strokes and the
+ * curve the cards are placed on are the same object solved two ways, and a
+ * card can never drift off the line it is supposed to hang from.
+ *
+ * The apex is taken from the orbit plate rather than from a percentage of the
+ * window, so the crest stays under the mark at every breakpoint — including the
+ * two short-viewport ones where the mark shrinks and moves.
+ */
+/** How far past each edge of the window the ends are pushed, in widths. Both
+    ends leave the frame, so the line reads as a piece of something larger
+    rather than as an object with two visible tips. */
+const ARC_OVER = 0.13
+/** How far the curve has fallen by those ends, in heights. */
+const ARC_DROP = 0.34
+/** How far below the mark's centre the crest sits, as a fraction of the plate.
+    Not zero: on the centre line the curve would cut the mark in half, and a
+    little lower it passes through the mark's foot, which reads as the mark
+    resting on it. */
+const ARC_SEAT = 0.09
+/** Kept clear either side of the page's centre column, in px. The column is
+    440 at its widest, so this is its half plus room to breathe: no card can be
+    placed inside it however wide the window gets. */
+const ARC_CLEAR = 250
+/** Kept clear of the window's own edges, in px. */
+const ARC_PAD = 26
+
+/** Motes riding the line, and how many seconds one takes to cross it. */
+const FLOW = 16
+const FLOW_PERIOD = 78
+
+/** Weight of the motes riding the line. The line's own two weights are not
+    here: they differ by theme — a hairline that reads on navy is a scratch on
+    paper — so like every other colour decision on this screen they are taken
+    from `.rm-auth` at run time. */
+const FLOW_INK = 0.6
 
 /**
  * One dotted wave field.
@@ -153,141 +199,139 @@ const ORBIT_PERIOD = 100
 const BUCKETS = 12
 
 /**
- * The instruments, placed by fraction of the viewport.
+ * A card hanging off the line.
  *
- * `depth` is the parallax throw in pixels: the small far-off marks move least,
- * the big near cards move most, which is the whole of the depth cue. Every
- * position stays clear of the centre column the card occupies — the widest
- * breakpoint puts the card at 400px, so nothing sits between 34% and 66%.
+ * `at` is where it sits along the half of the line beyond the clearance — 0 is
+ * as close to the centre column as anything is allowed, 1 is the window's edge
+ * — so the four keep their relative places at every width instead of being four
+ * percentages that happen to work at one. `w`/`h` are the art's own pixel size,
+ * which is what centres the card on its anchor and what stops it from being
+ * clamped half off the screen.
  */
-type Glyph = { x: number; y: number; depth: number; drift: number; art: React.ReactNode }
+type Node = {
+  side: -1 | 1
+  at: number
+  w: number
+  h: number
+  /** Parallax throw in px. It grows with distance from the mark: the outer
+      pair sit lower on the curve, which reads as nearer, and near things move
+      more. That is the whole of the depth cue. */
+  depth: number
+  drift: number
+  /** The inner pair. They are the first thing to go when the margins narrow. */
+  inner?: boolean
+  art: React.ReactNode
+}
 
 /** The card every instrument is drawn on. */
 function Frame({ w, h, r = 12 }: { w: number; h: number; r?: number }) {
   return <rect x="0.6" y="0.6" width={w - 1.2} height={h - 1.2} rx={r} className="rm-glyph-frame" />
 }
 
-const GLYPHS: Glyph[] = [
-  // ── left margin ──
+const NODES: Node[] = [
   {
-    // An area chart: the filled body is what makes it read as a chart at this
-    // size rather than as a zigzag.
-    x: 21, y: 29, depth: 17, drift: 0,
+    // **The databases.** A cylinder wired to three endpoints — the shape of
+    // "your Postgres, your MySQL, your SQL Server" without naming them.
+    side: -1, at: 0.52, w: 150, h: 98, depth: 22, drift: 0,
     art: (
-      <svg width="162" height="88" viewBox="0 0 162 88" fill="none" aria-hidden="true">
-        <Frame w={162} h={88} r={13} />
-        <path className="rm-glyph-fill" d="M20 64L44 46L62 55L82 30L102 41L122 21L146 34V72H20Z" />
-        <path className="rm-glyph-line" d="M20 64L44 46L62 55L82 30L102 41L122 21L146 34" />
-        <circle className="rm-glyph-halo" cx="122" cy="21" r="6.5" />
-        <circle className="rm-glyph-node" cx="122" cy="21" r="3.2" />
-      </svg>
-    ),
-  },
-  {
-    // A donut with two live segments against a track, beside its legend.
-    x: 18, y: 56, depth: 23, drift: 1,
-    art: (
-      <svg width="132" height="72" viewBox="0 0 132 72" fill="none" aria-hidden="true">
-        <Frame w={132} h={72} r={12} />
-        <circle className="rm-glyph-track" cx="34" cy="36" r="15" />
-        <path className="rm-glyph-arc-a" d="M34 21A15 15 0 0 1 43.6 47.5" />
-        <path className="rm-glyph-arc-b" d="M43.6 47.5A15 15 0 0 1 22.5 45.6" />
-        <g className="rm-glyph-rows">
-          <rect x="62" y="23" width="52" height="5" rx="2.5" />
-          <rect x="62" y="33.5" width="38" height="5" rx="2.5" />
-          <rect x="62" y="44" width="45" height="5" rx="2.5" />
-        </g>
-      </svg>
-    ),
-  },
-  {
-    // A completion ring — the one glyph that is a number rather than a series.
-    x: 32, y: 14, depth: 11, drift: 2,
-    art: (
-      <svg width="56" height="56" viewBox="0 0 56 56" fill="none" aria-hidden="true">
-        <Frame w={56} h={56} r={15} />
-        <circle className="rm-glyph-track" cx="28" cy="28" r="11.5" />
-        <path className="rm-glyph-arc-a" d="M28 16.5A11.5 11.5 0 1 1 17.2 31.9" />
-      </svg>
-    ),
-  },
-  {
-    // A result table: a header rule is what tells it apart from the donut's
-    // legend rows beside it.
-    x: 11, y: 42, depth: 9, drift: 3,
-    art: (
-      <svg width="104" height="70" viewBox="0 0 104 70" fill="none" aria-hidden="true">
-        <Frame w={104} h={70} r={11} />
-        <g className="rm-glyph-head">
-          <rect x="14" y="15" width="24" height="5" rx="2.5" />
-          <rect x="46" y="15" width="18" height="5" rx="2.5" />
-          <rect x="72" y="15" width="18" height="5" rx="2.5" />
-        </g>
-        <path className="rm-glyph-rule" d="M14 27h76" />
-        <g className="rm-glyph-rows">
-          <rect x="14" y="34" width="24" height="4.5" rx="2.25" />
-          <rect x="46" y="34" width="14" height="4.5" rx="2.25" />
-          <rect x="72" y="34" width="18" height="4.5" rx="2.25" />
-          <rect x="14" y="46" width="20" height="4.5" rx="2.25" />
-          <rect x="46" y="46" width="18" height="4.5" rx="2.25" />
-          <rect x="72" y="46" width="12" height="4.5" rx="2.25" />
-        </g>
-      </svg>
-    ),
-  },
-  { x: 27, y: 73, depth: 13, drift: 4, art: <Matrix cols={5} rows={3} /> },
-
-  // ── right margin ──
-  {
-    // Pill bars rather than rectangles, and the series climbs across the two
-    // brand hues instead of sitting in one.
-    x: 64, y: 11, depth: 15, drift: 2,
-    art: (
-      <svg width="122" height="88" viewBox="0 0 122 88" fill="none" aria-hidden="true">
-        <Frame w={122} h={88} r={13} />
-        <g className="rm-glyph-bars">
-          <rect x="20" y="50" width="9" height="20" rx="4.5" />
-          <rect x="35" y="40" width="9" height="30" rx="4.5" />
-          <rect x="50" y="46" width="9" height="24" rx="4.5" />
-          <rect x="65" y="30" width="9" height="40" rx="4.5" />
-          <rect x="80" y="36" width="9" height="34" rx="4.5" />
-          <rect x="95" y="20" width="9" height="50" rx="4.5" />
-        </g>
-        <path className="rm-glyph-rule" d="M16 70h90" />
-      </svg>
-    ),
-  },
-  {
-    // The database. Its top disc is filled so the cylinder reads as a solid
-    // rather than as three loose ellipses.
-    x: 72, y: 36, depth: 21, drift: 0,
-    art: (
-      <svg width="78" height="78" viewBox="0 0 78 78" fill="none" aria-hidden="true">
-        <Frame w={78} h={78} r={18} />
+      <svg width="150" height="98" viewBox="0 0 150 98" fill="none" aria-hidden="true">
+        <Frame w={150} h={98} r={17} />
         <g className="rm-glyph-db">
-          <path d="M22 26v11c0 3.7 7.6 6.6 17 6.6s17-2.9 17-6.6V26" />
-          <path d="M22 37v11c0 3.7 7.6 6.6 17 6.6s17-2.9 17-6.6V37" />
-          <ellipse className="rm-glyph-db-top" cx="39" cy="26" rx="17" ry="6.6" />
+          <path d="M28 37v12c0 3.9 7.8 7 17.5 7S63 52.9 63 49V37" />
+          <path d="M28 49v12c0 3.9 7.8 7 17.5 7S63 64.9 63 61V49" />
+          <ellipse className="rm-glyph-db-top" cx="45.5" cy="37" rx="17.5" ry="7" />
         </g>
+        <g className="rm-glyph-link">
+          <path d="M67 49h24" />
+          <path d="M91 49V33h20" />
+          <path d="M91 49h20" />
+          <path d="M91 49v16h20" />
+        </g>
+        <circle className="rm-glyph-node" cx="114" cy="33" r="3.4" />
+        <circle className="rm-glyph-node" cx="114" cy="49" r="3.4" />
+        <circle className="rm-glyph-node-b" cx="114" cy="65" r="3.4" />
       </svg>
     ),
   },
   {
-    x: 75, y: 60, depth: 12, drift: 3,
+    // **The question.** A bubble with a prompt half-typed in it: the caret is
+    // what makes it read as something being asked rather than something said.
+    side: -1, at: 0.16, w: 116, h: 80, depth: 13, drift: 2, inner: true,
     art: (
-      <svg width="110" height="68" viewBox="0 0 110 68" fill="none" aria-hidden="true">
-        <Frame w={110} h={68} r={11} />
-        <path className="rm-glyph-fill-b" d="M16 46L38 33L54 40L74 21L96 30V54H16Z" />
-        <path className="rm-glyph-line-b" d="M16 46L38 33L54 40L74 21L96 30" />
-        <circle className="rm-glyph-node-b" cx="96" cy="30" r="3" />
+      <svg width="116" height="80" viewBox="0 0 116 80" fill="none" aria-hidden="true">
+        <Frame w={116} h={80} r={15} />
+        <path
+          className="rm-glyph-bubble"
+          d="M24 18h68a9 9 0 0 1 9 9v18a9 9 0 0 1-9 9H43l-11 9v-9h-8a9 9 0 0 1-9-9V27a9 9 0 0 1 9-9z"
+        />
+        <g className="rm-glyph-rows">
+          <rect x="28" y="27" width="46" height="5" rx="2.5" />
+          <rect x="28" y="38" width="26" height="5" rx="2.5" />
+        </g>
+        <rect className="rm-glyph-caret" x="58" y="37" width="3" height="7" rx="1.5" />
+        <path className="rm-glyph-spark" d="M93 54l1.7 4.3 4.3 1.7-4.3 1.7L93 66l-1.7-4.3-4.3-1.7 4.3-1.7z" />
       </svg>
     ),
   },
-  { x: 80, y: 22, depth: 7, drift: 1, art: <Matrix cols={5} rows={5} /> },
-  { x: 86, y: 47, depth: 9, drift: 4, art: <Matrix cols={4} rows={3} /> },
+  {
+    // **The check.** Query text with a badge on it — the one promise this
+    // product makes that a visitor cannot see for themselves before signing in.
+    side: 1, at: 0.16, w: 116, h: 80, depth: 13, drift: 3, inner: true,
+    art: (
+      <svg width="116" height="80" viewBox="0 0 116 80" fill="none" aria-hidden="true">
+        <Frame w={116} h={80} r={15} />
+        <g className="rm-glyph-key">
+          <rect x="22" y="20" width="26" height="6" rx="3" />
+        </g>
+        <g className="rm-glyph-rows">
+          <rect x="52" y="20" width="18" height="6" rx="3" />
+          <rect x="22" y="33" width="14" height="6" rx="3" />
+          <rect x="40" y="33" width="34" height="6" rx="3" />
+          <rect x="22" y="46" width="22" height="6" rx="3" />
+        </g>
+        <circle className="rm-glyph-badge" cx="86" cy="50" r="13" />
+        <path className="rm-glyph-check" d="M80 50.5l4 4 8-8.5" />
+      </svg>
+    ),
+  },
+  {
+    // **The answer.** The series climbs across both brand hues, so it reads as
+    // a measure with a direction rather than six identical marks.
+    side: 1, at: 0.52, w: 150, h: 98, depth: 22, drift: 1,
+    art: (
+      <svg width="150" height="98" viewBox="0 0 150 98" fill="none" aria-hidden="true">
+        <Frame w={150} h={98} r={17} />
+        <g className="rm-glyph-bars">
+          <rect x="24" y="52" width="10" height="22" rx="5" />
+          <rect x="42" y="42" width="10" height="32" rx="5" />
+          <rect x="60" y="48" width="10" height="26" rx="5" />
+          <rect x="78" y="34" width="10" height="40" rx="5" />
+          <rect x="96" y="40" width="10" height="34" rx="5" />
+          <rect x="114" y="26" width="10" height="48" rx="5" />
+        </g>
+        <path className="rm-glyph-rule" d="M20 74h110" />
+      </svg>
+    ),
+  },
 ]
 
-/** The dot-grid patches — a schema's shape with the labels too far to read. */
+/**
+ * The dot-grid patches — a schema's shape with the labels too far to read.
+ *
+ * These are texture rather than objects, which is why they are the one thing in
+ * the margins still placed by percentage: they belong to the corners of the
+ * window, not to the line, and they are mirrored in pairs so neither side of
+ * the page carries more of them than the other.
+ */
+type Mote = { x: number; y: number; depth: number; drift: number; cols: number; rows: number }
+
+const MOTES: Mote[] = [
+  { x: 7, y: 20, depth: 9, drift: 0, cols: 4, rows: 3 },
+  { x: 91, y: 17, depth: 7, drift: 2, cols: 4, rows: 4 },
+  { x: 9, y: 62, depth: 11, drift: 3, cols: 3, rows: 3 },
+  { x: 90, y: 64, depth: 8, drift: 4, cols: 3, rows: 2 },
+]
+
 function Matrix({ cols, rows }: { cols: number; rows: number }) {
   const step = 11
   const dots: React.ReactNode[] = []
@@ -366,6 +410,7 @@ export default function AuthScene() {
        resolution, and 1200 of them a frame is the whole budget. */
     let colors: Record<string, string> = {}
     let orbitAlpha = 0.72
+    let arcInk = 0.4, arcHaze = 0.075
     /* Where the ring plate is, in viewport coordinates. Re-read every tenth
        frame rather than every frame: `getBoundingClientRect` forces layout, and
        six reads a second is enough to survive a resize, a font landing late or
@@ -378,6 +423,8 @@ export default function AuthScene() {
         '--wave-a': style.getPropertyValue('--wave-a').trim() || '#5b8cff',
         '--wave-b': style.getPropertyValue('--wave-b').trim() || '#ff5bab',
       }
+      arcInk = Number(style.getPropertyValue('--arc-ink')) || 0.4
+      arcHaze = Number(style.getPropertyValue('--arc-haze')) || 0.075
       const plate = document.querySelector('.rm-auth-orbit')
       orbitAlpha = plate ? Number(getComputedStyle(plate).opacity) || 0.72 : 0.72
     }
@@ -394,6 +441,11 @@ export default function AuthScene() {
     const dots = new Float32Array(MAX_DOTS * 4)
     const counts = new Uint16Array(BUCKETS)
 
+    /* The cards carry no position of their own until the first frame has
+       measured the line, so they start invisible and are faded in once — a
+       card painted at the origin for one frame is a card seen jumping. */
+    let placed = false
+
     let raf = 0
     const start = performance.now() / 1000
 
@@ -407,30 +459,104 @@ export default function AuthScene() {
       atY += (aimY - atY) * 0.09
       grip += (want - grip) * 0.06
 
-      // ── the instruments ──
-      for (let i = 0; i < marks.length; i++) {
+      const px = ((atX / width) - 0.5) * -2
+      const py = ((atY / height) - 0.5) * -2
+
+      // ── where the line is ──
+      if (++sinceMeasure >= 10) {
+        sinceMeasure = 0
+        plateBox = document.querySelector('.rm-auth-orbit')?.getBoundingClientRect() ?? null
+      }
+      const seated = plateBox && plateBox.width > 0
+      const apexX = seated ? plateBox!.left + plateBox!.width / 2 : width / 2
+      const apexY = seated
+        ? plateBox!.top + plateBox!.height * (0.5 + ARC_SEAT)
+        : height * 0.3
+      const span = width * (0.5 + ARC_OVER)
+      const drop = height * ARC_DROP
+
+      // ── the cards on it ──
+      for (let i = 0; i < NODES.length; i++) {
         const mark = marks[i]
-        const g = GLYPHS[i]
-        if (!g) continue
-        const cx = (g.x / 100) * width
-        const cy = (g.y / 100) * height
-        const px = ((atX / width) - 0.5) * -2
-        const py = ((atY / height) - 0.5) * -2
-        mark.style.setProperty('--tx', `${px * g.depth}px`)
-        mark.style.setProperty('--ty', `${py * g.depth}px`)
-        const d = Math.hypot(atX - cx, atY - cy)
-        const lit = grip * Math.max(0, 1 - d / 340) ** 1.6
-        mark.style.setProperty('--lit', lit.toFixed(3))
+        const n = NODES[i]
+        if (!mark) continue
+        /* Anchor first, then clamp into the window, then take the height from
+           the clamped x — so a card pulled in from the edge slides *along* the
+           curve instead of hanging off it in mid-air. */
+        let x = apexX + n.side * (ARC_CLEAR + n.at * (span - ARC_CLEAR))
+        x = Math.min(Math.max(x, ARC_PAD + n.w / 2), width - ARC_PAD - n.w / 2)
+        const s = (x - apexX) / span
+        const y = apexY + drop * s * s
+
+        mark.style.setProperty('--tx', `${x - n.w / 2 + px * n.depth}px`)
+        mark.style.setProperty('--ty', `${y - n.h / 2 + py * n.depth}px`)
+        const d = Math.hypot(atX - x, atY - y)
+        mark.style.setProperty('--lit', (grip * Math.max(0, 1 - d / 340) ** 1.6).toFixed(3))
+      }
+      if (!placed && seated) {
+        placed = true
+        for (let i = 0; i < NODES.length; i++) marks[i]?.style.setProperty('--ready', '1')
       }
 
-      // ── the waves ──
+      // ── the motes in the corners ──
+      for (let i = 0; i < MOTES.length; i++) {
+        const mark = marks[NODES.length + i]
+        const m = MOTES[i]
+        if (!mark) continue
+        const cx = (m.x / 100) * width
+        const cy = (m.y / 100) * height
+        mark.style.setProperty('--tx', `${px * m.depth}px`)
+        mark.style.setProperty('--ty', `${py * m.depth}px`)
+        const d = Math.hypot(atX - cx, atY - cy)
+        mark.style.setProperty('--lit', (grip * Math.max(0, 1 - d / 340) ** 1.6).toFixed(3))
+      }
+
       ctx!.clearRect(0, 0, width, height)
 
+      // ── the line ──
+      /* Each half is stroked twice from the same path: once wide and faint for
+         the haze it sits in, once hairline for the line itself. Both fade to
+         nothing at the outer end through the gradient rather than through a
+         mask, so the line is at its strongest where it meets the mark. */
+      for (const dir of [-1, 1] as const) {
+        const endX = apexX + dir * span
+        const grad = ctx!.createLinearGradient(endX, 0, apexX, 0)
+        grad.addColorStop(0, 'transparent')
+        grad.addColorStop(1, colors[dir < 0 ? '--wave-a' : '--wave-b'])
+        ctx!.strokeStyle = grad
+        ctx!.beginPath()
+        ctx!.moveTo(endX, apexY + drop)
+        ctx!.quadraticCurveTo(apexX + dir * span * 0.5, apexY, apexX, apexY)
+        ctx!.lineWidth = 9
+        ctx!.globalAlpha = arcHaze
+        ctx!.stroke()
+        ctx!.lineWidth = 1.3
+        ctx!.globalAlpha = arcInk
+        ctx!.stroke()
+      }
+
+      /* What travels it. Evenly spaced and all moving at one rate, so with the
+         clock stopped they hold a still, even scatter rather than a clump. */
+      for (let i = 0; i < FLOW; i++) {
+        const u = (i / FLOW + t / FLOW_PERIOD) % 1
+        const s = u * 2 - 1
+        const e = Math.min(u, 1 - u) / 0.22
+        const a = (e >= 1 ? 1 : e * e * (3 - 2 * e)) * FLOW_INK
+        if (a <= 0.01) continue
+        ctx!.globalAlpha = a
+        ctx!.fillStyle = colors[s < 0 ? '--wave-a' : '--wave-b']
+        ctx!.beginPath()
+        ctx!.arc(apexX + s * span, apexY + drop * s * s, 2.1, 0, 6.2832)
+        ctx!.fill()
+      }
+      ctx!.globalAlpha = 1
+
+      // ── the waves ──
       while (rings.length && now - rings[0].born > RING_LIFE) rings.shift()
 
       for (const w of WAVES) {
         const fx0 = w.x0 * width, fx1 = w.x1 * width
-        const span = fx1 - fx0
+        const wspan = fx1 - fx0
         const fy0 = w.y0 * height, fy1 = w.y1 * height
 
         /* Pass one solves every particle and files it under an opacity bucket;
@@ -457,7 +583,7 @@ export default function AuthScene() {
           const ph = w.seed * 6.2832 + d * 2.7
 
           const step = STEP_FRONT * (1 + STEP_BACK * d)
-          const count = Math.max(2, Math.ceil(Math.abs(span) / step))
+          const count = Math.max(2, Math.ceil(Math.abs(wspan) / step))
           const fade = (1 - d) ** 0.8
           const rad = 1.7 - 0.85 * d
 
@@ -466,7 +592,7 @@ export default function AuthScene() {
             const jx = jitter(L, i), jy = jitter(i, L)
 
             const th = u * 6.2832
-            let x = fx0 + span * u + (jx - 0.5) * step * 0.6
+            let x = fx0 + wspan * u + (jx - 0.5) * step * 0.6
             let y = baseY
               + a1 * Math.sin(th * f1 + ph + t * w.drift[0])
               + a2 * Math.sin(th * f2 + ph * 1.7 + t * w.drift[1])
@@ -538,14 +664,10 @@ export default function AuthScene() {
       ctx!.globalAlpha = 1
 
       // ── the dots around the mark ──
-      if (++sinceMeasure >= 10) {
-        sinceMeasure = 0
-        plateBox = document.querySelector('.rm-auth-orbit')?.getBoundingClientRect() ?? null
-      }
-      if (plateBox && plateBox.width > 0) {
-        const scale = plateBox.width / 900
-        const cx = plateBox.left + plateBox.width / 2
-        const cy = plateBox.top + plateBox.height / 2
+      if (seated) {
+        const scale = plateBox!.width / 900
+        const cx = apexX
+        const cy = plateBox!.top + plateBox!.height / 2
         const spin = (t / ORBIT_PERIOD) * Math.PI * 2
         for (const o of ORBIT) {
           const ang = (o.deg * Math.PI) / 180 + spin
@@ -555,7 +677,7 @@ export default function AuthScene() {
           /* The same dissolve the rings get from their CSS mask, computed the
              same way, so a dot and the ring it rides fade out together as they
              pass behind the heading. */
-          const down = (y - plateBox.top) / plateBox.height
+          const down = (y - plateBox!.top) / plateBox!.height
           let a = down <= 0.5 ? 1 : down >= 0.7 ? 0 : 1 - (down - 0.5) / 0.2
           if (a <= 0.01) continue
           a *= (o.far ? 0.55 : 0.85) * orbitAlpha
@@ -585,18 +707,27 @@ export default function AuthScene() {
   return (
     <>
       <canvas ref={canvasRef} className="rm-auth-waves" aria-hidden="true" />
+      {/* Cards first, motes after: the frame loop walks this list by index, and
+          `NODES.length` is where it changes what it is placing. */}
       <div ref={glyphsRef} className="rm-auth-glyphs" aria-hidden="true">
-        {GLYPHS.map((g, i) => (
+        {NODES.map((n, i) => (
           <div
-            key={i}
-            className="rm-auth-glyph"
-            style={{ left: `${g.x}%`, top: `${g.y}%` }}
+            key={`n${i}`}
+            className={`rm-auth-glyph rm-auth-node${n.inner ? ' is-inner' : ''}`}
+            style={{ transitionDelay: `${120 + i * 90}ms` }}
           >
             {/* The parallax is on the wrapper and the idle drift on the child:
                 one element cannot hold two transforms, and collapsing them into
                 one animated value would make the pointer fight the keyframes. */}
-            <div className="rm-auth-glyph-drift" style={{ animationDelay: `${g.drift * -1.7}s` }}>
-              {g.art}
+            <div className="rm-auth-glyph-drift" style={{ animationDelay: `${n.drift * -1.7}s` }}>
+              {n.art}
+            </div>
+          </div>
+        ))}
+        {MOTES.map((m, i) => (
+          <div key={`m${i}`} className="rm-auth-glyph" style={{ left: `${m.x}%`, top: `${m.y}%` }}>
+            <div className="rm-auth-glyph-drift" style={{ animationDelay: `${m.drift * -1.7}s` }}>
+              <Matrix cols={m.cols} rows={m.rows} />
             </div>
           </div>
         ))}
