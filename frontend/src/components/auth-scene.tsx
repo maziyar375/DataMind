@@ -63,6 +63,19 @@ const ARC_SEAT = 0.09
 const ARC_CLEAR = 250
 /** Kept clear of the window's own edges, in px. */
 const ARC_PAD = 26
+/**
+ * How much room the mark is given on the line, as multiples of the ring
+ * plate's width: the line is gone by the first and back to full by the second.
+ *
+ * The mark already has three rings, eight dots travelling them and a glow of
+ * its own inside a 520px circle. A line ruled through all of that is one system
+ * too many in one place — so the line does not arrive at the mark at all. It
+ * dissolves about a hundred pixels outside the outermost ring and picks up
+ * again on the far side, which reads as one curve passing behind the brand
+ * rather than as two lines pointing at it.
+ */
+const ARC_HUSH = 0.46
+const ARC_FULL = 0.88
 
 /** Motes riding the line, and how many seconds one takes to cross it. */
 const FLOW = 16
@@ -514,15 +527,28 @@ export default function AuthScene() {
       ctx!.clearRect(0, 0, width, height)
 
       // ── the line ──
+      /* Both ends of each half fade, and they fade for different reasons: the
+         outer one so the line leaves the frame as a piece of something larger,
+         the inner one so it never reaches the mark. Distances are in pixels
+         from the apex and converted to gradient offsets — the gradient runs
+         outer end (0) to apex (1), so a point `d` from the apex is at `1 −
+         d/span`. Both are clamped to the span, which is what keeps the stops in
+         order on a window too narrow to hold the full sequence. */
+      const plate = seated ? plateBox!.width : 520
+      const hush = Math.min(span * 0.6, plate * ARC_HUSH)
+      const rise = Math.min(span * 0.9, plate * ARC_FULL)
+
       /* Each half is stroked twice from the same path: once wide and faint for
-         the haze it sits in, once hairline for the line itself. Both fade to
-         nothing at the outer end through the gradient rather than through a
-         mask, so the line is at its strongest where it meets the mark. */
+         the haze it sits in, once hairline for the line itself. */
       for (const dir of [-1, 1] as const) {
         const endX = apexX + dir * span
         const grad = ctx!.createLinearGradient(endX, 0, apexX, 0)
+        const colour = colors[dir < 0 ? '--wave-a' : '--wave-b']
         grad.addColorStop(0, 'transparent')
-        grad.addColorStop(1, colors[dir < 0 ? '--wave-a' : '--wave-b'])
+        grad.addColorStop(Math.min(0.34, (1 - rise / span) * 0.7), colour)
+        grad.addColorStop(1 - rise / span, colour)
+        grad.addColorStop(1 - hush / span, 'transparent')
+        grad.addColorStop(1, 'transparent')
         ctx!.strokeStyle = grad
         ctx!.beginPath()
         ctx!.moveTo(endX, apexY + drop)
@@ -536,12 +562,17 @@ export default function AuthScene() {
       }
 
       /* What travels it. Evenly spaced and all moving at one rate, so with the
-         clock stopped they hold a still, even scatter rather than a clump. */
+         clock stopped they hold a still, even scatter rather than a clump —
+         and each one dims on the same two ramps the line does, or it would be
+         a dot crossing a gap the line itself had the sense to leave. */
       for (let i = 0; i < FLOW; i++) {
         const u = (i / FLOW + t / FLOW_PERIOD) % 1
         const s = u * 2 - 1
         const e = Math.min(u, 1 - u) / 0.22
-        const a = (e >= 1 ? 1 : e * e * (3 - 2 * e)) * FLOW_INK
+        const d = Math.abs(s) * span
+        const k = d <= hush ? 0 : d >= rise ? 1 : (d - hush) / (rise - hush)
+        const a = (e >= 1 ? 1 : e * e * (3 - 2 * e))
+          * (k * k * (3 - 2 * k)) * FLOW_INK
         if (a <= 0.01) continue
         ctx!.globalAlpha = a
         ctx!.fillStyle = colors[s < 0 ? '--wave-a' : '--wave-b']
