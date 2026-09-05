@@ -26,7 +26,7 @@
   <img src="https://img.shields.io/badge/Vega--Lite-E8912D" alt="Vega-Lite">
   <img src="https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL">
   <img src="https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white" alt="Docker">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue" alt="MIT License"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-PolyForm%20Noncommercial-blue" alt="PolyForm Noncommercial License"></a>
 </p>
 
 <p align="center">
@@ -617,4 +617,14 @@ all of them; this is the short version.
 
 ## License
 
-MIT
+[PolyForm Noncommercial 1.0.0](LICENSE).
+
+**Free for noncommercial use** — personal projects, study, research, hobby
+work, and use by nonprofits, schools and universities, public research
+bodies, and government institutions. Run it, change it, redistribute it; the
+license just has to travel with it.
+
+**Commercial use requires a paid license.** That means any use for or in
+support of a commercial purpose: running DataMind inside a business, offering
+it or a service built on it to customers, or bundling it into something you
+sell. Contact <maziyar.azami.b@gmail.com> to buy one.
