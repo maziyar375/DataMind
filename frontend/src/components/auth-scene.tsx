@@ -424,6 +424,11 @@ export default function AuthScene() {
     let colors: Record<string, string> = {}
     let orbitAlpha = 0.72
     let arcInk = 0.4, arcHaze = 0.075
+    /* How fat a wave particle is, relative to the radii below. A theme knob
+       rather than a constant for the same reason the hues are: on paper a dot
+       is read by how much ink it puts down, and the size that reads as a
+       particle over near black reads as a speck over white. */
+    let dotWeight = 1
     /* Where the ring plate is, in viewport coordinates. Re-read every tenth
        frame rather than every frame: `getBoundingClientRect` forces layout, and
        six reads a second is enough to survive a resize, a font landing late or
@@ -438,6 +443,7 @@ export default function AuthScene() {
       }
       arcInk = Number(style.getPropertyValue('--arc-ink')) || 0.4
       arcHaze = Number(style.getPropertyValue('--arc-haze')) || 0.075
+      dotWeight = Number(style.getPropertyValue('--wave-dot')) || 1
       const plate = document.querySelector('.rm-auth-orbit')
       orbitAlpha = plate ? Number(getComputedStyle(plate).opacity) || 0.72 : 0.72
     }
@@ -616,7 +622,7 @@ export default function AuthScene() {
           const step = STEP_FRONT * (1 + STEP_BACK * d)
           const count = Math.max(2, Math.ceil(Math.abs(wspan) / step))
           const fade = (1 - d) ** 0.8
-          const rad = 1.7 - 0.85 * d
+          const rad = (1.7 - 0.85 * d) * dotWeight
 
           for (let i = 0; i <= count; i++) {
             const u = i / count

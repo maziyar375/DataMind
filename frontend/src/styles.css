@@ -508,6 +508,11 @@ code, pre, .mono {
      the wave hues are: the canvas should not know which theme is on. */
   --arc-ink: 0.4;
   --arc-haze: 0.075;
+  /* Particle radius multiplier for the wave sheets, read by `auth-scene.tsx`
+     alongside the two above. Over near black a dot is read by its brightness
+     and a small one still carries; light raises this because on paper the same
+     dot is read by how much ink it lays down. */
+  --wave-dot: 1.15;
 
   /* Two quiet text tiers, mixed rather than taken whole. `--text-dim` and
      `--text-faint` are calibrated against a solid panel; over this ground the
@@ -545,16 +550,30 @@ code, pre, .mono {
      moved to indigo-violet and rose-magenta, both a long way round the wheel
      from the paper, and both dark enough to read as ink. That keeps the dark
      theme's relationship (one cool, one pink) with the accent's plum sitting
-     between them. Measured against `--bg`: 5.4:1 and 4.9:1, from 4.3 and 3.8. */
-  --wave-a: oklch(0.42 0.22 288);
-  --wave-b: oklch(0.45 0.21 352);
-  --auth-ink: oklch(0.32 0.06 300);
-  --auth-cta: linear-gradient(100deg, oklch(0.5 0.2 322), oklch(0.46 0.22 298));
+     between them.
+
+     Both are now at the **sRGB gamut edge for their lightness**, which is where
+     the strength asked for here comes from: the pair used to render
+     `rgb(81,26,186)` and `rgb(161,0,97)` — channel spreads of 160 and 161, a
+     third of each dot's ink spent on grey. Raising chroma past the edge clips,
+     and clipping is the point: they land on `rgb(99,0,234)` and
+     `rgb(195,0,109)`, spreads of 234 and 195, the most colour a dot this dark
+     can put on paper. Contrast against `--bg` goes *up* as well, 7.2:1 and
+     5.5:1, because the clipped channel that leaves is the bright one. */
+  --wave-a: oklch(0.46 0.29 289);
+  --wave-b: oklch(0.5 0.26 354);
+  --auth-ink: oklch(0.3 0.1 300);
+  --auth-cta: linear-gradient(100deg, oklch(0.52 0.27 320), oklch(0.47 0.28 296));
   /* More core, less haze. A dark hairline on paper needs the extra weight to
      be a line at all, while the same 9px haze that reads as glow on navy reads
      as a smudge here — over a pale ground a wide soft stroke is a stain. */
-  --arc-ink: 0.55;
-  --arc-haze: 0.045;
+  --arc-ink: 0.68;
+  --arc-haze: 0.05;
+  /* Fatter than dark's. Both sheets are dark ink on pale paper here, and a
+     1.7px dot at that contrast reads as grain rather than as a particle — the
+     sheets only resolve into surfaces once each dot is big enough to hold its
+     own edge. */
+  --wave-dot: 1.32;
   /* **Achromatic, and deeper than it was.** This vignette used to carry a
      violet-pink of its own, painted under all four corners at once — so every
      corner started from the same tint before its own colour was added, and the
@@ -655,15 +674,15 @@ code, pre, .mono {
 :root[data-theme='light'] .rm-auth::before {
   background:
     /* behind the mark — the plum the accent is drawn from, kept quiet */
-    radial-gradient(17% 14% at 50% 31%, oklch(0.58 0.34 312 / 0.16), transparent 72%),
+    radial-gradient(17% 14% at 50% 31%, oklch(0.58 0.34 312 / 0.22), transparent 72%),
     /* top-left — the mark's cyan-blue */
-    radial-gradient(21% 22.4% at 22% 23%, oklch(0.62 0.24 238 / 0.32), transparent 72%),
+    radial-gradient(21% 22.4% at 22% 23%, oklch(0.62 0.26 238 / 0.44), transparent 72%),
     /* top-right — the mark's orange */
-    radial-gradient(21% 22.4% at 78% 22%, oklch(0.74 0.2 55 / 0.34), transparent 72%),
+    radial-gradient(21% 22.4% at 78% 22%, oklch(0.74 0.22 55 / 0.46), transparent 72%),
     /* bottom-left — the mark's blue-violet, under the violet wave */
-    radial-gradient(23.8% 23.8% at 21% 78%, oklch(0.55 0.34 292 / 0.32), transparent 72%),
+    radial-gradient(23.8% 23.8% at 21% 78%, oklch(0.55 0.36 292 / 0.44), transparent 72%),
     /* bottom-right — the mark's magenta, under the rose wave */
-    radial-gradient(23.8% 23.8% at 79% 79%, oklch(0.6 0.32 352 / 0.3), transparent 72%);
+    radial-gradient(23.8% 23.8% at 79% 79%, oklch(0.6 0.34 352 / 0.42), transparent 72%);
 }
 
 /* On paper the instruments need more of themselves than they do on navy: a
@@ -1028,17 +1047,17 @@ code, pre, .mono {
 :root[data-theme='light'] .rm-auth-card {
   background: color-mix(in oklch, var(--panel) 94%, transparent);
   box-shadow:
-    0 34px 76px -38px oklch(0.4 0.08 320 / 0.44),
-    0 0 60px -26px oklch(0.55 0.18 320 / 0.3),
+    0 34px 76px -38px oklch(0.4 0.1 320 / 0.48),
+    0 0 60px -26px oklch(0.55 0.24 320 / 0.42),
     0 2px 8px -4px oklch(0.4 0.06 320 / 0.16);
 }
 :root[data-theme='light'] .rm-auth-card::before {
   background: linear-gradient(
     160deg,
-    oklch(0.54 0.21 318 / 0.72),
-    oklch(0.6 0.06 320 / 0.2) 42%,
-    oklch(0.62 0.1 340 / 0.16) 60%,
-    oklch(0.62 0.17 62 / 0.6)
+    oklch(0.54 0.27 318 / 0.9),
+    oklch(0.6 0.09 320 / 0.26) 42%,
+    oklch(0.62 0.14 340 / 0.22) 60%,
+    oklch(0.62 0.2 62 / 0.78)
   );
 }
 
