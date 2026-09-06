@@ -561,7 +561,11 @@ GROUP BY name
 ORDER BY tokens DESC;
 ```
 
-Two rules for anything built on these later:
+Both are executed by `tests/unit/test_usage_attribution.py` against the schema
+`models.py` actually defines, rather than only written down here — a documented
+query nothing runs is one that drifts from the columns it claims to read.
+
+Three rules for anything built on these later:
 
 - **Never coerce a null `cost_usd` to zero.** Null means litellm could not price
   the model — the normal state for a self-hosted deployment — and summing it as
@@ -569,3 +573,9 @@ Two rules for anything built on these later:
 - **A null token count is "not measured", not "no tokens".** Historical rows and
   providers that send no streamed usage chunk both produce nulls, and averaging
   over them understates every figure they touch.
+- **The join is inner, and a released row leaves the per-user report rather than
+  moving inside it.** Deleting a user sets `actor_id` null (§2) and keeps every
+  token they spent, so the first query stops counting those rows while a query
+  over the tables themselves still finds them. That is the honest split: the
+  spend is still true, and it is no longer *per user*. An outer join would
+  attribute it to whoever remains, which is the one answer that is wrong.
