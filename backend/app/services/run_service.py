@@ -1167,7 +1167,56 @@ class RunService:
             )
             return []
 
+        # Onto the thread's most recent run, which is the only row this call
+        # has. The plan's step 14 says "onto the run" and there is no run here:
+        # suggestions fire on their own when a thread is opened, outside any
+        # question the user asked. The newest run is the turn these suggestions
+        # were computed *from* — its transcript is the whole prompt — so its
+        # row is where the cost belongs, and attributing it to the thread's
+        # actor is right whichever run that is.
+        await self._record_side_usage(conversation_id, completion, llm_config)
+
         return _parse_suggestions(completion.text, limit, history)
+
+    async def _record_side_usage(
+        self, conversation_id: UUID, completion: Any, llm_config: LlmConfig
+    ) -> None:
+        """Add a non-run model call to the thread's newest run.
+
+        Failing to record never fails the feature (§1.4 of the token plan, and
+        `services/audit.py`'s posture): suggestions are a nicety, and losing a
+        count is not worth losing them. Nothing here raises.
+        """
+        tokens = (completion.prompt_tokens or 0) + (completion.completion_tokens or 0)
+        if not tokens:
+            return
+        try:
+            row = (
+                await self._db.execute(
+                    select(Run)
+                    .where(Run.conversation_id == conversation_id)
+                    .order_by(Run.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                return
+            row.prompt_tokens = (row.prompt_tokens or 0) + completion.prompt_tokens
+            row.completion_tokens = (
+                row.completion_tokens or 0
+            ) + completion.completion_tokens
+            row.llm_latency_ms = (row.llm_latency_ms or 0) + completion.latency_ms
+            row.cost_usd = estimate_cost_usd(
+                llm_config.model, row.prompt_tokens, row.completion_tokens
+            )
+            await self._db.commit()
+        except Exception:  # pragma: no cover - defensive
+            log.warning(
+                "suggestion_usage_not_recorded",
+                conversation_id=str(conversation_id),
+                exc_info=True,
+            )
+            await self._db.rollback()
 
 
 def _bind_connection(

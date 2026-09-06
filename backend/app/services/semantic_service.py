@@ -36,7 +36,7 @@ from app.infra.db.models import (
     SemanticLayerRow,
 )
 from app.infra.db.session import get_sessionmaker
-from app.infra.llm.litellm_gateway import LiteLLMGateway
+from app.infra.llm.litellm_gateway import LiteLLMGateway, estimate_cost_usd
 from app.semantic import (
     SEMANTIC_PROMPT_VERSION,
     Progress,
@@ -190,6 +190,10 @@ class SemanticService:
             id=uuid.uuid4(),
             connection_id=connection.id,
             owner_id=owner_id,
+            # Who asked for this build, as against who owns the connection it
+            # describes. The same person until a connection can be shared —
+            # which is why it is set now rather than backfilled by guesswork.
+            actor_id=owner_id,
             llm_config_id=config.id,
             model_snapshot={"provider": config.provider, "model": config.model},
             mode=mode,
@@ -395,6 +399,24 @@ class SemanticService:
             fields["error_message"] = error
         if stats is not None:
             fields["stats"] = stats
+            # The same numbers the `stats` blob already carries, lifted into
+            # columns so a usage query does not have to reach into JSONB — and
+            # written *here* because all three exits (cancelled, failed and
+            # succeeded) come through this one funnel. A cancelled build spent
+            # what it spent before the cancel landed, and that is a true record.
+            #
+            # Only when a call was actually made: a build that got no further
+            # than resolving its provider leaves nulls, which read as *not
+            # measured* rather than as a free build.
+            if stats.get("llm_calls"):
+                fields["prompt_tokens"] = stats.get("prompt_tokens", 0)
+                fields["completion_tokens"] = stats.get("completion_tokens", 0)
+                fields["llm_latency_ms"] = stats.get("llm_latency_ms", 0)
+                fields["cost_usd"] = estimate_cost_usd(
+                    str(stats.get("model") or ""),
+                    stats.get("prompt_tokens", 0),
+                    stats.get("completion_tokens", 0),
+                )
         await self._touch_job(job_id, **fields)
 
     async def _touch_job(self, job_id: UUID, **fields: Any) -> None:

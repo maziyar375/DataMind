@@ -44,7 +44,7 @@ from pydantic import (
 
 from app.core.errors import LLMError
 from app.core.logging import get_logger
-from app.domain.ports.llm import ChatMessage, LLMGateway, ResolvedLLM
+from app.domain.ports.llm import ChatMessage, LLMGateway, ResolvedLLM, Usage
 from app.domain.value_objects import HintBudget
 from app.semantic.models import (
     Additivity,
@@ -233,6 +233,32 @@ class GenerationStats:
     glossary_failed: bool = False
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    llm_latency_ms: int = 0
+    #: How many provider calls this build made. Distinguishes *"no tokens were
+    #: reported"* from *"no call was made"* the same way `run_steps.llm_calls`
+    #: does — a build whose provider sent no usage is not a build that was free.
+    llm_calls: int = 0
+    #: The **resolved** model name, as the gateway sent it — what litellm's
+    #: price map is keyed on, which the row's configured name is not. First
+    #: call that reports one wins; a build only ever uses one model.
+    model: str = ""
+
+    def record(self, usage: Usage) -> None:
+        """Add one provider call.
+
+        **Not concurrency-safe on its own, and deliberately not made so here.**
+        The per-table pass runs `concurrency` calls at once, and its results are
+        folded under the `lock` the progress counters already take — which is
+        where this is called from. A lock inside this method would be a second
+        answer to the same question, and the one that gets forgotten when a
+        fourth pass is added.
+        """
+        self.prompt_tokens += usage.prompt_tokens
+        self.completion_tokens += usage.completion_tokens
+        self.llm_latency_ms += usage.latency_ms
+        self.llm_calls += 1
+        if usage.model and not self.model:
+            self.model = usage.model
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -243,6 +269,9 @@ class GenerationStats:
             "glossary_failed": self.glossary_failed,
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
+            "llm_latency_ms": self.llm_latency_ms,
+            "llm_calls": self.llm_calls,
+            "model": self.model,
         }
 
 
@@ -334,6 +363,9 @@ async def generate_document(
             if cancelled is not None and cancelled():
                 return None
             qualified = _qualified(table)
+            # This call's usage, and only this call's. Merged under the lock
+            # below with the counters it belongs beside.
+            spent: list[Usage] = []
             try:
                 entity = await _describe_table(
                     gateway=gateway,
@@ -348,12 +380,19 @@ async def generate_document(
                     budget=budget,
                     index=index,
                     stats=stats,
+                    spent=spent,
                 )
             except LLMError as err:
                 log.warning("semantic_table_failed", table=qualified, error=err.message)
                 entity = None
             async with lock:
                 done += 1
+                # Before the outcome branch: a table whose *validation* dropped
+                # every metric still cost what the call cost, and a build that
+                # reported only its successes would understate itself by
+                # exactly the failures worth knowing about.
+                for usage in spent:
+                    stats.record(usage)
                 if entity is None:
                     stats.tables_failed.append(qualified)
                 else:
@@ -412,6 +451,7 @@ async def _overview(
                 ),
             ],
             _Overview,
+            on_usage=stats.record,
         )
     except LLMError as err:
         # An orientation note is a nicety; the per-table work is the product.
@@ -430,6 +470,7 @@ async def _describe_table(
     budget: HintBudget,
     index: SchemaIndex,
     stats: GenerationStats,
+    spent: list[Usage],
 ) -> SemanticEntity | None:
     qualified = _qualified(table)
     draft = await gateway.structured(
@@ -454,6 +495,12 @@ async def _describe_table(
             ),
         ],
         _TableDraft,
+        # Into the caller's own list, never into `stats`: these calls run
+        # `concurrency` at a time, and a sink writing shared counters from four
+        # coroutines is the race §1.1 of the plan rejects a gateway-instance
+        # counter for. The caller folds them in under the lock it already takes
+        # for the progress counters.
+        on_usage=spent.append,
     )
     return _to_entity(draft, table=table, index=index, budget=budget, stats=stats)
 
@@ -484,6 +531,7 @@ async def _glossary(
                 ),
             ],
             _GlossaryDraft,
+            on_usage=stats.record,
         )
     except LLMError as err:
         log.warning("semantic_glossary_failed", error=err.message)

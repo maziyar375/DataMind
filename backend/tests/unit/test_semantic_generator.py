@@ -78,7 +78,7 @@ class ScriptedGateway:
         return Completion(text="")
 
     def stream(
-        self, llm: ResolvedLLM, messages: Sequence[ChatMessage]
+        self, llm: ResolvedLLM, messages: Sequence[ChatMessage], **_kwargs: Any
     ) -> AsyncIterator[StreamChunk]:  # pragma: no cover - unused
         raise NotImplementedError
 
@@ -86,7 +86,8 @@ class ScriptedGateway:
         return ProviderCapabilities()
 
     async def structured(
-        self, llm: ResolvedLLM, messages: Sequence[ChatMessage], schema: type[T]
+        self, llm: ResolvedLLM, messages: Sequence[ChatMessage], schema: type[T],
+        **_kwargs: Any,
     ) -> T:
         name = schema.__name__
         self.calls.append(name)
@@ -220,7 +221,7 @@ async def test_one_failing_table_does_not_fail_the_job() -> None:
 @pytest.mark.asyncio
 async def test_overview_failure_still_yields_a_document() -> None:
     class NoOverview(ScriptedGateway):
-        async def structured(self, llm, messages, schema):  # type: ignore[override]
+        async def structured(self, llm, messages, schema, **_kwargs):  # type: ignore[override]
             if schema.__name__ == "_Overview":
                 raise LLMError("provider down")
             return await super().structured(llm, messages, schema)
@@ -353,7 +354,9 @@ def test_an_unusable_field_costs_that_field_and_nothing_else() -> None:
 async def test_a_glossary_returned_in_the_wrong_shape_still_lands() -> None:
     """End to end: the failure that emptied the glossary in production."""
 
-    async def structured(llm: Any, messages: Sequence[ChatMessage], schema: type[T]) -> T:
+    async def structured(
+        llm: Any, messages: Sequence[ChatMessage], schema: type[T], **_kwargs: Any
+    ) -> T:
         if schema.__name__ == "_GlossaryDraft":
             return schema.model_validate(
                 {"terms": [{"term": "AOV", "meaning": "Average order value.",
@@ -376,7 +379,9 @@ async def test_a_glossary_that_could_not_be_written_says_so() -> None:
     so failure has to be a separate fact, or the two look identical on
     screen and a silently lost glossary reads as a complete one."""
 
-    async def structured(llm: Any, messages: Sequence[ChatMessage], schema: type[T]) -> T:
+    async def structured(
+        llm: Any, messages: Sequence[ChatMessage], schema: type[T], **_kwargs: Any
+    ) -> T:
         if schema.__name__ == "_GlossaryDraft":
             raise LLMError("The model did not return valid _GlossaryDraft JSON.")
         if schema.__name__ == "_Overview":
@@ -619,7 +624,7 @@ async def test_business_context_falls_back_to_the_database_comment() -> None:
     assert doc.business_context == "Order-to-cash for the EU storefront."
 
     class NoOverview(ScriptedGateway):
-        async def structured(self, llm, messages, schema):  # type: ignore[override]
+        async def structured(self, llm, messages, schema, **_kwargs):  # type: ignore[override]
             if schema.__name__ == "_Overview":
                 raise LLMError("provider down")
             return await super().structured(llm, messages, schema)
