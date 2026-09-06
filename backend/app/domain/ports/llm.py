@@ -103,6 +103,28 @@ class StreamChunk:
 
 
 @dataclass(frozen=True, slots=True)
+class Usage:
+    """What one provider call cost, as the provider reported it.
+
+    It travels back from calls that have nowhere to put it: `structured`
+    returns a validated model and `stream` yields text, so neither can return
+    a number. `model` rides along because costing needs the *resolved* name
+    (post-prefix) and a sink's receiver — a node, a worker — should not have to
+    reach back into the `ResolvedLLM` to price a call it only observed.
+
+    A zero is not always "no tokens": a provider that sends no usage on a
+    streamed reply reports nothing, and that is recorded as it stands rather
+    than estimated, because an estimate in the same column as a measurement is
+    indistinguishable from one.
+    """
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    latency_ms: int = 0
+    model: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class Completion:
     text: str
     prompt_tokens: int = 0
@@ -115,6 +137,22 @@ class Completion:
     #: so. `structured` already reads the same signal for its repair path; this
     #: exposes it to `complete` callers rather than leaving them to guess.
     truncated: bool = False
+
+    def usage(self, model: str = "") -> Usage:
+        """The same numbers, in the shape a sink hands out.
+
+        So a `complete` caller feeds the same recorder a `structured` or
+        `stream` caller feeds, and there is one accumulation path rather than
+        two that can drift. The model name is the caller's to supply: the
+        completion was built by the gateway, which knows the resolved name, but
+        `Completion` predates costing and widening it would touch every caller.
+        """
+        return Usage(
+            prompt_tokens=self.prompt_tokens,
+            completion_tokens=self.completion_tokens,
+            latency_ms=self.latency_ms,
+            model=model,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,6 +178,14 @@ class EmbeddingCapability:
 #: nothing here keeps them.
 ReasoningSink = Callable[[str], Awaitable[None]]
 
+#: Where a call reports what it cost. Fired once per provider *attempt*, by the
+#: coroutine that made it — so concurrent callers never share a bucket, which a
+#: counter on the gateway instance could not promise (one gateway serves the
+#: report worker's whole narration wave). Synchronous on purpose: a sink is an
+#: accumulation, not I/O, and awaiting one inside the gateway would let a slow
+#: recorder hold a provider connection open.
+UsageSink = Callable[[Usage], None]
+
 
 class LLMGateway(Protocol):
     """The model is a text generator, never an actor."""
@@ -151,7 +197,11 @@ class LLMGateway(Protocol):
     # An async generator: its type is a function returning an AsyncIterator, not
     # a coroutine — so this is `def`, not `async def` (callers use `async for`).
     def stream(
-        self, llm: ResolvedLLM, messages: Sequence[ChatMessage]
+        self,
+        llm: ResolvedLLM,
+        messages: Sequence[ChatMessage],
+        *,
+        on_usage: UsageSink | None = None,
     ) -> AsyncIterator[StreamChunk]: ...
 
     # `on_reasoning` asks for the streamed transport and nothing else: same
@@ -160,6 +210,11 @@ class LLMGateway(Protocol):
     # a reasoning model thinking has no other way to see it. Implementations
     # that cannot stream may ignore it — the JSON is what the caller branches
     # on, and it is unchanged either way.
+    #
+    # `on_usage` is the same shape for the same reason: an optional sink, so a
+    # caller with no use for the number is byte-identical to before it existed,
+    # and only the callers that want it change. A repaired call fires it twice,
+    # once per attempt, because both attempts were paid for.
     async def structured(
         self,
         llm: ResolvedLLM,
@@ -167,6 +222,7 @@ class LLMGateway(Protocol):
         schema: type[T],
         *,
         on_reasoning: ReasoningSink | None = None,
+        on_usage: UsageSink | None = None,
     ) -> T: ...
 
     async def probe(self, llm: ResolvedLLM) -> ProviderCapabilities: ...

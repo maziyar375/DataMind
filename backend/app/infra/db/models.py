@@ -325,6 +325,20 @@ class SemanticJobRow(Base):
     progress_total: Mapped[int] = mapped_column(Integer, default=0)
     stats: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     error_message: Mapped[str | None] = mapped_column(Text)
+    # What this generation cost, added in 0023. Nullable throughout: a NULL is
+    # "not measured" — a historical row, or a streamed reply whose provider
+    # sent no usage — and never "no tokens". `cost_usd` is null wherever
+    # litellm cannot price the model, which is every self-hosted deployment.
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    llm_latency_ms: Mapped[int | None] = mapped_column(Integer)
+    cost_usd: Mapped[float | None] = mapped_column(Float)
+    # Who asked for it, as against who owns it. Identical to `owner_id` in
+    # every row that exists — which is why it is added now rather than
+    # backfilled by guesswork once a shared connection makes the two differ.
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
@@ -399,6 +413,16 @@ class Run(Base, TimestampMixin):
     )
     # Denormalised so ownership scoping is a single-index lookup on the hot path.
     owner_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    # Who *asked*, as against who owns the thing asked about. The two are the
+    # same person in every row written before connections can be shared, which
+    # is exactly why the column is added now: the backfill is `owner_id`
+    # rather than a guess about a past nobody recorded. SET NULL, unlike
+    # `owner_id` above — a usage row whose actor was deleted is still a true
+    # record of tokens spent, while a row with no owner is a row no ownership
+    # filter matches.
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
     # Nullable and SET NULL, like every other reference to these two tables: a
     # run is the record of a question that was answered, and deleting the
     # connection it used must not delete the transcript. `model_snapshot` still
@@ -424,6 +448,11 @@ class Run(Base, TimestampMixin):
     total_latency_ms: Mapped[int | None] = mapped_column(Integer)
     prompt_tokens: Mapped[int | None] = mapped_column(Integer)
     completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    # Best-effort, and null is the normal state for a self-hosted deployment:
+    # `estimate_cost_usd` prices what litellm's map knows and returns None for
+    # a local model, which prices as *nothing knowable*, not as free. Nothing
+    # reading this column may sum a null as zero.
+    cost_usd: Mapped[float | None] = mapped_column(Float)
     worker_id: Mapped[str | None] = mapped_column(String(100))
     fencing_token: Mapped[int | None] = mapped_column(BigInteger)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -463,6 +492,24 @@ class RunStep(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     duration_ms: Mapped[int | None] = mapped_column(Integer)
+    # Per-node attribution: the question a run's own totals cannot answer. A
+    # run saying a question cost 12k tokens is not the same as knowing the
+    # schema block was 9k of it.
+    #
+    # Nullable and never defaulted to `0`, because a node that calls no model
+    # (`validate`, `execute`) and one that called a provider which reported
+    # nothing are different facts. NULL reads as *not measured*, never as *no
+    # tokens*.
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    # Provider time only, and deliberately not `duration_ms` above: a node
+    # spending 200ms of its four seconds at the provider is a different
+    # problem from one spending 3.9s there, and one column cannot say which.
+    llm_latency_ms: Mapped[int | None] = mapped_column(Integer)
+    # Usually 0 or 1 — but `generate` repairs, and a repaired call is two
+    # calls that were both paid for, so this is not derivable from the step
+    # existing.
+    llm_calls: Mapped[int | None] = mapped_column(Integer)
 
 
 class GeneratedQuery(Base):
@@ -905,6 +952,20 @@ class ReportRun(Base):
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     cancel_requested: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false()
+    )
+    # What this document cost, added in 0023. Nullable throughout: a NULL is
+    # "not measured" — a historical row, or a streamed reply whose provider
+    # sent no usage — and never "no tokens". `cost_usd` is null wherever
+    # litellm cannot price the model, which is every self-hosted deployment.
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    llm_latency_ms: Mapped[int | None] = mapped_column(Integer)
+    cost_usd: Mapped[float | None] = mapped_column(Float)
+    # Who asked for it, as against who owns it. Identical to `owner_id` in
+    # every row that exists — which is why it is added now rather than
+    # backfilled by guesswork once a shared connection makes the two differ.
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
     )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

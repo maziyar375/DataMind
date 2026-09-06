@@ -62,11 +62,11 @@ from app.infra.db.models import (
 )
 from app.infra.events.bus import event_bus
 from app.infra.events.listener import notify_run_event
-from app.infra.llm.litellm_gateway import LiteLLMGateway
+from app.infra.llm.litellm_gateway import LiteLLMGateway, estimate_cost_usd
 from app.pipeline.nodes import NodeDeps, _describe_schema, _render_history
 from app.pipeline.pipeline import AnalyticsPipeline
 from app.pipeline.prompts import PROMPT_VERSION
-from app.pipeline.state import RunState
+from app.pipeline.state import NodeUsage, RunState
 from app.services.knowledge_service import build_matcher, record_hit
 from app.services.query_service import (
     bind_connector,
@@ -129,6 +129,23 @@ def _model_snapshot(llm_config: LlmConfig, connection: DatabaseConnection) -> di
     if llm_config.params:
         snapshot["params"] = dict(llm_config.params)
     return snapshot
+
+
+def _priced_model(state: RunState, run: Run) -> str:
+    """The name to price this run under — measured first, configured second.
+
+    A node's bucket carries the **resolved** name, which is what the gateway
+    actually sent (an `openai/` prefix and all) and therefore what litellm's
+    price map is keyed on. `model_snapshot` holds the name as the row spells
+    it, which is the right thing to *show* a reader and the wrong thing to look
+    up. Falling back to it keeps a run costed when every call was streamed and
+    no usage came back — `estimate_cost_usd` returns None over zero tokens
+    anyway, so the fallback costs nothing and never invents a price.
+    """
+    for bucket in state.node_usage.values():
+        if bucket.model:
+            return bucket.model
+    return str((run.model_snapshot or {}).get("model", "") or "")
 
 
 class RunService:
@@ -228,6 +245,12 @@ class RunService:
             conversation_id=conversation_id,
             user_message_id=user_message.id,
             owner_id=owner_id,
+            # Who asked, as against who owns the thing asked about. The same
+            # person today — `_owned` above refuses a conversation the caller
+            # does not own — and set from the caller rather than copied from
+            # `owner_id` so it stays true on its own terms the moment a
+            # connection can be shared.
+            actor_id=owner_id,
             connection_id=connection.id,
             llm_config_id=llm_config.id,
             model_snapshot=_model_snapshot(llm_config, connection),
@@ -289,6 +312,9 @@ class RunService:
             conversation_id=run.conversation_id,
             user_message_id=run.user_message_id,
             owner_id=owner_id,
+            # The retry's actor is whoever asked for the retry, not whoever
+            # asked the original question — the tokens are spent now, by them.
+            actor_id=owner_id,
             connection_id=connection.id,
             llm_config_id=llm_config.id,
             model_snapshot=_model_snapshot(llm_config, connection),
@@ -479,8 +505,11 @@ class RunService:
         )
 
         pipeline = AnalyticsPipeline(
-            on_step=lambda seq, name, status, detail, ms: self._record_step(
-                run_id, seq, name, status, detail, ms
+            # Six parameters, the last defaulted: the adapter passes usage
+            # only on a terminal step, and only to a callback shaped to take
+            # it (see `_finish_step` in `pipeline/graph.py`).
+            on_step=lambda seq, name, status, detail, ms, usage=None: (
+                self._record_step(run_id, seq, name, status, detail, ms, usage)
             )
         )
 
@@ -688,6 +717,12 @@ class RunService:
         run.db_latency_ms = state.db_latency_ms
         run.prompt_tokens = state.prompt_tokens
         run.completion_tokens = state.completion_tokens
+        # Best-effort, and null is the expected state for a self-hosted model
+        # litellm's price map does not know. Deliberately not coerced to 0.0:
+        # a real spend reported as free is worse than one reported as unknown.
+        run.cost_usd = estimate_cost_usd(
+            _priced_model(state, run), state.prompt_tokens, state.completion_tokens
+        )
         if run.started_at:
             run.total_latency_ms = int(
                 (run.finished_at - run.started_at).total_seconds() * 1000
@@ -794,6 +829,7 @@ class RunService:
     async def _record_step(
         self, run_id: UUID, seq: int, name: str, status: str,
         detail: str | None, duration_ms: int,
+        usage: NodeUsage | None = None,
     ) -> None:
         existing = await self._db.execute(
             select(RunStep).where(RunStep.run_id == run_id, RunStep.seq == seq)
@@ -810,6 +846,14 @@ class RunService:
         if status != StepStatus.RUNNING:
             step.finished_at = utcnow()
             step.duration_ms = duration_ms
+        if usage is not None:
+            # Only ever written from a bucket the adapter measured. A node that
+            # called no model leaves these null, which is the fact the column
+            # is nullable to carry: *not measured* is not *no tokens*.
+            step.prompt_tokens = usage.prompt_tokens
+            step.completion_tokens = usage.completion_tokens
+            step.llm_latency_ms = usage.latency_ms
+            step.llm_calls = usage.calls
         await self._db.commit()
 
     async def _authority(self, run_id: UUID) -> tuple[str | None, int | None]:
@@ -1123,7 +1167,56 @@ class RunService:
             )
             return []
 
+        # Onto the thread's most recent run, which is the only row this call
+        # has. The plan's step 14 says "onto the run" and there is no run here:
+        # suggestions fire on their own when a thread is opened, outside any
+        # question the user asked. The newest run is the turn these suggestions
+        # were computed *from* — its transcript is the whole prompt — so its
+        # row is where the cost belongs, and attributing it to the thread's
+        # actor is right whichever run that is.
+        await self._record_side_usage(conversation_id, completion, llm_config)
+
         return _parse_suggestions(completion.text, limit, history)
+
+    async def _record_side_usage(
+        self, conversation_id: UUID, completion: Any, llm_config: LlmConfig
+    ) -> None:
+        """Add a non-run model call to the thread's newest run.
+
+        Failing to record never fails the feature (§1.4 of the token plan, and
+        `services/audit.py`'s posture): suggestions are a nicety, and losing a
+        count is not worth losing them. Nothing here raises.
+        """
+        tokens = (completion.prompt_tokens or 0) + (completion.completion_tokens or 0)
+        if not tokens:
+            return
+        try:
+            row = (
+                await self._db.execute(
+                    select(Run)
+                    .where(Run.conversation_id == conversation_id)
+                    .order_by(Run.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                return
+            row.prompt_tokens = (row.prompt_tokens or 0) + completion.prompt_tokens
+            row.completion_tokens = (
+                row.completion_tokens or 0
+            ) + completion.completion_tokens
+            row.llm_latency_ms = (row.llm_latency_ms or 0) + completion.latency_ms
+            row.cost_usd = estimate_cost_usd(
+                llm_config.model, row.prompt_tokens, row.completion_tokens
+            )
+            await self._db.commit()
+        except Exception:  # pragma: no cover - defensive
+            log.warning(
+                "suggestion_usage_not_recorded",
+                conversation_id=str(conversation_id),
+                exc_info=True,
+            )
+            await self._db.rollback()
 
 
 def _bind_connection(

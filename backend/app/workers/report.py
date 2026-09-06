@@ -59,7 +59,7 @@ from app.core.clock import utcnow
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.domain.ports.database import ResultColumn
-from app.domain.ports.llm import LLMGateway, ResolvedLLM
+from app.domain.ports.llm import LLMGateway, ResolvedLLM, Usage
 from app.domain.value_objects import (
     ReportBlockResultStatus,
     ReportBlockType,
@@ -76,7 +76,7 @@ from app.infra.db.models import (
     ReportSection,
     ReportSectionResult,
 )
-from app.infra.llm.litellm_gateway import LiteLLMGateway
+from app.infra.llm.litellm_gateway import LiteLLMGateway, estimate_cost_usd
 from app.pipeline.disclosure import disclose
 from app.pipeline.state import ExecutionResult
 from app.reports import checks, facts, narrate
@@ -697,8 +697,17 @@ async def _narrate(
     narrator: tuple[LLMGateway, ResolvedLLM] | None,
     other_headings: list[str] | None = None,
     established: list[WrittenSection] | None = None,
+    spent: list[Usage] | None = None,
 ) -> ReportSectionResult:
     """One section's paragraph, written over its blocks' results.
+
+    `spent` collects what the provider charged for this one paragraph, and it
+    is a *list the caller owns* rather than a counter this function adds to.
+    Sections are narrated in concurrent waves, so a shared counter written from
+    four coroutines is the race §1.1 of the token-accounting plan rejects a
+    gateway-instance counter for. The caller merges each list at the wave's
+    commit point, which is also what stops a crashing section from taking its
+    siblings' numbers down with it.
 
     Three outcomes before a token is spent, and the first two are why:
 
@@ -766,6 +775,12 @@ async def _narrate(
         row.error_message = str(err)[:500]
         return row
 
+    # Before the prose is judged: a paragraph the model returned empty, or one
+    # cut off at `max_tokens`, was paid for exactly like a good one. Recording
+    # only what survives the checks would make a run's worst outcomes look
+    # like its cheapest.
+    _spend(spent, completion, llm)
+
     row.prose = _prose(completion, run_id=run.id, what=section.heading)
     if not row.prose:
         row.status = ReportSectionResultStatus.FAILED
@@ -789,6 +804,7 @@ async def _summarise(
     position: int,
     written: list[WrittenSection],
     narrator: tuple[LLMGateway, ResolvedLLM] | None,
+    spent: list[Usage] | None = None,
 ) -> ReportSectionResult:
     """The executive summary: written last, read first, from prose alone.
 
@@ -835,6 +851,8 @@ async def _summarise(
         row.error_message = str(err)[:500]
         return row
 
+    _spend(spent, completion, llm)
+
     # `one_paragraph=False`: the summary is the one piece of prose in the
     # document that is *asked* for a blank line — a paragraph, then its
     # findings, one per line.
@@ -855,6 +873,34 @@ async def _summarise(
         row.prose, checks.figures_in(body), context=section.intent
     ).model_dump(mode="json")
     return row
+
+
+def _spend(
+    spent: list[Usage] | None, completion: Any, llm: ResolvedLLM
+) -> None:
+    """Record one completion's cost into the caller's list, if it wants one.
+
+    Built from the completion's own fields rather than through
+    `Completion.usage()`: `complete()` is the one gateway method whose return
+    type already carries the numbers, and reading them here keeps this working
+    against anything shaped like a completion — which every scripted double in
+    the suite is.
+
+    Never raises. Recording observes, it does not authorise (§1.4 of the plan,
+    and `services/audit.py`'s stated posture): a paragraph that was written
+    must not be lost to a failure to count it.
+    """
+    if spent is None:
+        return
+    try:
+        spent.append(Usage(
+            prompt_tokens=getattr(completion, "prompt_tokens", 0) or 0,
+            completion_tokens=getattr(completion, "completion_tokens", 0) or 0,
+            latency_ms=getattr(completion, "latency_ms", 0) or 0,
+            model=getattr(llm, "model", "") or "",
+        ))
+    except Exception:  # pragma: no cover - defensive
+        log.warning("report_usage_not_recorded", exc_info=True)
 
 
 #: Sentence terminators, in both scripts a report is written in. Persian ends a
@@ -1057,6 +1103,55 @@ def _numeric_check(
 
 
 # ── the run row ──────────────────────────────────────────────────────────
+async def _record_usage(
+    db: AsyncSession, run: ReportRun, spent: list[Usage]
+) -> None:
+    """Add what a wave spent to the run's running totals.
+
+    Written through `_touch`, which is the one place a run row is updated
+    mid-flight: it takes the cancel guard with it, and it commits, so the next
+    poll sees the number alongside the progress it belongs to. Adding a second
+    write path here would be a second thing to remember when that guard
+    changes.
+
+    **Read-modify-write on values `_touch` just refreshed.** `_touch` refreshes
+    the run before it writes, so the totals are read back from the row rather
+    than from this process's memory — which is what makes a retry or a resume
+    *add* to what an earlier pass wrote instead of overwriting it. A NULL reads
+    as zero here and only here: the column means *not measured* until the first
+    call is recorded, and this is the thing that records it.
+
+    `cost_usd` is recomputed from the new totals rather than summed per call,
+    because per-call rounding accumulates and litellm's price map is linear. A
+    model it cannot price leaves NULL, the normal state of a self-hosted
+    deployment, which no reader may treat as free.
+
+    Failing to record never fails the document (§1.4 of the plan, and
+    `services/audit.py`'s posture): the paragraphs are already committed, and
+    losing a count is not worth losing them.
+    """
+    if not spent:
+        return
+    try:
+        await db.refresh(run)
+        prompt = (run.prompt_tokens or 0) + sum(u.prompt_tokens for u in spent)
+        completion = (run.completion_tokens or 0) + sum(
+            u.completion_tokens for u in spent
+        )
+        latency = (run.llm_latency_ms or 0) + sum(u.latency_ms for u in spent)
+        model = next((u.model for u in spent if u.model), "")
+        await _touch(
+            db,
+            run,
+            prompt_tokens=prompt,
+            completion_tokens=completion,
+            llm_latency_ms=latency,
+            cost_usd=estimate_cost_usd(model, prompt, completion),
+        )
+    except Exception:  # pragma: no cover - defensive
+        log.warning("report_usage_not_recorded", run_id=str(run.id), exc_info=True)
+
+
 async def _touch(db: AsyncSession, run: ReportRun, **fields: Any) -> None:
     """Write progress and commit, so the next poll sees it.
 

@@ -165,7 +165,9 @@ class ScriptedGateway:
 
         return _Completion()
 
-    async def structured(self, _llm: Any, _messages: Any, schema: Any) -> Any:
+    async def structured(
+        self, _llm: Any, _messages: Any, schema: Any, **_kwargs: Any
+    ) -> Any:
         name = schema.__name__
         if name == "SqlProposal":
             assert self._sql, "the script ran out of SQL"
@@ -176,7 +178,9 @@ class ScriptedGateway:
             return self._chart
         raise AssertionError(f"unscripted structured call for {name}")
 
-    def stream(self, _llm: Any, _messages: Any) -> AsyncIterator[StreamChunk]:
+    def stream(
+        self, _llm: Any, _messages: Any, **_kwargs: Any
+    ) -> AsyncIterator[StreamChunk]:
         self.streams += 1
         deltas = list(self._prose)
 

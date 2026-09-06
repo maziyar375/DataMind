@@ -66,7 +66,10 @@ class FakeGateway:
     async def complete(self, llm: ResolvedLLM, messages: Sequence[ChatMessage]) -> Completion:
         return Completion(text=self.route, prompt_tokens=8, completion_tokens=1, latency_ms=1)
 
-    async def structured(self, llm: ResolvedLLM, messages: Sequence[ChatMessage], schema: type) -> Any:
+    async def structured(
+        self, llm: ResolvedLLM, messages: Sequence[ChatMessage], schema: type,
+        **_kwargs: Any,
+    ) -> Any:
         if schema is SqlProposal:
             self.prompts.append("\n".join(m.content for m in messages))
             q = self._question(messages)
@@ -79,7 +82,7 @@ class FakeGateway:
         raise LLMError("fake gateway declines chart intent")  # -> heuristic/skip
 
     async def stream(
-        self, llm: ResolvedLLM, messages: Sequence[ChatMessage]
+        self, llm: ResolvedLLM, messages: Sequence[ChatMessage], **_kwargs: Any
     ) -> AsyncIterator[StreamChunk]:
         yield StreamChunk(text="ok")
 

@@ -103,7 +103,9 @@ class FakeGateway:
         self.messages: list[Any] = []
         self.calls = 0
 
-    def stream(self, _llm: Any, messages: Any) -> AsyncIterator[StreamChunk]:
+    def stream(
+        self, _llm: Any, messages: Any, **_kwargs: Any
+    ) -> AsyncIterator[StreamChunk]:
         self.calls += 1
         self.messages = list(messages)
 

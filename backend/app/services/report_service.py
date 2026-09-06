@@ -762,6 +762,10 @@ class ReportService:
             id=uuid.uuid4(),
             report_id=report_id,
             owner_id=owner_id,
+            # Who asked for this document, as against who owns the report. The
+            # same person until a report can be shared, which is why it is set
+            # now rather than backfilled by guesswork later.
+            actor_id=owner_id,
             status=ReportRunStatus.QUEUED,
             llm_config_id=config.id,
             # Which model wrote this document, kept beside it: *"a layer

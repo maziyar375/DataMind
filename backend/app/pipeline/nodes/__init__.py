@@ -15,7 +15,13 @@ from app.core.clock import utcnow
 from app.core.errors import ConnectorError, LLMError
 from app.core.logging import get_logger
 from app.domain.ports.database import DatabaseConnector
-from app.domain.ports.llm import ChatMessage, LLMGateway, ResolvedLLM
+from app.domain.ports.llm import (
+    ChatMessage,
+    LLMGateway,
+    ResolvedLLM,
+    Usage,
+    UsageSink,
+)
 from app.domain.value_objects import DisclosurePolicy, HintBudget
 from app.knowledge.bind import bind_params, bind_sql
 from app.knowledge.matcher import TemplateMatcher, best
@@ -154,9 +160,26 @@ async def route(state: RunState, deps: NodeDeps) -> NodeResult:
                 ChatMessage(role="user", content=state.question),
             ],
         )
-        state.llm_latency_ms += completion.latency_ms
-        state.prompt_tokens += completion.prompt_tokens
-        state.completion_tokens += completion.completion_tokens
+        # One accumulation path, not two. These used to be three hand-rolled
+        # `+=` lines here and nowhere else, which is exactly why a run's totals
+        # described this one cheap classification and none of the expensive
+        # calls after it.
+        # Built from the completion's own fields rather than through
+        # `Completion.usage()`: `complete()` is the one gateway method whose
+        # return type already carries the numbers, and reading them here keeps
+        # this node working against anything shaped like a completion — which
+        # every scripted double in the suite is.
+        #
+        # `getattr` on the model because `deps.llm` is typed `ResolvedLLM` but
+        # the draft and test harnesses legitimately pass None. A run costed
+        # under "" prices as unknown, which is the same honest null a
+        # self-hosted model already produces.
+        state.record_usage("route", Usage(
+            prompt_tokens=completion.prompt_tokens,
+            completion_tokens=completion.completion_tokens,
+            latency_ms=completion.latency_ms,
+            model=getattr(deps.llm, "model", "") or "",
+        ))
         label = completion.text.strip().upper().split()[0] if completion.text else ""
     except LLMError:
         # A routing failure must not fail the run; assume the common case.
@@ -687,7 +710,9 @@ async def describe(state: RunState, deps: NodeDeps) -> NodeResult:
     thinking = _Thinking(deps.emit)
     failed = False
     try:
-        async for chunk in deps.llm_gateway.stream(deps.llm, messages):
+        async for chunk in deps.llm_gateway.stream(
+            deps.llm, messages, on_usage=state.usage_sink("describe")
+        ):
             if chunk.reasoning:
                 await thinking.add(chunk.reasoning)
                 continue
@@ -801,6 +826,7 @@ async def clarify(state: RunState, deps: NodeDeps) -> NodeResult:
             ],
             ClarificationProposal,
             on_reasoning=thinking.add,
+            on_usage=state.usage_sink("clarify"),
         )
     except (LLMError, ValueError) as err:
         log.warning("clarify_failed", run_id=str(state.run_id), error=str(err))
@@ -948,9 +974,11 @@ async def generate(state: RunState, deps: NodeDeps) -> NodeResult:
             ),
         ]
 
-    started = time.perf_counter()
     try:
-        proposal = await deps.llm_gateway.structured(deps.llm, messages, SqlProposal)
+        proposal = await deps.llm_gateway.structured(
+            deps.llm, messages, SqlProposal,
+            on_usage=state.usage_sink("generate"),
+        )
     except LLMError as err:
         state.error = RunError(
             code="E_LLM",
@@ -959,8 +987,10 @@ async def generate(state: RunState, deps: NodeDeps) -> NodeResult:
         )
         return NodeResult(status="FAILED", detail=err.message)
 
-    state.llm_latency_ms += int((time.perf_counter() - started) * 1000)
-
+    # No latency accumulation here any more: it arrives with the usage, timed
+    # by the gateway around the provider call itself rather than around this
+    # block — and a repaired call reports it for both attempts, which a single
+    # stopwatch around the outside could not.
     state.attempts.append(
         SqlAttempt(
             attempt_no=attempt_no,
@@ -1260,6 +1290,11 @@ def _start_chart_intent(state: RunState, deps: NodeDeps) -> None:
                 truncated=execution.truncated,
                 policy=state.disclosure_policy,
                 log_context={"run_id": str(state.run_id)},
+                # Bound to `chart`, not to whatever is open when the reply
+                # lands. This call is started here and awaited a node later,
+                # so the name has to be chosen by the code rather than by the
+                # scheduling — see `node_usage` in `state.py`.
+                on_usage=state.usage_sink("chart"),
             )
         )
     )
@@ -1312,7 +1347,9 @@ async def present(state: RunState, deps: NodeDeps) -> NodeResult:
     buffer: list[str] = []
     thinking = _Thinking(deps.emit)
     try:
-        async for chunk in deps.llm_gateway.stream(deps.llm, messages):
+        async for chunk in deps.llm_gateway.stream(
+            deps.llm, messages, on_usage=state.usage_sink("present")
+        ):
             if chunk.reasoning:
                 await thinking.add(chunk.reasoning)
                 continue
@@ -1357,6 +1394,7 @@ async def propose_chart_intent(
     policy: str = DisclosurePolicy.NONE,
     composed: bool = False,
     log_context: dict[str, str] | None = None,
+    on_usage: UsageSink | None = None,
 ) -> ChartIntent | None:
     """Ask the model what this result should be drawn as. None if it could not say.
 
@@ -1415,6 +1453,7 @@ async def propose_chart_intent(
                 ),
             ],
             ChartIntent,
+            on_usage=on_usage,
         )
     except LLMError as err:
         log.warning("chart_intent_failed", error=err.message, **(log_context or {}))
@@ -1506,6 +1545,7 @@ async def chart(state: RunState, deps: NodeDeps) -> NodeResult:
             truncated=execution.truncated,
             policy=state.disclosure_policy,
             log_context={"run_id": str(state.run_id)},
+            on_usage=state.usage_sink("chart"),
         )
     )
 

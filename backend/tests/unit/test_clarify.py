@@ -73,7 +73,8 @@ class FakeGateway:
         self.streamed = False
 
     async def structured(
-        self, _llm: Any, messages: Any, _schema: Any, *, on_reasoning: Any = None
+        self, _llm: Any, messages: Any, _schema: Any, *,
+        on_reasoning: Any = None, **_kwargs: Any,
     ) -> Any:
         self.calls += 1
         self.messages = list(messages)

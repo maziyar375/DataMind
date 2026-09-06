@@ -1525,7 +1525,7 @@ class _Gateway:
         self.calls = 0
         self.sent: list[ChatMessage] = []
 
-    async def structured(self, llm, messages: Sequence[ChatMessage], schema):  # type: ignore[no-untyped-def]
+    async def structured(self, llm, messages: Sequence[ChatMessage], schema, **_kwargs):  # type: ignore[no-untyped-def]
         self.calls += 1
         self.sent = list(messages)
         if self._raises:

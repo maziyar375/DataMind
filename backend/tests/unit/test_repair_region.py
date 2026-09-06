@@ -65,7 +65,9 @@ class PromptGateway(ScriptedGateway):
         super().__init__(**kwargs)
         self.sql_prompts: list[str] = []
 
-    async def structured(self, llm: Any, messages: Any, schema: Any) -> Any:
+    async def structured(
+        self, llm: Any, messages: Any, schema: Any, **_kwargs: Any
+    ) -> Any:
         if schema.__name__ == "SqlProposal":
             self.sql_prompts.append(list(messages)[0].content)
         return await super().structured(llm, messages, schema)
@@ -230,7 +232,9 @@ async def test_a_spent_deadline_does_not_lose_a_statement_already_written() -> N
             super().__init__(**kwargs)
             self.state: RunState | None = None
 
-        async def structured(self, llm: Any, messages: Any, schema: Any) -> Any:
+        async def structured(
+        self, llm: Any, messages: Any, schema: Any, **_kwargs: Any
+    ) -> Any:
             result = await super().structured(llm, messages, schema)
             if self.state is not None:      # the provider took too long
                 self.state.deadline_at = utcnow() - timedelta(seconds=1)

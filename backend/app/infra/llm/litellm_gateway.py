@@ -40,6 +40,8 @@ from app.domain.ports.llm import (
     ReasoningSink,
     ResolvedLLM,
     StreamChunk,
+    Usage,
+    UsageSink,
 )
 from app.domain.value_objects.llm_params import RESERVED
 
@@ -118,11 +120,15 @@ class _StreamedReply:
     that have to be kept in agreement.
     """
 
-    __slots__ = ("choices",)
+    __slots__ = ("choices", "usage")
 
-    def __init__(self, text: str, finish_reason: str) -> None:
+    def __init__(self, text: str, finish_reason: str, usage: Any = None) -> None:
         message = SimpleNamespace(content=text)
         self.choices = [SimpleNamespace(message=message, finish_reason=finish_reason)]
+        # The trailing usage chunk, if the provider sent one. Named `usage` so
+        # the one-shot and reassembled responses are read by the same helper —
+        # the whole point of this class being response-shaped.
+        self.usage = usage
 
 
 class LiteLLMGateway:
@@ -175,19 +181,8 @@ class LiteLLMGateway:
 
     # ── request shaping ──────────────────────────────────────────────────
     def _kwargs(self, llm: ResolvedLLM, messages: Sequence[ChatMessage]) -> dict[str, Any]:
-        model = llm.model
-        # "Custom" is no longer offered when creating a config, but a row stored
-        # before it was removed still resolves through here and still needs the
-        # prefix — the read model types `provider` as a plain `str` precisely so
-        # such a row keeps working. Do not narrow this to the creatable set.
-        needs_openai_prefix = (
-            llm.provider in {"OpenAI-compatible", "Custom"} and "/" not in model
-        )
-        if needs_openai_prefix:
-            model = f"openai/{model}"
-
         kwargs: dict[str, Any] = {
-            "model": model,
+            "model": _resolved_model(llm),
             "messages": [{"role": m.role, "content": m.content} for m in messages],
             "temperature": llm.temperature,
             "max_tokens": llm.max_tokens,
@@ -217,6 +212,15 @@ class LiteLLMGateway:
         latency_ms = int((time.perf_counter() - started) * 1000)
         text = _answer(response.choices[0].message)
         usage = getattr(response, "usage", None)
+        # Logged here as well, though this method has always *returned* its
+        # counts: the log's grain is the call, and a caller that drops what it
+        # is handed — as four of them did until Phase 4 — should still leave a
+        # trace of what it spent.
+        _log_call(
+            _usage_of(response, model=_resolved_model(llm), latency_ms=latency_ms),
+            provider=llm.provider,
+            operation="complete",
+        )
         return Completion(
             text=text,
             prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
@@ -226,7 +230,11 @@ class LiteLLMGateway:
         )
 
     async def stream(
-        self, llm: ResolvedLLM, messages: Sequence[ChatMessage]
+        self,
+        llm: ResolvedLLM,
+        messages: Sequence[ChatMessage],
+        *,
+        on_usage: UsageSink | None = None,
     ) -> AsyncIterator[StreamChunk]:
         """Both channels of a streamed reply, in the order the provider sends them.
 
@@ -244,11 +252,22 @@ class LiteLLMGateway:
         tags sends neither (that one is `_THINK_BLOCK`'s problem, not this
         one). Read both, prefer the normalised name.
         """
+        started = time.perf_counter()
+        usage: Any = None
         try:
             response = await self._acompletion(
-                **self._kwargs(llm, messages), stream=True
+                **self._kwargs(llm, messages),
+                stream=True,
+                **_stream_usage_options(llm),
             )
             async for chunk in response:
+                # The usage chunk is the last one and carries no choices at
+                # all, so it must be read before anything indexes `choices[0]`.
+                # A provider that sends none simply never sets this, and the
+                # sink is fired with zeros rather than a guess.
+                usage = getattr(chunk, "usage", None) or usage
+                if not getattr(chunk, "choices", None):
+                    continue
                 delta = chunk.choices[0].delta
                 piece = getattr(delta, "content", None)
                 if piece:
@@ -261,6 +280,13 @@ class LiteLLMGateway:
                     yield StreamChunk(reasoning=thought)
         except Exception as err:
             raise LLMError(_clean(err)) from err
+        reported = _usage_of(
+            SimpleNamespace(usage=usage),
+            model=_resolved_model(llm),
+            latency_ms=int((time.perf_counter() - started) * 1000),
+        )
+        _log_call(reported, provider=llm.provider, operation="stream")
+        _fire_usage(on_usage, reported)
 
     # ── structured output ────────────────────────────────────────────────
     def _response_format(self, llm: ResolvedLLM, schema: type[T]) -> dict[str, Any] | None:
@@ -347,6 +373,7 @@ class LiteLLMGateway:
         response = await self._acompletion(**payload, stream=True)
         parts: list[str] = []
         finish_reason = ""
+        usage: Any = None
         chunks = response.__aiter__()
         while True:
             try:
@@ -360,6 +387,9 @@ class LiteLLMGateway:
                     f"The model sent nothing for {self._timeout}s and the "
                     "request was abandoned."
                 ) from err
+            # Read before the `choices` guard: the usage chunk carries no
+            # choices, which is exactly why that guard exists.
+            usage = getattr(chunk, "usage", None) or usage
             if not chunk.choices:
                 continue
             choice = chunk.choices[0]
@@ -374,7 +404,7 @@ class LiteLLMGateway:
             )
             if thought:
                 await on_reasoning(thought)
-        return _StreamedReply("".join(parts), finish_reason)
+        return _StreamedReply("".join(parts), finish_reason, usage)
 
     async def _structured_stream_call(
         self, payload: dict[str, Any], on_reasoning: ReasoningSink
@@ -411,6 +441,7 @@ class LiteLLMGateway:
         schema: type[T],
         *,
         on_reasoning: ReasoningSink | None = None,
+        on_usage: UsageSink | None = None,
     ) -> T:
         """A validated `schema` instance, however the provider gets us there.
 
@@ -427,6 +458,12 @@ class LiteLLMGateway:
         same parse, validation and repair below. Given none, the request is the
         single call it has always been — the callers that show nothing while
         they wait should not pay for a stream nobody watches.
+
+        `on_usage` fires **once per attempt**, inside the loop rather than
+        after it. A reply that will not parse still cost a call, and the repair
+        costs a second one; reporting only the attempt that succeeded would
+        make the expensive failure mode the invisible one. A call that raises
+        reports nothing, because nothing came back to read a count off.
         """
         base = self._kwargs(llm, messages)
         base["messages"] = [
@@ -437,14 +474,30 @@ class LiteLLMGateway:
         response_format = self._response_format(llm, schema)
         if response_format is not None:
             base["response_format"] = response_format
+        # The same widening `stream()` makes, and only where the transport is
+        # actually streamed. Set here rather than in `_consume_structured_stream`
+        # because the provider is known here and because the repair attempt
+        # inherits `base` — one place, both attempts.
+        if on_reasoning is not None:
+            base.update(_stream_usage_options(llm))
 
         payload = base
         for attempt in range(STRUCTURED_REPAIRS + 1):
+            attempt_started = time.perf_counter()
             response = await (
                 self._structured_stream_call(payload, on_reasoning)
                 if on_reasoning is not None
                 else self._structured_call(payload)
             )
+            reported = _usage_of(
+                response,
+                model=_resolved_model(llm),
+                latency_ms=int((time.perf_counter() - attempt_started) * 1000),
+            )
+            # Inside the loop, like the sink beside it: a repaired call made
+            # two requests and paid for both, so it leaves two lines.
+            _log_call(reported, provider=llm.provider, operation="structured")
+            _fire_usage(on_usage, reported)
             raw = (response.choices[0].message.content or "").strip()
             truncated = _finish_reason(response) == "length"
             try:
@@ -812,6 +865,123 @@ def _unparseable(schema: type[BaseModel], truncated: bool) -> str:
             "Raise max_tokens for this provider."
         )
     return f"The model did not return valid {name} JSON."
+
+
+def _stream_usage_options(llm: ResolvedLLM) -> dict[str, Any]:
+    """The request for a streamed usage report, where one can be asked for.
+
+    OpenAI reports tokens on a stream only when
+    `stream_options={"include_usage": True}` asks it to, and that is the shape
+    every OpenAI-compatible endpoint copies. Anthropic sends usage on a
+    streamed message unasked and is given nothing here; an endpoint that has
+    never heard of the option is covered by `drop_params`, which strips what a
+    provider cannot honour. So this only ever *widens* what may arrive: where
+    it does not work the counts stay zero, and it is never the reason a request
+    is refused.
+
+    One function rather than the same provider set written twice, because the
+    two streamed paths (`stream` and a `structured` call given `on_reasoning`)
+    have to agree or usage arrives on one and not the other.
+    """
+    if llm.provider in {"OpenAI-compatible", "Custom"}:
+        return {"stream_options": {"include_usage": True}}
+    return {}
+
+
+def _resolved_model(llm: ResolvedLLM) -> str:
+    """The model name as litellm will see it, prefix and all.
+
+    Shared by the request builder and by usage reporting, because a cost
+    lookup keyed on the *unprefixed* name is a lookup litellm's price map
+    cannot answer — and a null cost that reads as "this model is unpriced"
+    would be a wrong answer rather than a missing one.
+
+    "Custom" is no longer offered when creating a config, but a row stored
+    before it was removed still resolves through here and still needs the
+    prefix — the read model types `provider` as a plain `str` precisely so
+    such a row keeps working. Do not narrow this to the creatable set.
+    """
+    model = llm.model
+    if llm.provider in {"OpenAI-compatible", "Custom"} and "/" not in model:
+        return f"openai/{model}"
+    return model
+
+
+def _usage_of(response: Any, *, model: str, latency_ms: int) -> Usage:
+    """The provider's own counts off a response, or zeros if it sent none.
+
+    Read defensively because "usage" is not a guaranteed field: a one-shot
+    reply carries it, a streamed one carries it only if asked and only if the
+    endpoint obliges, and a reassembled `_StreamedReply` carries whatever the
+    trailing chunk had. Nothing here estimates — a missing count reads as zero
+    and the caller records it as it stands.
+    """
+    usage = getattr(response, "usage", None)
+    return Usage(
+        prompt_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
+        completion_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
+        latency_ms=latency_ms,
+        model=model,
+    )
+
+
+def _log_call(usage: Usage, *, provider: str, operation: str) -> None:
+    """One structured line per provider call: identifiers and counts, nothing else.
+
+    Per-call granularity, on the logging pipeline that already exists. It is
+    the grain neither `runs` nor `run_steps` can hold — a step that repaired
+    reports one row and made two calls, and only this says what each of them
+    cost. The correlation id that ties it back to the request is attached by
+    `core/logging.py`'s own processor, so it is never passed in and never at
+    risk of being passed wrong.
+
+    **No prompt text, no completion text, no question, no schema content** —
+    `services/audit.py`'s rule 3, applied here for its stated reason: a log
+    that became a second copy of what reached the provider is a second thing
+    to secure, and the one place somebody would forget to. `test_llm_call_log`
+    asserts that on the emitted keys rather than trusting it, because the
+    tempting debugging addition is exactly a `reply_head`.
+
+    `cost_usd` is best-effort and null where litellm cannot price the model,
+    which is the normal state for a self-hosted deployment. It is computed here
+    rather than by the reader so that every line carries the price that was
+    current when the call was made.
+
+    Failing to log never fails the call, for the reason `_fire_usage` gives
+    just below: this observes, it does not authorise.
+    """
+    try:
+        log.info(
+            "llm_call",
+            operation=operation,
+            provider=provider,
+            model=usage.model,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            latency_ms=usage.latency_ms,
+            cost_usd=estimate_cost_usd(
+                usage.model, usage.prompt_tokens, usage.completion_tokens
+            ),
+        )
+    except Exception as err:  # pragma: no cover - defensive
+        log.warning("llm_call_log_failed", error=type(err).__name__)
+
+
+def _fire_usage(sink: UsageSink | None, usage: Usage) -> None:
+    """Hand one call's cost to the sink, and never let that fail the call.
+
+    The posture is `services/audit.py`'s and for its stated reason: this
+    observes, it does not authorise. A recorder that raises must not lose a
+    report section that was successfully written, so the failure is a warning
+    and the reply is returned regardless. Deliberately the opposite of the
+    guard's fail-closed rule.
+    """
+    if sink is None:
+        return
+    try:
+        sink(usage)
+    except Exception as err:
+        log.warning("llm_usage_sink_failed", error=type(err).__name__)
 
 
 def _finish_reason(response: Any) -> str:

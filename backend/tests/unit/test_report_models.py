@@ -59,6 +59,13 @@ MIGRATIONS = [
     # Touches `runs` as well as `report_runs`; the recorder ignores tables
     # these revisions never created, so only the report half is checked here.
     importlib.import_module("app.infra.db.migrations.versions.0011_cross_replica"),
+    # Same again: `0023` puts tokens, cost and an actor on all three run
+    # tables, and only `report_runs` was created here. Listed because leaving
+    # a revision out is how this check quietly stops covering the newest
+    # column — which is exactly what it did until this line was added.
+    importlib.import_module(
+        "app.infra.db.migrations.versions.0023_token_accounting"
+    ),
 ]
 
 TABLES = (
@@ -80,6 +87,9 @@ class OpRecorder:
         self.dropped_tables: list[str] = []
         self.dropped_indexes: list[str] = []
         self.dropped_columns: list[tuple[str, str]] = []
+        self.foreign_keys: list[str] = []
+        self.dropped_constraints: list[str] = []
+        self.statements: list[str] = []
         self._metadata = sa.MetaData()
 
     def create_table(self, name: str, *columns: Any, **_kw: Any) -> None:
@@ -105,6 +115,35 @@ class OpRecorder:
 
     def drop_column(self, table: str, name: str, **_kw: Any) -> None:
         self.dropped_columns.append((table, name))
+
+    # `0023` alters tables rather than creating them, so it reaches for three
+    # operations the report revisions never used.
+    def create_foreign_key(
+        self,
+        name: str,
+        source: str,
+        referent: str,
+        local_cols: list[str],
+        remote_cols: list[str],
+        **kw: Any,
+    ) -> None:
+        self.foreign_keys.append(name)
+        # Attached to the column rather than merely noted, or the FK check
+        # below silently stops covering any key declared this way — and a
+        # column whose delete rule is CASCADE in the database and SET NULL in
+        # the ORM is a deletion that takes history with it.
+        if source not in self.tables:
+            return
+        column = self.tables[source].c[local_cols[0]]
+        column.append_foreign_key(
+            sa.ForeignKey(f"{referent}.{remote_cols[0]}", ondelete=kw.get("ondelete"))
+        )
+
+    def drop_constraint(self, name: str, *_a: Any, **_kw: Any) -> None:
+        self.dropped_constraints.append(name)
+
+    def execute(self, statement: Any, **_kw: Any) -> None:
+        self.statements.append(str(statement))
 
 
 def _replay(direction: str = "upgrade") -> OpRecorder:
@@ -173,12 +212,18 @@ def test_they_agree_on_every_foreign_key_and_its_delete_rule() -> None:
             assert _ondelete(column) == _ondelete(mirror), f"{name}.{column.name}"
 
 
+# The contiguous run this file was written around. `0023` is in `MIGRATIONS`
+# because it touches `report_runs`, but eleven unrelated revisions sit between
+# it and `0011`, so it is not part of any chain assertion here.
+CHAIN = MIGRATIONS[:4]
+
+
 def test_the_revision_chain_is_unbroken() -> None:
-    assert [m.revision for m in MIGRATIONS] == ["0008", "0009", "0010", "0011"]
-    assert MIGRATIONS[0].down_revision == "0007"
+    assert [m.revision for m in CHAIN] == ["0008", "0009", "0010", "0011"]
+    assert CHAIN[0].down_revision == "0007"
     # Each revision hangs off the one before it: a fork here is two heads and
     # an `alembic upgrade` that refuses to run.
-    for earlier, later in zip(MIGRATIONS, MIGRATIONS[1:], strict=False):
+    for earlier, later in zip(CHAIN, CHAIN[1:], strict=False):
         assert later.down_revision == earlier.revision
 
 
@@ -197,6 +242,26 @@ def test_the_downgrade_drops_exactly_what_the_upgrade_created() -> None:
     # the upgrade's `add_column` for that table *is* skipped, since `runs` was
     # never created here to add it to.
     assert down.dropped_columns == [
+        # 0023, whose downgrade runs first because downgrades run in reverse.
+        # `runs` and `semantic_jobs` are here for the same reason `runs`
+        # appears below: a revision that adds a column to three tables in one
+        # loop is recorded whole, and only the report table was created here.
+        ("semantic_jobs", "actor_id"),
+        ("report_runs", "actor_id"),
+        ("runs", "actor_id"),
+        ("semantic_jobs", "cost_usd"),
+        ("semantic_jobs", "llm_latency_ms"),
+        ("semantic_jobs", "completion_tokens"),
+        ("semantic_jobs", "prompt_tokens"),
+        ("report_runs", "cost_usd"),
+        ("report_runs", "llm_latency_ms"),
+        ("report_runs", "completion_tokens"),
+        ("report_runs", "prompt_tokens"),
+        ("runs", "cost_usd"),
+        ("run_steps", "llm_calls"),
+        ("run_steps", "llm_latency_ms"),
+        ("run_steps", "completion_tokens"),
+        ("run_steps", "prompt_tokens"),
         ("report_runs", "heartbeat_at"),
         ("report_runs", "worker_id"),
         ("runs", "cancel_requested"),

@@ -88,6 +88,7 @@ from langgraph.types import Command
 from app.core.clock import utcnow
 from app.core.errors import DisclosureTooNarrowError
 from app.core.logging import get_logger
+from app.domain.ports.llm import Usage
 from app.domain.value_objects import (
     ReportRunStatus,
     ReportSectionKind,
@@ -418,6 +419,7 @@ async def _narrate_section(work: ReportWork, config: RunnableConfig) -> str:
 
     if work.mode == "retry":
         section = _section(work)
+        spent: list[Usage] = []
         row = await report._narrate(
             cfg["settings"],
             run=work.run,
@@ -448,9 +450,11 @@ async def _narrate_section(work: ReportWork, config: RunnableConfig) -> str:
                     if s.kind == ReportSectionKind.EXECUTIVE_SUMMARY
                 ),
             ),
+            spent=spent,
         )
         db.add(row)
         await db.commit()
+        await report._record_usage(db, work.run, spent)
         return FINISH
 
     # ── the first pass: walk the sections in order, a wave at a time ─────
@@ -463,6 +467,11 @@ async def _narrate_section(work: ReportWork, config: RunnableConfig) -> str:
     # alternative is a race over `work.prose` that would hand section four a
     # different document depending on which provider call returned first.
     established = list(work.prose)
+    # One list per section, never one shared counter: these calls run at once,
+    # and a counter written from four coroutines is the race §1.1 of the
+    # token-accounting plan rejects a gateway-instance counter for. Each list
+    # is merged below, beside the paragraph it paid for.
+    wave_spend: list[list[Usage]] = [[] for _ in wave]
     paragraphs = await asyncio.gather(
         *(
             report._narrate(
@@ -476,8 +485,9 @@ async def _narrate_section(work: ReportWork, config: RunnableConfig) -> str:
                 narrator=work.narrator,
                 other_headings=[h for h in work.headings if h != section.heading],
                 established=established,
+                spent=wave_spend[index],
             )
-            for position, section in wave
+            for index, (position, section) in enumerate(wave)
         ),
         # A paragraph the provider refused already arrives as a FAILED row —
         # `_narrate` catches that itself. This is for the other kind: a genuine
@@ -503,6 +513,11 @@ async def _narrate_section(work: ReportWork, config: RunnableConfig) -> str:
                     heading=paragraph.heading_snapshot, prose=paragraph.prose
                 )
             )
+    # Every list in the wave, including those belonging to sections that
+    # crashed: a section that blew up after its provider call still spent what
+    # the provider charged, and a sibling's crash must not erase it. This is
+    # the same reason the loop above commits what came back.
+    await report._record_usage(db, work.run, [u for lst in wave_spend for u in lst])
     await progress(progress_current=work.done)
     if crash is not None:
         # The facade owns this: a crashing node is the run, not a step in it.
@@ -522,6 +537,7 @@ async def _summarise(work: ReportWork, config: RunnableConfig) -> str:
 
     if work.mode == "retry":
         section = _section(work)
+        spent: list[Usage] = []
         row = await report._summarise(
             cfg["settings"],
             run=work.run,
@@ -530,9 +546,11 @@ async def _summarise(work: ReportWork, config: RunnableConfig) -> str:
             position=work.positions[section.id],
             written=await report._written_sections(db, work.run.id, work.section_id),
             narrator=work.narrator,
+            spent=spent,
         )
         db.add(row)
         await db.commit()
+        await report._record_usage(db, work.run, spent)
         return FINISH
 
     if work.summary is None or work.summary[1].id in work.narrated:
@@ -541,6 +559,7 @@ async def _summarise(work: ReportWork, config: RunnableConfig) -> str:
     position, section = work.summary
     work.done += 1
     await progress(progress_current=work.done, phase="Writing the summary")
+    summary_spend: list[Usage] = []
     row = await report._summarise(
         cfg["settings"],
         run=work.run,
@@ -549,9 +568,11 @@ async def _summarise(work: ReportWork, config: RunnableConfig) -> str:
         position=position,
         written=work.prose,
         narrator=work.narrator,
+        spent=summary_spend,
     )
     db.add(row)
     await db.commit()
+    await report._record_usage(db, work.run, summary_spend)
     work.outcomes.append(row.status != ReportSectionResultStatus.FAILED)
     return FINISH
 
