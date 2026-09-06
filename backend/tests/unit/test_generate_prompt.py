@@ -152,7 +152,9 @@ class FakeGateway:
     def __init__(self) -> None:
         self.messages: list[Any] = []
 
-    async def structured(self, _llm: Any, messages: Any, _schema: Any) -> Any:
+    async def structured(
+        self, _llm: Any, messages: Any, _schema: Any, **_kwargs: Any
+    ) -> Any:
         self.messages = list(messages)
         return SqlProposal(sql="SELECT 1", reasoning="")
 

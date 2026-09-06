@@ -125,7 +125,9 @@ class FakeGateway:
         self.replies = list(sql)
         self.calls: list[list[Any]] = []
 
-    async def structured(self, _llm: Any, messages: Any, _schema: Any) -> SqlProposal:
+    async def structured(
+        self, _llm: Any, messages: Any, _schema: Any, **_kwargs: Any
+    ) -> SqlProposal:
         self.calls.append(list(messages))
         if not self.replies:
             raise LLMError("The provider is unavailable.")
@@ -137,7 +139,9 @@ class FakeGateway:
 
 
 class FailingGateway:
-    async def structured(self, _llm: Any, _messages: Any, _schema: Any) -> SqlProposal:
+    async def structured(
+        self, _llm: Any, _messages: Any, _schema: Any, **_kwargs: Any
+    ) -> SqlProposal:
         raise LLMError("The provider is unavailable.")
 
 
@@ -455,7 +459,9 @@ class SlowGateway(FakeGateway):
         self._elapsed = elapsed_seconds
         self.now = utcnow()
 
-    async def structured(self, llm: Any, messages: Any, schema: Any) -> SqlProposal:
+    async def structured(
+        self, llm: Any, messages: Any, schema: Any, **_kwargs: Any
+    ) -> SqlProposal:
         self.now += timedelta(seconds=self._elapsed)
         return await super().structured(llm, messages, schema)
 
@@ -756,7 +762,9 @@ class ChartingGateway(FakeGateway):
         self.chart_fails = chart_fails
         self.chart_calls: list[list[Any]] = []
 
-    async def structured(self, llm: Any, messages: Any, schema: Any) -> Any:
+    async def structured(
+        self, llm: Any, messages: Any, schema: Any, **_kwargs: Any
+    ) -> Any:
         if schema is ChartIntent:
             self.chart_calls.append(list(messages))
             if self.chart_fails:

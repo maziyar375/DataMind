@@ -52,7 +52,9 @@ from __future__ import annotations
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, TypedDict
+from functools import lru_cache
+from inspect import Parameter, signature
+from typing import Any, Protocol, TypedDict
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.errors import GraphRecursionError
@@ -65,12 +67,38 @@ from app.core.logging import get_logger
 from app.domain.value_objects import StepName, StepStatus
 from app.pipeline import nodes
 from app.pipeline.nodes import NodeDeps
-from app.pipeline.state import NodeResult, RunError, RunState
+from app.pipeline.state import NodeResult, NodeUsage, RunError, RunState
 
 log = get_logger(__name__)
 
 NodeFn = Callable[[RunState, NodeDeps], Awaitable[NodeResult]]
-OnStep = Callable[[int, str, str, str | None, int], Awaitable[None]]
+#: `(seq, name, status, detail, duration_ms, usage)` — one `run_steps` row.
+#: `usage` is what *this* execution of the node spent at the provider, or None
+#: for a node that called no model. A sixth positional rather than a widened
+#: `NodeResult` because the step row is the adapter's to write: CLAUDE.md is
+#: explicit that the adapter owns the `seq` counter, the `run_steps` write and
+#: both `emit` calls, and a node persisting its own tokens would be the first
+#: exception to the rule that keeps the SSE sequence identical run after run.
+#:
+#: The sixth argument is passed **positionally and only when there is one**:
+#: a callback that never took it — the eval runner's, the events test's
+#: recorder — keeps working untouched, which is what lets the SSE-sequence
+#: contract in `test_pipeline_events.py` stay the unedited gate it is meant to
+#: be. `Protocol` rather than `Callable` because the arity is genuinely two
+#: shapes, and a `Callable` alias can only describe one.
+class OnStep(Protocol):
+    async def __call__(
+        self,
+        seq: int,
+        name: str,
+        status: str,
+        detail: str | None,
+        duration_ms: int,
+        usage: NodeUsage | None = None,
+        /,
+    ) -> None: ...
+
+
 #: `(state, node_name) -> None`, raising when the caller is out of time. Takes
 #: the node name because the two callers deliberately check in different
 #: places: a chat run before *every* node, a draft before each `generate` only.
@@ -206,7 +234,8 @@ def _run_deadline(run: RunState, _node: str) -> None:
 
 
 async def _no_step(
-    _seq: int, _name: str, _status: str, _detail: str | None, _ms: int
+    _seq: int, _name: str, _status: str, _detail: str | None, _ms: int,
+    _usage: NodeUsage | None = None,
 ) -> None:
     """A caller with nowhere to put a step trail. The draft path has none."""
     return None
@@ -270,6 +299,97 @@ def _refuse_unless_analytical(_label: str, run: RunState) -> str:
     return RETRIEVE
 
 
+@lru_cache(maxsize=64)
+def _accepts_six(code: Any, fn: Any) -> bool:
+    """Whether this callable has somewhere to put the usage argument.
+
+    Asked of the signature rather than discovered by catching `TypeError` from
+    the call: a six-parameter callback that raises `TypeError` of its own — a
+    bug in the persistence path — must surface as the failure it is, not be
+    retried as though it had the older shape and quietly lose every token
+    count in the run.
+
+    Cached on the *code object*, not the callable: `run_service` builds its
+    `on_step` as a closure per run, so caching on the function itself would
+    add an entry per run and never drop one — a slow leak in the longest-lived
+    process in the product. Every closure over one `lambda` shares one
+    `__code__`, which is exactly the granularity the answer depends on. The
+    bound is belt and braces on top of that.
+    """
+    try:
+        params = signature(fn).parameters.values()
+    except (TypeError, ValueError):  # a builtin or C callable: assume the old shape
+        return False
+    positional = 0
+    for p in params:
+        if p.kind is Parameter.VAR_POSITIONAL:
+            return True  # `*_: Any` takes whatever it is given
+        if p.kind in (Parameter.POSITIONAL_ONLY, Parameter.POSITIONAL_OR_KEYWORD):
+            positional += 1
+    return positional >= 6
+
+
+def _takes_usage(on_step: OnStep) -> bool:
+    """`_accepts_six`, keyed on something stable across runs.
+
+    The *key* unwraps a bound method to its underlying function, because that
+    is what is shared between calls; the callable that gets inspected is the
+    bound method itself, because `signature()` drops `self` from it and
+    counting a receiver as a parameter would read a five-argument recorder as
+    a six-argument one.
+    """
+    fn = getattr(on_step, "__func__", on_step)
+    return _accepts_six(getattr(fn, "__code__", fn), on_step)
+
+
+async def _finish_step(
+    on_step: OnStep,
+    seq: int,
+    name: str,
+    status: str,
+    detail: str | None,
+    duration_ms: int,
+    usage: NodeUsage | None,
+) -> None:
+    """Persist a terminal step, passing usage only to a callback that wants it.
+
+    A five-parameter callback predates token accounting and is still correct —
+    the eval runner reads `validate` timings and nothing else, and the events
+    test asserts the SSE sequence. Rather than editing both to accept an
+    argument neither uses, the sixth is passed only when there is something to
+    say and only to a callable whose signature has somewhere to put it.
+    """
+    if usage is None or not _takes_usage(on_step):
+        await on_step(seq, name, status, detail, duration_ms)
+        return
+    await on_step(seq, name, status, detail, duration_ms, usage)
+
+
+def _usage_snapshot(run: RunState, name: str) -> NodeUsage:
+    """A copy of this node's bucket as it stands, for diffing after the call."""
+    return run.node_usage.get(name, NodeUsage()).model_copy()
+
+
+def _usage_since(run: RunState, name: str, before: NodeUsage) -> NodeUsage | None:
+    """What this execution of the node added, or None if it called no model.
+
+    None rather than a zeroed bucket, because the column it lands in
+    distinguishes *"this node never calls a model"* from *"it called one and
+    the provider reported nothing"* — and `validate` and `execute` are the
+    first kind. Zeroes here would make every step look measured.
+    """
+    after = run.node_usage.get(name)
+    if after is None or after.calls == before.calls:
+        return None
+    return NodeUsage(
+        prompt_tokens=after.prompt_tokens - before.prompt_tokens,
+        completion_tokens=after.completion_tokens - before.completion_tokens,
+        latency_ms=after.latency_ms - before.latency_ms,
+        calls=after.calls - before.calls,
+        model=after.model,
+    )
+
+
 # ── the adapter ──────────────────────────────────────────────────────────
 def _adapt(
     name: str,
@@ -296,6 +416,12 @@ def _adapt(
 
         seq = configurable["seq"].next()
         started = time.perf_counter()
+        # What this node had spent *before* it ran. A node can execute more
+        # than once in a run — `generate` repairs, and the restore edges
+        # re-enter `present` — and each of those is its own `run_steps` row, so
+        # each row must carry what that execution spent rather than the
+        # node's running total.
+        before = _usage_snapshot(run, name)
 
         await on_step(seq, name, StepStatus.RUNNING, None, 0)
         await deps.emit("STEP_STARTED", {"seq": seq, "name": name})
@@ -310,7 +436,13 @@ def _adapt(
                 hint=str(err)[:300],
             )
             duration = int((time.perf_counter() - started) * 1000)
-            await on_step(seq, name, StepStatus.FAILED, str(err)[:300], duration)
+            # A crashed node still reports what it spent getting there: a call
+            # that returned and then blew up downstream was paid for, and a
+            # step row saying nothing would hide the expensive failures.
+            await _finish_step(
+                on_step, seq, name, StepStatus.FAILED, str(err)[:300], duration,
+                _usage_since(run, name, before),
+            )
             await deps.emit(
                 "STEP_FINISHED",
                 {"seq": seq, "name": name, "status": StepStatus.FAILED},
@@ -320,7 +452,10 @@ def _adapt(
         duration = int((time.perf_counter() - started) * 1000)
         status = _STATUS[result.status]
 
-        await on_step(seq, name, status, result.detail, duration)
+        await _finish_step(
+            on_step, seq, name, status, result.detail, duration,
+            _usage_since(run, name, before),
+        )
         await deps.emit(
             "STEP_FINISHED",
             {
@@ -514,9 +649,13 @@ class AnalyticsPipeline:
     def __init__(
         self,
         *,
-        on_step: Callable[[int, str, str, str | None, int], Awaitable[None]],
+        on_step: OnStep,
     ) -> None:
-        """`on_step(seq, name, status, detail, duration_ms)` persists a run_step."""
+        """`on_step(seq, name, status, detail, duration_ms, usage)` persists a step.
+
+        `usage` is what that execution of the node spent at the provider, or
+        None for a node that called no model — see `OnStep`.
+        """
         self._on_step = on_step
 
     async def run(self, state: RunState, deps: NodeDeps) -> RunState:

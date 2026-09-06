@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from collections.abc import Callable
 from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.domain.ports.database import ResultColumn
+from app.domain.ports.llm import Usage
 from app.domain.value_objects import DisclosurePolicy, HintBudget
 from app.pipeline.checks import Finding
 from app.sqlguard.validator import ValidationReport
@@ -568,6 +570,56 @@ class RunState(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
 
+    # ── what each node spent ─────────────────────────────────────────────
+    # The run's totals above are the sum of this, and the sum is asserted in
+    # `test_token_accounting.py` rather than assumed: per-node attribution is
+    # only worth having if it adds up to the number beside it.
+    #
+    # Keyed by node name and *not* by "whichever node is currently running",
+    # because one call outlives the node that started it: `present` starts the
+    # chart's model call and `chart` awaits it (`_ChartAhead`), so a bucket
+    # chosen when the provider replies would file the chart's tokens under
+    # whatever was open at the time. Each call site names its own node, which
+    # is a fact about the code rather than about the scheduling.
+    node_usage: dict[str, NodeUsage] = Field(default_factory=dict)
+
+    def record_usage(self, node: str, usage: Usage) -> None:
+        """Add one provider call to a node's bucket and to the run's totals.
+
+        The one accumulation path. `route` had its own hand-rolled version of
+        these three `+=` lines, which is how the run totals came to describe a
+        single cheap call and nothing else — one path means a call site can
+        forget to record, but cannot record into a total that disagrees with
+        its own steps.
+
+        Called once per *attempt*, so a repaired `structured()` call adds twice
+        and `calls` counts two. Both were paid for.
+        """
+        bucket = self.node_usage.setdefault(node, NodeUsage())
+        bucket.prompt_tokens += usage.prompt_tokens
+        bucket.completion_tokens += usage.completion_tokens
+        bucket.latency_ms += usage.latency_ms
+        bucket.calls += 1
+        if usage.model and not bucket.model:
+            bucket.model = usage.model
+
+        self.prompt_tokens += usage.prompt_tokens
+        self.completion_tokens += usage.completion_tokens
+        self.llm_latency_ms += usage.latency_ms
+
+    def usage_sink(self, node: str) -> Callable[[Usage], None]:
+        """`record_usage` with the node name already bound, for `on_usage=`.
+
+        The gateway's sink takes a `Usage` and nothing else, so the node name
+        has to be closed over at the call site — which is the point: the name
+        is written where the call is made.
+        """
+
+        def sink(usage: Usage) -> None:
+            self.record_usage(node, usage)
+
+        return sink
+
     @property
     def repair_count(self) -> int:
         return max(0, len(self.attempts) - 1)
@@ -580,6 +632,28 @@ class RunState(BaseModel):
     def executable_sql(self) -> str | None:
         last = self.last_attempt
         return last.rewritten_sql if last else None
+
+
+class NodeUsage(BaseModel):
+    """What one node spent at the provider.
+
+    A mutable pydantic model rather than a frozen dataclass because it is
+    accumulated into: a node can call a model more than once (`generate`
+    repairs, and `structured` retries a malformed reply), and each call adds
+    to the same bucket.
+
+    `model` is the resolved name of the first call that reported one, kept so
+    the adapter can price a step without reaching back into `ResolvedLLM` —
+    the same reason `Usage` carries it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    latency_ms: int = 0
+    calls: int = 0
+    model: str = ""
 
 
 class NodeResult(BaseModel):

@@ -380,7 +380,7 @@ async def test_only_the_triggering_finding_reaches_the_repair_prompt() -> None:
     seen: list[str] = []
 
     class CapturingGateway:
-        async def structured(self, _llm, messages, _schema):  # type: ignore[no-untyped-def]
+        async def structured(self, _llm, messages, _schema, **_kwargs):  # type: ignore[no-untyped-def]
             seen.extend(m.content for m in messages)
             return SqlProposal(sql="SELECT 1", reasoning="")
 

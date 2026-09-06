@@ -86,7 +86,9 @@ class FakeGateway:
         self._thoughts = thoughts or []
         self.messages: list[Any] = []
 
-    def stream(self, _llm: Any, messages: Any) -> AsyncIterator[StreamChunk]:
+    def stream(
+        self, _llm: Any, messages: Any, **_kwargs: Any
+    ) -> AsyncIterator[StreamChunk]:
         self.messages = list(messages)
 
         async def gen() -> AsyncIterator[StreamChunk]:
