@@ -17,7 +17,9 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.clock import utcnow
+from app.core.context import RequestContext
 from app.domain.ports.database import ResultColumn
+from app.infra.authz.owner_only import OwnerOnlyAuthorizer
 from app.infra.db.models import (
     Dashboard,
     DashboardTile,
@@ -34,6 +36,12 @@ from app.services.dashboard_service import (
 from app.services.query_service import TileResult
 
 OWNER = uuid4()
+#: Phase 1: every service method takes a context rather than a bare owner id.
+#: The authorizer is the owner-only one — today's rule — constructed without a
+#: session because every call in this file hands it the row it is asking about.
+CTX = RequestContext(
+    user_id=OWNER, email="owner@test.local", role="MEMBER", correlation_id="t"
+)
 
 
 def _dashboard(default_interval: int = 0) -> Dashboard:
@@ -84,7 +92,9 @@ def _tile(
     )
 
 
-def _cached(tile: DashboardTile, *, age_seconds: float = 0.0, rows: int = 3) -> DashboardTileCache:
+def _cached(
+    tile: DashboardTile, *, age_seconds: float = 0.0, rows: int = 3
+) -> DashboardTileCache:
     computed_at = utcnow() - timedelta(seconds=age_seconds)
     result = TileResult(
         status="OK",
@@ -305,11 +315,15 @@ def _connection(connection_id: UUID) -> DatabaseConnection:
     )
 
 
-def _executor(monkeypatch: pytest.MonkeyPatch, result: TileResult | None = None) -> list[Any]:
+def _executor(
+    monkeypatch: pytest.MonkeyPatch, result: TileResult | None = None
+) -> list[Any]:
     """Replace `execute_many`, recording which tiles were actually run."""
     ran: list[Any] = []
 
-    async def fake(_db: Any, _settings: Any, *, requests: list[Any], owner_id: UUID) -> dict:
+    async def fake(
+        _db: Any, _settings: Any, *, requests: list[Any], owner_id: UUID
+    ) -> dict:
         ran.extend(requests)
         return {
             request.tile_id: (
@@ -337,7 +351,9 @@ async def test_a_fresh_tile_is_served_from_cache_without_touching_the_database(
     )
     ran = _executor(monkeypatch)
 
-    results = await DashboardService(db, object()).refresh(dashboard.id, OWNER)
+    results = await DashboardService(
+        db, object(), OwnerOnlyAuthorizer()).refresh(CTX, dashboard.id
+    )
 
     assert ran == []
     assert results[tile.id].row_count == 3
@@ -357,7 +373,9 @@ async def test_force_runs_the_query_however_fresh_the_cache_is(
     )
     ran = _executor(monkeypatch)
 
-    await DashboardService(db, object()).refresh(dashboard.id, OWNER, force=True)
+    await DashboardService(
+        db, object(), OwnerOnlyAuthorizer()).refresh(CTX, dashboard.id, force=True
+    )
 
     assert [r.tile_id for r in ran] == [tile.id]
 
@@ -379,7 +397,9 @@ async def test_two_tiles_with_different_rates_expire_independently(
     )
     ran = _executor(monkeypatch)
 
-    results = await DashboardService(db, object()).refresh(dashboard.id, OWNER)
+    results = await DashboardService(
+        db, object(), OwnerOnlyAuthorizer()).refresh(CTX, dashboard.id
+    )
 
     assert [r.tile_id for r in ran] == [quick.id]
     assert set(results) == {quick.id, slow.id}
@@ -401,8 +421,8 @@ async def test_a_tile_asked_for_by_id_is_the_only_one_computed(
     )
     ran = _executor(monkeypatch)
 
-    results = await DashboardService(db, object()).refresh(
-        dashboard.id, OWNER, tile_ids=[second.id]
+    results = await DashboardService(
+        db, object(), OwnerOnlyAuthorizer()).refresh(CTX, dashboard.id, tile_ids=[second.id]
     )
 
     assert [r.tile_id for r in ran] == [second.id]
@@ -422,7 +442,7 @@ async def test_a_computed_result_is_written_to_the_cache(
     )
     _executor(monkeypatch)
 
-    await DashboardService(db, object()).refresh(dashboard.id, OWNER)
+    await DashboardService(db, object(), OwnerOnlyAuthorizer()).refresh(CTX, dashboard.id)
 
     written = [row for row in db.added if isinstance(row, DashboardTileCache)]
     assert len(written) == 1
@@ -449,7 +469,7 @@ async def test_a_failure_is_cached_too(monkeypatch: pytest.MonkeyPatch) -> None:
         ),
     )
 
-    await DashboardService(db, object()).refresh(dashboard.id, OWNER)
+    await DashboardService(db, object(), OwnerOnlyAuthorizer()).refresh(CTX, dashboard.id)
 
     written = [row for row in db.added if isinstance(row, DashboardTileCache)][0]
     assert written.error_code == "E_QUERY_FAILED"
@@ -467,7 +487,9 @@ async def test_a_tile_whose_connection_was_deleted_says_so(
     db = FakeDb(dashboard=dashboard, tiles=[tile], cache=[], connections=[])
     ran = _executor(monkeypatch)
 
-    results = await DashboardService(db, object()).refresh(dashboard.id, OWNER)
+    results = await DashboardService(
+        db, object(), OwnerOnlyAuthorizer()).refresh(CTX, dashboard.id
+    )
 
     assert ran == []
     assert results[tile.id].status == "ERROR"
@@ -482,7 +504,9 @@ async def test_a_text_tile_computes_nothing(monkeypatch: pytest.MonkeyPatch) -> 
     db = FakeDb(dashboard=dashboard, tiles=[tile], cache=[], connections=[])
     ran = _executor(monkeypatch)
 
-    results = await DashboardService(db, object()).refresh(dashboard.id, OWNER)
+    results = await DashboardService(
+        db, object(), OwnerOnlyAuthorizer()).refresh(CTX, dashboard.id
+    )
 
     assert ran == []
     assert results == {}
@@ -509,7 +533,7 @@ async def test_a_stored_chart_intent_reaches_the_executor_as_a_suggestion(
     )
     ran = _executor(monkeypatch)
 
-    await DashboardService(db, object()).refresh(dashboard.id, OWNER)
+    await DashboardService(db, object(), OwnerOnlyAuthorizer()).refresh(CTX, dashboard.id)
 
     assert ran[0].chart_intent is not None
     assert ran[0].chart_intent.chart_type == "pie"
@@ -529,6 +553,6 @@ async def test_an_unreadable_stored_intent_falls_back_to_auto(
     )
     ran = _executor(monkeypatch)
 
-    await DashboardService(db, object()).refresh(dashboard.id, OWNER)
+    await DashboardService(db, object(), OwnerOnlyAuthorizer()).refresh(CTX, dashboard.id)
 
     assert ran[0].chart_intent is None

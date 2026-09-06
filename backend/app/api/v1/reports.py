@@ -20,7 +20,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Request, status
 
-from app.api.deps import CtxDep, DbDep, SettingsDep
+from app.api.deps import AuthzDep, CtxDep, DbDep, SettingsDep
 from app.api.schemas import (
     ChartOptionRead,
     ReportBlockCheckRead,
@@ -96,10 +96,10 @@ def _section_read(section: object, blocks: list[ReportBlockRead]) -> ReportSecti
 # ── reports ──────────────────────────────────────────────────────────────
 @router.get("", response_model=list[ReportSummaryRead])
 async def list_reports(
-    ctx: CtxDep, db: DbDep, settings: SettingsDep
+    ctx: CtxDep, db: DbDep, settings: SettingsDep, authz: AuthzDep
 ) -> list[ReportSummaryRead]:
-    service = ReportService(db, settings)
-    reports = await service.list(ctx.user_id)
+    service = ReportService(db, settings, authz)
+    reports = await service.list(ctx)
     connections, models = await service.display_names(reports)
 
     cards: list[ReportSummaryRead] = []
@@ -116,21 +116,21 @@ async def list_reports(
 
 @router.post("", response_model=ReportRead, status_code=status.HTTP_201_CREATED)
 async def create_report(
-    payload: ReportCreate, ctx: CtxDep, db: DbDep, settings: SettingsDep
+    payload: ReportCreate, ctx: CtxDep, db: DbDep, settings: SettingsDep, authz: AuthzDep
 ) -> ReportRead:
     """Create a report. **The disclosure gate is here** — a connection that
     shares no result values cannot carry a document written from them."""
-    service = ReportService(db, settings)
-    report = await service.create(ctx.user_id, **payload.model_dump())
+    service = ReportService(db, settings, authz)
+    report = await service.create(ctx, **payload.model_dump())
     return await _report_read(service, report)
 
 
 @router.get("/{report_id}", response_model=ReportRead)
 async def get_report(
-    report_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+    report_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep, authz: AuthzDep
 ) -> ReportRead:
-    service = ReportService(db, settings)
-    report = await service.get(report_id, ctx.user_id)
+    service = ReportService(db, settings, authz)
+    report = await service.get(ctx, report_id)
     return await _report_read(service, report)
 
 
@@ -141,35 +141,34 @@ async def update_report(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> ReportRead:
     """Name, description, prompt, model, status. A **different** `connection_id`
     is 422 — the report is pinned to the one it was created against."""
-    service = ReportService(db, settings)
-    report = await service.update(
-        report_id, ctx.user_id, **payload.model_dump(exclude_unset=True)
-    )
+    service = ReportService(db, settings, authz)
+    report = await service.update(ctx, report_id, **payload.model_dump(exclude_unset=True))
     return await _report_read(service, report)
 
 
 @router.delete("/{report_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_report(
-    report_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+    report_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep, authz: AuthzDep
 ) -> None:
-    await ReportService(db, settings).delete(report_id, ctx.user_id)
+    await ReportService(db, settings, authz).delete(ctx, report_id)
 
 
 # ── the outline ──────────────────────────────────────────────────────────
 @router.post("/{report_id}/outline", response_model=ReportRead)
 async def propose_outline(
-    report_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+    report_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep, authz: AuthzDep
 ) -> ReportRead:
     """Propose a structure from the request. One model call, synchronous.
 
     **This replaces the outline.** Returns the whole report so the editor
     renders the proposal from the response rather than re-reading it.
     """
-    service = ReportService(db, settings)
-    report = await service.propose_outline(report_id, ctx.user_id)
+    service = ReportService(db, settings, authz)
+    report = await service.propose_outline(ctx, report_id)
     return await _report_read(service, report)
 
 
@@ -184,6 +183,7 @@ async def check_block(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> ReportBlockCheckRead:
     """*Can this be produced, and if not, why.* Synchronous, one block.
 
@@ -191,8 +191,8 @@ async def check_block(
     result, and the guard's own reason travels with it verbatim. "Check all" is
     the frontend looping this with per-block progress.
     """
-    block, draft = await ReportService(db, settings).check_block(
-        report_id, block_id, ctx.user_id
+    block, draft = await ReportService(db, settings, authz).check_block(
+        ctx, report_id, block_id
     )
     return ReportBlockCheckRead(
         block=ReportBlockRead.model_validate(block),
@@ -214,6 +214,7 @@ async def edit_block_sql(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> ReportBlockCheckRead:
     """Write the block's statement by hand. Guarded and previewed, no model.
 
@@ -222,8 +223,8 @@ async def edit_block_sql(
     PATCH: the statement is replaced whole, and sending it twice is sending it
     once.
     """
-    block, draft = await ReportService(db, settings).edit_block_sql(
-        report_id, block_id, ctx.user_id, sql=payload.sql
+    block, draft = await ReportService(db, settings, authz).edit_block_sql(
+        ctx, report_id, block_id, sql=payload.sql
     )
     return ReportBlockCheckRead(
         block=ReportBlockRead.model_validate(block),
@@ -245,11 +246,12 @@ async def update_block(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> ReportBlockRead:
     """Editing the question (or the window) resets the block to `UNCHECKED` and
     drops its SQL: the stored statement answered the previous question."""
-    block = await ReportService(db, settings).update_block(
-        report_id, block_id, ctx.user_id, **payload.model_dump(exclude_unset=True)
+    block = await ReportService(db, settings, authz).update_block(
+        ctx, report_id, block_id, **payload.model_dump(exclude_unset=True)
     )
     return ReportBlockRead.model_validate(block)
 
@@ -263,8 +265,9 @@ async def delete_block(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> None:
-    await ReportService(db, settings).delete_block(report_id, block_id, ctx.user_id)
+    await ReportService(db, settings, authz).delete_block(ctx, report_id, block_id)
 
 
 # ── sections ─────────────────────────────────────────────────────────────
@@ -279,9 +282,10 @@ async def create_section(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> ReportSectionRead:
-    section = await ReportService(db, settings).add_section(
-        report_id, ctx.user_id, **payload.model_dump()
+    section = await ReportService(db, settings, authz).add_section(
+        ctx, report_id, **payload.model_dump()
     )
     return _section_read(section, [])
 
@@ -294,10 +298,11 @@ async def update_section(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> ReportSectionRead:
-    service = ReportService(db, settings)
+    service = ReportService(db, settings, authz)
     section = await service.update_section(
-        report_id, section_id, ctx.user_id, **payload.model_dump(exclude_unset=True)
+        ctx, report_id, section_id, **payload.model_dump(exclude_unset=True)
     )
     blocks = await service.blocks_of([section.id])
     return _section_read(section, [ReportBlockRead.model_validate(b) for b in blocks])
@@ -312,8 +317,9 @@ async def delete_section(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> None:
-    await ReportService(db, settings).delete_section(report_id, section_id, ctx.user_id)
+    await ReportService(db, settings, authz).delete_section(ctx, report_id, section_id)
 
 
 @router.post(
@@ -328,9 +334,10 @@ async def create_block(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> ReportBlockRead:
-    block = await ReportService(db, settings).add_block(
-        report_id, section_id, ctx.user_id, **payload.model_dump()
+    block = await ReportService(db, settings, authz).add_block(
+        ctx, report_id, section_id, **payload.model_dump()
     )
     return ReportBlockRead.model_validate(block)
 
@@ -349,6 +356,7 @@ async def create_run(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> ReportRunRead:
     """Start a generation and return immediately.
 
@@ -356,8 +364,8 @@ async def create_run(
     to "did it work" lives on the run row the client then polls — the same
     trade `semantic_jobs` makes.
     """
-    service = ReportService(db, settings)
-    run = await service.create_run(report_id, ctx.user_id)
+    service = ReportService(db, settings, authz)
+    run = await service.create_run(ctx, report_id)
     read = ReportRunRead.model_validate(run)
     # Committed before the worker starts, or the worker races the transaction
     # that created the row it is about to load.
@@ -368,11 +376,11 @@ async def create_run(
 
 @router.get("/{report_id}/runs", response_model=list[ReportRunRead])
 async def list_runs(
-    report_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+    report_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep, authz: AuthzDep
 ) -> list[ReportRunRead]:
     """The report's history, newest first. Rows only — a past run's results are
     read one run at a time."""
-    runs = await ReportService(db, settings).runs_of(report_id, ctx.user_id)
+    runs = await ReportService(db, settings, authz).runs_of(ctx, report_id)
     return [ReportRunRead.model_validate(run) for run in runs]
 
 
@@ -384,17 +392,18 @@ async def cancel_run(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> ReportRunRead:
     """Ask the run to stop. Results already computed are kept.
 
     The row is marked cancelled here rather than by the worker, so the next
     poll says so even while an in-flight query is still finishing.
     """
-    service = ReportService(db, settings)
-    await service.cancel_run(report_id, run_id, ctx.user_id)
+    service = ReportService(db, settings, authz)
+    await service.cancel_run(ctx, report_id, run_id)
     await db.commit()
     await request.app.state.report_executor.cancel(run_id)
-    return ReportRunRead.model_validate(await service.run(report_id, run_id, ctx.user_id))
+    return ReportRunRead.model_validate(await service.run(ctx, report_id, run_id))
 
 
 @router.post(
@@ -410,6 +419,7 @@ async def retry_section(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> ReportRunRead:
     """Rebuild one section of a finished run: its queries, then its paragraph.
 
@@ -419,8 +429,8 @@ async def retry_section(
     how a successful retry turns `PARTIAL` into `SUCCEEDED` with no state
     machine anywhere.
     """
-    service = ReportService(db, settings)
-    run = await service.request_section_retry(report_id, run_id, section_id, ctx.user_id)
+    service = ReportService(db, settings, authz)
+    run = await service.request_section_retry(ctx, report_id, run_id, section_id)
     read = ReportRunRead.model_validate(run)
     await db.commit()
     await request.app.state.report_executor.submit_retry(run_id, section_id)
@@ -439,6 +449,7 @@ async def redraw_block_chart(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> ReportChartRead:
     """Draw one saved block a different way, from the rows the run kept.
 
@@ -448,8 +459,8 @@ async def redraw_block_chart(
     refinement made while reading one generation must not rewrite the template
     the next one is produced from.
     """
-    row, options, reason = await ReportService(db, settings).redraw_block_chart(
-        report_id, run_id, result_id, ctx.user_id, chart_type=payload.chart_type
+    row, options, reason = await ReportService(db, settings, authz).redraw_block_chart(
+        ctx, report_id, run_id, result_id, chart_type=payload.chart_type
     )
     return ReportChartRead(
         spec=row.vega_spec if reason is None else None,
@@ -472,21 +483,27 @@ async def edit_section_prose(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> ReportSectionResultRead:
     """Write over a paragraph. The model's own words are kept beside it.
 
     The edit belongs to the **run**, not the template: regenerating writes a
     new run and leaves this one's writing exactly where it is.
     """
-    row = await ReportService(db, settings).edit_prose(
-        report_id, run_id, section_id, ctx.user_id, edited_prose=payload.edited_prose
+    row = await ReportService(db, settings, authz).edit_prose(
+        ctx, report_id, run_id, section_id, edited_prose=payload.edited_prose
     )
     return ReportSectionResultRead.model_validate(row)
 
 
 @router.get("/{report_id}/runs/{run_id}", response_model=ReportRunDetailRead)
 async def get_run(
-    report_id: UUID, run_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+    report_id: UUID,
+    run_id: UUID,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    authz: AuthzDep,
 ) -> ReportRunDetailRead:
     """**The poll target.** The run, and every result written so far.
 
@@ -494,8 +511,8 @@ async def get_run(
     has, which is what makes the progressive render need no protocol of its own
     and lets a browser that reloads mid-run resume exactly where it was.
     """
-    service = ReportService(db, settings)
-    run = await service.run(report_id, run_id, ctx.user_id)
+    service = ReportService(db, settings, authz)
+    run = await service.run(ctx, report_id, run_id)
     blocks, sections = await service.run_results(run.id)
     # Which figures rest on a different query than they did last time. One
     # extra pair of small queries per poll, and it is what makes two

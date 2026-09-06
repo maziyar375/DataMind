@@ -134,10 +134,15 @@ class NoLazyLoads:
 
 
 class FakeService:
-    """Stands in for `DashboardService`, recording every owner_id it is given.
+    """Stands in for `DashboardService`, recording every context it is given.
 
     The router builds the service itself, so it is the *class* that is
     replaced. Each instance shares one call log through the class attribute.
+
+    It records a `RequestContext` where it used to record an owner id, because
+    that is what the service now takes — the sweep below asserts the same
+    property it always did, about the same session, through the object that
+    carries it.
     """
 
     calls: list[tuple[str, dict[str, Any]]] = []
@@ -146,7 +151,7 @@ class FakeService:
     tiles: list[DashboardTile] = []
     skipped: list[SkippedTile] = []
 
-    def __init__(self, _db: Any, _settings: Any) -> None:
+    def __init__(self, _db: Any, _settings: Any, _authz: Any) -> None:
         pass
 
     def _record(self, method: str, **kwargs: Any) -> None:
@@ -158,8 +163,8 @@ class FakeService:
         if FakeService.raises is not None:
             raise FakeService.raises
 
-    async def list(self, owner_id: UUID) -> list[Dashboard]:
-        self._record("list", owner_id=owner_id)
+    async def list(self, ctx: RequestContext) -> list[Dashboard]:
+        self._record("list", ctx=ctx)
         return [_dashboard()]
 
     async def tile_counts(self, ids: list[UUID]) -> dict[UUID, int]:
@@ -168,8 +173,8 @@ class FakeService:
     async def last_refreshed(self, ids: list[UUID]) -> dict[UUID, datetime]:
         return {DASHBOARD_ID: utcnow()}
 
-    async def get(self, dashboard_id: UUID, owner_id: UUID) -> Any:
-        self._record("get", dashboard_id=dashboard_id, owner_id=owner_id)
+    async def get(self, ctx: RequestContext, dashboard_id: UUID) -> Any:
+        self._record("get", dashboard_id=dashboard_id, ctx=ctx)
         return NoLazyLoads(_dashboard())
 
     async def tiles_of(self, dashboard_id: UUID) -> list[DashboardTile]:
@@ -178,71 +183,87 @@ class FakeService:
     async def display_names(self, tiles: list[DashboardTile]) -> tuple[dict, dict]:
         return {CONNECTION_ID: "sales"}, {}
 
-    async def create(self, owner_id: UUID, **fields: Any) -> Any:
-        self._record("create", owner_id=owner_id, **fields)
+    async def create(self, ctx: RequestContext, **fields: Any) -> Any:
+        self._record("create", ctx=ctx, **fields)
         return NoLazyLoads(_dashboard())
 
-    async def update(self, dashboard_id: UUID, owner_id: UUID, **changes: Any) -> Any:
-        self._record("update", dashboard_id=dashboard_id, owner_id=owner_id, **changes)
+    async def update(self, ctx: RequestContext, dashboard_id: UUID, **changes: Any) -> Any:
+        self._record("update", dashboard_id=dashboard_id, ctx=ctx, **changes)
         return NoLazyLoads(_dashboard())
 
-    async def delete(self, dashboard_id: UUID, owner_id: UUID) -> None:
-        self._record("delete", dashboard_id=dashboard_id, owner_id=owner_id)
+    async def delete(self, ctx: RequestContext, dashboard_id: UUID) -> None:
+        self._record("delete", dashboard_id=dashboard_id, ctx=ctx)
 
-    async def tile(self, dashboard_id: UUID, tile_id: UUID, owner_id: UUID) -> DashboardTile:
-        self._record("tile", dashboard_id=dashboard_id, tile_id=tile_id, owner_id=owner_id)
+    async def tile(
+        self, ctx: RequestContext, dashboard_id: UUID, tile_id: UUID
+    ) -> DashboardTile:
+        self._record("tile", dashboard_id=dashboard_id, tile_id=tile_id, ctx=ctx)
         return _tile()
 
-    async def add_tile(self, dashboard_id: UUID, owner_id: UUID, **fields: Any) -> DashboardTile:
-        self._record("add_tile", dashboard_id=dashboard_id, owner_id=owner_id, **fields)
+    async def add_tile(
+        self, ctx: RequestContext, dashboard_id: UUID, **fields: Any
+    ) -> DashboardTile:
+        self._record("add_tile", dashboard_id=dashboard_id, ctx=ctx, **fields)
         return _tile()
 
     async def update_tile(
-        self, dashboard_id: UUID, tile_id: UUID, owner_id: UUID, **changes: Any
+        self,
+        ctx: RequestContext,
+        dashboard_id: UUID,
+        tile_id: UUID,
+        **changes: Any,
     ) -> DashboardTile:
         self._record(
             "update_tile",
             dashboard_id=dashboard_id,
             tile_id=tile_id,
-            owner_id=owner_id,
+            ctx=ctx,
             **changes,
         )
         return _tile()
 
-    async def delete_tile(self, dashboard_id: UUID, tile_id: UUID, owner_id: UUID) -> None:
+    async def delete_tile(
+        self, ctx: RequestContext, dashboard_id: UUID, tile_id: UUID
+    ) -> None:
         self._record(
-            "delete_tile", dashboard_id=dashboard_id, tile_id=tile_id, owner_id=owner_id
+            "delete_tile", dashboard_id=dashboard_id, tile_id=tile_id, ctx=ctx
         )
 
     async def duplicate_tile(
-        self, dashboard_id: UUID, tile_id: UUID, owner_id: UUID
+        self,
+        ctx: RequestContext,
+        dashboard_id: UUID,
+        tile_id: UUID,
     ) -> DashboardTile:
         self._record(
             "duplicate_tile",
             dashboard_id=dashboard_id,
             tile_id=tile_id,
-            owner_id=owner_id,
+            ctx=ctx,
         )
         return _tile(uuid4())
 
     async def set_layout(
-        self, dashboard_id: UUID, owner_id: UUID, positions: list[dict]
+        self,
+        ctx: RequestContext,
+        dashboard_id: UUID,
+        positions: list[dict],
     ) -> list[DashboardTile]:
         self._record(
             "set_layout",
             dashboard_id=dashboard_id,
-            owner_id=owner_id,
+            ctx=ctx,
             positions=positions,
         )
         return list(FakeService.tiles)
 
-    async def export(self, dashboard_id: UUID, owner_id: UUID) -> DashboardDocument:
-        self._record("export", dashboard_id=dashboard_id, owner_id=owner_id)
+    async def export(self, ctx: RequestContext, dashboard_id: UUID) -> DashboardDocument:
+        self._record("export", dashboard_id=dashboard_id, ctx=ctx)
         return build_document(_dashboard(), [_tile()], {CONNECTION_ID: _connection()})
 
     async def import_document(
         self,
-        owner_id: UUID,
+        ctx: RequestContext,
         *,
         document: Any,
         name: str | None = None,
@@ -251,7 +272,7 @@ class FakeService:
     ) -> tuple[Any, list[SkippedTile]]:
         self._record(
             "import_document",
-            owner_id=owner_id,
+            ctx=ctx,
             document=document,
             name=name,
             connection_map=connection_map,
@@ -261,15 +282,15 @@ class FakeService:
 
     async def refresh(
         self,
+        ctx: RequestContext,
         dashboard_id: UUID,
-        owner_id: UUID,
         tile_ids: list[UUID] | None = None,
         force: bool = False,
     ) -> dict[UUID, TileResult]:
         self._record(
             "refresh",
             dashboard_id=dashboard_id,
-            owner_id=owner_id,
+            ctx=ctx,
             tile_ids=tile_ids,
             force=force,
         )
@@ -603,9 +624,9 @@ def test_every_route_scopes_to_the_caller(
     )
 
     assert response.status_code < 400, response.text
-    owners = [kwargs["owner_id"] for _n, kwargs in FakeService.calls if "owner_id" in kwargs]
-    assert owners, f"{method.upper()} {path} reached no owner-scoped service call"
-    assert all(owner == USER for owner in owners)
+    contexts = [kwargs["ctx"] for _n, kwargs in FakeService.calls if "ctx" in kwargs]
+    assert contexts, f"{method.upper()} {path} reached no scoped service call"
+    assert all(c.user_id == USER for c in contexts)
 
 
 def test_the_sweep_covers_every_route_the_app_publishes() -> None:

@@ -21,7 +21,9 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.clock import utcnow
+from app.core.context import RequestContext
 from app.core.errors import NotFoundError, SqlRejectedError, ValidationError
+from app.infra.authz.owner_only import OwnerOnlyAuthorizer
 from app.infra.db.models import Dashboard, DashboardTile, DatabaseConnection
 from app.services.dashboard_service import DashboardService
 from app.services.dashboard_transfer import (
@@ -32,6 +34,12 @@ from app.services.dashboard_transfer import (
 )
 
 OWNER = uuid4()
+#: Phase 1: every service method takes a context rather than a bare owner id.
+#: The authorizer is the owner-only one — today's rule — constructed without a
+#: session because every call in this file hands it the row it is asking about.
+CTX = RequestContext(
+    user_id=OWNER, email="owner@test.local", role="MEMBER", correlation_id="t"
+)
 CONNECTION_ID = uuid4()
 OTHER_CONNECTION_ID = uuid4()
 
@@ -200,7 +208,7 @@ def _connection(
 
 
 def _service(db: FakeDb) -> DashboardService:
-    return DashboardService(db, object())
+    return DashboardService(db, object(), OwnerOnlyAuthorizer())
 
 
 def _document(**tile_overrides: Any) -> dict[str, Any]:
@@ -307,7 +315,7 @@ async def test_hostile_sql_in_a_file_is_refused() -> None:
 
     with pytest.raises(ValidationError):
         await _service(db).import_document(
-            OWNER,
+            CTX,
             document=_document(sql="DROP TABLE public.orders"),
             connection_map={"c1": CONNECTION_ID},
         )
@@ -320,7 +328,7 @@ async def test_a_refused_import_creates_nothing_at_all() -> None:
 
     with pytest.raises(ValidationError):
         await _service(db).import_document(
-            OWNER,
+            CTX,
             document=_document(sql="SELECT * FROM information_schema.tables"),
             connection_map={"c1": CONNECTION_ID},
         )
@@ -340,7 +348,7 @@ async def test_a_refusal_names_every_tile_it_refused() -> None:
 
     with pytest.raises(ValidationError) as caught:
         await _service(db).import_document(
-            OWNER, document=document, connection_map={"c1": CONNECTION_ID}
+            CTX, document=document, connection_map={"c1": CONNECTION_ID}
         )
 
     assert caught.value.detail["tiles"] == ["Bad", "Worse"]
@@ -358,10 +366,7 @@ async def test_skip_invalid_imports_the_rest_and_reports_the_loss() -> None:
     ]
 
     dashboard, skipped = await _service(db).import_document(
-        OWNER,
-        document=document,
-        connection_map={"c1": CONNECTION_ID},
-        skip_invalid=True,
+        CTX, document=document, connection_map={"c1": CONNECTION_ID}, skip_invalid=True
     )
 
     assert [tile.title for tile in db.tiles] == ["Good"]
@@ -373,7 +378,7 @@ async def test_a_tile_with_no_connection_chosen_is_refused_not_stored() -> None:
     db = FakeDb(connections=[_connection(name="something else")])
 
     _dash, skipped = await _service(db).import_document(
-        OWNER, document=_document(), skip_invalid=True
+        CTX, document=_document(), skip_invalid=True
     )
 
     assert db.tiles == []
@@ -388,7 +393,7 @@ async def test_a_connection_the_caller_does_not_own_is_not_found() -> None:
 
     with pytest.raises(NotFoundError):
         await _service(db).import_document(
-            OWNER, document=_document(), connection_map={"c1": OTHER_CONNECTION_ID}
+            CTX, document=_document(), connection_map={"c1": OTHER_CONNECTION_ID}
         )
 
 
@@ -397,18 +402,20 @@ async def test_an_unmapped_ref_falls_back_to_a_connection_of_the_same_name() -> 
     unique per owner, so the match is never ambiguous."""
     db = FakeDb(connections=[_connection(name="Sales")])
 
-    await _service(db).import_document(OWNER, document=_document())
+    await _service(db).import_document(CTX, document=_document())
 
     assert [tile.connection_id for tile in db.tiles] == [CONNECTION_ID]
 
 
 async def test_an_explicit_map_beats_a_name_that_happens_to_match() -> None:
     db = FakeDb(
-        connections=[_connection(name="sales"), _connection(OTHER_CONNECTION_ID, "warehouse")]
+        connections=[_connection(name="sales"), _connection(
+            OTHER_CONNECTION_ID, "warehouse"
+        )]
     )
 
     await _service(db).import_document(
-        OWNER, document=_document(), connection_map={"c1": OTHER_CONNECTION_ID}
+        CTX, document=_document(), connection_map={"c1": OTHER_CONNECTION_ID}
     )
 
     assert [tile.connection_id for tile in db.tiles] == [OTHER_CONNECTION_ID]
@@ -423,7 +430,7 @@ async def test_a_name_already_taken_gets_a_number() -> None:
                 connections=[_connection()])
 
     dashboard, _skipped = await _service(db).import_document(
-        OWNER, document=_document(), connection_map={"c1": CONNECTION_ID}
+        CTX, document=_document(), connection_map={"c1": CONNECTION_ID}
     )
 
     assert dashboard.name == "Ops (3)"
@@ -433,7 +440,7 @@ async def test_the_requested_name_overrides_the_files() -> None:
     db = FakeDb(connections=[_connection()])
 
     dashboard, _skipped = await _service(db).import_document(
-        OWNER,
+        CTX,
         document=_document(),
         name="Ops (from Ana)",
         connection_map={"c1": CONNECTION_ID},
@@ -447,15 +454,11 @@ async def test_an_import_keeps_the_layout_the_rates_and_the_provenance() -> None
     dashboard that was sent."""
     db = FakeDb(connections=[_connection()])
 
-    await _service(db).import_document(
-        OWNER,
-        document=_document(
+    await _service(db).import_document(CTX, document=_document(
             grid_x=6, grid_y=2, grid_w=6, grid_h=8, position=3,
             refresh_interval_seconds=30, max_rows=250,
             chart_config={"chart_type": "bar"},
-        ),
-        connection_map={"c1": CONNECTION_ID},
-    )
+        ), connection_map={"c1": CONNECTION_ID})
 
     tile = db.tiles[0]
     assert (tile.grid_x, tile.grid_y, tile.grid_w, tile.grid_h) == (6, 2, 6, 8)
@@ -472,7 +475,7 @@ async def test_an_imported_tile_is_attributed_to_no_model() -> None:
     db = FakeDb(connections=[_connection()])
 
     await _service(db).import_document(
-        OWNER, document=_document(), connection_map={"c1": CONNECTION_ID}
+        CTX, document=_document(), connection_map={"c1": CONNECTION_ID}
     )
 
     assert db.tiles[0].llm_config_id is None
@@ -490,9 +493,7 @@ async def test_an_export_reimports_as_the_same_dashboard() -> None:
     db = FakeDb(connections=[_connection()])
 
     imported, skipped = await _service(db).import_document(
-        OWNER,
-        document=document.model_dump(mode="json"),
-        connection_map={"c1": CONNECTION_ID},
+        CTX, document=document.model_dump(mode="json"), connection_map={"c1": CONNECTION_ID}
     )
 
     assert skipped == []
@@ -513,7 +514,7 @@ async def test_the_guard_runs_against_the_importers_snapshot_not_the_files() -> 
 
     with pytest.raises(ValidationError, match="Sync this connection"):
         await _service(db).import_document(
-            OWNER, document=_document(), connection_map={"c1": CONNECTION_ID}
+            CTX, document=_document(), connection_map={"c1": CONNECTION_ID}
         )
 
 
@@ -522,9 +523,7 @@ async def test_a_row_cap_above_the_connections_is_lowered_to_it() -> None:
     db = FakeDb(connections=[_connection()])
 
     await _service(db).import_document(
-        OWNER,
-        document=_document(max_rows=100_000),
-        connection_map={"c1": CONNECTION_ID},
+        CTX, document=_document(max_rows=100_000), connection_map={"c1": CONNECTION_ID}
     )
 
     assert db.tiles[0].max_rows == 1000
@@ -549,7 +548,7 @@ async def test_the_hostile_corpus_does_not_survive_a_file(sql: str) -> None:
 
     with pytest.raises(ValidationError):
         await _service(db).import_document(
-            OWNER, document=_document(sql=sql), connection_map={"c1": CONNECTION_ID}
+            CTX, document=_document(sql=sql), connection_map={"c1": CONNECTION_ID}
         )
 
     assert db.tiles == []

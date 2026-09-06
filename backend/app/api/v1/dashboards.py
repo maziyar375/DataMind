@@ -17,7 +17,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, status
 
-from app.api.deps import CtxDep, DbDep, SettingsDep
+from app.api.deps import AuthzDep, CtxDep, DbDep, SettingsDep
 from app.api.schemas import (
     DashboardCreate,
     DashboardDataRead,
@@ -90,10 +90,10 @@ def _data_read(results: dict[UUID, TileResult]) -> DashboardDataRead:
 # ── dashboards ───────────────────────────────────────────────────────────
 @router.get("", response_model=list[DashboardSummaryRead])
 async def list_dashboards(
-    ctx: CtxDep, db: DbDep, settings: SettingsDep
+    ctx: CtxDep, db: DbDep, settings: SettingsDep, authz: AuthzDep
 ) -> list[DashboardSummaryRead]:
-    service = DashboardService(db, settings)
-    dashboards = await service.list(ctx.user_id)
+    service = DashboardService(db, settings, authz)
+    dashboards = await service.list(ctx)
     ids = [d.id for d in dashboards]
     counts = await service.tile_counts(ids)
     refreshed = await service.last_refreshed(ids)
@@ -109,10 +109,10 @@ async def list_dashboards(
 
 @router.post("", response_model=DashboardRead, status_code=status.HTTP_201_CREATED)
 async def create_dashboard(
-    payload: DashboardCreate, ctx: CtxDep, db: DbDep, settings: SettingsDep
+    payload: DashboardCreate, ctx: CtxDep, db: DbDep, settings: SettingsDep, authz: AuthzDep
 ) -> DashboardRead:
-    service = DashboardService(db, settings)
-    dashboard = await service.create(ctx.user_id, **payload.model_dump())
+    service = DashboardService(db, settings, authz)
+    dashboard = await service.create(ctx, **payload.model_dump())
     return await _dashboard_read(service, dashboard)
 
 
@@ -120,7 +120,11 @@ async def create_dashboard(
     "/import", response_model=DashboardImportRead, status_code=status.HTTP_201_CREATED
 )
 async def import_dashboard(
-    payload: DashboardImportRequest, ctx: CtxDep, db: DbDep, settings: SettingsDep
+    payload: DashboardImportRequest,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    authz: AuthzDep,
 ) -> DashboardImportRead:
     """Create a dashboard from an exported document.
 
@@ -133,9 +137,9 @@ async def import_dashboard(
     through the same guard call the editor's save path makes, so this is a
     fourth way into a stored statement and not a way around anything.
     """
-    service = DashboardService(db, settings)
+    service = DashboardService(db, settings, authz)
     dashboard, skipped = await service.import_document(
-        ctx.user_id,
+        ctx,
         document=payload.document,
         name=payload.name,
         connection_map=payload.connection_map,
@@ -151,10 +155,10 @@ async def import_dashboard(
 
 @router.get("/{dashboard_id}", response_model=DashboardRead)
 async def get_dashboard(
-    dashboard_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+    dashboard_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep, authz: AuthzDep
 ) -> DashboardRead:
-    service = DashboardService(db, settings)
-    dashboard = await service.get(dashboard_id, ctx.user_id)
+    service = DashboardService(db, settings, authz)
+    dashboard = await service.get(ctx, dashboard_id)
     return await _dashboard_read(service, dashboard)
 
 
@@ -165,17 +169,18 @@ async def update_dashboard(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> DashboardRead:
-    service = DashboardService(db, settings)
+    service = DashboardService(db, settings, authz)
     dashboard = await service.update(
-        dashboard_id, ctx.user_id, **payload.model_dump(exclude_unset=True)
+        ctx, dashboard_id, **payload.model_dump(exclude_unset=True)
     )
     return await _dashboard_read(service, dashboard)
 
 
 @router.get("/{dashboard_id}/export", response_model=DashboardDocument)
 async def export_dashboard(
-    dashboard_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+    dashboard_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep, authz: AuthzDep
 ) -> DashboardDocument:
     """The dashboard as a portable document — the layout and the SQL, nothing else.
 
@@ -184,14 +189,14 @@ async def export_dashboard(
     No results and nothing from inside a connection are in it — see
     `services/dashboard_transfer.py` for what that costs and why.
     """
-    return await DashboardService(db, settings).export(dashboard_id, ctx.user_id)
+    return await DashboardService(db, settings, authz).export(ctx, dashboard_id)
 
 
 @router.delete("/{dashboard_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_dashboard(
-    dashboard_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+    dashboard_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep, authz: AuthzDep
 ) -> None:
-    await DashboardService(db, settings).delete(dashboard_id, ctx.user_id)
+    await DashboardService(db, settings, authz).delete(ctx, dashboard_id)
 
 
 # ── layout ───────────────────────────────────────────────────────────────
@@ -202,16 +207,17 @@ async def update_layout(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> list[DashboardTileRead]:
     """Bulk positions, one call per drag-end.
 
     One row per tile rather than a dashboard-level blob, so two open tabs
     cannot overwrite each other's layout wholesale.
     """
-    service = DashboardService(db, settings)
-    dashboard = await service.get(dashboard_id, ctx.user_id)
+    service = DashboardService(db, settings, authz)
+    dashboard = await service.get(ctx, dashboard_id)
     tiles = await service.set_layout(
-        dashboard_id, ctx.user_id, [p.model_dump() for p in payload.positions]
+        ctx, dashboard_id, [p.model_dump() for p in payload.positions]
     )
     connections, models = await service.display_names(tiles)
     return [_tile_read(t, dashboard, connections, models) for t in tiles]
@@ -229,11 +235,12 @@ async def create_tile(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> DashboardTileRead:
     """Save a tile. **Re-runs the guard** — a passing preview authorises nothing."""
-    service = DashboardService(db, settings)
-    dashboard = await service.get(dashboard_id, ctx.user_id)
-    tile = await service.add_tile(dashboard_id, ctx.user_id, **payload.model_dump())
+    service = DashboardService(db, settings, authz)
+    dashboard = await service.get(ctx, dashboard_id)
+    tile = await service.add_tile(ctx, dashboard_id, **payload.model_dump())
     return _tile_read(tile, dashboard, *await service.display_names([tile]))
 
 
@@ -245,11 +252,12 @@ async def update_tile(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> DashboardTileRead:
-    service = DashboardService(db, settings)
-    dashboard = await service.get(dashboard_id, ctx.user_id)
+    service = DashboardService(db, settings, authz)
+    dashboard = await service.get(ctx, dashboard_id)
     tile = await service.update_tile(
-        dashboard_id, tile_id, ctx.user_id, **payload.model_dump(exclude_unset=True)
+        ctx, dashboard_id, tile_id, **payload.model_dump(exclude_unset=True)
     )
     return _tile_read(tile, dashboard, *await service.display_names([tile]))
 
@@ -263,8 +271,9 @@ async def delete_tile(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> None:
-    await DashboardService(db, settings).delete_tile(dashboard_id, tile_id, ctx.user_id)
+    await DashboardService(db, settings, authz).delete_tile(ctx, dashboard_id, tile_id)
 
 
 @router.post(
@@ -278,10 +287,11 @@ async def duplicate_tile(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> DashboardTileRead:
-    service = DashboardService(db, settings)
-    dashboard = await service.get(dashboard_id, ctx.user_id)
-    tile = await service.duplicate_tile(dashboard_id, tile_id, ctx.user_id)
+    service = DashboardService(db, settings, authz)
+    dashboard = await service.get(ctx, dashboard_id)
+    tile = await service.duplicate_tile(ctx, dashboard_id, tile_id)
     return _tile_read(tile, dashboard, *await service.display_names([tile]))
 
 
@@ -293,6 +303,7 @@ async def refresh_dashboard(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
     force: bool = False,
 ) -> DashboardDataRead:
     """Compute the tiles named, or all of them.
@@ -300,8 +311,8 @@ async def refresh_dashboard(
     One broken tile is an `ERROR` entry in `results`, never a failed response:
     the other eleven tiles on the dashboard have nothing to do with it.
     """
-    results = await DashboardService(db, settings).refresh(
-        dashboard_id, ctx.user_id, tile_ids=list(payload.tile_ids), force=force
+    results = await DashboardService(db, settings, authz).refresh(
+        ctx, dashboard_id, tile_ids=list(payload.tile_ids), force=force
     )
     return _data_read(results)
 
@@ -313,16 +324,17 @@ async def refresh_tile(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
     force: bool = False,
 ) -> Any:
     """One tile — the kebab's "Refresh now", which sends `force=true`."""
-    results = await DashboardService(db, settings).refresh(
-        dashboard_id, ctx.user_id, tile_ids=[tile_id], force=force
+    results = await DashboardService(db, settings, authz).refresh(
+        ctx, dashboard_id, tile_ids=[tile_id], force=force
     )
     result = results.get(tile_id)
     if result is None:
         # A tile that computes nothing (TEXT) still exists; asking it for data
         # is answered, not refused.
-        await DashboardService(db, settings).tile(dashboard_id, tile_id, ctx.user_id)
+        await DashboardService(db, settings, authz).tile(ctx, dashboard_id, tile_id)
         return TileResultRead.model_validate(TileResult().to_payload())
     return TileResultRead.model_validate(result.to_payload())

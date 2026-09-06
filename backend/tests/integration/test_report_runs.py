@@ -28,9 +28,11 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.clock import utcnow
+from app.core.context import RequestContext
 from app.core.errors import ConflictError, ValidationError
 from app.domain.ports.llm import ChatMessage, Completion
 from app.domain.value_objects import DisclosurePolicy, ReportRunStatus
+from app.infra.authz.owner_only import OwnerOnlyAuthorizer
 from app.infra.db.models import (
     DatabaseConnection,
     LlmConfig,
@@ -48,6 +50,12 @@ from app.workers.report import derive_status, generate_run, retry_section
 from tests.unit.test_query_service import SNAPSHOT, FakeConnector, FakeSettings
 
 OWNER = uuid4()
+#: Phase 1: every service method takes a context rather than a bare owner id.
+#: The authorizer is the owner-only one — today's rule — constructed without a
+#: session because every call in this file hands it the row it is asking about.
+CTX = RequestContext(
+    user_id=OWNER, email="owner@test.local", role="MEMBER", correlation_id="t"
+)
 REPORT_ID = uuid4()
 SECTION_ID = uuid4()
 OTHER_SECTION_ID = uuid4()
@@ -394,7 +402,9 @@ async def test_a_run_writes_one_result_per_block_in_document_order(
 ) -> None:
     """Two sections, three blocks, one document. The order is the reader's,
     not the database's: section position first, then block position."""
-    first, second = _block(position=2, question="second"), _block(position=1, question="first")
+    first, second = _block(
+        position=2, question="second"), _block(position=1, question="first"
+    )
     third = _block(sql=OTHER_SQL, section_id=OTHER_SECTION_ID, position=1, question="third")
     db = FakeDb(
         run=_run(),
@@ -449,7 +459,9 @@ async def test_only_a_metric_block_asks_for_a_kpi(
     look at is work with no reader — so it is asked for, never inferred."""
     seen: dict[str, Any] = {}
 
-    async def _spy(_db: Any, _settings: Any, *, requests: list[Any], owner_id: UUID) -> dict:
+    async def _spy(
+        _db: Any, _settings: Any, *, requests: list[Any], owner_id: UUID
+    ) -> dict:
         seen["requests"] = requests
         seen["owner_id"] = owner_id
         return {}
@@ -1133,7 +1145,7 @@ async def test_a_retry_re_checks_disclosure_like_every_other_entry(
 
 # ── starting one ─────────────────────────────────────────────────────────
 def _service(db: FakeDb) -> ReportService:
-    return ReportService(db, _settings())  # type: ignore[arg-type]
+    return ReportService(db, _settings(), OwnerOnlyAuthorizer())  # type: ignore[arg-type]
 
 
 def _creatable(**overrides: Any) -> FakeDb:
@@ -1152,7 +1164,7 @@ async def test_a_queued_run_snapshots_the_model_and_the_language() -> None:
     six months later nobody remembers either."""
     db = _creatable()
 
-    run = await _service(db).create_run(REPORT_ID, OWNER)
+    run = await _service(db).create_run(CTX, REPORT_ID)
 
     assert run.status == ReportRunStatus.QUEUED
     assert run.model_snapshot == {"provider": "openai", "model": "m"}
@@ -1167,7 +1179,7 @@ async def test_a_second_run_while_one_is_in_flight_is_refused() -> None:
     db = _creatable(active_runs=[_run(ReportRunStatus.RUNNING)])
 
     with pytest.raises(ConflictError):
-        await _service(db).create_run(REPORT_ID, OWNER)
+        await _service(db).create_run(CTX, REPORT_ID)
 
     assert db.added == []
 
@@ -1176,7 +1188,7 @@ async def test_a_report_whose_blocks_were_never_checked_cannot_be_generated() ->
     db = _creatable(blocks=[_block(sql="")])
 
     with pytest.raises(ValidationError) as raised:
-        await _service(db).create_run(REPORT_ID, OWNER)
+        await _service(db).create_run(CTX, REPORT_ID)
 
     assert "Check them" in raised.value.message
     assert db.added == []
@@ -1190,13 +1202,13 @@ async def test_the_gate_is_at_creation_too_not_only_at_run_start() -> None:
     db = _creatable(connection=_connection(DisclosurePolicy.AGGREGATE))
 
     with pytest.raises(DisclosureTooNarrowError):
-        await _service(db).create_run(REPORT_ID, OWNER)
+        await _service(db).create_run(CTX, REPORT_ID)
 
 
 async def test_cancelling_a_finished_run_changes_nothing() -> None:
     db = FakeDb(report=_report(), run=_run(ReportRunStatus.SUCCEEDED))
 
-    assert await _service(db).cancel_run(REPORT_ID, RUN_ID, OWNER) is False
+    assert await _service(db).cancel_run(CTX, REPORT_ID, RUN_ID) is False
     assert db.run is not None and db.run.status == ReportRunStatus.SUCCEEDED
 
 
@@ -1285,7 +1297,7 @@ async def test_cancelling_a_running_run_writes_the_row_immediately() -> None:
     even while an in-flight query is still finishing."""
     db = FakeDb(report=_report(), run=_run(ReportRunStatus.RUNNING))
 
-    assert await _service(db).cancel_run(REPORT_ID, RUN_ID, OWNER) is True
+    assert await _service(db).cancel_run(CTX, REPORT_ID, RUN_ID) is True
     assert db.run is not None
     assert db.run.status == ReportRunStatus.CANCELLED
     assert db.run.finished_at is not None

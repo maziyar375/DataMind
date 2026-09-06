@@ -1,10 +1,17 @@
 """Reports: CRUD over the template and its outline.
 
 Ordinary CRUD with the same rule threaded through every method dashboards use —
-**everything is scoped to the owner, and a resource belonging to someone else is
-404, not 403**, so another user's report is indistinguishable from one that does
-not exist. Sections and blocks are reached *through* their report, never by id
-alone, so ownership is checked once at the top of every path.
+**every method asks the `Authorizer`, and a resource the caller may not reach is
+404, not 403**, so a report somebody else owns is indistinguishable from one that
+does not exist. Sections, blocks and runs are reached *through* their report,
+never by id alone, so the question is asked once at the top of every path: they
+are leaves in the permission model and never carry a grant of their own.
+
+That rule used to be spelled `WHERE owner_id = :actor`. It is now one question
+asked of one object, and the answer is identical today — `OwnerOnlyAuthorizer`
+returns exactly what the comparison did. That is the point: when grants arrive,
+sharing a report is a change in `app/infra/authz/`, not a change here. See
+`docs/user-management-and-access-control-plan.md` §18.
 
 Three rules here are not CRUD, and each is a decision the rest of the feature
 rests on:
@@ -37,6 +44,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clock import utcnow
 from app.core.config import Settings
+from app.core.context import RequestContext
 from app.core.errors import (
     ConflictError,
     DisclosureTooNarrowError,
@@ -46,6 +54,7 @@ from app.core.errors import (
     ValidationError,
 )
 from app.core.logging import get_logger
+from app.domain.ports.authz import Authorizer, ResourceRef
 from app.domain.value_objects import (
     DisclosurePolicy,
     ReportFeasibility,
@@ -53,6 +62,8 @@ from app.domain.value_objects import (
     ReportSectionKind,
     SqlOrigin,
 )
+from app.domain.value_objects.authz import Privilege, ResourceType
+from app.infra.authz.compose import restrict
 from app.infra.crypto.aesgcm_box import AesGcmSecretBox
 from app.infra.db.models import (
     DatabaseConnection,
@@ -214,9 +225,12 @@ def assert_wide_enough(connection: DatabaseConnection) -> None:
 
 
 class ReportService:
-    def __init__(self, db: AsyncSession, settings: Settings) -> None:
+    def __init__(
+        self, db: AsyncSession, settings: Settings, authz: Authorizer
+    ) -> None:
         self._db = db
         self._settings = settings
+        self._authz = authz
         self._box: AesGcmSecretBox | None = None
 
     @property
@@ -235,29 +249,52 @@ class ReportService:
         return self._box
 
     # ── reports ──────────────────────────────────────────────────────────
-    async def list(self, owner_id: UUID) -> list[Report]:
+    async def list(self, ctx: RequestContext) -> list[Report]:
+        """Every report this principal may see, in one query.
+
+        The authorization answer is **composed into** the statement rather than
+        applied to its results — see `DashboardService.list` for why filtering
+        in Python is a pagination bug rather than a style choice.
+        """
+        visible = await self._authz.visible(
+            ctx, ResourceType.REPORT, Privilege.DESCRIBE
+        )
         result = await self._db.execute(
-            select(Report)
-            .where(Report.owner_id == owner_id)
-            .order_by(Report.updated_at.desc())
+            restrict(
+                select(Report).order_by(Report.updated_at.desc()), Report.id, visible
+            )
         )
         return list(result.scalars())
 
-    async def get(self, report_id: UUID, owner_id: UUID) -> Report:
+    async def get(
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        privilege: Privilege = Privilege.SELECT,
+    ) -> Report:
+        """The report, if this principal may act on it at `privilege`.
+
+        `privilege` is what every caller in this file passes to say what it is
+        about to do. Under today's authorizer all five answer the same, because
+        ownership confers the whole lattice — naming them costs nothing now and
+        is the difference between "shared" and "shared read-only" later.
+        """
         result = await self._db.execute(
-            select(Report).where(Report.id == report_id, Report.owner_id == owner_id)
+            select(Report).where(Report.id == report_id)
         )
         report = result.scalar_one_or_none()
-        if report is None:
+        if report is None or not await self._authz.allowed(
+            ctx, ResourceRef.to(ResourceType.REPORT, report), privilege
+        ):
             # 404 rather than 403: see the module docstring.
             raise NotFoundError("Report not found.")
         return report
 
-    async def create(self, owner_id: UUID, **fields: Any) -> Report:
+    async def create(self, ctx: RequestContext, **fields: Any) -> Report:
         name = (fields.get("name") or "").strip()
         if not name:
             raise ValidationError("A report needs a name.")
-        await self._refuse_duplicate_name(owner_id, name)
+        await self._refuse_duplicate_name(ctx, name)
 
         connection_id = fields.get("connection_id")
         if connection_id is None:
@@ -265,18 +302,18 @@ class ReportService:
                 "A report needs a database connection, and it cannot be changed "
                 "afterwards."
             )
-        connection = await self._owned_connection(connection_id, owner_id)
+        connection = await self._authorized_connection(ctx, connection_id)
         # Before anything is written: a report that cannot be generated should
         # never reach the list in the first place.
         assert_wide_enough(connection)
 
         if fields.get("llm_config_id") is not None:
-            await self._owned_llm_config(fields["llm_config_id"], owner_id)
+            await self._authorized_llm_config(ctx, fields["llm_config_id"])
 
         prompt = (fields.get("prompt") or "").strip()
         report = Report(
             id=uuid.uuid4(),
-            owner_id=owner_id,
+            owner_id=ctx.user_id,
             **{
                 **fields,
                 "name": name,
@@ -292,8 +329,8 @@ class ReportService:
         await self._db.flush()
         return report
 
-    async def update(self, report_id: UUID, owner_id: UUID, **changes: Any) -> Report:
-        report = await self.get(report_id, owner_id)
+    async def update(self, ctx: RequestContext, report_id: UUID, **changes: Any) -> Report:
+        report = await self.get(ctx, report_id, Privilege.MODIFY)
 
         # Mirrors `_bind_connection`: re-sending what it already has is a no-op,
         # so a client that PATCHes a whole object is not punished for it; naming
@@ -311,13 +348,13 @@ class ReportService:
             if not name:
                 raise ValidationError("A report needs a name.")
             if name != report.name:
-                await self._refuse_duplicate_name(owner_id, name)
+                await self._refuse_duplicate_name(ctx, name)
             changes["name"] = name
 
         # The model is swappable at any time — it decides who writes the prose,
         # not what is in it — but it still has to be the caller's own.
         if changes.get("llm_config_id") is not None:
-            await self._owned_llm_config(changes["llm_config_id"], owner_id)
+            await self._authorized_llm_config(ctx, changes["llm_config_id"])
 
         if changes.get("section_target") is not None:
             changes["section_target"] = clamp_section_target(changes["section_target"])
@@ -340,12 +377,22 @@ class ReportService:
         await self._db.refresh(report)
         return report
 
-    async def delete(self, report_id: UUID, owner_id: UUID) -> None:
-        await self._db.delete(await self.get(report_id, owner_id))
+    async def delete(self, ctx: RequestContext, report_id: UUID) -> None:
+        await self._db.delete(await self.get(ctx, report_id, Privilege.DELETE))
 
-    async def _refuse_duplicate_name(self, owner_id: UUID, name: str) -> None:
+    async def _refuse_duplicate_name(self, ctx: RequestContext, name: str) -> None:
+        """The `uq_report_owner_name` predicate, not an access decision.
+
+        The only kind of `owner_id` comparison left in this file, and it stays
+        because the unique constraint it checks is itself per-owner: the row
+        about to be written carries `ctx.user_id`, so the question can only be
+        asked of that owner's rows.
+        """
         existing = await self._db.execute(
-            select(Report).where(Report.owner_id == owner_id, Report.name == name)
+            select(Report).where(
+                Report.owner_id == ctx.user_id,  # authz-ok: unique (owner, name)
+                Report.name == name,
+            )
         )
         if existing.scalar_one_or_none() is not None:
             raise ConflictError("You already have a report with that name.")
@@ -376,9 +423,18 @@ class ReportService:
         return list(result.scalars())
 
     async def section(
-        self, report_id: UUID, section_id: UUID, owner_id: UUID
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        section_id: UUID,
+        privilege: Privilege = Privilege.SELECT,
     ) -> ReportSection:
-        await self.get(report_id, owner_id)
+        """A section, reached through its report.
+
+        A section is a **leaf**: it carries no grant of its own and never will,
+        so the only question asked is about its parent.
+        """
+        await self.get(ctx, report_id, privilege)
         result = await self._db.execute(
             select(ReportSection).where(
                 ReportSection.id == section_id, ReportSection.report_id == report_id
@@ -390,9 +446,12 @@ class ReportService:
         return section
 
     async def add_section(
-        self, report_id: UUID, owner_id: UUID, **fields: Any
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        **fields: Any,
     ) -> ReportSection:
-        await self.get(report_id, owner_id)
+        await self.get(ctx, report_id, Privilege.MODIFY)
         heading = (fields.get("heading") or "").strip()
         if not heading:
             raise ValidationError("A section needs a heading.")
@@ -411,9 +470,13 @@ class ReportService:
         return section
 
     async def update_section(
-        self, report_id: UUID, section_id: UUID, owner_id: UUID, **changes: Any
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        section_id: UUID,
+        **changes: Any,
     ) -> ReportSection:
-        section = await self.section(report_id, section_id, owner_id)
+        section = await self.section(ctx, report_id, section_id, Privilege.MODIFY)
         if (heading := changes.get("heading")) is not None:
             heading = heading.strip()
             if not heading:
@@ -427,12 +490,17 @@ class ReportService:
         return section
 
     async def delete_section(
-        self, report_id: UUID, section_id: UUID, owner_id: UUID
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        section_id: UUID,
     ) -> None:
-        await self._db.delete(await self.section(report_id, section_id, owner_id))
+        await self._db.delete(
+            await self.section(ctx, report_id, section_id, Privilege.MODIFY)
+        )
 
     # ── the proposed outline ─────────────────────────────────────────────
-    async def propose_outline(self, report_id: UUID, owner_id: UUID) -> Report:
+    async def propose_outline(self, ctx: RequestContext, report_id: UUID) -> Report:
         """One model call: the user's request becomes a structure to approve.
 
         **It replaces whatever outline exists.** Proposing is the "start again"
@@ -445,7 +513,7 @@ class ReportService:
         the trade `POST .../blocks/{id}/check` makes too, and the reason
         generation does not.
         """
-        report = await self.get(report_id, owner_id)
+        report = await self.get(ctx, report_id, Privilege.MODIFY)
         request = (report.prompt or "").strip()
         if not request:
             raise ValidationError(
@@ -457,10 +525,10 @@ class ReportService:
                 "This report's connection was removed, so its outline cannot be "
                 "proposed. Past runs stay readable."
             )
-        connection = await self._owned_connection(report.connection_id, owner_id)
+        connection = await self._authorized_connection(ctx, report.connection_id)
         if report.llm_config_id is None:
             raise ValidationError("Choose a model for this report before proposing an outline.")
-        config = await self._owned_llm_config(report.llm_config_id, owner_id)
+        config = await self._authorized_llm_config(ctx, report.llm_config_id)
 
         snapshot = await latest_snapshot(self._db, connection.id)
         if not snapshot.get("tables"):
@@ -557,7 +625,10 @@ class ReportService:
 
     # ── feasibility ──────────────────────────────────────────────────────
     async def check_block(
-        self, report_id: UUID, block_id: UUID, owner_id: UUID
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        block_id: UUID,
     ) -> tuple[ReportBlock, SqlDraft | None]:
         """*Can this be produced, and if not, why* — answered by the guard.
 
@@ -572,14 +643,14 @@ class ReportService:
         negative answer, and a 502 would leave the block saying `UNCHECKED`
         with the reason only in a toast.
         """
-        report = await self.get(report_id, owner_id)
-        block = await self.block(report_id, block_id, owner_id)
+        report = await self.get(ctx, report_id, Privilege.MODIFY)
+        block = await self.block(ctx, report_id, block_id, Privilege.MODIFY)
         if report.connection_id is None:
             raise ValidationError(
                 "This report's connection was removed, so its blocks cannot be "
                 "checked. Past runs stay readable."
             )
-        connection = await self._owned_connection(report.connection_id, owner_id)
+        connection = await self._authorized_connection(ctx, report.connection_id)
         if report.llm_config_id is None:
             raise ValidationError("Choose a model for this report before checking a block.")
 
@@ -591,7 +662,9 @@ class ReportService:
                 connection_id=connection.id,
                 llm_config_id=report.llm_config_id,
                 question=block.question,
-                owner_id=owner_id,
+                # `sql_draft_service` still takes a bare owner id; Phase 2
+                # gives it a context of its own.
+                owner_id=ctx.user_id,
                 extra_rules=report_time_rules(
                     database_type=connection.database_type,
                     time_window=block.time_window,
@@ -643,7 +716,12 @@ class ReportService:
         return block, draft
 
     async def edit_block_sql(
-        self, report_id: UUID, block_id: UUID, owner_id: UUID, *, sql: str
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        block_id: UUID,
+        *,
+        sql: str,
     ) -> tuple[ReportBlock, SqlDraft]:
         """Store a statement the user wrote, after the guard has read it.
 
@@ -662,14 +740,14 @@ class ReportService:
         on the row carries the truth, and the guard reads the statement again
         at execution whatever is stored beside it.
         """
-        report = await self.get(report_id, owner_id)
-        block = await self.block(report_id, block_id, owner_id)
+        report = await self.get(ctx, report_id, Privilege.MODIFY)
+        block = await self.block(ctx, report_id, block_id, Privilege.MODIFY)
         if report.connection_id is None:
             raise ValidationError(
                 "This report's connection was removed, so its queries cannot "
                 "be validated. Past runs stay readable."
             )
-        connection = await self._owned_connection(report.connection_id, owner_id)
+        connection = await self._authorized_connection(ctx, report.connection_id)
 
         statement = sql.strip()
         if not statement:
@@ -683,7 +761,8 @@ class ReportService:
             self._settings,
             connection_id=connection.id,
             sql=statement,
-            owner_id=owner_id,
+            # Phase 2 boundary, as above.
+            owner_id=ctx.user_id,
             # No prompt on this road to append rules to, so this buys the
             # preview's KPI alone — the same figure `workers/report.py` will
             # compute for a METRIC block at generation time, available to the
@@ -711,7 +790,7 @@ class ReportService:
         return _render_time(document) if document else ""
 
     # ── runs ─────────────────────────────────────────────────────────────
-    async def create_run(self, report_id: UUID, owner_id: UUID) -> ReportRun:
+    async def create_run(self, ctx: RequestContext, report_id: UUID) -> ReportRun:
         """Queue a generation. Everything that can be refused is refused here.
 
         The worker inherits nothing it has to re-derive except the one thing it
@@ -723,7 +802,7 @@ class ReportService:
         so is a second concurrent one: both would spend a worker slot to reach
         an answer the user could have been given synchronously.
         """
-        report = await self.get(report_id, owner_id)
+        report = await self.get(ctx, report_id, Privilege.MODIFY)
 
         active = await self._db.execute(
             select(ReportRun)
@@ -741,12 +820,12 @@ class ReportService:
                 "This report's connection was removed, so it cannot be "
                 "generated. Past runs stay readable."
             )
-        connection = await self._owned_connection(report.connection_id, owner_id)
+        connection = await self._authorized_connection(ctx, report.connection_id)
         assert_wide_enough(connection)
 
         if report.llm_config_id is None:
             raise ValidationError("Choose a model for this report before generating it.")
-        config = await self._owned_llm_config(report.llm_config_id, owner_id)
+        config = await self._authorized_llm_config(ctx, report.llm_config_id)
 
         sections = await self.sections_of(report_id)
         blocks = await self.blocks_of([s.id for s in sections])
@@ -761,11 +840,11 @@ class ReportService:
         run = ReportRun(
             id=uuid.uuid4(),
             report_id=report_id,
-            owner_id=owner_id,
+            owner_id=ctx.user_id,
             # Who asked for this document, as against who owns the report. The
             # same person until a report can be shared, which is why it is set
             # now rather than backfilled by guesswork later.
-            actor_id=owner_id,
+            actor_id=ctx.user_id,
             status=ReportRunStatus.QUEUED,
             llm_config_id=config.id,
             # Which model wrote this document, kept beside it: *"a layer
@@ -786,10 +865,10 @@ class ReportService:
         await self._db.flush()
         return run
 
-    async def runs_of(self, report_id: UUID, owner_id: UUID) -> list[ReportRun]:
+    async def runs_of(self, ctx: RequestContext, report_id: UUID) -> list[ReportRun]:
         """The report's history, newest first. Rows only — a history list shows
         when and how it went, never every row of every result."""
-        await self.get(report_id, owner_id)
+        await self.get(ctx, report_id)
         result = await self._db.execute(
             select(ReportRun)
             .where(ReportRun.report_id == report_id)
@@ -797,8 +876,15 @@ class ReportService:
         )
         return list(result.scalars())
 
-    async def run(self, report_id: UUID, run_id: UUID, owner_id: UUID) -> ReportRun:
-        await self.get(report_id, owner_id)
+    async def run(
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        run_id: UUID,
+        privilege: Privilege = Privilege.SELECT,
+    ) -> ReportRun:
+        """A run, reached through its report. A leaf, like a section."""
+        await self.get(ctx, report_id, privilege)
         result = await self._db.execute(
             select(ReportRun).where(
                 ReportRun.id == run_id, ReportRun.report_id == report_id
@@ -869,7 +955,11 @@ class ReportService:
         }
 
     async def request_section_retry(
-        self, report_id: UUID, run_id: UUID, section_id: UUID, owner_id: UUID
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        run_id: UUID,
+        section_id: UUID,
     ) -> ReportRun:
         """Put a finished run back to work on one of its sections.
 
@@ -883,21 +973,21 @@ class ReportService:
         other sections stay on screen, and the status is *re-derived* when the
         retry lands rather than transitioned.
         """
-        run = await self.run(report_id, run_id, owner_id)
+        run = await self.run(ctx, report_id, run_id, Privilege.MODIFY)
         if run.status in ACTIVE_RUN_STATUSES:
             raise ConflictError(
                 "This report is already being generated. Wait for it to finish, "
                 "then retry the section."
             )
-        section = await self.section(report_id, section_id, owner_id)
+        section = await self.section(ctx, report_id, section_id, Privilege.MODIFY)
 
-        report = await self.get(report_id, owner_id)
+        report = await self.get(ctx, report_id, Privilege.MODIFY)
         if report.connection_id is None:
             raise ValidationError(
                 "This report's connection was removed, so its sections cannot "
                 "be retried. Past runs stay readable."
             )
-        assert_wide_enough(await self._owned_connection(report.connection_id, owner_id))
+        assert_wide_enough(await self._authorized_connection(ctx, report.connection_id))
 
         run.status = ReportRunStatus.RUNNING
         run.phase = f"Retrying {section.heading}"[:200]
@@ -907,9 +997,14 @@ class ReportService:
         return run
 
     async def section_result(
-        self, report_id: UUID, run_id: UUID, section_id: UUID, owner_id: UUID
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        run_id: UUID,
+        section_id: UUID,
+        privilege: Privilege = Privilege.SELECT,
     ) -> ReportSectionResult:
-        await self.run(report_id, run_id, owner_id)
+        await self.run(ctx, report_id, run_id, privilege)
         result = await self._db.execute(
             select(ReportSectionResult).where(
                 ReportSectionResult.run_id == run_id,
@@ -923,10 +1018,10 @@ class ReportService:
 
     async def edit_prose(
         self,
+        ctx: RequestContext,
         report_id: UUID,
         run_id: UUID,
         section_id: UUID,
-        owner_id: UUID,
         *,
         edited_prose: str | None,
     ) -> ReportSectionResult:
@@ -938,17 +1033,19 @@ class ReportService:
         why the column is nullable and why NULL has to keep meaning *not
         edited* rather than *edited to nothing*.
         """
-        row = await self.section_result(report_id, run_id, section_id, owner_id)
+        row = await self.section_result(
+            ctx, report_id, run_id, section_id, Privilege.MODIFY
+        )
         row.edited_prose = edited_prose
         await self._db.flush()
         return row
 
     async def redraw_block_chart(
         self,
+        ctx: RequestContext,
         report_id: UUID,
         run_id: UUID,
         result_id: UUID,
-        owner_id: UUID,
         *,
         chart_type: str,
     ) -> tuple[ReportBlockResult, list[dict[str, Any]], str | None]:
@@ -984,7 +1081,7 @@ class ReportService:
         )
         from app.domain.ports.database import ResultColumn
 
-        await self.run(report_id, run_id, owner_id)
+        await self.run(ctx, report_id, run_id, Privilege.MODIFY)
         found = await self._db.execute(
             select(ReportBlockResult).where(
                 ReportBlockResult.id == result_id, ReportBlockResult.run_id == run_id
@@ -1041,7 +1138,7 @@ class ReportService:
         await self._db.refresh(row)
         return row, options, None
 
-    async def cancel_run(self, report_id: UUID, run_id: UUID, owner_id: UUID) -> bool:
+    async def cancel_run(self, ctx: RequestContext, report_id: UUID, run_id: UUID) -> bool:
         """Mark it cancelled. The worker stops between phases and sees this.
 
         Writing the row here rather than waiting for the worker is what makes
@@ -1055,7 +1152,7 @@ class ReportService:
         row and left a generation running to completion, spending model calls
         on a document the user had already closed.
         """
-        run = await self.run(report_id, run_id, owner_id)
+        run = await self.run(ctx, report_id, run_id, Privilege.MODIFY)
         if run.status not in ACTIVE_RUN_STATUSES:
             return False
         run.cancel_requested = True
@@ -1066,15 +1163,19 @@ class ReportService:
 
     # ── blocks ───────────────────────────────────────────────────────────
     async def block(
-        self, report_id: UUID, block_id: UUID, owner_id: UUID
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        block_id: UUID,
+        privilege: Privilege = Privilege.SELECT,
     ) -> ReportBlock:
-        """A block, reached through its report so ownership is checked.
+        """A block, reached through its report so the check happens once.
 
         The join is what makes `/reports/{id}/blocks/{bid}` safe as a flat path:
-        a block id from someone else's report matches no row here, so it is a
-        404 like everything else.
+        a block id from a report this caller cannot reach matches no row here,
+        so it is a 404 like everything else.
         """
-        await self.get(report_id, owner_id)
+        await self.get(ctx, report_id, privilege)
         result = await self._db.execute(
             select(ReportBlock)
             .join(ReportSection, ReportSection.id == ReportBlock.section_id)
@@ -1086,10 +1187,14 @@ class ReportService:
         return block
 
     async def add_block(
-        self, report_id: UUID, section_id: UUID, owner_id: UUID, **fields: Any
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        section_id: UUID,
+        **fields: Any,
     ) -> ReportBlock:
-        report = await self.get(report_id, owner_id)
-        await self.section(report_id, section_id, owner_id)
+        report = await self.get(ctx, report_id, Privilege.MODIFY)
+        await self.section(ctx, report_id, section_id, Privilege.MODIFY)
 
         question = (fields.get("question") or "").strip()
         if not question:
@@ -1109,10 +1214,14 @@ class ReportService:
         return block
 
     async def update_block(
-        self, report_id: UUID, block_id: UUID, owner_id: UUID, **changes: Any
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        block_id: UUID,
+        **changes: Any,
     ) -> ReportBlock:
-        report = await self.get(report_id, owner_id)
-        block = await self.block(report_id, block_id, owner_id)
+        report = await self.get(ctx, report_id, Privilege.MODIFY)
+        block = await self.block(ctx, report_id, block_id, Privilege.MODIFY)
 
         if (question := changes.get("question")) is not None:
             question = question.strip()
@@ -1157,9 +1266,14 @@ class ReportService:
         return block
 
     async def delete_block(
-        self, report_id: UUID, block_id: UUID, owner_id: UUID
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        block_id: UUID,
     ) -> None:
-        await self._db.delete(await self.block(report_id, block_id, owner_id))
+        await self._db.delete(
+            await self.block(ctx, report_id, block_id, Privilege.MODIFY)
+        )
 
     async def _clamped(self, report: Report, fields: dict[str, Any]) -> dict[str, Any]:
         """A block's row cap, stored already lowered to what will be honoured.
@@ -1218,28 +1332,45 @@ class ReportService:
             models = {row[0]: row[1] for row in rows}
         return connections, models
 
-    # ── ownership ────────────────────────────────────────────────────────
-    async def _owned_connection(
-        self, connection_id: UUID, owner_id: UUID
+    # ── authorization ────────────────────────────────────────────────────
+    async def _authorized_connection(
+        self, ctx: RequestContext, connection_id: UUID
     ) -> DatabaseConnection:
+        """The connection, if this principal may **ask questions through it**.
+
+        `select`, not `modify`: binding a report to a database is using it, not
+        editing it. A reader who may query a warehouse must not thereby be able
+        to rewrite its credentials.
+        """
         result = await self._db.execute(
-            select(DatabaseConnection).where(
-                DatabaseConnection.id == connection_id,
-                DatabaseConnection.owner_id == owner_id,
-            )
+            select(DatabaseConnection).where(DatabaseConnection.id == connection_id)
         )
         connection = result.scalar_one_or_none()
-        if connection is None:
+        if connection is None or not await self._authz.allowed(
+            ctx,
+            ResourceRef.to(ResourceType.CONNECTION, connection),
+            Privilege.SELECT,
+        ):
             raise NotFoundError("Connection not found.")
         return connection
 
-    async def _owned_llm_config(self, llm_config_id: UUID, owner_id: UUID) -> LlmConfig:
+    async def _authorized_llm_config(
+        self, ctx: RequestContext, llm_config_id: UUID
+    ) -> LlmConfig:
+        """The model configuration, if this principal may **answer with it**.
+
+        `select` again, and load-bearing rather than tidy: `modify` on an LLM
+        config is equivalent to disclosing its API key, because a holder can
+        repoint `base_url` at a host they control and read the key out of the
+        next request. Choosing a model for a report must never require more
+        than `select`.
+        """
         result = await self._db.execute(
-            select(LlmConfig).where(
-                LlmConfig.id == llm_config_id, LlmConfig.owner_id == owner_id
-            )
+            select(LlmConfig).where(LlmConfig.id == llm_config_id)
         )
         config = result.scalar_one_or_none()
-        if config is None:
+        if config is None or not await self._authz.allowed(
+            ctx, ResourceRef.to(ResourceType.LLM_CONFIG, config), Privilege.SELECT
+        ):
             raise NotFoundError("Model configuration not found.")
         return config

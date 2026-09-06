@@ -17,6 +17,7 @@ from uuid import uuid4
 import pytest
 
 from app.core.clock import utcnow
+from app.core.context import RequestContext
 from app.core.errors import (
     LLMError,
     NotFoundError,
@@ -25,6 +26,7 @@ from app.core.errors import (
 )
 from app.domain.ports.database import ResultColumn
 from app.domain.value_objects import ReportFeasibility, SqlOrigin
+from app.infra.authz.owner_only import OwnerOnlyAuthorizer
 from app.infra.db.models import (
     DatabaseConnection,
     LlmConfig,
@@ -42,6 +44,12 @@ from app.sqlguard.validator import ValidationIssue, ValidationReport
 from tests.unit.test_report_service import FakeDb, FakeSettings
 
 OWNER = uuid4()
+#: Phase 1: every service method takes a context rather than a bare owner id.
+#: The authorizer is the owner-only one — today's rule — constructed without a
+#: session because every call in this file hands it the row it is asking about.
+CTX = RequestContext(
+    user_id=OWNER, email="owner@test.local", role="MEMBER", correlation_id="t"
+)
 REPORT_ID = uuid4()
 SECTION_ID = uuid4()
 BLOCK_ID = uuid4()
@@ -194,7 +202,9 @@ def drafting(monkeypatch: pytest.MonkeyPatch) -> Any:
 
 
 def _service(db: FakeDb) -> ReportService:
-    return ReportService(db, FakeSettings())  # type: ignore[arg-type]
+    return ReportService(
+        db, FakeSettings(), OwnerOnlyAuthorizer()
+    )  # type: ignore[arg-type]
 
 
 # ── the three outcomes ───────────────────────────────────────────────────
@@ -202,7 +212,7 @@ async def test_valid_sql_with_rows_is_feasible(drafting: Any) -> None:
     drafting(_draft(preview=_rows(3)))
     db = _db()
 
-    block, draft = await _service(db).check_block(REPORT_ID, BLOCK_ID, OWNER)
+    block, draft = await _service(db).check_block(CTX, REPORT_ID, BLOCK_ID)
 
     assert block.feasibility_status == ReportFeasibility.FEASIBLE
     assert block.feasibility_reason is None
@@ -224,7 +234,7 @@ async def test_valid_sql_with_no_rows_is_empty_not_infeasible(drafting: Any) -> 
     drafting(_draft(preview=_rows(0)))
     db = _db()
 
-    block, _ = await _service(db).check_block(REPORT_ID, BLOCK_ID, OWNER)
+    block, _ = await _service(db).check_block(CTX, REPORT_ID, BLOCK_ID)
 
     assert block.feasibility_status == ReportFeasibility.EMPTY
     assert "no rows" in (block.feasibility_reason or "")
@@ -253,7 +263,7 @@ async def test_a_rejected_statement_is_infeasible_in_the_guards_own_words(
     )
     db = _db()
 
-    block, _ = await _service(db).check_block(REPORT_ID, BLOCK_ID, OWNER)
+    block, _ = await _service(db).check_block(CTX, REPORT_ID, BLOCK_ID)
 
     assert block.feasibility_status == ReportFeasibility.INFEASIBLE
     assert block.feasibility_reason == (
@@ -273,7 +283,7 @@ async def test_a_model_that_produces_no_sql_is_a_verdict_not_a_502(
     fake = drafting(LLMError("The model could not produce a query."))
     db = _db()
 
-    block, draft = await _service(db).check_block(REPORT_ID, BLOCK_ID, OWNER)
+    block, draft = await _service(db).check_block(CTX, REPORT_ID, BLOCK_ID)
 
     assert fake.calls == 1
     assert block.feasibility_status == ReportFeasibility.INFEASIBLE
@@ -302,7 +312,7 @@ async def test_a_question_with_no_data_answer_is_infeasible_not_green(
     )
     db = _db()
 
-    block, draft = await _service(db).check_block(REPORT_ID, BLOCK_ID, OWNER)
+    block, draft = await _service(db).check_block(CTX, REPORT_ID, BLOCK_ID)
 
     assert fake.calls == 1
     assert block.feasibility_status == ReportFeasibility.INFEASIBLE
@@ -325,7 +335,7 @@ async def test_the_check_asks_for_the_question_to_be_classified(
     fake = drafting(_draft(preview=_rows(3)))
     db = _db()
 
-    await _service(db).check_block(REPORT_ID, BLOCK_ID, OWNER)
+    await _service(db).check_block(CTX, REPORT_ID, BLOCK_ID)
 
     assert fake.kwargs["classify"] is True
 
@@ -344,7 +354,7 @@ async def test_valid_sql_the_database_refuses_is_infeasible(drafting: Any) -> No
     )
     db = _db()
 
-    block, _ = await _service(db).check_block(REPORT_ID, BLOCK_ID, OWNER)
+    block, _ = await _service(db).check_block(CTX, REPORT_ID, BLOCK_ID)
 
     assert block.feasibility_status == ReportFeasibility.INFEASIBLE
     assert "timeout" in (block.feasibility_reason or "")
@@ -357,7 +367,7 @@ async def test_the_check_sends_the_time_rules_for_this_window(
     fake = drafting(_draft(preview=_rows(2)))
     db = _db()
 
-    await _service(db).check_block(REPORT_ID, BLOCK_ID, OWNER)
+    await _service(db).check_block(CTX, REPORT_ID, BLOCK_ID)
 
     rules = fake.kwargs["extra_rules"]
     assert "the last 3 months" in rules
@@ -378,7 +388,7 @@ async def test_the_rules_speak_the_connections_dialect(
     fake = drafting(_draft(preview=_rows(1)))
     db = _db(database_type=database_type)
 
-    await _service(db).check_block(REPORT_ID, BLOCK_ID, OWNER)
+    await _service(db).check_block(CTX, REPORT_ID, BLOCK_ID)
 
     assert DIALECT_DATE_ARITHMETIC[database_type] in fake.kwargs["extra_rules"]
 
@@ -444,7 +454,7 @@ async def test_an_unsynced_connection_is_refused_before_the_model_call(
     db.snapshot_tables = []
 
     with pytest.raises(ValidationError):
-        await _service(db).check_block(REPORT_ID, BLOCK_ID, OWNER)
+        await _service(db).check_block(CTX, REPORT_ID, BLOCK_ID)
 
     # It reached `draft_sql`, which refuses before spending the call — and the
     # block is left UNCHECKED rather than marked infeasible for a reason that
@@ -459,7 +469,7 @@ async def test_a_report_with_no_model_cannot_check_anything(drafting: Any) -> No
     db.report.llm_config_id = None  # type: ignore[union-attr]
 
     with pytest.raises(ValidationError):
-        await _service(db).check_block(REPORT_ID, BLOCK_ID, OWNER)
+        await _service(db).check_block(CTX, REPORT_ID, BLOCK_ID)
 
     assert fake.calls == 0
 
@@ -473,7 +483,7 @@ async def test_a_report_whose_connection_was_removed_cannot_check(
     db.report.connection_id = None  # type: ignore[union-attr]
 
     with pytest.raises(ValidationError):
-        await _service(db).check_block(REPORT_ID, BLOCK_ID, OWNER)
+        await _service(db).check_block(CTX, REPORT_ID, BLOCK_ID)
 
     assert fake.calls == 0
 
@@ -511,7 +521,7 @@ async def test_a_metric_block_tells_the_prompt_it_is_a_big_number(
 ) -> None:
     fake = drafting(_draft(preview=_rows(3)))
 
-    await _service(_db(block_type="METRIC")).check_block(REPORT_ID, BLOCK_ID, OWNER)
+    await _service(_db(block_type="METRIC")).check_block(CTX, REPORT_ID, BLOCK_ID)
 
     assert fake.kwargs["tile_type"] == "METRIC"
     # And it does not replace the block's own date arithmetic: a re-run in Mehr
@@ -526,9 +536,7 @@ async def test_other_block_types_pass_their_own_type_and_earn_nothing(
     what it always was — the type is passed, not the rules."""
     for block_type in ("CHART", "TABLE"):
         fake = drafting(_draft(preview=_rows(3)))
-        await _service(_db(block_type=block_type)).check_block(
-            REPORT_ID, BLOCK_ID, OWNER
-        )
+        await _service(_db(block_type=block_type)).check_block(CTX, REPORT_ID, BLOCK_ID)
         assert fake.kwargs["tile_type"] == block_type
 
 
@@ -543,6 +551,6 @@ async def test_a_report_block_still_does_not_ask_what_to_draw(
     """
     fake = drafting(_draft(preview=_rows(3)))
 
-    await _service(_db(block_type="METRIC")).check_block(REPORT_ID, BLOCK_ID, OWNER)
+    await _service(_db(block_type="METRIC")).check_block(CTX, REPORT_ID, BLOCK_ID)
 
     assert fake.kwargs.get("compose_chart", False) is False

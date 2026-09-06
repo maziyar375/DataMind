@@ -20,11 +20,19 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.clock import utcnow
+from app.core.context import RequestContext
 from app.core.errors import NotFoundError, SqlRejectedError, ValidationError
+from app.infra.authz.owner_only import OwnerOnlyAuthorizer
 from app.infra.db.models import Dashboard, DashboardTile, DatabaseConnection
 from app.services.dashboard_service import DashboardService
 
 OWNER = uuid4()
+#: Phase 1: every service method takes a context rather than a bare owner id.
+#: The authorizer is the owner-only one — today's rule — constructed without a
+#: session because every call in this file hands it the row it is asking about.
+CTX = RequestContext(
+    user_id=OWNER, email="owner@test.local", role="MEMBER", correlation_id="t"
+)
 CONNECTION_ID = uuid4()
 
 SNAPSHOT_TABLES = [
@@ -162,7 +170,7 @@ def _connection(max_rows: int = 1000) -> DatabaseConnection:
 
 
 def _service(db: FakeDb) -> DashboardService:
-    return DashboardService(db, object())
+    return DashboardService(db, object(), OwnerOnlyAuthorizer())
 
 
 # ── refresh-after-update ─────────────────────────────────────────────────
@@ -173,7 +181,7 @@ async def test_renaming_a_dashboard_refreshes_the_row_before_it_is_read() -> Non
     # The duplicate-name check runs the same select, so the "existing" row it
     # finds is this dashboard itself; renaming to its own name is the case
     # that must not raise.
-    await _service(db).update(dashboard.id, OWNER, gap_px=20)
+    await _service(db).update(CTX, dashboard.id, gap_px=20)
 
     assert db.flushes == 1
     assert db.refreshed == [dashboard]
@@ -184,7 +192,7 @@ async def test_editing_a_tile_refreshes_it_too() -> None:
     tile = _tile(dashboard)
     db = FakeDb(dashboard=dashboard, tiles=[tile], connection=_connection())
 
-    await _service(db).update_tile(dashboard.id, tile.id, OWNER, title="Renamed")
+    await _service(db).update_tile(CTX, dashboard.id, tile.id, title="Renamed")
 
     assert db.refreshed == [tile]
 
@@ -197,7 +205,7 @@ async def test_a_layout_save_refreshes_every_tile_it_moved() -> None:
     db = FakeDb(dashboard=dashboard, tiles=[moved, untouched])
 
     await _service(db).set_layout(
-        dashboard.id, OWNER, [{"tile_id": moved.id, "grid_x": 6, "position": 1}]
+        CTX, dashboard.id, [{"tile_id": moved.id, "grid_x": 6, "position": 1}]
     )
 
     assert db.refreshed == [moved]
@@ -212,7 +220,7 @@ async def test_a_layout_entry_for_a_tile_that_is_gone_is_ignored() -> None:
     db = FakeDb(dashboard=dashboard, tiles=[tile])
 
     tiles = await _service(db).set_layout(
-        dashboard.id, OWNER, [{"tile_id": uuid4(), "grid_x": 6}]
+        CTX, dashboard.id, [{"tile_id": uuid4(), "grid_x": 6}]
     )
 
     assert [t.id for t in tiles] == [tile.id]
@@ -226,8 +234,8 @@ async def test_saving_hostile_sql_is_refused() -> None:
 
     with pytest.raises(SqlRejectedError):
         await _service(db).add_tile(
+            CTX,
             dashboard.id,
-            OWNER,
             tile_type="CHART",
             connection_id=CONNECTION_ID,
             sql="SELECT * FROM public.orders; DROP TABLE public.orders",
@@ -242,8 +250,8 @@ async def test_saving_sql_against_an_unsynced_connection_is_refused() -> None:
 
     with pytest.raises(ValidationError):
         await _service(db).add_tile(
+            CTX,
             dashboard.id,
-            OWNER,
             tile_type="CHART",
             connection_id=CONNECTION_ID,
             sql="SELECT status FROM public.orders",
@@ -256,8 +264,8 @@ async def test_a_tile_row_cap_is_stored_already_clamped() -> None:
     db = FakeDb(dashboard=dashboard, connection=_connection(max_rows=1000))
 
     tile = await _service(db).add_tile(
+        CTX,
         dashboard.id,
-        OWNER,
         tile_type="CHART",
         connection_id=CONNECTION_ID,
         sql="SELECT status FROM public.orders",
@@ -274,8 +282,8 @@ async def test_a_text_tile_needs_no_connection_and_keeps_no_sql() -> None:
     db = FakeDb(dashboard=dashboard)
 
     tile = await _service(db).add_tile(
+        CTX,
         dashboard.id,
-        OWNER,
         tile_type="TEXT",
         title="Notes",
         sql="SELECT * FROM public.orders",
@@ -290,9 +298,7 @@ async def test_a_chart_tile_without_a_connection_is_refused() -> None:
     db = FakeDb(dashboard=dashboard)
 
     with pytest.raises(ValidationError):
-        await _service(db).add_tile(
-            dashboard.id, OWNER, tile_type="CHART", sql="SELECT 1"
-        )
+        await _service(db).add_tile(CTX, dashboard.id, tile_type="CHART", sql="SELECT 1")
 
 
 async def test_a_tile_may_not_borrow_another_users_connection() -> None:
@@ -302,8 +308,8 @@ async def test_a_tile_may_not_borrow_another_users_connection() -> None:
 
     with pytest.raises(NotFoundError):
         await _service(db).add_tile(
+            CTX,
             dashboard.id,
-            OWNER,
             tile_type="CHART",
             connection_id=CONNECTION_ID,
             sql="SELECT status FROM public.orders",
@@ -314,7 +320,7 @@ async def test_another_users_dashboard_is_not_found() -> None:
     db = FakeDb(dashboard=None)  # type: ignore[arg-type]
 
     with pytest.raises(NotFoundError):
-        await _service(db).get(uuid4(), OWNER)
+        await _service(db).get(CTX, uuid4())
 
 
 # ── duplicate ────────────────────────────────────────────────────────────
@@ -324,7 +330,7 @@ async def test_a_duplicate_copies_the_tile_but_not_its_cache() -> None:
     tile = _tile(dashboard, title="Revenue", refresh_interval_seconds=30)
     db = FakeDb(dashboard=dashboard, tiles=[tile])
 
-    copy = await _service(db).duplicate_tile(dashboard.id, tile.id, OWNER)
+    copy = await _service(db).duplicate_tile(CTX, dashboard.id, tile.id)
 
     assert copy.id != tile.id
     assert copy.title == "Revenue (copy)"

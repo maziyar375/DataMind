@@ -41,30 +41,13 @@ guard:
 lint:
 	cd backend && ruff check app tests && lint-imports
 
-# The authorization gate. Four greps, and each one names a way of deciding
-# access that this codebase has agreed not to use — see
-# docs/user-management-and-access-control-plan.md §18.4, which says there are
-# three enforcement shapes and no fourth.
-#
-#   1. A bare ownership comparison in a route or a service. Ownership is a
-#      *fact on a row*; whether it grants anything is the authorizer's answer,
-#      and a service that decides for itself cannot later be shared.
-#   2. `ctx.is_admin`. A role string standing in for a permission is exactly
-#      what requirement 7 asks to be removed, and it is what makes "extensive
-#      permissions over Knowledge without admin over everything" impossible.
-#   3. `role == "ADMIN"` anywhere, backend or frontend. The UI renders
-#      affordances from `GET /me/permissions` and `GET /{resource}/{id}/actions`,
-#      never from a role it guessed.
-#   4. A worker constructing a context out of nothing. There is no god
-#      context: background work runs *as* a principal, through
-#      `RequestContext.on_behalf_of`, or it is doing something the model does
-#      not cover.
-#
-# **It fails today, on purpose.** It is added to CI as non-blocking in Phase 0
-# and flips to blocking at the end of Phase 2, when the last of those lines is
-# gone. A gate that only ever passed would have told nobody anything.
+# The authorization gate: four greps, each naming a way of deciding access that
+# this codebase has agreed not to use. The script says which and why, and prints
+# every `# authz-ok:` exemption it honoured. It fails today on purpose — it is
+# non-blocking in CI until Phase 2 of
+# docs/user-management-and-access-control-plan.md removes the last of those lines.
 authz-check:
-	@fail=0; 	run() { 	  echo "── $$1"; 	  shift; 	  if grep -rnE "$$@" 2>/dev/null; then fail=1; else echo "   clean"; fi; 	}; 	run "a service or route deciding ownership for itself" 	    "owner_id[[:space:]]*[!=]=" backend/app/api backend/app/services; 	run "a role string standing in for a permission" 	    "\.is_admin" backend/app/api backend/app/services backend/app/workers; 	run "an ADMIN literal compared anywhere" 	    "role == ['\"]ADMIN" backend/app frontend/src; 	run "a worker acting as nobody" 	    "ctx=None" backend/app/workers; 	if [ $$fail -ne 0 ]; then 	  echo; 	  echo "authz-check: the lines above decide access outside the authorizer."; 	  echo "Non-blocking until Phase 2 of docs/user-management-and-access-control-plan.md."; 	  exit 1; 	fi; 	echo "authz-check: clean."
+	@bash scripts/authz-check.sh
 
 fmt:
 	cd backend && ruff format app tests

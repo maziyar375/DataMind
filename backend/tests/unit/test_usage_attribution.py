@@ -48,6 +48,7 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import Session
 
 from app.domain.value_objects import DisclosurePolicy
+from app.infra.authz.owner_only import OwnerOnlyAuthorizer
 from app.infra.db.models import Base, DatabaseConnection, LlmConfig
 from app.services.report_service import ReportService
 from app.services.semantic_service import SemanticService
@@ -167,8 +168,10 @@ async def test_a_report_run_records_who_asked() -> None:
     db = reports._outline_db(
         sections=[reports._section()], blocks=[reports._block()]
     )
-    service = ReportService(db, reports.FakeSettings())  # type: ignore[arg-type]
-    run = await service.create_run(reports.REPORT_ID, reports.OWNER)
+    service = ReportService(
+        db, reports.FakeSettings(), OwnerOnlyAuthorizer()
+    )  # type: ignore[arg-type]
+    run = await service.create_run(reports.CTX, reports.REPORT_ID)
     assert run.actor_id == reports.OWNER
     assert run.actor_id == run.owner_id
 

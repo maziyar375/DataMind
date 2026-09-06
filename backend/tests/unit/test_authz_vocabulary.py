@@ -437,3 +437,103 @@ def test_the_domain_layer_imports_no_database_driver() -> None:
             for alias in node.names
         }
         assert not imported & {"sqlalchemy", "fastapi", "pydantic"}, module
+
+
+# ── Phase 1: the list endpoints compose rather than iterate ──────────────
+async def test_a_list_endpoint_emits_a_subquery_rather_than_filtering_in_python() -> None:
+    """The claim Phase 1 rests on, asserted against the emitted SQL.
+
+    `DashboardService.list` must fold the authorizer's answer into the
+    statement it was already going to run. The failure mode this catches is the
+    tempting one: load every dashboard, ask `allowed` about each, drop the
+    misses. That returns the same rows today and a short page tomorrow, because
+    `LIMIT` would count rows the caller cannot see — a pagination bug that only
+    appears once somebody is sharing.
+    """
+    from app.services.dashboard_service import DashboardService
+    from app.services.report_service import ReportService
+
+    class _RecordingDb:
+        """Captures the statement and answers with nothing."""
+
+        def __init__(self) -> None:
+            self.statements: list[str] = []
+
+        async def execute(self, statement):  # noqa: ANN001, ANN202
+            self.statements.append(str(statement))
+
+            class _Empty:
+                def scalars(self):  # noqa: ANN202
+                    return iter(())
+
+            return _Empty()
+
+    for service_class in (DashboardService, ReportService):
+        db = _RecordingDb()
+        service = service_class(db, object(), OwnerOnlyAuthorizer())  # type: ignore[arg-type]
+        assert await service.list(ctx()) == []
+
+        assert len(db.statements) == 1, "one round trip, not one per row"
+        sql = " ".join(db.statements[0].lower().split())
+        assert "in (select" in sql, sql
+        assert "owner_id" in sql, sql
+
+
+async def test_the_subquery_is_composed_into_the_callers_own_query() -> None:
+    """`restrict` narrows a statement; it does not replace it. The ordering the
+    caller asked for has to survive, or the authorizer would silently be
+    deciding the page order too."""
+    from sqlalchemy import select
+
+    from app.infra.authz.compose import restrict
+    from app.infra.db.models import Dashboard
+
+    visible = await OwnerOnlyAuthorizer().visible(
+        ctx(), ResourceType.DASHBOARD, Privilege.SELECT
+    )
+    sql = " ".join(
+        str(
+            restrict(
+                select(Dashboard).order_by(Dashboard.updated_at.desc()),
+                Dashboard.id,
+                visible,
+            )
+        )
+        .lower()
+        .split()
+    )
+    assert "order by dashboards.updated_at desc" in sql
+    assert "dashboards.id in (select dashboards.id" in sql
+
+
+async def test_everything_adds_no_clause_at_all() -> None:
+    """The wildcard case must cost nothing — not even an `IN (SELECT ...)` for
+    the planner to unwrap."""
+    from sqlalchemy import select
+
+    from app.infra.authz.compose import restrict
+    from app.infra.db.models import Dashboard
+
+    plain = select(Dashboard)
+    assert str(restrict(plain, Dashboard.id, Everything())) == str(plain)
+
+
+async def test_visible_as_no_ids_matches_no_rows_rather_than_every_row() -> None:
+    """`Ids(frozenset())` is "you may see none of these". An unfiltered query
+    would be the dangerous reading of that."""
+    from sqlalchemy import select
+    from sqlalchemy.dialects import postgresql
+
+    from app.infra.authz.compose import restrict
+    from app.infra.db.models import Dashboard
+
+    # Compiled against a real dialect with the binds rendered: an empty `IN` is
+    # a *postcompile* placeholder until then, so a plain `str()` would prove
+    # nothing about what the database is asked.
+    statement = restrict(select(Dashboard.id), Dashboard.id, Ids(frozenset()))
+    sql = str(
+        statement.compile(
+            dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
+        )
+    ).lower()
+    assert "1 != 1" in sql, sql

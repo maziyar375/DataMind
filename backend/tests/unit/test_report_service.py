@@ -24,6 +24,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.core.clock import utcnow
+from app.core.context import RequestContext
 from app.core.errors import (
     ConflictError,
     DisclosureTooNarrowError,
@@ -36,6 +37,7 @@ from app.domain.value_objects import (
     ReportFeasibility,
     ReportSectionKind,
 )
+from app.infra.authz.owner_only import OwnerOnlyAuthorizer
 from app.infra.db.models import (
     DatabaseConnection,
     LlmConfig,
@@ -57,6 +59,15 @@ from app.services.report_service import ReportService, assert_wide_enough, is_wi
 
 OWNER = uuid4()
 OTHER = uuid4()
+#: Phase 1: every service method takes a context rather than a bare owner id.
+#: The authorizer is the owner-only one — today's rule — constructed without a
+#: session because every call in this file hands it the row it is asking about.
+CTX = RequestContext(
+    user_id=OWNER, email="owner@test.local", role="MEMBER", correlation_id="t"
+)
+OTHER_CTX = RequestContext(
+    user_id=OTHER, email="other@test.local", role="MEMBER", correlation_id="t"
+)
 REPORT_ID = uuid4()
 SECTION_ID = uuid4()
 BLOCK_ID = uuid4()
@@ -260,7 +271,9 @@ class FakeSettings:
 
 
 def _service(db: FakeDb) -> ReportService:
-    return ReportService(db, FakeSettings())  # type: ignore[arg-type]
+    return ReportService(
+        db, FakeSettings(), OwnerOnlyAuthorizer()
+    )  # type: ignore[arg-type]
 
 
 # ── the disclosure gate ──────────────────────────────────────────────────
@@ -271,9 +284,7 @@ async def test_a_narrow_connection_cannot_carry_a_report(policy: str) -> None:
     db = FakeDb(connection=_connection(policy))
 
     with pytest.raises(DisclosureTooNarrowError) as raised:
-        await _service(db).create(
-            OWNER, name="Q3", connection_id=CONNECTION_ID, prompt="p"
-        )
+        await _service(db).create(CTX, name="Q3", connection_id=CONNECTION_ID, prompt="p")
 
     assert raised.value.code == "E_DISCLOSURE_TOO_NARROW"
     assert raised.value.http_status == 422
@@ -290,7 +301,7 @@ async def test_a_wide_enough_connection_is_accepted(policy: str) -> None:
     db = FakeDb(connection=_connection(policy))
 
     report = await _service(db).create(
-        OWNER, name="Q3", connection_id=CONNECTION_ID, prompt="p"
+        CTX, name="Q3", connection_id=CONNECTION_ID, prompt="p"
     )
 
     assert report.owner_id == OWNER
@@ -312,7 +323,7 @@ async def test_the_language_is_read_off_the_request_not_asked_for(
     db = FakeDb(connection=_connection(DisclosurePolicy.FULL))
 
     report = await _service(db).create(
-        OWNER, name="Q3", connection_id=CONNECTION_ID, prompt=prompt
+        CTX, name="Q3", connection_id=CONNECTION_ID, prompt=prompt
     )
 
     assert report.language == expected
@@ -324,7 +335,7 @@ async def test_rewriting_the_request_moves_the_language_with_it() -> None:
     db = FakeDb(report=_report())
 
     report = await _service(db).update(
-        REPORT_ID, OWNER, prompt="an analysis of the last three months"
+        CTX, REPORT_ID, prompt="an analysis of the last three months"
     )
 
     assert report.prompt == "an analysis of the last three months"
@@ -335,7 +346,7 @@ async def test_the_requested_section_count_is_stored_and_clamped() -> None:
     db = FakeDb(connection=_connection(DisclosurePolicy.FULL))
 
     report = await _service(db).create(
-        OWNER, name="Q3", connection_id=CONNECTION_ID, prompt="p", section_target=99
+        CTX, name="Q3", connection_id=CONNECTION_ID, prompt="p", section_target=99
     )
 
     assert report.section_target == MAX_SECTION_TARGET
@@ -345,7 +356,7 @@ async def test_a_report_created_without_a_count_gets_the_default() -> None:
     db = FakeDb(connection=_connection(DisclosurePolicy.FULL))
 
     report = await _service(db).create(
-        OWNER, name="Q3", connection_id=CONNECTION_ID, prompt="p"
+        CTX, name="Q3", connection_id=CONNECTION_ID, prompt="p"
     )
 
     assert report.section_target == DEFAULT_SECTION_TARGET
@@ -366,14 +377,14 @@ def test_the_gate_is_a_free_function_the_worker_can_call() -> None:
 
 async def test_a_report_needs_a_connection_at_all() -> None:
     with pytest.raises(ValidationError):
-        await _service(FakeDb()).create(OWNER, name="Q3", connection_id=None)
+        await _service(FakeDb()).create(CTX, name="Q3", connection_id=None)
 
 
 async def test_someone_elses_connection_is_a_404() -> None:
     """The connection lookup is owner-scoped, so borrowing an id gets nothing."""
     with pytest.raises(NotFoundError):
-        await _service(FakeDb(connection=None)).create(
-            OWNER, name="Q3", connection_id=CONNECTION_ID
+        await _service(
+            FakeDb(connection=None)).create(CTX, name="Q3", connection_id=CONNECTION_ID
         )
 
 
@@ -382,7 +393,7 @@ async def test_moving_a_report_to_another_connection_is_refused() -> None:
     db = FakeDb(report=_report(), connection=_connection())
 
     with pytest.raises(ValidationError) as raised:
-        await _service(db).update(REPORT_ID, OWNER, connection_id=uuid4())
+        await _service(db).update(CTX, REPORT_ID, connection_id=uuid4())
 
     assert raised.value.http_status == 422
     assert "pinned" in raised.value.message
@@ -394,7 +405,7 @@ async def test_resending_the_same_connection_is_a_no_op() -> None:
     db = FakeDb(report=_report(), connection=_connection())
 
     report = await _service(db).update(
-        REPORT_ID, OWNER, connection_id=CONNECTION_ID, name="Renamed"
+        CTX, REPORT_ID, connection_id=CONNECTION_ID, name="Renamed"
     )
 
     assert report.name == "Renamed"
@@ -405,7 +416,7 @@ async def test_the_model_stays_swappable() -> None:
     """It decides who writes the prose, not what is in it."""
     db = FakeDb(report=_report(), connection=_connection())
 
-    report = await _service(db).update(REPORT_ID, OWNER, llm_config_id=None)
+    report = await _service(db).update(CTX, REPORT_ID, llm_config_id=None)
 
     assert report.llm_config_id is None
     # An UPDATE does not fetch `updated_at` back, so the row is refreshed
@@ -417,7 +428,7 @@ async def test_a_duplicate_name_is_a_409() -> None:
     db = FakeDb(report=_report(), connection=_connection(), duplicate_name=True)
 
     with pytest.raises(ConflictError):
-        await _service(db).create(OWNER, name="Quarterly sales", connection_id=CONNECTION_ID)
+        await _service(db).create(CTX, name="Quarterly sales", connection_id=CONNECTION_ID)
 
 
 async def test_another_users_report_is_a_404() -> None:
@@ -426,7 +437,7 @@ async def test_another_users_report_is_a_404() -> None:
     db = FakeDb(report=None)
 
     with pytest.raises(NotFoundError):
-        await _service(db).get(REPORT_ID, OTHER)
+        await _service(db).get(OTHER_CTX, REPORT_ID)
 
 
 # ── editing a block ──────────────────────────────────────────────────────
@@ -434,10 +445,12 @@ async def test_editing_the_question_drops_the_sql_it_was_checked_against() -> No
     """Otherwise the run produces last week's numbers under this week's
     heading, and nothing in the document says so."""
     block = _block()
-    db = FakeDb(report=_report(), sections=[_section()], blocks=[block], connection=_connection())
+    db = FakeDb(
+        report=_report(), sections=[_section()], blocks=[block], connection=_connection()
+    )
 
     updated = await _service(db).update_block(
-        REPORT_ID, BLOCK_ID, OWNER, question="revenue by week"
+        CTX, REPORT_ID, BLOCK_ID, question="revenue by week"
     )
 
     assert updated.question == "revenue by week"
@@ -455,10 +468,12 @@ async def test_retitling_a_figure_changes_a_label_and_nothing_else() -> None:
     other editable field on a block.
     """
     block = _block(title="Revenue by month")
-    db = FakeDb(report=_report(), sections=[_section()], blocks=[block], connection=_connection())
+    db = FakeDb(
+        report=_report(), sections=[_section()], blocks=[block], connection=_connection()
+    )
 
     updated = await _service(db).update_block(
-        REPORT_ID, BLOCK_ID, OWNER, title="  Monthly revenue,  2026  "
+        CTX, REPORT_ID, BLOCK_ID, title="  Monthly revenue, 2026  "
     )
 
     assert updated.title == "Monthly revenue, 2026"
@@ -470,9 +485,11 @@ async def test_clearing_a_title_puts_the_question_back_over_the_figure() -> None
     """Empty is a value here, not an omission: it is how a block says "caption
     me with my question", so the edit has to land rather than be skipped."""
     block = _block(title="Revenue by month")
-    db = FakeDb(report=_report(), sections=[_section()], blocks=[block], connection=_connection())
+    db = FakeDb(
+        report=_report(), sections=[_section()], blocks=[block], connection=_connection()
+    )
 
-    updated = await _service(db).update_block(REPORT_ID, BLOCK_ID, OWNER, title="")
+    updated = await _service(db).update_block(CTX, REPORT_ID, BLOCK_ID, title="")
 
     assert updated.title == ""
 
@@ -481,11 +498,11 @@ async def test_changing_the_time_window_invalidates_the_sql_too() -> None:
     """The window lives *in* the statement as relative date arithmetic, so a
     new label and the old SQL describe different periods."""
     block = _block()
-    db = FakeDb(report=_report(), sections=[_section()], blocks=[block], connection=_connection())
-
-    updated = await _service(db).update_block(
-        REPORT_ID, BLOCK_ID, OWNER, time_window="ytd"
+    db = FakeDb(
+        report=_report(), sections=[_section()], blocks=[block], connection=_connection()
     )
+
+    updated = await _service(db).update_block(CTX, REPORT_ID, BLOCK_ID, time_window="ytd")
 
     assert updated.sql == ""
     assert updated.feasibility_status == ReportFeasibility.UNCHECKED
@@ -504,10 +521,12 @@ async def test_editing_the_question_keeps_a_statement_someone_typed(
     together.
     """
     block = _block(sql_origin=origin)
-    db = FakeDb(report=_report(), sections=[_section()], blocks=[block], connection=_connection())
+    db = FakeDb(
+        report=_report(), sections=[_section()], blocks=[block], connection=_connection()
+    )
 
     updated = await _service(db).update_block(
-        REPORT_ID, BLOCK_ID, OWNER, question="revenue by week"
+        CTX, REPORT_ID, BLOCK_ID, question="revenue by week"
     )
 
     assert updated.sql == "SELECT month, revenue FROM public.sales"
@@ -523,10 +542,12 @@ async def test_changing_the_chart_type_keeps_the_sql() -> None:
     """A chart is drawn from a result that has already been computed; re-running
     the query to change a mark would be absurd."""
     block = _block()
-    db = FakeDb(report=_report(), sections=[_section()], blocks=[block], connection=_connection())
+    db = FakeDb(
+        report=_report(), sections=[_section()], blocks=[block], connection=_connection()
+    )
 
     updated = await _service(db).update_block(
-        REPORT_ID, BLOCK_ID, OWNER, chart_config={"chart_type": "line"}
+        CTX, REPORT_ID, BLOCK_ID, chart_config={"chart_type": "line"}
     )
 
     assert updated.sql == "SELECT month, revenue FROM public.sales"
@@ -537,10 +558,12 @@ async def test_resending_the_same_question_changes_nothing() -> None:
     """A whole-object PATCH from the editor must not silently invalidate a
     block the user did not touch."""
     block = _block()
-    db = FakeDb(report=_report(), sections=[_section()], blocks=[block], connection=_connection())
+    db = FakeDb(
+        report=_report(), sections=[_section()], blocks=[block], connection=_connection()
+    )
 
     updated = await _service(db).update_block(
-        REPORT_ID, BLOCK_ID, OWNER, question="revenue by month", block_type="TABLE"
+        CTX, REPORT_ID, BLOCK_ID, question="revenue by month", block_type="TABLE"
     )
 
     assert updated.block_type == "TABLE"
@@ -559,7 +582,7 @@ async def test_a_block_row_cap_may_only_tighten_the_connections() -> None:
     )
 
     block = await _service(db).add_block(
-        REPORT_ID, SECTION_ID, OWNER, question="everything", max_rows=100_000
+        CTX, REPORT_ID, SECTION_ID, question="everything", max_rows=100_000
     )
 
     assert block.max_rows == 500
@@ -572,7 +595,7 @@ async def test_a_new_section_is_appended_past_the_last_one() -> None:
     existing.position = 7
     db = FakeDb(report=_report(), sections=[existing], connection=_connection())
 
-    section = await _service(db).add_section(REPORT_ID, OWNER, heading="Returns")
+    section = await _service(db).add_section(CTX, REPORT_ID, heading="Returns")
 
     assert section.position == 8
 
@@ -590,7 +613,7 @@ async def test_a_section_can_be_created_first_and_not_only_appended() -> None:
     db = FakeDb(report=_report(), sections=[existing], connection=_connection())
 
     section = await _service(db).add_section(
-        REPORT_ID, OWNER, heading="خلاصه مدیریتی", position=0
+        CTX, REPORT_ID, heading="خلاصه مدیریتی", position=0
     )
 
     assert section.position == 0
@@ -600,7 +623,7 @@ async def test_a_block_can_be_created_first_too() -> None:
     db = FakeDb(report=_report(), sections=[_section()], connection=_connection())
 
     block = await _service(db).add_block(
-        REPORT_ID, SECTION_ID, OWNER, question="revenue", position=0
+        CTX, REPORT_ID, SECTION_ID, question="revenue", position=0
     )
 
     assert block.position == 0
@@ -692,7 +715,7 @@ async def _none(*_args: Any, **_kwargs: Any) -> None:
 async def test_a_proposal_becomes_sections_and_blocks(proposal: _Proposal) -> None:
     db = _outline_db()
 
-    await _service(db).propose_outline(REPORT_ID, OWNER)
+    await _service(db).propose_outline(CTX, REPORT_ID)
 
     sections = [o for o in db.added if isinstance(o, ReportSection)]
     blocks = [o for o in db.added if isinstance(o, ReportBlock)]
@@ -712,7 +735,7 @@ async def test_the_executive_summary_leads_and_carries_no_blocks(
     can remove it like any other."""
     db = _outline_db()
 
-    await _service(db).propose_outline(REPORT_ID, OWNER)
+    await _service(db).propose_outline(CTX, REPORT_ID)
 
     first = [o for o in db.added if isinstance(o, ReportSection)][0]
     assert first.position == 0
@@ -729,7 +752,7 @@ async def test_a_proposed_block_has_no_sql_and_is_unchecked(
     it into a statement."""
     db = _outline_db()
 
-    await _service(db).propose_outline(REPORT_ID, OWNER)
+    await _service(db).propose_outline(CTX, REPORT_ID)
 
     for block in [o for o in db.added if isinstance(o, ReportBlock)]:
         # Falsy rather than `== ""`: the column default lands at flush, and
@@ -744,7 +767,7 @@ async def test_proposing_again_replaces_the_outline(proposal: _Proposal) -> None
     existing = _section()
     db = _outline_db(sections=[existing])
 
-    await _service(db).propose_outline(REPORT_ID, OWNER)
+    await _service(db).propose_outline(CTX, REPORT_ID)
 
     assert db.deleted == [existing]
 
@@ -754,7 +777,7 @@ async def test_the_model_gets_the_request_the_language_and_the_schema(
 ) -> None:
     db = _outline_db()
 
-    await _service(db).propose_outline(REPORT_ID, OWNER)
+    await _service(db).propose_outline(CTX, REPORT_ID)
 
     assert proposal.kwargs["request"] == "a report on the last three months"
     assert proposal.kwargs["language"] == "fa"
@@ -772,7 +795,7 @@ async def test_an_unreadable_reply_is_a_502_and_writes_nothing(
     db = _outline_db()
 
     with pytest.raises(LLMError):
-        await _service(db).propose_outline(REPORT_ID, OWNER)
+        await _service(db).propose_outline(CTX, REPORT_ID)
 
     assert not [o for o in db.added if isinstance(o, ReportSection)]
 
@@ -785,7 +808,7 @@ async def test_an_unsynced_connection_is_refused_before_a_token_is_spent(
     db.snapshot_tables = []
 
     with pytest.raises(ValidationError):
-        await _service(db).propose_outline(REPORT_ID, OWNER)
+        await _service(db).propose_outline(CTX, REPORT_ID)
 
     assert proposal.calls == 0
 
@@ -797,7 +820,7 @@ async def test_a_report_with_no_request_has_nothing_to_propose_from(
     db.report.prompt = "   "  # type: ignore[union-attr]
 
     with pytest.raises(ValidationError):
-        await _service(db).propose_outline(REPORT_ID, OWNER)
+        await _service(db).propose_outline(CTX, REPORT_ID)
 
     assert proposal.calls == 0
 
@@ -811,7 +834,7 @@ async def test_a_report_with_no_model_is_refused_rather_than_defaulted(
     db.report.llm_config_id = None  # type: ignore[union-attr]
 
     with pytest.raises(ValidationError):
-        await _service(db).propose_outline(REPORT_ID, OWNER)
+        await _service(db).propose_outline(CTX, REPORT_ID)
 
     assert proposal.calls == 0
 
@@ -820,9 +843,9 @@ async def test_a_heading_and_a_question_may_not_be_blank() -> None:
     db = FakeDb(report=_report(), sections=[_section()], connection=_connection())
 
     with pytest.raises(ValidationError):
-        await _service(db).add_section(REPORT_ID, OWNER, heading="   ")
+        await _service(db).add_section(CTX, REPORT_ID, heading="   ")
     with pytest.raises(ValidationError):
-        await _service(db).add_block(REPORT_ID, SECTION_ID, OWNER, question=" ")
+        await _service(db).add_block(CTX, REPORT_ID, SECTION_ID, question=" ")
 
 
 # ── redrawing a saved chart ──────────────────────────────────────────────
@@ -879,7 +902,7 @@ async def test_a_redrawn_chart_is_written_onto_the_run() -> None:
     db = _chart_db()
 
     row, options, reason = await _service(db).redraw_block_chart(
-        REPORT_ID, RUN_ID, RESULT_ID, OWNER, chart_type="bar"
+        CTX, REPORT_ID, RUN_ID, RESULT_ID, chart_type="bar"
     )
 
     assert reason is None
@@ -900,7 +923,7 @@ async def test_auto_gives_the_planner_no_suggestion() -> None:
     db = _chart_db()
 
     row, _options, reason = await _service(db).redraw_block_chart(
-        REPORT_ID, RUN_ID, RESULT_ID, OWNER, chart_type="auto"
+        CTX, REPORT_ID, RUN_ID, RESULT_ID, chart_type="auto"
     )
 
     assert reason is None
@@ -913,7 +936,7 @@ async def test_a_type_this_result_cannot_carry_is_refused_with_its_reason() -> N
     db = _chart_db()
 
     row, options, reason = await _service(db).redraw_block_chart(
-        REPORT_ID, RUN_ID, RESULT_ID, OWNER, chart_type="heatmap"
+        CTX, REPORT_ID, RUN_ID, RESULT_ID, chart_type="heatmap"
     )
 
     assert reason
@@ -928,7 +951,7 @@ async def test_a_result_the_run_does_not_have_is_a_404() -> None:
 
     with pytest.raises(NotFoundError):
         await _service(db).redraw_block_chart(
-            REPORT_ID, RUN_ID, uuid4(), OWNER, chart_type="bar"
+            CTX, REPORT_ID, RUN_ID, uuid4(), chart_type="bar"
         )
 
 
@@ -940,5 +963,5 @@ async def test_a_block_that_kept_no_rows_has_nothing_to_draw() -> None:
 
     with pytest.raises(ValidationError):
         await _service(db).redraw_block_chart(
-            REPORT_ID, RUN_ID, RESULT_ID, OWNER, chart_type="bar"
+            CTX, REPORT_ID, RUN_ID, RESULT_ID, chart_type="bar"
         )

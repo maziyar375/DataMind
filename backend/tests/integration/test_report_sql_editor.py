@@ -27,6 +27,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.core.context import RequestContext
 from app.core.errors import NotFoundError, ValidationError
 from app.domain.ports.database import ResultColumn
 from app.domain.value_objects import ReportFeasibility, SqlOrigin
@@ -41,13 +42,20 @@ from app.sqlguard.validator import ValidationIssue, ValidationReport
 # second report out of the same rows is how the two quietly stop agreeing.
 from tests.integration.test_report_feasibility import (  # noqa: E402
     BLOCK_ID,
-    OWNER,
+    CTX,
     REPORT_ID,
     _db,
     _service,
 )
 
 HAND_SQL = "SELECT region, SUM(total_amount) AS revenue FROM public.orders GROUP BY 1"
+
+
+def _other_ctx() -> RequestContext:
+    """Somebody else's session, for the 404 case."""
+    return RequestContext(
+        user_id=uuid4(), email="other@test.local", role="MEMBER", correlation_id="t"
+    )
 
 
 def _preview(rows: int = 2) -> TileResult:
@@ -124,7 +132,7 @@ async def test_a_valid_statement_with_rows_is_feasible(validating: Any) -> None:
     db = _db()
 
     block, draft = await _service(db).edit_block_sql(
-        REPORT_ID, BLOCK_ID, OWNER, sql=HAND_SQL
+        CTX, REPORT_ID, BLOCK_ID, sql=HAND_SQL
     )
 
     assert fake.calls == 1
@@ -141,7 +149,7 @@ async def test_a_valid_statement_with_no_rows_is_empty_not_infeasible(
     validating(_draft(preview=_preview(rows=0)))
 
     block, _ = await _service(_db()).edit_block_sql(
-        REPORT_ID, BLOCK_ID, OWNER, sql=HAND_SQL
+        CTX, REPORT_ID, BLOCK_ID, sql=HAND_SQL
     )
 
     assert block.feasibility_status == ReportFeasibility.EMPTY
@@ -168,7 +176,7 @@ async def test_a_rejected_statement_is_kept_with_the_guards_own_reason(
     )
 
     block, _ = await _service(_db()).edit_block_sql(
-        REPORT_ID, BLOCK_ID, OWNER, sql="SELECT * FROM public.profits"
+        CTX, REPORT_ID, BLOCK_ID, sql="SELECT * FROM public.profits"
     )
 
     assert block.feasibility_status == ReportFeasibility.INFEASIBLE
@@ -186,7 +194,7 @@ async def test_a_block_that_never_held_generated_sql_becomes_handwritten(
     db = _db()  # its block starts with no SQL at all
 
     block, _ = await _service(db).edit_block_sql(
-        REPORT_ID, BLOCK_ID, OWNER, sql=HAND_SQL
+        CTX, REPORT_ID, BLOCK_ID, sql=HAND_SQL
     )
 
     assert block.sql_origin == SqlOrigin.HANDWRITTEN
@@ -201,7 +209,7 @@ async def test_editing_a_generated_statement_records_that_it_started_as_one(
     db.blocks[0].sql_origin = SqlOrigin.GENERATED
 
     block, _ = await _service(db).edit_block_sql(
-        REPORT_ID, BLOCK_ID, OWNER, sql=HAND_SQL
+        CTX, REPORT_ID, BLOCK_ID, sql=HAND_SQL
     )
 
     assert block.sql_origin == SqlOrigin.GENERATED_EDITED
@@ -221,7 +229,7 @@ async def test_provenance_does_not_drift_on_a_second_edit(
     db.blocks[0].sql_origin = origin
 
     block, _ = await _service(db).edit_block_sql(
-        REPORT_ID, BLOCK_ID, OWNER, sql=HAND_SQL
+        CTX, REPORT_ID, BLOCK_ID, sql=HAND_SQL
     )
 
     assert block.sql_origin == origin
@@ -232,7 +240,7 @@ async def test_whitespace_is_not_a_statement(validating: Any) -> None:
     fake = validating(_draft(preview=_preview()))
 
     with pytest.raises(ValidationError):
-        await _service(_db()).edit_block_sql(REPORT_ID, BLOCK_ID, OWNER, sql="   \n ")
+        await _service(_db()).edit_block_sql(CTX, REPORT_ID, BLOCK_ID, sql="   \n ")
 
     assert fake.calls == 0
 
@@ -245,7 +253,7 @@ async def test_a_removed_connection_refuses_before_the_guard(validating: Any) ->
     db.report.connection_id = None
 
     with pytest.raises(ValidationError):
-        await _service(db).edit_block_sql(REPORT_ID, BLOCK_ID, OWNER, sql=HAND_SQL)
+        await _service(db).edit_block_sql(CTX, REPORT_ID, BLOCK_ID, sql=HAND_SQL)
 
     assert fake.calls == 0
 
@@ -256,6 +264,6 @@ async def test_a_block_from_another_users_report_is_a_404(validating: Any) -> No
     db.report = None
 
     with pytest.raises(NotFoundError):
-        await _service(db).edit_block_sql(REPORT_ID, BLOCK_ID, uuid4(), sql=HAND_SQL)
+        await _service(db).edit_block_sql(_other_ctx(), REPORT_ID, BLOCK_ID, sql=HAND_SQL)
 
     assert fake.calls == 0

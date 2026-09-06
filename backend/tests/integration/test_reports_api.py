@@ -239,7 +239,7 @@ class NoLazyLoads:
 
 
 class FakeService:
-    """Stands in for `ReportService`, recording every owner_id it is given.
+    """Stands in for `ReportService`, recording every context it is given.
 
     The router builds the service itself, so it is the *class* that is replaced.
     Each instance shares one call log through the class attribute.
@@ -256,7 +256,7 @@ class FakeService:
     chart_options: list[dict[str, Any]] = []
     chart_refusal: str | None = None
 
-    def __init__(self, _db: Any, _settings: Any) -> None:
+    def __init__(self, _db: Any, _settings: Any, _authz: Any) -> None:
         pass
 
     def _record(self, method: str, **kwargs: Any) -> None:
@@ -264,12 +264,12 @@ class FakeService:
         if FakeService.raises is not None:
             raise FakeService.raises
 
-    async def list(self, owner_id: UUID) -> list[Report]:
-        self._record("list", owner_id=owner_id)
+    async def list(self, ctx: RequestContext) -> list[Report]:
+        self._record("list", ctx=ctx)
         return [_report()]
 
-    async def get(self, report_id: UUID, owner_id: UUID) -> Any:
-        self._record("get", report_id=report_id, owner_id=owner_id)
+    async def get(self, ctx: RequestContext, report_id: UUID) -> Any:
+        self._record("get", report_id=report_id, ctx=ctx)
         return NoLazyLoads(_report())
 
     async def sections_of(self, report_id: UUID) -> list[ReportSection]:
@@ -281,96 +281,125 @@ class FakeService:
     async def display_names(self, reports: list[Any]) -> tuple[dict, dict]:
         return {CONNECTION_ID: "sales"}, {LLM_ID: "deepseek"}
 
-    async def create(self, owner_id: UUID, **fields: Any) -> Any:
-        self._record("create", owner_id=owner_id, **fields)
+    async def create(self, ctx: RequestContext, **fields: Any) -> Any:
+        self._record("create", ctx=ctx, **fields)
         return NoLazyLoads(_report())
 
-    async def update(self, report_id: UUID, owner_id: UUID, **changes: Any) -> Any:
-        self._record("update", report_id=report_id, owner_id=owner_id, **changes)
+    async def update(self, ctx: RequestContext, report_id: UUID, **changes: Any) -> Any:
+        self._record("update", report_id=report_id, ctx=ctx, **changes)
         return NoLazyLoads(_report())
 
-    async def delete(self, report_id: UUID, owner_id: UUID) -> None:
-        self._record("delete", report_id=report_id, owner_id=owner_id)
+    async def delete(self, ctx: RequestContext, report_id: UUID) -> None:
+        self._record("delete", report_id=report_id, ctx=ctx)
 
-    async def propose_outline(self, report_id: UUID, owner_id: UUID) -> Any:
-        self._record("propose_outline", report_id=report_id, owner_id=owner_id)
+    async def propose_outline(self, ctx: RequestContext, report_id: UUID) -> Any:
+        self._record("propose_outline", report_id=report_id, ctx=ctx)
         return NoLazyLoads(_report())
 
     async def add_section(
-        self, report_id: UUID, owner_id: UUID, **fields: Any
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        **fields: Any,
     ) -> ReportSection:
-        self._record("add_section", report_id=report_id, owner_id=owner_id, **fields)
+        self._record("add_section", report_id=report_id, ctx=ctx, **fields)
         return _section()
 
     async def update_section(
-        self, report_id: UUID, section_id: UUID, owner_id: UUID, **changes: Any
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        section_id: UUID,
+        **changes: Any,
     ) -> ReportSection:
         self._record(
             "update_section",
             report_id=report_id,
             section_id=section_id,
-            owner_id=owner_id,
+            ctx=ctx,
             **changes,
         )
         return _section()
 
     async def delete_section(
-        self, report_id: UUID, section_id: UUID, owner_id: UUID
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        section_id: UUID,
     ) -> None:
         self._record(
             "delete_section",
             report_id=report_id,
             section_id=section_id,
-            owner_id=owner_id,
+            ctx=ctx,
         )
 
     async def add_block(
-        self, report_id: UUID, section_id: UUID, owner_id: UUID, **fields: Any
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        section_id: UUID,
+        **fields: Any,
     ) -> ReportBlock:
         self._record(
             "add_block",
             report_id=report_id,
             section_id=section_id,
-            owner_id=owner_id,
+            ctx=ctx,
             **fields,
         )
         return _block()
 
     async def update_block(
-        self, report_id: UUID, block_id: UUID, owner_id: UUID, **changes: Any
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        block_id: UUID,
+        **changes: Any,
     ) -> ReportBlock:
         self._record(
             "update_block",
             report_id=report_id,
             block_id=block_id,
-            owner_id=owner_id,
+            ctx=ctx,
             **changes,
         )
         return _block()
 
     async def delete_block(
-        self, report_id: UUID, block_id: UUID, owner_id: UUID
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        block_id: UUID,
     ) -> None:
         self._record(
-            "delete_block", report_id=report_id, block_id=block_id, owner_id=owner_id
+            "delete_block", report_id=report_id, block_id=block_id, ctx=ctx
         )
 
     async def check_block(
-        self, report_id: UUID, block_id: UUID, owner_id: UUID
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        block_id: UUID,
     ) -> tuple[ReportBlock, Any]:
         self._record(
-            "check_block", report_id=report_id, block_id=block_id, owner_id=owner_id
+            "check_block", report_id=report_id, block_id=block_id, ctx=ctx
         )
         return _block(), FakeService.draft
 
     async def edit_block_sql(
-        self, report_id: UUID, block_id: UUID, owner_id: UUID, *, sql: str
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        block_id: UUID,
+        *,
+        sql: str,
     ) -> tuple[ReportBlock, Any]:
         self._record(
             "edit_block_sql",
             report_id=report_id,
             block_id=block_id,
-            owner_id=owner_id,
+            ctx=ctx,
             sql=sql,
         )
         block = _block()
@@ -378,16 +407,16 @@ class FakeService:
         block.sql_origin = "GENERATED_EDITED"
         return block, FakeService.draft
 
-    async def create_run(self, report_id: UUID, owner_id: UUID) -> ReportRun:
-        self._record("create_run", report_id=report_id, owner_id=owner_id)
+    async def create_run(self, ctx: RequestContext, report_id: UUID) -> ReportRun:
+        self._record("create_run", report_id=report_id, ctx=ctx)
         return _run("QUEUED")
 
-    async def runs_of(self, report_id: UUID, owner_id: UUID) -> list[ReportRun]:
-        self._record("runs_of", report_id=report_id, owner_id=owner_id)
+    async def runs_of(self, ctx: RequestContext, report_id: UUID) -> list[ReportRun]:
+        self._record("runs_of", report_id=report_id, ctx=ctx)
         return [_run("SUCCEEDED")]
 
-    async def run(self, report_id: UUID, run_id: UUID, owner_id: UUID) -> ReportRun:
-        self._record("run", report_id=report_id, run_id=run_id, owner_id=owner_id)
+    async def run(self, ctx: RequestContext, report_id: UUID, run_id: UUID) -> ReportRun:
+        self._record("run", report_id=report_id, run_id=run_id, ctx=ctx)
         return _run()
 
     async def run_results(
@@ -399,31 +428,38 @@ class FakeService:
         return dict(FakeService.previous_hashes)
 
     async def cancel_run(
-        self, report_id: UUID, run_id: UUID, owner_id: UUID
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        run_id: UUID,
     ) -> bool:
         self._record(
-            "cancel_run", report_id=report_id, run_id=run_id, owner_id=owner_id
+            "cancel_run", report_id=report_id, run_id=run_id, ctx=ctx
         )
         return True
 
     async def request_section_retry(
-        self, report_id: UUID, run_id: UUID, section_id: UUID, owner_id: UUID
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        run_id: UUID,
+        section_id: UUID,
     ) -> ReportRun:
         self._record(
             "request_section_retry",
             report_id=report_id,
             run_id=run_id,
             section_id=section_id,
-            owner_id=owner_id,
+            ctx=ctx,
         )
         return _run("RUNNING")
 
     async def redraw_block_chart(
         self,
+        ctx: RequestContext,
         report_id: UUID,
         run_id: UUID,
         result_id: UUID,
-        owner_id: UUID,
         *,
         chart_type: str,
     ) -> tuple[ReportBlockResult, list[dict[str, Any]], str | None]:
@@ -432,7 +468,7 @@ class FakeService:
             report_id=report_id,
             run_id=run_id,
             result_id=result_id,
-            owner_id=owner_id,
+            ctx=ctx,
             chart_type=chart_type,
         )
         row = _block_result()
@@ -445,10 +481,10 @@ class FakeService:
 
     async def edit_prose(
         self,
+        ctx: RequestContext,
         report_id: UUID,
         run_id: UUID,
         section_id: UUID,
-        owner_id: UUID,
         *,
         edited_prose: str | None,
     ) -> ReportSectionResult:
@@ -457,7 +493,7 @@ class FakeService:
             report_id=report_id,
             run_id=run_id,
             section_id=section_id,
-            owner_id=owner_id,
+            ctx=ctx,
             edited_prose=edited_prose,
         )
         row = _section_result()
@@ -1230,11 +1266,11 @@ def test_every_route_scopes_to_the_caller(
     )
 
     assert response.status_code < 400, response.text
-    owners = [
-        kwargs["owner_id"] for _m, kwargs in FakeService.calls if "owner_id" in kwargs
+    contexts = [
+        kwargs["ctx"] for _m, kwargs in FakeService.calls if "ctx" in kwargs
     ]
-    assert owners, f"{method.upper()} {path} reached no owner-scoped service call"
-    assert all(owner == USER for owner in owners)
+    assert contexts, f"{method.upper()} {path} reached no scoped service call"
+    assert all(c.user_id == USER for c in contexts)
 
 
 def test_the_sweep_covers_every_route_the_app_publishes() -> None:

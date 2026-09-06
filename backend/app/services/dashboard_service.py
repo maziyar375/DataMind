@@ -1,9 +1,17 @@
 """Dashboards: CRUD, and the refresh that turns tiles into results.
 
 Most of this file is ordinary CRUD with one rule threaded through every method —
-**everything is scoped to the owner, and a resource belonging to someone else is
-404, not 403**, so another user's dashboard is indistinguishable from one that
-does not exist.
+**every method asks the `Authorizer`, and a resource the caller may not reach is
+404, not 403**, so a dashboard somebody else owns is indistinguishable from one
+that does not exist.
+
+That rule used to be spelled `WHERE owner_id = :actor`, in twenty-eight places
+in this file. It is now one question asked of one object: `allowed` for a single
+row, `visible` composed into the query for a list. The answer is identical today
+— `OwnerOnlyAuthorizer` returns exactly what the comparison did — and that is
+the point: when grants arrive, sharing a dashboard is a change in
+`app/infra/authz/`, not a change here. See
+`docs/user-management-and-access-control-plan.md` §18.
 
 The two parts that are not CRUD:
 
@@ -33,9 +41,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clock import utcnow
 from app.core.config import Settings
+from app.core.context import RequestContext
 from app.core.errors import ConflictError, NotFoundError, SqlRejectedError, ValidationError
 from app.core.logging import get_logger
+from app.domain.ports.authz import Authorizer, ResourceRef
 from app.domain.value_objects import TileType
+from app.domain.value_objects.authz import Privilege, ResourceType
+from app.infra.authz.compose import restrict
 from app.infra.db.models import (
     Dashboard,
     DashboardTile,
@@ -127,27 +139,56 @@ def is_fresh(
 
 
 class DashboardService:
-    def __init__(self, db: AsyncSession, settings: Settings) -> None:
+    def __init__(
+        self, db: AsyncSession, settings: Settings, authz: Authorizer
+    ) -> None:
         self._db = db
         self._settings = settings
+        self._authz = authz
 
     # ── dashboards ───────────────────────────────────────────────────────
-    async def list(self, owner_id: UUID) -> list[Dashboard]:
+    async def list(self, ctx: RequestContext) -> list[Dashboard]:
+        """Every dashboard this principal may see, in one query.
+
+        The authorization answer is **composed into** the statement rather than
+        applied to its results. A version of this that loaded every dashboard
+        and filtered in Python would return the same rows today and the wrong
+        page tomorrow, the moment ordering and paging meet a shared board.
+        """
+        visible = await self._authz.visible(
+            ctx, ResourceType.DASHBOARD, Privilege.DESCRIBE
+        )
         result = await self._db.execute(
-            select(Dashboard)
-            .where(Dashboard.owner_id == owner_id)
-            .order_by(Dashboard.updated_at.desc())
+            restrict(
+                select(Dashboard).order_by(Dashboard.updated_at.desc()),
+                Dashboard.id,
+                visible,
+            )
         )
         return list(result.scalars())
 
-    async def get(self, dashboard_id: UUID, owner_id: UUID) -> Dashboard:
+    async def get(
+        self,
+        ctx: RequestContext,
+        dashboard_id: UUID,
+        privilege: Privilege = Privilege.SELECT,
+    ) -> Dashboard:
+        """The dashboard, if this principal may act on it at `privilege`.
+
+        `privilege` is what every caller in this file passes to say *what it is
+        about to do*: reading is `select`, editing is `modify`, deleting is
+        `delete`. Under today's authorizer all three answer the same, because
+        ownership confers the whole lattice — so naming them costs nothing now
+        and is the entire difference between "shared" and "shared read-only"
+        later.
+        """
         result = await self._db.execute(
-            select(Dashboard).where(
-                Dashboard.id == dashboard_id, Dashboard.owner_id == owner_id
-            )
+            select(Dashboard).where(Dashboard.id == dashboard_id)
         )
         dashboard = result.scalar_one_or_none()
-        if dashboard is None:
+        if dashboard is None or not await self._authz.allowed(
+            ctx, ResourceRef.to(ResourceType.DASHBOARD, dashboard), privilege
+        ):
             # 404 rather than 403: see the module docstring.
             raise NotFoundError("Dashboard not found.")
         return dashboard
@@ -160,27 +201,29 @@ class DashboardService:
         )
         return list(result.scalars())
 
-    async def create(self, owner_id: UUID, **fields: Any) -> Dashboard:
+    async def create(self, ctx: RequestContext, **fields: Any) -> Dashboard:
         name = (fields.get("name") or "").strip()
         if not name:
             raise ValidationError("A dashboard needs a name.")
-        await self._refuse_duplicate_name(owner_id, name)
+        await self._refuse_duplicate_name(ctx, name)
 
-        dashboard = Dashboard(id=uuid.uuid4(), owner_id=owner_id, **{**fields, "name": name})
+        dashboard = Dashboard(
+            id=uuid.uuid4(), owner_id=ctx.user_id, **{**fields, "name": name}
+        )
         self._db.add(dashboard)
         await self._db.flush()
         return dashboard
 
     async def update(
-        self, dashboard_id: UUID, owner_id: UUID, **changes: Any
+        self, ctx: RequestContext, dashboard_id: UUID, **changes: Any
     ) -> Dashboard:
-        dashboard = await self.get(dashboard_id, owner_id)
+        dashboard = await self.get(ctx, dashboard_id, Privilege.MODIFY)
         if (name := changes.get("name")) is not None:
             name = name.strip()
             if not name:
                 raise ValidationError("A dashboard needs a name.")
             if name != dashboard.name:
-                await self._refuse_duplicate_name(owner_id, name)
+                await self._refuse_duplicate_name(ctx, name)
             changes["name"] = name
 
         for field, value in changes.items():
@@ -192,13 +235,22 @@ class DashboardService:
         await self._db.refresh(dashboard)
         return dashboard
 
-    async def delete(self, dashboard_id: UUID, owner_id: UUID) -> None:
-        await self._db.delete(await self.get(dashboard_id, owner_id))
+    async def delete(self, ctx: RequestContext, dashboard_id: UUID) -> None:
+        await self._db.delete(await self.get(ctx, dashboard_id, Privilege.DELETE))
 
-    async def _refuse_duplicate_name(self, owner_id: UUID, name: str) -> None:
+    async def _refuse_duplicate_name(self, ctx: RequestContext, name: str) -> None:
+        """The `uq_dashboard_owner_name` predicate, not an access decision.
+
+        This is the only kind of `owner_id` comparison that survives in this
+        file, and it survives because the unique constraint it is checking is
+        itself per-owner: the row about to be written will carry `ctx.user_id`,
+        so the question "is that name taken" can only be asked of that owner's
+        rows. Reading somebody else's dashboards here would be the bug.
+        """
         existing = await self._db.execute(
             select(Dashboard).where(
-                Dashboard.owner_id == owner_id, Dashboard.name == name
+                Dashboard.owner_id == ctx.user_id,  # authz-ok: unique (owner, name)
+                Dashboard.name == name,
             )
         )
         if existing.scalar_one_or_none() is not None:
@@ -206,9 +258,20 @@ class DashboardService:
 
     # ── tiles ────────────────────────────────────────────────────────────
     async def tile(
-        self, dashboard_id: UUID, tile_id: UUID, owner_id: UUID
+        self,
+        ctx: RequestContext,
+        dashboard_id: UUID,
+        tile_id: UUID,
+        privilege: Privilege = Privilege.SELECT,
     ) -> DashboardTile:
-        await self.get(dashboard_id, owner_id)
+        """A tile, reached through its dashboard.
+
+        A tile is a **leaf**: it has no grant of its own and never will, so the
+        only question asked here is about its parent. That is what keeps the
+        permission model finite — otherwise every tile, section, block and run
+        would be a row somebody could orphan a grant on.
+        """
+        await self.get(ctx, dashboard_id, privilege)
         result = await self._db.execute(
             select(DashboardTile).where(
                 DashboardTile.id == tile_id,
@@ -221,11 +284,11 @@ class DashboardService:
         return tile
 
     async def add_tile(
-        self, dashboard_id: UUID, owner_id: UUID, **fields: Any
+        self, ctx: RequestContext, dashboard_id: UUID, **fields: Any
     ) -> DashboardTile:
-        await self.get(dashboard_id, owner_id)
+        await self.get(ctx, dashboard_id, Privilege.MODIFY)
         return await self._store_tile(
-            dashboard_id, await self._validated_tile_fields(owner_id, fields)
+            dashboard_id, await self._validated_tile_fields(ctx, fields)
         )
 
     async def _store_tile(
@@ -247,9 +310,9 @@ class DashboardService:
         return tile
 
     async def update_tile(
-        self, dashboard_id: UUID, tile_id: UUID, owner_id: UUID, **changes: Any
+        self, ctx: RequestContext, dashboard_id: UUID, tile_id: UUID, **changes: Any
     ) -> DashboardTile:
-        tile = await self.tile(dashboard_id, tile_id, owner_id)
+        tile = await self.tile(ctx, dashboard_id, tile_id, Privilege.MODIFY)
         merged = {
             "tile_type": tile.tile_type,
             "connection_id": tile.connection_id,
@@ -260,7 +323,7 @@ class DashboardService:
         # Re-validated as a whole, not field by field: switching a TEXT tile to
         # a CHART is legal, and it is the *resulting* tile that has to make
         # sense, not the field that happened to change.
-        validated = await self._validated_tile_fields(owner_id, merged)
+        validated = await self._validated_tile_fields(ctx, merged)
 
         for field in changes:
             setattr(tile, field, validated.get(field, changes[field]))
@@ -269,14 +332,18 @@ class DashboardService:
         return tile
 
     async def delete_tile(
-        self, dashboard_id: UUID, tile_id: UUID, owner_id: UUID
+        self, ctx: RequestContext, dashboard_id: UUID, tile_id: UUID
     ) -> None:
-        await self._db.delete(await self.tile(dashboard_id, tile_id, owner_id))
+        # `modify` on the dashboard, not `delete`: removing a tile edits the
+        # board, it does not destroy it.
+        await self._db.delete(
+            await self.tile(ctx, dashboard_id, tile_id, Privilege.MODIFY)
+        )
 
     async def duplicate_tile(
-        self, dashboard_id: UUID, tile_id: UUID, owner_id: UUID
+        self, ctx: RequestContext, dashboard_id: UUID, tile_id: UUID
     ) -> DashboardTile:
-        source = await self.tile(dashboard_id, tile_id, owner_id)
+        source = await self.tile(ctx, dashboard_id, tile_id, Privilege.MODIFY)
         copy = DashboardTile(
             id=uuid.uuid4(),
             dashboard_id=dashboard_id,
@@ -304,7 +371,7 @@ class DashboardService:
         return copy
 
     async def set_layout(
-        self, dashboard_id: UUID, owner_id: UUID, positions: list[dict[str, Any]]
+        self, ctx: RequestContext, dashboard_id: UUID, positions: list[dict[str, Any]]
     ) -> list[DashboardTile]:
         """One call per drag-end, one row per tile — never a dashboard-level blob.
 
@@ -312,7 +379,7 @@ class DashboardService:
         an error: a drag that raced a delete in another tab should finish, not
         fail the whole layout save.
         """
-        await self.get(dashboard_id, owner_id)
+        await self.get(ctx, dashboard_id, Privilege.MODIFY)
         tiles = {tile.id: tile for tile in await self.tiles_of(dashboard_id)}
 
         touched: list[DashboardTile] = []
@@ -335,7 +402,7 @@ class DashboardService:
         return sorted(tiles.values(), key=lambda t: (t.position, t.created_at))
 
     async def _validated_tile_fields(
-        self, owner_id: UUID, fields: dict[str, Any]
+        self, ctx: RequestContext, fields: dict[str, Any]
     ) -> dict[str, Any]:
         """Everything a tile must satisfy before it is stored.
 
@@ -357,10 +424,10 @@ class DashboardService:
         connection_id = fields.get("connection_id")
         if connection_id is None:
             raise ValidationError("This tile type needs a database connection.")
-        connection = await self._owned_connection(connection_id, owner_id)
+        connection = await self._authorized_connection(ctx, connection_id)
 
         if fields.get("llm_config_id") is not None:
-            await self._owned_llm_config(fields["llm_config_id"], owner_id)
+            await self._authorized_llm_config(ctx, fields["llm_config_id"])
 
         if not sql:
             raise ValidationError("This tile type needs a SQL statement.")
@@ -385,49 +452,69 @@ class DashboardService:
             )
         return fields
 
-    async def _owned_connection(
-        self, connection_id: UUID, owner_id: UUID
+    async def _authorized_connection(
+        self, ctx: RequestContext, connection_id: UUID
     ) -> DatabaseConnection:
+        """The connection, if this principal may **ask questions through it**.
+
+        `select`, not `modify`: pointing a tile at a database is using it, not
+        editing it. That distinction is the whole reason the lattice has five
+        rungs rather than two — a reader who may query a warehouse must not
+        thereby be able to rewrite its credentials.
+        """
         result = await self._db.execute(
-            select(DatabaseConnection).where(
-                DatabaseConnection.id == connection_id,
-                DatabaseConnection.owner_id == owner_id,
-            )
+            select(DatabaseConnection).where(DatabaseConnection.id == connection_id)
         )
         connection = result.scalar_one_or_none()
-        if connection is None:
+        if connection is None or not await self._authz.allowed(
+            ctx,
+            ResourceRef.to(ResourceType.CONNECTION, connection),
+            Privilege.SELECT,
+        ):
             raise NotFoundError("Connection not found.")
         return connection
 
-    async def _owned_llm_config(self, llm_config_id: UUID, owner_id: UUID) -> LlmConfig:
+    async def _authorized_llm_config(
+        self, ctx: RequestContext, llm_config_id: UUID
+    ) -> LlmConfig:
+        """The model configuration, if this principal may **answer with it**.
+
+        `select` again, and here it is load-bearing rather than tidy: `modify`
+        on an LLM config is equivalent to disclosing its API key, because a
+        holder can repoint `base_url` at a host they control and read the key
+        out of the next request. Choosing a model for a tile must never require
+        anything above `select`.
+        """
         result = await self._db.execute(
-            select(LlmConfig).where(
-                LlmConfig.id == llm_config_id, LlmConfig.owner_id == owner_id
-            )
+            select(LlmConfig).where(LlmConfig.id == llm_config_id)
         )
         config = result.scalar_one_or_none()
-        if config is None:
+        if config is None or not await self._authz.allowed(
+            ctx, ResourceRef.to(ResourceType.LLM_CONFIG, config), Privilege.SELECT
+        ):
             raise NotFoundError("Model configuration not found.")
         return config
 
     # ── import / export ──────────────────────────────────────────────────
-    async def export(self, dashboard_id: UUID, owner_id: UUID) -> DashboardDocument:
+    async def export(
+        self, ctx: RequestContext, dashboard_id: UUID
+    ) -> DashboardDocument:
         """The dashboard as a portable document. No ids, no results, no secrets.
 
         The connections are loaded in full because the document needs two things
         off them — the name and the engine — and `display_names` deliberately
-        returns only the first. Both queries are owner-scoped; a tile pointing at
-        a row this user does not own contributes no connection to the file, and
-        its tile exports unmapped.
+        returns only the first. Both queries are authorization-scoped; a tile
+        pointing at a database this caller cannot reach contributes no
+        connection to the file, and its tile exports unmapped.
         """
-        dashboard = await self.get(dashboard_id, owner_id)
+        dashboard = await self.get(ctx, dashboard_id)
         tiles = await self.tiles_of(dashboard_id)
-        connections = await self._connections_of(tiles, owner_id)
+        connections = await self._connections_of(ctx, tiles)
         return build_document(dashboard, tiles, connections)
 
     async def import_document(
         self,
-        owner_id: UUID,
+        ctx: RequestContext,
         *,
         document: Any,
         name: str | None = None,
@@ -450,21 +537,19 @@ class DashboardService:
         3. The dashboard row is created only once tiles are known to be
            storable, so the common failure costs no name.
 
-        A connection is resolved from the caller's own rows, never from the
-        file: the document names a database, and only the person importing it
-        can say which of *their* connections that is.
+        A connection is resolved from the rows the caller may reach, never from
+        the file: the document names a database, and only the person importing
+        it can say which of the connections available to *them* that is.
         """
         parsed = parse_document(document)
-        targets = await self._resolve_refs(parsed, connection_map or {}, owner_id)
+        targets = await self._resolve_refs(ctx, parsed, connection_map or {})
 
         prepared: list[dict[str, Any]] = []
         skipped: list[SkippedTile] = []
         for index, tile in enumerate(parsed.tiles):
             try:
                 prepared.append(
-                    await self._validated_tile_fields(
-                        owner_id, tile_fields(tile, targets)
-                    )
+                    await self._validated_tile_fields(ctx, tile_fields(tile, targets))
                 )
             except (SqlRejectedError, ValidationError, NotFoundError) as exc:
                 skipped.append(
@@ -483,7 +568,7 @@ class DashboardService:
             raise ValidationError("A dashboard needs a name.")
         settings = parsed.dashboard.model_dump(exclude={"name"})
         dashboard = await self.create(
-            owner_id, name=await self._free_name(owner_id, wanted), **settings
+            ctx, name=await self._free_name(ctx, wanted), **settings
         )
         for fields in prepared:
             await self._store_tile(dashboard.id, fields)
@@ -491,25 +576,25 @@ class DashboardService:
 
     async def _resolve_refs(
         self,
+        ctx: RequestContext,
         document: DashboardDocument,
         connection_map: dict[str, UUID],
-        owner_id: UUID,
     ) -> dict[str, UUID]:
         """Which connection each `ref` in the file means, for this user.
 
-        The client's map wins, and every id in it is checked against the
-        caller's own rows — this is a route that takes an id from a request
-        body, so the ownership check is the wall. Refs the map leaves out fall
-        back to an exact name match, which is what makes re-importing a file
-        into the account it came from a single click. Names are unique per owner
-        (`uq_conn_owner_name`), so that match is never ambiguous.
+        The client's map wins, and every id in it goes through the authorizer —
+        this is a route that takes an id from a request body, so that check is
+        the wall. Refs the map leaves out fall back to an exact name match,
+        which is what makes re-importing a file into the account it came from a
+        single click. Names are unique per owner (`uq_conn_owner_name`), so that
+        match is never ambiguous.
         """
         declared = {connection.ref: connection for connection in document.connections}
         resolved: dict[str, UUID] = {}
         for ref, connection_id in connection_map.items():
             if ref not in declared:
                 continue  # a ref for a connection this document never mentions
-            await self._owned_connection(connection_id, owner_id)
+            await self._authorized_connection(ctx, connection_id)
             resolved[ref] = connection_id
 
         unmapped = [
@@ -518,22 +603,27 @@ class DashboardService:
             if ref not in resolved and connection.name.strip()
         ]
         if unmapped:
-            by_name = await self._connection_ids_by_name(owner_id)
+            by_name = await self._connection_ids_by_name(ctx)
             for connection in unmapped:
                 match = by_name.get(connection.name.strip().casefold())
                 if match is not None:
                     resolved[connection.ref] = match
         return resolved
 
-    async def _connection_ids_by_name(self, owner_id: UUID) -> dict[str, UUID]:
+    async def _connection_ids_by_name(self, ctx: RequestContext) -> dict[str, UUID]:
+        visible = await self._authz.visible(
+            ctx, ResourceType.CONNECTION, Privilege.SELECT
+        )
         rows = await self._db.execute(
-            select(DatabaseConnection.id, DatabaseConnection.name).where(
-                DatabaseConnection.owner_id == owner_id
+            restrict(
+                select(DatabaseConnection.id, DatabaseConnection.name),
+                DatabaseConnection.id,
+                visible,
             )
         )
         return {str(row[1]).strip().casefold(): row[0] for row in rows}
 
-    async def _free_name(self, owner_id: UUID, wanted: str) -> str:
+    async def _free_name(self, ctx: RequestContext, wanted: str) -> str:
         """`wanted`, or the first free number after it.
 
         Names are unique per owner, and the collision that matters here is the
@@ -545,7 +635,11 @@ class DashboardService:
         entirely.
         """
         rows = await self._db.execute(
-            select(Dashboard.name).where(Dashboard.owner_id == owner_id)
+            # The same predicate as `_refuse_duplicate_name`, asked of the row
+            # about to be written.
+            select(Dashboard.name).where(
+                Dashboard.owner_id == ctx.user_id  # authz-ok: unique (owner, name)
+            )
         )
         taken = {str(name).strip().casefold() for name in rows.scalars()}
         if wanted.casefold() not in taken:
@@ -591,8 +685,8 @@ class DashboardService:
     # ── refresh ──────────────────────────────────────────────────────────
     async def refresh(
         self,
+        ctx: RequestContext,
         dashboard_id: UUID,
-        owner_id: UUID,
         tile_ids: list[UUID] | None = None,
         force: bool = False,
     ) -> dict[UUID, TileResult]:
@@ -602,7 +696,7 @@ class DashboardService:
         for the tiles that are *due*, which is the normal call shape; the whole
         dashboard is the exception, on first paint.
         """
-        dashboard = await self.get(dashboard_id, owner_id)
+        dashboard = await self.get(ctx, dashboard_id)
         wanted = set(tile_ids or [])
         tiles = [
             tile
@@ -646,16 +740,16 @@ class DashboardService:
                 stale.append(tile)
 
         if stale:
-            results |= await self._execute(stale, owner_id, cache)
+            results |= await self._execute(ctx, stale, cache)
         return results
 
     async def _execute(
         self,
+        ctx: RequestContext,
         tiles: list[DashboardTile],
-        owner_id: UUID,
         cache: dict[UUID, DashboardTileCache],
     ) -> dict[UUID, TileResult]:
-        connections = await self._connections_of(tiles, owner_id)
+        connections = await self._connections_of(ctx, tiles)
 
         requests: list[TileRequest] = []
         results: dict[UUID, TileResult] = {}
@@ -681,7 +775,7 @@ class DashboardService:
 
         if requests:
             results |= await execute_many(
-                self._db, self._settings, requests=requests, owner_id=owner_id
+                self._db, self._settings, requests=requests, owner_id=ctx.user_id
             )
 
         by_id = {tile.id: tile for tile in tiles}
@@ -692,20 +786,28 @@ class DashboardService:
         return results
 
     async def _connections_of(
-        self, tiles: list[DashboardTile], owner_id: UUID
+        self, ctx: RequestContext, tiles: list[DashboardTile]
     ) -> dict[UUID, DatabaseConnection]:
-        """Every connection the batch needs, in one owner-scoped query.
+        """Every connection the batch needs, in one authorization-scoped query.
 
         Scoped here as well as in `query_service`: this is the query that
-        decides which rows are even loaded, and that one is the wall.
+        decides which rows are even loaded, and that one is the wall. A tile
+        whose connection is filtered out here does not silently run against
+        somebody else's database — it comes back `E_CONNECTION_REMOVED`, the
+        same answer a deleted connection gives, which is the right amount to
+        tell somebody about a database they cannot reach.
         """
         ids = {t.connection_id for t in tiles if t.connection_id}
         if not ids:
             return {}
+        visible = await self._authz.visible(
+            ctx, ResourceType.CONNECTION, Privilege.SELECT
+        )
         rows = await self._db.execute(
-            select(DatabaseConnection).where(
-                DatabaseConnection.id.in_(ids),
-                DatabaseConnection.owner_id == owner_id,
+            restrict(
+                select(DatabaseConnection).where(DatabaseConnection.id.in_(ids)),
+                DatabaseConnection.id,
+                visible,
             )
         )
         return {connection.id: connection for connection in rows.scalars()}
