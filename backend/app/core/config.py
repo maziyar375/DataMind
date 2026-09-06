@@ -42,6 +42,48 @@ class Settings(BaseSettings):
     admin_password: SecretStr = SecretStr("raymand")
     admin_display_name: str = "Administrator"
 
+    # ── authorization ────────────────────────────────────────────────────
+    # Which implementation of the `Authorizer` port answers "may they?".
+    # `owner_only` is the rule the product shipped with — you may act on a row
+    # if you own it — written down as a policy object so every call site could
+    # be routed through the port before the policy changed. `rbac` adds
+    # grants, teams and role scoped privileges on top of ownership, and
+    # becomes the default at the end of Phase 6 of
+    # `docs/user-management-and-access-control-plan.md`. The previous value
+    # stays a working rollback for one release: no grant row is read under
+    # `owner_only`, and turning grants on creates no rows, so the flip is
+    # reversible in both directions without a migration.
+    authz_backend: Literal["owner_only", "rbac"] = "owner_only"
+
+    # Who verifies a human. **`local` is the only value today** and the enum
+    # has one member on purpose: an unreachable branch is worse documentation
+    # than an honest single value.
+    #
+    # Adding `oidc` is §20.3 of the access-control plan, and step 5 of that
+    # recipe is the one that must not be skipped: an OIDC account is matched to
+    # an existing user by a **verified** email exactly once, at first sign-in,
+    # and from then on by `external_subject` — never by email again. Matching
+    # on email on every sign-in makes an attacker-controlled address at the IdP
+    # a takeover of the local account with the same address. Every grant, every
+    # role assignment and every owned row points at `users.id`, which does not
+    # change when an account is bound to an issuer, so nothing is rewritten.
+    auth_provider: Literal["local"] = "local"
+
+    # May a service user hold `user.manage`, `role.manage`,
+    # `service_user.manage` or `settings.manage`? **No**, and the reason is
+    # blast radius rather than tidiness: a leaked API key must not be able to
+    # mint an administrator. It is a policy enforced in the service layer, not
+    # an invariant enforced by the database, because an installation that runs
+    # its own provisioning agent has a real reason to turn it on — and turning
+    # it on writes an audit row.
+    allow_privileged_service_users: bool = False
+
+    # How long a newly minted service-user key lasts when the caller names no
+    # expiry. A year, not forever: an unexpiring machine credential is the one
+    # every published incident report has in common, and a default that expires
+    # makes rotation a thing that happens rather than a thing that is planned.
+    service_key_default_ttl_days: int = 365
+
     # ── secrets ──────────────────────────────────────────────────────────
     # 32-byte urlsafe-base64 key. Generate: python -c
     #   "import os,base64;print(base64.urlsafe_b64encode(os.urandom(32)).decode())"

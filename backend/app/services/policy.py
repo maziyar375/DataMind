@@ -1,15 +1,59 @@
 """Authorization as functions, not scattered role checks.
 
 Row-level or column-level security later is a change in this module only.
+
+**`can()` is the one that matters from here on.** The functions below it are
+the single-player rule the product shipped with — ownership, and an
+administrator arm that four of them never found a caller for. `can()` asks the
+`Authorizer` port instead, which is where ownership, grants, teams and role
+scoped privileges are combined into one answer with a reason attached. New code
+calls `can()`; the older functions stay because deleting a working check to
+make a diff tidier is how behaviour changes by accident.
 """
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
 from app.core.context import RequestContext
+from app.domain.ports.authz import Authorizer, Decision, ResourceRef
+from app.domain.value_objects.authz import Privilege, ResourceType
 
 if TYPE_CHECKING:  # `Settings` is a pydantic model; the import is free at runtime
     from app.core.config import Settings
+
+
+async def can(
+    ctx: RequestContext,
+    authz: Authorizer,
+    ref: ResourceRef,
+    privilege: Privilege,
+) -> Decision:
+    """May this principal do this to this thing? Delegates, and adds nothing.
+
+    A thin function on purpose. It exists so that `services/` has one import to
+    reach for and one name to grep, and so the answer arrives as a `Decision` —
+    allowed *plus why* — rather than as a bare bool that an audit row cannot
+    explain. Every scrap of logic lives in the authorizer; if this function ever
+    grows an `if`, the rule it encodes belongs in `app/infra/authz/` where the
+    other rules are and where the tests for them are.
+    """
+    return await authz.allowed(ctx, ref, privilege)
+
+
+async def can_on(
+    ctx: RequestContext,
+    authz: Authorizer,
+    type_: ResourceType,
+    entity: Any,
+    privilege: Privilege,
+) -> Decision:
+    """`can()` for a row already loaded — the common case in a service.
+
+    Passing the row means the authorizer does not re-read what the caller has
+    in memory. `ResourceRef.to` is the same thing spelled out; this is the
+    version that reads well at a call site.
+    """
+    return await authz.allowed(ctx, ResourceRef.to(type_, entity), privilege)
 
 
 def owns(ctx: RequestContext, resource: Any) -> bool:

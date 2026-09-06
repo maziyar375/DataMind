@@ -27,6 +27,20 @@ jobs:
       - name: Architecture contracts
         run: lint-imports
 
+      # The authorization gate — docs/user-management-and-access-control-plan.md
+      # §18.4. Four greps, each naming a way of deciding access that this
+      # codebase has agreed not to use.
+      #
+      # **Non-blocking on purpose, and only until Phase 2.** It fails today on
+      # the ~40 lines that still decide ownership inside a service, and those
+      # lines are removed in Phases 1 and 2 — at which point `continue-on-error`
+      # comes off and this becomes a real gate. Landing it red now is what makes
+      # the count visible in every PR while it goes down.
+      - name: Authorization decisions live in the authorizer
+        working-directory: .
+        continue-on-error: true
+        run: make authz-check
+
       # Milestone item 12 — one grep decides whether the LLM abstraction is
       # real or decorative. It costs a single CI line.
       - name: LiteLLM stays behind the gateway

@@ -1696,6 +1696,17 @@ where someone would otherwise repeat them: a "getting the answer right" block in
 - **A new API route:** router in `api/v1/`, DTO in `schemas.py`, business logic
   in a `services/*` function that owns the transaction. Literal paths (e.g.
   `/test`) must be declared **above** `/{id}` routes.
+
+  **Decide its `ResourceType` and `Privilege` before you write it.** Both enums
+  live in `domain/value_objects/authz.py` and the matrix of what each verb means
+  per type — `PRIVILEGE_MEANINGS` — is the specification every route resolves to
+  exactly one cell of. The check itself is asked through the `Authorizer` port
+  (`domain/ports/authz.py`), never by comparing `owner_id` or a role string in
+  the handler: `make authz-check` greps for those three shortcuts, and
+  [docs/user-management-and-access-control-plan.md](docs/user-management-and-access-control-plan.md)
+  §18.4 gives the three enforcement shapes and says there is no fourth. A route
+  that cannot name its type and privilege is a route whose access rule has not
+  been decided yet.
 - **Prompt changes:** versioned prompts live in `pipeline/prompts/`. Two sets
   are the exception, for the same reason and both recorded on the row they
   produce: `app/semantic/prompts.py` (`SEMANTIC_PROMPT_VERSION`) and

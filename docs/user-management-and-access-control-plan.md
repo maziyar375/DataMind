@@ -2062,10 +2062,10 @@ new API route decides its `ResourceType` and `Privilege` before it is written.*
 - Import-linter still green: `app.domain` imports no `sqlalchemy`, no `fastapi`.
 
 **Acceptance criteria.**
-- [ ] Gate green.
-- [ ] **Zero call sites changed and zero test assertions changed** — the diff is
+- [x] Gate green.
+- [x] **Zero call sites changed and zero test assertions changed** — the diff is
       additive.
-- [ ] `make authz-check` runs and currently **fails** on the 213 known lines;
+- [x] `make authz-check` runs and currently **fails** on the 213 known lines;
       it is added to CI as `continue-on-error` and flips to blocking in Phase 2.
 
 **Not included.** No table, no migration, no endpoint, no UI, no `RbacAuthorizer`,
@@ -2968,26 +2968,26 @@ cd frontend && npm run typecheck && npm run build && npm test
 
 ## Phase 0 — Vocabulary, the port, the switches
 
-- [ ] `app/domain/value_objects/authz.py`: `Privilege` (5), `ResourceType` (8),
+- [x] `app/domain/value_objects/authz.py`: `Privilege` (5), `ResourceType` (8),
       `Capability` (18), `PrincipalKind` (2)
-- [ ] `_SATISFIED_BY` and `satisfying()` in the same module
-- [ ] `PRIVILEGE_MEANINGS` — the §13.3 matrix as data
-- [ ] `app/domain/ports/authz.py`: `ResourceRef`, `Decision`, `Everything`,
+- [x] `_SATISFIED_BY` and `satisfying()` in the same module
+- [x] `PRIVILEGE_MEANINGS` — the §13.3 matrix as data
+- [x] `app/domain/ports/authz.py`: `ResourceRef`, `Decision`, `Everything`,
       `Subquery`, `Ids`, `Visible`, `Authorizer` Protocol (4 methods)
-- [ ] `app/infra/authz/__init__.py` and `owner_only.py` — `OwnerOnlyAuthorizer`
-- [ ] `core/config.py`: `authz_backend`, `auth_provider` (+ the §20.3 docstring),
+- [x] `app/infra/authz/__init__.py` and `owner_only.py` — `OwnerOnlyAuthorizer`
+- [x] `core/config.py`: `authz_backend`, `auth_provider` (+ the §20.3 docstring),
       `allow_privileged_service_users`, `service_key_default_ttl_days`
-- [ ] `api/deps.py`: `get_authorizer`, `AuthzDep`
-- [ ] `services/policy.py`: `can(ctx, resource, privilege)` delegating; `owns`
+- [x] `api/deps.py`: `get_authorizer`, `AuthzDep`
+- [x] `services/policy.py`: `can(ctx, resource, privilege)` delegating; `owns`
       and `can_curate` untouched
-- [ ] `Makefile`: the `authz-check` target with the four greps
-- [ ] CI: `authz-check` added as non-blocking
-- [ ] Test: lattice reflexive, transitive, `manage` satisfies all five
-- [ ] Test: `satisfying()` returns an immutable frozenset
-- [ ] Test: `OwnerOnlyAuthorizer` agrees with `owns()` on a table of cases
-- [ ] Test: every `ResourceType` × `Privilege` has a `PRIVILEGE_MEANINGS` entry
-- [ ] **Gate green**
-- [ ] **Acceptance:** zero call sites and zero test assertions changed
+- [x] `Makefile`: the `authz-check` target with the four greps
+- [x] CI: `authz-check` added as non-blocking
+- [x] Test: lattice reflexive, transitive, `manage` satisfies all five
+- [x] Test: `satisfying()` returns an immutable frozenset
+- [x] Test: `OwnerOnlyAuthorizer` agrees with `owns()` on a table of cases
+- [x] Test: every `ResourceType` × `Privilege` has a `PRIVILEGE_MEANINGS` entry
+- [x] **Gate green**
+- [x] **Acceptance:** zero call sites and zero test assertions changed
 
 ## Phase 1 — `ctx` everywhere, part A
 
