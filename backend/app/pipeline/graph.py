@@ -266,6 +266,10 @@ def _configurable(
         "out_of_scope": dict(out_of_scope or {}),
         "classify": classify,
         "seq": _Seq(),
+        # Which of each node's tokens a step row has already claimed. Per-run
+        # for the same reason `seq` is: the graphs are compiled once and
+        # shared, so nothing per-run may be closed over by an adapter.
+        "reported_usage": {},
     }
 
 
@@ -365,29 +369,46 @@ async def _finish_step(
     await on_step(seq, name, status, detail, duration_ms, usage)
 
 
-def _usage_snapshot(run: RunState, name: str) -> NodeUsage:
-    """A copy of this node's bucket as it stands, for diffing after the call."""
-    return run.node_usage.get(name, NodeUsage()).model_copy()
+def _usage_unreported(
+    run: RunState, name: str, reported: dict[str, NodeUsage]
+) -> NodeUsage | None:
+    """What this node has spent that no step row has claimed yet.
 
+    Deliberately *not* a diff around the node's own execution, which is the
+    obvious implementation and is wrong here. `present` starts the chart's
+    model call and `chart` awaits it (`_ChartAhead`), so the chart's sink
+    usually fires while `present` is still running: a before/after snapshot
+    taken around `chart` would see its bucket unchanged and write a null,
+    losing tokens the run's total already counts — the step rows would then no
+    longer sum to the run, which is the one invariant per-node attribution
+    rests on.
 
-def _usage_since(run: RunState, name: str, before: NodeUsage) -> NodeUsage | None:
-    """What this execution of the node added, or None if it called no model.
+    Diffing against *what has been reported* instead makes the accounting
+    complete by construction: every token in a bucket is claimed by exactly one
+    row, whichever node's execution it happened to arrive during, and a node
+    that runs twice (`generate` repairing) still reports only what is new since
+    its last row.
 
-    None rather than a zeroed bucket, because the column it lands in
-    distinguishes *"this node never calls a model"* from *"it called one and
-    the provider reported nothing"* — and `validate` and `execute` are the
-    first kind. Zeroes here would make every step look measured.
+    None rather than a zeroed bucket when there is nothing new, because the
+    columns distinguish *"this node never calls a model"* from *"it called one
+    and the provider reported nothing"* — `validate` and `execute` are the
+    first kind, and zeroes there would make every step look measured.
     """
-    after = run.node_usage.get(name)
-    if after is None or after.calls == before.calls:
+    total = run.node_usage.get(name)
+    if total is None:
         return None
-    return NodeUsage(
-        prompt_tokens=after.prompt_tokens - before.prompt_tokens,
-        completion_tokens=after.completion_tokens - before.completion_tokens,
-        latency_ms=after.latency_ms - before.latency_ms,
-        calls=after.calls - before.calls,
-        model=after.model,
+    seen = reported.get(name, NodeUsage())
+    if total.calls == seen.calls:
+        return None
+    delta = NodeUsage(
+        prompt_tokens=total.prompt_tokens - seen.prompt_tokens,
+        completion_tokens=total.completion_tokens - seen.completion_tokens,
+        latency_ms=total.latency_ms - seen.latency_ms,
+        calls=total.calls - seen.calls,
+        model=total.model,
     )
+    reported[name] = total.model_copy()
+    return delta
 
 
 # ── the adapter ──────────────────────────────────────────────────────────
@@ -416,12 +437,7 @@ def _adapt(
 
         seq = configurable["seq"].next()
         started = time.perf_counter()
-        # What this node had spent *before* it ran. A node can execute more
-        # than once in a run — `generate` repairs, and the restore edges
-        # re-enter `present` — and each of those is its own `run_steps` row, so
-        # each row must carry what that execution spent rather than the
-        # node's running total.
-        before = _usage_snapshot(run, name)
+        reported: dict[str, NodeUsage] = configurable["reported_usage"]
 
         await on_step(seq, name, StepStatus.RUNNING, None, 0)
         await deps.emit("STEP_STARTED", {"seq": seq, "name": name})
@@ -441,7 +457,7 @@ def _adapt(
             # step row saying nothing would hide the expensive failures.
             await _finish_step(
                 on_step, seq, name, StepStatus.FAILED, str(err)[:300], duration,
-                _usage_since(run, name, before),
+                _usage_unreported(run, name, reported),
             )
             await deps.emit(
                 "STEP_FINISHED",
@@ -454,7 +470,7 @@ def _adapt(
 
         await _finish_step(
             on_step, seq, name, status, result.detail, duration,
-            _usage_since(run, name, before),
+            _usage_unreported(run, name, reported),
         )
         await deps.emit(
             "STEP_FINISHED",

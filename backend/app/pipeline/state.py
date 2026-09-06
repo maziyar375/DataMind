@@ -15,8 +15,8 @@ can drift from `attempts`.
 from __future__ import annotations
 
 import re
-from datetime import datetime
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 

@@ -145,7 +145,7 @@ def _priced_model(state: RunState, run: Run) -> str:
     for bucket in state.node_usage.values():
         if bucket.model:
             return bucket.model
-    return str(run.model_snapshot.get("model", ""))
+    return str((run.model_snapshot or {}).get("model", "") or "")
 
 
 class RunService:

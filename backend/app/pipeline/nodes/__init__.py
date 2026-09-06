@@ -15,7 +15,13 @@ from app.core.clock import utcnow
 from app.core.errors import ConnectorError, LLMError
 from app.core.logging import get_logger
 from app.domain.ports.database import DatabaseConnector
-from app.domain.ports.llm import ChatMessage, LLMGateway, ResolvedLLM, UsageSink
+from app.domain.ports.llm import (
+    ChatMessage,
+    LLMGateway,
+    ResolvedLLM,
+    Usage,
+    UsageSink,
+)
 from app.domain.value_objects import DisclosurePolicy, HintBudget
 from app.knowledge.bind import bind_params, bind_sql
 from app.knowledge.matcher import TemplateMatcher, best
@@ -158,7 +164,22 @@ async def route(state: RunState, deps: NodeDeps) -> NodeResult:
         # `+=` lines here and nowhere else, which is exactly why a run's totals
         # described this one cheap classification and none of the expensive
         # calls after it.
-        state.record_usage("route", completion.usage(deps.llm.model))
+        # Built from the completion's own fields rather than through
+        # `Completion.usage()`: `complete()` is the one gateway method whose
+        # return type already carries the numbers, and reading them here keeps
+        # this node working against anything shaped like a completion — which
+        # every scripted double in the suite is.
+        #
+        # `getattr` on the model because `deps.llm` is typed `ResolvedLLM` but
+        # the draft and test harnesses legitimately pass None. A run costed
+        # under "" prices as unknown, which is the same honest null a
+        # self-hosted model already produces.
+        state.record_usage("route", Usage(
+            prompt_tokens=completion.prompt_tokens,
+            completion_tokens=completion.completion_tokens,
+            latency_ms=completion.latency_ms,
+            model=getattr(deps.llm, "model", "") or "",
+        ))
         label = completion.text.strip().upper().split()[0] if completion.text else ""
     except LLMError:
         # A routing failure must not fail the run; assume the common case.

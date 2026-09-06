@@ -306,8 +306,14 @@ async def test_anthropic_is_not_sent_stream_options() -> None:
 
 @pytest.mark.asyncio
 async def test_nothing_changes_for_a_caller_that_passes_no_sink() -> None:
-    """The phase gate: this is an optional keyword argument and no caller passes
-    it yet, so every path without one must be exactly what it was."""
+    """A call with no sink sends exactly the bytes it sent before sinks existed.
+
+    Written as Phase 1's gate, when no caller passed one. Phase 3 wired the six
+    pipeline call sites, so the property it pins is now the one that matters
+    longer: the *request* is unchanged by the presence or absence of a sink —
+    `on_usage` reads the reply and never shapes the ask. The draft graph, the
+    eval harness and every `complete()` caller still take this path.
+    """
     seen: list[dict[str, Any]] = []
 
     async def once(**payload: Any) -> Any:
