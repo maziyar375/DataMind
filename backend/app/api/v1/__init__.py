@@ -12,6 +12,7 @@ from app.api.v1 import (
     reports,
     roles,
     semantic,
+    service_users,
     teams,
     users,
 )
@@ -28,8 +29,13 @@ api_router.include_router(roles.router)
 # eight seed roles because a person has to be able to see the teams they are
 # in; `team.manage` is Administrator's alone.
 api_router.include_router(teams.router)
-# `audit.read`, and a peer of both for the same reason: all three are about
-# people rather than about a connection's data.
+# The fourth people-shaped router, and the only one whose principals are
+# machines. Gated `service_user.manage`, which Administrator and DataMind
+# Maintainer hold — running the installation and administering people are
+# different jobs, and minting an agent belongs to the first.
+api_router.include_router(service_users.router)
+# `audit.read`, and a peer of all of them for the same reason: they are about
+# principals rather than about a connection's data.
 api_router.include_router(audit.router)
 api_router.include_router(llm_configs.router)
 api_router.include_router(connections.router)

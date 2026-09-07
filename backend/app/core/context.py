@@ -4,9 +4,10 @@ from __future__ import annotations
 import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
+from typing import Any
 from uuid import UUID
 
-from app.domain.value_objects.authz import Capability
+from app.domain.value_objects.authz import Capability, PrincipalKind
 
 _correlation_id: ContextVar[str] = ContextVar("correlation_id", default="")
 
@@ -35,6 +36,14 @@ class RequestContext:
     user_id: UUID
     email: str
     role: str
+    #: HUMAN or SERVICE. **Nothing about authorization reads it** — a service
+    #: user with the BI Engineer role has byte-identical capabilities to a
+    #: human with it, and a test asserts that equality — so this exists for
+    #: exactly three things: the `/auth/*` routes that refuse a machine, the
+    #: audit log, and the badge the UI draws. A default, because every context
+    #: built by hand is a person or a delegation, and the service path sets it
+    #: explicitly.
+    kind: PrincipalKind = PrincipalKind.HUMAN
     session_id: UUID | None = None
     correlation_id: str = ""
     #: Where the request came from, for the audit log and nothing else.
@@ -95,6 +104,64 @@ class RequestContext:
         return Capability.USER_MANAGE in self.capabilities
 
     @classmethod
+    def for_user(
+        cls,
+        identity: Any,
+        capabilities: frozenset[Capability],
+        team_ids: frozenset[UUID],
+        *,
+        actor_ip: str = "",
+        session_id: UUID | None = None,
+    ) -> RequestContext:
+        """A verified human session, with what the database says they may do.
+
+        `identity` is an `app.domain.ports.identity.AuthenticatedIdentity` and
+        is typed loosely on purpose: `app.core` sits below `app.domain` in the
+        import graph, and a real annotation here would be a cycle for the sake
+        of a name. What it must have is `user_id`, `email` and `role`.
+        """
+        return cls(
+            user_id=identity.user_id,
+            email=identity.email,
+            role=identity.role,
+            kind=PrincipalKind.HUMAN,
+            session_id=session_id,
+            capabilities=capabilities,
+            team_ids=team_ids,
+            correlation_id=get_correlation_id(),
+            actor_ip=actor_ip,
+        )
+
+    @classmethod
+    def for_service(
+        cls,
+        identity: Any,
+        capabilities: frozenset[Capability],
+        team_ids: frozenset[UUID],
+        *,
+        actor_ip: str = "",
+    ) -> RequestContext:
+        """A verified API key. **The same object, from the other authenticator.**
+
+        This is the seam requirement 9 asks for, made of code: every field but
+        `kind` is filled from the same two queries the human path runs, and no
+        service, repository or authorizer downstream can tell the two apart.
+        There is no `session_id` because a key is not exchanged for a session —
+        it *is* the credential, which is what lets revoking one fail the very
+        next request.
+        """
+        return cls(
+            user_id=identity.user_id,
+            email=identity.email,
+            role=identity.role,
+            kind=PrincipalKind.SERVICE,
+            capabilities=capabilities,
+            team_ids=team_ids,
+            correlation_id=get_correlation_id(),
+            actor_ip=actor_ip,
+        )
+
+    @classmethod
     def on_behalf_of(
         cls, user_id: UUID, *, correlation_id: str | None = None
     ) -> RequestContext:
@@ -140,6 +207,11 @@ class RequestContext:
             user_id=user_id,
             email="",
             role="",
+            # Reset rather than carried: the principal changed, so the old
+            # principal's kind is not a fact about the new one. A run started
+            # by an API key and delegated to the report's owner must not
+            # describe that owner as a machine.
+            kind=PrincipalKind.HUMAN,
             session_id=None,
             capabilities=frozenset(),
             team_ids=frozenset(),

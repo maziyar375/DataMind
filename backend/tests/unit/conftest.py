@@ -17,11 +17,13 @@ import importlib
 import sys
 import types
 from collections.abc import Iterator
+from datetime import UTC
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.dialects import sqlite
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Session
 
@@ -49,10 +51,52 @@ ROLES_MIGRATION = importlib.import_module(
 )
 
 
+class _UtcDateTime(sqlite.DATETIME):
+    """`timestamptz`, for a database that has no such thing.
+
+    Postgres stores an offset and gives it back; SQLite stores a string and
+    returns a **naive** datetime, so a value written as `utcnow()` reads back
+    as something `utcnow()` cannot be compared against at all — a `TypeError`,
+    in a code path whose production behaviour is fine. That is a difference
+    between the test database and the real one, which is exactly what the
+    Postgres-syntax edits in `engine` already exist to erase.
+
+    Installed on the **dialect** rather than on the copied metadata, and that
+    is the whole subtlety: the ORM classes are mapped against
+    `Base.metadata`, not against the copy `create_all` runs, so a type swapped
+    on the copy would fix the `CREATE TABLE` and change nothing about what a
+    query returns. `colspecs` maps a generic type to its dialect
+    implementation, so this reaches every `DateTime` the mapping uses without
+    mutating the shared metadata other test modules import.
+    """
+
+    def bind_processor(self, dialect: Any) -> Any:
+        inner = super().bind_processor(dialect)
+
+        def process(value: Any) -> Any:
+            if value is not None and value.tzinfo is not None:
+                value = value.astimezone(UTC).replace(tzinfo=None)
+            return inner(value) if inner else value
+
+        return process
+
+    def result_processor(self, dialect: Any, coltype: Any) -> Any:
+        inner = super().result_processor(dialect, coltype)
+
+        def process(value: Any) -> Any:
+            resolved = inner(value) if inner else value
+            if resolved is not None and resolved.tzinfo is None:
+                resolved = resolved.replace(tzinfo=UTC)
+            return resolved
+
+        return process
+
+
 # ── a real database, behind the async surface the service uses ───────────
 _TABLES = (
     "users", "teams", "team_members", "roles", "role_capabilities",
-    "role_scoped_privileges", "role_assignments", "audit_logs",
+    "role_scoped_privileges", "role_assignments", "service_credentials",
+    "audit_logs",
 )
 
 
@@ -116,15 +160,18 @@ class AsyncSessionShim:
 
 @pytest.fixture(scope="module")
 def engine() -> sa.Engine:
-    """The eight tables this file writes, from the real metadata.
+    """The nine tables these files write, from the real metadata.
 
-    Four edits to a *copy* of the column definitions, all about Postgres
-    syntax rather than anything under test: a `::jsonb` server default SQLite
-    cannot parse, an `ARRAY` its driver refuses, `JSONB` itself, which has no
-    SQLite compiler, and `audit_logs.id` — a `BigInteger` primary key, which
-    SQLite will not auto-increment because only `INTEGER PRIMARY KEY` aliases
-    the rowid. None appears in an assertion here; they are the price of running
-    the real statements against a real engine rather than faking them.
+    Five edits, all about Postgres syntax rather than anything under test: a
+    `::jsonb` server default SQLite cannot parse, an `ARRAY` its driver
+    refuses, `JSONB` itself, which has no SQLite compiler, `audit_logs.id` — a
+    `BigInteger` primary key, which SQLite will not auto-increment because only
+    `INTEGER PRIMARY KEY` aliases the rowid — and every `timestamptz`, which
+    SQLite hands back naive. The first four are made on a *copy* of the column
+    definitions; the fifth is made on the dialect, for the reason
+    `_UtcDateTime` gives. None appears in an assertion here; they are the price
+    of running the real statements against a real engine rather than faking
+    them.
     """
     metadata = sa.MetaData()
     for name in _TABLES:
@@ -138,6 +185,9 @@ def engine() -> sa.Engine:
                 column.type = sa.Integer()
 
     engine = sa.create_engine("sqlite+pysqlite:///:memory:")
+    # The fifth edit, and the one that has to happen on the dialect — see
+    # `_UtcDateTime`.
+    engine.dialect.colspecs = {**engine.dialect.colspecs, sa.DateTime: _UtcDateTime}
 
     @sa.event.listens_for(engine, "connect")
     def _enforce_foreign_keys(dbapi_connection: Any, _record: Any) -> None:
@@ -163,6 +213,7 @@ def db(engine: sa.Engine) -> Iterator[AsyncSessionShim]:
             User(
                 id=ACTOR, email="actor@test.local", display_name="Actor",
                 password_hash="x", role=LegacyRole.ADMIN, status="ACTIVE",
+                kind="HUMAN",
             )
         )
         _seed_roles(session)
@@ -198,7 +249,7 @@ def _seed_roles(session: Session) -> None:
 def _user(session: Session, email: str, role: str = LegacyRole.MEMBER) -> User:
     user = User(
         id=uuid4(), email=email, display_name=email.split("@")[0],
-        password_hash="x", role=role, status="ACTIVE",
+        password_hash="x", role=role, status="ACTIVE", kind="HUMAN",
     )
     session.add(user)
     session.flush()

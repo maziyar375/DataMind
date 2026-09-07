@@ -1,3 +1,17 @@
+"""Sign in, sign out, and everything a signed-in **person** does to themselves.
+
+Every route here is a *human* route, and from Phase 5 that is enforced rather
+than assumed. A machine identity has no password, no session and no refresh
+cookie, so `/login` and `/refresh` are already unreachable for one — but
+`PATCH /auth/me` and `PUT /auth/me/password` are reachable with a valid API key,
+and both would be wrong: the first lets a leaked key rename the identity it
+leaked from, and the second would write a `password_hash` onto a row the
+database has a `CHECK` forbidding it on, turning a policy question into a 500.
+
+So a `SERVICE` principal is refused by every route in this module, with a
+sentence that says what to do instead. The refusal is `403`, not `404`: it is a
+statement about the caller, not about a resource, and there is nothing to leak.
+"""
 from __future__ import annotations
 
 from fastapi import APIRouter, Cookie, Response, status
@@ -11,14 +25,37 @@ from app.api.schemas import (
     ProfileUpdate,
     TokenResponse,
 )
-from app.core.errors import AuthenticationError, ValidationError
+from app.core.errors import AuthenticationError, ForbiddenError, ValidationError
 from app.domain.ports.identity import AuthenticatedIdentity, Credentials
 from app.domain.value_objects import UserStatus
+from app.domain.value_objects.authz import PrincipalKind
 from app.infra.db.models import User
 from app.services.role_service import RoleService
 from app.services.team_service import TeamService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+#: What a machine is told when it reaches a human route. Concrete on purpose:
+#: an integration author reading this in a log needs the next step, not a
+#: category.
+_NOT_FOR_MACHINES = (
+    "This is a sign-in route for people. A service account authenticates with "
+    "its API key on every request and has no session, no password and no "
+    "profile to edit — rotate its key from Administration → Service accounts "
+    "instead."
+)
+
+
+def _refuse_service(ctx) -> None:
+    """403 for a `SERVICE` principal, on every route in this module.
+
+    Read from the **context**, which got it from the authenticator that
+    verified this very request, rather than re-read from the row: the two
+    cannot disagree, and a second query to learn something already in hand is
+    the kind of thing that gets dropped from one route later.
+    """
+    if ctx.kind == PrincipalKind.SERVICE:
+        raise ForbiddenError(_NOT_FOR_MACHINES)
 
 
 def _set_refresh_cookie(response: Response, token: str, settings) -> None:
@@ -92,6 +129,7 @@ async def me(ctx: CtxDep, db: DbDep) -> MeResponse:
     It also means a role granted or revoked while the user is signed in shows
     up on their **next** `/auth/me`, with no new token and no sign-out.
     """
+    _refuse_service(ctx)
     user = await db.get(User, ctx.user_id)
     if user is None:
         raise AuthenticationError("This account no longer exists.")
@@ -108,6 +146,7 @@ async def my_permissions(ctx: CtxDep, db: DbDep) -> PermissionsResponse:
     not have to re-fetch the first. Grafana has exactly this endpoint
     (`/api/access-control/user/permissions`) for exactly this reason.
     """
+    _refuse_service(ctx)
     roles = await RoleService(db).roles_of(ctx.user_id, ctx.team_ids)
     teams = await TeamService(db).teams_of(ctx.user_id)
     return PermissionsResponse(
@@ -132,6 +171,12 @@ async def _me(db, user: User, ctx) -> MeResponse:
         email=user.email,
         display_name=user.display_name,
         role=user.role,
+        # `users.kind` is `NOT NULL`, so the fallback only fires for a `User`
+        # that was never inserted — which is a test double, not a state the
+        # database can be in. Defaulting rather than crashing keeps a fixture
+        # that predates the column from failing on a field it does not care
+        # about.
+        kind=user.kind or PrincipalKind.HUMAN,
         capabilities=sorted(str(c) for c in ctx.capabilities),
         roles=[role.name for role in roles],
         teams=[team.name for team in teams],
@@ -151,6 +196,7 @@ async def _me(db, user: User, ctx) -> MeResponse:
 
 @router.patch("/me", response_model=MeResponse)
 async def update_me(payload: ProfileUpdate, ctx: CtxDep, db: DbDep) -> MeResponse:
+    _refuse_service(ctx)
     user = await db.get(User, ctx.user_id)
     if user is None:
         raise AuthenticationError("This account no longer exists.")
@@ -182,6 +228,7 @@ async def change_my_password(
     immediately afterwards, so the person who just changed their password is
     the only one still signed in rather than the only one signed out.
     """
+    _refuse_service(ctx)
     user = await db.get(User, ctx.user_id)
     if user is None:
         raise AuthenticationError("This account no longer exists.")

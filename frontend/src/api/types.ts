@@ -86,6 +86,58 @@ export interface Team {
   created_at?: string
 }
 
+/**
+ * A machine identity: a principal with roles, teams and keys, and no way in.
+ *
+ * The same `users` row shape a person has — which is why an agent can own a
+ * dashboard and appear in the audit log by name — narrowed to the fields the
+ * Service accounts screen renders. There is no `email` field worth showing:
+ * the address is generated and non-routable, and the display name is the
+ * identity.
+ */
+export interface ServiceAccount {
+  id: string
+  display_name: string
+  /** What it is for. Required by the API — an undocumented machine identity
+   *  is the one nobody is willing to delete. */
+  description: string | null
+  status: string
+  /** Always `SERVICE`. Present so a principal from either list badges right. */
+  kind: string
+  /** `svc-<slug>-<discriminator>@service.datamind.local`. Shown small: it is
+   *  what an audit row joins on, not what anybody calls this account. */
+  email: string
+  roles: string[]
+  teams: string[]
+  /** Keys neither revoked nor expired — "is anything still authenticating as
+   *  this?", answered without opening the detail. */
+  active_keys: number
+  created_at?: string
+}
+
+/**
+ * One API key, described. **Never the key.**
+ *
+ * `prefix` is the clear half by construction: it is what makes a key found in
+ * a log traceable to its owner without the secret half ever having been
+ * stored, and showing it is the reason the format has two parts.
+ */
+export interface ServiceKey {
+  id: string
+  name: string
+  prefix: string
+  expires_at: string | null
+  last_used_at: string | null
+  revoked_at: string | null
+  created_at?: string
+}
+
+/** The one response in the API that carries a live credential. Shown once. */
+export interface IssuedKey {
+  credential: ServiceKey
+  token: string
+}
+
 /** `GET /auth/me/permissions`. What every affordance is rendered from. */
 export interface Permissions {
   capabilities: string[]

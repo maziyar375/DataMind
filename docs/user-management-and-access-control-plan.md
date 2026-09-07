@@ -2357,8 +2357,8 @@ join teams the moment both exist.
 - Audit: `service_user.created/disabled/deleted`,
   `service_credential.issued/revoked/expired`.
 
-**Schema.** `0024_principal_kind.py` (§17.1) and `0025_service_credentials.py`
-(§17.2).
+**Schema.** `0026_principal_kind.py` (§17.1) and `0027_service_credentials.py`
+(§17.2) — `0024` and `0025` went to roles and teams, so the numbers moved by two.
 
 **Frontend.**
 - `/admin/service-accounts` tab: list, create form (name, description, roles,
@@ -3180,36 +3180,36 @@ cd frontend && npm run typecheck && npm run build && npm test
 
 ## Phase 5 — Service users
 
-- [ ] Migration `0024_principal_kind.py`: `users.kind`, `users.description`, the
+- [x] Migration `0026_principal_kind.py`: `users.kind`, `users.description`, the
       three `CHECK`s, `ix_users_kind`
-- [ ] Migration `0025_service_credentials.py`
-- [ ] ORM models and the `PrincipalKind` plumbing
-- [ ] `domain/ports/identity.py`: `ServiceIdentityProvider` Protocol
-- [ ] `infra/identity/service_key.py`: generate, verify (SHA-256,
+- [x] Migration `0027_service_credentials.py`
+- [x] ORM models and the `PrincipalKind` plumbing
+- [x] `domain/ports/identity.py`: `ServiceIdentityProvider` Protocol
+- [x] `infra/identity/service_key.py`: generate, verify (SHA-256,
       constant-time), expiry, revocation, throttled `last_used_at`
-- [ ] `api/deps.py`: `get_ctx` dispatches on the `dm_sk_` prefix
-- [ ] `services/service_user_service.py`, incl. the privileged-capability refusal
-- [ ] `api/v1/service_users.py` gated `service_user.manage`
-- [ ] `/auth/login`, `/auth/refresh`, `/auth/me*` refuse a `SERVICE` principal
-- [ ] Audit actions: the six service actions
-- [ ] Frontend: **Service accounts** tab — list, create form with effective
+- [x] `api/deps.py`: `get_ctx` dispatches on the `dm_sk_` prefix
+- [x] `services/service_user_service.py`, incl. the privileged-capability refusal
+- [x] `api/v1/service_users.py` gated `service_user.manage`
+- [x] `/auth/login`, `/auth/refresh`, `/auth/me*` refuse a `SERVICE` principal
+- [x] Audit actions: the six service actions
+- [x] Frontend: **Service accounts** tab — list, create form with effective
       permission preview, detail, Keys panel
-- [ ] Frontend: one-time key display reusing the one-time-password panel
-- [ ] Frontend: kind badges wherever a principal is listed
-- [ ] Frontend: the role picker hides privileged capabilities and says why
-- [ ] Test: valid / revoked / expired / unknown-prefix / wrong-secret key
-- [ ] Test: constant-time comparison helper
-- [ ] Test: `last_used_at` throttling
-- [ ] Test: a `SERVICE` principal is refused by every `/auth` route
-- [ ] Test: the three `CHECK` constraints
-- [ ] Test: a service user's capabilities are byte-identical to a human's with
+- [x] Frontend: one-time key display reusing the one-time-password panel
+- [x] Frontend: kind badges wherever a principal is listed
+- [x] Frontend: the role picker hides privileged capabilities and says why
+- [x] Test: valid / revoked / expired / unknown-prefix / wrong-secret key
+- [x] Test: constant-time comparison helper
+- [x] Test: `last_used_at` throttling
+- [x] Test: a `SERVICE` principal is refused by every `/auth` route
+- [x] Test: the three `CHECK` constraints
+- [x] Test: a service user's capabilities are byte-identical to a human's with
       the same role
-- [ ] Test: privileged capabilities refused off, allowed and audited on
-- [ ] Test: `test_openapi_has_no_secrets.py` covers `token_hash` and the key
-- [ ] Doc: `security.md` §6 subsection and §7 checklist item; `README.md`
+- [x] Test: privileged capabilities refused off, allowed and audited on
+- [x] Test: `test_openapi_has_no_secrets.py` covers `token_hash` and the key
+- [x] Doc: `security.md` §6 subsection and §7 checklist item; `README.md`
       *Programmatic access*
-- [ ] **Gate green**
-- [ ] **Acceptance:** a key authenticates and returns the same body a human in
+- [x] **Gate green**
+- [x] **Acceptance:** a key authenticates and returns the same body a human in
       the same team would get; the key is shown once; revoking fails the next
       request
 
@@ -3398,14 +3398,14 @@ cd frontend && npm run typecheck && npm run build && npm test
 | 2 · `ctx` part B | 16 | **16** | 2026-09-07 |
 | 3 · Roles and capabilities | 32 | **32** | 2026-09-07 |
 | 4 · Teams | 20 | **20** | 2026-09-07 |
-| 5 · Service users | 25 | 0 | — |
+| 5 · Service users | 25 | **25** | 2026-09-07 |
 | 6 · Grants on connections | 34 | 0 | — |
 | 7 · The audit half | 15 | 0 | — |
 | 8 · Grants on artifacts | 26 | 0 | — |
 | 9 · Access review | 15 | 0 | — |
 | 10 · Rulebook and seams | 21 | 0 | — |
 | Cross-cutting | 8 | 0 | — |
-| **Total** | **254** | **110** | |
+| **Total** | **254** | **135** | |
 
 ## 30. The one-line acceptance test for the whole plan
 

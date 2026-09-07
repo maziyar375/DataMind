@@ -389,6 +389,45 @@ generation reads the same schema block a run reads, under the same budget.
 - In-process run executor with heartbeats and a stale-run reconciler, so no run
   is left stuck when a process dies
 - An offline eval harness with a nightly CI run — **[docs/eval.md](docs/eval.md)**
+- **Programmatic access** — service accounts and API keys, below
+
+### Programmatic access
+
+An integration signs in as a **service account**: a machine identity with its
+own roles and teams, its own API keys, and no way to sign in interactively. It
+is a first-class principal — it can own a dashboard, it appears in the audit log
+by name, and its permissions come from exactly the same roles a person's do.
+
+Create one under **Administration → Service accounts** (you need the
+`service_user.manage` permission — Administrator and DataMind Maintainer carry
+it), give it the roles it needs, then issue a key from its detail page. **The
+key is shown once.** Then:
+
+```bash
+curl -H "Authorization: Bearer dm_sk_…" \
+     https://your-datamind/api/v1/dashboards
+```
+
+Every endpoint that takes a bearer token takes a key, and answers exactly as it
+would for a person holding the same roles — the two authenticators produce the
+same request context. The exceptions are the `/auth` routes, which are for
+people: a service account has no session to refresh, no profile to edit and no
+password to rotate.
+
+Four things worth knowing before you deploy one:
+
+- **Keys expire after a year by default** (`SERVICE_KEY_DEFAULT_TTL_DAYS`).
+  Plan the rotation; a key with no expiry is available and is a deliberate
+  choice rather than the default.
+- **Revoking a key fails the very next request** — the key is the credential,
+  not something exchanged for a short-lived token.
+- **The `dm_sk_` prefix is deliberately scannable**, and the twelve characters
+  after it are the key's public half: paste them into the Service accounts
+  screen to identify a key found in a log, without the secret ever leaving your
+  hands.
+- **A service account cannot manage users, roles, service accounts or settings**
+  unless you set `ALLOW_PRIVILEGED_SERVICE_USERS=true`. A leaked key should not
+  be able to change who can sign in.
 
 ### Frontend
 
@@ -567,6 +606,10 @@ The offline eval harness is separate and costs real tokens — see
 | `MAX_CONCURRENT_RUNS` | Executor concurrency limit | `8` |
 | `RUN_DEADLINE_SECONDS` | Hard per-run time budget | `120` in code, raised to `300` by compose |
 | `LLM_REQUEST_TIMEOUT_SECONDS` | Per-provider-call timeout | `60` in code, raised to `120` by compose |
+| `AUTHZ_BACKEND` | Which `Authorizer` answers "may they?" — `owner_only` or `rbac` | `owner_only` |
+| `AUTH_PROVIDER` | Who verifies a human. One value today | `local` |
+| `ALLOW_PRIVILEGED_SERVICE_USERS` | May a service account hold `user.manage`, `role.manage`, `service_user.manage` or `settings.manage`? | `false` |
+| `SERVICE_KEY_DEFAULT_TTL_DAYS` | Lifetime of a new API key when none is named | `365` |
 | `VITE_POLL` | Set to `1` if hot reload misses your bind mounts | `0` |
 
 The two compose overrides are headroom for slow hosted models: a chat run makes

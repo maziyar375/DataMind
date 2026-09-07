@@ -80,6 +80,32 @@ TEAMS: dict[tuple[str, str], Capability] = {
     ("DELETE", "/api/v1/teams/{team_id}/roles/{role_id}"): Capability.TEAM_MANAGE,
 }
 
+#: Phase 5's routes. **All of them are `service_user.manage`**, and there is no
+#: read/manage split here on purpose: unlike people, a machine identity has no
+#: audience that needs to see it without being able to change it, and the two
+#: roles that hold this — Administrator and DataMind Maintainer — are exactly
+#: the two whose job includes minting one.
+SERVICE_ACCOUNTS: dict[tuple[str, str], Capability] = {
+    ("GET", "/api/v1/service-accounts"): Capability.SERVICE_USER_MANAGE,
+    ("POST", "/api/v1/service-accounts"): Capability.SERVICE_USER_MANAGE,
+    ("GET", "/api/v1/service-accounts/{service_user_id}"):
+        Capability.SERVICE_USER_MANAGE,
+    ("PATCH", "/api/v1/service-accounts/{service_user_id}"):
+        Capability.SERVICE_USER_MANAGE,
+    ("DELETE", "/api/v1/service-accounts/{service_user_id}"):
+        Capability.SERVICE_USER_MANAGE,
+    ("POST", "/api/v1/service-accounts/{service_user_id}/roles"):
+        Capability.SERVICE_USER_MANAGE,
+    ("DELETE", "/api/v1/service-accounts/{service_user_id}/roles/{role_id}"):
+        Capability.SERVICE_USER_MANAGE,
+    ("GET", "/api/v1/service-accounts/{service_user_id}/keys"):
+        Capability.SERVICE_USER_MANAGE,
+    ("POST", "/api/v1/service-accounts/{service_user_id}/keys"):
+        Capability.SERVICE_USER_MANAGE,
+    ("DELETE", "/api/v1/service-accounts/{service_user_id}/keys/{credential_id}"):
+        Capability.SERVICE_USER_MANAGE,
+}
+
 
 def _guarded_by(route: Any) -> set[Capability]:
     """Which capabilities this route's dependency tree demands.
@@ -147,7 +173,8 @@ def test_the_walk_finds_the_real_routes() -> None:
 
 
 @pytest.mark.parametrize(
-    ("key", "capability"), sorted((EXPECTED | ADDED | TEAMS).items())
+    ("key", "capability"),
+    sorted((EXPECTED | ADDED | TEAMS | SERVICE_ACCOUNTS).items()),
 )
 def test_each_administration_route_names_its_capability(
     key: tuple[str, str], capability: Capability

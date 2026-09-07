@@ -27,6 +27,7 @@ from app.domain.ports.identity import (
     SessionTokens,
 )
 from app.domain.value_objects import UserStatus
+from app.domain.value_objects.authz import PrincipalKind
 from app.infra.db.models import Session as SessionRow
 from app.infra.db.models import User
 
@@ -82,7 +83,17 @@ class LocalIdentityProvider:
         except (VerifyMismatchError, InvalidHashError):
             raise AuthenticationError("Email or password is incorrect.") from None
 
-        if user is None or user.password_hash is None:
+        # A service user has no password by database `CHECK`, so it already
+        # falls out here — the explicit `kind` test is a *stated* rule rather
+        # than a consequence of a column being null, so that adding a password
+        # column back for some other reason could not silently make a machine
+        # identity signable-in. Same sentence as a wrong password: which of the
+        # two it was is not the caller's business.
+        if (
+            user is None
+            or user.password_hash is None
+            or user.kind == PrincipalKind.SERVICE
+        ):
             raise AuthenticationError("Email or password is incorrect.")
         if user.status == UserStatus.DISABLED:
             raise AuthenticationError("This account is disabled.")

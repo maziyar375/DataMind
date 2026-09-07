@@ -34,13 +34,42 @@ from app.api.schemas import (
 )
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.domain.value_objects import Role, UserStatus
-from app.domain.value_objects.authz import ADMINISTRATOR, NORMAL_USER
+from app.domain.value_objects.authz import ADMINISTRATOR, NORMAL_USER, PrincipalKind
 from app.infra.db.models import User
 from app.infra.identity.local import LocalIdentityProvider
 from app.services.role_service import RoleService, assign_by_name
 from app.services.team_service import TeamService
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+#: What somebody is told when a People route is pointed at a machine.
+#:
+#: `GET /users` returns **every** principal — the team picker and the audit
+#: renderer both have to resolve any `users.id`, and a list that hid machines
+#: would make a service account unaddable to a team. But the *write* routes
+#: here speak human: `PUT /users/{id}/password` on a service row would violate
+#: `ck_users_service_no_password` and answer 500, and `PATCH` could promote a
+#: machine to administrator behind the flag that exists to stop exactly that.
+#: So they refuse, and say where the right screen is.
+_MANAGED_ELSEWHERE = (
+    "That is a service account, not a person. Machine identities are managed "
+    "under Administration → Service accounts, where their keys live too."
+)
+
+
+async def _person(db, user_id: UUID) -> User:
+    """The `users` row, if it is a human. 404 if missing, 422 if a machine.
+
+    The split is deliberate: a missing id is a 404 because nothing exists to
+    talk about, and a machine is a 422 with a sentence because something does
+    and the caller is on the wrong screen.
+    """
+    user = await db.get(User, user_id)
+    if user is None:
+        raise NotFoundError("User not found.")
+    if user.kind == PrincipalKind.SERVICE:
+        raise ValidationError(_MANAGED_ELSEWHERE)
+    return user
 
 
 @router.get("", response_model=list[UserRead])
@@ -96,9 +125,7 @@ async def create_user(
 async def update_user(
     user_id: UUID, payload: UserUpdate, ctx: UserManageDep, db: DbDep
 ) -> User:
-    user = await db.get(User, user_id)
-    if user is None:
-        raise NotFoundError("User not found.")
+    user = await _person(db, user_id)
 
     if payload.display_name is not None:
         user.display_name = payload.display_name.strip()
@@ -139,10 +166,12 @@ async def set_user_password(
     revoked: a reset that left old sessions valid would not actually lock the
     account, and if the admin is resetting their own password they expect to
     sign in again with the new one.
+
+    A service account is refused rather than 500-ing on the `CHECK` that says a
+    machine has no password — and the refusal names the screen that rotates a
+    machine's credential, which is a key rather than a password.
     """
-    user = await db.get(User, user_id)
-    if user is None:
-        raise NotFoundError("User not found.")
+    user = await _person(db, user_id)
 
     provider = LocalIdentityProvider(db, settings)
     user.password_hash = provider.hash_password(payload.password.get_secret_value())
@@ -155,11 +184,15 @@ async def set_user_password(
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_user(user_id: UUID, ctx: UserManageDep, db: DbDep) -> None:
+    """Delete a person. A machine is deleted from its own screen, and audited.
+
+    Routing a service account through here would delete it with no
+    `service_user.deleted` row — the audit action that names what was removed —
+    so it is refused rather than quietly handled.
+    """
     if user_id == ctx.user_id:
         raise ValidationError("You cannot remove your own account.")
-    user = await db.get(User, user_id)
-    if user is None:
-        raise NotFoundError("User not found.")
+    user = await _person(db, user_id)
     await RoleService(db).guard_last_administrator(user_id)
     await db.delete(user)
 
@@ -173,6 +206,9 @@ async def list_user_roles(user_id: UUID, ctx: UserReadDep, db: DbDep) -> list[Ro
     People detail pane shows — while *changing* them is a role operation. An
     Auditor is exactly the person this split exists for.
     """
+    # Reading is not narrowed to humans: a service account's roles are the
+    # honest answer to "what does this principal hold", and the People screen
+    # never asks — but the audit and access-review surfaces will.
     if await db.get(User, user_id) is None:
         raise NotFoundError("User not found.")
     return [_role_read(role) for role in await RoleService(db).roles_of(user_id)]
@@ -191,6 +227,10 @@ async def assign_user_role(
     detail pane re-render from the response instead of re-fetching, and it is
     the honest answer to "what happened" when the role was already held.
     """
+    # A machine's roles go through `service_user_service`, which is where the
+    # privileged-capability refusal lives. Assigning one here would be the way
+    # around it.
+    await _person(db, user_id)
     service = RoleService(db)
     await service.assign(ctx, user_id=user_id, role_id=payload.role_id)
     return [_role_read(role) for role in await service.roles_of(user_id)]
@@ -201,6 +241,7 @@ async def unassign_user_role(
     user_id: UUID, role_id: UUID, ctx: UserManageDep, db: DbDep
 ) -> None:
     """Take a role away — refused if it would leave no administrator."""
+    await _person(db, user_id)
     await RoleService(db).unassign(ctx, user_id=user_id, role_id=role_id)
 
 

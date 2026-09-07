@@ -18,7 +18,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
-from app.core.context import RequestContext, get_correlation_id
+from app.core.context import RequestContext
 from app.core.errors import AuthenticationError, ForbiddenError
 from app.domain.ports.authz import Authorizer
 from app.domain.value_objects.authz import Capability
@@ -26,6 +26,7 @@ from app.infra.authz.factory import build_authorizer
 from app.infra.crypto.aesgcm_box import AesGcmSecretBox
 from app.infra.db.session import get_sessionmaker
 from app.infra.identity.local import LocalIdentityProvider
+from app.infra.identity.service_key import ServiceKeyProvider, looks_like_service_key
 from app.services.role_service import RoleService
 from app.services.team_service import TeamService
 
@@ -51,6 +52,24 @@ def get_identity_provider(db: DbDep, settings: SettingsDep) -> LocalIdentityProv
 
 
 IdentityDep = Annotated[LocalIdentityProvider, Depends(get_identity_provider)]
+
+
+def get_service_identity_provider(
+    db: DbDep, settings: SettingsDep
+) -> ServiceKeyProvider:
+    """The **second** authenticator, wired exactly like the first.
+
+    Two of them is the whole of requirement 9's seam, shipped rather than
+    described: a human's session token and a machine's API key are verified by
+    different objects that produce the same `AuthenticatedIdentity`, and
+    `get_ctx` builds one `RequestContext` from either.
+    """
+    return ServiceKeyProvider(db, settings)
+
+
+ServiceIdentityDep = Annotated[
+    ServiceKeyProvider, Depends(get_service_identity_provider)
+]
 
 
 def get_authorizer(db: DbDep, settings: SettingsDep) -> Authorizer:
@@ -80,36 +99,55 @@ SecretBoxDep = Annotated[AesGcmSecretBox, Depends(get_secret_box)]
 async def get_ctx(
     request: Request,
     identity: IdentityDep,
+    service_identity: ServiceIdentityDep,
     db: DbDep,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
 ) -> RequestContext:
     """Who is calling, and what they may do — resolved per request.
 
+    **Two authenticators, one context.** The bearer token's *shape* decides
+    which: a `dm_sk_` prefix goes to the service authenticator, anything else to
+    the JWT path. The dispatch is on the shape and never a fallback — a token
+    that looks like a key and is not one is refused rather than quietly retried
+    against the other verifier, because a credential that can be verified two
+    ways has two attack surfaces.
+
+    What comes out is **one `RequestContext` either way**, built from the same
+    two queries, and nothing downstream — no service, no repository, no
+    authorizer — can tell which authenticated the request. That is the seam
+    requirement 9 asks for, and this function is where it is either kept or
+    lost.
+
     The capability set and the team set are read from the database here rather
     than carried in the token (plan decision 15). Two indexed reads on every
     authenticated call; what they buy is a revoked role — or a removal from a
-    team — taking effect on the **next request** instead of at the next token
-    refresh, which is the difference between "we removed their access" and "we
-    removed their access, up to fifteen minutes from now".
+    team, or a revoked key — taking effect on the **next request** instead of at
+    the next token refresh, which is the difference between "we removed their
+    access" and "we removed their access, up to fifteen minutes from now".
     """
     if credentials is None or not credentials.credentials:
         raise AuthenticationError("Sign in to continue.")
-    who = await identity.verify_access_token(credentials.credentials)
+
+    token = credentials.credentials
+    service = looks_like_service_key(token)
+    who = (
+        await service_identity.verify_key(token)
+        if service
+        else await identity.verify_access_token(token)
+    )
     # Teams first, because capability resolution takes them: a role reaches a
     # principal directly *or* through a team, and asking for the second answer
-    # without the first would silently drop half of it.
+    # without the first would silently drop half of it. Both arms run for both
+    # kinds of principal, which is what makes a service user's permissions the
+    # same object as a human's rather than a parallel one.
     team_ids = await TeamService(db).team_ids(who.user_id)
-    return RequestContext(
-        user_id=who.user_id,
-        email=who.email,
-        role=who.role,
-        capabilities=await RoleService(db).resolve_capabilities(
-            who.user_id, team_ids
-        ),
-        team_ids=team_ids,
-        correlation_id=get_correlation_id(),
-        actor_ip=_client_ip(request),
-    )
+    capabilities = await RoleService(db).resolve_capabilities(who.user_id, team_ids)
+    actor_ip = _client_ip(request)
+    if service:
+        return RequestContext.for_service(
+            who, capabilities, team_ids, actor_ip=actor_ip
+        )
+    return RequestContext.for_user(who, capabilities, team_ids, actor_ip=actor_ip)
 
 
 def _client_ip(request: Request) -> str:
@@ -187,3 +225,6 @@ RoleManageDep = Annotated[RequestContext, Depends(needs(Capability.ROLE_MANAGE))
 AuditReadDep = Annotated[RequestContext, Depends(needs(Capability.AUDIT_READ))]
 TeamReadDep = Annotated[RequestContext, Depends(needs(Capability.TEAM_READ))]
 TeamManageDep = Annotated[RequestContext, Depends(needs(Capability.TEAM_MANAGE))]
+ServiceUserManageDep = Annotated[
+    RequestContext, Depends(needs(Capability.SERVICE_USER_MANAGE))
+]

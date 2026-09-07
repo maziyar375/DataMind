@@ -30,6 +30,7 @@ import { PageHeader } from '../components/ui'
 import { Tabs } from '../components/settings'
 import { useCan, type Capability } from '../permissions'
 import RolesTab from './RolesTab'
+import ServiceAccountsTab from './ServiceAccountsTab'
 import TeamsTab from './TeamsTab'
 import UsersPage from './UsersPage'
 
@@ -43,9 +44,9 @@ interface TabSpec {
 /**
  * The section's tabs, in the order the plan introduces them.
  *
- * Teams, Service accounts, Access review and Audit arrive in Phases 4, 5, 9
- * and 7 as more entries here — which is the point of building the shell now
- * rather than a second standalone page each time.
+ * Access review and Audit arrive in Phases 9 and 7 as more entries here —
+ * which is the point of building the shell now rather than a second standalone
+ * page each time.
  */
 const TABS: TabSpec[] = [
   { value: 'people', label: 'People', needs: 'user.read' },
@@ -55,6 +56,11 @@ const TABS: TabSpec[] = [
   // Phase 6 a team is how somebody will have been given access to anything,
   // and "which teams am I in" stops being a curiosity.
   { value: 'teams', label: 'Teams', needs: 'team.read' },
+  // The one tab a **DataMind Maintainer** sees. That pairing is the point
+  // rather than an accident of the seed: running the installation and
+  // administering people are different jobs, and minting an agent belongs to
+  // the first — so this role gets the Administration row and no People list.
+  { value: 'service-accounts', label: 'Service accounts', needs: 'service_user.manage' },
 ]
 
 export default function AdminPage({ user }: { user: User }) {
@@ -64,9 +70,9 @@ export default function AdminPage({ user }: { user: User }) {
 
   const visible = useMemo(() => TABS.filter((entry) => can(entry.needs)), [can])
 
-  // No tab at all is a real state: a DataMind Maintainer holds
-  // `service_user.manage` and gets the rail row, and until Phase 5 there is
-  // nothing here for them. Saying so is better than an empty frame.
+  // No tab at all is still a real state — a custom role could carry one of the
+  // rail's capabilities and none of the tabs' — and saying so is better than
+  // an empty frame.
   if (visible.length === 0) {
     return (
       <div className="rm-index rm-page-pad" style={{ flex: 1, overflowY: 'auto' }}>
@@ -104,8 +110,10 @@ export default function AdminPage({ user }: { user: User }) {
         <UsersPage currentUser={user} embedded />
       ) : active.value === 'roles' ? (
         <RolesTab />
-      ) : (
+      ) : active.value === 'teams' ? (
         <TeamsTab />
+      ) : (
+        <ServiceAccountsTab />
       )}
     </div>
   )

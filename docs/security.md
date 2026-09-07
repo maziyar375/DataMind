@@ -911,15 +911,74 @@ Two more facts about them:
   removed on the strength of a team whose membership somebody else can empty in
   one click, leaving a workspace that looks administered and is not.
 
+**Service users, and what an API key is.** As of Phase 5 a *machine* is a
+principal: a row in `users` with `kind='SERVICE'`, its own display name and
+description, its own roles and teams, and no password, no external subject and
+no interactive login — three database `CHECK` constraints, not conventions.
+It authenticates with an API key on every request, through a **second
+authenticator** that produces the same `RequestContext` a password session
+does; nothing downstream can tell which one ran, which is the seam an OIDC
+provider will arrive through.
+
+Five facts about that key, each of which has a weaker version somebody would
+otherwise ship:
+
+* **The format is `dm_sk_<prefix>_<secret>`, and only the prefix is stored in
+  the clear.** `dm_sk` is one literal a secret scanner can be taught — GitHub
+  push protection, `gitleaks` and every commercial scanner match on a prefix,
+  and 48 characters of base64 with no marker is a secret nobody can grep for.
+  The prefix is indexed and unique, so **a key found in a log traces to its
+  owner without the secret half ever having been stored**. That is the entire
+  reason the key has two parts.
+* **`token_hash` is SHA-256, deliberately not Argon2id.** The secret half is
+  256 bits from `secrets.token_urlsafe` — from the OS, not from a person.
+  Key-stretching exists to make *guessing a human password* expensive; against
+  a uniformly random 256-bit secret there is nothing to guess, so Argon2id
+  would buy zero security and cost 50–100 ms of CPU on **every API call that
+  identity makes**. The password path keeps Argon2id for exactly the opposite
+  reason: the same principle applied to inputs with different entropy. The
+  comparison is still `hmac.compare_digest`.
+* **A key is shown exactly once and is not recoverable from any endpoint.** It
+  appears in one response body in the whole API, from
+  `POST /service-accounts/{id}/keys`, and a test walks the generated OpenAPI to
+  prove no second model can return it and that `token_hash` never reaches the
+  wire.
+* **Keys expire by default — a year (`SERVICE_KEY_DEFAULT_TTL_DAYS`).** An
+  unexpiring machine credential is the one thing every published key-leak
+  incident has in common. A key with no expiry stays possible, because some
+  integrations genuinely cannot rotate, but it is an explicit request rather
+  than a default anybody falls into. **Revoking one fails the next request**,
+  not in fifteen minutes: verification reads the row every time, which is why
+  the service path does not mint a JWT.
+* **A machine may not mint an administrator.** A service user cannot hold
+  `user.manage`, `role.manage`, `service_user.manage` or `settings.manage`
+  unless `ALLOW_PRIVILEGED_SERVICE_USERS` is on, which it is not by default.
+  This is a *policy* enforced in the service layer rather than an invariant in
+  the database — an installation running its own provisioning agent has a real
+  reason for it — and **using** it writes a `service_user.privileged` audit row
+  naming the capability. The reason is blast radius: a leaked key must not be
+  able to change who can sign in.
+
+Everything else about a service user is the model that already existed. Its
+capabilities are resolved by the same query, from the same tables, as a
+person's — a service user with the BI Engineer role holds a **byte-identical**
+capability set to a human with it, and a test asserts that equality rather than
+describing it. Every `/auth` route refuses a `SERVICE` principal with a 403,
+because a machine has no session to refresh, no profile to edit and no password
+to rotate. Its actions are audited under `service_user.created`,
+`service_user.disabled`, `service_user.deleted`, `service_credential.issued`
+and `service_credential.revoked` — and an audit row records a key's **prefix**,
+never the key.
+
 The role model carries **no resource ids**: `role_scoped_privileges` has a
 resource *type* and nowhere to put an id. Per-resource access is a grant
 (Phase 6), and keeping the two apart is what makes an access review answerable
 — *"because of the Knowledge Manager role"* and *"because Sara granted it on
 3 March"* have to stay different rows. Every role change is audited:
 `role.created`, `role.updated`, `role.deleted`, `role.assigned`,
-`role.unassigned`, and every team change likewise: `team.created`,
-`team.renamed`, `team.deleted`, `team.member.added`, `team.member.removed`,
-`team.source.bound`.
+`role.unassigned`; every team change likewise: `team.created`, `team.renamed`,
+`team.deleted`, `team.member.added`, `team.member.removed`,
+`team.source.bound`; and every service-account change as listed above.
 
 > **Losing `SECRET_BOX_KEY` means every stored credential must be re-entered.**
 > There is no recovery path, by design. Back it up somewhere your database
@@ -948,6 +1007,14 @@ The defaults are development defaults. Before real data:
       session that password opened.
 - [ ] **Generate fresh secrets** with `make secrets` — `SECRET_BOX_KEY` and
       `JWT_SECRET` — and back up the box key separately.
+- [ ] **Review service accounts and their keys.** Administration → Service
+      accounts lists every machine identity, what each is for, and every key
+      ever issued to it — with `last_used_at`, so *"can I delete this?"* is
+      answerable. Revoke what nothing is using, and check that no account holds
+      a role it does not need: an agent's reach is the roles it carries, not the
+      name somebody gave it. Leave `ALLOW_PRIVILEGED_SERVICE_USERS` off unless
+      an agent genuinely provisions accounts, and treat every
+      `service_user.privileged` audit row as something to have a reason for.
 - [ ] **Grant read-only database roles.** Confirm each connection reports
       *read-only role confirmed*.
 - [ ] **Choose a disclosure policy per connection deliberately.** The default

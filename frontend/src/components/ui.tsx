@@ -1561,6 +1561,111 @@ export function CopyButton({
   )
 }
 
+/**
+ * A secret the server will not repeat: shown once, loudly, and dismissible.
+ *
+ * There are two of these in the product and they are the same panel because
+ * they are the same *situation*, not because the markup happened to match: a
+ * one-time password on an invitation, and an API key on a service account.
+ * Both are the only state in the product where dismissing a panel destroys
+ * information nobody can get back, and both therefore deserve to be the
+ * loudest thing on the screen while they are up.
+ *
+ * Writing it once also means the sentence that says so is written once. A
+ * second copy is a second place for that sentence to be softened.
+ */
+export function SecretOncePanel({
+  title, secret, note, onDismiss,
+}: {
+  title: React.ReactNode
+  secret: string
+  note: React.ReactNode
+  onDismiss: () => void
+}) {
+  return (
+    <div
+      className="rm-enter"
+      style={{
+        display: 'flex',
+        gap: 12,
+        marginBottom: 16,
+        padding: '14px 16px',
+        border: '1px solid var(--amber-border)',
+        background: 'var(--amber-bg)',
+        borderRadius: 12,
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          display: 'grid',
+          placeItems: 'center',
+          width: 32,
+          height: 32,
+          flexShrink: 0,
+          borderRadius: 10,
+          border: '1px solid var(--amber-border)',
+          color: 'var(--amber)',
+        }}
+      >
+        <Icon.Key size={15} />
+      </span>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 9, minWidth: 0, flex: 1 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-strong)' }}>
+          {title}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {/* `userSelect: all` so one click selects the whole secret: a
+              part-selected key pasted into a config file fails in a way that
+              looks like a server problem. */}
+          <code
+            className="mono"
+            style={{
+              fontSize: 13.5,
+              padding: '8px 12px',
+              background: 'var(--code-bg)',
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              color: 'var(--code-text)',
+              userSelect: 'all',
+              wordBreak: 'break-all',
+            }}
+          >
+            {secret}
+          </code>
+          <CopyButton text={secret} label="Copy" />
+        </div>
+        <div style={{ fontSize: 11.5, color: 'var(--text-dim)', lineHeight: 1.5 }}>
+          {note}
+        </div>
+      </div>
+      <button
+        onClick={onDismiss}
+        aria-label="Dismiss"
+        title="Dismiss"
+        className="rm-icon-btn"
+        style={{
+          alignSelf: 'flex-start',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 26,
+          height: 26,
+          flexShrink: 0,
+          border: 'none',
+          borderRadius: 7,
+          background: 'transparent',
+          color: 'var(--text-dim)',
+          cursor: 'pointer',
+          ['--rm-hover-bg' as string]: 'var(--panel)',
+        }}
+      >
+        <Icon.Close size={13} />
+      </button>
+    </div>
+  )
+}
+
 /** "just now" / "4m ago" / "3d ago" — shared by every settings surface. */
 export function relativeTime(iso: string): string {
   const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000)

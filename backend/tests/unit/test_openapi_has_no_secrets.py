@@ -8,7 +8,15 @@ import json
 
 from app.api.schemas import ConnectionRead, LlmConfigRead
 
-FORBIDDEN = ("password", "api_key", "apikey", "secret", "encrypted")
+FORBIDDEN = (
+    "password", "api_key", "apikey", "secret", "encrypted",
+    # Phase 5. `token_hash` is the SHA-256 of a service key's secret half; a
+    # response model carrying it would hand out the one value the whole
+    # two-part key format exists to keep off the wire. `prefix` is deliberately
+    # **not** here — it is the clear half by construction, and showing it is
+    # what makes a key found in a log traceable to its owner.
+    "token_hash", "token_secret",
+)
 
 # The two response fields that match a forbidden word on purpose. Named one by
 # one, with the reason, so adding a third is a decision someone has to make
@@ -20,6 +28,15 @@ ALLOWED = {
     # invite they cannot deliver.
     ("UserInviteResponse", "temporary_password"),
 }
+
+#: The one response in the whole API that carries a live credential, and the
+#: field it carries it in. Named rather than pattern-matched, so a *second*
+#: endpoint returning a key is a decision somebody makes on this line.
+#:
+#: `IssuedKeyResponse.token` is `dm_sk_<prefix>_<secret>`, returned from
+#: `POST /service-accounts/{id}/keys` and never recoverable afterwards — the
+#: row keeps a SHA-256 of the secret half and nothing else.
+ISSUED_ONCE = {("IssuedKeyResponse", "token")}
 
 
 def test_connection_read_model_has_no_credential_fields() -> None:
@@ -110,7 +127,7 @@ def test_no_read_model_in_the_generated_openapi_exposes_a_credential() -> None:
 
     for name in sorted(_response_models(spec)):
         for field in components.get(name, {}).get("properties", {}):
-            if (name, field) in ALLOWED:
+            if (name, field) in ALLOWED | ISSUED_ONCE:
                 continue
             assert not any(word in field.lower() for word in FORBIDDEN), (
                 f"{name} exposes {field!r}"
@@ -127,3 +144,63 @@ def test_it_sees_the_dashboard_read_models() -> None:
     assert "SqlDraftRead" in returnable
     assert "TileResultRead" in returnable
     assert "columns" in components["TileResultRead"]["properties"]
+
+
+# ── Phase 5: the service key ─────────────────────────────────────────────
+def test_no_response_model_carries_a_service_key_hash() -> None:
+    """`token_hash` never reaches the wire, on any endpoint.
+
+    The stored hash is not directly usable as a credential, which is exactly
+    why it would be tempting to serialise "just for the admin screen" — and why
+    this is asserted rather than assumed. It is a SHA-256 over 256 bits from
+    the OS: publishing it publishes the only value standing between an
+    offline copy of the table and every key in it.
+    """
+    components = _openapi_components()
+    for name in sorted(_response_models(_openapi())):
+        assert "token_hash" not in components.get(name, {}).get("properties", {}), (
+            f"{name} exposes token_hash"
+        )
+
+
+def test_the_key_itself_appears_in_exactly_one_response_model() -> None:
+    """Issued once, from one endpoint, and nowhere else.
+
+    A second model returning the token would mean the key was recoverable — and
+    a secret that can be re-read is a secret with no revocation story, because
+    nobody can say who has seen it.
+    """
+    spec = _openapi()
+    components = spec["components"]["schemas"]
+    carriers = {
+        name
+        for name in _response_models(spec)
+        if "token" in components.get(name, {}).get("properties", {})
+    }
+    assert carriers == {"IssuedKeyResponse"}
+
+    # And it comes back from one path, which is the one that mints it.
+    minting = {
+        path
+        for path, operations in spec["paths"].items()
+        for operation in operations.values()
+        if isinstance(operation, dict)
+        and "IssuedKeyResponse" in _refs(operation.get("responses", {}))
+    }
+    assert minting == {"/api/v1/service-accounts/{service_user_id}/keys"}
+
+
+def test_the_credential_read_model_shows_the_prefix_and_nothing_secret() -> None:
+    """The prefix is the *point*, not an oversight.
+
+    A key found in a log traces to its owner through this field, without the
+    secret half ever having been stored — which is the entire reason the key
+    format has two parts. Asserting it is present is asserting the design
+    survived.
+    """
+    from app.api.schemas import ServiceCredentialRead
+
+    fields = set(ServiceCredentialRead.model_fields)
+    assert "prefix" in fields
+    assert "token_hash" not in fields
+    assert "token" not in fields

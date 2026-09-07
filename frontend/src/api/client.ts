@@ -12,14 +12,14 @@ import type {
   ArtifactSpec, BenchmarkCandidate, BenchmarkOverview, BenchmarkResult,
   BenchmarkRun, BenchmarkSet, CapabilityEntry, ChartRedraw, Connection, ConversationSummary, Dashboard, DashboardDocument,
   DashboardImportResult, DashboardSummary,
-  DashboardTile, EmbeddingStatus, KnowledgeHealth, KnowledgeTemplate,
+  DashboardTile, EmbeddingStatus, IssuedKey, KnowledgeHealth, KnowledgeTemplate,
   KnowledgeTemplateList,
   LlmConfig, MaintenanceResult, MessageWithRun, ParameterCatalog, Permissions,
   ProblemDetail, Report, ReportBlock,
   ReportBlockCheck, ReportChart, ReportRun, ReportRunDetail, ReportSection,
   ReportSectionResult,
   ReportSummary, Review, Role, RunDetail, RunEvent, RunKnowledge, SchemaSnapshot,
-  ScopedPrivilege, Team,
+  ScopedPrivilege, ServiceAccount, ServiceKey, Team,
   SemanticDocument, SemanticJob, Suggestion,
   SemanticLayer, SqlDraft, TemplateCheckResult, TemplateParam,
   TilePosition, TileResult, TileType, TestResult, User,
@@ -291,6 +291,42 @@ export const teams = {
   bindSource: (id: string, provider_id: string | null, source_id: string | null) =>
     put<Team>(`/teams/${id}/source`, { provider_id, source_id }),
   remove: (id: string) => del(`/teams/${id}`),
+}
+
+// ── service accounts ──────────────────────────────────────────────────────
+// Two acts, two calls: `create` makes an identity, `issueKey` hands out a
+// secret. A create that returned a key would collapse them, and the key would
+// then exist wherever the account was created.
+//
+// `issueKey` is the **only** call in this client that receives a credential.
+// It is not cached, not stored and not re-fetchable: the server keeps a hash.
+export const serviceAccounts = {
+  list: () => get<ServiceAccount[]>('/service-accounts'),
+  get: (id: string) => get<ServiceAccount>(`/service-accounts/${id}`),
+  create: (payload: {
+    display_name: string
+    description: string
+    role_ids?: string[]
+  }) => post<ServiceAccount>('/service-accounts', payload),
+  update: (
+    id: string,
+    payload: { display_name?: string; description?: string; status?: string },
+  ) => patch<ServiceAccount>(`/service-accounts/${id}`, payload),
+  remove: (id: string) => del(`/service-accounts/${id}`),
+  assignRole: (id: string, roleId: string) =>
+    post<ServiceAccount>(`/service-accounts/${id}/roles`, { role_id: roleId }),
+  unassignRole: (id: string, roleId: string) =>
+    del(`/service-accounts/${id}/roles/${roleId}`),
+  /** Every key ever issued, revoked and expired ones included — "this key
+   *  existed, was last used in March, and was revoked on the 4th" is the
+   *  sentence an incident needs. */
+  keys: (id: string) => get<ServiceKey[]>(`/service-accounts/${id}/keys`),
+  issueKey: (
+    id: string,
+    payload: { name: string; expires_at?: string | null; never_expires?: boolean },
+  ) => post<IssuedKey>(`/service-accounts/${id}/keys`, payload),
+  revokeKey: (id: string, keyId: string) =>
+    del(`/service-accounts/${id}/keys/${keyId}`),
 }
 
 // ── connections ───────────────────────────────────────────────────────────

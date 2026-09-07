@@ -573,7 +573,7 @@ function MembersSection({
                   >
                     {initialOf(person.display_name || person.email)}
                   </span>
-                  <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                  <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
                     <span style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-strong)' }}>
                       {person.display_name || person.email}
                     </span>
@@ -581,6 +581,12 @@ function MembersSection({
                       {person.email}
                     </span>
                   </span>
+                  {/* Both kinds of principal can be in a team — that is
+                      requirement 3's own example, applied to an agent. Adding
+                      *the nightly runner* is a different decision from adding
+                      a colleague with a similar name, so the picker says
+                      which. */}
+                  {person.kind === 'SERVICE' && <Chip tone="accent">Service</Chip>}
                 </label>
               )
             })}

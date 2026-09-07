@@ -50,7 +50,37 @@ class TimestampMixin:
 
 # ── identity ─────────────────────────────────────────────────────────────
 class User(Base, TimestampMixin):
+    """A principal. **Both kinds live here** — see `kind`.
+
+    One identifier space, because every foreign key in the schema that names
+    who did something (`owner_id`, `actor_user_id`, `role_assignments.user_id`,
+    `team_members.user_id`, and Phase 6's `grants`) points at `users.id`. A
+    separate `service_users` table would make all of them polymorphic to buy a
+    distinction one column already draws — and would stop an agent owning the
+    dashboard it built.
+    """
+
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint("kind IN ('HUMAN', 'SERVICE')", name="ck_users_kind"),
+        # The three that keep the kinds from blurring. Constraints rather than
+        # service-layer rules: the row a bug would write is an interactive
+        # login for a machine identity, and that is not a thing to catch in
+        # review.
+        CheckConstraint(
+            "kind <> 'SERVICE' OR password_hash IS NULL",
+            name="ck_users_service_no_password",
+        ),
+        CheckConstraint(
+            "kind <> 'SERVICE' OR external_subject IS NULL",
+            name="ck_users_service_no_external_subject",
+        ),
+        CheckConstraint(
+            "kind <> 'SERVICE' OR must_change_password = false",
+            name="ck_users_service_no_password_change",
+        ),
+        Index("ix_users_kind", "kind"),
+    )
 
     id: Mapped[uuid.UUID] = _pk()
     email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False)
@@ -61,6 +91,60 @@ class User(Base, TimestampMixin):
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
     external_subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: `HUMAN` or `SERVICE` — `PrincipalKind`, closed in code *and* in the row.
+    #: Unlike `role_capabilities.capability`, a word this build does not know
+    #: has no safe reading here, so the `CHECK` is not the open/closed bargain
+    #: the capability column makes.
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, default="HUMAN")
+    #: What a service user is *for*. Required for a machine by the service, not
+    #: by a constraint — an undocumented integration is the one nobody dares
+    #: delete, and most humans legitimately have none.
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class ServiceCredential(Base):
+    """One API key for one machine identity. The secret half is never stored.
+
+    `dm_sk_<prefix>_<secret>`: `prefix` is the clear, indexed half — so a key
+    found in a log traces to its owner — and `token_hash` is SHA-256 over the
+    secret half. **Not Argon2id**, and migration `0027` explains why at length:
+    the secret is 256 bits from the OS, so stretching defends against nothing
+    and would put 50–100 ms of CPU on every call this identity makes.
+    """
+
+    __tablename__ = "service_credentials"
+    __table_args__ = (
+        UniqueConstraint("prefix", name="uq_service_credentials_prefix"),
+        Index("ix_service_credentials_user", "service_user_id"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    service_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    #: Reserved and unread. A subset of what the principal holds; empty means
+    #: the principal's full permission, which is every key today. Named now so
+    #: narrowing a key later is a service change rather than a migration over
+    #: live credentials.
+    scopes: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: Written at most once a minute per key. The throttle is in
+    #: `infra/identity/service_key.py`; without it every request from a busy
+    #: integration is also a write, for a column whose only question — "can I
+    #: delete this?" — needs minute resolution at best.
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
 
 
 # ── roles ────────────────────────────────────────────────────────────────

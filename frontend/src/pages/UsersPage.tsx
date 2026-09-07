@@ -24,9 +24,9 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { roles as rolesApi, users as api } from '../api/client'
 import type { Role as RoleRecord, Team as TeamRecord, User } from '../api/types'
 import {
-  Chip, CopyButton, DangerButton, EmptyState, ErrorNote, Field, GhostButton,
+  Chip, DangerButton, EmptyState, ErrorNote, Field, GhostButton,
   GlyphBadge, Icon, MetaDot, Modal, PageHeader, PrimaryButton, SearchField,
-  Segmented, Select, Spinner, TextInput, identityHue, initialOf,
+  SecretOncePanel, Segmented, Select, Spinner, TextInput, identityHue, initialOf,
 } from '../components/ui'
 import { useCan } from '../permissions'
 
@@ -723,6 +723,12 @@ function UserChips({ user, isSelf }: { user: User; isSelf: boolean }) {
       <Chip tone={user.role === 'ADMIN' ? 'accent' : 'neutral'}> {/* authz-ok: a badge */}
         {user.role === 'ADMIN' ? 'Admin' : 'Member'} {/* authz-ok: a badge */}
       </Chip>
+      {/* A machine, on a screen called People. `GET /users` returns every
+          principal because the team picker and the audit renderer both have to
+          resolve any user id — so the honest thing is to badge it rather than
+          hide it, and the write controls beside it are refused by the API with
+          a sentence pointing at Service accounts. */}
+      {user.kind === 'SERVICE' && <Chip tone="accent">Service</Chip>}
       {status === 'INVITED' && <Chip tone="amber">Invited</Chip>}
       {status === 'DISABLED' && <Chip tone="red">Disabled</Chip>}
       {isSelf && <Chip tone="green">You</Chip>}
@@ -1182,9 +1188,10 @@ function Divider() {
 /**
  * The one-time password, shown once and never again.
  *
- * Deliberately the loudest thing on the page while it is up: it is the only
- * state in the product where dismissing a panel destroys information the
- * server will not repeat.
+ * The panel itself is `SecretOncePanel` in `components/ui`, shared with the
+ * API-key display on Service accounts — the same situation deserves the same
+ * furniture, and the sentence about the secret not being repeatable should
+ * exist once so nobody softens the second copy.
  */
 function InvitePanel({
   invite, onDismiss,
@@ -1193,83 +1200,12 @@ function InvitePanel({
   onDismiss: () => void
 }) {
   return (
-    <div
-      className="rm-enter"
-      style={{
-        display: 'flex',
-        gap: 12,
-        marginBottom: 16,
-        padding: '14px 16px',
-        border: '1px solid var(--amber-border)',
-        background: 'var(--amber-bg)',
-        borderRadius: 12,
-      }}
-    >
-      <span
-        aria-hidden
-        style={{
-          display: 'grid',
-          placeItems: 'center',
-          width: 32,
-          height: 32,
-          flexShrink: 0,
-          borderRadius: 10,
-          border: '1px solid var(--amber-border)',
-          color: 'var(--amber)',
-        }}
-      >
-        <Icon.Key size={15} />
-      </span>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 9, minWidth: 0, flex: 1 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-strong)' }}>
-          Temporary password for {invite.email}
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <code
-            className="mono"
-            style={{
-              fontSize: 13.5,
-              padding: '8px 12px',
-              background: 'var(--code-bg)',
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              color: 'var(--code-text)',
-              userSelect: 'all',
-            }}
-          >
-            {invite.password}
-          </code>
-          <CopyButton text={invite.password} label="Copy" />
-        </div>
-        <div style={{ fontSize: 11.5, color: 'var(--text-dim)', lineHeight: 1.5 }}>
-          Copy this now — it is shown once and cannot be retrieved later. The user
-          is asked to change it on first sign-in.
-        </div>
-      </div>
-      <button
-        onClick={onDismiss}
-        aria-label="Dismiss"
-        title="Dismiss"
-        className="rm-icon-btn"
-        style={{
-          alignSelf: 'flex-start',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          width: 26,
-          height: 26,
-          flexShrink: 0,
-          border: 'none',
-          borderRadius: 7,
-          background: 'transparent',
-          color: 'var(--text-dim)',
-          cursor: 'pointer',
-          ['--rm-hover-bg' as string]: 'var(--panel)',
-        }}
-      >
-        <Icon.Close size={13} />
-      </button>
-    </div>
+    <SecretOncePanel
+      title={`Temporary password for ${invite.email}`}
+      secret={invite.password}
+      note="Copy this now — it is shown once and cannot be retrieved later. The user is asked to change it on first sign-in."
+      onDismiss={onDismiss}
+    />
   )
 }
 
