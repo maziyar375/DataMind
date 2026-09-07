@@ -143,6 +143,20 @@ class Capability(StrEnum):
     SYSTEM_MAINTENANCE = "system.maintenance"
 
 
+#: The two seeded role names anything in code refers to by name, and the only
+#: two it may.
+#:
+#: Everything else about a role lives in rows: migration `0024` seeds eight,
+#: `role_service` reads them, and the API renders them. These two are different
+#: because two code paths that run *before* anybody has chosen anything have to
+#: name one — `bootstrap.ensure_admin`, which creates the first account, and
+#: the last-administrator guard, which has to know which role it is guarding.
+#: A literal `"Administrator"` in either place is a string that silently stops
+#: matching the day somebody renames the role, which is allowed.
+ADMINISTRATOR = "Administrator"
+NORMAL_USER = "Normal User"
+
+
 #: The four capabilities a leaked API key must not be able to reach.
 #:
 #: A service user may not hold any of these unless

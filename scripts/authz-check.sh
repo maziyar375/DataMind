@@ -61,8 +61,11 @@ check "a service or route deciding ownership for itself" \
 check "a role string standing in for a permission" \
       "\.is_admin" backend/app/api backend/app/services backend/app/workers
 
+# `===` as well as `==`: this arm was written for Python and silently matched
+# nothing in the SPA for two phases, because TypeScript spells it with three
+# characters. A gate that cannot fail is a comment.
 check "an ADMIN literal compared anywhere" \
-      "role == ['\"]ADMIN" backend/app frontend/src
+      "role ===? ['\"]ADMIN" backend/app frontend/src
 
 check "a worker acting as nobody" \
       "ctx=None" backend/app/workers

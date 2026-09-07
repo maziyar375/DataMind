@@ -7,6 +7,7 @@ from app.api.schemas import (
     ChangePasswordRequest,
     LoginRequest,
     MeResponse,
+    PermissionsResponse,
     ProfileUpdate,
     TokenResponse,
 )
@@ -14,6 +15,7 @@ from app.core.errors import AuthenticationError, ValidationError
 from app.domain.ports.identity import AuthenticatedIdentity, Credentials
 from app.domain.value_objects import UserStatus
 from app.infra.db.models import User
+from app.services.role_service import RoleService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -77,14 +79,55 @@ async def logout(
 
 @router.get("/me", response_model=MeResponse)
 async def me(ctx: CtxDep, db: DbDep) -> MeResponse:
+    """Who is signed in, and every affordance the SPA renders from.
+
+    The capabilities come off the **context**, which resolved them from the
+    database a moment ago as part of authenticating this very request — so no
+    second query, and no chance of the answer here disagreeing with the answer
+    a route guard would give. That equivalence is what makes "the UI shows
+    exactly what the backend would allow" a property of the system rather than
+    a thing somebody has to keep true by hand.
+
+    It also means a role granted or revoked while the user is signed in shows
+    up on their **next** `/auth/me`, with no new token and no sign-out.
+    """
     user = await db.get(User, ctx.user_id)
     if user is None:
         raise AuthenticationError("This account no longer exists.")
-    return MeResponse.model_validate(user)
+    return _me(user, ctx, await RoleService(db).roles_of(ctx.user_id))
+
+
+@router.get("/me/permissions", response_model=PermissionsResponse)
+async def my_permissions(ctx: CtxDep, db: DbDep) -> PermissionsResponse:
+    """The same answer, without the account.
+
+    A separate endpoint because the two are re-read on different rhythms: the
+    profile changes when somebody edits their name, and permissions change when
+    an administrator moves a role — and a screen that wants the second should
+    not have to re-fetch the first. Grafana has exactly this endpoint
+    (`/api/access-control/user/permissions`) for exactly this reason.
+    """
+    return PermissionsResponse(
+        capabilities=sorted(str(c) for c in ctx.capabilities),
+        roles=[role.name for role in await RoleService(db).roles_of(ctx.user_id)],
+        teams=[],
+    )
+
+
+def _me(user: User, ctx, roles) -> MeResponse:
+    return MeResponse(
+        id=user.id,
+        email=user.email,
+        display_name=user.display_name,
+        role=user.role,
+        capabilities=sorted(str(c) for c in ctx.capabilities),
+        roles=[role.name for role in roles],
+        teams=[],
+    )
 
 
 # ── your own account ─────────────────────────────────────────────────────
-# Everything under `/users` is `AdminDep`, which left an invited member with
+# Everything under `/users` needs a People capability, which left an invited member with
 # no way to change the one-time password an administrator generated — and can
 # still read. These two routes are that way out. They are deliberately *not*
 # the admin routes with a softer dependency: they act on `ctx.user_id` and
@@ -102,7 +145,7 @@ async def update_me(payload: ProfileUpdate, ctx: CtxDep, db: DbDep) -> MeRespons
     # Already trimmed and proven non-empty by the schema.
     user.display_name = payload.display_name
     await db.flush()
-    return MeResponse.model_validate(user)
+    return _me(user, ctx, await RoleService(db).roles_of(ctx.user_id))
 
 
 @router.put("/me/password", response_model=TokenResponse)

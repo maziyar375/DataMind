@@ -309,9 +309,18 @@ async def test_an_allowed_decision_says_owner_and_a_denial_says_nothing() -> Non
 
 async def test_owner_only_never_consults_the_admin_flag() -> None:
     """An administrator does not today reach another user's dashboard, and
-    adding that here would be a behaviour change smuggled into a refactor."""
+    adding that here would be a behaviour change smuggled into a refactor.
+
+    The administrator is built the way `get_ctx` builds one as of Phase 3 —
+    from a **capability set**, not a role string — which is also why the
+    assertion below is worth keeping: an authorizer that started consulting
+    `ctx.capabilities` would now have something to find."""
     admin = RequestContext(
-        user_id=STRANGER, email="a@test.local", role="ADMIN", correlation_id="t"
+        user_id=STRANGER,
+        email="a@test.local",
+        role="ADMIN",
+        capabilities=frozenset(Capability),
+        correlation_id="t",
     )
     assert admin.is_admin
     decision = await OwnerOnlyAuthorizer().allowed(

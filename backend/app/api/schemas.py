@@ -42,11 +42,26 @@ class TokenResponse(BaseModel):
 
 
 class MeResponse(BaseModel):
+    """Who is signed in, and — as of Phase 3 — what they may do.
+
+    `role` is still here and is still the legacy `ADMIN`/`MEMBER` cache, so an
+    older SPA build keeps working through the upgrade. Nothing new should read
+    it: `capabilities` is the answer to every "may I?" the interface asks, and
+    `roles` is the list of names to *show*, never to branch on.
+    """
+
     model_config = ConfigDict(from_attributes=True)
     id: UUID
     email: str
     display_name: str
     role: str
+    #: HUMAN or SERVICE. One value today; the column arrives in Phase 5, and
+    #: the field is here now so the SPA's badge does not need a new release
+    #: when it does.
+    kind: str = "HUMAN"
+    capabilities: list[str] = []
+    roles: list[str] = []
+    teams: list[str] = []
 
 
 class ProfileUpdate(BaseModel):
@@ -130,6 +145,92 @@ class UserInviteResponse(BaseModel):
     """The temp password is shown exactly once, at creation, and never again."""
     user: UserRead
     temporary_password: str
+
+
+# ── roles ────────────────────────────────────────────────────────────────
+class ScopedPrivilegeRead(BaseModel):
+    """A privilege a role holds over **every** resource of a type.
+
+    No `resource_id`, here or in the table behind it. A role that could name
+    one resource would make "why can Ali see this?" unanswerable in one
+    sentence, which is the whole reason `grants` is a separate thing.
+    """
+
+    resource_type: str
+    privilege: str
+
+
+class RoleRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    name: str
+    description: str
+    is_system: bool
+    capabilities: list[str] = []
+    scoped_privileges: list[ScopedPrivilegeRead] = []
+    #: How many principals hold it. Present so the list screen can say "3
+    #: people" beside a role rather than making somebody open it to find out —
+    #: and so the delete button can be disabled with a reason.
+    holders: int = 0
+    created_at: datetime | None = None
+
+
+class RoleWrite(BaseModel):
+    """Create or replace a role's definition.
+
+    `capabilities` and `scoped_privileges` are **whole sets**, not deltas: the
+    editor is a checklist and a matrix, so what the user is looking at *is* the
+    intended state, and a PATCH of additions and removals would need the client
+    to diff two lists correctly to avoid re-granting something another
+    administrator had just removed.
+
+    Both default to `None` on the update path, which means *leave alone* — a
+    rename must not silently clear a role's permissions.
+    """
+
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=2000)
+    capabilities: list[str] | None = None
+    scoped_privileges: list[ScopedPrivilegeRead] | None = None
+
+
+class RoleCreate(RoleWrite):
+    """Same shape, with the name required — a role without one has no handle."""
+
+    name: str = Field(min_length=1, max_length=100)
+
+
+class RoleAssignmentWrite(BaseModel):
+    role_id: UUID
+
+
+class CapabilityCatalogEntry(BaseModel):
+    """One capability, with the group and sentence the checklist renders.
+
+    Served rather than hardcoded in the SPA for the same reason the parameter
+    catalog is: the enum is closed **in the backend**, and a checklist that
+    listed a nineteenth capability the server had never heard of — or missed
+    one it had — would be a permission nobody could grant.
+    """
+
+    name: str
+    group: str
+    label: str
+
+
+class PermissionsResponse(BaseModel):
+    """`GET /me/permissions` — what the UI renders every affordance from.
+
+    Never a role string. The SPA asks "may I?" and gets a list of verbs; it
+    does not ask "what am I?" and guess. That is what makes "the UI shows
+    exactly what the backend would allow" a property rather than an aspiration.
+    """
+
+    capabilities: list[str]
+    roles: list[str]
+    #: Empty until Phase 4 gives a principal teams. Present now so the SPA's
+    #: shape does not change when they arrive.
+    teams: list[str] = []
 
 
 # ── llm configs ──────────────────────────────────────────────────────────

@@ -21,13 +21,14 @@
  * says so, and every destructive act is confirmed before it happens.
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { users as api } from '../api/client'
-import type { User } from '../api/types'
+import { roles as rolesApi, users as api } from '../api/client'
+import type { Role as RoleRecord, User } from '../api/types'
 import {
   Chip, CopyButton, DangerButton, EmptyState, ErrorNote, Field, GhostButton,
   GlyphBadge, Icon, MetaDot, Modal, PageHeader, PrimaryButton, SearchField,
   Segmented, Select, Spinner, TextInput, identityHue, initialOf,
 } from '../components/ui'
+import { useCan } from '../permissions'
 
 type Role = 'ADMIN' | 'MEMBER'
 type Status = 'ACTIVE' | 'INVITED' | 'DISABLED'
@@ -51,14 +52,31 @@ function sortUsers(users: User[], key: SortKey): User[] {
   return [...users].sort((a, b) => {
     if (key === 'joined') return joined(b) - joined(a)
     if (key === 'role') {
-      if (a.role !== b.role) return a.role === 'ADMIN' ? -1 : 1
+      // authz-ok: sorting the list, not deciding who may read it
+      if (a.role !== b.role) return a.role === 'ADMIN' ? -1 : 1 // authz-ok: a sort key
       return name(a).localeCompare(name(b))
     }
     return name(a).localeCompare(name(b))
   })
 }
 
-export default function UsersPage({ currentUser }: { currentUser: User }) {
+export default function UsersPage({
+  currentUser, embedded = false,
+}: {
+  currentUser: User
+  /**
+   * Rendered as the People tab of `/admin` rather than as a page of its own.
+   *
+   * The Administration section already carries the page's title and its tab
+   * strip, so this drops its own `PageHeader` and moves the one action it
+   * needs — Add user — into the toolbar. Everything else about the screen is
+   * identical, which is the point: the list, its filters, its empty states and
+   * its dialogs were right before the section existed and are right inside it.
+   */
+  embedded?: boolean
+}) {
+  const can = useCan()
+  const mayManage = can('user.manage')
   // `null` is "not read yet", which is what the skeleton renders for. An empty
   // array is a real answer and gets the empty state instead.
   const [list, setList] = useState<User[] | null>(null)
@@ -90,7 +108,11 @@ export default function UsersPage({ currentUser }: { currentUser: User }) {
     const users = list ?? []
     return {
       total: users.length,
-      admins: users.filter((user) => user.role === 'ADMIN').length,
+      // authz-ok: a count shown in the header. The user *list* deliberately
+      // carries accounts and not capability sets — a list that shipped
+      // everybody's permissions would be an access review nobody asked for —
+      // so the cache the backend keeps true is the only thing to count.
+      admins: users.filter((user) => user.role === 'ADMIN').length, // authz-ok: a count
       invited: users.filter((user) => statusOf(user) === 'INVITED').length,
       disabled: users.filter((user) => statusOf(user) === 'DISABLED').length,
     }
@@ -133,7 +155,15 @@ export default function UsersPage({ currentUser }: { currentUser: User }) {
   )
 
   return (
-    <div className="rm-index rm-page-pad" style={{ flex: 1, overflowY: 'auto' }}>
+    <div
+      className={embedded ? 'rm-index' : 'rm-index rm-page-pad'}
+      style={{
+        flex: 1,
+        overflowY: 'auto',
+        ...(embedded ? { padding: '20px 28px 32px' } : {}),
+      }}
+    >
+      {!embedded && (
       <PageHeader
         title="Users"
         subtitle={
@@ -157,11 +187,14 @@ export default function UsersPage({ currentUser }: { currentUser: User }) {
           )
         }
         actions={
-          <PrimaryButton style={{ padding: '10px 17px' }} onClick={() => setAdding(true)}>
-            <Icon.Plus /> Add user
-          </PrimaryButton>
+          mayManage ? (
+            <PrimaryButton style={{ padding: '10px 17px' }} onClick={() => setAdding(true)}>
+              <Icon.Plus /> Add user
+            </PrimaryButton>
+          ) : undefined
         }
       />
+      )}
 
       {error && <div style={{ marginBottom: 14 }}><ErrorNote>{error}</ErrorNote></div>}
 
@@ -246,6 +279,14 @@ export default function UsersPage({ currentUser }: { currentUser: User }) {
                 </option>
               ))}
             </select>
+            {/* Inside the section the page header belongs to Administration,
+                so the one thing this tab adds to the workspace rides at the
+                end of its own toolbar rather than disappearing. */}
+            {embedded && mayManage && (
+              <PrimaryButton onClick={() => setAdding(true)}>
+                <Icon.Plus /> Add user
+              </PrimaryButton>
+            )}
           </div>
         </div>
       )}
@@ -258,10 +299,12 @@ export default function UsersPage({ currentUser }: { currentUser: User }) {
           title="No users yet"
           body="Add your first teammate. They receive a one-time password and are asked to change it on first sign-in."
           action={
-            <PrimaryButton onClick={() => setAdding(true)}>
-              <Icon.Plus size={15} />
-              Add user
-            </PrimaryButton>
+            mayManage ? (
+              <PrimaryButton onClick={() => setAdding(true)}>
+                <Icon.Plus size={15} />
+                Add user
+              </PrimaryButton>
+            ) : undefined
           }
         />
       ) : visible.length === 0 ? (
@@ -325,7 +368,10 @@ export default function UsersPage({ currentUser }: { currentUser: User }) {
         <EditUserModal
           user={editing}
           isSelf={editing.id === currentUser.id}
-          isOnlyAdmin={editing.role === 'ADMIN' && stats.admins <= 1}
+          // authz-ok: a *hint* on a disabled control. The refusal itself is
+          // the server's, counted over role assignments, and arrives whatever
+          // this says.
+          isOnlyAdmin={editing.role === 'ADMIN' && stats.admins <= 1} // authz-ok: a hint
           onClose={() => setEditing(null)}
           onDone={(message) => {
             setEditing(null)
@@ -346,6 +392,167 @@ export default function UsersPage({ currentUser }: { currentUser: User }) {
           }}
         />
       )}
+    </div>
+  )
+}
+
+/**
+ * The roles this person holds, and the way to change them.
+ *
+ * It sits inside the edit dialog rather than on the row, because assigning a
+ * role is a considered act with a blast radius — one click here can hand
+ * somebody every permission in the installation — and a control that lives on
+ * a hover menu invites the click nobody meant to make.
+ *
+ * The Role select above it is the **legacy** two-value control and still
+ * works: the backend translates it into an Administrator assignment, so the
+ * two halves of this dialog cannot disagree about who is an administrator.
+ * It is what Phase 10 removes once nothing needs the old vocabulary.
+ */
+function RolesSection({ userId }: { userId: string }) {
+  const can = useCan()
+  const mayAssign = can('user.manage')
+  const mayList = can('role.read')
+
+  const [held, setHeld] = useState<RoleRecord[] | null>(null)
+  const [all, setAll] = useState<RoleRecord[]>([])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [picked, setPicked] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    api.roles(userId)
+      .then((rows) => !cancelled && setHeld(rows))
+      .catch(() => !cancelled && setHeld([]))
+    if (mayList) {
+      rolesApi.list()
+        .then((rows) => !cancelled && setAll(rows))
+        // A picker that cannot be filled is simply absent; the roles somebody
+        // already holds are still listed, which is the half that matters here.
+        .catch(() => undefined)
+    }
+    return () => {
+      cancelled = true
+    }
+  }, [userId, mayList])
+
+  const available = useMemo(
+    () => all.filter((role) => !(held ?? []).some((row) => row.id === role.id)),
+    [all, held],
+  )
+
+  async function add(roleId: string) {
+    setBusy(true)
+    setError(null)
+    try {
+      setHeld(await api.assignRole(userId, roleId))
+      setPicked('')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not assign that role.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function remove(roleId: string) {
+    setBusy(true)
+    setError(null)
+    try {
+      await api.unassignRole(userId, roleId)
+      setHeld((current) => (current ?? []).filter((role) => role.id !== roleId))
+    } catch (e) {
+      // The server refuses to strand a workspace with no administrator, and
+      // says so. Shown verbatim: it is the only useful sentence here.
+      setError(e instanceof Error ? e.message : 'Could not remove that role.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <label style={{ fontSize: 12, color: 'var(--text-dim)' }}>Roles</label>
+      {error && <ErrorNote>{error}</ErrorNote>}
+
+      {held === null ? (
+        <Spinner />
+      ) : held.length === 0 ? (
+        <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
+          No roles yet — this account can sign in and do nothing else.
+        </span>
+      ) : (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {held.map((role) => (
+            <span
+              key={role.id}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '4px 6px 4px 10px',
+                borderRadius: 20,
+                fontSize: 11.5,
+                fontWeight: 600,
+                color: 'var(--text-strong)',
+                background: 'var(--accent-bg)',
+                border: '1px solid var(--border)',
+              }}
+            >
+              {role.name}
+              {mayAssign && (
+                <button
+                  type="button"
+                  onClick={() => remove(role.id)}
+                  disabled={busy}
+                  aria-label={`Remove ${role.name}`}
+                  title={`Remove ${role.name}`}
+                  className="rm-icon-btn"
+                  style={{
+                    display: 'flex',
+                    padding: 2,
+                    border: 'none',
+                    borderRadius: 20,
+                    background: 'transparent',
+                    color: 'var(--text-faint)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <Icon.Close size={11} />
+                </button>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {mayAssign && mayList && available.length > 0 && (
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Select
+            aria-label="Add a role"
+            value={picked}
+            disabled={busy}
+            onChange={(event) => setPicked(event.target.value)}
+            style={{ flex: 1 }}
+          >
+            <option value="">Add a role…</option>
+            {available.map((role) => (
+              <option key={role.id} value={role.id}>
+                {role.name}
+              </option>
+            ))}
+          </Select>
+          <PrimaryButton disabled={!picked || busy} onClick={() => add(picked)}>
+            {busy ? <Spinner /> : <Icon.Plus size={14} />}
+            Add
+          </PrimaryButton>
+        </div>
+      )}
+
+      <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+        A change takes effect on this person's next request — they do not need
+        to sign out and back in.
+      </span>
     </div>
   )
 }
@@ -460,8 +667,12 @@ function UserChips({ user, isSelf }: { user: User; isSelf: boolean }) {
   const status = statusOf(user)
   return (
     <>
-      <Chip tone={user.role === 'ADMIN' ? 'accent' : 'neutral'}>
-        {user.role === 'ADMIN' ? 'Admin' : 'Member'}
+      {/* authz-ok below: a badge on somebody else's row. This list carries
+          accounts, not capability sets, so the legacy cache is what there is
+          to draw — and drawing is not deciding. Their actual roles are in the
+          detail dialog, read from the server. */}
+      <Chip tone={user.role === 'ADMIN' ? 'accent' : 'neutral'}> {/* authz-ok: a badge */}
+        {user.role === 'ADMIN' ? 'Admin' : 'Member'} {/* authz-ok: a badge */}
       </Chip>
       {status === 'INVITED' && <Chip tone="amber">Invited</Chip>}
       {status === 'DISABLED' && <Chip tone="red">Disabled</Chip>}
@@ -799,6 +1010,10 @@ function EditUserModal({
           </Select>
         </Field>
       </div>
+
+      <Divider />
+
+      <RolesSection userId={user.id} />
 
       <Divider />
 

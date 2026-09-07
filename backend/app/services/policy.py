@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from app.core.context import RequestContext
 from app.domain.ports.authz import Authorizer, Decision, ResourceRef
-from app.domain.value_objects.authz import Privilege, ResourceType
+from app.domain.value_objects.authz import Capability, Privilege, ResourceType
 
 if TYPE_CHECKING:  # `Settings` is a pydantic model; the import is free at runtime
     from app.core.config import Settings
@@ -104,7 +104,15 @@ def can_curate(
     asks the strict question — administrator only — because a caller with no
     resource in hand cannot establish ownership, and the fail-closed reading of
     "I don't know who owns this" is *no*.
+
+    **"Administrator" is now `user.manage`**, which is exactly the set of people
+    the `ADMIN` enum used to name, so nothing about who may curate has moved.
+    The flag itself is on a path to redundancy rather than to a rewrite: the
+    knowledge routes already ask the authorizer for `(knowledge, modify)` before
+    reaching here, and once that can be *granted* (Phase 6) the reader/curator
+    split this flag approximates becomes the privilege itself. This function
+    goes when it does.
     """
     if not settings.curation_admin_only:
         return True
-    return ctx.is_admin or owns(ctx, resource)  # authz-ok: retires in Phase 3
+    return ctx.can(Capability.USER_MANAGE) or owns(ctx, resource)

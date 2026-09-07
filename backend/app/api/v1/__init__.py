@@ -10,6 +10,7 @@ from app.api.v1 import (
     knowledge,
     llm_configs,
     reports,
+    roles,
     semantic,
     users,
 )
@@ -17,8 +18,13 @@ from app.api.v1 import (
 api_router = APIRouter()
 api_router.include_router(auth.router)
 api_router.include_router(users.router)
-# Administrators only, and a peer of `users` for the same reason: both are
-# about people rather than about a connection's data.
+# A peer of `users`, and gated on `role.read` / `role.manage` rather than on
+# being an administrator — which is the point: administering *people* and
+# administering *what people can do* are separable jobs, and the DataMind
+# Maintainer role exists because they should be.
+api_router.include_router(roles.router)
+# `audit.read`, and a peer of both for the same reason: all three are about
+# people rather than about a connection's data.
 api_router.include_router(audit.router)
 api_router.include_router(llm_configs.router)
 api_router.include_router(connections.router)

@@ -10,11 +10,12 @@ product cannot answer who did what"*. A log nobody can read answers that
 exactly as badly as an empty one. Thirty lines is the difference between a
 table and a feature.
 
-**Why administrators only**, when curation itself is open to a connection's
-owner: an audit log is a record *about people*. It names who did what and from
-where, which is the one thing in this product a curator has no operational need
-to read about their colleagues — and `AdminDep` is the existing answer to
-"who may see across users".
+**Why `audit.read`**, when curation itself is open to a connection's owner: an
+audit log is a record *about people*. It names who did what and from where,
+which is the one thing in this product a curator has no operational need to
+read about their colleagues. It is a capability rather than a role so that an
+**Auditor** — who may read this and change nothing anywhere — is expressible
+without also being an administrator, which is the whole of requirement 2.
 
 This is **not** the whole of [mvp2 §D4](../../../../docs/mvp2-plan.md), which
 also wants every question recorded with the policy in force, the SQL that ran,
@@ -30,7 +31,7 @@ from uuid import UUID
 from fastapi import APIRouter
 from sqlalchemy import select
 
-from app.api.deps import AdminDep, DbDep
+from app.api.deps import AuditReadDep, DbDep
 from app.api.schemas import AuditEntry
 from app.infra.db.models import AuditLog, User
 
@@ -44,7 +45,7 @@ MAX_LIMIT = 500
 
 @router.get("", response_model=list[AuditEntry])
 async def list_audit(
-    ctx: AdminDep,
+    ctx: AuditReadDep,
     db: DbDep,
     action: str | None = None,
     resource_id: UUID | None = None,

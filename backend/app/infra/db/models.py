@@ -12,6 +12,7 @@ from typing import Any
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -60,6 +61,110 @@ class User(Base, TimestampMixin):
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
     external_subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ── roles ────────────────────────────────────────────────────────────────
+# Four tables and one rule: **a role names a resource *type*, never a resource
+# id.** An id belongs in `grants` (Phase 6), and keeping the two apart is what
+# makes an access review answerable — "because of the Knowledge Manager role"
+# and "because Sara granted it on 3 March" have to stay different rows.
+class Role(Base, TimestampMixin):
+    __tablename__ = "roles"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_roles_name"),
+        UniqueConstraint("provider_id", "source_id", name="uq_roles_source"),
+        CheckConstraint(
+            "(provider_id IS NULL) = (source_id IS NULL)",
+            name="ck_roles_source_pair",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: One of the eight seeded by migration `0024`. Its capability set changes
+    #: only through a migration and is **never re-synchronised on boot** — the
+    #: failure mode `superset init` demonstrates. Its name and description are
+    #: editable; it cannot be deleted.
+    is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: The external role this mirrors, when it mirrors one. Both or neither.
+    #: Nothing reads them until an OIDC adapter exists.
+    provider_id: Mapped[str | None] = mapped_column(String(50))
+    source_id: Mapped[str | None] = mapped_column(String(255))
+
+    capabilities: Mapped[list[RoleCapability]] = relationship(
+        cascade="all, delete-orphan", lazy="selectin"
+    )
+    scoped_privileges: Mapped[list[RoleScopedPrivilege]] = relationship(
+        cascade="all, delete-orphan", lazy="selectin"
+    )
+
+
+class RoleCapability(Base):
+    """One app-wide verb a role carries.
+
+    `capability` is a plain `String`, not an enum type, and that is the whole
+    open/closed bargain: closed in code (`Capability` is a `StrEnum`, so a typo
+    raises at import), open in the row (a downgrade must not turn every stored
+    word the new code does not know into a constraint violation).
+    """
+
+    __tablename__ = "role_capabilities"
+
+    role_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True
+    )
+    capability: Mapped[str] = mapped_column(String(50), primary_key=True)
+
+
+class RoleScopedPrivilege(Base):
+    """A privilege this role holds over **every** resource of a type.
+
+    Wildcard by construction: there is no `resource_id` column and there will
+    not be one. `(knowledge, manage)` on Knowledge Manager means every store in
+    the installation, now and in future.
+    """
+
+    __tablename__ = "role_scoped_privileges"
+
+    role_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True
+    )
+    resource_type: Mapped[str] = mapped_column(String(30), primary_key=True)
+    privilege: Mapped[str] = mapped_column(String(20), primary_key=True)
+
+
+class RoleAssignment(Base):
+    """Who holds a role. `RESTRICT` on the role, `CASCADE` on the principal.
+
+    The asymmetry is the point. Deleting a *person* should take their
+    assignments with them; deleting a *role* people still hold must fail and
+    name them, rather than silently widening or narrowing what those people
+    can do at the moment somebody was trying to tidy up.
+
+    `team_id` arrives with `teams`; until then a role reaches a principal
+    directly or not at all.
+    """
+
+    __tablename__ = "role_assignments"
+    __table_args__ = (
+        UniqueConstraint("role_id", "user_id", name="uq_role_assignment"),
+        Index("ix_role_assignments_user", "user_id"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    role_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("roles.id", ondelete="RESTRICT"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
 
 
 class Session(Base):

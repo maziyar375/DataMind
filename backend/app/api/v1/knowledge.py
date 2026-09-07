@@ -118,7 +118,7 @@ async def _authorized(
 
 
 def _require_curator(ctx, settings, connection) -> None:
-    """Administrator, or the owner of this connection. Never `is_admin` alone.
+    """Administrator, or the owner of this connection. Never a role string.
 
     The connection is passed rather than looked up because every caller has
     just resolved it through `_authorized()` — and because `can_curate` with no

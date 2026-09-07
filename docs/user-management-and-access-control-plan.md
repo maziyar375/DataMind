@@ -1107,11 +1107,14 @@ continues from `0023_token_accounting` (decision 16).
 | `0028_grants.py` | 6 | `grants` |
 | `0029_drop_users_role.py` | 10 | drops `users.role` once nothing reads it |
 
-> **Order note.** `0026` (roles) precedes `0024` (kind) in *phase* order but not
-> in *migration* order, because Phase 3 ships before Phase 5. Alembic revisions
-> are linear, so the file numbers follow the order they are **written**, and the
-> table above lists them by number. Whoever writes them renumbers to match
-> reality; the shapes below do not change.
+> **Order note, resolved.** Phase 3 shipped first, so roles landed as
+> **`0024_roles.py`** and teams as **`0025_teams.py`**; the remaining numbers
+> shift down by two. The shapes below are unchanged, with one honest
+> consequence of the reordering: `role_assignments.team_id` cannot exist before
+> `teams` does, so `0024` creates the table with a non-null `user_id` and a
+> two-column uniqueness, and `0025` widens it — nullable `user_id`, a
+> `team_id`, the one-principal `CHECK`, and the three-column unique constraint
+> `0024` already named.
 
 ### 17.1 `users`, extended
 
@@ -3064,43 +3067,66 @@ cd frontend && npm run typecheck && npm run build && npm test
 
 ## Phase 3 — Roles and capabilities
 
-- [ ] Migration `0026_roles.py`: `roles`, `role_capabilities`,
-      `role_scoped_privileges`, `role_assignments`
-- [ ] Seed the eight system roles with exactly the §12.3 capability sets
-- [ ] Backfill `users.role` → a role assignment for every existing user
-- [ ] ORM models for the four tables
-- [ ] `services/role_service.py`: create, update, delete-with-guard, assign,
+- [x] Migration **`0024_roles.py`** (renumbered: Phase 3 ships before Phase 5,
+      and alembic revisions are linear): `roles`, `role_capabilities`,
+      `role_scoped_privileges`, `role_assignments`. **`role_assignments.team_id`
+      is deliberately absent** — a column with a foreign key to a table that
+      does not exist yet is not a column; `0025` adds it with `teams`
+- [x] Seed the eight system roles with exactly the §12.3 capability sets
+- [x] Backfill `users.role` → a role assignment for every existing user
+- [x] ORM models for the four tables
+- [x] `services/role_service.py`: create, update, delete-with-guard, assign,
       unassign, `resolve_capabilities`
-- [ ] `api/v1/roles.py`: CRUD gated `role.read` / `role.manage`
-- [ ] `api/v1/users.py`: `GET/POST/DELETE /users/{id}/roles`
-- [ ] `api/deps.py`: `needs(capability)`; `AdminDep` aliased and deprecated
-- [ ] `RequestContext.capabilities`, one query, resolved in `get_ctx`
-- [ ] `ctx.is_admin` becomes a deprecated computed property
-- [ ] Every `AdminDep` route moves to `needs(...)`
-- [ ] `services/bootstrap.py` assigns `Administrator`
-- [ ] `_guard_last_admin` → `_guard_last_administrator` over assignments
-- [ ] `MeResponse` gains `kind`, `capabilities`, `roles`
-- [ ] Audit actions: `role.created/updated/deleted/assigned/unassigned`
-- [ ] Frontend: `/users` → `/admin/people` permanent redirect
-- [ ] Frontend: rail row becomes **Administration**, gated on a capability set
-- [ ] Frontend: `/admin` master–detail shell, tabs appearing per capability
-- [ ] Frontend: **People** tab, reusing `UsersPage`'s list furniture
-- [ ] Frontend: People detail gains a **Roles** section
-- [ ] Frontend: **Roles** tab — list, capability checklist, scoped-privilege
+- [x] `api/v1/roles.py`: CRUD gated `role.read` / `role.manage`, plus
+      `/roles/capabilities` and `/roles/privileges` — the two vocabularies the
+      editor renders, **served rather than duplicated in the SPA**
+- [x] `api/v1/users.py`: `GET/POST/DELETE /users/{id}/roles`
+- [x] `api/deps.py`: `needs(capability)`; `AdminDep` aliased and deprecated
+- [x] `RequestContext.capabilities`, one query, resolved in `get_ctx`
+- [x] `ctx.is_admin` becomes a deprecated computed property over `user.manage`
+- [x] Every `AdminDep` route moves to `needs(...)`
+- [x] `services/bootstrap.py` assigns `Administrator`, in the same transaction
+      as the account — an installation cannot come up with an administrator who
+      is not one
+- [x] `_guard_last_admin` → `RoleService.guard_last_administrator`, counted over
+      assignments, reached by **both** routes into a demotion
+- [x] `MeResponse` gains `kind`, `capabilities`, `roles`, `teams`; a second
+      endpoint `GET /auth/me/permissions` answers the same without the account
+- [x] Audit actions: `role.created/updated/deleted/assigned/unassigned`
+- [x] Frontend: `/users` → `/admin/people` permanent redirect
+- [x] Frontend: rail row becomes **Administration**, gated on a capability set
+- [x] Frontend: `/admin` shell with tabs appearing per capability
+- [x] Frontend: **People** tab, reusing `UsersPage`'s list furniture
+- [x] Frontend: People detail gains a **Roles** section
+- [x] Frontend: **Roles** tab — list, capability checklist, scoped-privilege
       matrix, system badge
-- [ ] Frontend: `useCan()` replaces every `user.role === 'ADMIN'`
-- [ ] Test: the eight seeds match §12.3 exactly (a table test)
-- [ ] Test: a system role refuses a capability edit, allows a rename
-- [ ] Test: deleting an assigned role is refused and names holders
-- [ ] Test: the last-administrator guard, through both routes
-- [ ] Test: a capability change takes effect on the next request, no new token
-- [ ] Test: capability resolution is one query
-- [ ] Test: a route-table walk proves every ex-`AdminDep` route is capability
-      gated
-- [ ] Doc: `security.md` §6 · `frontend.md` §2 · this plan's ledger
-- [ ] **Gate green**
-- [ ] **Acceptance:** a custom role can be created, assigned, and takes effect
-      without signing out; Maintainer and Auditor reach the right tabs
+- [x] Frontend: `useCan()` replaces every `user.role === 'ADMIN'` that decided
+      something. The survivors are labels and counts, each carrying its own
+      `authz-ok:` marker — and the gate's frontend arm was **widened to match
+      `===`**, which it never did, so it had silently checked nothing for two
+      phases
+- [x] Test: the eight seeds match §12.3 exactly (a table test, from an
+      independent transcription of the plan)
+- [x] Test: a system role refuses a capability edit, allows a rename
+- [x] Test: deleting an assigned role is refused and names holders
+- [x] Test: the last-administrator guard, through both routes
+- [x] Test: a capability change takes effect on the next request, no new token
+- [x] Test: capability resolution is one query
+- [x] Test: a route-table walk proves every ex-`AdminDep` route is capability
+      gated — walking the **live** table, and asserting the walk itself finds
+      routes, because a flattener that returned nothing would have passed
+- [x] Test: the SQLite session used by the role tests **refuses a lazy load**,
+      because `AsyncSession` cannot do one. Added after `POST /roles` shipped
+      as a 500 that every test in the file was green for
+- [x] Doc: `security.md` §6 · `frontend.md` §2 · this plan's ledger
+- [x] **Gate green** — ruff, 8 import-linter contracts, 2294 backend tests,
+      `make guard`, `make authz-check`, frontend typecheck + build + tests
+- [x] **Acceptance**, verified end to end against the running stack: an Auditor
+      reaches People, Roles and Audit and is refused (403) on every write; a
+      custom role is created, assigned, and appears in the holder's `/auth/me`
+      **on the same access token**; a system role refuses a capability edit with
+      an explanation and accepts a rename; deleting an assigned role is refused
+      and names the holder
 
 ## Phase 4 — Teams
 
@@ -3344,7 +3370,7 @@ cd frontend && npm run typecheck && npm run build && npm test
 | 0 · Vocabulary and the port | 16 | **16** | 2026-09-06 |
 | 1 · `ctx` part A | 10 | **10** | 2026-09-06 |
 | 2 · `ctx` part B | 16 | **16** | 2026-09-07 |
-| 3 · Roles and capabilities | 32 | 0 | — |
+| 3 · Roles and capabilities | 32 | **32** | 2026-09-07 |
 | 4 · Teams | 20 | 0 | — |
 | 5 · Service users | 25 | 0 | — |
 | 6 · Grants on connections | 34 | 0 | — |
@@ -3353,7 +3379,7 @@ cd frontend && npm run typecheck && npm run build && npm test
 | 9 · Access review | 15 | 0 | — |
 | 10 · Rulebook and seams | 21 | 0 | — |
 | Cross-cutting | 8 | 0 | — |
-| **Total** | **254** | **58** | |
+| **Total** | **254** | **90** | |
 
 ## 30. The one-line acceptance test for the whole plan
 

@@ -10,15 +10,16 @@
 import type {
   AnswerFeedback,
   ArtifactSpec, BenchmarkCandidate, BenchmarkOverview, BenchmarkResult,
-  BenchmarkRun, BenchmarkSet, ChartRedraw, Connection, ConversationSummary, Dashboard, DashboardDocument,
+  BenchmarkRun, BenchmarkSet, CapabilityEntry, ChartRedraw, Connection, ConversationSummary, Dashboard, DashboardDocument,
   DashboardImportResult, DashboardSummary,
   DashboardTile, EmbeddingStatus, KnowledgeHealth, KnowledgeTemplate,
   KnowledgeTemplateList,
-  LlmConfig, MaintenanceResult, MessageWithRun, ParameterCatalog, ProblemDetail,
-  Report, ReportBlock,
+  LlmConfig, MaintenanceResult, MessageWithRun, ParameterCatalog, Permissions,
+  ProblemDetail, Report, ReportBlock,
   ReportBlockCheck, ReportChart, ReportRun, ReportRunDetail, ReportSection,
   ReportSectionResult,
-  ReportSummary, Review, RunDetail, RunEvent, RunKnowledge, SchemaSnapshot,
+  ReportSummary, Review, Role, RunDetail, RunEvent, RunKnowledge, SchemaSnapshot,
+  ScopedPrivilege,
   SemanticDocument, SemanticJob, Suggestion,
   SemanticLayer, SqlDraft, TemplateCheckResult, TemplateParam,
   TilePosition, TileResult, TileType, TestResult, User,
@@ -175,6 +176,13 @@ export const auth = {
     }
   },
   me: () => get<User>('/auth/me'),
+  /** Capabilities, roles and teams, without the account.
+   *
+   *  A separate call from `me()` because the two change on different rhythms:
+   *  a display name moves when somebody edits it, permissions move when an
+   *  administrator assigns a role — and a screen that wants the second should
+   *  not have to re-read the first. */
+  permissions: () => get<Permissions>('/auth/me/permissions'),
   /** Your own display name. Email, role and status stay with an admin. */
   updateProfile: (display_name: string) =>
     patch<User>('/auth/me', { display_name }),
@@ -198,6 +206,14 @@ export const auth = {
 // ── users ─────────────────────────────────────────────────────────────────
 export const users = {
   list: () => get<User[]>('/users'),
+  /** The roles reaching one person. `user.read`, not `role.manage`. */
+  roles: (id: string) => get<Role[]>(`/users/${id}/roles`),
+  /** Idempotent, and answers with what they hold **afterwards**, so the
+   *  detail pane re-renders from the response instead of re-fetching. */
+  assignRole: (id: string, roleId: string) =>
+    post<Role[]>(`/users/${id}/roles`, { role_id: roleId }),
+  unassignRole: (id: string, roleId: string) =>
+    del(`/users/${id}/roles/${roleId}`),
   create: (payload: { email: string; display_name: string; role: string }) =>
     post<{ user: User; temporary_password: string }>('/users', payload),
   update: (
@@ -215,6 +231,37 @@ export const users = {
       body: JSON.stringify({ password }),
     }),
   remove: (id: string) => del(`/users/${id}`),
+}
+
+// ── roles ─────────────────────────────────────────────────────────────────
+// The capability catalog and the privilege matrix are **fetched**, never
+// hardcoded here: both are closed vocabularies in the backend, and a second
+// copy in the SPA is a second thing that can quietly stop matching — with the
+// failure showing up as a permission nobody can grant.
+export const roles = {
+  list: () => get<Role[]>('/roles'),
+  get: (id: string) => get<Role>(`/roles/${id}`),
+  create: (payload: {
+    name: string
+    description?: string
+    capabilities?: string[]
+    scoped_privileges?: ScopedPrivilege[]
+  }) => post<Role>('/roles', payload),
+  update: (
+    id: string,
+    payload: {
+      name?: string
+      description?: string
+      capabilities?: string[]
+      scoped_privileges?: ScopedPrivilege[]
+    },
+  ) => patch<Role>(`/roles/${id}`, payload),
+  remove: (id: string) => del(`/roles/${id}`),
+  capabilities: () => get<CapabilityEntry[]>('/roles/capabilities'),
+  /** What each privilege means on each resource type, as the backend's own
+   *  conformance test asserts it. The matrix renders these sentences verbatim
+   *  so the UI and the API cannot disagree about what a grant would do. */
+  privileges: () => get<Record<string, Record<string, string>>>('/roles/privileges'),
 }
 
 // ── connections ───────────────────────────────────────────────────────────

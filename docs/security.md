@@ -849,6 +849,52 @@ fields on its schema, so a member cannot promote themselves by editing a
 payload. Neither route takes a user id — there is no parameter to point at
 somebody else, and a test walks the route table to keep it that way.
 
+`GET /auth/me` and `GET /auth/me/permissions` return the caller's capability
+set, resolved for the request that is asking. **The SPA renders every affordance
+from that answer**, never from a role string — which is what makes "the
+interface offers exactly what the API would allow" a property rather than an
+aspiration.
+
+**Roles, capabilities, and where the answer to "may they?" lives.** As of
+Phase 3 of
+[user-management-and-access-control-plan.md](user-management-and-access-control-plan.md),
+`users.role` is no longer a permission. It is a two-value cache the role
+service keeps true so a rollback is a config flip, and a CI grep
+(`make authz-check`) fails the build on anything that reads it to decide
+something. What decides is a **capability**: one of eighteen app-wide verbs,
+carried by roles, held by principals, and checked in a route dependency —
+`deps.needs(Capability.ROLE_MANAGE)` — which runs *before* the handler body and
+therefore cannot be forgotten by whoever adds the next route. That is this
+codebase's answer to OWASP API1:2023.
+
+Three properties of that design are worth stating because each has an obvious
+weaker version:
+
+* **Capabilities are resolved from the database on every request, never carried
+  in the token** (decision 15 of the plan). The cost is one indexed join per
+  authenticated call. What it buys is that revoking a role takes effect on the
+  **next request** rather than at the next token refresh — the difference
+  between "we removed their access" and "we removed their access, up to fifteen
+  minutes from now".
+* **The vocabulary is closed in code and open in the database.** `Capability`
+  is a `StrEnum`, so a typo is an `AttributeError` at import; the column that
+  stores it is a `varchar`, and a row naming a word this build does not know is
+  ignored with a warning. A downgrade must degrade to *fewer* permissions, not
+  to a 500 on sign-in.
+* **The eight seeded roles are never re-synchronised on boot.** Their capability
+  sets change only through a migration — Superset's `superset init`, which
+  reverts local edits every restart, is the failure mode being avoided. A
+  system role's name and description are editable; it cannot be deleted, and
+  neither can any role somebody still holds.
+
+The role model carries **no resource ids**: `role_scoped_privileges` has a
+resource *type* and nowhere to put an id. Per-resource access is a grant
+(Phase 6), and keeping the two apart is what makes an access review answerable
+— *"because of the Knowledge Manager role"* and *"because Sara granted it on
+3 March"* have to stay different rows. Every role change is audited:
+`role.created`, `role.updated`, `role.deleted`, `role.assigned`,
+`role.unassigned`.
+
 > **Losing `SECRET_BOX_KEY` means every stored credential must be re-entered.**
 > There is no recovery path, by design. Back it up somewhere your database
 > backups are not.

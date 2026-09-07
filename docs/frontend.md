@@ -125,20 +125,31 @@ colours are chosen in JS, and the print stylesheet.
 | **Knowledge** | [`KnowledgePage.tsx`](../frontend/src/pages/KnowledgePage.tsx) | The curation console, across every connection: flags raised, questions nothing answers, the maintenance sweep. |
 | **Data sources** | [`DataSourcesPage.tsx`](../frontend/src/pages/DataSourcesPage.tsx) | The connections DataMind may read, and everything known about each one. |
 | **LLM providers** | [`LlmProvidersPage.tsx`](../frontend/src/pages/LlmProvidersPage.tsx) | The models it may call, and the keys it calls them with. Two groups: *Models* answer questions, the *Embedder* makes vectors — a row is one or the other, and the form shows that kind's fields only. |
-| **Users** | [`UsersPage.tsx`](../frontend/src/pages/UsersPage.tsx) | Who can sign in and what they may do. Admin only — the rail entry is not rendered otherwise. |
+| **Administration** | [`AdminPage.tsx`](../frontend/src/pages/AdminPage.tsx) | `/admin`: a tabbed section over **People** ([`UsersPage.tsx`](../frontend/src/pages/UsersPage.tsx)) and **Roles** ([`RolesTab.tsx`](../frontend/src/pages/RolesTab.tsx)), with Teams, Service accounts, Access review and Audit arriving as more tabs. The rail row appears when the viewer holds **any** administration capability, and each tab appears when its own capability is held — so an Auditor sees People and changes nothing, and a DataMind Maintainer sees the section without seeing People at all. `/users` permanently redirects to `/admin/people`. |
 | **Your account** | [`AccountPage.tsx`](../frontend/src/pages/AccountPage.tsx) | `/settings`: your display name and your password. Reached from the user block in the rail, not from `NAV`. |
 | **Creators** | [`AboutPage.tsx`](../frontend/src/pages/AboutPage.tsx) | Who built it. A colophon, not a destination; the one page on both sides of the sign-in wall. |
 | **Login** | [`LoginPage.tsx`](../frontend/src/pages/LoginPage.tsx) | The only public surface, and therefore the only signed-out route to Creators. |
 
-Three of these are **index pages** — Dashboards, Reports, Users — and they
-share their furniture deliberately: the same page header, the same toolbar
-(search, a filter offered only when there is something to filter, a sort), the
-same loading skeleton, the same empty states. Dashboards and Reports offer
-cards *or* rows because their records have a face worth showing; Users is rows
-only, because the facts about an account are a line, not a card.
+Three of these are **index pages** — Dashboards, Reports, and People inside
+Administration — and they share their furniture deliberately: the same page
+header, the same toolbar (search, a filter offered only when there is something
+to filter, a sort), the same loading skeleton, the same empty states.
+Dashboards and Reports offer cards *or* rows because their records have a face
+worth showing; People is rows only, because the facts about an account are a
+line, not a card. Embedded as a tab it drops its own page header — the section
+carries that — and moves *Add user* to the end of its toolbar; everything else
+about it is unchanged, which is the point of reusing it rather than writing a
+second one.
 
-Three are **master–detail** — Data sources, LLM providers and Knowledge — and
-share the frame in
+**No screen branches on a role.** `useCan()`
+([`permissions.tsx`](../frontend/src/permissions.tsx)) reads the capability list
+`/auth/me` returned — the same set the API will check on the next request — and
+the four `user.role === 'ADMIN'` comparisons that used to decide what to render
+are gone. The remaining ones are labels and counts, each carrying an
+`authz-ok:` marker that `make authz-check` prints on every run.
+
+Four are **master–detail** — Data sources, LLM providers, Knowledge and the
+Roles tab — and share the frame in
 [`components/settings.tsx`](../frontend/src/components/settings.tsx)
 (`MasterColumn`, `MasterItem`, `DetailHeader`, `DetailBody`, `Section`,
 `FieldRow`, `Tabs`, `StatusLine`, `UnsavedNote`). Two pages that configure a

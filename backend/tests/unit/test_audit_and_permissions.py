@@ -28,6 +28,7 @@ import pytest
 
 from app.core.config import Settings
 from app.core.context import RequestContext
+from app.domain.value_objects.authz import Capability
 from app.services import audit
 from app.services.policy import can_curate
 
@@ -36,8 +37,22 @@ STRANGER = uuid4()
 
 
 def ctx(user_id=OWNER, role: str = "MEMBER") -> RequestContext:
+    """A context whose capabilities match the role it names.
+
+    `role` is the legacy enum and, as of Phase 3, decides nothing — what
+    `can_curate` actually reads is `user.manage`. The helper keeps the old
+    argument so the tests below still read as sentences about administrators
+    and members, and derives the capability set from it, which is exactly what
+    `get_ctx` does against the database.
+    """
     return RequestContext(
-        user_id=user_id, email="u@test.local", role=role, correlation_id="t"
+        user_id=user_id,
+        email="u@test.local",
+        role=role,
+        capabilities=(
+            frozenset({Capability.USER_MANAGE}) if role == "ADMIN" else frozenset()
+        ),
+        correlation_id="t",
     )
 
 
@@ -244,10 +259,14 @@ def test_every_curation_write_path_records_one() -> None:
         assert name in audited, f"{name} writes curation and logs nothing"
 
 
-def test_the_audit_reader_is_administrators_only() -> None:
+def test_the_audit_reader_needs_the_audit_capability() -> None:
     """An audit log is a record *about people*. A curator has an operational
     need to change their connection's knowledge and none to read who else did
-    what, and from where."""
+    what, and from where.
+
+    It is a **capability** rather than an admin flag as of Phase 3, which is
+    what makes an Auditor possible: somebody who can read this and change
+    nothing anywhere else."""
     tree = ast.parse(Path("app/api/v1/audit.py").read_text())
     routes = [
         node for node in ast.walk(tree)
@@ -262,4 +281,4 @@ def test_the_audit_reader_is_administrators_only() -> None:
         annotations = {
             ast.unparse(a.annotation) for a in route.args.args if a.annotation
         }
-        assert "AdminDep" in annotations, route.name
+        assert "AuditReadDep" in annotations, route.name

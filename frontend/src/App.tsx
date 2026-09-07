@@ -8,6 +8,7 @@ import type { User } from './api/types'
 import { DangerButton, GhostButton, Icon, Logo, Modal, initialOf } from './components/ui'
 import AboutPage from './pages/AboutPage'
 import AccountPage from './pages/AccountPage'
+import AdminPage from './pages/AdminPage'
 import KnowledgePage from './pages/KnowledgePage'
 import ChatPage from './pages/ChatPage'
 import DashboardsPage from './pages/DashboardsPage'
@@ -15,8 +16,10 @@ import DataSourcesPage from './pages/DataSourcesPage'
 import LlmProvidersPage from './pages/LlmProvidersPage'
 import LoginPage from './pages/LoginPage'
 import ReportsPage from './pages/ReportsPage'
-import UsersPage from './pages/UsersPage'
 import { badge, queueTone, totalWaiting } from './components/knowledge-queue'
+import {
+  ADMIN_SECTION, PermissionsProvider, usePermissions, type Capability,
+} from './permissions'
 import type { QueueRow } from './components/knowledge-queue'
 import { Notifications, type ShownNotice } from './components/notifications'
 import { ShellProvider, isWithin, type BackgroundTask, type Shell } from './shell'
@@ -61,7 +64,17 @@ const NAV = [
   // admin-only and rarer still.
   { path: '/sources', label: 'Data sources', icon: <Icon.Database /> },
   { path: '/providers', label: 'LLM providers', icon: <Icon.Sparkle /> },
-  { path: '/users', label: 'Users', icon: <Icon.Users />, adminOnly: true },
+  // Was **Users**, gated on a role string (authz-ok: prose). It is now a section rather
+  // than a page, and its gate is *holding any administration capability* —
+  // which is what lets an Auditor reach it and change nothing, and a DataMind
+  // Maintainer reach it without seeing the People list. A boolean could
+  // express neither. See `permissions.tsx`.
+  {
+    path: '/admin',
+    label: 'Administration',
+    icon: <Icon.Shield />,
+    needsAny: ADMIN_SECTION,
+  },
 ]
 
 /** Does `pathname` sit inside the section rooted at `path`? */
@@ -324,7 +337,16 @@ export default function App() {
       : <LoginPage onSignedIn={setUser} onAbout={() => navigate('/about')} />
   }
 
+  // The Administration route is registered only for somebody who holds an
+  // administration capability; everybody else falls through to Chat. The
+  // section itself then decides which of its tabs they see, from the same
+  // answer — so the rail, the route table and the API cannot disagree.
+  const reachesAdmin = ADMIN_SECTION.some((capability) =>
+    (user.capabilities ?? []).includes(capability),
+  )
+
   return (
+    <PermissionsProvider user={user}>
     <ShellProvider value={shell}>
       <div
         className="rm-app"
@@ -380,11 +402,21 @@ export default function App() {
               <Route path="/sources/*" element={<DataSourcesPage />} />
               <Route path="/knowledge/*" element={<KnowledgePage />} />
               <Route path="/providers/*" element={<LlmProvidersPage />} />
-              {/* Not a hidden rail item: a member who types the path lands on
-                  Chat like any other unknown address. */}
-              {user.role === 'ADMIN' && (
-                <Route path="/users" element={<UsersPage currentUser={user} />} />
+              {/* Not a hidden rail item: somebody who types the path with no
+                  administration capability lands on Chat like any other
+                  unknown address. The section itself decides which of its tabs
+                  they see. */}
+              {reachesAdmin && (
+                <>
+                  <Route path="/admin" element={<AdminPage user={user} />} />
+                  <Route path="/admin/:tab" element={<AdminPage user={user} />} />
+                </>
               )}
+              {/* The address this section used to live at. A permanent
+                  redirect rather than a removal: `/users` is in bookmarks and
+                  in at least one screenshot, and a dead link into an admin
+                  screen reads as "your access was revoked". */}
+              <Route path="/users" element={<Navigate to="/admin/people" replace />} />
               {/* `/settings` at last means the account, which is what the
                   word says. It held the LLM providers until routing moved
                   them to `/providers`. */}
@@ -431,6 +463,7 @@ export default function App() {
         )}
       </div>
     </ShellProvider>
+    </PermissionsProvider>
   )
 }
 
@@ -471,9 +504,13 @@ function Sidebar({
   onToggleTheme: () => void
   onLogout: () => void
 }) {
+  const { canAny } = usePermissions()
   const items = useMemo(
-    () => NAV.filter((item) => !item.adminOnly || user.role === 'ADMIN'),
-    [user.role],
+    // A row with no gate is for everyone; a gated row appears when the person
+    // holds **any** of the capabilities it names. Read from the backend's own
+    // answer, never from a role string — see `permissions.tsx`.
+    () => NAV.filter((item) => !item.needsAny || canAny(...(item.needsAny as Capability[]))),
+    [canAny],
   )
 
   return (
@@ -584,8 +621,25 @@ function Sidebar({
             >
               {user.display_name || user.email}
             </span>
-            <span style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>
-              {user.role === 'ADMIN' ? 'Admin' : 'Member'}
+            {/* The roles this person actually holds, named. It read "Admin"
+                or "Member" from a two-value enum, which since Phase 3 is a
+                cache rather than the truth — somebody can be a Knowledge
+                Manager and an Auditor, and neither word was ever either of
+                those. Falls back to the legacy label for an older `/auth/me`
+                that carries no role list. */}
+            <span
+              style={{
+                fontSize: 10.5,
+                color: 'var(--text-faint)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+              title={(user.roles ?? []).join(', ')}
+            >
+              {user.roles?.length
+                ? user.roles.join(' · ')
+                : user.role === 'ADMIN' ? 'Admin' : 'Member'} {/* authz-ok: a label */}
             </span>
           </div>
           </button>

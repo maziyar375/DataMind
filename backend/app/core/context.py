@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import uuid
 from contextvars import ContextVar
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from uuid import UUID
+
+from app.domain.value_objects.authz import Capability
 
 _correlation_id: ContextVar[str] = ContextVar("correlation_id", default="")
 
@@ -41,6 +43,17 @@ class RequestContext:
     #: log that refused to record an action because it could not name an
     #: address would be worse than one that records the action without it.
     actor_ip: str = ""
+    #: Every capability this principal holds, from every role reaching them.
+    #: Resolved **once per request** in `get_ctx`, from the database and never
+    #: from the token (plan decision 15), so a role revoked now takes effect on
+    #: the next request rather than at the next token refresh.
+    #:
+    #: It has a default, and the default is the safe one: an empty set can do
+    #: nothing app-wide. A context built by hand — a worker, a test — is
+    #: therefore *fail-closed* rather than unconstructible, which matters
+    #: because the alternative is a required field that every construction site
+    #: fills in with a guess.
+    capabilities: frozenset[Capability] = field(default_factory=frozenset)
     #: True when this context was built by `on_behalf_of` rather than from a
     #: verified credential. The audit log records it and **nothing else reads
     #: it** — a delegated context has exactly the principal's permissions, no
@@ -48,11 +61,28 @@ class RequestContext:
     #: and that is the correct outcome rather than a bug to route around.
     delegated: bool = False
 
+    def can(self, capability: Capability) -> bool:
+        """Does this principal hold this app-wide verb?
+
+        The **only** way to ask. A route asks it through `deps.needs(...)`,
+        which runs before the handler body and so cannot be forgotten; a
+        service asks it directly where the answer is not what the route was
+        guarding. Nothing anywhere asks what role somebody has.
+        """
+        return capability in self.capabilities
+
     @property
     def is_admin(self) -> bool:
-        """Deprecated. Becomes `USER_MANAGE in self.capabilities` in Phase 3,
-        and is deleted in Phase 10 once the gate proves nothing reads it."""
-        return self.role == "ADMIN"  # authz-ok: retires in Phase 3
+        """Deprecated, and no longer a role string.
+
+        It reads `user.manage` because that is what the old `ADMIN` enum
+        actually gated — the People screens — and because the alternative,
+        "holds every capability", would quietly demote an administrator the
+        day a nineteenth capability was added. Its two remaining callers are
+        `require_admin` and `can_curate`; it is deleted in Phase 10 once the
+        gate proves that number is zero.
+        """
+        return Capability.USER_MANAGE in self.capabilities
 
     @classmethod
     def on_behalf_of(
@@ -69,9 +99,13 @@ class RequestContext:
         default argument.
 
         `email` and `role` are empty because a worker has neither in hand and
-        neither is an input to any decision. Empty `role` in particular means a
-        delegated context is **never** an administrator, which is the safe
-        reading of "we did not look it up".
+        neither is an input to any decision, and `capabilities` is empty for a
+        stronger reason: a delegated context holds **no app-wide verb at all**.
+        Nothing background needs one — a scheduled run reads and writes
+        *resources*, and reach over a resource is the authorizer's answer, read
+        from the database against this principal. A worker that genuinely
+        needed `settings.manage` would be doing something this model does not
+        cover, which is a design conversation rather than a wider default.
         """
         return cls(
             user_id=user_id,
@@ -92,5 +126,11 @@ class RequestContext:
         log, and drops the identity, because it is no longer that person's.
         """
         return replace(
-            self, user_id=user_id, email="", role="", session_id=None, delegated=True
+            self,
+            user_id=user_id,
+            email="",
+            role="",
+            session_id=None,
+            capabilities=frozenset(),
+            delegated=True,
         )

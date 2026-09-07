@@ -14,9 +14,67 @@ export interface User {
   id: string
   email: string
   display_name: string
+  /**
+   * The legacy two-value enum. **Do not branch on it.**
+   *
+   * As of Phase 3 of the access-control plan it is a read-only cache the
+   * backend keeps true so a rollback is a config flip; every "may I?" the
+   * interface asks is answered by `capabilities`. It survives here because the
+   * user list still *shows* an Admin chip, and showing is not deciding.
+   */
   role: 'ADMIN' | 'MEMBER'
   status?: string
   created_at?: string
+  /** HUMAN or SERVICE. One value until service users land. */
+  kind?: string
+  /**
+   * Every app-wide verb this principal holds, from every role reaching them.
+   * Present on `/auth/me` only — the user *list* carries accounts, not
+   * permissions, and a list that shipped everybody's capability set would be
+   * an access-review answer nobody asked for.
+   */
+  capabilities?: string[]
+  roles?: string[]
+  teams?: string[]
+}
+
+/** A privilege a role holds over **every** resource of a type. Never an id. */
+export interface ScopedPrivilege {
+  resource_type: string
+  privilege: string
+}
+
+export interface Role {
+  id: string
+  name: string
+  description: string
+  /** Seeded by a migration: renameable, not re-scopeable, never deletable. */
+  is_system: boolean
+  capabilities: string[]
+  scoped_privileges: ScopedPrivilege[]
+  /** How many principals hold it. */
+  holders?: number
+  created_at?: string
+}
+
+/**
+ * One capability as the backend describes it.
+ *
+ * Served rather than hardcoded here: the list is a closed enum in the backend,
+ * and a checklist shipping its own copy would, the day a nineteenth arrived,
+ * be a permission nobody could grant and nobody could see was missing.
+ */
+export interface CapabilityEntry {
+  name: string
+  group: string
+  label: string
+}
+
+/** `GET /auth/me/permissions`. What every affordance is rendered from. */
+export interface Permissions {
+  capabilities: string[]
+  roles: string[]
+  teams: string[]
 }
 
 export interface Connection {
