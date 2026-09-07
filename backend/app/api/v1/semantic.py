@@ -73,6 +73,7 @@ async def _authorized(
             type=ResourceType.SEMANTIC_LAYER, id=connection.id, entity=connection
         ),
         privilege,
+        db=db,
     )
     return connection
 

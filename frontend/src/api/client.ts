@@ -10,6 +10,7 @@
 import type {
   Actions,
   AnswerFeedback,
+  AuditEntry,
   ArtifactSpec, BenchmarkCandidate, BenchmarkOverview, BenchmarkResult,
   BenchmarkRun, BenchmarkSet, CapabilityEntry, ChartRedraw, Connection, ConversationSummary, Dashboard, DashboardDocument,
   DashboardImportResult, DashboardSummary,
@@ -292,6 +293,36 @@ export const teams = {
   bindSource: (id: string, provider_id: string | null, source_id: string | null) =>
     put<Team>(`/teams/${id}/source`, { provider_id, source_id }),
   remove: (id: string) => del(`/teams/${id}`),
+}
+
+// ── audit ─────────────────────────────────────────────────────────────────
+// **Keyset pagination, not offset.** `before` takes the `at` of the last row
+// on the page you have, so paging through a log that is being appended to
+// while you read it never skips a row or shows one twice — which `OFFSET`
+// does, on exactly the table where it would be least noticeable and most
+// misleading.
+export const audit = {
+  list: (params: {
+    action?: string
+    outcome?: string
+    resource_type?: string
+    actor?: string
+    since?: string
+    until?: string
+    before?: string
+    limit?: number
+  } = {}) => {
+    const query = new URLSearchParams()
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== undefined && value !== '') query.set(key, String(value))
+    }
+    const suffix = query.toString()
+    return get<AuditEntry[]>(`/audit${suffix ? `?${suffix}` : ''}`)
+  },
+  /** The action words that actually appear in *this* installation's log —
+   *  served rather than hardcoded, so the filter never offers a word that
+   *  matches nothing and never misses one that does. */
+  actions: () => get<string[]>('/audit/actions'),
 }
 
 // ── access ────────────────────────────────────────────────────────────────

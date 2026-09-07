@@ -79,6 +79,19 @@ BENCHMARK_CREATED = "knowledge.benchmark.created"
 BENCHMARK_DELETED = "knowledge.benchmark.deleted"
 BENCHMARK_RUN_QUEUED = "knowledge.benchmark.run"
 
+#: **The ask itself**, with the disclosure policy that was in force for it.
+#:
+#: The remaining half of mvp2 §D4, and the sentence this product's positioning
+#: rests on: *"you decide what leaves your database"* is only defensible if the
+#: system can say, per question, what the decision **was**. Written at ask time
+#: rather than read off the connection afterwards, because the policy can
+#: change between one question and the next.
+#:
+#: It matters more since connections can be shared: the person who chose the
+#: policy and the person asking are no longer necessarily the same person, and
+#: the second may never have seen it.
+ASK_RECORDED = "ask.recorded"
+
 #: **The rest of the vocabulary, and where each word is defined.**
 #:
 #: The permission actions live beside the services that write them — the same

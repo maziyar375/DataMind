@@ -179,6 +179,28 @@ export interface Actions {
   meanings: Record<string, string>
 }
 
+/**
+ * One audited action, as an administrator reads it.
+ *
+ * No `id` and no `actor_user_id`: this is a record *about people*, and the
+ * questions it answers — who did what, and what was refused — are answered by
+ * a display name and a resource id. A row identifier would only be useful for
+ * editing, and an audit log that can be edited is not one.
+ */
+export interface AuditEntry {
+  at: string
+  /** A name, never an address. */
+  actor: string
+  actor_ip: string
+  action: string
+  resource_type: string
+  resource_id: string | null
+  /** `SUCCESS` · `DENIED` · `FAILED`. */
+  outcome: string
+  /** Identifiers and counts, never content — enforced by the writer. */
+  detail: Record<string, unknown>
+}
+
 /** `GET /auth/me/permissions`. What every affordance is rendered from. */
 export interface Permissions {
   capabilities: string[]

@@ -70,6 +70,7 @@ from app.pipeline.nodes import NodeDeps, _describe_schema, _render_history
 from app.pipeline.pipeline import AnalyticsPipeline
 from app.pipeline.prompts import PROMPT_VERSION
 from app.pipeline.state import NodeUsage, RunState
+from app.services import audit
 from app.services.knowledge_service import build_matcher, record_hit
 from app.services.query_service import (
     bind_connector,
@@ -484,6 +485,43 @@ class RunService:
             statement_timeout_ms=connection.statement_timeout_ms,
             disclosure_policy=connection.disclosure_policy,
             deadline_at=utcnow() + timedelta(seconds=self._settings.run_deadline_seconds),
+        )
+
+        # **The disclosure policy in force, recorded at ask time.**
+        #
+        # The remaining half of mvp2 §D4, and the sentence the README's
+        # positioning depends on: *"you decide what leaves your database"* is
+        # only a claim a product can defend if it can say, per question, what
+        # the decision *was*. It is written here rather than at the connection
+        # because the policy can change between one question and the next, and
+        # the row has to record what applied to **this** one.
+        #
+        # It matters more now than it did before Phase 6: the person who chose
+        # the policy and the person asking are no longer necessarily the same
+        # person, and the second may never have seen it. This row is what lets
+        # either of them reconstruct what left.
+        #
+        # Rule 3 of `services/audit.py` holds: identifiers and counts, never
+        # content. No question text, no SQL, no rows — the run id points at all
+        # three for anybody entitled to read them.
+        await audit.record(
+            # The run's **owner**, delegated: `execute_run` is a worker path
+            # with nobody at the other end, and `on_behalf_of` is how every
+            # background write in this codebase names its principal. The row
+            # therefore reads "Sara asked this" with `delegated: true` beside
+            # it, which is the difference between somebody pressing send and
+            # the scheduler running their report at 03:00.
+            self._db,
+            RequestContext.on_behalf_of(run.owner_id),
+            action=audit.ASK_RECORDED,
+            resource_type=audit.CONNECTION, resource_id=connection.id,
+            detail={
+                "run_id": str(run_id),
+                "disclosure_policy": connection.disclosure_policy,
+                "clarify_enabled": connection.clarify_enabled,
+                "semantic_layer": semantic is not None,
+                "model": run.model_snapshot.get("model", ""),
+            },
         )
 
         connector = bind_connector(connection, self._box)

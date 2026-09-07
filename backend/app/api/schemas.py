@@ -324,6 +324,18 @@ class ActionsRead(BaseModel):
     meanings: dict[str, str]
 
 
+class SelfGrantWrite(BaseModel):
+    """An administrator giving themselves access. One field, and a loud one.
+
+    Deliberately **not** a flag on `GrantWrite`: an administrator granting
+    themselves reach over somebody else's resource is a different act from
+    sharing, with a different gate and a second audit row, and a boolean on the
+    ordinary payload would make the two look like one operation with an option.
+    """
+
+    privilege: Literal["describe", "select", "modify", "delete", "manage"]
+
+
 class TransferWrite(BaseModel):
     """Hand a resource to another principal. The new owner must be active."""
 

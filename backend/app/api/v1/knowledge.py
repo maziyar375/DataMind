@@ -146,6 +146,7 @@ async def _authorized(
         authz,
         ResourceRef(type=ResourceType.KNOWLEDGE, id=connection.id, entity=connection),
         privilege,
+        db=db,
     )
     return connection
 

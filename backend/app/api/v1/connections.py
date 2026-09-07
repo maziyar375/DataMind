@@ -65,7 +65,8 @@ async def _authorized(
     # A second copy here is exactly how the two answers drift and turn a list
     # endpoint into an existence oracle.
     await require(
-        ctx, authz, ResourceRef.to(ResourceType.CONNECTION, connection), privilege
+        ctx, authz, ResourceRef.to(ResourceType.CONNECTION, connection), privilege,
+        db=db,
     )
     return connection
 

@@ -359,14 +359,87 @@ async def test_an_over_long_action_is_capped_to_the_column() -> None:
 
 # ── the vocabulary, and the reason it is a vocabulary ────────────────────
 def test_every_audited_action_is_namespaced() -> None:
-    """An admin filtering the log should be able to ask for "everything the
-    learning loop did" with a prefix rather than a list."""
+    """An administrator filtering the log asks for a **prefix**, not a list.
+
+    This used to assert every action in `audit.py` began with `knowledge.`,
+    which was true while this module held only curation verbs. It now also
+    holds `ask.recorded` — the disclosure policy in force per question, the
+    remaining half of mvp2 §D4 — and the permission verbs live beside the
+    services that write them, indexed here.
+
+    So the claim is the one that always mattered: **every action is
+    `<area>.<verb>`**, with a namespace from a closed set, so *"everything the
+    learning loop did"* and *"everything that touched a grant"* are both one
+    filter. A bare `deleted` in the log is a word that matches four different
+    things and helps with none of them.
+    """
     actions = [
         v for k, v in vars(audit).items()
         if k.isupper() and isinstance(v, str) and "." in v
     ]
     assert actions
-    assert all(a.startswith("knowledge.") for a in actions)
+
+    # The namespaces this product uses, written out rather than derived: a
+    # ninth is a decision somebody makes on this line, which is the point of
+    # having a closed vocabulary at all.
+    namespaces = {
+        "knowledge",        # the learning loop, this module's original tenant
+        "ask",              # one row per question, with the policy in force
+        "role", "team",     # who holds what, app-wide
+        "grant", "ownership", "disclosure",   # who may reach this thing
+        "service_user", "service_credential", # machine identities
+        "access", "admin",  # denials, and the escalation that is never silent
+    }
+    for action in actions:
+        area, _, verb = action.partition(".")
+        assert verb, f"{action!r} is not <area>.<verb>"
+        assert area in namespaces, f"{action!r} uses an unknown namespace"
+
+
+def test_the_whole_vocabulary_is_enumerable_from_one_file() -> None:
+    """The property `services/audit.py`'s docstring claims, asserted.
+
+    An administrator reading the log should be able to find out what can appear
+    in it without reading the routers. The permission verbs are *defined* beside
+    the services that write them — an action defined away from its writer drifts
+    from it — so `audit.py` carries the index instead, and this is what stops
+    that index going stale.
+    """
+    from pathlib import Path
+
+    index = Path("app/services/audit.py").read_text()
+    modules = {
+        "app/services/role_service.py",
+        "app/services/team_service.py",
+        "app/services/service_user_service.py",
+        "app/services/grant_service.py",
+        "app/services/policy.py",
+    }
+    # Only `<namespace>.<verb>` strings, and only from the namespaces this
+    # product audits under. A module-level constant can hold a dotted string
+    # that is not an action — `SERVICE_EMAIL_DOMAIN` is
+    # `service.datamind.local` — and a scraper that could not tell them apart
+    # would fail on the day somebody added a hostname.
+    namespaces = (
+        "role.", "team.", "grant.", "ownership.", "disclosure.",
+        "service_user.", "service_credential.", "access.", "admin.",
+    )
+    defined: set[str] = set()
+    for module in modules:
+        for line in Path(module).read_text().splitlines():
+            name, _, value = line.partition(" = ")
+            if not (name.isupper() and value.startswith('"')):
+                continue
+            word = value.split('"')[1]
+            if word.startswith(namespaces):
+                defined.add(word)
+    assert len(defined) > 15, "the scraper found almost nothing; it is broken"
+
+    missing = {a for a in defined if a not in index}
+    assert not missing, (
+        f"{sorted(missing)} are written somewhere and named nowhere an "
+        "administrator would look. Add them to the index block in audit.py."
+    )
 
 
 def test_every_curation_write_path_records_one() -> None:

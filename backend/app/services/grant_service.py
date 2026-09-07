@@ -65,6 +65,12 @@ GRANT_REVOKED = "grant.revoked"
 GRANT_WILDCARD_CREATED = "grant.wildcard.created"
 OWNERSHIP_TRANSFERRED = "ownership.transferred"
 DISCLOSURE_CHANGED = "disclosure.changed"
+#: Decision 14, and the reason there is no administrator arm in the authorizer.
+#: An administrator reaching somebody else's resource writes **two** rows: the
+#: ordinary grant, and this — so the log distinguishes "Sara shared this" from
+#: "an administrator gave themselves access", which are different events that a
+#: single `grant.created` would render identically.
+ADMIN_SELF_GRANTED = "admin.self_granted"
 
 
 class GrantView:
@@ -329,6 +335,85 @@ class GrantService:
         )
         return row
 
+    async def self_grant(
+        self, ctx: RequestContext, ref: ResourceRef, *, privilege: Privilege
+    ) -> Grant:
+        """An administrator giving **themselves** access. Two rows, never none.
+
+        This is the whole of decision 14, and the reason `RbacAuthorizer` has no
+        administrator arm. Every product in this space has one, and every one of
+        them has the same hole: an administrator can read any customer's data
+        and the only evidence is the absence of an error. The alternative is not
+        "administrators cannot help" — it is that helping is an *act*, and the
+        act leaves a record.
+
+        So an administrator may reach anything, and reaching it writes:
+
+        1. an ordinary `grants` row, which is what the authorizer then sees —
+           there is no second code path, no flag, and nothing for a later reader
+           to discover; and
+        2. an `admin.self_granted` row, so *"who gave themselves access to
+           what, and when"* is one filter on the audit screen rather than a
+           join somebody has to think of.
+
+        The grant is **not** revoked afterwards, deliberately. A self-grant that
+        expired at the end of the request would be indistinguishable from a
+        silent read path in every way that matters — the row would be gone by
+        the time anybody looked. It stays until somebody revokes it, which is
+        itself a row.
+
+        `user.manage` is the gate because that is what "administrator" means in
+        this codebase now: it is exactly the capability the old `ADMIN` enum
+        gated, and `role.manage` would let somebody who defines roles reach data
+        through a door meant for account recovery.
+        """
+        if not ctx.can(Capability.USER_MANAGE):
+            raise ValidationError(
+                "Only an administrator can grant themselves access to somebody "
+                "else's resource, and doing so is recorded. Ask whoever manages "
+                "this to share it with you instead."
+            )
+
+        # Written **before** the grant, so a failure between the two leaves the
+        # louder row rather than the quieter one. An `admin.self_granted` with
+        # no grant beside it is a puzzle somebody investigates; a grant with no
+        # `admin.self_granted` is the thing this exists to prevent.
+        await audit.record(
+            self._db, ctx,
+            action=ADMIN_SELF_GRANTED,
+            resource_type=str(ref.type), resource_id=ref.id,
+            detail={"privilege": str(privilege), "principal_id": str(ctx.user_id)},
+        )
+        log.warning(
+            "admin_self_granted",
+            resource_type=str(ref.type),
+            privilege=str(privilege),
+        )
+
+        row = Grant(
+            id=uuid.uuid4(),
+            resource_type=str(ref.type),
+            resource_id=ref.id,
+            user_id=ctx.user_id,
+            team_id=None,
+            privilege=str(privilege),
+            created_by=ctx.user_id,
+        )
+        self._db.add(row)
+        await self._db.flush()
+        await audit.record(
+            self._db, ctx,
+            action=GRANT_CREATED,
+            resource_type=str(ref.type), resource_id=ref.id,
+            detail={
+                "privilege": str(privilege),
+                "principal_id": str(ctx.user_id),
+                "grant_id": str(row.id),
+                "self_granted": True,
+            },
+        )
+        return row
+
     async def revoke(
         self, ctx: RequestContext, ref: ResourceRef, grant_id: UUID
     ) -> None:
@@ -431,7 +516,7 @@ class GrantService:
         the database out — which is exactly the conflation §14 exists to
         prevent.
         """
-        await require(ctx, self._authz, ref, Privilege.MANAGE)
+        await require(ctx, self._authz, ref, Privilege.MANAGE, db=self._db)
 
     async def _guard_last_manager(
         self, ctx: RequestContext, ref: ResourceRef, row: Grant

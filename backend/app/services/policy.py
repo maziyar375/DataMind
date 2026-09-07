@@ -33,6 +33,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.context import RequestContext
 from app.core.errors import ForbiddenError, NotFoundError
 from app.domain.ports.authz import Authorizer, Decision, ResourceRef
@@ -41,6 +43,12 @@ from app.domain.value_objects.authz import (
     Privilege,
     ResourceType,
 )
+from app.services import audit
+
+#: The action a refusal is filed under. One word for every 403 in the product,
+#: so *"what was refused, and to whom"* is one filter rather than a search
+#: across every action name that might mean a denial.
+ACCESS_DENIED = "access.denied"
 
 
 async def can(
@@ -94,21 +102,31 @@ async def require(
     authz: Authorizer,
     ref: ResourceRef,
     privilege: Privilege,
+    *,
+    db: AsyncSession | None = None,
 ) -> Decision:
-    """`can()`, and raise the right error when the answer is no.
+    """`can()`, raise the right error when the answer is no, **and record it**.
 
-    **The one place the 404/403 rule is implemented.** See the module
-    docstring for the table; the two branches below are it.
+    **The one place the 404/403 rule is implemented**, and from Phase 7 the one
+    place a denial becomes a row. See the module docstring for the table; the
+    two branches below are it.
 
-    The 403 message names the privilege *and what it means on this type*,
-    read from `PRIVILEGE_MEANINGS` — the same table `GET …/actions` renders
-    from, so the sentence in the refusal and the sentence beside the radio
-    button in the share dialog cannot drift apart. "You need select on this
-    connection: ask questions through it" is something a person can take to
-    whoever owns it. "Forbidden" is not.
+    The 403 message names the privilege *and what it means on this type*, read
+    from `PRIVILEGE_MEANINGS` — the same table `GET …/actions` renders from, so
+    the sentence in the refusal and the sentence beside the radio button in the
+    share dialog cannot drift apart. "You need select on this connection: ask
+    questions through it" is something a person can take to whoever owns it.
+    "Forbidden" is not.
+
+    **`db` is how the denial gets written, and it is optional on purpose.** A
+    caller that has a session passes it and the refusal is audited; one that
+    does not — a unit test, a check made before a session exists — still gets
+    the same refusal. Making it required would have meant threading a session
+    into every call site to buy an audit row, and a required argument that half
+    the callers fill in with `None` is worse than an optional one.
 
     Returns the `Decision` when it is yes, so a caller that wants `because` for
-    an audit row has it without asking twice.
+    an audit row of its own has it without asking twice.
     """
     decision = await authz.allowed(ctx, ref, privilege)
     if decision:
@@ -116,11 +134,32 @@ async def require(
 
     # Nothing at all reaches them: the resource must be indistinguishable from
     # one that does not exist. Deliberately **not** audited — a 404 is
-    # indistinguishable from a typo, and auditing it makes the log noise
-    # (plan §19.1).
+    # indistinguishable from a typo, so auditing it would fill the log with
+    # mistyped URLs and bury the denials somebody needs to find (plan §19.1).
     held = await authz.privileges_on(ctx, ref)
     if not held:
         raise NotFoundError(_NOT_FOUND.get(ref.type, "Not found."))
+
+    # A 403 is a *fact*: something reaches this principal and it was not
+    # enough. That is the row `audit_logs.DENIED` has been waiting for since
+    # migration `0001`, and this is its only producer.
+    if db is not None:
+        await audit.record(
+            db, ctx,
+            action=ACCESS_DENIED,
+            resource_type=str(ref.type),
+            resource_id=ref.id,
+            outcome=audit.DENIED,
+            detail={
+                "privilege": str(privilege),
+                "held": sorted(str(p) for p in held),
+                # `Decision.because` — the *path* that was tried, in the
+                # authorizer's own words: `via_team`, `via_role`, `direct`.
+                # "They hold describe through the Finance team and asking needs
+                # select" is a different artifact from "denied".
+                "because": list(decision.because),
+            },
+        )
 
     meaning = PRIVILEGE_MEANINGS[ref.type][privilege]
     raise ForbiddenError(

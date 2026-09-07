@@ -785,15 +785,15 @@ those forms, and that `app/knowledge/embed.py` imports no infrastructure.
 ### 4.8 The audit log, and what it deliberately does not hold
 
 `audit_logs` was defined in migration `0001` and **nothing wrote to it** until
-Phase 8. That was a real hole in this document's own claims: a product whose
-second section is *"two things are never left to the model"*, and which shows
-the disclosure policy at ask time, could not answer *"who taught this system
-that, and when?"*
+the learning loop's Phase 8. That was a real hole in this document's own
+claims: a product whose second section is *"two things are never left to the
+model"*, and which shows the disclosure policy at ask time, could not answer
+*"who taught this system that, and when?"*
 
-Every curation write now leaves a row — a template created, updated or
-archived; a store sweep; embedding search switched; a review resolved; a
-benchmark set built, deleted or run; a flag recorded. Three rules govern what
-goes in, and the third is the one that matters here:
+Every curation write leaves a row — a template created, updated or archived; a
+store sweep; embedding search switched; a review resolved; a benchmark set
+built, deleted or run; a flag recorded. Three rules govern what goes in, and
+the third is the one that matters here:
 
 * **The row joins the caller's transaction.** A log that can commit while the
   action it describes rolls back is a log that invents history. The accepted
@@ -808,11 +808,53 @@ goes in, and the third is the one that matters here:
   to.** The row carries the resource id; whatever it points at is where the
   content lives, under that resource's own access rules.
 
-Reading it is `GET /audit`, **administrators only**, because an audit log is a
-record about *people*: a curator has an operational need to change their
-connection's knowledge and none to read who else did what, and from where. The
-actor is returned as a display name and never an address, the same rule the
-review queue follows.
+**Authorization events, and the denials.** As of Phase 6 of the access-control
+plan the table also holds the whole permission story, and as of Phase 7 it
+holds the half nobody else records:
+
+| what | action |
+|---|---|
+| a share made, or taken away | `grant.created` · `grant.revoked` |
+| a share over an entire resource type | `grant.wildcard.created` |
+| a resource handed to somebody else | `ownership.transferred` |
+| a change to what may leave a database | `disclosure.changed` |
+| **a request that was refused** | `access.denied` |
+| **an administrator giving themselves access** | `admin.self_granted` |
+| a question asked, with the policy in force | `ask.recorded` |
+| roles, teams, service accounts, keys | §6's lists |
+
+Three of those deserve their own sentence.
+
+**`DENIED` finally has a producer, and it is exactly one.** Every 403 in the
+product goes through `services/policy.require`, which writes one row carrying
+the privilege that was missing, what the principal actually holds, and
+`Decision.because` — *the path that was tried*. "They hold `describe` on this
+connection through the Finance team, and asking needs `select`" says which
+grant to widen and where it lives. "Forbidden" says nothing the status code
+did not.
+
+**A 404 writes nothing, deliberately.** A principal to whom no fact reaches
+cannot distinguish a resource that is out of reach from one that does not
+exist, and neither can the log: auditing 404s would fill it with mistyped URLs
+and bury the denials somebody is looking for. The rule is what keeps the table
+readable, and it is asserted rather than documented.
+
+**An administrator cannot read anything silently.** There is no administrator
+arm in the authorizer. Reaching somebody else's resource is an explicit act
+that writes **two** rows — an ordinary grant, which is what makes the access
+real and stays until revoked, and `admin.self_granted`, so *"who gave
+themselves access to what"* is one filter. Every product in this space lets an
+administrator read anything; the difference is whether there is evidence.
+
+Reading it is `GET /audit`, gated on **`audit.read`**, because an audit log is
+a record about *people*: a curator has an operational need to change their
+connection's knowledge and none to read who else did what, and from where. It
+is a capability rather than an administrator flag so that an **Auditor** — who
+reads this and changes nothing anywhere — is expressible. The screen is
+`/admin/audit`; the actor is a display name and never an address, the same rule
+the review queue follows, and denials are shown **in the same list** as
+everything else because a denial beside the grant that answered it is the
+story.
 
 `actor_ip` is read from `X-Real-IP` and **never from `X-Forwarded-For`**. The
 second is a client-settable header, and an audit log holding an address the
@@ -821,11 +863,16 @@ and looks authoritative. A deployment behind a proxy that does not set
 `X-Real-IP` records the proxy's address, which is honest and fixable in one
 line of that proxy's config.
 
-**This is not the whole of [mvp2 §D4](mvp2-plan.md).** That also wants every
-question recorded with the policy in force, the SQL that ran, how many rows
-came back, and what reached the model provider. Those are writes on the ask
-path and belong to that plan; `services/audit.py` is shaped so they arrive as
-more `record()` calls and no new machinery.
+**One half of [mvp2 §D4](mvp2-plan.md) landed with Phase 7 and one half has
+not.** Every ask now records the **disclosure policy in force for it**, under
+`ask.recorded` — written at ask time rather than read off the connection
+afterwards, because the policy can change between one question and the next,
+and because since connections can be shared the person who chose it and the
+person asking are no longer necessarily the same person.
+
+What is still not here is the SQL that ran, how many rows came back, and what
+reached the model provider. Those live on the run, which the row points at, and
+they arrive as more `record()` calls and no new machinery when they arrive.
 
 ---
 
@@ -1078,9 +1125,12 @@ resource *type* and nowhere to put an id. Per-resource access is a grant
 `role.created`, `role.updated`, `role.deleted`, `role.assigned`,
 `role.unassigned`; every team change likewise: `team.created`, `team.renamed`,
 `team.deleted`, `team.member.added`, `team.member.removed`,
-`team.source.bound`; every service-account change as listed above; and every
+`team.source.bound`; every service-account change as listed above; every
 sharing change: `grant.created`, `grant.revoked`, `grant.wildcard.created`,
-`ownership.transferred` and `disclosure.changed`.
+`ownership.transferred` and `disclosure.changed`; **every refusal**, as
+`access.denied` with the path that was tried; and every administrator
+escalation, as `admin.self_granted` beside the grant it created. §4.8 has the
+whole table.
 
 > **Losing `SECRET_BOX_KEY` means every stored credential must be re-entered.**
 > There is no recovery path, by design. Back it up somewhere your database

@@ -45,6 +45,12 @@ EXPECTED: dict[tuple[str, str], Capability] = {
     ("PUT", "/api/v1/users/{user_id}/password"): Capability.USER_MANAGE,
     ("DELETE", "/api/v1/users/{user_id}"): Capability.USER_MANAGE,
     ("GET", "/api/v1/audit"): Capability.AUDIT_READ,
+    # Phase 7. The action catalogue the filter dropdown is built from — the
+    # same capability as the log itself, because it is a projection of the log:
+    # "which words appear in this installation's audit table" is a fact about
+    # the table, and offering it to somebody who cannot read the table would be
+    # a very small, very silly leak.
+    ("GET", "/api/v1/audit/actions"): Capability.AUDIT_READ,
 }
 
 #: The routes Phase 3 adds, and what each needs. Reading somebody's roles is

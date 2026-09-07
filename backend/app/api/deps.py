@@ -231,7 +231,9 @@ def on(
     **The 404/403 rule is not implemented here.** It is implemented once, in
     `services/policy.require`, which this calls; a second copy in a dependency
     is exactly how the two answers drift apart and turn a list endpoint into an
-    existence oracle.
+    existence oracle. The session is passed along for the same reason — that is
+    where a refusal becomes an `access.denied` row, and a guard that skipped it
+    would be the one route whose denials nobody could find.
 
     The handler still receives the `RequestContext`, so the body can ask for a
     second, different privilege where it genuinely needs one — a `PATCH` that
@@ -240,7 +242,7 @@ def on(
     """
 
     async def guard(
-        request: Request, ctx: CtxDep, authz: AuthzDep
+        request: Request, ctx: CtxDep, db: DbDep, authz: AuthzDep
     ) -> RequestContext:
         raw = request.path_params.get(param)
         if raw is None:  # pragma: no cover - a wiring mistake, not a request
@@ -254,7 +256,9 @@ def on(
             # A malformed id is a bad request, not a missing resource: nothing
             # was looked up, so answering 404 would imply something was.
             raise ValidationError("That is not a valid identifier.") from None
-        await require(ctx, authz, ResourceRef(type=type_, id=resource_id), privilege)
+        await require(
+            ctx, authz, ResourceRef(type=type_, id=resource_id), privilege, db=db
+        )
         return ctx
 
     return guard

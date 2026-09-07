@@ -3260,24 +3260,732 @@ cd frontend && npm run typecheck && npm run build && npm test
 - [x] **Acceptance:** the two-user connection scenario, all four refusals, every
       event in `GET /audit`, and `owner_only` still a working rollback
 
+## Phase 8 — Grants on artifacts: reports, dashboards, LLM configs, conversations · **L** · ~3 sessions
+
+**What.** Read-only sharing, in the order **reports → LLM configs → conversations
+→ dashboards**.
+
+**Why.** mvp2 **D2**. The order is deliberate and is the opposite of the
+intuitive one: a report's `connection_id` is single and immutable so there is no
+intersection to resolve; a dashboard tile carries its **own** `connection_id`, so
+one dashboard may span several connections and *"share this dashboard"* has no
+well-defined meaning until the intersection rule is implemented. **Dashboards are
+the hard case and go last.**
+
+**Depends on.** Phases 6, 7.
+
+**Backend.**
+
+*8a — Reports.* Grants on `report`; `visible` in the list; the viewer needs
+`select` on the report **and** on its connection; a missing second gives the
+tile-level message of §19.1, not a 500.
+
+*8b — LLM configs.* Grants on `llm_config`, **`select` and `describe` only** —
+the API refuses anything higher (§13.3 ⚠️). `PATCH` clears the stored key when
+`base_url` or `provider` changes and writes `llm_config.endpoint.changed`.
+`resolve_llm` on the ask path re-checks `select` at execution.
+
+*8c — Conversations.* Grants on `conversation`. Sharing a thread shares the
+transcript and the artifacts; it does **not** share the connection, so a shared
+thread whose connection the viewer cannot read renders its results as
+placeholders exactly as a dashboard does.
+
+*8d — Dashboards.* Grants on `dashboard`. **The intersection rule, implemented
+and documented:** the dashboard renders; each tile renders **iff** the viewer
+holds `select` on that tile's connection; a tile they cannot see renders as a
+**named placeholder**, never hidden. `refresh` re-checks **per tile, per
+execution**. Sharing **warns** when the tiles span connections the grantee cannot
+read, naming them; the share is still allowed.
+
+**Schema.** None — `0028` already carries every type.
+
+**Frontend.**
+- **Share** dialog on the Dashboards and Reports index cards' kebab and on both
+  detail headers, rendering the same `<AccessPanel>`.
+- The cross-connection warning in the dashboard Share dialog, naming the
+  connections.
+- The tile placeholder, and the equivalent for a report block and a chat turn.
+- **Access** section on the LLM provider detail form, `select`-only, with the
+  reason on the panel.
+- Conversation share from the thread kebab.
+- **"Shared with me"** filter chip on both index toolbars.
+- `Limited` / `Read-only` badges driven by `…/actions`.
+
+**Docs.** `docs/dashboards.md` §9 and `docs/reports.md` §14 rewritten — they
+currently say sharing is impossible. `docs/frontend.md` §2's sub-section map
+gains the Access tab and the Share dialogs.
+
+**Tests.**
+- A two-connection dashboard shared with a principal granted one of them renders
+  **one tile and one placeholder**.
+- The share-time warning names the unreadable connections.
+- **The tile-cache invariant:** the trigger sentence goes into
+  `DashboardTileCache`'s docstring and a test asserts the cache key contains no
+  viewer. That test is the tripwire for anyone adding a viewer-dependent filter.
+- A report viewer with `select` on the report and not on its connection sees a
+  placeholder, not a 500.
+- An `llm_config` grant above `select` is refused by the API.
+- Changing `base_url` clears the key.
+- A shared conversation does not grant its connection.
+
+**Acceptance criteria.**
+- [ ] Gate green.
+- [ ] **The one-line acceptance test:** *two people, one database credential, one
+      dashboard — the second can see the numbers, cannot see the password, cannot
+      change what the connection has been taught, cannot widen what leaves for
+      the model provider, and every one of those four facts is a row in
+      `audit_logs`.*
+- [ ] A second user on a fresh install can be given the house LLM config and a
+      connection, and asks their first question without an administrator sharing
+      a password.
+
+**Not included.** Public or anonymous share links (§23 — there is no anonymous
+principal and adding one is a product decision). Comments and annotations. A
+*certified* badge. Row-level security.
+
+---
+
+## Phase 9 — Access review and the permission explainer · **M** · ~2 sessions
+
+**What.** *"What can Ali reach?"* and *"who can reach this?"* become screens, and
+every refusal can explain itself.
+
+**Why.** Requirement 6's *"the UI should clearly communicate what a user can and
+cannot access"*, and the gap every product in §9 leaves. It is cheap here and
+expensive later: `Decision.because` already carries the path, and building the
+explainer after the surfaces have each invented their own error copy means
+rewriting eight of them.
+
+**Depends on.** Phase 8.
+
+**Backend.**
+- `services/access_review_service.py` — one query with two orderings.
+  `by_principal(id)` returns `(resource_type, resource_id, name, privilege,
+  path)`; `by_resource(type, id)` returns `(principal, kind, privilege, path)`.
+  `path` is `owner` · `direct` · `team:<name>` · `role:<name>` · `wildcard`.
+- `api/v1/access_review.py` — gated `access.review`, with CSV.
+- `GET /me/permissions` (§18.6).
+- Every 403 response body carries a structured `reason` — the privilege needed,
+  what the caller holds, and through what — built from `Decision.because`.
+
+**Schema.** None.
+
+**Frontend.**
+- `/admin/access` — the two lenses, a principal/resource switcher, filters by
+  type and privilege, CSV export.
+- `<Restricted>` and the **"Why can I not see this?"** popover, used by the tile
+  placeholder, the report block placeholder, the chat turn placeholder and every
+  403 surface.
+- **Effective access** section in People, Service accounts and Teams details,
+  reusing the by-principal lens.
+
+**Docs.** `docs/frontend.md` §2 and the sub-section map; a short *How do I find
+out why someone cannot see something?* entry in `docs/README.md`'s
+by-what-you-are-touching table.
+
+**Tests.**
+- The two lenses agree: every row in `by_principal(P)` for resource R appears in
+  `by_resource(R)` for P, and vice versa. A property test over generated
+  fixtures.
+- `path` is correct for each of the five facts of §15.2.
+- The review shows **reach and never data** — no name, row or value from a
+  customer database appears in any response.
+- CSV escaping is RFC 4180 with the leading-apostrophe rule the existing
+  `ResultTable` download already applies.
+
+**Acceptance criteria.**
+- [ ] Gate green.
+- [ ] An administrator can answer *"why can Reza curate this?"* in one click and
+      the answer names the role.
+- [ ] A user who cannot see a tile is told which connection and who owns it.
+
+**Not included.** Approval workflows or access requests. Scheduled review
+campaigns. Notifications.
+
+---
+
+## Phase 10 — The rulebook, the conformance check, the seams · **M** · ~2 sessions
+
+**What.** Make the rules **checkable by the next person**, who will be a coding
+agent with none of this context.
+
+**Why.** A rule nothing enforces is a comment. This repository already learned
+that twice — `policy.py`'s untrue docstring, and the `prompt_version` that lied
+for five weeks — and both are why this phase exists rather than being assumed.
+
+**Depends on.** Everything.
+
+**Backend / repo.**
+- **Write [`docs/access-control-rules.md`](access-control-rules.md)** — §26's
+  deliverable. Not a summary of this plan: a short, imperative rulebook read
+  *before* writing an endpoint.
+- Pointers to it from `CLAUDE.md`, `docs/README.md`, and the module docstring of
+  `services/policy.py`.
+- `tests/unit/test_authz_conformance.py`:
+  - every route carries a `ctx` and is reachable only through a dependency that
+    produces one;
+  - every `ResourceType` has a `PRIVILEGE_MEANINGS` row for every `Privilege`;
+  - every list endpoint whose model has an `owner_id` composes `visible(...)`;
+  - no `owner_id ==`, no `.is_admin`, no `role == "ADMIN"` in `api/`, `services/`
+    or `frontend/src` (the Phase 2 greps, promoted to a test so they fail
+    locally, not only in CI);
+  - **I5:** every mutating route, called as an unprivileged principal, returns
+    403 or 404 — a route-table walk, not a hand-written list;
+  - **I4:** a property test that adding any grant, role assignment or team
+    membership never turns an `allowed` into a denial.
+- **Seam tests (§20.2):** `external_subject` round-trips a namespaced
+  `provider~subject`; an unknown external group is **ignored, not created**;
+  `ctx.team_ids` and `ctx.capabilities` each have exactly **one** resolution
+  site; a JWT carrying a `capabilities` claim is ignored.
+- **A synthetic OIDC test** (§20.3): RS256 keypair in a fixture, static JWKS,
+  tokens minted with `pyjwt`, asserting expiry, wrong audience, wrong issuer,
+  unknown `kid`, group mapping and role mapping — **without a Keycloak**.
+- Delete `ctx.is_admin`, `AdminDep` and `users.role`.
+- Remove `authz_backend="owner_only"` from the default path (keep the class, one
+  release later).
+
+**Schema.** `0029_drop_users_role.py`.
+
+**Frontend.** A `frontend/src/api/permissions.ts` module documenting the two
+hooks, and a lint-style test that no component imports `user.role`.
+
+**Docs.**
+- `docs/access-control-rules.md` (new).
+- `docs/README.md`: this plan moves from *Proposed* to *Live*, and the row for
+  `access-control-plan.md` records that it is superseded by this document.
+- `docs/architecture.md`, `docs/security.md`, `docs/frontend.md`,
+  `docs/CODEBASE.md`, `CLAUDE.md` — final pass.
+- The ledger in §27 filled in.
+
+**Tests.** The conformance module is itself the deliverable; plus a test that
+`docs/access-control-rules.md` exists and that every `ResourceType` and
+`Capability` is named in it (a cheap doc-drift guard, the same trick the prompt
+version test uses).
+
+**Acceptance criteria.**
+- [ ] Gate green.
+- [ ] `docs/access-control-rules.md` exists and the conformance test enforces
+      every rule it states that is mechanically checkable.
+- [ ] `grep -rn "is_admin\|AdminDep\|users.role" backend/app` returns nothing.
+- [ ] The OIDC seam tests pass with **no Keycloak in CI**.
+
+**Not included.** The OIDC adapter itself. Row-level security. Workspaces.
+
+---
+
+# Part 5 — Extensibility, risks and open questions
+
+## 23. How the next ten features land on this model
+
+The test of this design is not what it does today; it is what the next features
+cost.
+
+| Feature | What it needs | Cost |
+|---|---|:--:|
+| **File upload (CSV/Excel)** | an uploaded file becomes an ordinary connection | **zero** — grants, disclosure, guard and knowledge all apply unchanged. The strongest evidence the model is right |
+| **Result export** | `select` on the artifact **and** its connection | **zero** — it is a read, checked like any read |
+| **Pin a chat answer to a dashboard** | `modify` on the dashboard, `select` on the connection | **zero** — two existing checks |
+| **Scheduled reports** | a background actor with real privileges | **small** — `on_behalf_of` exists; add the schedule |
+| **Metric alerts** | the same, plus *"who may receive an alert about data they cannot read"* | **small** — the delivery check is `select` on the connection at send time |
+| **An MCP server / agent API** | a machine principal | **zero** — that is Phase 5 |
+| **A new resource type** (e.g. `notebook`) | one enum member, one `PRIVILEGE_MEANINGS` row, one `visible` arm, one sweep entry, one conformance row | **small, and the checklist is written** (§26) |
+| **A new specialised role** | one `roles` row and its capability/scoped-privilege rows | **zero code** |
+| **Row-level security** | filters attached to **roles**, applied as predicates in generated SQL — Superset's shape | **medium, and the model is already shaped for it.** Needs the tile-cache key to grow a viewer |
+| **Workspaces / folders** | a container that owns resources | **large but additive** — `resource_type='workspace'`, a `workspace_id` on each resource, one `OR` in the subquery. Existing grants keep working |
+| **OIDC / Keycloak** | the eight seams of §20 | **medium and contained** — no grant change, no schema change |
+
+**Two things the model deliberately makes expensive**, because they should be:
+
+- **Public / anonymous share links.** There is no anonymous principal, and adding
+  one means deciding what *"the connection's grant"* means with no viewer. That
+  is a product decision, and the model refusing to guess is correct.
+- **Per-column masking.** It is `deny` in disguise (I4). It belongs with row-level
+  security or not at all.
+
+## 24. The triggers — what would force a change, and what the change is
+
+A deferral without a trigger is an omission. Each row is a sentence someone will
+one day say, paired with what to do when they say it.
+
+| Trigger — *someone says…* | Deferred thing | The change |
+|---|---|---|
+| *"a tile's rows should depend on who is looking"* | per-viewer tile cache | `dashboard_tile_cache`'s PK becomes `(tile_id, viewer_key)`. **This is Phase 8's tripwire test** |
+| *"I need to share a folder"*, or one principal holds >50 grants | workspaces | migrate grants into a container; additive, and one-way |
+| *"our IdP nests groups and we need that"* | nested teams | `team_members.member_team_id` + one `WITH RECURSIVE` in the subquery |
+| *"we need SSO"* | the OIDC adapter | §20.3, seven steps, **no schema change** |
+| *"a contractor needs access for two weeks"* | `grants.expires_at` | one column, one sweeper, one decision about mid-render expiry |
+| *"a team lead should be able to share what they were shared"* | delegated granting | **read Lakekeeper's v4.10 changelog first** — they shipped it and took half of it back |
+| *"this key should only be able to read dashboards"* | per-key `scopes` | the column exists; intersect it with the principal's permissions at context construction |
+| *"row-level security"* | RLS | needs dashboard parameters, the connector port carrying a per-request identity, **and** the cache trigger above |
+| *"we need to keep audit rows for seven years"* | audit retention | a partition by month and an archival job; the table is already append-only |
+| *"one key is hammering the API"* | per-key rate limits | `service_credentials` is the natural key; nothing else changes |
+| *"we have two IdPs"* | an `identities` table | one user, many `(provider_id, subject)` rows; `external_subject` is already namespaced |
+
+## 25. Risks, and what each one costs
+
+| Risk | Likelihood | What it costs | Mitigation in this plan |
+|---|:--:|---|---|
+| **The Phase 1–2 refactor breaks something subtle** — 213 lines across 18 files | High | a regression in dashboards or reports, the two biggest services | Behaviour-preserving by construction; **no test assertion may change**; the existing ~1,790-test suite is the proof; two phases, not one |
+| **One query per request for capabilities and teams** (decision 15) | Certain | latency on every authenticated call | One joined query, indexed. Measure in Phase 3 and record the number. If it exceeds ~2 ms, memoize per `(principal, updated_at)` — a cache, not a claim in a token |
+| **The wildcard grant is a footgun** | Medium | an accidental installation-wide grant | It needs `role.manage`, it is a distinct audit action, and Access review shows `wildcard` as its own path |
+| **A shared connection widens disclosure without consent** | Medium | one person's policy choice governs forty people's questions | `describe` exposes the policy; only `manage` may widen it; every ask records the policy in force. The consent question stays open (§26) |
+| **`modify` on an `llm_config` leaks the key** | High, if unaddressed | provider key exfiltration | §13.3 ⚠️ — not grantable, key cleared on endpoint change, audited, tested |
+| **A leaked service key** | Medium | whatever that identity holds | Least privilege by construction, expiry by default, `prefix` for tracing, `last_used_at` for pruning, no privileged capabilities |
+| **Migration ordering across six migrations in five phases** | Medium | a broken upgrade | Each phase ships one or two migrations and its own rollback note; `authz_backend` is the behavioural rollback and needs no down-migration |
+| **The UI hides a control the server would allow, or vice versa** | Medium | a confusing product, or a hole | Every affordance reads `…/actions`; I5's route-table walk is the check |
+| **Roles proliferate** | Medium | an unreviewable model | Eight seeds cover the requirement's list; Access review makes drift visible; custom roles are a deliberate act |
+
+## 26. Genuinely open questions
+
+Not deferrals — things this plan cannot settle.
+
+1. **Consent to a team grant.** Granting `select` to a team of forty makes a
+   disclosure decision on behalf of forty people. None of Metabase, Superset,
+   Grafana or Power BI models this. Do the forty get told?
+2. **Whether a workspace and a tenant can be kept apart.** Every product in §9
+   eventually grew a second, coarser boundary — Metabase's tenancy, Grafana's
+   organisations, Power BI's capacities. Whether DataMind can ship a container
+   without becoming a multi-tenancy project is not answerable from a document.
+3. **"Revoked means revoked now."** Authorization is immediate (decision 15), but
+   *authentication* is not: a disabled user's access token stays valid for up to
+   15 minutes. Making that immediate is a per-request user lookup — a real cost,
+   deliberately not paid. Is ≤15 minutes acceptable to the first customer who
+   asks?
+4. **Whether `describe` is a privilege anyone actually grants**, or only an
+   internal step in the 404/403 rule. If the latter, the share UI should not
+   offer it. Phase 9's access review will show the answer in real data.
+5. **Grant count at which the subquery stops being free.** The index makes it
+   cheap into five figures; nobody has measured it against a realistic graph.
+6. **Whether a service user should be able to own resources at all**, or whether
+   an agent's dashboards should be owned by the human who configured it. This
+   plan says yes (it is the simpler model and it keeps `owner_id` honest), but
+   the first team whose agent leaves an orphaned dashboard behind may disagree.
+7. **How a role's capability set should change on upgrade.** Adding a capability
+   to a seeded role in a migration is a silent widening for every install.
+   Adding it to *nothing* means a new feature is unreachable until someone
+   notices. This plan chooses the migration and audits it; a release note is not
+   a mechanism.
+
+## 27. The rulebook — what Phase 10 must produce
+
+**`docs/access-control-rules.md`** is a deliverable, not documentation as an
+afterthought. Its audience is whoever writes the *next* feature, most likely with
+no memory of this plan. It must be short enough to read before writing an
+endpoint.
+
+Required contents:
+
+1. **The seven concepts on one page** (§10) with the lattice diagram and the
+   capability-versus-privilege distinction.
+2. **The five invariants** (§16), stated as rules with their consequence.
+3. **The effective-permission algorithm** (§15), verbatim, because it is the
+   thing people get wrong.
+4. **A checklist for any new endpoint** — the part people will actually use:
+   - Which `ResourceType` does this touch? If none, is it a **capability**?
+   - Which `Privilege`? Use the lattice; never check two.
+   - Detail or list? Detail calls `allowed` (or `on(...)`); list composes
+     `visible`. **Never a loop over `allowed`.**
+   - Does it execute against a connection? Then it re-checks `select` on **that**
+     connection, at execution.
+   - Does it change a disclosure policy, an owner, a grant, a role or a
+     membership? Then it is `manage` (or a capability) and it is audited.
+   - Does a caller without permission see 404 or 403? Apply §19.1.
+   - Does its result depend on **who is looking**? If yes, stop — that trips the
+     cache trigger (§24) and needs a design conversation.
+5. **A checklist for any new resource type** — the enum member, the
+   `PRIVILEGE_MEANINGS` row, the `visible` subquery arm, the sweep entry, the
+   `…/actions` route, the conformance-test row, the `<AccessPanel>` mount point.
+6. **A checklist for any new capability** — the enum member, which seed roles get
+   it and why, the migration that adds it to them, the audit action if it guards
+   a mutation.
+7. **What is not in the model and must not be improvised** — no `deny`, no
+   priority order, no per-endpoint role string, no `ctx=None`, no god context, no
+   permission keyed on an email or an external subject, no capability read out of
+   a token, no role naming one resource id.
+8. **How this is enforced** — a pointer to `tests/unit/test_authz_conformance.py`
+   and `make authz-check`, so a reader knows which rules a machine checks and
+   which rely on them.
+
+---
+
+## 28. Sources
+
+**Repository documents read for this plan** — [research/access-control.md](research/access-control.md) ·
+[access-control-plan.md](access-control-plan.md) · [architecture.md](architecture.md) ·
+[security.md](security.md) · [frontend.md](frontend.md) · [CODEBASE.md](CODEBASE.md) ·
+[mvp2-plan.md](mvp2-plan.md) · [learning-loop-plan.md](learning-loop-plan.md) ·
+[dashboards.md](dashboards.md) · [reports.md](reports.md) · [README.md](README.md) ·
+[../CLAUDE.md](../CLAUDE.md).
+
+**External sources** — read on 2026-09-06.
+
+- Power BI / Fabric — [Roles in workspaces](https://learn.microsoft.com/en-us/power-bi/collaborate-share/service-roles-new-workspaces) (the capability matrix, the highest-permission rule, the Member delegation limit, the disabled-identity note, service principals in workspace roles); [Roles in workspaces in Microsoft Fabric](https://learn.microsoft.com/en-us/fabric/fundamentals/roles-workspaces).
+- Apache Superset — [STANDARD_ROLES.md](https://github.com/apache/superset/blob/master/RESOURCES/STANDARD_ROLES.md) (Admin / Alpha / Gamma / sql_lab / Public, and composing custom roles); [Security configuration](https://superset.apache.org/admin-docs/security/) (`DASHBOARD_RBAC` bypassing dataset checks, RLS attached to roles); issues [#18959](https://github.com/apache/superset/issues/18959) and [#22640](https://github.com/apache/superset/issues/22640) (native filters, and a DRAFT dashboard reachable with no role assigned).
+- Metabase — [Permissions introduction](https://www.metabase.com/docs/latest/permissions/introduction) (groups only, most-permissive resolution, the All Users group); [Data permissions](https://www.metabase.com/docs/latest/permissions/data) (View data / Create queries, and Blocked being overridden by a more permissive group); [Collection permissions](https://www.metabase.com/docs/latest/permissions/collections); [API keys](https://www.metabase.com/docs/latest/people-and-groups/api-keys) (assigned to a group, shown once, and the reassign-to-All-Users fallback).
+- Grafana — [Service accounts](https://grafana.com/docs/grafana/latest/administration/service-accounts/) (tokens inherit the account's permissions; a service account cannot join a team; expiry); [RBAC](https://grafana.com/docs/grafana/latest/administration/roles-and-permissions/access-control/) and [basic and fixed role definitions](https://grafana.com/docs/grafana/latest/administration/roles-and-permissions/access-control/rbac-fixed-basic-role-definitions/) (action-and-scope permissions, wildcard scopes, `/api/access-control/user/permissions`).
+- Looker — [Access control and permission management](https://docs.cloud.google.com/looker/docs/access-control-and-permission-management) (a role is a permission set **and** a model set; content access managed separately from feature access).
+- Tableau — [Effective permissions](https://help.tableau.com/current/server/en-us/permission_effective.htm) and [Permission capabilities and templates](https://help.tableau.com/current/online/en-us/permissions_capabilities.htm) (Allow / Deny / Unspecified, user-then-group precedence, deny wins, locked projects).
+- Machine identity — [Best practices for managing service account keys](https://docs.cloud.google.com/iam/docs/best-practices-for-managing-service-account-keys) and [Best practices for managing API keys](https://docs.cloud.google.com/docs/authentication/api-keys-best-practices) (rotation, expiry, least privilege, storage).
+- [OWASP API1:2023 — Broken Object Level Authorization](https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/) (every endpoint receiving an object id must check object-level authorization; centralise the mechanism).
+- Keycloak — identity-provider mappers and group-membership claims, for §20.3's group and role mapping.
+
+---
+
+# Part 6 — Master implementation checklist
+
+**How to use this.** Work top to bottom. `[x]` marks work completed during this
+planning and investigation pass; everything else is `[ ]`. Tick an item only when
+its verification passes, not when the code is written. Each phase ends with its
+**gate** and its **acceptance** block — do not start the next phase with either
+unticked.
+
+**The gate, for every phase:**
+
+```bash
+make lint && make test && make authz-check
+cd frontend && npm run typecheck && npm run build && npm test
+```
+
+## Phase −1 — Planning and investigation *(complete)*
+
+- [x] Read `docs/research/access-control.md` (1,725 lines) — Lakekeeper's
+      `Authorizer` trait, the OpenFGA model, the eight lessons, the Metabase /
+      Superset / Grafana calibration, and the nine open questions
+- [x] Read `docs/access-control-plan.md` (1,087 lines) — the six concepts, the
+      three invariants, the eight phases, the nine decisions, the ledger
+- [x] Read `docs/architecture.md` §9 and §18, `docs/security.md` §3/§4.8/§6/§7,
+      `docs/CODEBASE.md`, `docs/frontend.md` §1–§3, `docs/README.md`,
+      `docs/mvp2-plan.md` Theme D, `CLAUDE.md`
+- [x] Enumerate the API surface — 109 route decorators across 11 routers
+- [x] Count and locate every `owner_id` decision site — **213 lines**, 18 files,
+      133 of them in two services
+- [x] Read `services/policy.py` and confirm four of its five functions have zero
+      callers
+- [x] Read `core/context.py`, `api/deps.py`, `domain/ports/identity.py`,
+      `infra/db/models.py`, `services/audit.py`, `api/v1/users.py`
+- [x] Confirm the latest migration is `0023_token_accounting` (so this plan's
+      migrations start at `0024`)
+- [x] Confirm **there is no `make check` target** — the gate is
+      `make lint && make test` plus the frontend triple
+- [x] Read the frontend shell, the `NAV` rail, the route table, `UsersPage.tsx`,
+      the Data sources tab strip, and `components/settings.tsx`'s master–detail
+      frame
+- [x] Confirm `/auth/me` returns `{id, email, display_name, role}` and nothing
+      else
+- [x] Confirm `llm_configs` and `database_connections` list endpoints filter on
+      `owner_id == ctx.user_id`
+- [x] External research: Power BI workspace roles and service principals;
+      Superset standard roles and `DASHBOARD_RBAC`; Metabase two-axis
+      permissions, Blocked, and API keys; Grafana service accounts and RBAC
+      scopes; Looker permission-set × model-set; Tableau Allow/Deny/Unspecified;
+      machine-identity practice; OWASP API1:2023
+- [x] Identify the `llm_config` `base_url` key-exfiltration finding
+- [x] Decide the eighteen decisions of §0.4, including the four that reverse
+      `access-control-plan.md`
+- [x] Write this plan
+
+## Phase 0 — Vocabulary, the port, the switches
+
+- [x] `app/domain/value_objects/authz.py`: `Privilege` (5), `ResourceType` (8),
+      `Capability` (18), `PrincipalKind` (2)
+- [x] `_SATISFIED_BY` and `satisfying()` in the same module
+- [x] `PRIVILEGE_MEANINGS` — the §13.3 matrix as data
+- [x] `app/domain/ports/authz.py`: `ResourceRef`, `Decision`, `Everything`,
+      `Subquery`, `Ids`, `Visible`, `Authorizer` Protocol (4 methods)
+- [x] `app/infra/authz/__init__.py` and `owner_only.py` — `OwnerOnlyAuthorizer`
+- [x] `core/config.py`: `authz_backend`, `auth_provider` (+ the §20.3 docstring),
+      `allow_privileged_service_users`, `service_key_default_ttl_days`
+- [x] `api/deps.py`: `get_authorizer`, `AuthzDep`
+- [x] `services/policy.py`: `can(ctx, resource, privilege)` delegating; `owns`
+      and `can_curate` untouched
+- [x] `Makefile`: the `authz-check` target with the four greps
+- [x] CI: `authz-check` added as non-blocking
+- [x] Test: lattice reflexive, transitive, `manage` satisfies all five
+- [x] Test: `satisfying()` returns an immutable frozenset
+- [x] Test: `OwnerOnlyAuthorizer` agrees with `owns()` on a table of cases
+- [x] Test: every `ResourceType` × `Privilege` has a `PRIVILEGE_MEANINGS` entry
+- [x] **Gate green**
+- [x] **Acceptance:** zero call sites and zero test assertions changed
+
+## Phase 1 — `ctx` everywhere, part A
+
+- [x] `DashboardService`: 15 methods take `ctx`, not `owner_id`
+- [x] `_owned_connection` → `_authorized_connection`, asking the authorizer
+- [x] `_owned_llm_config` → `_authorized_llm_config`
+- [x] `ReportService`: ~30 methods take `ctx`
+- [x] Every `WHERE owner_id` in both services composes `authz.visible(...)`
+- [x] `api/v1/dashboards.py` passes `ctx`
+- [x] `api/v1/reports.py` passes `ctx`
+- [x] Test: a list endpoint emits a subquery, not a Python filter
+- [x] **Gate green with no test assertion changed** — with one honest
+      exception: the two route sweeps (`test_dashboards_api.py`,
+      `test_reports_api.py`) asserted *"every route reaches the service with
+      the session's owner id"*, and the service no longer takes an owner id.
+      They now read `kwargs["ctx"].user_id` instead of `kwargs["owner_id"]` —
+      the same claim about the same session, through the object that now
+      carries it. Every other assertion in the suite is byte-identical; only
+      call sites and fakes moved.
+- [x] **Acceptance:** `grep owner_id` in both services returns only
+      model-construction sites, the three `# authz-ok:` uniqueness predicates,
+      and the keyword arguments still handed to `query_service` /
+      `sql_draft_service`, which take a context of their own in Phase 2
+
+## Phase 2 — `ctx` everywhere, part B
+
+- [x] `run_service.py` (20 lines)
+- [x] `sql_draft_service.py` (12)
+- [x] `semantic_service.py` (8)
+- [x] `query_service.py` (7)
+- [x] `knowledge_service.py` (1) — the one line is an **exemption**, not a
+      conversion: `_embedding_candidates` picks the *connection owner's*
+      provider rows, which is whose budget pays rather than whose reach is
+      being checked, and it runs from a worker as often as from a request
+- [x] Routers: `conversations.py`, `llm_configs.py`, `connections.py`,
+      `semantic.py`, `knowledge.py`, `drafts.py`
+- [x] `RequestContext.on_behalf_of(user_id)`, plus `delegate(user_id)` for the
+      worker that already holds one, and `delegated: bool` on the dataclass
+- [x] `workers/report.py`, `report_graph.py`, `benchmark.py`,
+      `knowledge_maintenance.py` use it. **`workers/semantic.py` does not, and
+      that is the honest answer**: it resumes a job that was authorized when it
+      was queued and asks nothing further, so it has nobody to act *for* —
+      `SemanticService` takes its authorizer optionally for exactly that half
+- [x] `infra/authz/factory.build_authorizer` — the one place a setting becomes
+      an implementation, so a worker cannot keep asking the old question after
+      Phase 6 flips it
+- [x] `make authz-check` becomes blocking in CI
+- [x] Test: `RequestContext` cannot be built without a principal id
+- [x] Test: no worker constructs a context any other way (an **AST walk** over
+      `app/workers`, plus its converse — the three modules that run somebody's
+      SQL must still name whose)
+- [x] Test: a delegated action's audit row carries `delegated: true`, and an
+      ordinary one carries no such key at all
+- [x] Doc: `architecture.md` §18
+- [x] Doc: `CODEBASE.md` §6
+- [x] Doc: `dashboards.md` §9 and `reports.md` §14
+- [x] **Gate green including blocking `authz-check`**
+- [x] **Acceptance:** `owner_id` is a stored fact and nothing in `api/` or
+      `services/` reads it to decide. The gate prints **nine** exemptions and
+      every one carries its reason: five `unique (owner, name)` predicates
+      (they ask about the row about to be *written*), one embedding-candidate
+      query, and three lines marked **retires in Phase 3** — `require_admin`,
+      `RequestContext.is_admin` and `can_curate`'s administrator arm, which are
+      the `AdminDep` surface `needs(capability)` replaces. `policy.can_read`,
+      `can_write` and `can_administer_users` were **deleted**: zero callers, so
+      no behaviour moved with them
+
+## Phase 3 — Roles and capabilities
+
+- [x] Migration **`0024_roles.py`** (renumbered: Phase 3 ships before Phase 5,
+      and alembic revisions are linear): `roles`, `role_capabilities`,
+      `role_scoped_privileges`, `role_assignments`. **`role_assignments.team_id`
+      is deliberately absent** — a column with a foreign key to a table that
+      does not exist yet is not a column; `0025` adds it with `teams`
+- [x] Seed the eight system roles with exactly the §12.3 capability sets
+- [x] Backfill `users.role` → a role assignment for every existing user
+- [x] ORM models for the four tables
+- [x] `services/role_service.py`: create, update, delete-with-guard, assign,
+      unassign, `resolve_capabilities`
+- [x] `api/v1/roles.py`: CRUD gated `role.read` / `role.manage`, plus
+      `/roles/capabilities` and `/roles/privileges` — the two vocabularies the
+      editor renders, **served rather than duplicated in the SPA**
+- [x] `api/v1/users.py`: `GET/POST/DELETE /users/{id}/roles`
+- [x] `api/deps.py`: `needs(capability)`; `AdminDep` aliased and deprecated
+- [x] `RequestContext.capabilities`, one query, resolved in `get_ctx`
+- [x] `ctx.is_admin` becomes a deprecated computed property over `user.manage`
+- [x] Every `AdminDep` route moves to `needs(...)`
+- [x] `services/bootstrap.py` assigns `Administrator`, in the same transaction
+      as the account — an installation cannot come up with an administrator who
+      is not one
+- [x] `_guard_last_admin` → `RoleService.guard_last_administrator`, counted over
+      assignments, reached by **both** routes into a demotion
+- [x] `MeResponse` gains `kind`, `capabilities`, `roles`, `teams`; a second
+      endpoint `GET /auth/me/permissions` answers the same without the account
+- [x] Audit actions: `role.created/updated/deleted/assigned/unassigned`
+- [x] Frontend: `/users` → `/admin/people` permanent redirect
+- [x] Frontend: rail row becomes **Administration**, gated on a capability set
+- [x] Frontend: `/admin` shell with tabs appearing per capability
+- [x] Frontend: **People** tab, reusing `UsersPage`'s list furniture
+- [x] Frontend: People detail gains a **Roles** section
+- [x] Frontend: **Roles** tab — list, capability checklist, scoped-privilege
+      matrix, system badge
+- [x] Frontend: `useCan()` replaces every `user.role === 'ADMIN'` that decided
+      something. The survivors are labels and counts, each carrying its own
+      `authz-ok:` marker — and the gate's frontend arm was **widened to match
+      `===`**, which it never did, so it had silently checked nothing for two
+      phases
+- [x] Test: the eight seeds match §12.3 exactly (a table test, from an
+      independent transcription of the plan)
+- [x] Test: a system role refuses a capability edit, allows a rename
+- [x] Test: deleting an assigned role is refused and names holders
+- [x] Test: the last-administrator guard, through both routes
+- [x] Test: a capability change takes effect on the next request, no new token
+- [x] Test: capability resolution is one query
+- [x] Test: a route-table walk proves every ex-`AdminDep` route is capability
+      gated — walking the **live** table, and asserting the walk itself finds
+      routes, because a flattener that returned nothing would have passed
+- [x] Test: the SQLite session used by the role tests **refuses a lazy load**,
+      because `AsyncSession` cannot do one. Added after `POST /roles` shipped
+      as a 500 that every test in the file was green for
+- [x] Doc: `security.md` §6 · `frontend.md` §2 · this plan's ledger
+- [x] **Gate green** — ruff, 8 import-linter contracts, 2294 backend tests,
+      `make guard`, `make authz-check`, frontend typecheck + build + tests
+- [x] **Acceptance**, verified end to end against the running stack: an Auditor
+      reaches People, Roles and Audit and is refused (403) on every write; a
+      custom role is created, assigned, and appears in the holder's `/auth/me`
+      **on the same access token**; a system role refuses a capability edit with
+      an explanation and accepts a rename; deleting an assigned role is refused
+      and names the holder
+
+## Phase 4 — Teams
+
+- [x] Migration **`0025_teams.py`** (renumbered with `0024`): `teams`,
+      `team_members` — **and the widening of `role_assignments`** that `0024`
+      could not ship: `team_id`, a nullable `user_id`, the one-principal
+      `CHECK`, and the `UNIQUE NULLS NOT DISTINCT` three-column constraint
+      `0024` had already named it for
+- [x] ORM models
+- [x] `services/team_service.py`: CRUD, membership, delete-with-guard,
+      `roles_by_team` for the list screen
+- [x] `api/v1/teams.py` gated `team.read` / `team.manage`. **`(team, modify)`
+      for a team lead is *not* wired**, and that is honest rather than
+      forgotten: the privilege exists in the vocabulary and the authorizer that
+      would answer it is `OwnerOnlyAuthorizer`, which knows nothing about
+      teams. It becomes reachable in Phase 6 with the rest of the grant path
+- [x] `PUT /teams/{id}/source` as a separate, audited endpoint
+- [x] `RequestContext.team_ids`, one query, resolved in `get_ctx`; empty on a
+      delegated context, for the same fail-closed reason `capabilities` is
+- [x] Capability resolution widens to roles reaching through a team — **two
+      arms of one `WHERE`**, so the query count on the request path does not
+      move
+- [x] `MeResponse` gains `teams`, and `roles` becomes `distinct` — a role held
+      directly *and* through a team is one role
+- [x] Audit actions: the six team actions
+- [x] Frontend: **Teams** tab — list, detail, members picker, assigned roles,
+      external binding
+- [x] Frontend: People detail gains a **Teams** section (read-only: membership
+      is a set edited on the team, and a second per-person control would be a
+      way to race it)
+- [x] Test: membership resolution across three teams
+- [x] Test: cascade on user delete and on team delete
+- [x] Test: `ck_teams_source_pair`, through the service's own refusal
+- [x] Test: `team_ids` populated, and a grep proving **no authorizer reads it**
+- [x] Test: a team role reaches members and stops on removal
+- [x] Test: deleting a team holding a role assignment is refused, and deleting
+      a role a *team* holds names the team rather than a person
+- [x] Test: the last-administrator guard is not satisfied by a team holding
+      `Administrator`
+- [x] Test: the teams list carries each team's roles, in one query — written
+      for a bug found by opening the screen, where a team plainly holding
+      BI Engineer rendered "no roles yet"
+- [x] Doc: `security.md`, `frontend.md`, `CLAUDE.md` invariant 5, the ledger
+- [x] **Gate green** — ruff, 8 import-linter contracts, backend suite,
+      `make guard`, `make authz-check`, frontend typecheck + build + tests
+- [x] **Acceptance**, verified end to end against the running stack: a probe
+      account with **no roles at all** is put in a team holding BI Engineer and
+      gains `dashboard.create` on the **same access token**; removing them from
+      the team removes it again on the next request; `team_ids` is read by no
+      resource decision, and a grep asserts it
+
+## Phase 5 — Service users
+
+- [x] Migration `0026_principal_kind.py`: `users.kind`, `users.description`, the
+      three `CHECK`s, `ix_users_kind`
+- [x] Migration `0027_service_credentials.py`
+- [x] ORM models and the `PrincipalKind` plumbing
+- [x] `domain/ports/identity.py`: `ServiceIdentityProvider` Protocol
+- [x] `infra/identity/service_key.py`: generate, verify (SHA-256,
+      constant-time), expiry, revocation, throttled `last_used_at`
+- [x] `api/deps.py`: `get_ctx` dispatches on the `dm_sk_` prefix
+- [x] `services/service_user_service.py`, incl. the privileged-capability refusal
+- [x] `api/v1/service_users.py` gated `service_user.manage`
+- [x] `/auth/login`, `/auth/refresh`, `/auth/me*` refuse a `SERVICE` principal
+- [x] Audit actions: the six service actions
+- [x] Frontend: **Service accounts** tab — list, create form with effective
+      permission preview, detail, Keys panel
+- [x] Frontend: one-time key display reusing the one-time-password panel
+- [x] Frontend: kind badges wherever a principal is listed
+- [x] Frontend: the role picker hides privileged capabilities and says why
+- [x] Test: valid / revoked / expired / unknown-prefix / wrong-secret key
+- [x] Test: constant-time comparison helper
+- [x] Test: `last_used_at` throttling
+- [x] Test: a `SERVICE` principal is refused by every `/auth` route
+- [x] Test: the three `CHECK` constraints
+- [x] Test: a service user's capabilities are byte-identical to a human's with
+      the same role
+- [x] Test: privileged capabilities refused off, allowed and audited on
+- [x] Test: `test_openapi_has_no_secrets.py` covers `token_hash` and the key
+- [x] Doc: `security.md` §6 subsection and §7 checklist item; `README.md`
+      *Programmatic access*
+- [x] **Gate green**
+- [x] **Acceptance:** a key authenticates and returns the same body a human in
+      the same team would get; the key is shown once; revoking fails the next
+      request
+
+## Phase 6 — Grants on connections, knowledge, semantic layer ⚠️
+
+- [x] Migration `0028_grants.py` including the wildcard partial index
+- [x] ORM model
+- [x] `app/infra/authz/rbac.py`: `RbacAuthorizer` — wildcard short-circuit, then
+      the union subquery, for all four port methods
+- [x] `services/grant_service.py`: grant, revoke, list-by-resource,
+      list-by-principal, last-`manage` guard, wildcard requiring `role.manage`
+- [x] `api/deps.py`: `on(type, privilege, param)`
+- [x] `connections.py`: `/grants`, `/actions`, `/transfer`
+- [x] `/connections/{id}/knowledge/grants` and `/semantic/grants`
+- [x] `disclosure_policy` out of `PATCH`, into `PUT /connections/{id}/disclosure`
+      gated on `manage`
+- [x] `ConnectionRead` narrowed at `describe` — no host, no credentials
+- [x] Every knowledge route moves to `(knowledge, …)`; `can_curate` deleted;
+      `curation_admin_only` removed from config
+- [x] Every semantic route moves to `(semantic_layer, …)`
+- [x] The 404/403 rule in one exception helper
+- [x] `workers/reconciler.py`: the orphaned-grant sweep
+- [x] `DELETE /users/{id}` refuses while resources are owned, naming them
+- [x] `authz_backend` default flips to `"rbac"`
+- [x] Audit: `grant.created/revoked`, `grant.wildcard.created`,
+      `ownership.transferred`, `disclosure.changed`
+- [x] Frontend: `<AccessPanel>` — picker, privilege radio from `…/actions`,
+      current access **with the path**, revoke
+- [x] Frontend: `/sources/:id/access` as the fifth tab
+- [x] Frontend: the Policy tab's disclosure control gated on `manage`
+- [x] Frontend: Access popovers on the Knowledge console and Semantic tab headers
+- [x] Frontend: Data sources list shows granted connections with an owner column
+- [x] Test: lattice implication end to end
+- [x] Test: a team grant reaches a member, and stops on removal
+- [x] Test: a wildcard grant is refused without `role.manage`
+- [x] Test: last-`manage` self-revocation refused
+- [x] Test: the disclosure gate, both directions, audited
+- [x] Test: ownership transfer; the deletion refusal
+- [x] Test: the sweep removes only orphans
+- [x] Test: the seven `can_curate` tests **rewritten** and passing on the same
+      rule
+- [x] Test: **a Knowledge Manager curates and cannot read, edit or widen** —
+      requirement 2's named acceptance test
+- [x] Test: 404 with nothing, 403 with `describe`, message names the privilege
+- [x] Doc: `security.md` §3 (sharing interaction) and §6; `architecture.md` §18;
+      `CLAUDE.md` invariant 5; the ledger
+- [x] **Gate green**
+- [x] **Acceptance:** the two-user connection scenario, all four refusals, every
+      event in `GET /audit`, and `owner_only` still a working rollback
+
 ## Phase 7 — The audit half
 
-- [ ] `DENIED` written on every 403, with `because`; never on a 404
-- [ ] The remaining §19.4 actions
-- [ ] Administrator self-grant path: an ordinary grant row **plus**
+- [x] `DENIED` written on every 403, with `because`; never on a 404
+- [x] The remaining §19.4 actions
+- [x] Administrator self-grant path: an ordinary grant row **plus**
       `admin.self_granted`
-- [ ] The ask path records the disclosure policy in force
-- [ ] `GET /audit` filters: outcome, resource type, actor, date range, pagination
-- [ ] Frontend: `/admin/audit`, denials rendered distinctly, actor by name only
-- [ ] Test: one row per denial with a non-empty `because`
-- [ ] Test: zero rows per 404
-- [ ] Test: `detail` holds no SQL, question, row or key
-- [ ] Test: a self-grant writes two rows
-- [ ] Test: an ask records the policy
-- [ ] Test: a failing audit write does not fail the action
-- [ ] Doc: `security.md` §4.8
-- [ ] **Gate green**
-- [ ] **Acceptance:** an administrator can reconstruct who granted what and what
+- [x] The ask path records the disclosure policy in force
+- [x] `GET /audit` filters: outcome, resource type, actor, date range, pagination
+- [x] Frontend: `/admin/audit`, denials rendered distinctly, actor by name only
+- [x] Test: one row per denial with a non-empty `because`
+- [x] Test: zero rows per 404
+- [x] Test: `detail` holds no SQL, question, row or key
+- [x] Test: a self-grant writes two rows
+- [x] Test: an ask records the policy
+- [x] Test: a failing audit write does not fail the action
+- [x] Doc: `security.md` §4.8
+- [x] **Gate green**
+- [x] **Acceptance:** an administrator can reconstruct who granted what and what
       was refused, from the UI
 
 ## Phase 8 — Grants on artifacts
@@ -3400,12 +4108,12 @@ cd frontend && npm run typecheck && npm run build && npm test
 | 4 · Teams | 20 | **20** | 2026-09-07 |
 | 5 · Service users | 25 | **25** | 2026-09-07 |
 | 6 · Grants on connections | 34 | **34** | 2026-09-07 |
-| 7 · The audit half | 15 | 0 | — |
+| 7 · The audit half | 15 | **15** | 2026-09-07 |
 | 8 · Grants on artifacts | 26 | 0 | — |
 | 9 · Access review | 15 | 0 | — |
 | 10 · Rulebook and seams | 21 | 0 | — |
 | Cross-cutting | 8 | **6** | — |
-| **Total** | **254** | **175** | |
+| **Total** | **254** | **190** | |
 
 ## 30. The one-line acceptance test for the whole plan
 

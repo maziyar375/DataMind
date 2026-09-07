@@ -39,7 +39,13 @@ from uuid import UUID
 from fastapi import APIRouter, Request, status
 
 from app.api.deps import AuthzDep, CtxDep, DbDep
-from app.api.schemas import ActionsRead, GrantRead, GrantWrite, TransferWrite
+from app.api.schemas import (
+    ActionsRead,
+    GrantRead,
+    GrantWrite,
+    SelfGrantWrite,
+    TransferWrite,
+)
 from app.core.context import RequestContext
 from app.domain.ports.authz import Authorizer, ResourceRef
 from app.domain.value_objects.authz import (
@@ -185,7 +191,7 @@ def attach_access_routes(
 
     @router.get(f"{path}/actions", response_model=ActionsRead, name=f"{type_}_actions")
     async def read_actions(
-        request: Request, ctx: CtxDep, authz: AuthzDep
+        request: Request, ctx: CtxDep, db: DbDep, authz: AuthzDep
     ) -> ActionsRead:
         """What may I do here — the answer every control is rendered from.
 
@@ -195,8 +201,47 @@ def attach_access_routes(
         the same 404 every other route gives them, through the same helper.
         """
         ref = _ref(request)
-        await require(ctx, authz, ref, Privilege.DESCRIBE)
+        await require(ctx, authz, ref, Privilege.DESCRIBE, db=db)
         return await actions_for(ctx, authz, ref)
+
+    @router.post(
+        f"{path}/grants/self",
+        response_model=GrantRead,
+        status_code=status.HTTP_201_CREATED,
+        name=f"{type_}_self_grant",
+    )
+    async def self_grant(
+        request: Request,
+        payload: SelfGrantWrite,
+        ctx: CtxDep,
+        db: DbDep,
+        authz: AuthzDep,
+    ) -> GrantRead:
+        """An administrator giving themselves access. **Two audit rows.**
+
+        Declared before `POST …/grants` would match it? No — `/grants/self` is
+        a longer literal path and Starlette matches it first regardless of
+        order, because `/grants` has no path parameter to be confused with
+        `self`. It is here rather than beside the ordinary grant because it is
+        a different act with a different gate.
+
+        `user.manage`, checked in the service, and refused for everybody else
+        with a sentence pointing at the ordinary way to get access. See
+        `GrantService.self_grant` for why the grant is not revoked afterwards.
+        """
+        service = GrantService(db, authz)
+        ref = _ref(request)
+        row = await service.self_grant(
+            ctx, ref, privilege=Privilege(payload.privilege)
+        )
+        return GrantRead(
+            id=row.id,
+            principal_id=ctx.user_id,
+            principal_name="you",
+            principal_kind="HUMAN",
+            privilege=row.privilege,
+            path="direct",
+        )
 
     if transferable:
 
