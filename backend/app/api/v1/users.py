@@ -26,6 +26,7 @@ from app.api.schemas import (
     RoleAssignmentWrite,
     RoleRead,
     ScopedPrivilegeRead,
+    TeamRead,
     UserCreate,
     UserInviteResponse,
     UserRead,
@@ -37,6 +38,7 @@ from app.domain.value_objects.authz import ADMINISTRATOR, NORMAL_USER
 from app.infra.db.models import User
 from app.infra.identity.local import LocalIdentityProvider
 from app.services.role_service import RoleService, assign_by_name
+from app.services.team_service import TeamService
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -200,6 +202,29 @@ async def unassign_user_role(
 ) -> None:
     """Take a role away — refused if it would leave no administrator."""
     await RoleService(db).unassign(ctx, user_id=user_id, role_id=role_id)
+
+
+@router.get("/{user_id}/teams", response_model=list[TeamRead])
+async def list_user_teams(user_id: UUID, ctx: UserReadDep, db: DbDep) -> list[TeamRead]:
+    """Which teams this person is in. `user.read`, for the same reason their
+    roles are: it is part of reading their account, and changing it is a team
+    operation that lives on the team."""
+    if await db.get(User, user_id) is None:
+        raise NotFoundError("User not found.")
+    service = TeamService(db)
+    counts = await service.member_counts()
+    return [
+        TeamRead(
+            id=team.id,
+            name=team.name,
+            description=team.description,
+            members=counts.get(team.id, 0),
+            provider_id=team.provider_id,
+            source_id=team.source_id,
+            created_at=team.created_at,
+        )
+        for team in await service.teams_of(user_id)
+    ]
 
 
 def _role_read(role) -> RoleRead:

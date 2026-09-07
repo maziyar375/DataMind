@@ -54,6 +54,16 @@ class RequestContext:
     #: because the alternative is a required field that every construction site
     #: fills in with a guess.
     capabilities: frozenset[Capability] = field(default_factory=frozenset)
+    #: Every team this principal belongs to. One query, resolved beside the
+    #: capabilities in `get_ctx` and held for the life of the request.
+    #:
+    #: **Nothing decides resource access from it yet** — that is Phase 6, where
+    #: it becomes the second arm of the grant lookup. What reads it today is
+    #: capability resolution, which already unions the roles a team carries.
+    #: Empty is the safe default for the same reason `capabilities` is: a
+    #: principal in no teams is exactly what an unresolved context should look
+    #: like.
+    team_ids: frozenset[UUID] = field(default_factory=frozenset)
     #: True when this context was built by `on_behalf_of` rather than from a
     #: verified credential. The audit log records it and **nothing else reads
     #: it** — a delegated context has exactly the principal's permissions, no
@@ -132,5 +142,6 @@ class RequestContext:
             role="",
             session_id=None,
             capabilities=frozenset(),
+            team_ids=frozenset(),
             delegated=True,
         )

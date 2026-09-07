@@ -135,34 +135,112 @@ class RoleScopedPrivilege(Base):
 
 
 class RoleAssignment(Base):
-    """Who holds a role. `RESTRICT` on the role, `CASCADE` on the principal.
+    """Who holds a role: exactly one person **or** exactly one team.
 
-    The asymmetry is the point. Deleting a *person* should take their
-    assignments with them; deleting a *role* people still hold must fail and
-    name them, rather than silently widening or narrowing what those people
-    can do at the moment somebody was trying to tidy up.
+    `RESTRICT` on the role, `CASCADE` on the principal, and the asymmetry is
+    the point. Deleting a *person* or a *team* should take their assignments
+    with them; deleting a *role* people still hold must fail and name them,
+    rather than silently widening or narrowing what those people can do at the
+    moment somebody was trying to tidy up.
 
-    `team_id` arrives with `teams`; until then a role reaches a principal
-    directly or not at all.
+    "Exactly one principal" is a `CHECK`, not a convention — and the unique
+    constraint is `NULLS NOT DISTINCT`, without which Postgres treats every row
+    holding a NULL in the key as unique and the table quietly accepts the same
+    team assignment twice.
     """
 
     __tablename__ = "role_assignments"
     __table_args__ = (
-        UniqueConstraint("role_id", "user_id", name="uq_role_assignment"),
+        UniqueConstraint(
+            "role_id", "user_id", "team_id",
+            name="uq_role_assignment", postgresql_nulls_not_distinct=True,
+        ),
+        CheckConstraint(
+            "(user_id IS NULL) <> (team_id IS NULL)",
+            name="ck_role_assignment_one_principal",
+        ),
         Index("ix_role_assignments_user", "user_id"),
+        Index(
+            "ix_role_assignments_team", "team_id",
+            postgresql_where=text("team_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = _pk()
     role_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("roles.id", ondelete="RESTRICT"), nullable=False
     )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE")
+    )
+    team_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("teams.id", ondelete="CASCADE")
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+
+
+# ── teams ────────────────────────────────────────────────────────────────
+class Team(Base, TimestampMixin):
+    """A named set of principals — and, itself, a resource.
+
+    Two things it carries and one it deliberately does not:
+
+    * **Role assignments and grants both flow to members**, by the same union
+      the capability resolver already performs. That is requirement 3's own
+      example: a BI Engineer team holds the role, and its members inherit it.
+    * **`(provider_id, source_id)` mirrors an external group** — `(NULL, NULL)`
+      for a DataMind-managed team, `('oidc', '/analytics')` for a bound one.
+      Nothing reads them until an OIDC adapter exists; they are here now
+      because binding a team afterwards should be two column updates rather
+      than a namespace retrofitted onto identifiers that grants point at.
+    * **No parent.** Teams are flat because every IdP that matters emits
+      membership as an already-flattened list of paths, and a local hierarchy
+      would be a second one contradicting it.
+    """
+
+    __tablename__ = "teams"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_teams_name"),
+        UniqueConstraint("provider_id", "source_id", name="uq_teams_source"),
+        CheckConstraint(
+            "(provider_id IS NULL) = (source_id IS NULL)",
+            name="ck_teams_source_pair",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    provider_id: Mapped[str | None] = mapped_column(String(50))
+    source_id: Mapped[str | None] = mapped_column(String(255))
+
+
+class TeamMember(Base):
+    """One principal's membership of one team.
+
+    Meaningful only for a DataMind-managed team: when a team is
+    provider-managed, membership arrives in the token on each sign-in and this
+    table stays empty for it.
+    """
+
+    __tablename__ = "team_members"
+    __table_args__ = (Index("ix_team_members_user", "user_id"),)
+
+    team_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("teams.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    added_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    added_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL")
     )
 

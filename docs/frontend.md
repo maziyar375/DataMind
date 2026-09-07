@@ -125,7 +125,7 @@ colours are chosen in JS, and the print stylesheet.
 | **Knowledge** | [`KnowledgePage.tsx`](../frontend/src/pages/KnowledgePage.tsx) | The curation console, across every connection: flags raised, questions nothing answers, the maintenance sweep. |
 | **Data sources** | [`DataSourcesPage.tsx`](../frontend/src/pages/DataSourcesPage.tsx) | The connections DataMind may read, and everything known about each one. |
 | **LLM providers** | [`LlmProvidersPage.tsx`](../frontend/src/pages/LlmProvidersPage.tsx) | The models it may call, and the keys it calls them with. Two groups: *Models* answer questions, the *Embedder* makes vectors — a row is one or the other, and the form shows that kind's fields only. |
-| **Administration** | [`AdminPage.tsx`](../frontend/src/pages/AdminPage.tsx) | `/admin`: a tabbed section over **People** ([`UsersPage.tsx`](../frontend/src/pages/UsersPage.tsx)) and **Roles** ([`RolesTab.tsx`](../frontend/src/pages/RolesTab.tsx)), with Teams, Service accounts, Access review and Audit arriving as more tabs. The rail row appears when the viewer holds **any** administration capability, and each tab appears when its own capability is held — so an Auditor sees People and changes nothing, and a DataMind Maintainer sees the section without seeing People at all. `/users` permanently redirects to `/admin/people`. |
+| **Administration** | [`AdminPage.tsx`](../frontend/src/pages/AdminPage.tsx) | `/admin`: a tabbed section over **People** ([`UsersPage.tsx`](../frontend/src/pages/UsersPage.tsx)), **Roles** ([`RolesTab.tsx`](../frontend/src/pages/RolesTab.tsx)) and **Teams** ([`TeamsTab.tsx`](../frontend/src/pages/TeamsTab.tsx)), with Service accounts, Access review and Audit arriving as more tabs. The rail row appears when the viewer holds **any** administration capability, and each tab appears when its own capability is held — so an Auditor sees People and changes nothing, and a DataMind Maintainer sees the section without seeing People at all. `/users` permanently redirects to `/admin/people`. |
 | **Your account** | [`AccountPage.tsx`](../frontend/src/pages/AccountPage.tsx) | `/settings`: your display name and your password. Reached from the user block in the rail, not from `NAV`. |
 | **Creators** | [`AboutPage.tsx`](../frontend/src/pages/AboutPage.tsx) | Who built it. A colophon, not a destination; the one page on both sides of the sign-in wall. |
 | **Login** | [`LoginPage.tsx`](../frontend/src/pages/LoginPage.tsx) | The only public surface, and therefore the only signed-out route to Creators. |
@@ -148,8 +148,8 @@ the four `user.role === 'ADMIN'` comparisons that used to decide what to render
 are gone. The remaining ones are labels and counts, each carrying an
 `authz-ok:` marker that `make authz-check` prints on every run.
 
-Four are **master–detail** — Data sources, LLM providers, Knowledge and the
-Roles tab — and share the frame in
+Five are **master–detail** — Data sources, LLM providers, Knowledge and the
+Roles and Teams tabs — and share the frame in
 [`components/settings.tsx`](../frontend/src/components/settings.tsx)
 (`MasterColumn`, `MasterItem`, `DetailHeader`, `DetailBody`, `Section`,
 `FieldRow`, `Tabs`, `StatusLine`, `UnsavedNote`). Two pages that configure a

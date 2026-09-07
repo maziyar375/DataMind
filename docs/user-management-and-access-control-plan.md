@@ -3130,27 +3130,53 @@ cd frontend && npm run typecheck && npm run build && npm test
 
 ## Phase 4 — Teams
 
-- [ ] Migration `0027_teams.py`: `teams`, `team_members`
-- [ ] ORM models
-- [ ] `services/team_service.py`: CRUD, membership, delete-with-guard
-- [ ] `api/v1/teams.py` gated `team.read` / `team.manage`, or `(team, modify)`
-- [ ] `PUT /teams/{id}/source` as a separate, audited endpoint
-- [ ] `RequestContext.team_ids`, one query, both constructors
-- [ ] Capability resolution widens to roles reaching through a team
-- [ ] `MeResponse` gains `teams`
-- [ ] Audit actions: the six team actions
-- [ ] Frontend: **Teams** tab — list, detail, members picker, assigned roles
-- [ ] Frontend: People detail gains a **Teams** section
-- [ ] Test: membership resolution across three teams
-- [ ] Test: cascade on user delete and on team delete
-- [ ] Test: `ck_teams_source_pair`
-- [ ] Test: `team_ids` on a context built both ways
-- [ ] Test: a team role reaches members and stops on removal
-- [ ] Test: deleting a team holding a role assignment is refused
-- [ ] Doc: `security.md`, `CLAUDE.md`, the ledger
-- [ ] **Gate green**
-- [ ] **Acceptance:** a BI Engineer team's members gain `dashboard.create`
-      without signing out; `team_ids` is used by no resource decision yet
+- [x] Migration **`0025_teams.py`** (renumbered with `0024`): `teams`,
+      `team_members` — **and the widening of `role_assignments`** that `0024`
+      could not ship: `team_id`, a nullable `user_id`, the one-principal
+      `CHECK`, and the `UNIQUE NULLS NOT DISTINCT` three-column constraint
+      `0024` had already named it for
+- [x] ORM models
+- [x] `services/team_service.py`: CRUD, membership, delete-with-guard,
+      `roles_by_team` for the list screen
+- [x] `api/v1/teams.py` gated `team.read` / `team.manage`. **`(team, modify)`
+      for a team lead is *not* wired**, and that is honest rather than
+      forgotten: the privilege exists in the vocabulary and the authorizer that
+      would answer it is `OwnerOnlyAuthorizer`, which knows nothing about
+      teams. It becomes reachable in Phase 6 with the rest of the grant path
+- [x] `PUT /teams/{id}/source` as a separate, audited endpoint
+- [x] `RequestContext.team_ids`, one query, resolved in `get_ctx`; empty on a
+      delegated context, for the same fail-closed reason `capabilities` is
+- [x] Capability resolution widens to roles reaching through a team — **two
+      arms of one `WHERE`**, so the query count on the request path does not
+      move
+- [x] `MeResponse` gains `teams`, and `roles` becomes `distinct` — a role held
+      directly *and* through a team is one role
+- [x] Audit actions: the six team actions
+- [x] Frontend: **Teams** tab — list, detail, members picker, assigned roles,
+      external binding
+- [x] Frontend: People detail gains a **Teams** section (read-only: membership
+      is a set edited on the team, and a second per-person control would be a
+      way to race it)
+- [x] Test: membership resolution across three teams
+- [x] Test: cascade on user delete and on team delete
+- [x] Test: `ck_teams_source_pair`, through the service's own refusal
+- [x] Test: `team_ids` populated, and a grep proving **no authorizer reads it**
+- [x] Test: a team role reaches members and stops on removal
+- [x] Test: deleting a team holding a role assignment is refused, and deleting
+      a role a *team* holds names the team rather than a person
+- [x] Test: the last-administrator guard is not satisfied by a team holding
+      `Administrator`
+- [x] Test: the teams list carries each team's roles, in one query — written
+      for a bug found by opening the screen, where a team plainly holding
+      BI Engineer rendered "no roles yet"
+- [x] Doc: `security.md`, `frontend.md`, `CLAUDE.md` invariant 5, the ledger
+- [x] **Gate green** — ruff, 8 import-linter contracts, backend suite,
+      `make guard`, `make authz-check`, frontend typecheck + build + tests
+- [x] **Acceptance**, verified end to end against the running stack: a probe
+      account with **no roles at all** is put in a team holding BI Engineer and
+      gains `dashboard.create` on the **same access token**; removing them from
+      the team removes it again on the next request; `team_ids` is read by no
+      resource decision, and a grep asserts it
 
 ## Phase 5 — Service users
 
@@ -3371,7 +3397,7 @@ cd frontend && npm run typecheck && npm run build && npm test
 | 1 · `ctx` part A | 10 | **10** | 2026-09-06 |
 | 2 · `ctx` part B | 16 | **16** | 2026-09-07 |
 | 3 · Roles and capabilities | 32 | **32** | 2026-09-07 |
-| 4 · Teams | 20 | 0 | — |
+| 4 · Teams | 20 | **20** | 2026-09-07 |
 | 5 · Service users | 25 | 0 | — |
 | 6 · Grants on connections | 34 | 0 | — |
 | 7 · The audit half | 15 | 0 | — |
@@ -3379,7 +3405,7 @@ cd frontend && npm run typecheck && npm run build && npm test
 | 9 · Access review | 15 | 0 | — |
 | 10 · Rulebook and seams | 21 | 0 | — |
 | Cross-cutting | 8 | 0 | — |
-| **Total** | **254** | **90** | |
+| **Total** | **254** | **110** | |
 
 ## 30. The one-line acceptance test for the whole plan
 

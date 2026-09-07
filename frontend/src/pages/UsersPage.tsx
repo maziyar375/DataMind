@@ -22,7 +22,7 @@
  */
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { roles as rolesApi, users as api } from '../api/client'
-import type { Role as RoleRecord, User } from '../api/types'
+import type { Role as RoleRecord, Team as TeamRecord, User } from '../api/types'
 import {
   Chip, CopyButton, DangerButton, EmptyState, ErrorNote, Field, GhostButton,
   GlyphBadge, Icon, MetaDot, Modal, PageHeader, PrimaryButton, SearchField,
@@ -557,6 +557,55 @@ function RolesSection({ userId }: { userId: string }) {
   )
 }
 
+/**
+ * The teams this person is in — read only, and deliberately so.
+ *
+ * Membership is edited on the **team**, not on the person, because a team's
+ * membership is a set somebody edits as one: the picker over there sends the
+ * whole intended list, and a second control here that added one person at a
+ * time would be a way to race it. This says which teams they are in and links
+ * the reader to where it is changed.
+ */
+function TeamsSection({ userId }: { userId: string }) {
+  const can = useCan()
+  const [teams, setTeams] = useState<TeamRecord[] | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    api.teams(userId)
+      .then((rows) => !cancelled && setTeams(rows))
+      .catch(() => !cancelled && setTeams([]))
+    return () => {
+      cancelled = true
+    }
+  }, [userId])
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <label style={{ fontSize: 12, color: 'var(--text-dim)' }}>Teams</label>
+      {teams === null ? (
+        <Spinner />
+      ) : teams.length === 0 ? (
+        <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
+          Not in any team.
+        </span>
+      ) : (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {teams.map((team) => (
+            <Chip key={team.id} tone="neutral">{team.name}</Chip>
+          ))}
+        </div>
+      )}
+      {can('team.manage') && (
+        <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+          Membership is changed on the team, in the Teams tab — a team's members
+          are edited as one list.
+        </span>
+      )}
+    </div>
+  )
+}
+
 // ── one person ──────────────────────────────────────────────────────────────
 /**
  * One person, one line.
@@ -1014,6 +1063,10 @@ function EditUserModal({
       <Divider />
 
       <RolesSection userId={user.id} />
+
+      <Divider />
+
+      <TeamsSection userId={user.id} />
 
       <Divider />
 

@@ -24,16 +24,12 @@ from __future__ import annotations
 import importlib
 import sys
 import types
-from collections.abc import Iterator
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB
-from sqlalchemy.orm import Session
 
-from app.core.context import RequestContext
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.domain.value_objects import Role as LegacyRole
 from app.domain.value_objects.authz import (
@@ -48,10 +44,11 @@ from app.infra.db.models import (
     Role,
     RoleAssignment,
     RoleCapability,
-    RoleScopedPrivilege,
-    User,
 )
 from app.services.role_service import RoleService, assign_by_name, known_capabilities
+
+# `db`, `ctx` and `_user` come from `tests/unit/conftest.py`.
+from tests.unit.conftest import AsyncSessionShim, _user, ctx
 
 if "alembic" not in sys.modules:  # a revision module imports `alembic.op` only
     try:
@@ -62,6 +59,9 @@ if "alembic" not in sys.modules:  # a revision module imports `alembic.op` only
         sys.modules["alembic"] = stub
 
 MIGRATION = importlib.import_module("app.infra.db.migrations.versions.0024_roles")
+TEAMS_MIGRATION = importlib.import_module(
+    "app.infra.db.migrations.versions.0025_teams"
+)
 
 
 # ── the specification, restated ──────────────────────────────────────────
@@ -184,18 +184,43 @@ def test_no_seed_role_names_a_resource_id() -> None:
 
 # ── the migration agrees with `models.py` ────────────────────────────────
 class OpRecorder:
-    """Stands in for `alembic.op`: records the DDL instead of emitting it."""
+    """Stands in for `alembic.op`: records the DDL instead of emitting it.
+
+    It records enough of the two revisions to compare their *result* with
+    `models.py` — including `0025`'s `add_column`, which is how
+    `role_assignments` gains the column `0024` could not create.
+    """
 
     def __init__(self) -> None:
         self.tables: dict[str, list[Any]] = {}
         self.indexes: list[tuple[str, str, list[str]]] = []
         self.statements: list[str] = []
+        self.checks: list[tuple[str, str, str]] = []
+        self.nullable: dict[tuple[str, str], bool] = {}
 
     def create_table(self, name: str, *columns: Any, **_kw: Any) -> None:
         self.tables[name] = list(columns)
 
+    def add_column(self, table: str, column: Any, **_kw: Any) -> None:
+        self.tables.setdefault(table, []).append(column)
+
+    def alter_column(self, table: str, column: str, **kw: Any) -> None:
+        if "nullable" in kw:
+            self.nullable[(table, column)] = kw["nullable"]
+
     def create_index(self, name: str, table: str, columns: list[str], **_kw: Any) -> None:
         self.indexes.append((name, table, columns))
+
+    def create_foreign_key(self, *_a: Any, **_kw: Any) -> None:
+        pass
+
+    def create_check_constraint(
+        self, name: str, table: str, condition: str, **_kw: Any
+    ) -> None:
+        self.checks.append((name, table, condition))
+
+    def drop_constraint(self, *_a: Any, **_kw: Any) -> None:
+        pass
 
     def execute(self, statement: Any) -> None:
         self.statements.append(str(statement))
@@ -209,19 +234,30 @@ class OpRecorder:
 
 @pytest.fixture
 def recorded(monkeypatch: pytest.MonkeyPatch) -> OpRecorder:
+    """**Both** revisions, replayed onto one recorder.
+
+    `0024` and `0025` are one schema arriving in two instalments — roles
+    shipped a phase before teams existed, so `role_assignments.team_id` cannot
+    be created until the second. Comparing either half alone against
+    `models.py` would fail for a reason that is not a defect; comparing the
+    pair is the claim worth making.
+    """
     recorder = OpRecorder()
     monkeypatch.setattr(MIGRATION, "op", recorder)
+    monkeypatch.setattr(TEAMS_MIGRATION, "op", recorder)
     MIGRATION.upgrade()
+    TEAMS_MIGRATION.upgrade()
     return recorder
 
 
-def test_the_migration_and_the_orm_describe_the_same_four_tables(
+def test_the_migrations_and_the_orm_describe_the_same_six_tables(
     recorded: OpRecorder,
 ) -> None:
     """Two definitions of one schema, and only a running database usually
     notices when they drift."""
     expected = {
         "roles", "role_capabilities", "role_scoped_privileges", "role_assignments",
+        "teams", "team_members",
     }
     assert set(recorded.tables) == expected
 
@@ -234,6 +270,28 @@ def test_the_migration_and_the_orm_describe_the_same_four_tables(
         assert declared == set(Base.metadata.tables[name].columns.keys()), name
 
 
+def test_the_widening_makes_role_assignments_take_a_team(
+    recorded: OpRecorder,
+) -> None:
+    """The half `0024` could not ship, asserted where both halves are in view.
+
+    A column with a foreign key to a table that does not exist yet is not a
+    column — so `role_assignments` arrives non-null on `user_id` and gains the
+    rest here: the team column, the nullability, and the `CHECK` that makes
+    "exactly one principal" a constraint rather than a convention.
+    """
+    assert recorded.nullable == {("role_assignments", "user_id"): True}
+    assert ("ck_role_assignment_one_principal", "role_assignments",
+            "(user_id IS NULL) <> (team_id IS NULL)") in recorded.checks
+    # `NULLS NOT DISTINCT` is raw SQL because SQLAlchemy's `UniqueConstraint`
+    # cannot express it in an `ALTER`. Without it Postgres treats every row
+    # with a NULL in the key as unique and the table accepts a duplicate team
+    # assignment — which is the whole reason the clause is there.
+    assert any(
+        "UNIQUE NULLS NOT DISTINCT" in statement for statement in recorded.statements
+    )
+
+
 def test_the_seed_and_the_backfill_both_run(recorded: OpRecorder) -> None:
     """Eight roles, their rows, and one assignment per existing account.
 
@@ -244,174 +302,6 @@ def test_the_seed_and_the_backfill_both_run(recorded: OpRecorder) -> None:
     inserts = [s for s in recorded.statements if "INSERT INTO roles" in s]
     assert len(inserts) == 8
     assert any("INSERT INTO role_assignments" in s for s in recorded.statements)
-
-
-# ── a real database, behind the async surface the service uses ───────────
-_TABLES = (
-    "users", "roles", "role_capabilities", "role_scoped_privileges",
-    "role_assignments", "audit_logs",
-)
-
-
-def _refuse_lazy_loads(session: Session) -> None:
-    """Make this synchronous session as strict as an asyncio one.
-
-    Added after a bug that shipped past every test in this file: `create` and
-    `update` returned a role whose `capabilities` collection had been populated
-    while it was empty, and the child rows were written beside it rather than
-    through it. Reading the collection then **lazy-loads** — which a
-    synchronous session does silently and correctly, and an `AsyncSession`
-    cannot do at all. So `POST /roles` was a 500 in production and green here.
-
-    A lazy load is legitimate in plenty of code; it is never legitimate in
-    anything that runs under `AsyncSession`, which is everything in `app/`. So
-    the session used by these tests refuses one, and the failure names the
-    attribute rather than appearing later as a `MissingGreenlet` in a log.
-    """
-
-    @sa.event.listens_for(session, "do_orm_execute")
-    def _guard(state: Any) -> None:
-        # `lazy_loaded_from` is only meaningful for a SELECT; the teardown's
-        # bulk DELETEs reach this hook too and raise if it is asked.
-        if state.is_select and state.lazy_loaded_from is not None:
-            raise AssertionError(
-                "a lazy load happened here, which would be a MissingGreenlet "
-                "under AsyncSession. Load the relationship eagerly — see "
-                "RoleService.get."
-            )
-
-
-class AsyncSessionShim:
-    """A synchronous `Session` wearing the async surface `RoleService` calls.
-
-    The alternative was a hand-written fake that answers queries by inspecting
-    statements, and it would prove nothing about the statements themselves —
-    the joins in `resolve_capabilities` are the thing under test. This runs the
-    real SQL against SQLite and counts it.
-    """
-
-    def __init__(self, session: Session) -> None:
-        self._session = session
-        self.statements: list[Any] = []
-
-    async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
-        self.statements.append(statement)
-        return self._session.execute(statement, *args, **kwargs)
-
-    async def get(self, model: type, primary_key: Any) -> Any:
-        return self._session.get(model, primary_key)
-
-    def add(self, obj: Any) -> None:
-        self._session.add(obj)
-
-    async def flush(self) -> None:
-        self._session.flush()
-
-    async def delete(self, obj: Any) -> None:
-        self._session.delete(obj)
-
-
-@pytest.fixture(scope="module")
-def engine() -> sa.Engine:
-    """The six tables this file writes, from the real metadata.
-
-    Four edits to a *copy* of the column definitions, all about Postgres
-    syntax rather than anything under test: a `::jsonb` server default SQLite
-    cannot parse, an `ARRAY` its driver refuses, `JSONB` itself, which has no
-    SQLite compiler, and `audit_logs.id` — a `BigInteger` primary key, which
-    SQLite will not auto-increment because only `INTEGER PRIMARY KEY` aliases
-    the rowid. None appears in an assertion here; they are the price of running
-    the real statements against a real engine rather than faking them.
-    """
-    metadata = sa.MetaData()
-    for name in _TABLES:
-        table = Base.metadata.tables[name].to_metadata(metadata)
-        for column in table.columns:
-            if "::" in str(getattr(column.server_default, "arg", "")):
-                column.server_default = None
-            if isinstance(column.type, ARRAY | JSONB):
-                column.type = sa.JSON()
-            if column.primary_key and isinstance(column.type, sa.BigInteger):
-                column.type = sa.Integer()
-
-    engine = sa.create_engine("sqlite+pysqlite:///:memory:")
-
-    @sa.event.listens_for(engine, "connect")
-    def _enforce_foreign_keys(dbapi_connection: Any, _record: Any) -> None:
-        dbapi_connection.execute("PRAGMA foreign_keys=ON")
-
-    metadata.create_all(engine)
-    return engine
-
-
-#: The administrator every test in this file acts as. A real row, because
-#: `role_assignments.created_by` and `audit_logs.actor_user_id` are foreign
-#: keys and SQLite is asked to enforce them — a fixture that acted as a made-up
-#: id would be testing against a schema looser than the real one.
-ACTOR = uuid4()
-
-
-@pytest.fixture
-def db(engine: sa.Engine) -> Iterator[AsyncSessionShim]:
-    with Session(engine) as session:
-        _refuse_lazy_loads(session)
-        shim = AsyncSessionShim(session)
-        session.add(
-            User(
-                id=ACTOR, email="actor@test.local", display_name="Actor",
-                password_hash="x", role=LegacyRole.ADMIN, status="ACTIVE",
-            )
-        )
-        _seed_roles(session)
-        yield shim
-        session.rollback()
-        for name in reversed(_TABLES):
-            session.execute(sa.text(f"DELETE FROM {name}"))  # noqa: S608
-        session.commit()
-
-
-def _seed_roles(session: Session) -> None:
-    """The migration's seed, applied through the ORM.
-
-    The revision's own SQL uses `gen_random_uuid()`, which SQLite does not
-    have. Reading `SEED` here is legitimate where the table test above would
-    not be: this fixture is *arranging* a world, not asserting what is in it.
-    """
-    for name, description, capabilities, scoped in MIGRATION.SEED:
-        role = Role(id=uuid4(), name=name, description=description, is_system=True)
-        session.add(role)
-        session.flush()
-        for capability in capabilities:
-            session.add(RoleCapability(role_id=role.id, capability=capability))
-        for resource_type, privilege in scoped:
-            session.add(
-                RoleScopedPrivilege(
-                    role_id=role.id, resource_type=resource_type, privilege=privilege
-                )
-            )
-    session.flush()
-
-
-def _user(session: Session, email: str, role: str = LegacyRole.MEMBER) -> User:
-    user = User(
-        id=uuid4(), email=email, display_name=email.split("@")[0],
-        password_hash="x", role=role, status="ACTIVE",
-    )
-    session.add(user)
-    session.flush()
-    return user
-
-
-def ctx(user_id: UUID = ACTOR) -> RequestContext:
-    """The administrator doing the administering, as `get_ctx` would build it:
-    from a **capability set**, with the legacy role string along for the ride
-    and deciding nothing."""
-    return RequestContext(
-        user_id=user_id,
-        email="actor@test.local",
-        role=LegacyRole.ADMIN,
-        capabilities=frozenset({Capability.ROLE_MANAGE, Capability.USER_MANAGE}),
-    )
 
 
 # ── resolution ───────────────────────────────────────────────────────────

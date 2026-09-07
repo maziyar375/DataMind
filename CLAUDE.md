@@ -641,6 +641,25 @@ joined them with Phase 1 of the learning loop.
    applies at capture under every policy, including FULL, because the schema
    block is sent on every question while a result is only sent for the query
    the user asked for.
+5. **One place answers "may they?", and it is the `Authorizer` port.** Nothing
+   under `api/` or `services/` compares an owner id or reads a role string to
+   decide anything: a single row asks `authz.allowed(ctx, ref, privilege)`, a
+   list composes `authz.visible(...)` into the `SELECT` it was already going to
+   run, and an app-wide verb is a route dependency, `deps.needs(capability)`,
+   which runs before the handler body and so cannot be forgotten by the next
+   route. `make authz-check` fails the build on the four shapes this codebase
+   has agreed not to use, and every exemption carries its reason on the line.
+   Background work names its principal through
+   `RequestContext.on_behalf_of(owner)` and gets exactly that person's
+   answers — **there is no god context**, and a scheduled run its owner could
+   not perform by hand is supposed to fail.
+
+   **When you grant something, grant it to a team.** A team is the recommended
+   default principal for any assignment and, from Phase 6, for any share: a
+   permission attached to a job survives the person leaving it, and one
+   attached to a person becomes a row nobody can attribute and nobody dares
+   revoke. `docs/user-management-and-access-control-plan.md` is the whole
+   design.
 
 ---
 

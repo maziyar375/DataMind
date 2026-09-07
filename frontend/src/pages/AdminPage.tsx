@@ -30,6 +30,7 @@ import { PageHeader } from '../components/ui'
 import { Tabs } from '../components/settings'
 import { useCan, type Capability } from '../permissions'
 import RolesTab from './RolesTab'
+import TeamsTab from './TeamsTab'
 import UsersPage from './UsersPage'
 
 interface TabSpec {
@@ -49,6 +50,11 @@ interface TabSpec {
 const TABS: TabSpec[] = [
   { value: 'people', label: 'People', needs: 'user.read' },
   { value: 'roles', label: 'Roles', needs: 'role.read' },
+  // `team.read` is held by five of the eight seed roles, so this tab is the
+  // one most people in the installation will see — which is deliberate: from
+  // Phase 6 a team is how somebody will have been given access to anything,
+  // and "which teams am I in" stops being a curiosity.
+  { value: 'teams', label: 'Teams', needs: 'team.read' },
 ]
 
 export default function AdminPage({ user }: { user: User }) {
@@ -96,8 +102,10 @@ export default function AdminPage({ user }: { user: User }) {
           scrollbar inside the one it already has. */}
       {active.value === 'people' ? (
         <UsersPage currentUser={user} embedded />
-      ) : (
+      ) : active.value === 'roles' ? (
         <RolesTab />
+      ) : (
+        <TeamsTab />
       )}
     </div>
   )

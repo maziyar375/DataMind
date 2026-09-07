@@ -887,13 +887,39 @@ weaker version:
   system role's name and description are editable; it cannot be deleted, and
   neither can any role somebody still holds.
 
+**Teams.** A role reaches a principal directly *or* through a team they are
+in, and the two are one `WHERE` with two arms rather than two round trips — so
+membership costs nothing on the request path and a role assigned to a team
+takes effect on its members' **next request**, and stops reaching them the
+moment they leave. That property is the reason teams shipped before anything
+could be shared: the research behind this design is unanimous that per-user
+grants do not survive staff turnover, and a workspace whose every share was
+made to a person accumulates permissions nobody can attribute and nobody dares
+revoke.
+
+Two more facts about them:
+
+* **`teams.(provider_id, source_id)` mirrors an external group** — `(NULL,
+  NULL)` for a DataMind-managed team, `('oidc', '/analytics')` for a bound one.
+  Nothing reads them; there is no directory adapter. They exist now so binding
+  an existing team later is two column updates rather than a namespace
+  retrofitted onto identifiers every grant already points at, and rebinding is
+  its **own** endpoint with its own audit action because it redirects which
+  people flow into a set of permissions.
+* **The last-administrator guard counts people, not teams.** A team may hold
+  `Administrator`; counting one would let the last named administrator be
+  removed on the strength of a team whose membership somebody else can empty in
+  one click, leaving a workspace that looks administered and is not.
+
 The role model carries **no resource ids**: `role_scoped_privileges` has a
 resource *type* and nowhere to put an id. Per-resource access is a grant
 (Phase 6), and keeping the two apart is what makes an access review answerable
 — *"because of the Knowledge Manager role"* and *"because Sara granted it on
 3 March"* have to stay different rows. Every role change is audited:
 `role.created`, `role.updated`, `role.deleted`, `role.assigned`,
-`role.unassigned`.
+`role.unassigned`, and every team change likewise: `team.created`,
+`team.renamed`, `team.deleted`, `team.member.added`, `team.member.removed`,
+`team.source.bound`.
 
 > **Losing `SECRET_BOX_KEY` means every stored credential must be re-entered.**
 > There is no recovery path, by design. Back it up somewhere your database

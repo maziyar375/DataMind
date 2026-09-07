@@ -30,7 +30,7 @@ import uuid
 from collections.abc import Iterable, Sequence
 from uuid import UUID
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -50,6 +50,7 @@ from app.infra.db.models import (
     RoleAssignment,
     RoleCapability,
     RoleScopedPrivilege,
+    Team,
     User,
 )
 from app.services import audit
@@ -105,7 +106,9 @@ class RoleService:
         self._db = db
 
     # ── resolution: the hot path ─────────────────────────────────────────
-    async def resolve_capabilities(self, principal_id: UUID) -> frozenset[Capability]:
+    async def resolve_capabilities(
+        self, principal_id: UUID, team_ids: frozenset[UUID] = frozenset()
+    ) -> frozenset[Capability]:
         """Every capability this principal holds, in **one** query.
 
         `role_assignments → roles → role_capabilities`, joined and returned as
@@ -113,24 +116,47 @@ class RoleService:
         asserts the statement count, because this runs on every authenticated
         request and an N+1 here is a per-request N+1 for the whole product.
 
-        Teams widen this in Phase 4 — the union gains a second arm and the
-        query count does not change.
+        **Two arms, one query.** A role reaches a principal directly, or
+        through a team they are in — requirement 3's *"members of that team
+        would inherit those permissions"* — and the two are `OR`ed inside the
+        same `WHERE` rather than unioned by two round trips. The team ids are
+        passed in rather than joined for, because `get_ctx` has already read
+        them for `ctx.team_ids` and reading them twice per request to save
+        passing an argument is the wrong trade.
+
+        An empty `team_ids` degrades to the direct arm alone, which is exactly
+        what it should mean and what every caller that has no teams in hand
+        gets.
         """
+        reaches = RoleAssignment.user_id == principal_id
+        if team_ids:
+            reaches = or_(reaches, RoleAssignment.team_id.in_(team_ids))
         result = await self._db.execute(
             select(RoleCapability.capability)
             .join(Role, Role.id == RoleCapability.role_id)
             .join(RoleAssignment, RoleAssignment.role_id == Role.id)
-            .where(RoleAssignment.user_id == principal_id)
+            .where(reaches)
         )
         return known_capabilities(result.scalars().all())
 
-    async def roles_of(self, principal_id: UUID) -> list[Role]:
-        """The roles reaching this principal, by name — for `/auth/me`."""
+    async def roles_of(
+        self, principal_id: UUID, team_ids: frozenset[UUID] = frozenset()
+    ) -> list[Role]:
+        """The roles reaching this principal, by name — for `/auth/me`.
+
+        Both arms again, and `distinct` because a role held directly *and*
+        through a team is one role: listing it twice would put the same chip on
+        the screen twice and tell nobody anything.
+        """
+        reaches = RoleAssignment.user_id == principal_id
+        if team_ids:
+            reaches = or_(reaches, RoleAssignment.team_id.in_(team_ids))
         result = await self._db.execute(
             select(Role)
             .join(RoleAssignment, RoleAssignment.role_id == Role.id)
-            .where(RoleAssignment.user_id == principal_id)
+            .where(reaches)
             .order_by(Role.name)
+            .distinct()
         )
         return list(result.scalars())
 
@@ -170,11 +196,17 @@ class RoleService:
         return result.scalar_one_or_none()
 
     async def holder_counts(self) -> dict[UUID, int]:
-        """How many principals hold each role, for the list screen.
+        """How many **assignments** each role has, for the list screen.
 
-        One grouped query rather than a count per row: the roles list is eight
-        rows on a fresh install and a dozen on a used one, and eight queries to
-        draw one table is how a list page becomes slow for no reason.
+        Assignments rather than people, because a team assignment is one row
+        and the number of people behind it changes without the role changing.
+        "3 holders" beside a role that two teams and one person hold is the
+        honest count of the things somebody would have to remove before the
+        role could be deleted — which is exactly what the number is there to
+        warn about.
+
+        One grouped query rather than a count per row: eight queries to draw
+        one table is how a list page becomes slow for no reason.
         """
         result = await self._db.execute(
             select(RoleAssignment.role_id, func.count())
@@ -385,9 +417,15 @@ class RoleService:
         if losing is not None and losing != administrator.id:
             return
 
+        # Direct assignments only, deliberately. A team could in principle hold
+        # `Administrator`, and counting one as an administrator would let the
+        # last named administrator be removed on the strength of a team whose
+        # membership somebody else can empty in one click. The guard's job is
+        # to keep at least one person recoverable, so it counts people.
         result = await self._db.execute(
             select(RoleAssignment.user_id).where(
                 RoleAssignment.role_id == administrator.id,
+                RoleAssignment.user_id.is_not(None),
                 RoleAssignment.user_id != user_id,
             )
         )
@@ -415,14 +453,27 @@ class RoleService:
         return await self.get(role_id)
 
     async def _holders(self, role_id: UUID) -> list[str]:
-        """Display names of everyone holding this role, for the refusal."""
-        result = await self._db.execute(
+        """Names of everyone and every team holding this role, for the refusal.
+
+        Both, because "still assigned to Sara" is a misleading refusal when
+        what actually holds it is the BI Engineers team — the person reading it
+        would go looking at Sara's account and find nothing.
+        """
+        people = await self._db.execute(
             select(User.display_name, User.email)
             .join(RoleAssignment, RoleAssignment.user_id == User.id)
             .where(RoleAssignment.role_id == role_id)
             .order_by(User.display_name)
         )
-        return [(name or email) for name, email in result.all()]
+        teams = await self._db.execute(
+            select(Team.name)
+            .join(RoleAssignment, RoleAssignment.team_id == Team.id)
+            .where(RoleAssignment.role_id == role_id)
+            .order_by(Team.name)
+        )
+        return [(name or email) for name, email in people.all()] + [
+            f"the {name} team" for name in teams.scalars()
+        ]
 
     async def _write_capabilities(
         self, role: Role, capabilities: Sequence[str], *, replace: bool = False

@@ -70,6 +70,22 @@ export interface CapabilityEntry {
   label: string
 }
 
+export interface Team {
+  id: string
+  name: string
+  description: string
+  /** How many people are in it. */
+  members: number
+  /** The roles the team carries — its members hold them from their next
+   *  request, which is the whole of requirement 3. */
+  roles: string[]
+  /** The external group this team mirrors, when it mirrors one. Both or
+   *  neither, and nothing reads them until an OIDC adapter exists. */
+  provider_id: string | null
+  source_id: string | null
+  created_at?: string
+}
+
 /** `GET /auth/me/permissions`. What every affordance is rendered from. */
 export interface Permissions {
   capabilities: string[]

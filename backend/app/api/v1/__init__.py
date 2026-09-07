@@ -12,6 +12,7 @@ from app.api.v1 import (
     reports,
     roles,
     semantic,
+    teams,
     users,
 )
 
@@ -23,6 +24,10 @@ api_router.include_router(users.router)
 # administering *what people can do* are separable jobs, and the DataMind
 # Maintainer role exists because they should be.
 api_router.include_router(roles.router)
+# The third of the people-shaped routers. `team.read` is held by five of the
+# eight seed roles because a person has to be able to see the teams they are
+# in; `team.manage` is Administrator's alone.
+api_router.include_router(teams.router)
 # `audit.read`, and a peer of both for the same reason: all three are about
 # people rather than about a connection's data.
 api_router.include_router(audit.router)

@@ -27,6 +27,7 @@ from app.infra.crypto.aesgcm_box import AesGcmSecretBox
 from app.infra.db.session import get_sessionmaker
 from app.infra.identity.local import LocalIdentityProvider
 from app.services.role_service import RoleService
+from app.services.team_service import TeamService
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -84,21 +85,28 @@ async def get_ctx(
 ) -> RequestContext:
     """Who is calling, and what they may do — resolved per request.
 
-    The capability set is read from the database here rather than carried in
-    the token (plan decision 15). It costs one indexed join on every
-    authenticated call; it buys a revoked role taking effect on the **next
-    request** instead of at the next token refresh, which is the difference
-    between "we removed their access" and "we removed their access, up to
-    fifteen minutes from now".
+    The capability set and the team set are read from the database here rather
+    than carried in the token (plan decision 15). Two indexed reads on every
+    authenticated call; what they buy is a revoked role — or a removal from a
+    team — taking effect on the **next request** instead of at the next token
+    refresh, which is the difference between "we removed their access" and "we
+    removed their access, up to fifteen minutes from now".
     """
     if credentials is None or not credentials.credentials:
         raise AuthenticationError("Sign in to continue.")
     who = await identity.verify_access_token(credentials.credentials)
+    # Teams first, because capability resolution takes them: a role reaches a
+    # principal directly *or* through a team, and asking for the second answer
+    # without the first would silently drop half of it.
+    team_ids = await TeamService(db).team_ids(who.user_id)
     return RequestContext(
         user_id=who.user_id,
         email=who.email,
         role=who.role,
-        capabilities=await RoleService(db).resolve_capabilities(who.user_id),
+        capabilities=await RoleService(db).resolve_capabilities(
+            who.user_id, team_ids
+        ),
+        team_ids=team_ids,
         correlation_id=get_correlation_id(),
         actor_ip=_client_ip(request),
     )
@@ -177,3 +185,5 @@ UserManageDep = Annotated[RequestContext, Depends(needs(Capability.USER_MANAGE))
 RoleReadDep = Annotated[RequestContext, Depends(needs(Capability.ROLE_READ))]
 RoleManageDep = Annotated[RequestContext, Depends(needs(Capability.ROLE_MANAGE))]
 AuditReadDep = Annotated[RequestContext, Depends(needs(Capability.AUDIT_READ))]
+TeamReadDep = Annotated[RequestContext, Depends(needs(Capability.TEAM_READ))]
+TeamManageDep = Annotated[RequestContext, Depends(needs(Capability.TEAM_MANAGE))]

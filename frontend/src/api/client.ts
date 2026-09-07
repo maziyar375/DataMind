@@ -19,7 +19,7 @@ import type {
   ReportBlockCheck, ReportChart, ReportRun, ReportRunDetail, ReportSection,
   ReportSectionResult,
   ReportSummary, Review, Role, RunDetail, RunEvent, RunKnowledge, SchemaSnapshot,
-  ScopedPrivilege,
+  ScopedPrivilege, Team,
   SemanticDocument, SemanticJob, Suggestion,
   SemanticLayer, SqlDraft, TemplateCheckResult, TemplateParam,
   TilePosition, TileResult, TileType, TestResult, User,
@@ -214,6 +214,9 @@ export const users = {
     post<Role[]>(`/users/${id}/roles`, { role_id: roleId }),
   unassignRole: (id: string, roleId: string) =>
     del(`/users/${id}/roles/${roleId}`),
+  /** Which teams this person is in. Changing it is a *team* operation and
+   *  lives on the team, which is why there is no setter here. */
+  teams: (id: string) => get<Team[]>(`/users/${id}/teams`),
   create: (payload: { email: string; display_name: string; role: string }) =>
     post<{ user: User; temporary_password: string }>('/users', payload),
   update: (
@@ -262,6 +265,32 @@ export const roles = {
    *  conformance test asserts it. The matrix renders these sentences verbatim
    *  so the UI and the API cannot disagree about what a grant would do. */
   privileges: () => get<Record<string, Record<string, string>>>('/roles/privileges'),
+}
+
+// ── teams ─────────────────────────────────────────────────────────────────
+// `setMembers` sends the **whole** intended membership rather than adds and
+// removes: the picker's state is the answer, and a client diffing two lists is
+// a client that can re-add somebody another administrator just took out. The
+// server computes the difference and audits one row per person who moved.
+export const teams = {
+  list: () => get<Team[]>('/teams'),
+  get: (id: string) => get<Team>(`/teams/${id}`),
+  members: (id: string) => get<User[]>(`/teams/${id}/members`),
+  create: (payload: { name: string; description?: string }) =>
+    post<Team>('/teams', payload),
+  update: (id: string, payload: { name?: string; description?: string }) =>
+    patch<Team>(`/teams/${id}`, payload),
+  setMembers: (id: string, userIds: string[]) =>
+    put<User[]>(`/teams/${id}/members`, { user_ids: userIds }),
+  assignRole: (id: string, roleId: string) =>
+    post<Team>(`/teams/${id}/roles`, { role_id: roleId }),
+  unassignRole: (id: string, roleId: string) =>
+    del(`/teams/${id}/roles/${roleId}`),
+  /** Its own call for its own reason — rebinding redirects which people flow
+   *  into a set of permissions, and the audit log records it as its own act. */
+  bindSource: (id: string, provider_id: string | null, source_id: string | null) =>
+    put<Team>(`/teams/${id}/source`, { provider_id, source_id }),
+  remove: (id: string) => del(`/teams/${id}`),
 }
 
 // ── connections ───────────────────────────────────────────────────────────

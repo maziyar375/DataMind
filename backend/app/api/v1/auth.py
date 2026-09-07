@@ -16,6 +16,7 @@ from app.domain.ports.identity import AuthenticatedIdentity, Credentials
 from app.domain.value_objects import UserStatus
 from app.infra.db.models import User
 from app.services.role_service import RoleService
+from app.services.team_service import TeamService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -94,7 +95,7 @@ async def me(ctx: CtxDep, db: DbDep) -> MeResponse:
     user = await db.get(User, ctx.user_id)
     if user is None:
         raise AuthenticationError("This account no longer exists.")
-    return _me(user, ctx, await RoleService(db).roles_of(ctx.user_id))
+    return await _me(db, user, ctx)
 
 
 @router.get("/me/permissions", response_model=PermissionsResponse)
@@ -107,14 +108,25 @@ async def my_permissions(ctx: CtxDep, db: DbDep) -> PermissionsResponse:
     not have to re-fetch the first. Grafana has exactly this endpoint
     (`/api/access-control/user/permissions`) for exactly this reason.
     """
+    roles = await RoleService(db).roles_of(ctx.user_id, ctx.team_ids)
+    teams = await TeamService(db).teams_of(ctx.user_id)
     return PermissionsResponse(
         capabilities=sorted(str(c) for c in ctx.capabilities),
-        roles=[role.name for role in await RoleService(db).roles_of(ctx.user_id)],
-        teams=[],
+        roles=[role.name for role in roles],
+        teams=[team.name for team in teams],
     )
 
 
-def _me(user: User, ctx, roles) -> MeResponse:
+async def _me(db, user: User, ctx) -> MeResponse:
+    """The account, plus what the context already resolved for this request.
+
+    The roles list takes `ctx.team_ids` because a role can reach somebody
+    through a team, and a `/auth/me` that named only their direct assignments
+    would show a person capabilities it could not account for — which is the
+    one thing this endpoint exists to prevent.
+    """
+    roles = await RoleService(db).roles_of(ctx.user_id, ctx.team_ids)
+    teams = await TeamService(db).teams_of(ctx.user_id)
     return MeResponse(
         id=user.id,
         email=user.email,
@@ -122,7 +134,7 @@ def _me(user: User, ctx, roles) -> MeResponse:
         role=user.role,
         capabilities=sorted(str(c) for c in ctx.capabilities),
         roles=[role.name for role in roles],
-        teams=[],
+        teams=[team.name for team in teams],
     )
 
 
@@ -145,7 +157,7 @@ async def update_me(payload: ProfileUpdate, ctx: CtxDep, db: DbDep) -> MeRespons
     # Already trimmed and proven non-empty by the schema.
     user.display_name = payload.display_name
     await db.flush()
-    return _me(user, ctx, await RoleService(db).roles_of(ctx.user_id))
+    return await _me(db, user, ctx)
 
 
 @router.put("/me/password", response_model=TokenResponse)

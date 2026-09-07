@@ -60,6 +60,24 @@ ADDED: dict[tuple[str, str], Capability] = {
     ("GET", "/api/v1/users/{user_id}/roles"): Capability.USER_READ,
     ("POST", "/api/v1/users/{user_id}/roles"): Capability.USER_MANAGE,
     ("DELETE", "/api/v1/users/{user_id}/roles/{role_id}"): Capability.USER_MANAGE,
+    ("GET", "/api/v1/users/{user_id}/teams"): Capability.USER_READ,
+}
+
+#: Phase 4's routes. `team.read` is held by five of the eight seed roles,
+#: because a person has to be able to see the teams they are in — from Phase 6
+#: a team is how they will have been given access to anything. Changing one is
+#: `team.manage`, which Administrator holds alone.
+TEAMS: dict[tuple[str, str], Capability] = {
+    ("GET", "/api/v1/teams"): Capability.TEAM_READ,
+    ("GET", "/api/v1/teams/{team_id}"): Capability.TEAM_READ,
+    ("GET", "/api/v1/teams/{team_id}/members"): Capability.TEAM_READ,
+    ("POST", "/api/v1/teams"): Capability.TEAM_MANAGE,
+    ("PATCH", "/api/v1/teams/{team_id}"): Capability.TEAM_MANAGE,
+    ("DELETE", "/api/v1/teams/{team_id}"): Capability.TEAM_MANAGE,
+    ("PUT", "/api/v1/teams/{team_id}/members"): Capability.TEAM_MANAGE,
+    ("PUT", "/api/v1/teams/{team_id}/source"): Capability.TEAM_MANAGE,
+    ("POST", "/api/v1/teams/{team_id}/roles"): Capability.TEAM_MANAGE,
+    ("DELETE", "/api/v1/teams/{team_id}/roles/{role_id}"): Capability.TEAM_MANAGE,
 }
 
 
@@ -128,7 +146,9 @@ def test_the_walk_finds_the_real_routes() -> None:
     assert len(found) > 50
 
 
-@pytest.mark.parametrize(("key", "capability"), sorted((EXPECTED | ADDED).items()))
+@pytest.mark.parametrize(
+    ("key", "capability"), sorted((EXPECTED | ADDED | TEAMS).items())
+)
 def test_each_administration_route_names_its_capability(
     key: tuple[str, str], capability: Capability
 ) -> None:
@@ -210,6 +230,20 @@ def test_it_is_403_and_never_404() -> None:
 
     for path in ("/api/v1/roles", "/api/v1/users", "/api/v1/audit"):
         assert client.get(path).status_code == 403, path
+    client.app.dependency_overrides.clear()
+
+
+def test_rebinding_a_team_to_a_directory_needs_more_than_reading_teams() -> None:
+    """The endpoint that can change who holds what without touching a
+    membership row is behind the write capability, like every other write."""
+    client = _client(frozenset({Capability.TEAM_READ}))
+
+    response = client.put(
+        f"/api/v1/teams/{uuid4()}/source",
+        json={"provider_id": "oidc", "source_id": "/analytics"},
+    )
+
+    assert response.status_code == 403
     client.app.dependency_overrides.clear()
 
 
