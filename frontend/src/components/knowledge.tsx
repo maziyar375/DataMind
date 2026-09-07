@@ -44,6 +44,7 @@ import {
   Modal, PrimaryButton, SearchField, Segmented, Spinner, TextArea, TextInput,
   dirOf, relativeTime,
 } from './ui'
+import { AccessPopover } from './access'
 import { DetailBody } from './settings'
 import { useBackgroundWatch, useNotify, useQueue } from '../shell'
 import {
@@ -444,6 +445,16 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
             }))}
           />
           <span style={{ flex: 1 }} />
+          {/* The store is a **separately grantable resource** — `knowledge`,
+              carrying this connection's id — which is the whole of
+              requirement 2: somebody can be given curation over a database
+              whose data they cannot read. So it gets its own Access control
+              here rather than borrowing the connection's, and the popover
+              renders nothing at all for a viewer who cannot share it. */}
+          <AccessPopover
+            base={`connections/${connection.id}/knowledge`}
+            resourceLabel="this knowledge store"
+          />
           {canCurate && synced && rows.length > 1 && (
             <GhostButton onClick={sweep} disabled={sweeping}>
               {sweeping ? <Spinner size={13} /> : <Icon.Refresh size={13} />}

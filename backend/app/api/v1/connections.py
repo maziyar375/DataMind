@@ -13,8 +13,11 @@ from app.api.schemas import (
     ConnectionTestRequest,
     ConnectionTestResult,
     ConnectionUpdate,
+    DisclosureWrite,
     SchemaRead,
+    narrow_to_describe,
 )
+from app.api.v1.access import attach_access_routes
 from app.core.clock import utcnow
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.domain.ports.authz import ResourceRef
@@ -22,10 +25,18 @@ from app.domain.value_objects import HintBudget
 from app.domain.value_objects.authz import Privilege, ResourceType
 from app.infra.authz.compose import restrict
 from app.infra.connectors.factory import build_connector
-from app.infra.db.models import DatabaseConnection, SchemaSnapshotRow
+from app.infra.db.models import DatabaseConnection, SchemaSnapshotRow, User
+from app.services import audit
+from app.services.grant_service import DISCLOSURE_CHANGED, GrantService
 from app.services.knowledge_service import KnowledgeService
+from app.services.policy import require
 
 router = APIRouter(prefix="/connections", tags=["connections"])
+
+# `/grants`, `/actions` and `/transfer`, written once in `access.py`. Declared
+# here rather than at the bottom so the literal-path routes below (`/test`)
+# still win the match against `/{connection_id}`.
+attach_access_routes(router, ResourceType.CONNECTION, param="connection_id")
 
 
 async def _authorized(
@@ -36,34 +47,50 @@ async def _authorized(
     Scoping happens here, not in the router body, so it cannot be forgotten —
     and it happens by *asking*, so the answer changes with the authorizer
     rather than with this file. `privilege` is what the caller is about to do:
-    `select` to read the row or query through it, `modify` to edit its
-    credentials or re-sync it, `delete` to destroy it. All three answer the
-    same under `OwnerOnlyAuthorizer`; they stop answering the same in Phase 6,
-    which is the point of naming them now.
+    `describe` to know it exists, `select` to read the row or query through it,
+    `modify` to edit its credentials or re-sync it, `delete` to destroy it,
+    `manage` to share it or change its disclosure policy. Under
+    `OwnerOnlyAuthorizer` all five answer the same; under `RbacAuthorizer` — the
+    default from Phase 6 — they are five different questions, which is why they
+    were named before they differed.
     """
     result = await db.execute(
         select(DatabaseConnection).where(DatabaseConnection.id == connection_id)
     )
     connection = result.scalar_one_or_none()
-    if connection is None or not await authz.allowed(
-        ctx, ResourceRef.to(ResourceType.CONNECTION, connection), privilege
-    ):
-        # 404, not 403: a resource out of reach should not be distinguishable
-        # from one that does not exist.
+    if connection is None:
         raise NotFoundError("Connection not found.")
+    # `require` is the one place the 404/403 rule lives: 404 when nothing at
+    # all reaches this principal, 403 naming the privilege when something does.
+    # A second copy here is exactly how the two answers drift and turn a list
+    # endpoint into an existence oracle.
+    await require(
+        ctx, authz, ResourceRef.to(ResourceType.CONNECTION, connection), privilege
+    )
     return connection
 
 
 @router.get("", response_model=list[ConnectionRead])
 async def list_connections(
     ctx: CtxDep, db: DbDep, authz: AuthzDep
-) -> list[DatabaseConnection]:
+) -> list[ConnectionRead]:
     """Every connection this principal may see, in one query.
 
     `describe` is the floor on purpose: a Data Engineer holds it over every
     connection and still needs `select` to ask a question through one, so the
     list is *"what exists that I may know about"* rather than *"what I may
     read"*.
+
+    From Phase 6 the list therefore contains connections this principal was
+    **granted** as well as ones they own, and each row carries two things it
+    did not before: the privileges the caller holds on it — so the card can
+    render read-only rather than offering an Edit the server would refuse — and
+    the owner's display name, which is the answer to *"whose is this?"* on a
+    screen that now shows other people's.
+
+    A row this principal holds only `describe` on comes back **without its
+    host, port, database name or username**. That is `narrow_to_describe`, and
+    the loop below is the one place a list applies it.
     """
     visible = await authz.visible(ctx, ResourceType.CONNECTION, Privilege.DESCRIBE)
     result = await db.execute(
@@ -73,7 +100,43 @@ async def list_connections(
             visible,
         )
     )
-    return list(result.scalars())
+    rows = list(result.scalars())
+    owners = await _owner_names(db, {row.owner_id for row in rows if row.owner_id})
+
+    out: list[ConnectionRead] = []
+    for row in rows:
+        # One `privileges_on` per row, and this is the one place in the product
+        # where that is the right shape rather than the anti-pattern: the
+        # *filtering* was done by `visible` in one query above, and this is
+        # rendering, not access. It is bounded by the page the caller can
+        # already see, and the alternative — a second endpoint per card — is
+        # the same N requests with latency added.
+        held = await authz.privileges_on(
+            ctx, ResourceRef.to(ResourceType.CONNECTION, row)
+        )
+        read = ConnectionRead.model_validate(row).model_copy(
+            update={
+                "privileges": sorted(str(p) for p in held),
+                "owner": owners.get(row.owner_id, ""),
+            }
+        )
+        out.append(read if Privilege.SELECT in held else narrow_to_describe(read))
+    return out
+
+
+async def _owner_names(db, ids: set) -> dict:
+    """Display names for the owner column. **Never an address.**
+
+    The rule the review queue already follows, and it matters more here: this
+    list is now visible to anybody a connection was shared with, and an email
+    is a piece of personal data that "who owns this data source" does not need.
+    """
+    if not ids:
+        return {}
+    rows = await db.execute(
+        select(User.id, User.display_name, User.email).where(User.id.in_(ids))
+    )
+    return {row[0]: (row[1] or row[2].split("@")[0]) for row in rows.all()}
 
 
 @router.post("", response_model=ConnectionRead, status_code=status.HTTP_201_CREATED)
@@ -176,8 +239,27 @@ async def test_draft_connection(
 @router.get("/{connection_id}", response_model=ConnectionRead)
 async def get_connection(
     connection_id: UUID, ctx: CtxDep, db: DbDep, authz: AuthzDep
-) -> DatabaseConnection:
-    return await _authorized(db, authz, connection_id, ctx, Privilege.SELECT)
+) -> ConnectionRead:
+    """The connection — narrowed to what this principal may know about it.
+
+    `describe` gets in, and that is the change Phase 6 makes: a Data Engineer,
+    an Auditor, or somebody a dashboard was shared with can now confirm the
+    connection exists, see its engine and **see its disclosure policy** — which
+    §19.5 rule 1 requires, because a grantee has to be able to see what leaves
+    before they ask. They do not see the host, the port, the database name or
+    the username; those four together are enough to attempt a connection from
+    anywhere the database is reachable.
+    """
+    connection = await _authorized(
+        db, authz, connection_id, ctx, Privilege.DESCRIBE
+    )
+    held = await authz.privileges_on(
+        ctx, ResourceRef.to(ResourceType.CONNECTION, connection)
+    )
+    read = ConnectionRead.model_validate(connection).model_copy(
+        update={"privileges": sorted(str(p) for p in held)}
+    )
+    return read if Privilege.SELECT in held else narrow_to_describe(read)
 
 
 @router.patch("/{connection_id}", response_model=ConnectionRead)
@@ -204,11 +286,66 @@ async def update_connection(
     return connection
 
 
+@router.put("/{connection_id}/disclosure", response_model=ConnectionRead)
+async def set_disclosure_policy(
+    connection_id: UUID, payload: DisclosureWrite,
+    ctx: CtxDep, db: DbDep, authz: AuthzDep,
+) -> ConnectionRead:
+    """Change how much of a result may leave for a model provider. **`manage`.**
+
+    Its own endpoint, gated one privilege above every other edit, and audited
+    under its own action — and the reason is the whole of §19.5. The moment a
+    connection is shared, **one person's disclosure choice governs another
+    person's questions**, and that person may not know what it is. Widening
+    `NONE` → `FULL` is not an edit to a row; it is a decision about what leaves
+    the customer's database, taken on behalf of everybody who can now ask
+    through this connection.
+
+    So `modify` — which can re-credential the connection and re-sync its schema
+    — cannot touch it, and `manage` — which is also what lets somebody share it
+    in the first place — can. The two decisions belong to the same person
+    because they are the same decision seen twice.
+
+    Narrowing is audited exactly as widening is. A policy that quietly tightened
+    would break somebody's report, and *"who changed this and when"* is the
+    question that gets asked either way.
+    """
+    connection = await _authorized(
+        db, authz, connection_id, ctx, Privilege.MANAGE
+    )
+    previous = connection.disclosure_policy
+    if payload.disclosure_policy != previous:
+        connection.disclosure_policy = payload.disclosure_policy
+        await db.flush()
+        await audit.record(
+            db, ctx,
+            action=DISCLOSURE_CHANGED,
+            resource_type=audit.CONNECTION, resource_id=connection.id,
+            detail={"from": previous, "to": payload.disclosure_policy},
+        )
+    held = await authz.privileges_on(
+        ctx, ResourceRef.to(ResourceType.CONNECTION, connection)
+    )
+    return ConnectionRead.model_validate(connection).model_copy(
+        update={"privileges": sorted(str(p) for p in held)}
+    )
+
+
 @router.delete("/{connection_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_connection(
     connection_id: UUID, ctx: CtxDep, db: DbDep, authz: AuthzDep
 ) -> None:
     connection = await _authorized(db, authz, connection_id, ctx, Privilege.DELETE)
+    # The delete hook. `grants.resource_id` carries no foreign key — it is
+    # polymorphic across eight types — so nothing removes these for us, and a
+    # left-behind grant would name an id no row has. Inert, but it would show
+    # up in an access review as reach nobody can explain. All three types go,
+    # because the derived two share this connection's id.
+    service = GrantService(db, authz)
+    for type_ in (
+        ResourceType.CONNECTION, ResourceType.KNOWLEDGE, ResourceType.SEMANTIC_LAYER,
+    ):
+        await service.revoke_all_for(type_, connection.id)
     await db.delete(connection)
     # Flush inside the request, exactly as `update_connection` does. `get_db`
     # commits *after* the handler returns, by which point the 204 has been

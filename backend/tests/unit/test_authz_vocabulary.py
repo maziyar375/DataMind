@@ -395,36 +395,66 @@ async def test_a_type_with_no_table_yet_is_visible_as_nothing() -> None:
 
 
 # ── the switches ─────────────────────────────────────────────────────────
-def test_the_switches_default_to_todays_behaviour() -> None:
-    """Phase 0 changes nothing that anybody can observe, and these four
-    defaults are what that sentence rests on."""
+def test_the_switches_carry_the_defaults_this_release_ships() -> None:
+    """`authz_backend` **flipped to `rbac` in Phase 6**, and the rest did not.
+
+    This test used to assert `owner_only`, which was Phase 0's whole claim:
+    the port shipped before the policy changed, so nothing anybody could
+    observe moved. Phase 6 is the release where that stops being true on
+    purpose — grants are read, and `owner_only` becomes the rollback rather
+    than the default.
+
+    The other three are unchanged and each is a deliberate "no": one
+    authenticator for humans, no machine may hold a privileged capability, and
+    a key expires after a year.
+    """
     from app.core.config import Settings
 
     settings = Settings()
-    assert settings.authz_backend == "owner_only"
+    assert settings.authz_backend == "rbac"
     assert settings.auth_provider == "local"
     assert settings.allow_privileged_service_users is False
     assert settings.service_key_default_ttl_days == 365
 
 
-def test_the_authorizer_dependency_resolves_the_owner_only_implementation() -> None:
+def test_the_authorizer_dependency_resolves_the_configured_implementation() -> None:
     """Wired exactly as `get_identity_provider` is, so the port is the seam and
     no caller learns which implementation it got."""
     from app.api.deps import get_authorizer
     from app.core.config import Settings
+    from app.infra.authz.rbac import RbacAuthorizer
 
-    assert isinstance(get_authorizer(None, Settings()), OwnerOnlyAuthorizer)  # type: ignore[arg-type]
+    assert isinstance(get_authorizer(None, Settings()), RbacAuthorizer)  # type: ignore[arg-type]
+    assert isinstance(
+        get_authorizer(None, Settings(authz_backend="owner_only")),  # type: ignore[arg-type]
+        OwnerOnlyAuthorizer,
+    )
 
 
-def test_naming_a_backend_that_does_not_exist_yet_says_so() -> None:
-    """`rbac` is Phase 6. Falling back silently to owner-only would be an
-    installation that believes it enforces grants and does not."""
-    from app.api.deps import get_authorizer
+def test_owner_only_stays_a_working_rollback() -> None:
+    """The previous value survives one release, and the flip is a config change
+    in **both** directions rather than a migration either way.
+
+    No grant row is read under `owner_only`, and running under it creates none
+    — so flipping back narrows everybody to what they own, and flipping forward
+    restores every share exactly, with nothing to replay. That is what makes it
+    a rollback rather than a hope, and it is asserted here because the day
+    somebody needs it is not the day to find out.
+    """
     from app.core.config import Settings
 
-    with pytest.raises(NotImplementedError, match="Phase 6"):
-        get_authorizer(None, Settings(authz_backend="rbac"))  # type: ignore[arg-type]
+    assert set(Settings.model_fields["authz_backend"].annotation.__args__) == {
+        "owner_only", "rbac",
+    }
 
+
+# ── Phase 0 and Phase 1's guarantees, which Phase 6 does not repeal ──────
+# These five were written for the port and for the list endpoints, and every
+# one of them is still exactly true with `RbacAuthorizer` behind the port —
+# which is the point of having had a port. They are restored here rather than
+# left out: a claim that survives a policy change unchanged is the most
+# valuable kind to keep asserting, because it is the one nobody thinks to
+# re-check.
 
 def test_the_domain_layer_imports_no_database_driver() -> None:
     """`lint-imports` enforces this for the whole package; this asserts it for

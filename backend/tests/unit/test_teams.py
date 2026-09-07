@@ -457,14 +457,20 @@ async def test_a_team_holding_administrator_does_not_satisfy_the_guard(
         await roles.unassign(ctx(), user_id=only.id, role_id=admin_role.id)
 
 
-# ── what Phase 4 deliberately does not do ────────────────────────────────
-def test_no_resource_decision_reads_team_ids_yet() -> None:
-    """Phase 4 ships membership; Phase 6 ships the grant that reads it.
+# ── what a team membership now reaches ───────────────────────────────────
+def test_exactly_one_authorizer_reads_team_ids() -> None:
+    """Phase 4 shipped membership; **Phase 6 shipped the grant that reads it.**
 
-    `ctx.team_ids` is populated on every request and consulted by exactly one
-    thing — capability resolution, which unions the roles a team carries. No
-    authorizer reads it, so no *resource* decision has moved. A grep rather
-    than a behavioural test, because the claim is about absence.
+    This test used to assert the opposite — that no authorizer read
+    `ctx.team_ids` — and it is rewritten rather than deleted because the claim
+    it makes is the same claim, one phase on: *team membership reaches
+    resources through exactly one place.* If a second module ever starts
+    consulting it to decide reach, that is a second permission model, and this
+    grep is what notices.
+
+    `owner_only.py` still does not read it, and that matters: it is the
+    rollback, and a rollback that quietly kept honouring team grants would not
+    be one.
     """
     root = pathlib.Path(__file__).resolve().parents[2] / "app"
     readers = {
@@ -479,7 +485,9 @@ def test_no_resource_decision_reads_team_ids_yet() -> None:
         "services/team_service.py",     # answers it
         "services/role_service.py",     # unions roles through it
         "api/v1/auth.py",               # renders the names
+        "infra/authz/rbac.py",          # Phase 6: decides resource reach with it
     }
-    assert not (root / "infra" / "authz" / "owner_only.py").read_text().count(
-        "team_ids"
-    ), "an authorizer reads team_ids — that is Phase 6, not Phase 4"
+    assert "team_ids" not in (root / "infra" / "authz" / "owner_only.py").read_text(), (
+        "the owner_only rollback reads team_ids; it must stay the rule the "
+        "product shipped with, or flipping AUTHZ_BACKEND back is not a rollback"
+    )

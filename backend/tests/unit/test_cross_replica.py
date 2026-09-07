@@ -261,7 +261,14 @@ def test_an_unparsable_payload_is_dropped_rather_than_raised() -> None:
 
 # ── the reconciler's lock ────────────────────────────────────────────────
 class _LockSession:
-    """A session that answers the lock request however the test says."""
+    """A session that answers the lock request however the test says.
+
+    It also answers the **orphaned-grant sweep**, which Phase 6 added to the
+    same tick under the same lock: one `DELETE` per owned resource type, each
+    reporting how many rows it removed. Zero here — this file is about the lock,
+    not about what the sweeps find — and `calls` records the statements so the
+    ordering assertions below can still see the whole tick.
+    """
 
     def __init__(self, granted: bool) -> None:
         self.granted = granted
@@ -279,6 +286,10 @@ class _LockSession:
 
             def scalar(self) -> Any:
                 return self._value
+
+            @property
+            def rowcount(self) -> int:
+                return 0
 
         if "advisory" in sql:
             assert params == {"key": RECONCILER_LOCK_KEY}

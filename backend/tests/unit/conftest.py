@@ -32,6 +32,8 @@ from app.domain.value_objects import Role as LegacyRole
 from app.domain.value_objects.authz import Capability
 from app.infra.db.models import (
     Base,
+    DatabaseConnection,
+    Grant,
     Role,
     RoleCapability,
     RoleScopedPrivilege,
@@ -96,7 +98,14 @@ class _UtcDateTime(sqlite.DATETIME):
 _TABLES = (
     "users", "teams", "team_members", "roles", "role_capabilities",
     "role_scoped_privileges", "role_assignments", "service_credentials",
-    "audit_logs",
+    "grants", "audit_logs",
+    # The owned tables. Present from Phase 6 because `RbacAuthorizer` reads
+    # `owner_id` off them, `visible` unions against them, `owned_resources`
+    # counts them for the deletion refusal, and the orphaned-grant sweep
+    # deletes against every one — so a fixture holding only the identity
+    # tables could not exercise any of it.
+    "database_connections", "llm_configs", "dashboards", "reports",
+    "conversations",
 )
 
 
@@ -160,7 +169,7 @@ class AsyncSessionShim:
 
 @pytest.fixture(scope="module")
 def engine() -> sa.Engine:
-    """The nine tables these files write, from the real metadata.
+    """The tables these files write, from the real metadata.
 
     Five edits, all about Postgres syntax rather than anything under test: a
     `::jsonb` server default SQLite cannot parse, an `ARRAY` its driver
@@ -185,9 +194,21 @@ def engine() -> sa.Engine:
                 column.type = sa.Integer()
 
     engine = sa.create_engine("sqlite+pysqlite:///:memory:")
-    # The fifth edit, and the one that has to happen on the dialect — see
-    # `_UtcDateTime`.
-    engine.dialect.colspecs = {**engine.dialect.colspecs, sa.DateTime: _UtcDateTime}
+    # The two edits that have to happen on the **dialect** rather than on the
+    # copy, for the reason `_UtcDateTime` gives: the ORM classes are mapped
+    # against `Base.metadata`, not against the copy `create_all` runs, so a
+    # type swapped on the copy fixes the `CREATE TABLE` and changes nothing
+    # about what a query binds or returns.
+    #
+    # `ARRAY` is the second. `database_connections.schema_allowlist` is a
+    # Postgres array, and SQLite's driver refuses to bind a list — so the
+    # column reaches `CREATE TABLE` as JSON (below) and every insert through
+    # the ORM still fails, with an error about parameter 12 that names nothing.
+    engine.dialect.colspecs = {
+        **engine.dialect.colspecs,
+        sa.DateTime: _UtcDateTime,
+        sa.ARRAY: sa.JSON,
+    }
 
     @sa.event.listens_for(engine, "connect")
     def _enforce_foreign_keys(dbapi_connection: Any, _record: Any) -> None:
@@ -254,6 +275,62 @@ def _user(session: Session, email: str, role: str = LegacyRole.MEMBER) -> User:
     session.add(user)
     session.flush()
     return user
+
+
+def _connection(
+    session: Session, *, owner_id: UUID | None, name: str | None = None
+) -> DatabaseConnection:
+    """A real `database_connections` row, for the tests that need reach.
+
+    A real row rather than a stub with an `owner_id` attribute, because from
+    Phase 6 the authorizer does more than read that attribute: `visible`
+    unions against this table, the orphaned-grant sweep deletes against it, and
+    the deletion refusal counts it. A stub would pass the ownership arm and
+    prove nothing about the other four facts.
+
+    `owner_id=None` is a legitimate state and one of the tests: a resource
+    nobody owns is reachable by nobody, which is the fail-closed reading.
+    """
+    row = DatabaseConnection(
+        id=uuid4(),
+        owner_id=owner_id,
+        name=name or f"conn-{uuid4().hex[:8]}",
+        database_type="postgres",
+        host="db.internal",
+        port=5432,
+        database_name="warehouse",
+        username="reader",
+        encrypted_password="not-a-real-ciphertext",
+        key_version=1,
+        schema_allowlist=["public"],
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+def _team_grant(
+    session: Session, *, type_: str, resource_id: UUID | None,
+    privilege: str, user: UUID | None = None, team: UUID | None = None,
+) -> Grant:
+    """One `grants` row, written directly. For arranging, never for asserting.
+
+    The service is the thing under test in the files that check *how* a grant
+    is made; the files that check what a grant *does* need one to exist and
+    should not have to satisfy `manage` first to get one.
+    """
+    row = Grant(
+        id=uuid4(),
+        resource_type=type_,
+        resource_id=resource_id,
+        user_id=user,
+        team_id=team,
+        privilege=privilege,
+        created_by=ACTOR,
+    )
+    session.add(row)
+    session.flush()
+    return row
 
 
 def ctx(user_id: UUID = ACTOR) -> RequestContext:

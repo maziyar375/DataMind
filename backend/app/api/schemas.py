@@ -6,7 +6,9 @@ OpenAPI schema to prove it.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
+from types import MappingProxyType
 from typing import Any, Literal
 from uuid import UUID
 
@@ -263,6 +265,69 @@ class TeamSourceWrite(BaseModel):
 
     provider_id: str | None = Field(default=None, max_length=50)
     source_id: str | None = Field(default=None, max_length=255)
+
+
+# ── grants ───────────────────────────────────────────────────────────────
+class GrantWrite(BaseModel):
+    """Share a resource with exactly one principal, at one privilege.
+
+    `user_id` **or** `team_id`, never both — the same `CHECK` the table
+    carries, expressed here so a malformed request is a 422 with a sentence
+    rather than an `IntegrityError` the client can only report as "something
+    went wrong".
+    """
+
+    privilege: Literal["describe", "select", "modify", "delete", "manage"]
+    user_id: UUID | None = None
+    team_id: UUID | None = None
+
+
+class GrantRead(BaseModel):
+    """One row of *"who can reach this"* — **with the path**.
+
+    The path is what makes this screen worth having. *"Sara — select"* is a
+    fact somebody can neither act on nor verify; *"Sara — select, via the
+    Finance team"* tells them the revoke they want is on the team, and that
+    clicking revoke here would do nothing.
+
+    `id` is `null` for ownership, which is a path rather than a row: ownership
+    is not a grant, cannot be revoked, and is moved by transferring instead —
+    so the UI renders it without a revoke control.
+    """
+
+    id: UUID | None = None
+    principal_id: UUID
+    principal_name: str
+    #: `HUMAN`, `SERVICE` or `TEAM`. What the kind badge is drawn from.
+    principal_kind: str
+    privilege: str
+    #: `owner` · `direct` · `team`.
+    path: str
+
+
+class ActionsRead(BaseModel):
+    """`GET /{resource}/{id}/actions` — what the UI renders every control from.
+
+    Two shapes of the same answer, deliberately. `privileges` is the raw set,
+    for a screen that wants to *show* it; `can` is the named questions a
+    component actually asks, so a button is `can.share` rather than
+    `privileges.includes('manage')` — a spelling that puts a copy of the
+    lattice in the SPA.
+
+    `meanings` carries the sentence for each privilege on this resource type,
+    from the backend's own `PRIVILEGE_MEANINGS` table. That is what lets the
+    share dialog label a radio button with the same words a 403 would use.
+    """
+
+    privileges: list[str]
+    can: dict[str, bool]
+    meanings: dict[str, str]
+
+
+class TransferWrite(BaseModel):
+    """Hand a resource to another principal. The new owner must be active."""
+
+    to: UUID
 
 
 # ── service accounts ─────────────────────────────────────────────────────
@@ -542,6 +607,17 @@ class ConnectionCreate(BaseModel):
 
 
 class ConnectionUpdate(BaseModel):
+    """Everything a `modify` holder may change. **Not the disclosure policy.**
+
+    Widening `NONE` → `FULL` is not an edit, it is a disclosure decision: it
+    changes how much of somebody else's query result may leave the database for
+    a model provider, on a connection other people are now asking questions
+    through. As of Phase 6 it lives on `PUT /connections/{id}/disclosure`,
+    gated on `manage` and audited — and its absence from this schema is what
+    makes that a rule rather than a convention, because a payload that could
+    express it would be a second way to change it.
+    """
+
     name: str | None = None
     host: str | None = None
     port: int | None = Field(default=None, ge=1, le=65535)
@@ -552,7 +628,6 @@ class ConnectionUpdate(BaseModel):
     schema_allowlist: list[str] | None = None
     max_rows: int | None = Field(default=None, ge=1, le=100_000)
     statement_timeout_ms: int | None = Field(default=None, ge=1_000, le=300_000)
-    disclosure_policy: Literal["NONE", "AGGREGATE", "SAMPLE", "FULL"] | None = None
     semantic_layer_enabled: bool | None = None
     clarify_enabled: bool | None = None
     include_db_comments: bool | None = None
@@ -567,19 +642,38 @@ class ConnectionUpdate(BaseModel):
 
 
 class ConnectionRead(BaseModel):
-    """Note the absence of any password field. There is no read model with one."""
+    """Note the absence of any password field. There is no read model with one.
+
+    **From Phase 6 this model is narrowed at `describe`.** A principal who
+    holds only `describe` on a connection — a Data Engineer, an Auditor, or
+    somebody a dashboard was shared with whose tiles read through it — sees
+    that it exists, what engine it is, and *what its disclosure policy is*, and
+    sees **no host, no port, no database name and no username**. See
+    `narrow_to_describe` below for why those four and not others.
+
+    The fields are typed as optional rather than removed, so one model serves
+    both audiences and no caller has to branch on which shape came back.
+    """
+
     model_config = ConfigDict(from_attributes=True)
     id: UUID
     name: str
     database_type: str
-    host: str
-    port: int
-    database_name: str
-    username: str
-    ssl_mode: str | None
-    schema_allowlist: list[str]
-    max_rows: int
-    statement_timeout_ms: int
+    #: Blank at `describe`. Together these four are enough to attempt a
+    #: connection from anywhere the database is reachable, which is why they
+    #: are the line rather than "credentials" alone.
+    host: str = ""
+    port: int = 0
+    database_name: str = ""
+    username: str = ""
+    ssl_mode: str | None = None
+    schema_allowlist: list[str] = []
+    max_rows: int = 0
+    statement_timeout_ms: int = 0
+    #: **Visible at `describe`, deliberately.** A grantee has to be able to see
+    #: what leaves *before* they ask a question through this connection — rule
+    #: 1 of §19.5, and the reason `describe` is a real privilege rather than a
+    #: formality.
     disclosure_policy: str
     semantic_layer_enabled: bool = True
     clarify_enabled: bool = True
@@ -587,10 +681,69 @@ class ConnectionRead(BaseModel):
     conflict_checks_enabled: bool = True
     knowledge_examples_enabled: bool = False
     status: str
-    readonly_confirmed: bool
+    readonly_confirmed: bool = False
     server_version: str | None = None
     last_tested_at: datetime | None = None
     last_synced_at: datetime | None = None
+    #: What the caller may do here, from the authorizer — so the SPA can render
+    #: a read-only card without asking a second endpoint per row. Empty on the
+    #: paths that do not resolve it; `GET …/actions` is the full answer.
+    privileges: list[str] = []
+    #: Who owns it, for the list's owner column. A display name, never an
+    #: address — the rule the review queue already follows.
+    owner: str = ""
+
+
+#: The four fields a `describe` holder does not see, and the empty value each
+#: is blanked to.
+#:
+#: A mapping rather than a tuple because `port` is an `int`: `model_copy` does
+#: **not** revalidate, so blanking it to `""` would put a string on a field the
+#: schema says is a number, and the only place that surfaced was a client
+#: parsing it. The empty value has to match the declared type per field.
+#:
+#: Not "the credentials" — the password is not on this model at all and never
+#: was. These four are the ones that, together, are enough to *attempt* a
+#: connection from anywhere the database is reachable, so handing them to
+#: somebody who may only know the connection exists is handing them the target.
+#: `database_type` and `disclosure_policy` stay: the first is how the UI draws
+#: an engine badge, and the second is what §19.5 requires a grantee to be able
+#: to see before they ask.
+DESCRIBE_HIDDEN: Mapping[str, object] = MappingProxyType({
+    "host": "",
+    "port": 0,
+    "database_name": "",
+    "username": "",
+})
+
+
+def narrow_to_describe(read: ConnectionRead) -> ConnectionRead:
+    """`read`, with the four connection details blanked. Applied at `describe`.
+
+    A copy rather than a mutation, because the input is built from a live ORM
+    row and blanking fields on that row would write the blanks back on the next
+    flush — which is the kind of bug that shows up as a connection whose host
+    quietly became empty for everybody.
+
+    `model_copy` does not revalidate, which is why `DESCRIBE_HIDDEN` carries a
+    typed empty value per field rather than one blank for all four.
+    """
+    return read.model_copy(update=dict(DESCRIBE_HIDDEN))
+
+
+class DisclosureWrite(BaseModel):
+    """Its own endpoint, its own schema, its own audit action.
+
+    One field, and the reason it is not two more lines on `ConnectionUpdate`:
+    the moment a connection is shared, **one person's disclosure choice governs
+    another person's questions** — and that person may not know what it is.
+    Widening `NONE` → `FULL` is a decision about what leaves the database for a
+    model provider, made on behalf of everybody who can now ask through this
+    connection. Filing it under "connection updated" in the audit log would be
+    lying by omission.
+    """
+
+    disclosure_policy: Literal["NONE", "AGGREGATE", "SAMPLE", "FULL"]
 
 
 class ConnectionTestResult(BaseModel):

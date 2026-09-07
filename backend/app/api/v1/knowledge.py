@@ -7,11 +7,18 @@ dies with it. It is its own **resource type** all the same — a knowledge
 manager is not a credential editor — so every route here asks the authorizer
 about `knowledge`, carrying the connection's id, and never about `connection`.
 
-**Every write asks `can_curate`, and no endpoint here reads a role string.**
-That is the whole of decision D4 in `docs/learning-loop-plan.md`: curation is
-open to any signed-in user today because the highest-value correction comes
-from the person who knew the answer, and one settings flag makes it stricter
-later without touching a single call site.
+**Every write asks for `(knowledge, modify)` and nothing else.** Until Phase 6
+a second check sat on top of it — `can_curate`, driven by the
+`curation_admin_only` flag — because there was no way to *grant* curation, so
+the split between "may ask questions" and "may teach it" had to be approximated
+by a setting. Now it is the privilege itself: `(knowledge, modify)` can be
+granted to a person or a team, on one connection, and is visible in an access
+review. Both the flag and the function are gone.
+
+That is requirement 2's own example, made real: a **Knowledge Manager** holds
+`(knowledge, manage)` over every connection and nothing on `connection`, so
+they can teach a database whose credentials they cannot edit, whose disclosure
+policy they cannot widen, and whose data they cannot read.
 """
 from __future__ import annotations
 
@@ -45,7 +52,8 @@ from app.api.schemas import (
     TemplateCheckRequest,
     TemplateCheckResult,
 )
-from app.core.errors import ForbiddenError, NotFoundError
+from app.api.v1.access import attach_access_routes
+from app.core.errors import NotFoundError
 from app.domain.ports.authz import ResourceRef
 from app.domain.value_objects.authz import Privilege, ResourceType
 from app.infra.authz.compose import restrict
@@ -78,11 +86,27 @@ from app.services.knowledge_service import (
     embedding_provider,
     set_embeddings,
 )
-from app.services.policy import can_curate
+from app.services.policy import require
 from app.workers.knowledge_maintenance import run_maintenance
 
 router = APIRouter(
     prefix="/connections/{connection_id}/knowledge", tags=["knowledge"]
+)
+
+# `…/knowledge/grants` and `…/knowledge/actions`. **No transfer**: a knowledge
+# store has no owner of its own — its owner *is* its connection's owner — so a
+# transfer here would be a second, quieter way to transfer the connection.
+#
+# These are what make requirement 2 real. A Knowledge Manager can be granted
+# `(knowledge, manage)` on one connection and hold nothing on `connection`:
+# they may teach that database, and may not read it, re-credential it, or widen
+# what leaves it.
+attach_access_routes(
+    router,
+    ResourceType.KNOWLEDGE,
+    param="connection_id",
+    in_prefix=True,
+    transferable=False,
 )
 
 
@@ -98,37 +122,52 @@ async def _authorized(
     `connection`, so a curator can teach a database they may not re-credential
     and may not read.
 
-    `select` to read the store, `modify` to write it. `_require_curator` still
-    runs on top of `modify` for the routes that change what the system has been
-    taught: that flag is a *policy* about curation, this is *reach*, and
-    collapsing the two would make `curation_admin_only` unable to say anything
-    the authorizer had not already said.
+    `describe` to know it exists, `select` to read it, `modify` to **curate**
+    it, `delete` to remove a benchmark set, `manage` to change embedding
+    settings and to grant curation to somebody else.
+
+    **`modify` is now the whole of "may they curate".** Until Phase 6 a second
+    check — `can_curate`, driven by a `curation_admin_only` flag — sat on top
+    of it, approximating a reader/curator split that grants could not yet
+    express. Now they can: `(knowledge, modify)` *is* that split, it can be
+    granted to a person or a team on one connection, and it is visible in an
+    access review. The flag and the function are both gone, and their seven
+    tests were rewritten rather than deleted — they assert the same rule, which
+    is what makes the retirement a refactor rather than a removal.
     """
     result = await db.execute(
         select(DatabaseConnection).where(DatabaseConnection.id == connection_id)
     )
     connection = result.scalar_one_or_none()
-    if connection is None or not await authz.allowed(
+    if connection is None:
+        raise NotFoundError("Connection not found.")
+    await require(
         ctx,
+        authz,
         ResourceRef(type=ResourceType.KNOWLEDGE, id=connection.id, entity=connection),
         privilege,
-    ):
-        raise NotFoundError("Connection not found.")
+    )
     return connection
 
 
-def _require_curator(ctx, settings, connection) -> None:
-    """Administrator, or the owner of this connection. Never a role string.
+async def _may_curate(authz, ctx, connection) -> bool:
+    """Does this principal hold `(knowledge, modify)` on this store?
 
-    The connection is passed rather than looked up because every caller has
-    just resolved it through `_authorized()` — and because `can_curate` with no
-    resource asks the strict question, which is the wrong one here.
+    What `KnowledgeCapabilities.can_curate` now means, and the reason that
+    field kept its name through Phase 6: the SPA greys the same controls it
+    always did, and the answer behind it moved from a settings flag to the
+    privilege the API will actually check on the next request. A screen that
+    kept asking the old question would offer a Save the server refuses.
     """
-    if not can_curate(ctx, settings, connection):
-        raise ForbiddenError(
-            "Only administrators and the owner of this connection can change "
-            "what it has been taught."
+    return bool(
+        await authz.allowed(
+            ctx,
+            ResourceRef(
+                type=ResourceType.KNOWLEDGE, id=connection.id, entity=connection
+            ),
+            Privilege.MODIFY,
         )
+    )
 
 
 def _params(payload) -> list[TemplateParam]:
@@ -177,7 +216,7 @@ async def list_templates(
         templates=[KnowledgeTemplateRead.model_validate(r) for r in rows],
         schema_version=current or snapshot_version,
         schema_synced=bool(current),
-        can_curate=can_curate(ctx, settings, connection),
+        can_curate=await _may_curate(authz, ctx, connection),
         stale_ids=stale,
         health=await _health(service, connection),
     )
@@ -214,14 +253,14 @@ async def revalidate_store(
     means the list they are looking at refreshes to what the sweep found rather
     than to a job id.
 
-    `can_curate`, because it writes template statuses — and because the
-    conflict half runs statements against the customer's database, which is not
-    something every reader of a connection should be able to start.
+    `(knowledge, modify)` — curation — because it writes template statuses, and
+    because the conflict half runs statements against the customer's database,
+    which is not something every *reader* of a connection should be able to
+    start.
     """
     connection = await _authorized(
         db, authz, connection_id, ctx, Privilege.MODIFY
     )
-    _require_curator(ctx, settings, connection)
 
     result = await run_maintenance(db, settings, connection)
     # A sweep writes template statuses without anybody naming a template, and
@@ -294,8 +333,12 @@ async def set_embedding_search(
     handful of calls. Waiting means the answer on the screen is what the
     feature will actually do on the next question, rather than a job id.
 
-    `can_curate`, because it spends the owner's provider budget and changes how
-    every question on this connection is matched.
+    **`(knowledge, manage)`, not `modify`**, and it is the one write on this
+    router that is not ordinary curation: turning embeddings on spends the
+    *owner's* provider budget and changes how every question on this connection
+    is matched, for everybody. §13.3 places "change embedding settings" at
+    `manage` for exactly that reason — a curator writes templates; deciding how
+    the store is searched is a decision about the connection.
 
     **A refusal leaves the connection exactly as it was**, and returns the
     provider's own sentence in `message`: *"Anthropic does not offer an
@@ -303,9 +346,8 @@ async def set_embedding_search(
     not.
     """
     connection = await _authorized(
-        db, authz, connection_id, ctx, Privilege.MODIFY
+        db, authz, connection_id, ctx, Privilege.MANAGE
     )
-    _require_curator(ctx, settings, connection)
 
     result, message = await set_embeddings(
         db, settings, connection,
@@ -391,7 +433,7 @@ async def capabilities(
         db, authz, connection_id, ctx, Privilege.SELECT
     )
     return KnowledgeCapabilities(
-        can_curate=can_curate(ctx, settings, connection)
+        can_curate=await _may_curate(authz, ctx, connection)
     )
 
 
@@ -449,7 +491,6 @@ async def create_template(
     connection = await _authorized(
         db, authz, connection_id, ctx, Privilege.MODIFY
     )
-    _require_curator(ctx, settings, connection)
 
     source = TemplateSource(payload.source)
     row = await KnowledgeService(db, settings).create(
@@ -486,7 +527,6 @@ async def update_template(
     connection = await _authorized(
         db, authz, connection_id, ctx, Privilege.MODIFY
     )
-    _require_curator(ctx, settings, connection)
 
     row = await KnowledgeService(db, settings).update(
         connection,
@@ -532,7 +572,6 @@ async def archive_template(
     connection = await _authorized(
         db, authz, connection_id, ctx, Privilege.MODIFY
     )
-    _require_curator(ctx, settings, connection)
     row = await KnowledgeService(db, settings).archive(connection, template_id)
     await audit.record(
         db, ctx,
@@ -567,7 +606,7 @@ async def list_benchmarks(
 
     return BenchmarkOverview(
         sets=sets,
-        can_curate=can_curate(ctx, settings, connection),
+        can_curate=await _may_curate(authz, ctx, connection),
         candidates=len(await service.candidates(connection)),
         min_set_size=MIN_SET_SIZE,
     )
@@ -616,7 +655,6 @@ async def create_benchmark(
     connection = await _authorized(
         db, authz, connection_id, ctx, Privilege.MODIFY
     )
-    _require_curator(ctx, settings, connection)
 
     service = BenchmarkService(db, settings)
     row = await service.create_set(
@@ -658,11 +696,15 @@ async def delete_benchmark(
     The one place in the learning loop where `DELETE` really deletes: a set is
     an instrument, not somebody's knowledge, and the knowledge it was built
     from is returned intact and `RETRIEVABLE`.
+
+    `(knowledge, delete)`, which is the **only** thing that word means on this
+    type — §13.3's row for it is literally "delete a benchmark set". A curator
+    with `modify` writes templates and cannot destroy the instrument that
+    measures them.
     """
     connection = await _authorized(
-        db, authz, connection_id, ctx, Privilege.MODIFY
+        db, authz, connection_id, ctx, Privilege.DELETE
     )
-    _require_curator(ctx, settings, connection)
     released = await BenchmarkService(db, settings).release(connection, set_id)
     await audit.record(
         db, ctx,
@@ -700,7 +742,6 @@ async def run_benchmark(
     connection = await _authorized(
         db, authz, connection_id, ctx, Privilege.MODIFY
     )
-    _require_curator(ctx, settings, connection)
 
     service = BenchmarkService(db, settings)
     set_row = await service.get_set(connection, set_id)
@@ -844,7 +885,6 @@ async def resolve_review(
     connection = await _authorized(
         db, authz, connection_id, ctx, Privilege.MODIFY
     )
-    _require_curator(ctx, settings, connection)
 
     if payload.template_id is not None:
         # It must be a template on *this* connection: a resolution pointing at

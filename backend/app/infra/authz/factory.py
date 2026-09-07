@@ -17,18 +17,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.domain.ports.authz import Authorizer
 from app.infra.authz.owner_only import OwnerOnlyAuthorizer
+from app.infra.authz.rbac import RbacAuthorizer
 
 
 def build_authorizer(db: AsyncSession, settings: Settings) -> Authorizer:
     """The authorizer this installation is configured to use.
 
-    `rbac` is Phase 6; naming it before it exists raises rather than silently
-    falling back, because a deployment that asked for grants and got ownership
-    would look like it was working.
+    **`rbac` is the default from Phase 6** and `owner_only` remains a working
+    rollback for one release. The rollback is a config flip rather than a
+    migration in both directions: no grant row is *read* under `owner_only`,
+    and running under it creates none — so flipping back narrows everybody to
+    what they own and flipping forward restores every share exactly, with
+    nothing to replay.
+
+    An unknown value falls to `owner_only`, which is the narrower of the two.
+    A typo in an environment variable should cost people access to things they
+    were shared, not hand out access nobody granted.
     """
-    if settings.authz_backend == "rbac":  # pragma: no cover - Phase 6
-        raise NotImplementedError(
-            "authz_backend='rbac' arrives in Phase 6; RbacAuthorizer does not "
-            "exist yet. Leave AUTHZ_BACKEND unset or set it to 'owner_only'."
-        )
+    if settings.authz_backend == "rbac":
+        return RbacAuthorizer(db)
     return OwnerOnlyAuthorizer(db)

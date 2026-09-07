@@ -329,6 +329,81 @@ class TeamMember(Base):
     )
 
 
+class Grant(Base):
+    """*"Who may do what to **this** thing."* The table the plan was heading for.
+
+    A role says what a principal may do app-wide; `role_scoped_privileges` says
+    what they may do to *every* resource of a type. Neither can say "Sara may
+    read the Finance warehouse and nothing else", and this is where that
+    sentence lives.
+
+    Three things are worth knowing before reading a row:
+
+    * **`resource_id IS NULL` means every resource of this type.** One nullable
+      column is what makes a wildcard a row instead of an `if`. Writing one
+      needs `role.manage` and is audited under its own action.
+    * **`resource_type` is polymorphic and carries no foreign key.** Eight
+      types, two of which are derived and share their connection's id — there
+      is nothing single to reference. A deleted resource can leave an orphaned
+      grant, which is inert (it names an id no row has) and is swept by
+      `workers/reconciler.py`.
+    * **Exactly one principal, by `CHECK`.** A service user needs no third
+      column: it is a `users` row, which is the payoff for one identifier
+      space.
+    """
+
+    __tablename__ = "grants"
+    __table_args__ = (
+        CheckConstraint(
+            "(user_id IS NULL) <> (team_id IS NULL)",
+            name="ck_grants_one_principal",
+        ),
+        # `NULLS NOT DISTINCT` is the point: without it Postgres treats every
+        # row with a NULL in the key as unique, and this table would silently
+        # accept the same wildcard — or the same team grant — twice over.
+        UniqueConstraint(
+            "resource_type", "resource_id", "user_id", "team_id", "privilege",
+            name="uq_grants", postgresql_nulls_not_distinct=True,
+        ),
+        Index("ix_grants_resource", "resource_type", "resource_id"),
+        Index(
+            "ix_grants_user", "user_id",
+            postgresql_where=text("user_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_grants_team", "team_id",
+            postgresql_where=text("team_id IS NOT NULL"),
+        ),
+        # Step 0 of `visible`: the wildcard short-circuit runs before any
+        # subquery is built, so it has to be a single index scan.
+        Index(
+            "ix_grants_wildcard", "resource_type", "privilege",
+            postgresql_where=text("resource_id IS NULL"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    resource_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    #: NULL = every resource of this type. See the class docstring.
+    resource_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True))
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE")
+    )
+    team_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("teams.id", ondelete="CASCADE")
+    )
+    privilege: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    #: SET NULL rather than CASCADE: who granted access is history, and a share
+    #: must not vanish because the person who made it left — which is exactly
+    #: when somebody is reviewing the shares.
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+
+
 class Session(Base):
     __tablename__ = "sessions"
 

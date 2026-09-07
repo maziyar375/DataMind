@@ -1,4 +1,11 @@
-"""The stale-run sweep, and the lock that stops every replica doing it at once.
+"""Two sweeps, and the lock that stops every replica doing them at once.
+
+The **stale-run sweep** is the original and the reason this module exists. The
+**orphaned-grant sweep** joined it in Phase 6 and is described at
+`sweep_orphaned_grants`; both run under the same advisory lock, in the same
+tick, because they are the same kind of thing — periodic hygiene nobody is
+waiting for — and a second lock and a second loop would double the moving parts
+to save nothing.
 
 The sweep itself is one `UPDATE` and is idempotent, so concurrent sweeps are
 not a correctness problem in the "two writers corrupt a row" sense. The lock is
@@ -53,8 +60,63 @@ log = get_logger(__name__)
 RECONCILER_LOCK_KEY = 8_274_119_003_461_552
 
 
+async def sweep_orphaned_grants(session) -> int:
+    """Delete grants naming a resource that no longer exists. Returns the count.
+
+    **`grants.resource_id` carries no foreign key**, and cannot: it is
+    polymorphic across eight resource types, two of which are *derived* and
+    share their parent connection's id, so there is nothing single to
+    reference. Eight nullable FK columns with a `CHECK` that exactly one is set
+    would be the alternative, and it would be worse than the problem.
+
+    The problem it leaves is small and this is the second half of the answer.
+    The first half is a delete hook in the service — deleting a connection
+    revokes its grants in the same transaction — so in the normal case this
+    sweep finds nothing. It exists for the abnormal one: a row deleted by
+    something that bypassed the service, a crash between two statements, a
+    restore from a backup taken mid-delete.
+
+    **An orphaned grant is inert**, which is why this is hygiene rather than a
+    security fix: it names an id no row has, so `visible` returns it and every
+    join drops it. What it is not is *invisible* — it would appear in an access
+    review as reach nobody can account for, and "why does Sara have select on
+    something that does not exist" is a question with no good answer.
+
+    One statement per owned type, each a `NOT IN` against a primary-key index,
+    built through the ORM rather than by interpolating a table name into SQL —
+    `_OWNED_TABLES` is a closed map of trusted classes, but a string-built
+    `DELETE` in a background worker is the kind of line that gets copied
+    somewhere the input is not.
+    Wildcards (`resource_id IS NULL`) are excluded by construction: they name no
+    resource, so no resource of theirs can be missing.
+    """
+    from sqlalchemy import delete, select
+
+    from app.infra.authz.owner_only import _OWNED_TABLES
+    from app.infra.db.models import Grant
+
+    removed = 0
+    for type_, table in _OWNED_TABLES.items():
+        result = await session.execute(
+            delete(Grant).where(
+                Grant.resource_type == str(type_),
+                Grant.resource_id.is_not(None),
+                Grant.resource_id.not_in(select(table.id)),
+            )
+        )
+        removed += result.rowcount or 0
+    return removed
+
+
 async def reconcile_once(settings: Settings) -> int:
-    """Sweep, if no other replica is already sweeping. Returns rows failed."""
+    """Sweep, if no other replica is already sweeping. Returns rows failed.
+
+    Both sweeps run under the one lock and in the one transaction — see the
+    module docstring. The return value stays the stale-run count, because that
+    is what the caller logs and what every existing test asserts; the grant
+    sweep logs its own count when it finds anything, which in a healthy
+    installation is never.
+    """
     from app.infra.db.session import get_sessionmaker
     from app.services.run_service import RunService
 
@@ -70,6 +132,13 @@ async def reconcile_once(settings: Settings) -> int:
             # holds an idle transaction open until it is garbage collected.
             await session.rollback()
             return 0
+
+        # Before the run sweep, because that one commits — and the commit is
+        # what releases the lock. Anything after it would be running unlocked.
+        orphans = await sweep_orphaned_grants(session)
+        if orphans:
+            log.warning("orphaned_grants_swept", count=orphans)
+
         # Deliberately inside the same transaction, and deliberately not
         # wrapped in `try/finally`: `reconcile_stale` commits, and that commit
         # is what releases the lock. A rollback on the way out of an exception

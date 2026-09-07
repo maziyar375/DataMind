@@ -631,14 +631,17 @@ async def test_every_role_change_leaves_a_row(db: AsyncSessionShim) -> None:
 
 
 # ── what Phase 3 deliberately does not do ────────────────────────────────
-def test_no_decision_reads_a_scoped_privilege_yet() -> None:
-    """Phase 3 ships the *storage*; Phase 6 ships the decision that reads it.
+def test_exactly_one_authorizer_reads_a_scoped_privilege() -> None:
+    """Phase 3 shipped the *storage*; **Phase 6 shipped the decision** reading it.
 
-    A grep rather than a behavioural test, because the claim is about absence:
-    the only modules allowed to mention `role_scoped_privileges` today are the
-    ones that store and render it. `OwnerOnlyAuthorizer` in particular must
-    still answer from ownership alone, or Phase 3 would have quietly changed
-    who can reach what.
+    Rewritten rather than deleted, and it makes the same claim one phase on: a
+    role's wildcard reach is consulted in exactly one place. A second module
+    that started reading `role_scoped_privileges` to decide something would be
+    a second permission model, and this grep is what notices.
+
+    `OwnerOnlyAuthorizer` must still answer from ownership alone — it is the
+    rollback, and a rollback that quietly kept honouring role wildcards would
+    not be one.
     """
     import pathlib
 
@@ -652,4 +655,8 @@ def test_no_decision_reads_a_scoped_privilege_yet() -> None:
     assert readers == {
         "infra/db/models.py",          # declares it
         "services/role_service.py",    # writes it
+        "infra/authz/rbac.py",         # Phase 6: the one thing that reads it
     }
+    assert "RoleScopedPrivilege" not in (
+        root / "infra" / "authz" / "owner_only.py"
+    ).read_text()

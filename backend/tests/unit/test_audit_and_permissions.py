@@ -1,13 +1,15 @@
-"""Phase 8 — who may curate, whose queue a flag lands in, and the record of it.
+"""Who may curate, whose queue a flag lands in, and the record of it.
 
 Three claims, and each one is a thing that quietly rots if it is not asserted:
 
-* **`curation_admin_only` is on, and it did not lock anybody out.** The flip is
-  admin **or owner**. Without the second half it would mean the person who owns
-  a connection cannot curate their own store — `_owned()` already scopes every
-  knowledge endpoint to the owner, and an administrator cannot reach somebody
-  else's connection either, so admin-only alone takes rights away and grants
-  none. That is a lockout, not a posture.
+* **Curation is a privilege that can be granted, and it is `(knowledge, modify)`.**
+  This section was seven tests about `can_curate` — a function and a settings
+  flag that approximated a reader/curator split because, before Phase 6, there
+  was no way to *grant* one. They are **rewritten rather than deleted**, and
+  they assert the same rule they always did: somebody who may ask questions
+  through a connection may not rewrite what it has been taught. What changed is
+  that the rule is now a row somebody can see, revoke and review, rather than a
+  boolean in `.env`.
 * **A flag is routed to the connection's owner**, and the server says whose
   queue it went to rather than the SPA guessing.
 * **Every curation write leaves a row**, and that row carries identifiers and
@@ -26,11 +28,14 @@ from uuid import uuid4
 
 import pytest
 
-from app.core.config import Settings
 from app.core.context import RequestContext
-from app.domain.value_objects.authz import Capability
+from app.domain.ports.authz import ResourceRef
+from app.domain.value_objects.authz import Capability, Privilege, ResourceType
+from app.infra.authz.rbac import RbacAuthorizer
 from app.services import audit
-from app.services.policy import can_curate
+from app.services.grant_service import GrantService
+from tests.unit.conftest import AsyncSessionShim, _connection, _user
+from tests.unit.conftest import ctx as admin_ctx
 
 OWNER = uuid4()
 STRANGER = uuid4()
@@ -39,11 +44,10 @@ STRANGER = uuid4()
 def ctx(user_id=OWNER, role: str = "MEMBER") -> RequestContext:
     """A context whose capabilities match the role it names.
 
-    `role` is the legacy enum and, as of Phase 3, decides nothing — what
-    `can_curate` actually reads is `user.manage`. The helper keeps the old
-    argument so the tests below still read as sentences about administrators
-    and members, and derives the capability set from it, which is exactly what
-    `get_ctx` does against the database.
+    `role` is the legacy enum and, as of Phase 3, decides nothing. The helper
+    keeps the old argument so the tests below still read as sentences about
+    administrators and members, and derives the capability set from it, which
+    is exactly what `get_ctx` does against the database.
     """
     return RequestContext(
         user_id=user_id,
@@ -56,55 +60,197 @@ def ctx(user_id=OWNER, role: str = "MEMBER") -> RequestContext:
     )
 
 
-class _Connection:
-    def __init__(self, owner_id=OWNER) -> None:
-        self.owner_id = owner_id
+def _knowledge(connection) -> ResourceRef:
+    """The store's ref: the **connection's** id, under the derived type.
+
+    That pairing is the whole of requirement 2. A grant on `knowledge` and a
+    grant on `connection` name the same uuid and mean entirely different
+    things, which is what lets somebody curate a database they cannot read.
+    """
+    return ResourceRef(
+        type=ResourceType.KNOWLEDGE, id=connection.id, entity=connection
+    )
 
 
-OPEN = Settings(curation_admin_only=False)
-CLOSED = Settings(curation_admin_only=True)
+# ── who may curate: the same seven claims, through grants ────────────────
+async def test_the_owner_may_curate_their_own_connection(
+    db: AsyncSessionShim,
+) -> None:
+    """Ownership confers the whole lattice, so it confers curation.
+
+    The half that made the old flag correct rather than merely done, and it
+    survives unchanged: without it, a rule that named only administrators would
+    have meant the person who owns a connection cannot curate their own store.
+    """
+    owner = _user(db._session, "owner@test.local")
+    connection = _connection(db._session, owner_id=owner.id)
+
+    assert await RbacAuthorizer(db).allowed(
+        ctx(owner.id), _knowledge(connection), Privilege.MODIFY
+    )
 
 
-# ── who may curate ───────────────────────────────────────────────────────
-def test_the_flag_is_on_by_default() -> None:
-    """Phase 8's first box. Curation writes business logic that answers
-    questions on other people's behalf, and user management now exists to
-    express that as a privilege."""
-    assert Settings().curation_admin_only is True
+async def test_a_stranger_may_not(db: AsyncSessionShim) -> None:
+    """The claim the old flag could only approximate, now literal."""
+    owner = _user(db._session, "owner@test.local")
+    stranger = _user(db._session, "stranger@test.local")
+    connection = _connection(db._session, owner_id=owner.id)
+
+    assert not await RbacAuthorizer(db).allowed(
+        ctx(stranger.id), _knowledge(connection), Privilege.MODIFY
+    )
 
 
-def test_with_the_flag_off_anyone_signed_in_may_curate() -> None:
-    """The single-player install's setting, unchanged and still supported."""
-    assert can_curate(ctx(), OPEN) is True
-    assert can_curate(ctx(STRANGER), OPEN, _Connection()) is True
+async def test_a_reader_may_ask_and_may_not_curate(db: AsyncSessionShim) -> None:
+    """**The sentence the whole flag existed to approximate**, now a row.
+
+    A grant of `(connection, select)` lets somebody ask questions through this
+    database. It does not let them rewrite what it has been taught, because
+    that is a different resource type — and *that* is the split the old
+    `curation_admin_only` was reaching for with a boolean that could only say
+    "administrators and owners".
+    """
+    owner = _user(db._session, "owner@test.local")
+    reader = _user(db._session, "reader@test.local")
+    connection = _connection(db._session, owner_id=owner.id)
+    authz = RbacAuthorizer(db)
+
+    await GrantService(db, authz).grant(
+        ctx(owner.id),
+        ResourceRef.to(ResourceType.CONNECTION, connection),
+        privilege=Privilege.SELECT,
+        user_id=reader.id,
+    )
+
+    reader_ctx = ctx(reader.id)
+    assert await authz.allowed(
+        reader_ctx,
+        ResourceRef.to(ResourceType.CONNECTION, connection),
+        Privilege.SELECT,
+    )
+    assert not await authz.allowed(
+        reader_ctx, _knowledge(connection), Privilege.MODIFY
+    )
 
 
-def test_an_administrator_may_curate() -> None:
-    assert can_curate(ctx(STRANGER, role="ADMIN"), CLOSED, _Connection()) is True
+async def test_curation_can_now_be_granted_on_its_own(
+    db: AsyncSessionShim,
+) -> None:
+    """The other direction, which the flag could not express **at all**.
+
+    `(knowledge, modify)` on one connection: this person may teach it, and
+    holds nothing on the connection itself. No boolean in a config file could
+    say that, which is why the flag went rather than being kept beside the
+    grant.
+    """
+    owner = _user(db._session, "owner@test.local")
+    curator = _user(db._session, "curator@test.local")
+    connection = _connection(db._session, owner_id=owner.id)
+    authz = RbacAuthorizer(db)
+
+    await GrantService(db, authz).grant(
+        ctx(owner.id),
+        _knowledge(connection),
+        privilege=Privilege.MODIFY,
+        user_id=curator.id,
+    )
+
+    curator_ctx = ctx(curator.id)
+    assert await authz.allowed(
+        curator_ctx, _knowledge(connection), Privilege.MODIFY
+    )
+    assert not await authz.allowed(
+        curator_ctx,
+        ResourceRef.to(ResourceType.CONNECTION, connection),
+        Privilege.SELECT,
+    )
 
 
-def test_the_owner_may_curate_their_own_connection() -> None:
-    """The half that makes the flip correct rather than merely done."""
-    assert can_curate(ctx(), CLOSED, _Connection(owner_id=OWNER)) is True
+async def test_an_administrator_does_not_silently_curate(
+    db: AsyncSessionShim,
+) -> None:
+    """**The one answer that changed, and it changed on purpose.**
+
+    The old rule let an administrator curate anybody's store by virtue of
+    holding `user.manage`. That is a silent read path — no row, nothing in the
+    log, nothing an access review would show — and decision 14 of the plan
+    replaces every one of them with an explicit, audited self-grant.
+
+    Administering *people* and reaching somebody's *data* are different powers,
+    and the whole reason the answer is computed in one place is that the one
+    place can be read.
+    """
+    owner = _user(db._session, "owner@test.local")
+    admin = _user(db._session, "admin@test.local")
+    connection = _connection(db._session, owner_id=owner.id)
+
+    assert not await RbacAuthorizer(db).allowed(
+        ctx(admin.id, role="ADMIN"), _knowledge(connection), Privilege.MODIFY
+    )
 
 
-def test_a_stranger_may_not() -> None:
-    """Inert today — `_owned()` answers 404 first — and the whole point of
-    turning the flag on *before* sharing exists rather than after: when a
-    connection can be shared, a reader may ask it questions and may not rewrite
-    what it has been taught."""
-    assert can_curate(ctx(STRANGER), CLOSED, _Connection(owner_id=OWNER)) is False
+async def test_a_knowledge_manager_curates_every_store_and_reads_none(
+    db: AsyncSessionShim,
+) -> None:
+    """Requirement 2's acceptance test, and it is a **named** test.
+
+    > *"extensive permissions over Knowledge resources without Admin access to
+    > the whole application"*
+
+    The Knowledge Manager role carries `(knowledge, manage)` and
+    `(connection, describe)`. So this principal may teach `conn-A`, and may
+    **not** read its data, edit its credentials, delete it, or widen its
+    disclosure policy — on a connection they have never been granted anything
+    on individually.
+    """
+    from app.services.role_service import RoleService
+
+    owner = _user(db._session, "owner@test.local")
+    manager = _user(db._session, "manager@test.local")
+    connection = _connection(db._session, owner_id=owner.id, name="conn-A")
+
+    role = await RoleService(db).by_name("Knowledge Manager")
+    assert role is not None
+    await RoleService(db).assign(admin_ctx(), user_id=manager.id, role_id=role.id)
+
+    authz = RbacAuthorizer(db)
+    who = ctx(manager.id)
+    connection_ref = ResourceRef.to(ResourceType.CONNECTION, connection)
+
+    # May curate — every store, by a role scoped privilege rather than a grant.
+    assert await authz.allowed(who, _knowledge(connection), Privilege.MANAGE)
+    assert await authz.allowed(who, _knowledge(connection), Privilege.MODIFY)
+
+    # And may not read the data, edit the credentials, delete it, or widen what
+    # leaves it. Four separate assertions because they are four separate powers
+    # and a single "cannot do anything" would pass if `describe` were missing.
+    assert await authz.allowed(who, connection_ref, Privilege.DESCRIBE)
+    assert not await authz.allowed(who, connection_ref, Privilege.SELECT)
+    assert not await authz.allowed(who, connection_ref, Privilege.MODIFY)
+    assert not await authz.allowed(who, connection_ref, Privilege.DELETE)
+    assert not await authz.allowed(who, connection_ref, Privilege.MANAGE)
 
 
-def test_no_resource_asks_the_strict_question() -> None:
-    """Fail closed: the honest reading of "I cannot establish who owns this"
-    is *no*, not *probably fine*."""
-    assert can_curate(ctx(), CLOSED) is False
-    assert can_curate(ctx(role="ADMIN"), CLOSED) is True
+def test_the_flag_and_the_function_are_gone() -> None:
+    """Neither survives as a second, quieter answer to the same question.
 
+    A grep rather than a behavioural test, because the claim is about absence —
+    and because a `can_curate` left behind with two callers would be a rule
+    nobody was reviewing sitting beside the one everybody was.
+    """
+    app = Path("app")
+    for path in app.rglob("*.py"):
+        source = path.read_text()
+        if "migrations/versions" in path.as_posix():
+            continue  # a revision's prose may name what it replaced
+        assert "def can_curate" not in source, f"{path} still defines can_curate"
+        assert "settings.curation_admin_only" not in source, (
+            f"{path} still reads curation_admin_only"
+        )
 
-def test_a_resource_with_no_owner_is_not_owned_by_anybody() -> None:
-    assert can_curate(ctx(), CLOSED, object()) is False
+    from app.core.config import Settings
+
+    assert not hasattr(Settings(), "curation_admin_only")
 
 
 # ── the audit writer ─────────────────────────────────────────────────────

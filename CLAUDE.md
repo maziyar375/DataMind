@@ -654,12 +654,35 @@ joined them with Phase 1 of the learning loop.
    answers — **there is no god context**, and a scheduled run its owner could
    not perform by hand is supposed to fail.
 
+   **The answer is computed from five facts, and there is no sixth.** As of
+   Phase 6 `RbacAuthorizer` is the default: ownership, a direct grant, a team
+   grant, a role's scoped privilege, and a wildcard grant. The lattice
+   (`manage ⊃ delete ⊃ modify ⊃ select ⊃ describe`) is **data, expanded at read
+   time** — so a `modify` holder passes a `select` check with no row saying so,
+   and changing the lattice never needs a backfill.
+
+   Three things follow that are easy to regress:
+
+   * **`manage` is not implied by `modify`.** Editing a connection's
+     credentials and deciding who else may read through it are different acts.
+     The same split is why the disclosure policy has its own `manage`-gated
+     endpoint rather than being a field on `PATCH`.
+   * **There is no administrator arm.** An administrator does not silently
+     reach another person's resource — reach is an explicit self-grant that
+     writes a grant row *and* an `admin.self_granted` row. If you find yourself
+     adding `if ctx.is_admin` to a decision, that is the thing this model
+     exists to not have.
+   * **404 above 403, in one place.** `services/policy.require` is it: 404 when
+     no fact reaches the principal (not audited — a 404 is indistinguishable
+     from a typo), 403 naming the privilege when something does. A second copy
+     anywhere turns a list endpoint into an existence oracle.
+
    **When you grant something, grant it to a team.** A team is the recommended
-   default principal for any assignment and, from Phase 6, for any share: a
-   permission attached to a job survives the person leaving it, and one
-   attached to a person becomes a row nobody can attribute and nobody dares
-   revoke. `docs/user-management-and-access-control-plan.md` is the whole
-   design.
+   default principal for any assignment and for any share: a permission
+   attached to a job survives the person leaving it, and one attached to a
+   person becomes a row nobody can attribute and nobody dares revoke.
+   `docs/user-management-and-access-control-plan.md` is the whole design, and
+   Phase 10 turns it into a rulebook.
 
 ---
 

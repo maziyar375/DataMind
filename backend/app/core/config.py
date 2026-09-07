@@ -46,14 +46,17 @@ class Settings(BaseSettings):
     # Which implementation of the `Authorizer` port answers "may they?".
     # `owner_only` is the rule the product shipped with — you may act on a row
     # if you own it — written down as a policy object so every call site could
-    # be routed through the port before the policy changed. `rbac` adds
-    # grants, teams and role scoped privileges on top of ownership, and
-    # becomes the default at the end of Phase 6 of
-    # `docs/user-management-and-access-control-plan.md`. The previous value
-    # stays a working rollback for one release: no grant row is read under
-    # `owner_only`, and turning grants on creates no rows, so the flip is
-    # reversible in both directions without a migration.
-    authz_backend: Literal["owner_only", "rbac"] = "owner_only"
+    # be routed through the port before the policy changed. `rbac` adds grants,
+    # teams, role scoped privileges and wildcards on top of ownership, and **is
+    # the default as of Phase 6** of
+    # `docs/user-management-and-access-control-plan.md`.
+    #
+    # The previous value stays a working rollback for one release, and the
+    # rollback is a config flip in both directions rather than a migration: no
+    # grant row is *read* under `owner_only`, and running under it creates none
+    # — so flipping back narrows everybody to what they own, and flipping
+    # forward restores every share exactly, with nothing to replay.
+    authz_backend: Literal["owner_only", "rbac"] = "rbac"
 
     # Who verifies a human. **`local` is the only value today** and the enum
     # has one member on purpose: an unreachable branch is worse documentation
@@ -126,23 +129,13 @@ class Settings(BaseSettings):
     hard_row_cap: int = 100_000
 
     # ── knowledge templates ──────────────────────────────────────────────
-    # Who may teach this system a question. **True since Phase 8** of
-    # `docs/learning-loop-plan.md`: curation writes business logic that answers
-    # questions on other people's behalf, and user management now exists to
-    # express that privilege. Every write path already asked
-    # `services.policy.can_curate`, so the flip was this line and nothing else.
-    #
-    # It reads as admin-only and is really *administrator **or** the owner of
-    # the connection* — see `policy.can_curate`, which explains why the second
-    # half is what makes the flip correct instead of a lockout. Nobody can
-    # observe a difference today, because `_owned()` already scopes every
-    # knowledge endpoint to the connection's owner. It starts mattering when
-    # connections can be shared (mvp2 §D1), which is the point of having it on
-    # *before* sharing exists rather than after.
-    #
-    # Set it to false for a single-player install where the highest-value
-    # correction comes from whoever knew the answer and nobody is an admin.
-    curation_admin_only: bool = True
+    # `curation_admin_only` lived here from Phase 8 of the learning-loop plan
+    # until **Phase 6 of the access-control plan removed it**. It approximated
+    # a reader/curator split with a flag because there was no way to *grant*
+    # curation; now there is. `(knowledge, modify)` is that split — grantable
+    # to a person or a team, on one connection, and visible in an access
+    # review — so a setting that could only say "administrators and owners"
+    # was strictly less expressive than the thing that replaced it.
     # How often the store-health sweep runs: re-validate every live template,
     # then run near-duplicate pairs against each other and compare the rows.
     # Six hours, because a store rots on the schema's schedule rather than on

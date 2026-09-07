@@ -138,6 +138,47 @@ export interface IssuedKey {
   token: string
 }
 
+/**
+ * One row of *"who can reach this"* — **with the path**.
+ *
+ * The path is what makes the access panel worth having. "Sara — select" is a
+ * fact nobody can act on or verify; "Sara — select, via the Finance team"
+ * tells them the revoke they want is on the team, and that clicking revoke
+ * here would do nothing.
+ *
+ * `id` is `null` for ownership, which is a path rather than a row: ownership
+ * cannot be revoked, only transferred, so the panel renders it without a
+ * revoke control.
+ */
+export interface Grant {
+  id: string | null
+  principal_id: string
+  principal_name: string
+  /** `HUMAN`, `SERVICE` or `TEAM`. What the kind badge is drawn from. */
+  principal_kind: string
+  privilege: string
+  /** `owner` · `direct` · `team`. */
+  path: string
+}
+
+/**
+ * `GET /{resource}/{id}/actions` — what every control is rendered from.
+ *
+ * `can` is the named question a component asks, so a button is `can.share`
+ * rather than `privileges.includes('manage')` — the second is a copy of the
+ * backend's lattice living in the SPA, kept in sync by hand, wrong on the day
+ * the lattice changes.
+ *
+ * `meanings` is the backend's own `PRIVILEGE_MEANINGS` table, so the sentence
+ * beside a radio button in the share dialog is the same sentence a 403 would
+ * use.
+ */
+export interface Actions {
+  privileges: string[]
+  can: Record<string, boolean>
+  meanings: Record<string, string>
+}
+
 /** `GET /auth/me/permissions`. What every affordance is rendered from. */
 export interface Permissions {
   capabilities: string[]
@@ -149,6 +190,15 @@ export interface Connection {
   id: string
   name: string
   database_type: string
+  /**
+   * **Empty when the viewer holds only `describe`.**
+   *
+   * Together with `port`, `database_name` and `username` these are enough to
+   * attempt a connection from anywhere the database is reachable, so a
+   * principal who may only know this connection exists does not get them. The
+   * disclosure policy *is* still sent, deliberately: a grantee has to be able
+   * to see what leaves before they ask a question through it.
+   */
   host: string
   port: number
   database_name: string
@@ -174,6 +224,21 @@ export interface Connection {
   server_version: string | null
   last_tested_at: string | null
   last_synced_at: string | null
+  /**
+   * What the viewer may do here, resolved by the authorizer on the request
+   * that returned this row.
+   *
+   * **Every control on the data-source screens is rendered from this**, never
+   * from a role string and never from ownership. It is the same answer the API
+   * will give on the next request, which is what makes "the interface offers
+   * exactly what the backend would allow" a property rather than an aspiration
+   * — and it arrives *with* the row, so no control renders enabled for a frame
+   * while a second call is in flight.
+   */
+  privileges?: string[]
+  /** Whose it is — a display name, never an address. For the owner column,
+   *  which exists because the list now shows other people's connections. */
+  owner?: string
 }
 
 export interface LlmConfig {

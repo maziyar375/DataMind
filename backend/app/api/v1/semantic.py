@@ -27,14 +27,27 @@ from app.api.schemas import (
     SemanticSaveRequest,
     SemanticTableFact,
 )
+from app.api.v1.access import attach_access_routes
 from app.core.errors import NotFoundError, ValidationError
 from app.domain.ports.authz import ResourceRef
 from app.domain.value_objects.authz import Privilege, ResourceType
 from app.infra.db.models import DatabaseConnection, SemanticJobRow
 from app.semantic import SemanticDocument, check_expression
+from app.services.policy import require
 from app.services.semantic_service import SemanticService
 
 router = APIRouter(prefix="/connections/{connection_id}/semantic", tags=["semantic"])
+
+# `…/semantic/grants` and `…/semantic/actions`. No transfer, for the same
+# reason the knowledge store has none: a layer's owner is its connection's
+# owner, so there is one transfer and it lives on the thing that has an owner.
+attach_access_routes(
+    router,
+    ResourceType.SEMANTIC_LAYER,
+    param="connection_id",
+    in_prefix=True,
+    transferable=False,
+)
 
 
 async def _authorized(
@@ -51,12 +64,16 @@ async def _authorized(
         select(DatabaseConnection).where(DatabaseConnection.id == connection_id)
     )
     connection = result.scalar_one_or_none()
-    if connection is None or not await authz.allowed(
-        ctx,
-        ResourceRef(type=ResourceType.SEMANTIC_LAYER, id=connection.id, entity=connection),
-        privilege,
-    ):
+    if connection is None:
         raise NotFoundError("Connection not found.")
+    await require(
+        ctx,
+        authz,
+        ResourceRef(
+            type=ResourceType.SEMANTIC_LAYER, id=connection.id, entity=connection
+        ),
+        privilege,
+    )
     return connection
 
 

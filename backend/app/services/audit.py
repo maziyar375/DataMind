@@ -79,6 +79,34 @@ BENCHMARK_CREATED = "knowledge.benchmark.created"
 BENCHMARK_DELETED = "knowledge.benchmark.deleted"
 BENCHMARK_RUN_QUEUED = "knowledge.benchmark.run"
 
+#: **The rest of the vocabulary, and where each word is defined.**
+#:
+#: The permission actions live beside the services that write them — the same
+#: rule this module already follows for curation — because an action defined
+#: away from its writer drifts from it. What lives *here* is the index: an
+#: administrator reading the log should be able to enumerate everything that
+#: can appear in it without reading the routers, and that is only true if one
+#: file lists them all.
+#:
+#: ```
+#: services/role_service.py         role.created · role.updated · role.deleted
+#:                                  role.assigned · role.unassigned
+#: services/team_service.py         team.created · team.renamed · team.deleted
+#:                                  team.member.added · team.member.removed
+#:                                  team.source.bound
+#: services/service_user_service.py service_user.created · service_user.disabled
+#:                                  service_user.deleted · service_user.privileged
+#:                                  service_credential.issued
+#:                                  service_credential.revoked
+#:                                  service_credential.expired
+#: services/grant_service.py        grant.created · grant.revoked
+#:                                  grant.wildcard.created
+#:                                  ownership.transferred · disclosure.changed
+#: ```
+#:
+#: Phase 7 adds the last two — `access.denied`, the producer `DENIED` has been
+#: waiting for since migration `0001`, and `admin.self_granted`.
+
 #: How much of a `detail` value survives. Generous for an identifier or a
 #: status reason, mean enough that nobody is tempted to pass a statement.
 MAX_DETAIL_CHARS = 500

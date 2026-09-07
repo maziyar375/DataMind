@@ -3215,49 +3215,49 @@ cd frontend && npm run typecheck && npm run build && npm test
 
 ## Phase 6 — Grants on connections, knowledge, semantic layer ⚠️
 
-- [ ] Migration `0028_grants.py` including the wildcard partial index
-- [ ] ORM model
-- [ ] `app/infra/authz/rbac.py`: `RbacAuthorizer` — wildcard short-circuit, then
+- [x] Migration `0028_grants.py` including the wildcard partial index
+- [x] ORM model
+- [x] `app/infra/authz/rbac.py`: `RbacAuthorizer` — wildcard short-circuit, then
       the union subquery, for all four port methods
-- [ ] `services/grant_service.py`: grant, revoke, list-by-resource,
+- [x] `services/grant_service.py`: grant, revoke, list-by-resource,
       list-by-principal, last-`manage` guard, wildcard requiring `role.manage`
-- [ ] `api/deps.py`: `on(type, privilege, param)`
-- [ ] `connections.py`: `/grants`, `/actions`, `/transfer`
-- [ ] `/connections/{id}/knowledge/grants` and `/semantic/grants`
-- [ ] `disclosure_policy` out of `PATCH`, into `PUT /connections/{id}/disclosure`
+- [x] `api/deps.py`: `on(type, privilege, param)`
+- [x] `connections.py`: `/grants`, `/actions`, `/transfer`
+- [x] `/connections/{id}/knowledge/grants` and `/semantic/grants`
+- [x] `disclosure_policy` out of `PATCH`, into `PUT /connections/{id}/disclosure`
       gated on `manage`
-- [ ] `ConnectionRead` narrowed at `describe` — no host, no credentials
-- [ ] Every knowledge route moves to `(knowledge, …)`; `can_curate` deleted;
+- [x] `ConnectionRead` narrowed at `describe` — no host, no credentials
+- [x] Every knowledge route moves to `(knowledge, …)`; `can_curate` deleted;
       `curation_admin_only` removed from config
-- [ ] Every semantic route moves to `(semantic_layer, …)`
-- [ ] The 404/403 rule in one exception helper
-- [ ] `workers/reconciler.py`: the orphaned-grant sweep
-- [ ] `DELETE /users/{id}` refuses while resources are owned, naming them
-- [ ] `authz_backend` default flips to `"rbac"`
-- [ ] Audit: `grant.created/revoked`, `grant.wildcard.created`,
+- [x] Every semantic route moves to `(semantic_layer, …)`
+- [x] The 404/403 rule in one exception helper
+- [x] `workers/reconciler.py`: the orphaned-grant sweep
+- [x] `DELETE /users/{id}` refuses while resources are owned, naming them
+- [x] `authz_backend` default flips to `"rbac"`
+- [x] Audit: `grant.created/revoked`, `grant.wildcard.created`,
       `ownership.transferred`, `disclosure.changed`
-- [ ] Frontend: `<AccessPanel>` — picker, privilege radio from `…/actions`,
+- [x] Frontend: `<AccessPanel>` — picker, privilege radio from `…/actions`,
       current access **with the path**, revoke
-- [ ] Frontend: `/sources/:id/access` as the fifth tab
-- [ ] Frontend: the Policy tab's disclosure control gated on `manage`
-- [ ] Frontend: Access popovers on the Knowledge console and Semantic tab headers
-- [ ] Frontend: Data sources list shows granted connections with an owner column
-- [ ] Test: lattice implication end to end
-- [ ] Test: a team grant reaches a member, and stops on removal
-- [ ] Test: a wildcard grant is refused without `role.manage`
-- [ ] Test: last-`manage` self-revocation refused
-- [ ] Test: the disclosure gate, both directions, audited
-- [ ] Test: ownership transfer; the deletion refusal
-- [ ] Test: the sweep removes only orphans
-- [ ] Test: the seven `can_curate` tests **rewritten** and passing on the same
+- [x] Frontend: `/sources/:id/access` as the fifth tab
+- [x] Frontend: the Policy tab's disclosure control gated on `manage`
+- [x] Frontend: Access popovers on the Knowledge console and Semantic tab headers
+- [x] Frontend: Data sources list shows granted connections with an owner column
+- [x] Test: lattice implication end to end
+- [x] Test: a team grant reaches a member, and stops on removal
+- [x] Test: a wildcard grant is refused without `role.manage`
+- [x] Test: last-`manage` self-revocation refused
+- [x] Test: the disclosure gate, both directions, audited
+- [x] Test: ownership transfer; the deletion refusal
+- [x] Test: the sweep removes only orphans
+- [x] Test: the seven `can_curate` tests **rewritten** and passing on the same
       rule
-- [ ] Test: **a Knowledge Manager curates and cannot read, edit or widen** —
+- [x] Test: **a Knowledge Manager curates and cannot read, edit or widen** —
       requirement 2's named acceptance test
-- [ ] Test: 404 with nothing, 403 with `describe`, message names the privilege
-- [ ] Doc: `security.md` §3 (sharing interaction) and §6; `architecture.md` §18;
+- [x] Test: 404 with nothing, 403 with `describe`, message names the privilege
+- [x] Doc: `security.md` §3 (sharing interaction) and §6; `architecture.md` §18;
       `CLAUDE.md` invariant 5; the ledger
-- [ ] **Gate green**
-- [ ] **Acceptance:** the two-user connection scenario, all four refusals, every
+- [x] **Gate green**
+- [x] **Acceptance:** the two-user connection scenario, all four refusals, every
       event in `GET /audit`, and `owner_only` still a working rollback
 
 ## Phase 7 — The audit half
@@ -3373,16 +3373,16 @@ cd frontend && npm run typecheck && npm run build && npm test
 
 ## Cross-cutting, do not forget
 
-- [ ] Every new endpoint appears in `docs/architecture.md` §26's endpoint list
-- [ ] Every new audit action is named in `services/audit.py`'s vocabulary block
+- [x] Every new endpoint appears in `docs/architecture.md` §26's endpoint list
+- [x] Every new audit action is named in `services/audit.py`'s vocabulary block
 - [ ] Every new `Capability` and `ResourceType` is named in the rulebook
 - [ ] `docs/README.md`'s *"Users, groups, roles, grants — anything about who
       may"* row points at this plan, then at the rulebook
-- [ ] No new dependency is added to `backend/pyproject.toml` by any phase
-- [ ] No phase adds a container to `docker-compose.yml`
-- [ ] `.env.example` documents `AUTHZ_BACKEND`, `AUTH_PROVIDER`,
+- [x] No new dependency is added to `backend/pyproject.toml` by any phase
+- [x] No phase adds a container to `docker-compose.yml`
+- [x] `.env.example` documents `AUTHZ_BACKEND`, `AUTH_PROVIDER`,
       `ALLOW_PRIVILEGED_SERVICE_USERS`, `SERVICE_KEY_DEFAULT_TTL_DAYS`
-- [ ] The eval harness and `make guard` are untouched by every phase
+- [x] The eval harness and `make guard` are untouched by every phase
 
 ---
 
@@ -3399,13 +3399,13 @@ cd frontend && npm run typecheck && npm run build && npm test
 | 3 · Roles and capabilities | 32 | **32** | 2026-09-07 |
 | 4 · Teams | 20 | **20** | 2026-09-07 |
 | 5 · Service users | 25 | **25** | 2026-09-07 |
-| 6 · Grants on connections | 34 | 0 | — |
+| 6 · Grants on connections | 34 | **34** | 2026-09-07 |
 | 7 · The audit half | 15 | 0 | — |
 | 8 · Grants on artifacts | 26 | 0 | — |
 | 9 · Access review | 15 | 0 | — |
 | 10 · Rulebook and seams | 21 | 0 | — |
-| Cross-cutting | 8 | 0 | — |
-| **Total** | **254** | **135** | |
+| Cross-cutting | 8 | **6** | — |
+| **Total** | **254** | **175** | |
 
 ## 30. The one-line acceptance test for the whole plan
 

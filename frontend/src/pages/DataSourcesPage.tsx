@@ -48,6 +48,7 @@ import {
   DetailBody, DetailHeader, FieldRow, MasterColumn, MasterItem, Section,
   StatusLine, Tabs, UnsavedNote,
 } from '../components/settings'
+import { AccessPanel, TransferControl } from '../components/access'
 import { ListScrim, ListToggle, useListDrawer } from '../components/list-drawer'
 import { forConnection } from '../components/knowledge-queue'
 import { SemanticLayerTab } from '../components/semantic'
@@ -97,7 +98,14 @@ const BLANK = {
  * as the pane's front door, which now is Connection — the half that old link
  * most likely meant.
  */
-const TABS = ['connection', 'policy', 'schema', 'semantic', 'knowledge'] as const
+// `access` sits between Policy and Schema, and the position is the argument:
+// who may reach this connection is a decision of the same kind as how much of
+// a result may leave through it, and both are decisions about *other people*
+// rather than about the database. Schema and Semantic layer are about the
+// database.
+const TABS = [
+  'connection', 'policy', 'access', 'schema', 'semantic', 'knowledge',
+] as const
 type Tab = (typeof TABS)[number]
 
 /**
@@ -372,10 +380,29 @@ export default function DataSourcesPage() {
       } else if (selected) {
         const payload: Record<string, unknown> = {}
         for (const key of Object.keys(draft)) {
+          if (key === 'disclosure_policy') continue // its own call, below
           if (POLICY_KEYS.has(key) === (group === 'policy')) payload[key] = draft[key]
         }
         if (group === 'connection' && password) payload.password = password
         await api.update(selected.id, payload)
+
+        // **The disclosure policy is its own request, and it needs `manage`.**
+        //
+        // Not a tidiness: the moment a connection is shared, one person's
+        // disclosure choice governs another person's questions. So the API
+        // took it off `PATCH` entirely — a `modify` holder can re-credential
+        // this connection and cannot widen what leaves it — and sending it
+        // inside the payload above would now be silently dropped, which is the
+        // worst possible outcome for a control labelled "what may leave".
+        //
+        // Only when it actually changed, so a `modify` holder saving anything
+        // else on this tab does not get a 403 for a field they never touched.
+        if (
+          group === 'policy'
+          && draft.disclosure_policy !== selected.disclosure_policy
+        ) {
+          await api.setDisclosure(selected.id, String(draft.disclosure_policy))
+        }
         await refresh()
         if (group === 'connection') setPassword('')
       }
@@ -559,6 +586,19 @@ export default function DataSourcesPage() {
    * one list is what let the row cap sit beside the sentence about sending
    * your DBA's comments to a third party.
    */
+  // What this viewer may do to the selected connection, straight off the row.
+  //
+  // `ConnectionRead.privileges` is resolved by the authorizer on the request
+  // that returned it, so it is the *same answer* the API will give on the next
+  // one — which is what makes "the interface offers exactly what the backend
+  // would allow" a property rather than a thing somebody keeps true by hand.
+  // No second fetch, and no window where a control renders enabled before an
+  // `…/actions` call comes back.
+  const held = new Set(selected?.privileges ?? [])
+  // A brand-new connection has no row yet, so nothing has been resolved: the
+  // creator is about to own it, and an owner holds everything.
+  const mayManage = creating || held.has('manage')
+
   const policyFields = (
     <>
       <Section
@@ -572,6 +612,7 @@ export default function DataSourcesPage() {
         >
           <Select
             value={draft.disclosure_policy}
+            disabled={!mayManage}
             onChange={(e) =>
               setDraft({ ...draft, disclosure_policy: e.target.value })
             }
@@ -581,6 +622,19 @@ export default function DataSourcesPage() {
             <option value="SAMPLE">A sample of rows</option>
             <option value="FULL">All returned rows</option>
           </Select>
+          {/* Said, not silently disabled. A greyed control with no reason
+              teaches somebody the product is broken; one with a reason
+              teaches them the rule — and this rule is worth knowing, because
+              it is why the person who can fix a password cannot also widen
+              what leaves the database. */}
+          {!mayManage && (
+            <span style={{ fontSize: 11.5, color: 'var(--text-faint)', lineHeight: 1.5 }}>
+              Changing this needs <strong>manage</strong> on this data source.
+              You can edit its connection details and re-sync its schema;
+              deciding how much of a result may leave for the model provider is
+              a decision for whoever can also share it. Ask on the Access tab.
+            </span>
+          )}
         </Field>
 
         <Field
@@ -710,7 +764,17 @@ export default function DataSourcesPage() {
             <MasterItem
               key={connection.id}
               title={connection.name}
-              subtitle={`${engineLabel(connection.database_type)} · ${connection.host}:${connection.port}`}
+              // From Phase 6 the list contains connections **granted** to this
+              // person as well as ones they own, so the row has to answer
+              // "whose is this?" — and a row they hold only `describe` on has
+              // no host to show at all, which is not an error but the point.
+              subtitle={[
+                engineLabel(connection.database_type),
+                connection.host ? `${connection.host}:${connection.port}` : null,
+                connection.owner ? `owned by ${connection.owner}` : null,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
               active={connection.id === selectedId}
               tone={state.tone}
               toneLabel={state.label}
@@ -851,6 +915,7 @@ export default function DataSourcesPage() {
                 items={[
                   { value: 'connection', label: 'Connection' },
                   { value: 'policy', label: 'Policy' },
+                  { value: 'access', label: 'Access' },
                   { value: 'schema', label: 'Schema', count: schema?.tables.length },
                   { value: 'semantic', label: 'Semantic layer' },
                   // It has a count now, and the objection that kept it off
@@ -1016,6 +1081,29 @@ export default function DataSourcesPage() {
                 {error && <ErrorNote>{error}</ErrorNote>}
                 {policyFields}
               </DetailBody>
+            )}
+
+            {!creating && tab === 'access' && selected && (
+              <Section
+                title="Who can reach this data source"
+                description="Everyone here can ask questions through this connection under the disclosure policy on the Policy tab — which is somebody else’s decision about what leaves your database, so read it before you share."
+                icon={<Icon.Users size={13} />}
+              >
+                <AccessPanel
+                  base={`connections/${selected.id}`}
+                  title={selected.name}
+                />
+                {/* Its own control, below the panel, because it is a different
+                    act: sharing adds somebody, transferring hands the thing
+                    over and the previous owner keeps nothing. */}
+                <div style={{ display: 'flex', gap: 8, paddingTop: 4 }}>
+                  <TransferControl
+                    base={`connections/${selected.id}`}
+                    title={selected.name}
+                    onTransferred={() => void refresh()}
+                  />
+                </div>
+              </Section>
             )}
 
             {!creating && tab === 'schema' && (

@@ -480,12 +480,12 @@ the wrong thing. On a stock connection nothing renders at all —
 `database_connections.knowledge_examples_enabled` defaults to `false` and the
 examples slot collapses to `PROMPT_VERSION` v8's exact bytes.
 
-**One path this rung does not cover, and it is §3.5's residual wearing a new
+**One path this rung does not cover, and it is §3.6's residual wearing a new
 hat.** A Phase 2 short-circuit answers from stored SQL, and `present` (#5) sends
 *the SQL that ran* to the narration call exactly as it does for generated SQL.
 So a `MODEL_DERIVED` template's literals can reach a provider on a short-circuit
 under `NONE`, where `render_examples` would have withheld the same template as a
-few-shot. Recorded rather than papered over. It is the same trade §3.5 already
+few-shot. Recorded rather than papered over. It is the same trade §3.6 already
 makes for kept SQL, for the same reasons and one further one: a short-circuited
 answer shows its matched question and its bindings behind the *saved answer*
 badge, so the statement is an artifact the asker can audit rather than a hidden
@@ -520,7 +520,48 @@ snapshot in the first place. It is stricter than the render-time gates for a
 reason: the schema block is sent on *every* question, whereas a result is sent
 only for the query the user actually asked.
 
-### 3.5 Known residual
+### 3.5 The sharing interaction — one person's choice, another person's questions
+
+Everything above describes a policy chosen by whoever set the connection up.
+**From Phase 6 a connection can be shared**, and the moment it is, that choice
+starts governing questions asked by people who did not make it — and who may
+not know what it is.
+
+Three rules follow, and they are why `describe` is a real privilege rather than
+a formality:
+
+1. **`describe` exposes the policy.** Somebody granted access to a connection
+   sees its disclosure policy on the connection itself, before they ask
+   anything through it. They see the engine and the name too, and they do
+   **not** see the host, the port, the database name or the username — those
+   four together are enough to attempt a connection from anywhere the database
+   is reachable. What leaves is disclosed; how to reach the database is not.
+2. **`modify` may not change the policy; `manage` may.** Widening `NONE` →
+   `FULL` is not an edit, it is a disclosure decision taken on behalf of
+   everybody who can now ask through this connection — so it lives on its own
+   endpoint (`PUT /connections/{id}/disclosure`), gated one privilege above
+   every other edit, and audited under `disclosure.changed` rather than filed
+   among ordinary updates. A person who can re-credential a connection and
+   re-sync its schema therefore *cannot* widen what leaves it, which is
+   deliberate: those are different jobs, and the second is the same decision as
+   deciding who may read through it at all.
+
+   Narrowing is audited exactly as widening is. A policy that quietly tightened
+   would break somebody's report, and *"who changed this, and when"* is the
+   question that gets asked either way.
+3. **Every ask records the policy in force.** Phase 7 completes this half; the
+   row already carries the connection and the actor.
+
+**The unsolved half, named rather than smoothed over.** A grant to a team of
+forty is a disclosure decision made on behalf of forty people, none of whom
+were asked. DataMind does not currently notify them, and there is no
+per-principal disclosure ceiling. What it does instead is make the decision
+*visible*: the policy is on the connection at `describe`, the change is a row
+in `audit_logs`, and the access panel names everyone the connection reaches.
+§26 of the access-control plan holds this as an open question rather than
+claiming it solved.
+
+### 3.6 Known residual
 
 Recorded here rather than omitted. Under `NONE`/`AGGREGATE`, kept SQL may
 contain a literal — `WHERE status = 'churned'` — that originally came from a
@@ -970,6 +1011,65 @@ to rotate. Its actions are audited under `service_user.created`,
 and `service_credential.revoked` — and an audit row records a key's **prefix**,
 never the key.
 
+**Grants: who may do what to *this* thing.** As of Phase 6, `RbacAuthorizer` is
+the default and answers "may they?" from **five** facts combined in one place:
+ownership, a direct grant, a team grant, a role's scoped privilege, and a
+wildcard grant. A grant names one resource, one privilege and exactly one
+principal — a person **or** a team, never both, by database `CHECK` — and a
+service user needs no third column because it is a `users` row.
+
+Five properties are worth stating because each has an obvious weaker version:
+
+* **The lattice is expanded at read time, never at write.** A demand for
+  `select` becomes one array comparison against an index, so a `modify` holder
+  passes a `select` check without four rows having been written — and changing
+  the lattice never needs a backfill.
+* **`manage` is not implied by `modify`.** Editing a connection's credentials
+  and deciding who else may read through it are different acts. Because no
+  grantee can re-grant unless somebody deliberately gave them `manage`, revoke
+  never walks a chain: no chain can exist.
+* **A wildcard needs `role.manage` and gets its own audit action.**
+  `resource_id IS NULL` reaches every resource of a type, including ones that
+  do not exist yet — a role-shaped decision wearing a grant's clothes — so it
+  is recorded as `grant.wildcard.created` rather than hiding among ordinary
+  shares.
+* **There is no administrator arm.** An administrator does not silently reach
+  another person's connection. They reach it through an explicit self-grant
+  that writes a grant row **and** an `admin.self_granted` row (decision 14).
+  There is no silent read path anywhere, which is what makes an access review
+  answerable.
+* **404 above 403, implemented once.** A principal to whom no fact reaches gets
+  404 — indistinguishable from a typo, and deliberately not audited. One who
+  holds `describe` and needs more gets 403 **naming the privilege and what it
+  means on that resource type**, from the same table the share dialog labels
+  its radio buttons from. Both branches live in `services/policy.require`, and
+  a second copy anywhere is how a list endpoint becomes an existence oracle.
+
+**Ownership transfer, and refusing to strand a resource.** `POST
+/{resource}/{id}/transfer` is gated on `manage`, audited as
+`ownership.transferred`, and refuses an inactive new owner. The previous owner
+keeps nothing: if they should retain access, it is granted, which is a row
+somebody can see rather than a residue of a transfer nobody remembers.
+
+`DELETE /users/{id}` **refuses while the principal owns a grantable resource,
+and names what they own** — deleting them would `SET NULL` the owner and leave
+rows nobody can reach, share or transfer. `DISABLED` is the reversible option
+and keeps every grant, role and team membership, because re-enabling somebody
+must not be a re-grant; Power BI documents the same choice for the same reason.
+Deleting a team or a role that anything points at is refused the same way.
+
+**Revoking takes effect on the next request.** The authorizer reads the
+database every time and caches nothing — the same trade `resolve_capabilities`
+makes, for the same reason. `grants.resource_id` carries no foreign key
+(it is polymorphic across eight types, two of which share their connection's
+id), so a deleted resource is handled by a delete hook in the service **plus** a
+sweep in the reconciler; an orphaned grant is inert but would show in an access
+review as reach nobody can explain.
+
+**`AUTHZ_BACKEND=owner_only` remains a working rollback for one release**, in
+both directions and without a migration: no grant row is read under it, and
+running under it creates none.
+
 The role model carries **no resource ids**: `role_scoped_privileges` has a
 resource *type* and nowhere to put an id. Per-resource access is a grant
 (Phase 6), and keeping the two apart is what makes an access review answerable
@@ -978,7 +1078,9 @@ resource *type* and nowhere to put an id. Per-resource access is a grant
 `role.created`, `role.updated`, `role.deleted`, `role.assigned`,
 `role.unassigned`; every team change likewise: `team.created`, `team.renamed`,
 `team.deleted`, `team.member.added`, `team.member.removed`,
-`team.source.bound`; and every service-account change as listed above.
+`team.source.bound`; every service-account change as listed above; and every
+sharing change: `grant.created`, `grant.revoked`, `grant.wildcard.created`,
+`ownership.transferred` and `disclosure.changed`.
 
 > **Losing `SECRET_BOX_KEY` means every stored credential must be re-entered.**
 > There is no recovery path, by design. Back it up somewhere your database

@@ -29,7 +29,9 @@ from app.core.config import Settings, get_settings
 from app.core.context import RequestContext
 from app.infra.db.models import (
     DatabaseConnection,
+    Grant,
     KnowledgeTemplateRow,
+    RoleScopedPrivilege,
     SchemaSnapshotRow,
 )
 from app.main import create_app
@@ -133,6 +135,19 @@ class FakeDb:
             return _Result(self.snapshot.version if self.snapshot else None)
         if entity is KnowledgeTemplateRow:
             return _Result(None, rows=self._visible(statement))
+        if entity in (Grant, RoleScopedPrivilege) or name in (
+            "privilege", "id", "resource_id",
+        ):
+            # The authorizer's own reads, from Phase 6: a role scoped
+            # privilege over this type, and a wildcard grant over it. Answered
+            # "no rows" rather than whitelisted statement by statement, because
+            # this file is about **ownership** scoping and the world it builds
+            # has neither — so the honest answer is that neither reaches
+            # anybody, and ownership decides, exactly as it did before.
+            #
+            # `test_grants.py` is where the other four facts are exercised,
+            # against a real schema rather than a double.
+            return _Result(None, rows=[])
         raise AssertionError(f"unexpected query: {statement}")
 
     def _visible(self, statement: Any) -> list[KnowledgeTemplateRow]:
@@ -182,13 +197,38 @@ class _Result:
     def scalars(self) -> Any:
         return _Scalars(self._rows)
 
+    def all(self) -> list[Any]:
+        """Multi-column rows, read without `.scalars()`.
+
+        The authorizer's grant lookup selects two columns — the privilege and
+        the team id, because a row's *path* is part of the answer — so it reads
+        the result directly. Answering `[]` here is the same statement the
+        wildcard branch makes: this file builds a world with no grants in it,
+        so ownership decides, exactly as it did before Phase 6.
+        """
+        return self._rows
+
 
 class _Scalars:
+    """`Result.scalars()` over a list — iterable **and** `.all()`-able.
+
+    Both, because the two callers read it differently: the routes call
+    `.all()`, and the authorizer's wildcard reads iterate. A double that
+    offered only one would fail the caller that used the other, in a traceback
+    about the double rather than about the code under test.
+    """
+
     def __init__(self, rows: list[Any]) -> None:
         self._rows = rows
 
     def all(self) -> list[Any]:
         return self._rows
+
+    def __iter__(self) -> Any:
+        return iter(self._rows)
+
+    def first(self) -> Any:
+        return self._rows[0] if self._rows else None
 
 
 def _client(
@@ -593,14 +633,18 @@ def test_a_write_that_updates_a_row_refreshes_it_before_serialising() -> None:
     assert client.db.refreshes > before, "DELETE serialised a row it did not refresh"
 
 
-def test_no_knowledge_endpoint_checks_is_admin_directly() -> None:
-    """D4, enforced on the parse rather than on the prose.
+def test_every_knowledge_route_asks_the_authorizer_and_nothing_else() -> None:
+    """D4, enforced on the parse rather than on the prose — one phase on.
 
-    The discipline — every write asks one function — is what makes flipping
-    curation to admin-only a single line in `policy.py` instead of an audit of
-    every route. A grep would trip over this module's own docstring saying so,
-    so the check reads the AST: no attribute access named `is_admin` anywhere
-    in the file.
+    This asserted `can_curate` was called and `is_admin` was not. **Phase 6
+    retired `can_curate`**: curation is now `(knowledge, modify)`, a privilege
+    that can be granted to a person or a team on one connection and shown in an
+    access review, which is strictly more than a settings flag could express.
+
+    So the claim is rewritten to the same shape: every route in this module
+    reaches its answer through `_authorized`, which asks the authorizer, and
+    **no route decides for itself**. A grep would trip over this module's own
+    docstring naming the retired function, so it reads the AST.
     """
     import ast
     from pathlib import Path
@@ -610,7 +654,11 @@ def test_no_knowledge_endpoint_checks_is_admin_directly() -> None:
     attributes = {
         node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
     }
+    names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+
     assert "is_admin" not in attributes
-    assert "can_curate" in {
-        node.id for node in ast.walk(tree) if isinstance(node, ast.Name)
-    }
+    assert "can_curate" not in names, "can_curate was retired in Phase 6"
+    assert "_authorized" in names
+    # And the privilege that replaced it is named here, so the module cannot
+    # quietly stop asking for it.
+    assert "Privilege" in names

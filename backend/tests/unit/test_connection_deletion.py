@@ -66,11 +66,23 @@ def test_ownership_is_not_released_the_same_way() -> None:
 
 # ── and that a refusal reaches the caller ────────────────────────────────
 class _Result:
+    """Enough of a `Result` for both statements the delete route now runs.
+
+    `rowcount` arrived with Phase 6: deleting a connection also revokes its
+    grants, and a `DELETE` reports how many rows it removed. Zero is the honest
+    answer for a fake holding one row and no grants — the count is only logged,
+    and a double that raised on it would be testing the double.
+    """
+
     def __init__(self, value: Any) -> None:
         self._value = value
 
     def scalar_one_or_none(self) -> Any:
         return self._value
+
+    @property
+    def rowcount(self) -> int:
+        return 0
 
 
 class FakeDb:

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -19,14 +20,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.core.context import RequestContext
-from app.core.errors import AuthenticationError, ForbiddenError
-from app.domain.ports.authz import Authorizer
-from app.domain.value_objects.authz import Capability
+from app.core.errors import AuthenticationError, ForbiddenError, ValidationError
+from app.domain.ports.authz import Authorizer, ResourceRef
+from app.domain.value_objects.authz import Capability, Privilege, ResourceType
 from app.infra.authz.factory import build_authorizer
 from app.infra.crypto.aesgcm_box import AesGcmSecretBox
 from app.infra.db.session import get_sessionmaker
 from app.infra.identity.local import LocalIdentityProvider
 from app.infra.identity.service_key import ServiceKeyProvider, looks_like_service_key
+from app.services.policy import require
 from app.services.role_service import RoleService
 from app.services.team_service import TeamService
 
@@ -196,6 +198,63 @@ def needs(capability: Capability) -> Callable[..., Awaitable[RequestContext]]:
                 f"This action needs the “{capability}” permission, which none "
                 "of your roles carries."
             )
+        return ctx
+
+    return guard
+
+
+def on(
+    type_: ResourceType, privilege: Privilege, param: str = "id"
+) -> Callable[..., Awaitable[RequestContext]]:
+    """A declarative guard for a **resource**. The sibling of `needs`.
+
+    ```python
+    @router.get("/{connection_id}/grants")
+    async def list_grants(
+        connection_id: UUID,
+        ctx: Annotated[RequestContext, Depends(
+            on(ResourceType.CONNECTION, Privilege.MANAGE, "connection_id")
+        )],
+    ): ...
+    ```
+
+    `needs` guards an app-wide verb; this guards *this* thing, and both run in
+    a dependency **before** the handler body for the same reason — a check that
+    lives in a dependency cannot be forgotten by whoever adds the next route.
+    That is §18.4's shape (a), and this codebase's answer to OWASP API1:2023.
+
+    It reads the id from the path by name rather than positionally, because a
+    route with two ids (`/connections/{connection_id}/grants/{grant_id}`) has
+    to be able to say which one the question is about — and a guard that got
+    that wrong would silently authorise against the wrong row.
+
+    **The 404/403 rule is not implemented here.** It is implemented once, in
+    `services/policy.require`, which this calls; a second copy in a dependency
+    is exactly how the two answers drift apart and turn a list endpoint into an
+    existence oracle.
+
+    The handler still receives the `RequestContext`, so the body can ask for a
+    second, different privilege where it genuinely needs one — a `PATCH` that
+    also touches a `manage`-gated field, say. What it must not do is re-ask the
+    same question, which would be two round trips for one answer.
+    """
+
+    async def guard(
+        request: Request, ctx: CtxDep, authz: AuthzDep
+    ) -> RequestContext:
+        raw = request.path_params.get(param)
+        if raw is None:  # pragma: no cover - a wiring mistake, not a request
+            raise RuntimeError(
+                f"on(...) was asked for path parameter {param!r}, which this "
+                f"route does not declare: {request.url.path}"
+            )
+        try:
+            resource_id = UUID(str(raw))
+        except ValueError:
+            # A malformed id is a bad request, not a missing resource: nothing
+            # was looked up, so answering 404 would imply something was.
+            raise ValidationError("That is not a valid identifier.") from None
+        await require(ctx, authz, ResourceRef(type=type_, id=resource_id), privilege)
         return ctx
 
     return guard

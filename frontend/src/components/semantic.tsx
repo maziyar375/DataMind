@@ -35,6 +35,7 @@ import {
   relativeTime,
 } from './ui'
 import type { ChipTone } from './ui'
+import { AccessPopover } from './access'
 import { DetailBody, FieldRow } from './settings'
 import { useBackgroundWatch } from '../shell'
 import { explainRekey, rekeyDrift } from './semantic-drift'
@@ -582,6 +583,16 @@ function Hero({
         </div>
 
         <div style={{ display: 'flex', gap: 8, flexShrink: 0, alignItems: 'center' }}>
+          {/* The layer is its own grantable resource — `semantic_layer`,
+              carrying this connection's id — so a Data Engineer can hold
+              `(semantic_layer, manage)` over every connection and still need
+              `select` on one to read a row of its data. Its Access control
+              therefore belongs here rather than on the connection's tab, and
+              it renders nothing for a viewer who cannot share it. */}
+          <AccessPopover
+            base={`connections/${connection.id}/semantic`}
+            resourceLabel="this semantic layer"
+          />
           {exists ? (
             <GhostButton onClick={onGenerate} disabled={running}>
               <Icon.Sparkle size={14} />

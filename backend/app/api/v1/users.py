@@ -37,6 +37,7 @@ from app.domain.value_objects import Role, UserStatus
 from app.domain.value_objects.authz import ADMINISTRATOR, NORMAL_USER, PrincipalKind
 from app.infra.db.models import User
 from app.infra.identity.local import LocalIdentityProvider
+from app.services.grant_service import owned_resources
 from app.services.role_service import RoleService, assign_by_name
 from app.services.team_service import TeamService
 
@@ -184,16 +185,39 @@ async def set_user_password(
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_user(user_id: UUID, ctx: UserManageDep, db: DbDep) -> None:
-    """Delete a person. A machine is deleted from its own screen, and audited.
+    """Delete a person. Refused while they own anything, **naming what**.
 
-    Routing a service account through here would delete it with no
-    `service_user.deleted` row — the audit action that names what was removed —
-    so it is refused rather than quietly handled.
+    Three refusals, and the third is new in Phase 6.
+
+    Deleting a principal `SET NULL`s the `owner_id` of everything they own, and
+    a resource with no owner is one nobody can reach: no ownership arm in
+    `visible` matches it, no `manage` holder exists to share it, and the only
+    way back is a database client. So the delete is refused while they own a
+    grantable resource, and the refusal **lists what they own** — because
+    *"transfer these four things first"* is a support ticket somebody can act
+    on and *"cannot delete user"* is not.
+
+    `POST /{resource}/{id}/transfer` is the way through it, which is also why
+    that endpoint exists on every owned type rather than only on connections.
+
+    A machine is deleted from its own screen: routing a service account through
+    here would remove it with no `service_user.deleted` row naming what went.
     """
     if user_id == ctx.user_id:
         raise ValidationError("You cannot remove your own account.")
     user = await _person(db, user_id)
     await RoleService(db).guard_last_administrator(user_id)
+
+    owned = await owned_resources(db, user_id)
+    if owned:
+        shown = ", ".join(owned[:5])
+        more = f" and {len(owned) - 5} more" if len(owned) > 5 else ""
+        raise ConflictError(
+            f"“{user.display_name or user.email}” still owns {shown}{more}. "
+            "Transfer them to somebody else first — deleting the account now "
+            "would leave them with no owner and nobody able to share them."
+        )
+
     await db.delete(user)
 
 

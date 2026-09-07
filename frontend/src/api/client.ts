@@ -8,12 +8,13 @@
  */
 
 import type {
+  Actions,
   AnswerFeedback,
   ArtifactSpec, BenchmarkCandidate, BenchmarkOverview, BenchmarkResult,
   BenchmarkRun, BenchmarkSet, CapabilityEntry, ChartRedraw, Connection, ConversationSummary, Dashboard, DashboardDocument,
   DashboardImportResult, DashboardSummary,
-  DashboardTile, EmbeddingStatus, IssuedKey, KnowledgeHealth, KnowledgeTemplate,
-  KnowledgeTemplateList,
+  DashboardTile, EmbeddingStatus, Grant, IssuedKey, KnowledgeHealth,
+  KnowledgeTemplate, KnowledgeTemplateList,
   LlmConfig, MaintenanceResult, MessageWithRun, ParameterCatalog, Permissions,
   ProblemDetail, Report, ReportBlock,
   ReportBlockCheck, ReportChart, ReportRun, ReportRunDetail, ReportSection,
@@ -293,6 +294,40 @@ export const teams = {
   remove: (id: string) => del(`/teams/${id}`),
 }
 
+// ── access ────────────────────────────────────────────────────────────────
+/**
+ * Sharing, and *"what may I do here"*, for any resource type.
+ *
+ * One object rather than a `grants` block on each of `connections`, `reports`,
+ * `dashboards` and the rest, because the backend serves these from one module
+ * too (`api/v1/access.py`) — eight copies of five calls is eight places for a
+ * path to be spelled slightly wrong, and the failure mode is a share dialog
+ * that silently reads somebody else's shares.
+ *
+ * `base` is the resource's path without the leading `/api/v1`:
+ * `connections/{id}`, `connections/{id}/knowledge`, and from Phase 8
+ * `reports/{id}`. That is the same string the backend mounts these under.
+ */
+export const access = {
+  grants: (base: string) => get<Grant[]>(`/${base}/grants`),
+  /** Idempotent, and answers with the whole list — so the panel re-renders
+   *  from the response rather than re-fetching, and "it was already shared"
+   *  reads as state instead of a 409. */
+  grant: (
+    base: string,
+    payload: { privilege: string; user_id?: string; team_id?: string },
+  ) => post<Grant[]>(`/${base}/grants`, payload),
+  revoke: (base: string, grantId: string) =>
+    del(`/${base}/grants/${grantId}`),
+  /** What the viewer may do here. **Every control is rendered from this**,
+   *  never from a role string and never from a privilege list the SPA
+   *  interprets itself — `can.share` is the question; the lattice stays in the
+   *  backend. */
+  actions: (base: string) => get<Actions>(`/${base}/actions`),
+  transfer: (base: string, to: string) =>
+    post<void>(`/${base}/transfer`, { to }),
+}
+
 // ── service accounts ──────────────────────────────────────────────────────
 // Two acts, two calls: `create` makes an identity, `issueKey` hands out a
 // secret. A create that returned a key would collapse them, and the key would
@@ -332,6 +367,18 @@ export const serviceAccounts = {
 // ── connections ───────────────────────────────────────────────────────────
 export const connections = {
   list: () => get<Connection[]>('/connections'),
+  /**
+   * Change how much of a result may leave for a model provider. **`manage`.**
+   *
+   * Its own call because it is its own endpoint, and its own endpoint because
+   * the moment a connection is shared, one person's disclosure choice governs
+   * another person's questions. Sending it inside `update` would let anybody
+   * who can fix a password also widen what leaves the database.
+   */
+  setDisclosure: (id: string, policy: string) =>
+    put<Connection>(`/connections/${id}/disclosure`, {
+      disclosure_policy: policy,
+    }),
   create: (payload: Record<string, unknown>) =>
     post<Connection>('/connections', payload),
   update: (id: string, payload: Record<string, unknown>) =>

@@ -2,28 +2,45 @@
 
 Row-level or column-level security later is a change in this module only.
 
-**`can()` is the one that matters from here on.** It asks the `Authorizer`
-port, which is where ownership, grants, teams and role scoped privileges are
-combined into one answer with a reason attached.
+**`can()` asks; `require()` asks and raises.** Both delegate to the
+`Authorizer` port, which is where ownership, grants, teams, role scoped
+privileges and wildcards are combined into one answer with a reason attached.
 
-Three functions that used to sit below it — `can_read`, `can_write` and
-`can_administer_users` — are gone as of Phase 2. Not tidying: each had **zero
-callers** anywhere in `app/` or `tests/`, so deleting them changed no
-behaviour, and each carried an `is_admin` arm that would otherwise have to be
-explained to the authorization gate for the rest of the plan. What survives is
-`owns` — a fact, used by exactly one caller — and `can_curate`, which is a
-policy about curation rather than a question about reach.
+**`require()` is where the 404-versus-403 rule lives, and it lives here once.**
+Getting that rule wrong turns every endpoint into an existence oracle, and
+getting it inconsistent is worse than getting it uniformly wrong — a caller who
+gets 404 from one route and 403 from another for the same resource has learned
+that the resource exists. So it is one function, and §19.1's table is its
+implementation:
+
+| the caller holds | answer |
+|---|---|
+| nothing at all | **404** — indistinguishable from a typo, and audited as nothing |
+| `describe` or more, but not enough | **403**, naming the privilege they need |
+
+**`can_curate` is gone as of Phase 6, and its seven tests were rewritten rather
+than deleted.** It approximated a reader/curator split with a settings flag
+because there was no way to *grant* curation; now there is, and the
+approximation is the privilege itself — `(knowledge, modify)`. `curation_admin_only`
+went with it. The three functions before it (`can_read`, `can_write`,
+`can_administer_users`) went in Phase 2, each with zero callers and an
+`is_admin` arm.
+
+What survives beside `can` and `require` is `owns` — a *fact*, legitimate only
+where the answer is not being used to decide reach.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from app.core.context import RequestContext
+from app.core.errors import ForbiddenError, NotFoundError
 from app.domain.ports.authz import Authorizer, Decision, ResourceRef
-from app.domain.value_objects.authz import Capability, Privilege, ResourceType
-
-if TYPE_CHECKING:  # `Settings` is a pydantic model; the import is free at runtime
-    from app.core.config import Settings
+from app.domain.value_objects.authz import (
+    PRIVILEGE_MEANINGS,
+    Privilege,
+    ResourceType,
+)
 
 
 async def can(
@@ -64,55 +81,82 @@ def owns(ctx: RequestContext, resource: Any) -> bool:
     """Is this principal the row's owner? A **fact**, not a decision.
 
     Ownership is one of the five facts the authorizer combines; asking it here
-    is legitimate only where the answer is not being used to decide reach.
-    Today that is one caller: `can_curate`, below. Everything else asks
-    `can()`.
+    is legitimate only where the answer is not being used to decide reach —
+    rendering an "owned by you" badge, say. Its last decision-making caller
+    was `can_curate`, which Phase 6 retired. Everything else asks `can()` or
+    `require()`.
     """
     return getattr(resource, "owner_id", None) == ctx.user_id
 
 
-def can_curate(
-    ctx: RequestContext, settings: Settings, resource: Any = None
-) -> bool:
-    """Who may write connection knowledge — templates, reviews, resolutions.
+async def require(
+    ctx: RequestContext,
+    authz: Authorizer,
+    ref: ResourceRef,
+    privilege: Privilege,
+) -> Decision:
+    """`can()`, and raise the right error when the answer is no.
 
-    **Phase 8 flipped `curation_admin_only` to `true`.** Curation writes
-    business logic that answers questions on other people's behalf, so it is a
-    privileged act by default now that user management exists to express the
-    privilege. Every write call site already asked this function, which is the
-    whole reason it is a function here rather than an `is_admin` check
-    scattered across the endpoints — the flip moved one line in `config.py`.
+    **The one place the 404/403 rule is implemented.** See the module
+    docstring for the table; the two branches below are it.
 
-    **The owner of the connection is the other legitimate curator, and adding
-    that is what makes the flip correct rather than merely done.** Without it
-    the flag takes rights away and grants none: the knowledge routes already
-    ask the authorizer before they get here, so an admin cannot reach somebody
-    else's connection either, and admin-only would have meant *the person who
-    owns a connection cannot curate their own store*. That is not what D4
-    describes and it is not a security posture — it is a lockout.
+    The 403 message names the privilege *and what it means on this type*,
+    read from `PRIVILEGE_MEANINGS` — the same table `GET …/actions` renders
+    from, so the sentence in the refusal and the sentence beside the radio
+    button in the share dialog cannot drift apart. "You need select on this
+    connection: ask questions through it" is something a person can take to
+    whoever owns it. "Forbidden" is not.
 
-    So the rule is **administrator, or the owner of the thing being curated**.
-    Today those two are the only people who can reach a connection at all, so
-    the flag changes nothing that anyone can observe. It starts mattering the
-    moment [mvp2 §D1](../../../docs/mvp2-plan.md) lands and a connection can be
-    *shared*: a reader granted access to somebody's connection may then ask it
-    questions and may not rewrite what it has been taught, which is precisely
-    the protection D4 wants and the reason to have the flag on before sharing
-    exists rather than after.
-
-    `resource` is the connection (or anything carrying `owner_id`). Omitting it
-    asks the strict question — administrator only — because a caller with no
-    resource in hand cannot establish ownership, and the fail-closed reading of
-    "I don't know who owns this" is *no*.
-
-    **"Administrator" is now `user.manage`**, which is exactly the set of people
-    the `ADMIN` enum used to name, so nothing about who may curate has moved.
-    The flag itself is on a path to redundancy rather than to a rewrite: the
-    knowledge routes already ask the authorizer for `(knowledge, modify)` before
-    reaching here, and once that can be *granted* (Phase 6) the reader/curator
-    split this flag approximates becomes the privilege itself. This function
-    goes when it does.
+    Returns the `Decision` when it is yes, so a caller that wants `because` for
+    an audit row has it without asking twice.
     """
-    if not settings.curation_admin_only:
-        return True
-    return ctx.can(Capability.USER_MANAGE) or owns(ctx, resource)
+    decision = await authz.allowed(ctx, ref, privilege)
+    if decision:
+        return decision
+
+    # Nothing at all reaches them: the resource must be indistinguishable from
+    # one that does not exist. Deliberately **not** audited — a 404 is
+    # indistinguishable from a typo, and auditing it makes the log noise
+    # (plan §19.1).
+    held = await authz.privileges_on(ctx, ref)
+    if not held:
+        raise NotFoundError(_NOT_FOUND.get(ref.type, "Not found."))
+
+    meaning = PRIVILEGE_MEANINGS[ref.type][privilege]
+    raise ForbiddenError(
+        f"This needs “{privilege}” on this {_NOUN[ref.type]}: {meaning[0].lower()}"
+        f"{meaning[1:]} You hold "
+        f"{', '.join(sorted(str(p) for p in held))}.",
+        privilege=str(privilege),
+        resource_type=str(ref.type),
+        held=sorted(str(p) for p in held),
+    )
+
+
+#: What each type is called in a refusal. Written out rather than derived from
+#: the enum, because `semantic_layer` reads badly in a sentence and "the
+#: knowledge store" is what the UI calls it.
+_NOUN: dict[ResourceType, str] = {
+    ResourceType.CONNECTION: "data source",
+    ResourceType.KNOWLEDGE: "knowledge store",
+    ResourceType.SEMANTIC_LAYER: "semantic layer",
+    ResourceType.LLM_CONFIG: "model configuration",
+    ResourceType.DASHBOARD: "dashboard",
+    ResourceType.REPORT: "report",
+    ResourceType.CONVERSATION: "conversation",
+    ResourceType.TEAM: "team",
+}
+
+#: The 404 sentence per type. Same wording the routes used before Phase 6, so
+#: a client matching on it does not break — and deliberately the *same* whether
+#: the row is missing or merely out of reach.
+_NOT_FOUND: dict[ResourceType, str] = {
+    ResourceType.CONNECTION: "Connection not found.",
+    ResourceType.KNOWLEDGE: "Connection not found.",
+    ResourceType.SEMANTIC_LAYER: "Connection not found.",
+    ResourceType.LLM_CONFIG: "Model configuration not found.",
+    ResourceType.DASHBOARD: "Dashboard not found.",
+    ResourceType.REPORT: "Report not found.",
+    ResourceType.CONVERSATION: "Conversation not found.",
+    ResourceType.TEAM: "Team not found.",
+}

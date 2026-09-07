@@ -33,10 +33,12 @@ from app.infra.db.models import (
     DashboardTile,
     DatabaseConnection,
     GeneratedQuery,
+    Grant,
     KnowledgeTemplateHit,
     KnowledgeTemplateRow,
     Message,
     ReportBlock,
+    RoleScopedPrivilege,
     Run,
     RunStep,
     SchemaSnapshotRow,
@@ -155,6 +157,12 @@ class FakeDb:
         if entity is SemanticLayerRow:
             return _Result(None)
         if name in ("version", "question_normalized", "run_id"):
+            return _Result(None, rows=[])
+        if entity in (Grant, RoleScopedPrivilege):
+            # The authorizer's own reads, from Phase 6: a role scoped privilege
+            # over this type, and a wildcard grant over it. Answered "no rows"
+            # rather than whitelisted statement by statement — this file builds
+            # a world with neither, so ownership decides, exactly as before.
             return _Result(None, rows=[])
         # Deliberately short: an unhandled query used to raise with the whole
         # SQLAlchemy statement in the frame, and the error logger's rich
