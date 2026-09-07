@@ -55,6 +55,7 @@ from app.infra.db.models import (
     DatabaseConnection,
     LlmConfig,
 )
+from app.services import restricted
 from app.services.dashboard_transfer import (
     DashboardDocument,
     SkippedTile,
@@ -63,6 +64,7 @@ from app.services.dashboard_transfer import (
     parse_document,
     tile_fields,
 )
+from app.services.policy import require
 from app.services.query_service import (
     TileRequest,
     TileResult,
@@ -186,11 +188,19 @@ class DashboardService:
             select(Dashboard).where(Dashboard.id == dashboard_id)
         )
         dashboard = result.scalar_one_or_none()
-        if dashboard is None or not await self._authz.allowed(
-            ctx, ResourceRef.to(ResourceType.DASHBOARD, dashboard), privilege
-        ):
-            # 404 rather than 403: see the module docstring.
+        if dashboard is None:
             raise NotFoundError("Dashboard not found.")
+        # 404 when nothing reaches them, 403 naming the privilege when
+        # something does — the §19.1 rule, asked in the one place that holds
+        # it. A shared board makes "you may look but not edit" an ordinary
+        # state, and a 404 for it reads as a broken link rather than a rule.
+        await require(
+            ctx,
+            self._authz,
+            ResourceRef.to(ResourceType.DASHBOARD, dashboard),
+            privilege,
+            db=self._db,
+        )
         return dashboard
 
     async def tiles_of(self, dashboard_id: UUID) -> list[DashboardTile]:
@@ -652,6 +662,60 @@ class DashboardService:
                 return candidate
         raise ConflictError("You already have a dashboard with that name.")
 
+    async def share_check(
+        self,
+        ctx: RequestContext,
+        dashboard_id: UUID,
+        *,
+        user_id: UUID | None = None,
+        team_id: UUID | None = None,
+    ) -> tuple[int, list[tuple[UUID, str]]]:
+        """Which of this board's databases the named principal cannot read.
+
+        §19.2: *"sharing warns when its tiles span connections the grantee
+        cannot read, and names them. The share is still allowed; the surprise
+        is not."* A dashboard is the only artifact that needs this, because it
+        is the only one whose tiles carry their own `connection_id` — a report
+        has exactly one connection and a conversation is pinned to one.
+
+        Asked **as the grantee**, through `RequestContext.on_behalf_of`, which
+        is the same delegation a scheduled run uses and the reason this needs
+        no second implementation of the reach question: what the dialog wants
+        to know is literally *"what would they see"*, and the honest way to
+        answer that is to ask the authorizer as them.
+
+        The caller must hold `manage` — this reveals what a third party can
+        reach — and `refresh` enforces the same rule at render time anyway.
+        A team is asked as **the team**, not as its members: a team grant is
+        what a team member would inherit, and enumerating members here would
+        answer a different question and leak the membership list besides.
+        """
+        await require(
+            ctx,
+            self._authz,
+            ResourceRef(type=ResourceType.DASHBOARD, id=dashboard_id),
+            Privilege.MANAGE,
+            db=self._db,
+        )
+        tiles = await self.tiles_of(dashboard_id)
+        ids = {t.connection_id for t in tiles if t.connection_id}
+        if not ids:
+            return 0, []
+
+        as_them = (
+            RequestContext.as_team(team_id)
+            if team_id is not None
+            else RequestContext.on_behalf_of(user_id or ctx.user_id)
+        )
+        readable = await restricted.readable_connection_ids(
+            self._db, as_them, self._authz, ids
+        )
+        withheld = ids - readable
+        names = await restricted.connection_names(self._db, withheld)
+        return len(ids), sorted(
+            ((cid, names.get(cid, "")) for cid in withheld), key=lambda pair: pair[1]
+        )
+
     # ── display names for the tile chrome ────────────────────────────────
     async def display_names(
         self, tiles: list[DashboardTile]
@@ -725,6 +789,41 @@ class DashboardService:
                 continue
             runnable.append(tile)
 
+        # ── the intersection rule (§19.2), and it runs BEFORE the cache ──
+        #
+        # A tile renders iff this viewer holds `select` on **that tile's**
+        # connection. One query for the whole board, not one per tile.
+        #
+        # The order is the security property, not a preference:
+        # `dashboard_tile_cache` holds rows read out of the customer's database
+        # and is keyed on the tile alone. Asking after the cache lookup would
+        # serve a revoked reader the last numbers they were allowed to see, for
+        # as long as the interval lasts. See `services/restricted.py`.
+        wanted_connections = {t.connection_id for t in runnable if t.connection_id}
+        readable = await restricted.readable_connection_ids(
+            self._db, ctx, self._authz, wanted_connections
+        )
+        withheld = wanted_connections - readable
+        if withheld:
+            names = await restricted.connection_names(self._db, withheld)
+            for tile in runnable:
+                if tile.connection_id in withheld:
+                    results[tile.id] = TileResult(
+                        status="ERROR",
+                        error_code=restricted.NO_DATA_ACCESS,
+                        error_message=restricted.no_access_message(
+                            names.get(tile.connection_id)
+                        ),
+                    )
+            await restricted.record_denials(
+                self._db,
+                ctx,
+                connection_ids=withheld,
+                on_type=ResourceType.DASHBOARD,
+                on_id=dashboard_id,
+            )
+            runnable = [t for t in runnable if t.connection_id not in withheld]
+
         cache = await self._cache_rows([t.id for t in runnable])
         stale: list[DashboardTile] = []
         for tile in runnable:
@@ -774,8 +873,20 @@ class DashboardService:
             )
 
         if requests:
+            # `ctx` and `authz`, not an owner id. `execute_many` took an
+            # `owner_id` until Phase 1 swapped it for the pair every guarded
+            # execution needs; this call site was not updated with it and every
+            # dashboard refresh that actually ran a query had been raising
+            # `TypeError` — a 500 the unit tests could not see, because the
+            # fake that stands in for `execute_many` still had the old
+            # signature. It now takes `**_` and asserts the real one, so the
+            # two cannot drift apart again.
             results |= await execute_many(
-                self._db, self._settings, requests=requests, owner_id=ctx.user_id
+                self._db,
+                self._settings,
+                requests=requests,
+                ctx=ctx,
+                authz=self._authz,
             )
 
         by_id = {tile.id: tile for tile in tiles}

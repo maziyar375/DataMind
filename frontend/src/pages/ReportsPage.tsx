@@ -22,6 +22,7 @@ import { useMatch, useNavigate } from 'react-router-dom'
 
 import { ApiError, connections as connectionsApi, llmConfigs as modelsApi, reports as api } from '../api/client'
 import type { Connection, LlmConfig, Report, ReportSummary } from '../api/types'
+import { AccessPanel } from '../components/access'
 import { ReportOutlineEditor, ReportRunViewer } from '../components/report'
 import { ReportRunHistory } from '../components/report-history'
 import {
@@ -163,6 +164,15 @@ function ReportsIndex({
   const [error, setError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [renaming, setRenaming] = useState<ReportSummary | null>(null)
+  /** The report whose access panel is open, from a card's kebab. */
+  const [sharing, setSharing] = useState<ReportSummary | null>(null)
+  /**
+   * *"Shared with me"*, off by default and only offered once there is
+   * something to filter to — the same rule the Archived segment follows. It
+   * answers *"what did somebody hand me"*, which is a question people ask on
+   * the day they are handed something.
+   */
+  const [sharedOnly, setSharedOnly] = useState(false)
   const [busy, setBusy] = useState(false)
 
   const [query, setQuery] = useState('')
@@ -255,6 +265,7 @@ function ReportsIndex({
     const needle = query.trim().toLowerCase()
     const matched = cards.filter((card) => {
       if (status !== 'ALL' && card.status !== status) return false
+      if (sharedOnly && !card.shared) return false
       if (!needle) return true
       return (
         card.name.toLowerCase().includes(needle)
@@ -262,10 +273,14 @@ function ReportsIndex({
       )
     })
     return sortCards(matched, sort)
-  }, [cards, query, sort, status])
+  }, [cards, query, sharedOnly, sort, status])
 
   const archivedCount = useMemo(
     () => (cards ?? []).filter((card) => card.status === 'ARCHIVED').length,
+    [cards],
+  )
+  const sharedCount = useMemo(
+    () => (cards ?? []).filter((card) => card.shared).length,
     [cards],
   )
   const activeCount = (cards ?? []).length - archivedCount
@@ -283,6 +298,7 @@ function ReportsIndex({
       onRename: () => setRenaming(card),
       onArchive: () => void toggleArchive(card),
       onDelete: () => void remove(card),
+      onShare: () => setSharing(card),
     }),
     [onOpen, toggleArchive, remove],
   )
@@ -334,6 +350,24 @@ function ReportsIndex({
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
             {/* Offered only once something is archived: a permanently empty
                 filter is furniture, not a control. */}
+            {sharedCount > 0 && (
+              <GhostButton
+                aria-pressed={sharedOnly}
+                onClick={() => setSharedOnly((on) => !on)}
+                style={
+                  sharedOnly
+                    ? {
+                        background: 'var(--accent-bg)',
+                        borderColor: 'var(--accent-border)',
+                        color: 'var(--accent)',
+                      }
+                    : undefined
+                }
+                title="Only reports somebody shared with you"
+              >
+                <Icon.Users size={13} /> Shared with me ({sharedCount})
+              </GhostButton>
+            )}
             {archivedCount > 0 && (
               <Segmented
                 ariaLabel="Filter by status"
@@ -449,6 +483,17 @@ function ReportsIndex({
         />
       )}
 
+      {sharing && (
+        <Modal
+          title={`Access to “${sharing.name}”`}
+          onClose={() => setSharing(null)}
+          width={620}
+          footer={<GhostButton onClick={() => setSharing(null)}>Done</GhostButton>}
+        >
+          <AccessPanel base={`reports/${sharing.id}`} title={sharing.name} />
+        </Modal>
+      )}
+
       {renaming && (
         <RenameDialog
           report={renaming}
@@ -481,6 +526,12 @@ function toCard(report: Report): ReportSummary {
     section_count: report.sections.length,
     created_at: report.created_at,
     updated_at: report.updated_at,
+    // A report you just created or opened is one you can reach; whether it is
+    // *shared with you* is a fact the index carries and this conversion
+    // cannot invent, so it takes the safe reading — the badge and the filter
+    // correct themselves on the next list read.
+    shared: false,
+    owner_name: null,
   }
 }
 
@@ -496,13 +547,14 @@ function cardHue(id: string): number {
 }
 
 function ReportCard({
-  report, onOpen, onRename, onArchive, onDelete,
+  report, onOpen, onRename, onArchive, onDelete, onShare,
 }: {
   report: ReportSummary
   onOpen: () => void
   onRename: () => void
   onArchive: () => void
   onDelete: () => void
+  onShare: () => void
 }) {
   const hue = cardHue(report.id)
   const archived = report.status === 'ARCHIVED'
@@ -570,11 +622,19 @@ function ReportCard({
           onRename={onRename}
           onArchive={onArchive}
           onDelete={onDelete}
+          onShare={onShare}
         />
       </div>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
         {archived && <Chip tone="amber">Archived</Chip>}
+        {/* Whose report this is, when it is not yours. A display name, never
+            an address — the rule every list that became shareable follows. */}
+        {report.shared && (
+          <Chip tone="accent">
+            {report.owner_name ? `Shared by ${report.owner_name}` : 'Shared with you'}
+          </Chip>
+        )}
         {/* Unfinished, and invisible otherwise: a report with no outline has
             nothing to generate. */}
         {report.section_count === 0 ? (
@@ -641,13 +701,14 @@ function ReportCard({
  * and the facts, and everything dropped is still on the card.
  */
 function ReportRow({
-  report, onOpen, onRename, onArchive, onDelete,
+  report, onOpen, onRename, onArchive, onDelete, onShare,
 }: {
   report: ReportSummary
   onOpen: () => void
   onRename: () => void
   onArchive: () => void
   onDelete: () => void
+  onShare: () => void
 }) {
   const hue = cardHue(report.id)
   const archived = report.status === 'ARCHIVED'
@@ -706,6 +767,11 @@ function ReportRow({
             {report.name}
           </button>
           {archived && <Chip tone="amber">Archived</Chip>}
+          {report.shared && (
+            <Chip tone="accent">
+              {report.owner_name ? `Shared by ${report.owner_name}` : 'Shared'}
+            </Chip>
+          )}
           {/* Unfinished is worth a badge even here: a report with no outline
               has nothing to generate, and that is the one fact a scan of the
               list should not have to open a card to learn. */}
@@ -769,21 +835,26 @@ function ReportRow({
         onRename={onRename}
         onArchive={onArchive}
         onDelete={onDelete}
+        onShare={onShare}
       />
     </div>
   )
 }
 
 function ReportMenu({
-  report, onRename, onArchive, onDelete,
+  report, onRename, onArchive, onDelete, onShare,
 }: {
   report: ReportSummary
   onRename: () => void
   onArchive: () => void
   onDelete: () => void
+  onShare: () => void
 }) {
   const [open, setOpen] = useState(false)
   const items = [
+    // First, and above Rename: this is the verb that changes who else has the
+    // document, which is a bigger act than the three below it.
+    { label: 'Share…', run: onShare },
     { label: 'Rename', run: onRename },
     { label: report.status === 'ARCHIVED' ? 'Unarchive' : 'Archive', run: onArchive },
     { label: 'Delete', run: onDelete, danger: true },

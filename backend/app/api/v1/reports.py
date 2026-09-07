@@ -44,23 +44,46 @@ from app.api.schemas import (
     ReportUpdate,
     TileResultRead,
 )
+from app.api.v1.access import attach_access_routes, owner_names
+from app.domain.ports.authz import ResourceRef
+from app.domain.value_objects.authz import ResourceType
 from app.infra.db.models import Report, ReportBlockResult
+from app.services import restricted
 from app.services.report_service import ReportService
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
+# `/grants`, `/actions` and `/transfer`, written once in `access.py`. A
+# report is bound to exactly **one** connection, which is why it is the
+# first artifact type to become shareable: there is no intersection to
+# resolve, only the second check — `select` on the report, and `select` on
+# the connection behind it.
+attach_access_routes(router, ResourceType.REPORT, param="report_id")
 
-async def _report_read(service: ReportService, report: Report) -> ReportRead:
-    """The report, its outline, and the chips' labels — in three queries.
+
+async def _report_read(
+    service: ReportService,
+    report: Report,
+    ctx: CtxDep,
+    authz: AuthzDep,
+) -> ReportRead:
+    """The report, its outline, the chips' labels, and this reader's reach.
 
     Every field *except* `sections` is copied off the row. `Report.sections` is
     a lazy relationship, and `model_validate` would read it — a lazy load inside
     a response, in a context that cannot await, which is `MissingGreenlet`: a
     500 that appears only against a real database.
+
+    `data_access` is the second half of the report's authorization and the
+    reason this signature grew: reaching the **report** and reaching the
+    **database it was built over** are two questions, and from Phase 8 they can
+    have different answers. The editor reads it to disable Generate and Check
+    rather than offering buttons whose only outcome is a refusal.
     """
     sections = await service.sections_of(report.id)
     blocks = await service.blocks_of([s.id for s in sections])
     connections, models = await service.display_names([report])
+    held = await authz.privileges_on(ctx, ResourceRef.to(ResourceType.REPORT, report))
 
     by_section: dict[UUID, list[ReportBlockRead]] = {}
     for block in blocks:
@@ -71,7 +94,14 @@ async def _report_read(service: ReportService, report: Report) -> ReportRead:
     fields = {
         name: getattr(report, name)
         for name in ReportRead.model_fields
-        if name not in ("sections", "connection_name", "llm_config_name")
+        if name
+        not in (
+            "sections",
+            "connection_name",
+            "llm_config_name",
+            "data_access",
+            "privileges",
+        )
     }
     return ReportRead(
         **fields,
@@ -81,6 +111,8 @@ async def _report_read(service: ReportService, report: Report) -> ReportRead:
             _section_read(section, by_section.get(section.id, []))
             for section in sections
         ],
+        data_access=await service.may_read_data(ctx, report),
+        privileges=sorted(str(p) for p in held),
     )
 
 
@@ -101,6 +133,9 @@ async def list_reports(
     service = ReportService(db, settings, authz)
     reports = await service.list(ctx)
     connections, models = await service.display_names(reports)
+    # One query for the page, not one per card: from Phase 8 this list can
+    # hold somebody else's reports, and the card has to say whose.
+    owners = await owner_names(db, {r.owner_id for r in reports if r.owner_id})
 
     cards: list[ReportSummaryRead] = []
     for report in reports:
@@ -110,6 +145,12 @@ async def list_reports(
             card.connection_name = connections.get(report.connection_id)
         if report.llm_config_id is not None:
             card.llm_config_name = models.get(report.llm_config_id)
+        # A badge, not a gate: `visible` already decided this row is
+        # reachable, and this only says whether to name an owner.
+        card.shared = report.owner_id != ctx.user_id  # authz-ok: a badge
+        # The owner's name only on a card the reader does not own — "shared
+        # with you by you" is noise on every card somebody made themselves.
+        card.owner_name = owners.get(report.owner_id) if card.shared else None
         cards.append(card)
     return cards
 
@@ -122,7 +163,7 @@ async def create_report(
     shares no result values cannot carry a document written from them."""
     service = ReportService(db, settings, authz)
     report = await service.create(ctx, **payload.model_dump())
-    return await _report_read(service, report)
+    return await _report_read(service, report, ctx, authz)
 
 
 @router.get("/{report_id}", response_model=ReportRead)
@@ -131,7 +172,7 @@ async def get_report(
 ) -> ReportRead:
     service = ReportService(db, settings, authz)
     report = await service.get(ctx, report_id)
-    return await _report_read(service, report)
+    return await _report_read(service, report, ctx, authz)
 
 
 @router.patch("/{report_id}", response_model=ReportRead)
@@ -147,7 +188,7 @@ async def update_report(
     is 422 — the report is pinned to the one it was created against."""
     service = ReportService(db, settings, authz)
     report = await service.update(ctx, report_id, **payload.model_dump(exclude_unset=True))
-    return await _report_read(service, report)
+    return await _report_read(service, report, ctx, authz)
 
 
 @router.delete("/{report_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -169,7 +210,7 @@ async def propose_outline(
     """
     service = ReportService(db, settings, authz)
     report = await service.propose_outline(ctx, report_id)
-    return await _report_read(service, report)
+    return await _report_read(service, report, ctx, authz)
 
 
 # ── blocks ───────────────────────────────────────────────────────────────
@@ -513,18 +554,81 @@ async def get_run(
     """
     service = ReportService(db, settings, authz)
     run = await service.run(ctx, report_id, run_id)
+    report = await service.get(ctx, report_id)
     blocks, sections = await service.run_results(run.id)
     # Which figures rest on a different query than they did last time. One
     # extra pair of small queries per poll, and it is what makes two
     # generations of the same report comparable rather than merely adjacent.
     previous = await service.previous_block_hashes(run)
+
+    # ── the intersection rule, on a document (§19.2) ──
+    #
+    # `run_results` reads `report_block_results`, which holds rows taken out of
+    # the customer's database — the report's equivalent of the tile cache, and
+    # subject to the same rule for the same reason. A reader shared the report
+    # and not its connection keeps the structure, the headings and the prose,
+    # and every figure becomes a named placeholder. Asked once for the whole
+    # document, because a report has exactly one connection.
+    reachable = await service.may_read_data(ctx, report)
+    message = ""
+    if not reachable:
+        withheld = (
+            {report.connection_id} if report.connection_id is not None else set()
+        )
+        names = await restricted.connection_names(db, withheld)
+        message = restricted.no_access_message(names.get(report.connection_id))
+        await restricted.record_denials(
+            db,
+            ctx,
+            connection_ids=withheld,
+            on_type=ResourceType.REPORT,
+            on_id=report_id,
+        )
+
     return ReportRunDetailRead(
         **{
             name: getattr(run, name)
             for name in ReportRunRead.model_fields
         },
-        blocks=[_block_result_read(b, previous) for b in blocks],
+        blocks=[
+            _block_result_read(b, previous)
+            if reachable
+            else _withheld_block(b, message)
+            for b in blocks
+        ],
         sections=[ReportSectionResultRead.model_validate(s) for s in sections],
+    )
+
+
+def _withheld_block(
+    row: ReportBlockResult, message: str
+) -> ReportBlockResultRead:
+    """A figure the reader may not see, keeping everything that is not data.
+
+    The heading, the caption, the position and the timing survive — so the
+    document still reads as a document, the figure numbers still mean
+    something, and the reader can say *which* exhibit they need access to. The
+    statement goes with the rows: a stored `SELECT` names columns and filter
+    values out of a database this reader was not given, which is the same
+    disclosure the rows are.
+    """
+    return ReportBlockResultRead(
+        id=row.id,
+        block_id=row.block_id,
+        section_id=row.section_id,
+        position=row.position,
+        heading_snapshot=row.heading_snapshot,
+        title_snapshot=row.title_snapshot,
+        question_snapshot=row.question_snapshot,
+        computed_at=row.computed_at,
+        # The row's **own** verdict survives: a block that failed to run stays
+        # failed. `restricted` is the flag the renderer branches on first, so
+        # the two facts stay separable — "this figure is broken" and "this
+        # figure is not yours to see" are different things to tell a reader.
+        status=row.status,
+        restricted=True,
+        error_code=restricted.NO_DATA_ACCESS,
+        error_message=message,
     )
 
 

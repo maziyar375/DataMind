@@ -261,7 +261,16 @@ class FakeResult:
 
 
 class FakeDb:
-    """Answers the four selects `refresh` makes, by the table they name."""
+    """Answers the selects `refresh` makes, by table **and by projection**.
+
+    The table alone stopped being enough in Phase 8. `database_connections` is
+    now read three ways on one refresh — the whole row (to run a tile), the id
+    alone (the intersection check, composed with `visible`), and `(id, name)`
+    (the placeholder's label) — and a fake that answered all three with entity
+    rows made `readable_connection_ids` return objects where it wanted ids,
+    which silently withheld every tile. So the projection is read off the
+    statement rather than guessed.
+    """
 
     def __init__(
         self,
@@ -287,6 +296,11 @@ class FakeDb:
         if "dashboard_tiles" in sql:
             return FakeResult(list(self.tiles))
         if "database_connections" in sql:
+            wanted = [c["name"] for c in statement.column_descriptions]
+            if wanted == ["id"]:
+                return FakeResult([c.id for c in self.connections])
+            if wanted == ["id", "name"]:
+                return FakeResult([(c.id, c.name) for c in self.connections])
             return FakeResult(list(self.connections))
         return FakeResult([self.dashboard])
 
@@ -318,11 +332,24 @@ def _connection(connection_id: UUID) -> DatabaseConnection:
 def _executor(
     monkeypatch: pytest.MonkeyPatch, result: TileResult | None = None
 ) -> list[Any]:
-    """Replace `execute_many`, recording which tiles were actually run."""
+    """Replace `execute_many`, recording which tiles were actually run.
+
+    **The fake takes the real function's keyword arguments, and a test below
+    asserts that it does.** This stand-in kept an `owner_id` parameter for two
+    phases after `execute_many` swapped it for `ctx` and `authz`, so every
+    assertion in this file passed while a real dashboard refresh raised
+    `TypeError` on the call it was standing in for. A fake whose signature is
+    allowed to drift from the function it replaces tests the fake.
+    """
     ran: list[Any] = []
 
     async def fake(
-        _db: Any, _settings: Any, *, requests: list[Any], owner_id: UUID
+        _db: Any,
+        _settings: Any,
+        *,
+        requests: list[Any],
+        ctx: RequestContext,
+        authz: Any,
     ) -> dict:
         ran.extend(requests)
         return {
@@ -556,3 +583,39 @@ async def test_an_unreadable_stored_intent_falls_back_to_auto(
     await DashboardService(db, object(), OwnerOnlyAuthorizer()).refresh(CTX, dashboard.id)
 
     assert ran[0].chart_intent is None
+
+
+def test_the_fake_executor_matches_the_real_one() -> None:
+    """The tripwire for the bug this file did not catch for two phases.
+
+    `_executor` replaces `execute_many`. If its keyword arguments drift from
+    the real function's, every test here keeps passing while the call site it
+    stands in for raises `TypeError` at runtime — which is exactly what
+    happened: `execute_many` swapped `owner_id` for `ctx` and `authz` in Phase
+    1, this fake did not, and every dashboard refresh that actually ran a query
+    was a 500 until it was driven against a live stack in Phase 8.
+
+    So the signatures are compared. Positional names are not — the fake spells
+    them `_db` and `_settings` on purpose — but the keyword-only set is the
+    contract a caller can get wrong, and it is checked.
+    """
+    import inspect
+
+    from app.services.query_service import execute_many
+
+    def keywords(fn: Any) -> set[str]:
+        return {
+            name
+            for name, p in inspect.signature(fn).parameters.items()
+            if p.kind is inspect.Parameter.KEYWORD_ONLY
+        }
+
+    captured: list[Any] = []
+
+    def capture(_target: Any, _name: str, value: Any) -> None:
+        captured.append(value)
+
+    monkeypatch = type("_M", (), {"setattr": staticmethod(capture)})()
+    _executor(monkeypatch)  # type: ignore[arg-type]
+
+    assert keywords(captured[0]) == keywords(execute_many)

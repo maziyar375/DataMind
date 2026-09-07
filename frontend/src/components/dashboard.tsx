@@ -26,6 +26,7 @@ import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
 
 import { dashboards as api } from '../api/client'
+import { Restricted } from './access'
 import { dueTileIds } from './dashboard-schedule'
 import type { Dashboard, DashboardSummary, DashboardTile, TileResult } from '../api/types'
 import { Chip, Dot, ErrorNote, Icon, Kpi, ResultTable, Spinner, glyphTint, relativeTime } from './ui'
@@ -652,6 +653,16 @@ function TileBody({
     )
   }
 
+  // The intersection rule, before the error branch — because this **is not**
+  // an error. The board is shared with this reader and this tile's database is
+  // not, which is the system working: they get a named placeholder holding the
+  // tile's space, not a red note telling them something broke. `ERROR` is the
+  // transport, and reading only that would put a failure in front of somebody
+  // whose only problem is that nobody has given them access yet.
+  if (result.error?.code === 'E_NO_DATA_ACCESS') {
+    return <Restricted reason={result.error.message} />
+  }
+
   if (result.status === 'ERROR' || result.error) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1113,7 +1124,7 @@ function DashboardGlyph({ hue, size = 34 }: { hue: number; size?: number }) {
 
 /** Rename / duplicate / export / archive / delete — shared by card and row. */
 function DashboardMenu({
-  dashboard, onRename, onDuplicate, onExport, onArchive, onDelete,
+  dashboard, onRename, onDuplicate, onExport, onArchive, onDelete, onShare,
 }: {
   dashboard: DashboardSummary
   onRename: () => void
@@ -1121,9 +1132,16 @@ function DashboardMenu({
   onExport: () => void
   onArchive: () => void
   onDelete: () => void
+  onShare: () => void
 }) {
   const [open, setOpen] = useState(false)
   const items = [
+    // First, and above Rename: from Phase 8 this is the verb that changes who
+    // else has the board, which is a bigger act than any of the four below it.
+    // Offered on every card rather than only on ones the viewer can share —
+    // the dialog itself renders a sentence instead of a form when they cannot,
+    // which teaches more than a menu entry that silently is not there.
+    { label: 'Share…', run: onShare },
     { label: 'Rename', run: onRename },
     { label: 'Duplicate', run: onDuplicate },
     // Next to Duplicate on purpose: both answer "I want another one of these",
@@ -1247,7 +1265,7 @@ function CardMeta({ dashboard }: { dashboard: DashboardSummary }) {
 }
 
 export function DashboardCard({
-  dashboard, onOpen, onRename, onDuplicate, onExport, onArchive, onDelete,
+  dashboard, onOpen, onRename, onDuplicate, onExport, onArchive, onDelete, onShare,
 }: {
   dashboard: DashboardSummary
   onOpen: () => void
@@ -1256,6 +1274,7 @@ export function DashboardCard({
   onExport: () => void
   onArchive: () => void
   onDelete: () => void
+  onShare: () => void
 }) {
   const hue = cardHue(dashboard.id)
   const archived = dashboard.status === 'ARCHIVED'
@@ -1308,16 +1327,24 @@ export function DashboardCard({
           onExport={onExport}
           onArchive={onArchive}
           onDelete={onDelete}
+          onShare={onShare}
         />
       </div>
 
       {/* State worth acting on, and only when there is any: an empty dashboard
           is unfinished and a live one that has never run is misconfigured.
           Both were invisible on the old card, which showed a picture instead. */}
-      {(archived || dashboard.tile_count === 0
+      {(archived || dashboard.shared || dashboard.tile_count === 0
         || (dashboard.default_refresh_interval_seconds > 0 && !dashboard.last_refreshed_at)) && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           {archived && <Chip tone="amber">Archived</Chip>}
+          {/* Whose board this is, when it is not yours. A display name, never
+              an address — the rule every list that became shareable follows. */}
+          {dashboard.shared && (
+            <Chip tone="accent">
+              {dashboard.owner_name ? `Shared by ${dashboard.owner_name}` : 'Shared with you'}
+            </Chip>
+          )}
           {dashboard.tile_count === 0 && <Chip tone="neutral">No tiles yet</Chip>}
           {dashboard.tile_count > 0
             && dashboard.default_refresh_interval_seconds > 0
@@ -1370,7 +1397,7 @@ export function DashboardCard({
  * many names on screen, and every comparable product offers the switch.
  */
 export function DashboardRow({
-  dashboard, onOpen, onRename, onDuplicate, onExport, onArchive, onDelete,
+  dashboard, onOpen, onRename, onDuplicate, onExport, onArchive, onDelete, onShare,
 }: {
   dashboard: DashboardSummary
   onOpen: () => void
@@ -1379,6 +1406,7 @@ export function DashboardRow({
   onExport: () => void
   onArchive: () => void
   onDelete: () => void
+  onShare: () => void
 }) {
   const hue = cardHue(dashboard.id)
   const archived = dashboard.status === 'ARCHIVED'
@@ -1423,6 +1451,11 @@ export function DashboardRow({
             {dashboard.name}
           </button>
           {archived && <Chip tone="amber">Archived</Chip>}
+          {dashboard.shared && (
+            <Chip tone="accent">
+              {dashboard.owner_name ? `Shared by ${dashboard.owner_name}` : 'Shared'}
+            </Chip>
+          )}
         </div>
         {dashboard.description && (
           <span
@@ -1461,6 +1494,7 @@ export function DashboardRow({
         onExport={onExport}
         onArchive={onArchive}
         onDelete={onDelete}
+        onShare={onShare}
       />
     </div>
   )

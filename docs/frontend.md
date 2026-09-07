@@ -141,6 +141,28 @@ carries that — and moves *Add user* to the end of its toolbar; everything else
 about it is unchanged, which is the point of reusing it rather than writing a
 second one.
 
+**Sharing lives in one component, and every screen mounts it.**
+[`components/access.tsx`](../frontend/src/components/access.tsx) holds
+`AccessPanel` (who can reach this, and one way to change it), `AccessPopover`
+(the same panel behind a header button that draws nothing unless the viewer
+holds `manage`), `TransferControl`, `ReachBadge` and `Restricted`. Eight
+resource types mount the same panel with the resource's own path —
+`connections/{id}`, `connections/{id}/knowledge`, `reports/{id}`,
+`dashboards/{id}`, `llm-configs/{id}`, `conversations/{id}` — because the
+privilege radio is rendered from `GET …/actions`, which sends the privileges a
+type will accept and the sentence each means on it. So a model configuration
+offering only `select` and `describe` narrows on the *server*, and this
+component follows without a second rule.
+
+Two things it draws are the same fact seen from two sides. `<Restricted>` is
+the **named placeholder** — a dashboard tile, a report figure or a chat turn
+whose database the reader was not given — and it is amber and neutral rather
+than red, because a partly visible dashboard is the rule working, not a
+failure. `<ReachBadge>` is the header chip that says *Read-only* or *Limited*,
+so a screen with fewer controls than the reader is used to reads as a
+permission rather than as a page that failed to load. Both take what the
+server already sent; neither computes a privilege of its own.
+
 **No screen branches on a role.** `useCan()`
 ([`permissions.tsx`](../frontend/src/permissions.tsx)) reads the capability list
 `/auth/me` returned — the same set the API will check on the next request — and

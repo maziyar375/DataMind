@@ -123,6 +123,14 @@ class FakeDb:
                 if owner is None or self.connection.owner_id == owner
                 else None
             )
+            # The **projection**, not only the table. `RbacAuthorizer._owner_of`
+            # asks for `database_connections.owner_id` and calls
+            # `scalar_one_or_none` on it; a fake that answered every read of
+            # this table with the whole row handed it an entity where it
+            # wanted a UUID, and ownership then failed to match for the person
+            # who owns the row. Silent, and it looked like a permissions bug.
+            if name == "owner_id":
+                return _Result(match.owner_id if match is not None else None)
             return _Result(match)
         if entity is Run:
             # The owner predicate is honoured rather than ignored: scoping is a

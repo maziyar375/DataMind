@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 
 from app.api import deps
 from app.api.v1 import dashboards
+from app.api.v1.access import ACCESS_PATHS
 from app.core.clock import utcnow
 from app.core.context import RequestContext
 from app.core.errors import NotFoundError, SqlRejectedError
@@ -173,6 +174,24 @@ class FakeService:
     async def last_refreshed(self, ids: list[UUID]) -> dict[UUID, datetime]:
         return {DASHBOARD_ID: utcnow()}
 
+    async def share_check(
+        self,
+        ctx: RequestContext,
+        dashboard_id: UUID,
+        *,
+        user_id: UUID | None = None,
+        team_id: UUID | None = None,
+    ) -> tuple[int, list[tuple[UUID, str]]]:
+        """The cross-connection warning. Recorded, so the sweep sees its ctx.
+
+        What it *answers* is exercised against the real service in
+        `tests/unit/test_intersection.py`; here it only has to prove the route
+        reaches the service with the session's own principal, which is what
+        every other entry in this class is for.
+        """
+        self._record("share_check", ctx=ctx, dashboard_id=dashboard_id)
+        return 2, [(CONNECTION_ID, "sales")]
+
     async def get(self, ctx: RequestContext, dashboard_id: UUID) -> Any:
         self._record("get", dashboard_id=dashboard_id, ctx=ctx)
         return NoLazyLoads(_dashboard())
@@ -297,6 +316,25 @@ class FakeService:
         return dict(FakeService.results)
 
 
+class _NameLookupOnly:
+    """A session that answers the one query the router makes for itself.
+
+    The db override used to be `None`, which was honest while every read went
+    through `DashboardService`. The index now resolves owner **display names**
+    directly — one query per page, in `access.owner_names` — so the override
+    has to answer it. It answers with nothing, which is what a page whose
+    owners have been deleted gets, and the cards fall back to no owner name.
+    """
+
+    async def execute(self, *_args: Any, **_kwargs: Any) -> Any:
+        return _NoRows()
+
+
+class _NoRows:
+    def all(self) -> list[Any]:
+        return []
+
+
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch) -> Any:
     FakeService.calls = []
@@ -307,7 +345,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.setattr(dashboards, "DashboardService", FakeService)
 
     app = create_app()
-    app.dependency_overrides[deps.get_db] = lambda: None
+    app.dependency_overrides[deps.get_db] = lambda: _NameLookupOnly()
     app.dependency_overrides[deps.get_ctx] = lambda: RequestContext(
         user_id=USER, email="user@test.local", role="MEMBER", correlation_id="test"
     )
@@ -610,6 +648,7 @@ ROUTES: list[tuple[str, str, dict | None]] = [
     ("post", f"/{DASHBOARD_ID}/tiles/{TILE_ID}/duplicate", None),
     ("post", f"/{DASHBOARD_ID}/data", {}),
     ("post", f"/{DASHBOARD_ID}/tiles/{TILE_ID}/data", None),
+    ("get", f"/{DASHBOARD_ID}/share-check", None),
 ]
 
 
@@ -638,6 +677,18 @@ def test_the_sweep_covers_every_route_the_app_publishes() -> None:
         for path, item in app.openapi()["paths"].items()
         if path.startswith("/api/v1/dashboards")
         for method in item
+    }
+    # The five access routes are attached by `api/v1/access.py` and scoped by
+    # `GrantService`, not by `DashboardService` — so the sweep above, which
+    # proves a route reaches a scoped *dashboard service* call, cannot cover
+    # them and must not pretend to. `tests/unit/test_grants.py` is where they
+    # are proven. Read off the shared module, so a sixth access route joins
+    # this exclusion automatically and a sixth **dashboard** route still fails
+    # here, which is the whole point of the test.
+    published -= {
+        (method, path)
+        for method, path in published
+        if any(path.endswith(suffix) for suffix in ACCESS_PATHS)
     }
     covered = {
         (method, path)

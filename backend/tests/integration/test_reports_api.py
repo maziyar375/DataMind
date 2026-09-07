@@ -28,6 +28,7 @@ from fastapi.testclient import TestClient
 
 from app.api import deps
 from app.api.v1 import reports
+from app.api.v1.access import ACCESS_PATHS
 from app.core.clock import utcnow
 from app.core.context import RequestContext
 from app.core.errors import (
@@ -209,15 +210,32 @@ class FakeExecutor:
 
 
 class FakeSession:
-    """Only `commit`, which the two run routes call before handing off.
+    """`commit`, which the two run routes call before handing off, and one read.
 
     The commit is not incidental: the worker loads the row it was handed in a
     session of its own, and an uncommitted transaction would have it looking
     for a run that does not exist yet.
+
+    `execute` arrived with Phase 8: the index resolves owner **display names**
+    for the cards it did not write, one query per page. It returns nothing
+    here, which is the honest fake — these fixtures have no `users` rows — and
+    the card falls back to no owner name, which is exactly what the route does
+    against a real database when the owner has been deleted.
     """
 
     async def commit(self) -> None:
         EVENTS.append("commit")
+
+    async def execute(self, *_args: Any, **_kwargs: Any) -> Any:
+        return _EmptyResult()
+
+
+class _EmptyResult:
+    def all(self) -> list[Any]:
+        return []
+
+    def scalars(self) -> list[Any]:
+        return []
 
 
 class NoLazyLoads:
@@ -280,6 +298,21 @@ class FakeService:
 
     async def display_names(self, reports: list[Any]) -> tuple[dict, dict]:
         return {CONNECTION_ID: "sales"}, {LLM_ID: "deepseek"}
+
+    async def may_read_data(self, ctx: RequestContext, report: Any) -> bool:
+        """The second half of a report's authorization: reach on its data.
+
+        True here, so every existing assertion in this file keeps describing
+        the ordinary case. The withheld case has its own test in
+        `tests/unit/test_intersection.py`, against the real service.
+
+        Deliberately **not** recorded in `calls`: that log is what the scoping
+        sweep reads, and every route that reaches this one has already made a
+        scoped call of its own (`get`, `update`, `propose_outline`). Recording
+        it would add a second entry to every response-shape assertion in this
+        file without proving anything the first entry does not.
+        """
+        return True
 
     async def create(self, ctx: RequestContext, **fields: Any) -> Any:
         self._record("create", ctx=ctx, **fields)
@@ -1282,6 +1315,18 @@ def test_the_sweep_covers_every_route_the_app_publishes() -> None:
         for path, item in app.openapi()["paths"].items()
         if path.startswith("/api/v1/reports")
         for method in item
+    }
+    # The five access routes are attached by `api/v1/access.py` and scoped by
+    # `GrantService`, not by `ReportService` — so the sweep above, which proves
+    # a route reaches a scoped *report service* call, cannot cover them and
+    # must not pretend to. They are proven in `tests/unit/test_grants.py`.
+    # Read off the shared module rather than listed here, so a sixth access
+    # route joins the exclusion automatically and a sixth **report** route
+    # still fails this test, which is the whole point of it.
+    published -= {
+        (method, path)
+        for method, path in published
+        if any(path.endswith(suffix) for suffix in ACCESS_PATHS)
     }
     covered = {(method, path) for method, path, _body in ROUTES}
 

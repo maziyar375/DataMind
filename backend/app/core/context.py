@@ -11,6 +11,11 @@ from app.domain.value_objects.authz import Capability, PrincipalKind
 
 _correlation_id: ContextVar[str] = ContextVar("correlation_id", default="")
 
+#: The principal id of a context that names no person — `as_team`. Nil
+#: rather than random so it is recognisable in a log and matches no row in
+#: any ownership predicate, which is the property that makes it safe.
+NOBODY = UUID(int=0)
+
 
 def set_correlation_id(value: str | None = None) -> str:
     cid = value or uuid.uuid4().hex
@@ -191,6 +196,33 @@ class RequestContext:
             correlation_id=(
                 get_correlation_id() if correlation_id is None else correlation_id
             ),
+            delegated=True,
+        )
+
+    @classmethod
+    def as_team(cls, team_id: UUID) -> RequestContext:
+        """The reach a **team** confers, asked as if the team were a principal.
+
+        Built for exactly one question: *"if I share this with the Finance
+        team, what would they not be able to see?"* — the cross-connection
+        warning of §19.2. Answering it by enumerating the team's members would
+        answer a different question (what the members can reach, which includes
+        everything they hold personally) and would leak the membership list to
+        whoever opened the share dialog.
+
+        `user_id` is the nil UUID, and that is the honest value rather than a
+        placeholder: a team owns nothing, so the ownership arm of every
+        authorization query must match no row. It is not a principal that can
+        sign in, hold a capability or write an audit row — this context exists
+        to be *asked*, never to act, and `delegated=True` says so to anything
+        that ends up recording it.
+        """
+        return cls(
+            user_id=NOBODY,
+            email="",
+            role="",
+            team_ids=frozenset({team_id}),
+            correlation_id=get_correlation_id(),
             delegated=True,
         )
 

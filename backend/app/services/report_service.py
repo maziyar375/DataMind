@@ -87,6 +87,7 @@ from app.reports.outline import (
 )
 from app.reports.prompts import REPORT_PROMPT_VERSION, report_time_rules
 from app.semantic.render import _render_time
+from app.services.policy import require
 from app.services.query_service import effective_max_rows, latest_snapshot, resolve_llm
 from app.services.semantic_service import load_document
 from app.services.sql_draft_service import SqlDraft, draft_sql, validate_sql
@@ -283,11 +284,20 @@ class ReportService:
             select(Report).where(Report.id == report_id)
         )
         report = result.scalar_one_or_none()
-        if report is None or not await self._authz.allowed(
-            ctx, ResourceRef.to(ResourceType.REPORT, report), privilege
-        ):
-            # 404 rather than 403: see the module docstring.
+        if report is None:
             raise NotFoundError("Report not found.")
+        # 404 when nothing reaches them, 403 naming the privilege when
+        # something does — the §19.1 rule, in the one function that holds it.
+        # A report can be shared as of Phase 8, so "you may read this but not
+        # regenerate it" is now a real state and deserves the sentence rather
+        # than a 404 that reads as a broken link.
+        await require(
+            ctx,
+            self._authz,
+            ResourceRef.to(ResourceType.REPORT, report),
+            privilege,
+            db=self._db,
+        )
         return report
 
     async def create(self, ctx: RequestContext, **fields: Any) -> Report:
@@ -1333,6 +1343,34 @@ class ReportService:
         return connections, models
 
     # ── authorization ────────────────────────────────────────────────────
+    async def may_read_data(self, ctx: RequestContext, report: Report) -> bool:
+        """May this reader see the **numbers**, not merely the document?
+
+        The intersection rule (§19.2) on a report. A report is bound to
+        exactly one connection and cannot be repointed, so unlike a dashboard
+        the answer is a single boolean — but it is the same two-part question:
+        `select` on the report is what shows the headings and the prose,
+        `select` on the connection behind it is what shows the figures.
+
+        A report whose connection has been **deleted** (the FK is `SET NULL`)
+        answers **True**, and that is not a loophole: there is no row left to
+        hold a grant, so there is nobody this could be withholding the numbers
+        *from*, and a past document has to stay readable — "its history stays
+        readable, but it cannot be continued" is the rule every other surface
+        downstream of a released connection already follows. What that state
+        stops is *generating*, which is refused separately and for a different
+        reason.
+        """
+        if report.connection_id is None:
+            return True
+        return bool(
+            await self._authz.allowed(
+                ctx,
+                ResourceRef(type=ResourceType.CONNECTION, id=report.connection_id),
+                Privilege.SELECT,
+            )
+        )
+
     async def _authorized_connection(
         self, ctx: RequestContext, connection_id: UUID
     ) -> DatabaseConnection:

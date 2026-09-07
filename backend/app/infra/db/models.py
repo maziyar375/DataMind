@@ -1062,6 +1062,23 @@ class DashboardTileCache(Base):
     In Postgres rather than in-process because the reconciler already assumes
     several workers may exist, and an in-process cache would go stale per
     worker. Written in Phase 4; the table lands here so there is one DDL step.
+
+    ⚠️ **The cache key contains no viewer, and it must not start to.**
+
+    This row holds rows read out of the customer's database, and a dashboard
+    can be shared. What keeps that safe is the *order* of two steps, not this
+    table: `DashboardService.refresh` asks whether the reader holds `select`
+    on the tile's connection **before** it looks the cache up, so nothing a
+    reader may not see is ever fetched on their behalf. Add a viewer to
+    `result_fingerprint` and you get a cache that mostly misses, one stored
+    result per reader of every shared board, and — the actual failure — a
+    fingerprint that decides what somebody *else* is served.
+
+    So if you are here because you want to add a per-viewer filter to a tile's
+    SQL, this is the sentence that says stop: that feature is row-level
+    security, it belongs in the guard and the connection, and it cannot be
+    built by keying this table differently.
+    `tests/unit/test_intersection.py` holds both halves of that claim.
     """
 
     __tablename__ = "dashboard_tile_cache"

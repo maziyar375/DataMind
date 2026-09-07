@@ -30,16 +30,30 @@ from app.api.schemas import (
     DashboardUpdate,
     ImportSkipRead,
     LayoutUpdate,
+    NamedRef,
+    ShareCheckRead,
     TileCreate,
     TileResultRead,
     TileUpdate,
 )
+from app.api.v1.access import attach_access_routes, owner_names
+from app.domain.ports.authz import ResourceRef
+from app.domain.value_objects.authz import ResourceType
 from app.infra.db.models import Dashboard, DashboardTile
 from app.services.dashboard_service import DashboardService, effective_refresh_interval
 from app.services.dashboard_transfer import DashboardDocument
 from app.services.query_service import TileResult
 
 router = APIRouter(prefix="/dashboards", tags=["dashboards"])
+
+# `/grants`, `/actions` and `/transfer`. Declared above the `/{dashboard_id}`
+# routes so the literal segments still win the match.
+#
+# A dashboard is the **hard** share and it went last for that reason: a tile
+# carries its own `connection_id`, so one board may span several databases
+# and "share this dashboard" has no single meaning. The grant reaches the
+# board; each tile is still asked for separately, per viewer, per render.
+attach_access_routes(router, ResourceType.DASHBOARD, param="dashboard_id")
 
 
 def _tile_read(
@@ -58,10 +72,16 @@ def _tile_read(
 
 
 async def _dashboard_read(
-    service: DashboardService, dashboard: Dashboard
+    service: DashboardService,
+    dashboard: Dashboard,
+    ctx: CtxDep,
+    authz: AuthzDep,
 ) -> DashboardRead:
     tiles = await service.tiles_of(dashboard.id)
     connections, models = await service.display_names(tiles)
+    held = await authz.privileges_on(
+        ctx, ResourceRef.to(ResourceType.DASHBOARD, dashboard)
+    )
     # Every field *except* `tiles` is copied off the row. `Dashboard.tiles` is
     # a lazy relationship, and `model_validate` would read it — a lazy load
     # inside a response, in a context that cannot await, which is
@@ -70,11 +90,12 @@ async def _dashboard_read(
     fields = {
         name: getattr(dashboard, name)
         for name in DashboardRead.model_fields
-        if name != "tiles"
+        if name not in ("tiles", "privileges")
     }
     return DashboardRead(
         **fields,
         tiles=[_tile_read(t, dashboard, connections, models) for t in tiles],
+        privileges=sorted(str(p) for p in held),
     )
 
 
@@ -97,12 +118,19 @@ async def list_dashboards(
     ids = [d.id for d in dashboards]
     counts = await service.tile_counts(ids)
     refreshed = await service.last_refreshed(ids)
+    # One query for the page: from Phase 8 this list can hold somebody else's
+    # boards, and the card has to say whose.
+    owners = await owner_names(db, {d.owner_id for d in dashboards if d.owner_id})
 
     cards: list[DashboardSummaryRead] = []
     for dashboard in dashboards:
         card = DashboardSummaryRead.model_validate(dashboard)
         card.tile_count = counts.get(dashboard.id, 0)
         card.last_refreshed_at = refreshed.get(dashboard.id)
+        # A badge, not a gate: `visible` already decided this row is
+        # reachable, and this only says whether to name an owner.
+        card.shared = dashboard.owner_id != ctx.user_id  # authz-ok: a badge
+        card.owner_name = owners.get(dashboard.owner_id) if card.shared else None
         cards.append(card)
     return cards
 
@@ -113,7 +141,7 @@ async def create_dashboard(
 ) -> DashboardRead:
     service = DashboardService(db, settings, authz)
     dashboard = await service.create(ctx, **payload.model_dump())
-    return await _dashboard_read(service, dashboard)
+    return await _dashboard_read(service, dashboard, ctx, authz)
 
 
 @router.post(
@@ -145,7 +173,7 @@ async def import_dashboard(
         connection_map=payload.connection_map,
         skip_invalid=payload.skip_invalid,
     )
-    read = await _dashboard_read(service, dashboard)
+    read = await _dashboard_read(service, dashboard, ctx, authz)
     return DashboardImportRead(
         dashboard=read,
         imported_tiles=len(read.tiles),
@@ -159,7 +187,7 @@ async def get_dashboard(
 ) -> DashboardRead:
     service = DashboardService(db, settings, authz)
     dashboard = await service.get(ctx, dashboard_id)
-    return await _dashboard_read(service, dashboard)
+    return await _dashboard_read(service, dashboard, ctx, authz)
 
 
 @router.patch("/{dashboard_id}", response_model=DashboardRead)
@@ -175,7 +203,7 @@ async def update_dashboard(
     dashboard = await service.update(
         ctx, dashboard_id, **payload.model_dump(exclude_unset=True)
     )
-    return await _dashboard_read(service, dashboard)
+    return await _dashboard_read(service, dashboard, ctx, authz)
 
 
 @router.get("/{dashboard_id}/export", response_model=DashboardDocument)
@@ -293,6 +321,37 @@ async def duplicate_tile(
     dashboard = await service.get(ctx, dashboard_id)
     tile = await service.duplicate_tile(ctx, dashboard_id, tile_id)
     return _tile_read(tile, dashboard, *await service.display_names([tile]))
+
+
+@router.get("/{dashboard_id}/share-check", response_model=ShareCheckRead)
+async def share_check(
+    dashboard_id: UUID,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    authz: AuthzDep,
+    user_id: UUID | None = None,
+    team_id: UUID | None = None,
+) -> ShareCheckRead:
+    """What the person you are about to share with would **not** see.
+
+    A warning, never a gate: the dialog renders it beside an enabled Share
+    button, because a board spanning four warehouses is a legitimate thing to
+    share with somebody who can read two of them — they get two tiles and two
+    named placeholders, which is §19.2 working. What is not legitimate is the
+    sharer not knowing.
+
+    `manage`, checked in the service: this answers a question about a third
+    party's reach, and only somebody who may decide this board's access has
+    business asking it.
+    """
+    total, withheld = await DashboardService(db, settings, authz).share_check(
+        ctx, dashboard_id, user_id=user_id, team_id=team_id
+    )
+    return ShareCheckRead(
+        total_connections=total,
+        unreadable=[NamedRef(id=cid, name=name) for cid, name in withheld],
+    )
 
 
 # ── data ─────────────────────────────────────────────────────────────────

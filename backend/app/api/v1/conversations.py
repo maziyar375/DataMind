@@ -31,6 +31,7 @@ from app.api.schemas import (
     RunStepRead,
     SuggestionsRead,
 )
+from app.api.v1.access import attach_access_routes
 from app.core.errors import NotFoundError, ValidationError
 from app.domain.ports.authz import ResourceRef
 from app.domain.value_objects import RunStatus
@@ -52,11 +53,27 @@ from app.infra.db.models import (
     User,
 )
 from app.infra.events.bus import event_bus
-from app.services import audit
+from app.services import audit, restricted
 from app.services.knowledge_service import FeedbackService, record_hit
+from app.services.policy import require
 from app.services.run_service import RunService
 
 router = APIRouter(tags=["conversations"])
+
+# `/grants`, `/actions` and `/transfer` for a thread. `base` because this
+# router carries no prefix and spells the collection per route.
+#
+# **Sharing a thread shares the transcript, not the database behind it.**
+# The grant reaches the conversation; every run in it still asks about the
+# connection separately, so a shared thread whose connection the reader
+# cannot reach shows its questions and its answers and refuses to re-run
+# them — which is the same rule a dashboard tile follows.
+attach_access_routes(
+    router,
+    ResourceType.CONVERSATION,
+    param="conversation_id",
+    base="/conversations",
+)
 
 
 # ── conversations ────────────────────────────────────────────────────────
@@ -74,10 +91,15 @@ async def _authorized_conversation(
         select(Conversation).where(Conversation.id == conversation_id)
     )
     row = result.scalar_one_or_none()
-    if row is None or not await authz.allowed(
-        ctx, ResourceRef.to(ResourceType.CONVERSATION, row), privilege
-    ):
+    if row is None:
         raise NotFoundError("Conversation not found.")
+    # 404 when nothing reaches them, 403 naming the privilege when something
+    # does — §19.1, through the one function that holds the rule. A thread can
+    # be shared as of Phase 8, so "you may read this transcript but not add to
+    # it" is a real state rather than a broken link.
+    await require(
+        ctx, authz, ResourceRef.to(ResourceType.CONVERSATION, row), privilege, db=db
+    )
     return row
 
 
@@ -223,7 +245,13 @@ async def list_messages(
     by_assistant = {r.assistant_message_id: r for r in runs if r.assistant_message_id}
     by_user = {r.user_message_id: r for r in runs}
 
-    hydrated = {r.id: await _hydrate_run(db, r) for r in runs}
+    reachable = await _reachable_data(db, ctx, authz, runs)
+    hydrated = {
+        r.id: await _hydrate_run(
+            db, r, may_read_data=r.connection_id in reachable
+        )
+        for r in runs
+    }
 
     out: list[MessageRead] = []
     for message in messages:
@@ -308,10 +336,89 @@ async def _authorized_run(db, authz, run_id: UUID, ctx, privilege: Privilege) ->
     return run
 
 
-async def _hydrate_run(db, run: Run) -> RunRead:
+async def _reachable_data(db, ctx, authz, runs: list[Run]) -> set[UUID]:
+    """Which of these runs' connections this reader may ask questions through.
+
+    ── The intersection rule, on a thread (§19.2) ──
+
+    Sharing a conversation shares the **transcript**: the questions somebody
+    asked and the prose the model wrote. It does not share the database, and
+    the table, the chart and the generated statement are all *the database* —
+    a stored `SELECT` names columns and filter values out of a schema this
+    reader was never given, and the rows are the rows.
+
+    So the thread renders, and the turns whose connection is out of reach lose
+    their results the way a dashboard tile does. One query for the whole
+    thread, composed rather than filtered.
+    """
+    ids = {r.connection_id for r in runs if r.connection_id}
+    return await restricted.readable_connection_ids(db, ctx, authz, ids)
+
+
+async def _may_read_run_data(db, ctx, authz, run: Run) -> bool:
+    """One run's half of `_reachable_data`, for the routes that take one.
+
+    A run whose connection has been **deleted** (`SET NULL`) answers **True**.
+    There is no row left to hold a grant, so there is nobody this could be
+    withholding the answer from — and a released connection's rule, everywhere
+    else in the product, is *"its history stays readable, but it cannot be
+    continued"*. Blanking every past answer in the thread would be a new and
+    much worse reading of it.
+    """
+    if run.connection_id is None:
+        return True
+    return bool(
+        await authz.allowed(
+            ctx,
+            ResourceRef(type=ResourceType.CONNECTION, id=run.connection_id),
+            Privilege.SELECT,
+        )
+    )
+
+
+async def _require_run_data(db, ctx, authz, run: Run) -> None:
+    """The same question, for a route whose whole body **is** the data.
+
+    `GET /runs/{id}/sql` returns a statement and the chart redraw returns a
+    picture of stored rows; there is no half of either worth rendering, so
+    these refuse rather than blank. Through `policy.require`, so the refusal
+    is the same 404-or-403 every other surface gives and lands in the log the
+    same way.
+
+    A deleted connection is allowed through, for the reason
+    `_may_read_run_data` gives: nothing is being withheld from anybody, and
+    the history stays readable.
+    """
+    if run.connection_id is None:
+        return
+    await require(
+        ctx,
+        authz,
+        ResourceRef(type=ResourceType.CONNECTION, id=run.connection_id),
+        Privilege.SELECT,
+        db=db,
+    )
+
+
+async def _hydrate_run(db, run: Run, *, may_read_data: bool = True) -> RunRead:
     steps = await db.execute(
         select(RunStep).where(RunStep.run_id == run.id).order_by(RunStep.seq)
     )
+    data = RunRead.model_validate(run)
+    data.steps = [RunStepRead.model_validate(s) for s in steps.scalars()]
+
+    if not may_read_data:
+        # The turn keeps its identity, its status and its step trail — which
+        # is what makes the transcript still read as a transcript — and
+        # carries neither rows, nor a chart, nor the statement that produced
+        # them. `knowledge` goes too: its evidence is the matched question and
+        # its bound parameter *values*.
+        data.restricted = True
+        data.restricted_reason = restricted.no_access_message(
+            run.model_snapshot.get("connection_name")
+        )
+        return data
+
     artifacts = await db.execute(
         select(Artifact).where(Artifact.run_id == run.id).order_by(Artifact.created_at)
     )
@@ -320,8 +427,6 @@ async def _hydrate_run(db, run: Run) -> RunRead:
         .where(GeneratedQuery.run_id == run.id)
         .order_by(GeneratedQuery.attempt_no)
     )
-    data = RunRead.model_validate(run)
-    data.steps = [RunStepRead.model_validate(s) for s in steps.scalars()]
     data.artifacts = [ArtifactRead.model_validate(a) for a in artifacts.scalars()]
     data.queries = [GeneratedQueryRead.model_validate(q) for q in queries.scalars()]
     data.knowledge = await _knowledge(db, run, data.queries)
@@ -408,14 +513,19 @@ async def get_run(
     run_id: UUID, ctx: CtxDep, db: DbDep, authz: AuthzDep
 ) -> RunRead:
     run = await _authorized_run(db, authz, run_id, ctx, Privilege.SELECT)
-    return await _hydrate_run(db, run)
+    return await _hydrate_run(
+        db, run, may_read_data=await _may_read_run_data(db, ctx, authz, run)
+    )
 
 
 @router.get("/runs/{run_id}/sql", response_model=list[GeneratedQueryRead])
 async def get_run_sql(
     run_id: UUID, ctx: CtxDep, db: DbDep, authz: AuthzDep
 ) -> list[GeneratedQueryRead]:
-    await _authorized_run(db, authz, run_id, ctx, Privilege.SELECT)
+    run = await _authorized_run(db, authz, run_id, ctx, Privilege.SELECT)
+    # The statement names columns and filter values out of a schema. Reaching
+    # the thread is not reaching the database it was asked against.
+    await _require_run_data(db, ctx, authz, run)
     result = await db.execute(
         select(GeneratedQuery)
         .where(GeneratedQuery.run_id == run_id)
@@ -681,7 +791,9 @@ async def redraw_chart(
     )
     from app.domain.ports.database import ResultColumn
 
-    await _authorized_run(db, authz, run_id, ctx, Privilege.SELECT)
+    run = await _authorized_run(db, authz, run_id, ctx, Privilege.SELECT)
+    # A redraw is a picture of stored rows, so it is the rows.
+    await _require_run_data(db, ctx, authz, run)
     result = await db.execute(
         select(Artifact).where(Artifact.run_id == run_id, Artifact.kind == "TABLE")
     )
@@ -768,7 +880,22 @@ async def get_artifact(
     if pair is None:
         raise NotFoundError("Artifact not found.")
 
-    artifact, _run = pair
+    artifact, run = pair
+    # The intersection rule again: the artifact belongs to the thread, its
+    # content belongs to the database. A reader shared the first and not the
+    # second gets the artifact's identity and none of its rows — the same
+    # placeholder the turn above it renders, so the two cannot disagree.
+    if not await _may_read_run_data(db, ctx, authz, run):
+        return ArtifactRead(
+            id=artifact.id,
+            kind=artifact.kind,
+            spec={},
+            restricted=True,
+            restricted_reason=restricted.no_access_message(
+                run.model_snapshot.get("connection_name")
+            ),
+        )
+
     data = ArtifactRead.model_validate(artifact)
     if artifact.kind == "TABLE" and isinstance(artifact.spec.get("rows"), list):
         rows = artifact.spec["rows"]

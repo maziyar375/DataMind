@@ -17,7 +17,7 @@ from app.api.schemas import (
     SchemaRead,
     narrow_to_describe,
 )
-from app.api.v1.access import attach_access_routes
+from app.api.v1.access import attach_access_routes, owner_names
 from app.core.clock import utcnow
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.domain.ports.authz import ResourceRef
@@ -25,7 +25,7 @@ from app.domain.value_objects import HintBudget
 from app.domain.value_objects.authz import Privilege, ResourceType
 from app.infra.authz.compose import restrict
 from app.infra.connectors.factory import build_connector
-from app.infra.db.models import DatabaseConnection, SchemaSnapshotRow, User
+from app.infra.db.models import DatabaseConnection, SchemaSnapshotRow
 from app.services import audit
 from app.services.grant_service import DISCLOSURE_CHANGED, GrantService
 from app.services.knowledge_service import KnowledgeService
@@ -102,7 +102,7 @@ async def list_connections(
         )
     )
     rows = list(result.scalars())
-    owners = await _owner_names(db, {row.owner_id for row in rows if row.owner_id})
+    owners = await owner_names(db, {row.owner_id for row in rows if row.owner_id})
 
     out: list[ConnectionRead] = []
     for row in rows:
@@ -123,21 +123,6 @@ async def list_connections(
         )
         out.append(read if Privilege.SELECT in held else narrow_to_describe(read))
     return out
-
-
-async def _owner_names(db, ids: set) -> dict:
-    """Display names for the owner column. **Never an address.**
-
-    The rule the review queue already follows, and it matters more here: this
-    list is now visible to anybody a connection was shared with, and an email
-    is a piece of personal data that "who owns this data source" does not need.
-    """
-    if not ids:
-        return {}
-    rows = await db.execute(
-        select(User.id, User.display_name, User.email).where(User.id.in_(ids))
-    )
-    return {row[0]: (row[1] or row[2].split("@")[0]) for row in rows.all()}
 
 
 @router.post("", response_model=ConnectionRead, status_code=status.HTTP_201_CREATED)

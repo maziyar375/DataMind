@@ -769,12 +769,46 @@ the connection. There is no god context.
 
 ---
 
+## 14.1 Sharing, and the second half of a reader's access
+
+A report is shareable as of Phase 8 of
+[user-management-and-access-control-plan.md](user-management-and-access-control-plan.md),
+and it was the **first** artifact type to become so — the opposite of the
+intuitive order, and for a reason that is a fact about this data model: a
+report is bound to exactly one connection and cannot be repointed, so there is
+no intersection to resolve. A dashboard tile carries its own `connection_id`
+and went last.
+
+Reaching the **report** and reaching the **database it was built over** are two
+questions, and from Phase 8 they can have different answers:
+
+* `select` on the report is what shows the structure, the headings and the
+  prose. A shared document reads as a document.
+* `select` on the **connection** is what shows the figures. Without it every
+  block in a run comes back with its heading, its caption and its position
+  intact and with no rows, no chart and no statement — `restricted: true`, and
+  the same named placeholder a dashboard tile shows. The figure numbering is
+  unchanged, so a reader can say *which* exhibit they need access to.
+* The statement goes with the rows, deliberately. A stored `SELECT` names
+  columns and filter values out of a schema this reader was never given; it is
+  the same disclosure the rows are.
+* **Generating and checking are refused**, not blanked: both run queries
+  against the database, and there is no half of either worth rendering.
+  `generationBlockedBy` says so on the page rather than leaving a button whose
+  only outcome is a 403.
+
+`ReportRead.data_access` is that second answer, computed once per response by
+`ReportService.may_read_data`. A report whose connection has been **deleted**
+(the FK is `SET NULL`) answers **true**, which is not a loophole: there is no
+row left to hold a grant, so there is nobody it could be withholding the
+numbers from, and *"its history stays readable, but it cannot be continued"* is
+the rule every surface downstream of a released connection already follows.
+
 ## 15. Not built
 
-Sharing (Phase 8 of
-[user-management-and-access-control-plan.md](user-management-and-access-control-plan.md)),
-scheduled generation and email delivery, run-to-run **comparison**,
+Scheduled generation and email delivery, run-to-run **comparison**,
 export to Word/PowerPoint, and Tier-3 structural number substitution.
+(Sharing is built — §14.1.)
 
 One is cheap once the rest exists, and is the natural next step:
 

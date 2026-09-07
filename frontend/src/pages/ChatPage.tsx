@@ -54,6 +54,7 @@ import {
 } from '../components/chat'
 import { absorbThought, endThought } from '../components/thinking'
 import type { ThinkingState } from '../components/thinking'
+import { AccessPopover } from '../components/access'
 import { TemplateEditor } from '../components/knowledge'
 import { AddToDashboardDialog, AddToReportDialog } from '../components/answer-destinations'
 import {
@@ -1009,6 +1010,19 @@ export default function ChatPage() {
               emptyLabel="Add a model provider…"
               onEmpty={() => navigate('/providers')}
             />
+            {/* Sharing a thread shares the **transcript** — the questions and
+                the prose — and not the database it was asked against. A
+                reader who was not also given the connection sees every turn's
+                table replaced by a placeholder, which is the same rule a
+                dashboard tile follows. The control draws nothing unless this
+                viewer holds `manage` on the thread. */}
+            {activeId && (
+              <AccessPopover
+                key={activeId}
+                base={`conversations/${activeId}`}
+                resourceLabel={activeTitle}
+              />
+            )}
           </div>
         </header>
 

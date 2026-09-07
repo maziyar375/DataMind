@@ -20,6 +20,7 @@ import type {
   Artifact, ChartOption, ClarificationSpec, GeneratedQuery, KpiSpec, RunDetail,
   RunKnowledge, RunStep, TableArtifactSpec,
 } from '../api/types'
+import { Restricted } from './access'
 import { ChartGlyph, ChartTypePicker } from './chart-picker'
 import {
   ActionDivider, Chip, CopyButton, Dot, Icon, Kpi, PrimaryButton, QuietAction,
@@ -1655,6 +1656,16 @@ export const AssistantTurn = memo(function AssistantTurn({
       {!spec && preview && (
         <div className="rm-artifact">
           <ResultTable spec={preview} />
+        </div>
+      )}
+      {/* The intersection rule, on a turn. Sharing a thread shares the
+          transcript — the question above and the prose beside this — and not
+          the database it was asked against, so the table, the chart and the
+          statement are not here to render. One placeholder in their place,
+          the same one a dashboard tile and a report figure show. */}
+      {run?.restricted && (
+        <div className="rm-artifact">
+          <Restricted reason={run.restricted_reason} compact />
         </div>
       )}
       {run && run.queries.length > 0 && <SqlPanel queries={run.queries} />}

@@ -106,6 +106,16 @@ _TABLES = (
     # tables could not exercise any of it.
     "database_connections", "llm_configs", "dashboards", "reports",
     "conversations",
+    # Phase 8: the intersection rule is a property of a **tile**, and the
+    # tripwire on the cache is a property of the cache row. Both need the real
+    # tables — a fake tile with a `connection_id` attribute would pass the
+    # check being tested without any of the composition that makes it correct.
+    "dashboard_tiles", "dashboard_tile_cache",
+    # And the chat half of the same rule: a turn in a shared thread keeps its
+    # prose and loses its results, which is a property of a `runs` row.
+    # `messages` comes with it — `runs.user_message_id` is a foreign key, and
+    # a metadata copy missing the target table cannot be created at all.
+    "messages", "runs", "run_steps",
 )
 
 

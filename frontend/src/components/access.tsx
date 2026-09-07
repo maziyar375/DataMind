@@ -57,7 +57,7 @@ interface Principal {
 }
 
 export function AccessPanel({
-  base, title, description, onChanged,
+  base, title, description, onChanged, warn,
 }: {
   /**
    * The resource's path, **without** a leading slash and without `/api/v1`:
@@ -70,6 +70,23 @@ export function AccessPanel({
   description?: string
   /** Called after any change, so a parent showing a share count can re-read. */
   onChanged?: () => void
+  /**
+   * **The cross-connection warning**, and the only resource-specific thing
+   * this panel knows about.
+   *
+   * A dashboard is the one artifact whose tiles carry their own
+   * `connection_id`, so it is the one place where *"share this"* can mean
+   * *"and they will see two of these four tiles"*. The page passes a function
+   * that asks the server what a named principal could not read; the dialog
+   * renders the answer beside an **enabled** Share button, because §19.2 is
+   * explicit that the share is still allowed and it is the surprise that is
+   * not.
+   *
+   * A prop rather than a branch on `base` — the panel serves eight types and
+   * a `startsWith('dashboards/')` here would be the ninth place the route
+   * table is spelled out.
+   */
+  warn?: (principal: { user_id?: string; team_id?: string }) => Promise<string[]>
 }) {
   const [grants, setGrants] = useState<Grant[] | null>(null)
   const [actions, setActions] = useState<Actions | null>(null)
@@ -167,6 +184,7 @@ export function AccessPanel({
           title={title}
           meanings={actions.meanings}
           existing={grants ?? []}
+          warn={warn}
           onClose={() => setSharing(false)}
           onShared={async () => {
             setSharing(false)
@@ -257,7 +275,7 @@ function GrantRow({ grant, onRevoke }: { grant: Grant; onRevoke: () => void }) {
 }
 
 function ShareModal({
-  base, title, meanings, existing, onClose, onShared,
+  base, title, meanings, existing, onClose, onShared, warn,
 }: {
   base: string
   title?: string
@@ -265,6 +283,7 @@ function ShareModal({
   existing: Grant[]
   onClose: () => void
   onShared: () => void
+  warn?: (principal: { user_id?: string; team_id?: string }) => Promise<string[]>
 }) {
   const [principals, setPrincipals] = useState<Principal[] | null>(null)
   const [query, setQuery] = useState('')
@@ -272,6 +291,24 @@ function ShareModal({
   const [privilege, setPrivilege] = useState('select')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  //: The data sources this principal would not be able to read. Asked when a
+  //: principal is picked, and never blocking: a failed check leaves the list
+  //: empty and the Share button exactly as usable as it was.
+  const [unreadable, setUnreadable] = useState<string[]>([])
+
+  useEffect(() => {
+    if (!warn || !picked) {
+      setUnreadable([])
+      return
+    }
+    let cancelled = false
+    warn(picked.kind === 'TEAM' ? { team_id: picked.id } : { user_id: picked.id })
+      .then((names) => !cancelled && setUnreadable(names))
+      .catch(() => !cancelled && setUnreadable([]))
+    return () => {
+      cancelled = true
+    }
+  }, [warn, picked])
 
   useEffect(() => {
     let cancelled = false
@@ -360,6 +397,36 @@ function ShareModal({
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {error && <ErrorNote>{error}</ErrorNote>}
+
+        {/* §19.2: the share is still allowed; the surprise is not. So this is
+            a note, and the button beside it stays enabled — a board spanning
+            four warehouses is a legitimate thing to share with somebody who
+            can read two of them. They get two tiles and two named
+            placeholders, which is the rule working. */}
+        {unreadable.length > 0 && (
+          <div
+            style={{
+              display: 'flex',
+              gap: 9,
+              padding: '10px 12px',
+              borderRadius: 10,
+              border: '1px solid var(--amber-border)',
+              background: 'var(--amber-bg)',
+            }}
+          >
+            <span aria-hidden style={{ color: 'var(--amber)', flexShrink: 0 }}>
+              <Icon.Lock size={14} />
+            </span>
+            <span style={{ fontSize: 11.5, color: 'var(--text-dim)', lineHeight: 1.55 }}>
+              {picked?.name} cannot read{' '}
+              <strong style={{ color: 'var(--text-strong)' }}>
+                {unreadable.join(', ')}
+              </strong>
+              . Those tiles will render as placeholders. Share the data source
+              too if they should see the numbers.
+            </span>
+          </div>
+        )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <SearchField
@@ -669,12 +736,130 @@ export function TransferControl({
  * server regardless — `manage` on all five calls — so hiding it is an
  * affordance, never the boundary.
  */
+/**
+ * `<ReachBadge>` — *"you may look, not touch"*, said once and quietly.
+ *
+ * A shared board and a shared report both put a reader in front of a screen
+ * whose controls do less than they used to. Every one of those controls is
+ * already rendered from what the reader holds, so nothing is broken — but a
+ * page that silently has fewer buttons than the last one you saw reads as a
+ * page that failed to load, and the reader has no way to learn that they were
+ * given `select` rather than `manage`.
+ *
+ * So one chip, from the privileges the detail response already carries. Three
+ * states and no more, because a fourth would be a privilege list, and a
+ * privilege list on a page header is the lattice leaking into the UI:
+ *
+ * * nothing to say — the reader can edit it, which is the ordinary case;
+ * * **Read-only** — they hold `select`, so they can look and run nothing;
+ * * **Limited** — they can edit but not share, which is what `modify` without
+ *   `manage` means and is exactly the distinction people are surprised by.
+ */
+export function ReachBadge({ privileges }: { privileges: string[] }) {
+  const held = new Set(privileges)
+  if (held.has('manage')) return null
+  // `<Chip>` takes no `title`, so the tooltip lives on a wrapper — the chip
+  // stays a chip rather than growing a prop for one caller.
+  return (
+    <span
+      title={
+        held.has('modify')
+          ? 'You can edit this, but not decide who else can reach it.'
+          : 'You were given read access to this.'
+      }
+      style={{ display: 'inline-flex' }}
+    >
+      <Chip tone="neutral">{held.has('modify') ? 'Limited' : 'Read-only'}</Chip>
+    </span>
+  )
+}
+
+/**
+ * `<Restricted>` — the named placeholder, everywhere the intersection rule
+ * puts one.
+ *
+ * A dashboard tile, a report figure and a chat turn all reach the same state:
+ * *you may see this thing, and not the database behind it.* §19.2 says what to
+ * draw —
+ *
+ * > A tile they cannot see renders as a **named placeholder** — not hidden,
+ * > because hiding it makes the dashboard silently wrong, and a partly visible
+ * > dashboard is a better product than a refused one **and** a better product
+ * > than a leaking one.
+ *
+ * Three decisions, and each is one this could easily have got wrong:
+ *
+ * * **It fills the space the content would have taken.** A tile that shrank to
+ *   a line of text would reflow the grid and make a shared board look broken
+ *   rather than partial.
+ * * **It is neutral, not an error.** Amber, not red, and the same reasoning
+ *   the audit screen uses for a denial: this is the system working. Red would
+ *   teach a reader that a correctly shared dashboard is full of failures.
+ * * **The sentence comes from the server.** The backend already writes it —
+ *   naming the connection, and saying which privilege to ask for — and a
+ *   second copy here would be a second chance to describe the rule wrongly.
+ *   The fallback exists for an old response, not as an alternative wording.
+ */
+export function Restricted({
+  reason, compact = false,
+}: {
+  /** The server's sentence. It names the data source and what to ask for. */
+  reason?: string | null
+  /** For a report figure or a chat turn, which sit in flowing text. */
+  compact?: boolean
+}) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: compact ? 'row' : 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: compact ? 10 : 8,
+        height: compact ? undefined : '100%',
+        minHeight: compact ? undefined : 80,
+        padding: compact ? '10px 12px' : '18px 16px',
+        borderRadius: 10,
+        border: '1px dashed var(--amber-border)',
+        background: 'var(--amber-bg)',
+        textAlign: compact ? 'left' : 'center',
+      }}
+    >
+      <span
+        aria-hidden
+        style={{ color: 'var(--amber)', display: 'grid', placeItems: 'center' }}
+      >
+        <Icon.Lock size={compact ? 14 : 18} />
+      </span>
+      <span
+        style={{
+          fontSize: compact ? 12 : 12.5,
+          color: 'var(--text-dim)',
+          lineHeight: 1.55,
+          maxWidth: 320,
+        }}
+      >
+        {reason || 'You do not have access to the data source behind this.'}
+      </span>
+    </div>
+  )
+}
+
+
 export function AccessPopover({
-  base, resourceLabel,
+  base, resourceLabel, label, warn,
 }: {
   base: string
   /** What to call this thing in the button's title and the modal's heading. */
   resourceLabel: string
+  /**
+   * Override the button's text. The default is the share summary — "2 people"
+   * — which reads well beside a heading and badly inside a kebab menu, where
+   * "Share…" is what everything else in the list looks like.
+   */
+  label?: string
+  /** Passed straight through — see `AccessPanel`'s own `warn`. */
+  warn?: (principal: { user_id?: string; team_id?: string }) => Promise<string[]>
 }) {
   const [open, setOpen] = useState(false)
   const [actions, setActions] = useState<Actions | null>(null)
@@ -710,7 +895,7 @@ export function AccessPopover({
     <>
       <GhostButton onClick={() => setOpen(true)} title={`Who can reach ${resourceLabel}`}>
         <Icon.Users size={14} />
-        {accessSummary(grants) || 'Access'}
+        {label ?? (accessSummary(grants) || 'Access')}
       </GhostButton>
       {open && (
         <Modal
@@ -719,7 +904,7 @@ export function AccessPopover({
           width={620}
           footer={<GhostButton onClick={() => setOpen(false)}>Done</GhostButton>}
         >
-          <AccessPanel base={base} />
+          <AccessPanel base={base} title={resourceLabel} warn={warn} />
         </Modal>
       )}
     </>

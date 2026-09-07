@@ -18,6 +18,7 @@ from app.api.schemas import (
     ParameterCatalog,
     TestResult,
 )
+from app.api.v1.access import attach_access_routes
 from app.core.clock import utcnow
 from app.core.errors import ConflictError, LLMError, NotFoundError, ValidationError
 from app.domain.ports.authz import ResourceRef
@@ -33,9 +34,30 @@ from app.domain.value_objects.llm_params import (
 from app.infra.authz.compose import restrict
 from app.infra.db.models import LlmConfig
 from app.infra.llm.litellm_gateway import LiteLLMGateway
+from app.services import audit
+from app.services.policy import require
 from app.services.query_service import can_chat, can_embed
 
 router = APIRouter(prefix="/llm-configs", tags=["llm-configs"])
+
+#: **Where a stored key stopped being safe.** Written whenever a PATCH moves a
+#: configuration's `base_url` or its `provider` — the two fields that decide
+#: *where the key is sent*. The key is cleared in the same transaction, so this
+#: row is the record of a credential's end of life rather than a warning about
+#: one, and an administrator reading the log can tell "somebody re-pointed the
+#: house model at their own gateway" from "somebody renamed it".
+ENDPOINT_CHANGED = "llm_config.endpoint.changed"
+
+# `/grants`, `/actions` and `/transfer`, above the `/{config_id}` routes so
+# `/parameters` and `/test` still win their match.
+#
+# ⚠️ **Only `describe` and `select` can be granted here**, refused in
+# `GrantService._guard_key_equivalent` rather than by leaving the route off:
+# `modify` on a model configuration is equivalent to handing over the API
+# key, because a holder can repoint `base_url` at a host they control. The
+# share surface offers the two that are safe and the API refuses the other
+# three wherever they are asked for.
+attach_access_routes(router, ResourceType.LLM_CONFIG, param="config_id")
 
 
 def _to_read(row: LlmConfig) -> LlmConfigRead:
@@ -57,10 +79,16 @@ async def _authorized(db, authz, config_id: UUID, ctx, privilege: Privilege) -> 
     """
     result = await db.execute(select(LlmConfig).where(LlmConfig.id == config_id))
     row = result.scalar_one_or_none()
-    if row is None or not await authz.allowed(
-        ctx, ResourceRef.to(ResourceType.LLM_CONFIG, row), privilege
-    ):
+    if row is None:
         raise NotFoundError("Model configuration not found.")
+    # 404 when nothing reaches them, 403 naming the privilege when something
+    # does — the §19.1 rule, in the one function that holds it. It matters
+    # here as of Phase 8: `select` is grantable and `modify` is not, so
+    # *"you may answer with this model but not edit it"* is the ordinary state
+    # of every shared provider row and deserves the sentence.
+    await require(
+        ctx, authz, ResourceRef.to(ResourceType.LLM_CONFIG, row), privilege, db=db
+    )
     return row
 
 
@@ -334,6 +362,9 @@ async def update_config(
     # parameter that does not survive the move.
     provider = payload.provider or row.provider
     given = payload.model_dump(exclude_unset=True)
+    # **Where the key gets sent, before and after.** Read before anything is
+    # assigned, because the comparison below is the whole of the rule.
+    was = (row.base_url or "", row.provider or "")
     embedding_model = (
         payload.embedding_model.strip()
         if payload.embedding_model is not None
@@ -370,6 +401,52 @@ async def update_config(
         )
         row.key_version = box.key_version
         row.status = "UNTESTED"
+
+    # ── moving the endpoint clears the key ──
+    #
+    # ⚠️ This is the rule that makes `modify` on an `llm_config` a
+    # key-equivalent privilege, and it is the mitigation for it. A holder who
+    # repoints `base_url` at a host they control would otherwise read the
+    # stored secret out of the next request's `Authorization` header — the
+    # credential would leave the product without anybody deciding to disclose
+    # it. So the key does not survive the move: the row keeps working as a
+    # configuration and stops working as a credential until somebody who has
+    # the new endpoint's key types it in.
+    #
+    # `provider` counts as much as `base_url`. Switching OpenAI-compatible to
+    # Anthropic sends the same secret to a different company, and a rule that
+    # only watched the URL would let that through while blocking the
+    # cosmetically similar case.
+    #
+    # After the `api_key` branch, deliberately: a PATCH that moves the endpoint
+    # **and** supplies the new key in the same call is the honest way to do it,
+    # and must not have the new key cleared. `_moved` compares against what was
+    # read before any assignment, so a PATCH that merely re-sends the same URL
+    # is not a move.
+    now = (row.base_url or "", row.provider or "")
+    if now != was and payload.api_key is None:
+        cleared = bool(row.encrypted_api_key)
+        row.encrypted_api_key = None
+        # `key_version` is left alone: it names the master key that encrypted
+        # a ciphertext which no longer exists, and `Mapped[int]` is not
+        # nullable. Nothing reads it without a ciphertext beside it.
+        row.status = "UNTESTED"
+        await audit.record(
+            db, ctx,
+            action=ENDPOINT_CHANGED,
+            resource_type=str(ResourceType.LLM_CONFIG),
+            resource_id=row.id,
+            # Identifiers and a boolean. **Never the key**, and never the old
+            # URL's credentials — `base_url` is a host, which is what makes it
+            # nameable here at all.
+            detail={
+                "from_base_url": was[0],
+                "to_base_url": now[0],
+                "from_provider": was[1],
+                "to_provider": now[1],
+                "key_cleared": cleared,
+            },
+        )
 
     await db.flush()
     return _to_read(row)

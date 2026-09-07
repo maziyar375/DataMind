@@ -37,6 +37,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Request, status
+from sqlalchemy import select
 
 from app.api.deps import AuthzDep, CtxDep, DbDep
 from app.api.schemas import (
@@ -53,6 +54,7 @@ from app.domain.value_objects.authz import (
     Privilege,
     ResourceType,
 )
+from app.infra.db.models import User
 from app.services.grant_service import GrantService, GrantView
 from app.services.policy import require
 
@@ -69,6 +71,23 @@ CAN: dict[str, Privilege] = {
     "share": Privilege.MANAGE,
     "transfer": Privilege.MANAGE,
 }
+
+
+#: The five paths `attach_access_routes` writes, relative to the resource's
+#: own `/{id}`. Exported so a router's route sweep can tell *"a route this
+#: shared module published"* from *"a route somebody forgot to test"* — the
+#: distinction matters because these five are scoped by `GrantService` and
+#: proven in `tests/unit/test_grants.py`, not by the router's own service.
+#:
+#: Derived from this tuple in both places, so adding a sixth access route
+#: cannot quietly slip past a sweep that was written against a literal list.
+ACCESS_PATHS: tuple[str, ...] = (
+    "/grants",
+    "/grants/self",
+    "/grants/{grant_id}",
+    "/actions",
+    "/transfer",
+)
 
 
 def _view(grant: GrantView) -> GrantRead:
@@ -101,11 +120,33 @@ async def actions_for(
     )
 
 
+async def owner_names(db: DbDep, ids: set[UUID]) -> dict[UUID, str]:
+    """Display names for an owner column. **Never an address.**
+
+    The rule the review queue already follows, and it matters more on every
+    index that became shareable in Phase 8: these lists are now visible to
+    anybody a report or a board was shared with, and an email is a piece of
+    personal data that *"who owns this"* does not need. One query per page.
+
+    Lives here rather than in each router because four indexes need the same
+    column and four copies would be four chances to render the email by
+    accident — which is the failure that is invisible until it is a screenshot
+    in a ticket.
+    """
+    if not ids:
+        return {}
+    rows = await db.execute(
+        select(User.id, User.display_name, User.email).where(User.id.in_(ids))
+    )
+    return {row[0]: (row[1] or row[2].split("@")[0]) for row in rows.all()}
+
+
 def attach_access_routes(
     router: APIRouter,
     type_: ResourceType,
     *,
     param: str = "id",
+    base: str = "",
     in_prefix: bool = False,
     transferable: bool = True,
 ) -> None:
@@ -125,8 +166,14 @@ def attach_access_routes(
     its connection's owner — so `POST /connections/{id}/knowledge/transfer`
     would be a second, quieter way to transfer the connection. There is one
     transfer per owned thing, and it lives on the thing that has an owner.
+
+    **`base`** is for a router that is *not* mounted at the resource's
+    collection. `conversations` is one: it carries a bare prefix and spells
+    `/conversations/{conversation_id}` out per route, so the grants have to be
+    spelled with it too. Everything else leaves it empty and the routes hang
+    off the router's own prefix.
     """
-    path = "" if in_prefix else f"/{{{param}}}"
+    path = base if in_prefix else f"{base}/{{{param}}}"
 
     def _ref(request: Request) -> ResourceRef:
         return ResourceRef(type=type_, id=UUID(request.path_params[param]))

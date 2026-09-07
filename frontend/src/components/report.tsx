@@ -56,6 +56,7 @@ import type {
   ReportBlockType, ReportFeasibility, ReportLanguage, ReportRun, ReportRunDetail,
   ReportSection, ReportSectionResult, ReportSummary, ReportTimeWindow,
 } from '../api/types'
+import { AccessPopover, ReachBadge, Restricted } from './access'
 import { ChartGlyph, ChartTypePicker } from './chart-picker'
 import {
   assembleDocument, captionOf, chartTypeOf, figureNumbers, isCallout, isEdited,
@@ -822,6 +823,13 @@ export function ReportOutlineEditor({
         </div>
 
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {/* Who else can reach this document, and the way to change it. It
+              draws nothing unless the viewer holds `manage` — the same answer
+              the API will give the next request — so somebody who was shared
+              this report sees a header without a share control rather than
+              one whose button 403s. */}
+          <ReachBadge privileges={report.privileges} />
+          <AccessPopover base={`reports/${report.id}`} resourceLabel={report.name} />
           {sections.length > 0 && (
             <GhostButton
               onClick={() => setConfirmPropose(true)}
@@ -3657,6 +3665,63 @@ function BlockView({
 }) {
   const kind = renderKindOf(block)
   const caption = captionOf(block)
+
+  // The intersection rule, on a figure. Checked **before** the callout branch
+  // and before `kind`: a withheld block has no kpi, no rows and no chart, so
+  // every branch below it would render an empty exhibit rather than say why
+  // it is empty. The caption, the figure number and the position survive, so
+  // the document still reads as a document and the reader can name the
+  // exhibit they need access to.
+  if (block.restricted) {
+    return (
+      <figure
+        className="rm-report-figure"
+        style={{
+          margin: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 9,
+          padding: 14,
+          background: 'var(--panel)',
+          border: '1px solid var(--border)',
+          borderRadius: 12,
+        }}
+      >
+        <figcaption
+          className="rm-report-figcap"
+          style={{ display: 'flex', flexDirection: 'column', gap: 2 }}
+        >
+          {figure !== undefined && (
+            <span
+              className="mono rm-report-figlabel"
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: '0.09em',
+                textTransform: 'uppercase',
+                color: 'var(--accent)',
+              }}
+            >
+              {t.figure} {figure}
+            </span>
+          )}
+          <span
+            dir="auto"
+            className="rm-report-caption"
+            style={{
+              fontSize: 13.5,
+              fontWeight: 650,
+              color: 'var(--text-strong)',
+              lineHeight: 1.45,
+            }}
+          >
+            {caption}
+          </span>
+        </figcaption>
+        <Restricted reason={block.error_message} compact />
+      </figure>
+    )
+  }
 
   if (isCallout(block) && block.kpi) {
     // The caption *is* the label. `plan_kpi` labels the number with its column

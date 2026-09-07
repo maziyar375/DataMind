@@ -236,7 +236,26 @@ export function preflightOf(sections: ReportSection[]): Preflight {
 export function generationBlockedBy(report: {
   connection_id: string | null
   connection_name: string | null
+  /**
+   * Whether this reader may reach the database. Optional so every existing
+   * caller and every fixture keeps its meaning — absent reads as "yes", which
+   * is what it was before a report could be shared.
+   */
+  data_access?: boolean
 }): string | null {
+  // The intersection rule, as a refusal rather than a placeholder. Generating
+  // runs queries against the database; a reader shared the document and not
+  // its warehouse cannot do that, and telling them so beats a button whose
+  // only outcome is a 403. This is checked **first**: it is the more specific
+  // reason, and a report can be both out of reach and released.
+  if (report.data_access === false) {
+    const which = report.connection_name ? ` “${report.connection_name}”` : ''
+    return (
+      `You do not have access to${which}, the database this report was built ` +
+      'over, so it cannot be generated or checked. Ask whoever owns it for ' +
+      '“select”. Every run it already produced stays readable.'
+    )
+  }
   if (report.connection_id !== null) return null
   const which = report.connection_name ? ` (${report.connection_name})` : ''
   return (

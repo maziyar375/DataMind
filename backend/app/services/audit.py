@@ -115,10 +115,16 @@ ASK_RECORDED = "ask.recorded"
 #: services/grant_service.py        grant.created · grant.revoked
 #:                                  grant.wildcard.created
 #:                                  ownership.transferred · disclosure.changed
+#: services/policy.py               access.denied
+#: api/v1/llm_configs.py            llm_config.endpoint.changed
 #: ```
 #:
-#: Phase 7 adds the last two — `access.denied`, the producer `DENIED` has been
-#: waiting for since migration `0001`, and `admin.self_granted`.
+#: Phase 7 added `access.denied` — the producer `DENIED` had been waiting for
+#: since migration `0001` — and `admin.self_granted`. Phase 8 adds
+#: `llm_config.endpoint.changed`: the one action defined in a **router** rather
+#: than a service, because the rule it records lives in the PATCH handler that
+#: compares the endpoint before and after, and moving the word away from that
+#: comparison would be moving it away from the only code that can decide it.
 
 #: How much of a `detail` value survives. Generous for an identifier or a
 #: status reason, mean enough that nobody is tempted to pass a statement.

@@ -3283,40 +3283,40 @@ cd frontend && npm run typecheck && npm run build && npm test
 ## Phase 8 — Grants on artifacts
 
 **8a — Reports**
-- [ ] Grants on `report`; `visible` in the list; share panel
-- [ ] A viewer needs `select` on the report **and** its connection
-- [ ] A missing connection privilege renders a placeholder, not a 500
+- [x] Grants on `report`; `visible` in the list; share panel
+- [x] A viewer needs `select` on the report **and** its connection
+- [x] A missing connection privilege renders a placeholder, not a 500
 
 **8b — LLM configs**
-- [ ] Grants on `llm_config`, `describe`/`select` only; the API refuses higher
-- [ ] `PATCH` clears the stored key when `base_url` or `provider` changes
-- [ ] `llm_config.endpoint.changed` audit action
-- [ ] `resolve_llm` re-checks `select` at execution
-- [ ] Frontend: Access section on the provider detail, with the reason
+- [x] Grants on `llm_config`, `describe`/`select` only; the API refuses higher
+- [x] `PATCH` clears the stored key when `base_url` or `provider` changes
+- [x] `llm_config.endpoint.changed` audit action
+- [x] `resolve_llm` re-checks `select` at execution
+- [x] Frontend: Access section on the provider detail, with the reason
 
 **8c — Conversations**
-- [ ] Grants on `conversation`; share from the thread kebab
-- [ ] A shared thread does not share its connection
+- [x] Grants on `conversation`; share from the thread kebab
+- [x] A shared thread does not share its connection
 
 **8d — Dashboards**
-- [ ] Grants on `dashboard`; `visible` in the list
-- [ ] **The intersection rule** — per-tile `select` on that tile's connection
-- [ ] The named tile placeholder, never hidden
-- [ ] `refresh` re-checks per tile, per execution
-- [ ] The share-time cross-connection warning, naming the connections
-- [ ] The tile-cache trigger sentence in `DashboardTileCache`'s docstring
+- [x] Grants on `dashboard`; `visible` in the list
+- [x] **The intersection rule** — per-tile `select` on that tile's connection
+- [x] The named tile placeholder, never hidden
+- [x] `refresh` re-checks per tile, per execution
+- [x] The share-time cross-connection warning, naming the connections
+- [x] The tile-cache trigger sentence in `DashboardTileCache`'s docstring
 
 **Across 8**
-- [ ] Frontend: Share dialogs on both index cards and both detail headers
-- [ ] Frontend: **Shared with me** filter chip on both index toolbars
-- [ ] Frontend: `Limited` / `Read-only` badges from `…/actions`
-- [ ] Test: a two-connection dashboard renders one tile and one placeholder
-- [ ] Test: the cache key contains no viewer (the tripwire)
-- [ ] Test: an `llm_config` grant above `select` is refused
-- [ ] Test: changing `base_url` clears the key
-- [ ] Doc: `dashboards.md` §9, `reports.md` §14, `frontend.md` §2
-- [ ] **Gate green**
-- [ ] **Acceptance: the one-line test** — two people, one credential, one
+- [x] Frontend: Share dialogs on both index cards and both detail headers
+- [x] Frontend: **Shared with me** filter chip on both index toolbars
+- [x] Frontend: `Limited` / `Read-only` badges from `…/actions`
+- [x] Test: a two-connection dashboard renders one tile and one placeholder
+- [x] Test: the cache key contains no viewer (the tripwire)
+- [x] Test: an `llm_config` grant above `select` is refused
+- [x] Test: changing `base_url` clears the key
+- [x] Doc: `dashboards.md` §9, `reports.md` §14, `frontend.md` §2
+- [x] **Gate green**
+- [x] **Acceptance: the one-line test** — two people, one credential, one
       dashboard, four refusals, four audit rows
 
 ## Phase 9 — Access review and the explainer
@@ -3401,11 +3401,11 @@ cd frontend && npm run typecheck && npm run build && npm test
 | 5 · Service users | 25 | **25** | 2026-09-07 |
 | 6 · Grants on connections | 34 | **34** | 2026-09-07 |
 | 7 · The audit half | 15 | **15** | 2026-09-07 |
-| 8 · Grants on artifacts | 26 | 0 | — |
+| 8 · Grants on artifacts | 26 | **26** | 2026-09-07 |
 | 9 · Access review | 15 | 0 | — |
 | 10 · Rulebook and seams | 21 | 0 | — |
 | Cross-cutting | 8 | **6** | — |
-| **Total** | **254** | **190** | |
+| **Total** | **254** | **216** | |
 
 ## 30. The one-line acceptance test for the whole plan
 

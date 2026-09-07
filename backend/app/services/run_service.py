@@ -449,11 +449,45 @@ class RunService:
             if run.llm_config_id
             else None
         )
+        # ── the re-check at execution (§8b) ──
+        #
+        # A run is queued by a request and executed by a worker, and between
+        # the two a grant can be revoked. The row still points at the
+        # connection and the model, so without this the run would go on to
+        # spend the key and read the database on behalf of somebody who no
+        # longer may — which is exactly the state a revoke is supposed to end
+        # on the next request.
+        #
+        # Asked as **the run's actor**, through the same delegation a
+        # scheduled report uses: there is no god context, so a run its actor
+        # could no longer perform by hand fails, and that is the outcome
+        # rather than a bug to route around. `describe`-level reach is not
+        # enough; answering a question is `select` on both.
+        revoked = False
+        if connection is not None and llm_config is not None:
+            as_actor = RequestContext.on_behalf_of(run.actor_id or run.owner_id)
+            if not await self._authorizer().allowed(
+                as_actor,
+                ResourceRef.to(ResourceType.CONNECTION, connection),
+                Privilege.SELECT,
+            ):
+                connection, revoked = None, True
+            elif not await self._authorizer().allowed(
+                as_actor,
+                ResourceRef.to(ResourceType.LLM_CONFIG, llm_config),
+                Privilege.SELECT,
+            ):
+                llm_config, revoked = None, True
+
         if connection is None or llm_config is None:
             missing = "data source" if connection is None else "model"
             run.status = RunStatus.FAILED
-            run.error_code = "E_NOT_FOUND"
-            run.error_message = f"The {missing} this run was using has been deleted."
+            run.error_code = "E_FORBIDDEN" if revoked else "E_NOT_FOUND"
+            run.error_message = (
+                f"You no longer have access to the {missing} this run was using."
+                if revoked
+                else f"The {missing} this run was using has been deleted."
+            )
             run.finished_at = utcnow()
             await self._db.commit()
             # The same terminal event every other ending emits, so the SPA needs

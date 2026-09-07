@@ -389,6 +389,7 @@ def test_every_audited_action_is_namespaced() -> None:
         "grant", "ownership", "disclosure",   # who may reach this thing
         "service_user", "service_credential", # machine identities
         "access", "admin",  # denials, and the escalation that is never silent
+        "llm_config",       # where a stored key stopped being safe
     }
     for action in actions:
         area, _, verb = action.partition(".")
@@ -414,6 +415,10 @@ def test_the_whole_vocabulary_is_enumerable_from_one_file() -> None:
         "app/services/service_user_service.py",
         "app/services/grant_service.py",
         "app/services/policy.py",
+        # The one action defined in a router: `llm_config.endpoint.changed`
+        # belongs beside the comparison that decides it, which is the PATCH
+        # handler. Listed here so the index still covers everything.
+        "app/api/v1/llm_configs.py",
     }
     # Only `<namespace>.<verb>` strings, and only from the namespaces this
     # product audits under. A module-level constant can hold a dotted string
@@ -423,6 +428,7 @@ def test_the_whole_vocabulary_is_enumerable_from_one_file() -> None:
     namespaces = (
         "role.", "team.", "grant.", "ownership.", "disclosure.",
         "service_user.", "service_credential.", "access.", "admin.",
+        "llm_config.",
     )
     defined: set[str] = set()
     for module in modules:

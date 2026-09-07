@@ -62,6 +62,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMatch, useNavigate } from 'react-router-dom'
 import { llmConfigs as api } from '../api/client'
+import { AccessPanel } from '../components/access'
 import type { LlmConfig, ParameterCatalog, TestResult } from '../api/types'
 import {
   Chip, DangerButton, EmptyState, ErrorNote, Field, GhostButton, GlyphBadge, Icon,
@@ -1218,8 +1219,38 @@ export default function LlmProvidersPage() {
               </Section>
               )}
 
-              {!creating && (
+              {!creating && selected && (
                 <>
+                  {/* ⚠️ **`select` and `describe` only**, and the reason is on
+                      the panel rather than in a comment nobody reading the
+                      screen will see: anybody who can edit this row can point
+                      `base_url` at a host they control and read the key out of
+                      the next request's `Authorization` header. The narrowing
+                      is enforced on the server — `GET …/actions` sends the two
+                      privileges it will accept and the panel renders what it is
+                      sent — so this is one sentence, not a second rule. */}
+                  <Section
+                    title="Access"
+                    description="Who may answer questions with this model. Sharing it never shares its API key."
+                    icon={<Icon.Users size={14} />}
+                  >
+                    <p
+                      style={{
+                        fontSize: 12.5,
+                        color: 'var(--text-dim)',
+                        margin: 0,
+                        lineHeight: 1.6,
+                      }}
+                    >
+                      Only <strong>select</strong> and <strong>describe</strong> can
+                      be given here. Anyone who could <em>edit</em> this
+                      configuration could repoint its endpoint at a server they
+                      control and read the stored key out of the next request, so
+                      editing stays with you and with whoever you transfer it to.
+                    </p>
+                    <AccessPanel base={`llm-configs/${selected.id}`} title={selected.name} />
+                  </Section>
+
                   <Section title="How testing works" icon={<Icon.Zap size={14} />}>
                     <p
                       style={{

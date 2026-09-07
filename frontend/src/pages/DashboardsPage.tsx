@@ -13,7 +13,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { Layout } from 'react-grid-layout'
 import { useLocation, useMatch, useNavigate } from 'react-router-dom'
 
-import { ApiError, dashboards as api } from '../api/client'
+import { ApiError, access, dashboards as api } from '../api/client'
+import { AccessPanel, AccessPopover, ReachBadge } from '../components/access'
 import { useThemeOverride } from '../shell'
 import type { Dashboard, DashboardSummary, DashboardTile } from '../api/types'
 import {
@@ -50,6 +51,32 @@ export default function DashboardsPage() {
   ) : (
     <DashboardIndex onOpen={(id) => navigate(`/dashboards/${id}`)} />
   )
+}
+
+/**
+ * The cross-connection warning, as the share dialog wants it.
+ *
+ * A dashboard is the only artifact whose tiles carry their own
+ * `connection_id`, so it is the only one where *"share this"* can mean *"and
+ * they will see two of these four tiles"*. The server answers the question —
+ * asked **as the grantee**, which is the only honest way to answer *"what
+ * would they see"* — and this turns it into the names the dialog prints.
+ *
+ * Curried per dashboard so the identity is stable across renders of the
+ * dialog, which polls it whenever the picked principal changes.
+ */
+const WARN_CACHE = new Map<string, (p: { user_id?: string; team_id?: string }) => Promise<string[]>>()
+
+function warnFor(dashboardId: string) {
+  let fn = WARN_CACHE.get(dashboardId)
+  if (!fn) {
+    fn = async (principal) => {
+      const check = await access.shareCheck(dashboardId, principal)
+      return check.unreadable.map((connection) => connection.name)
+    }
+    WARN_CACHE.set(dashboardId, fn)
+  }
+  return fn
 }
 
 // ── the index ─────────────────────────────────────────────────────────────
@@ -89,9 +116,21 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
   const [creating, setCreating] = useState(false)
   const [importing, setImporting] = useState(false)
   const [renaming, setRenaming] = useState<DashboardSummary | null>(null)
+  /** The board whose access panel is open, from a card's kebab. */
+  const [sharing, setSharing] = useState<DashboardSummary | null>(null)
   const [busy, setBusy] = useState(false)
 
   const [query, setQuery] = useState('')
+  /**
+   * *"Shared with me"*, and it is off by default.
+   *
+   * A filter that hides your own work is not a default anybody wants; what
+   * this answers is *"what did somebody hand me"*, which is a question people
+   * ask on the day they are handed something. The chip only appears once
+   * there is something shared to filter to — a permanently empty control is
+   * furniture, the same rule the Archived segment already follows.
+   */
+  const [sharedOnly, setSharedOnly] = useState(false)
   const [sort, setSort] = useState<SortKey>('updated')
   // Archiving existed as an action with nowhere for the result to go: an
   // archived dashboard stayed in the list at 72% opacity forever. Defaulting
@@ -174,6 +213,7 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
     const needle = query.trim().toLowerCase()
     const matched = cards.filter((card) => {
       if (status !== 'ALL' && card.status !== status) return false
+      if (sharedOnly && !card.shared) return false
       if (!needle) return true
       return (
         card.name.toLowerCase().includes(needle)
@@ -181,10 +221,15 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
       )
     })
     return sortCards(matched, sort)
-  }, [cards, query, sort, status])
+  }, [cards, query, sharedOnly, sort, status])
 
   const archivedCount = useMemo(
     () => (cards ?? []).filter((card) => card.status === 'ARCHIVED').length,
+    [cards],
+  )
+
+  const sharedCount = useMemo(
+    () => (cards ?? []).filter((card) => card.shared).length,
     [cards],
   )
 
@@ -208,6 +253,7 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
           }),
         ),
       onDelete: () => void guard(() => api.remove(card.id)),
+      onShare: () => setSharing(card),
     }),
     [duplicate, guard, onOpen],
   )
@@ -263,6 +309,24 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
             {/* Only offered once there is something archived to look at — a
                 permanently empty filter is furniture, not a control. */}
+            {sharedCount > 0 && (
+              <GhostButton
+                aria-pressed={sharedOnly}
+                onClick={() => setSharedOnly((on) => !on)}
+                style={
+                  sharedOnly
+                    ? {
+                        background: 'var(--accent-bg)',
+                        borderColor: 'var(--accent-border)',
+                        color: 'var(--accent)',
+                      }
+                    : undefined
+                }
+                title="Only boards somebody shared with you"
+              >
+                <Icon.Users size={13} /> Shared with me ({sharedCount})
+              </GhostButton>
+            )}
             {archivedCount > 0 && (
               <Segmented
                 ariaLabel="Filter by status"
@@ -382,6 +446,21 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
             onOpen(result.dashboard.id)
           }}
         />
+      )}
+
+      {sharing && (
+        <Modal
+          title={`Access to “${sharing.name}”`}
+          onClose={() => setSharing(null)}
+          width={620}
+          footer={<GhostButton onClick={() => setSharing(null)}>Done</GhostButton>}
+        >
+          <AccessPanel
+            base={`dashboards/${sharing.id}`}
+            title={sharing.name}
+            warn={warnFor(sharing.id)}
+          />
+        </Modal>
       )}
 
       {renaming && (
@@ -1103,6 +1182,17 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
                   tiles={tiles}
                   refreshing={data.pending.size > 0}
                   onRefresh={() => data.refreshNow(tiles.map((t) => t.id))}
+                />
+                {/* Who else can reach this board, and the way to change it.
+                    It draws nothing unless the viewer holds `manage`, which
+                    is the same answer the API will give the next request —
+                    so a reader who was shared this board sees a header with
+                    no share control rather than one that 403s. */}
+                <ReachBadge privileges={dashboard.privileges} />
+                <AccessPopover
+                  base={`dashboards/${dashboard.id}`}
+                  resourceLabel={dashboard.name}
+                  warn={warnFor(dashboard.id)}
                 />
                 {/* One control per verb was four ghost buttons of identical
                     weight — a row of equals with no shape. Presentation and

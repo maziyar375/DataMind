@@ -740,6 +740,10 @@ export interface Artifact {
   id: string
   kind: 'TABLE' | 'CHART' | 'KPI' | 'CLARIFICATION' | 'ERROR' | 'SQL_SUMMARY'
   spec: ArtifactSpec
+  /** As on the run: identity without content, for a reader who was shared the
+   *  thread and not the database behind it. `spec` arrives empty. */
+  restricted?: boolean
+  restricted_reason?: string | null
 }
 
 /**
@@ -933,6 +937,16 @@ export interface RunDetail {
   artifacts: Artifact[]
   queries: GeneratedQuery[]
   knowledge: RunKnowledge
+  /**
+   * The intersection rule, on a turn in a shared thread. Sharing a
+   * conversation shares the **transcript**, not the database it was asked
+   * against — so when this is true the prose and the step trail are here and
+   * `artifacts` and `queries` are empty, because a stored `SELECT` names
+   * columns out of a schema this reader was never given, and the rows are the
+   * rows.
+   */
+  restricted: boolean
+  restricted_reason: string | null
 }
 
 export interface MessageWithRun {
@@ -1042,6 +1056,12 @@ export interface Dashboard {
   created_at: string
   updated_at: string
   tiles: DashboardTile[]
+  /**
+   * What this reader may do here, from the same table `GET …/actions` renders
+   * from. Embedded so the header does not draw every control enabled for one
+   * frame and then take half of them away.
+   */
+  privileges: string[]
 }
 
 export interface DashboardSummary {
@@ -1054,6 +1074,10 @@ export interface DashboardSummary {
   last_refreshed_at: string | null
   created_at: string
   updated_at: string
+  /** Somebody else's board, shared with you. Drives the filter and the badge. */
+  shared: boolean
+  /** Their display name — never an address. Null on a board you own. */
+  owner_name: string | null
 }
 
 // ── a dashboard as a file ─────────────────────────────────────────────────
@@ -1291,6 +1315,15 @@ export interface Report {
   created_at: string
   updated_at: string
   sections: ReportSection[]
+  /**
+   * Whether you may reach the database this report was built over. Reaching
+   * the **report** and reaching its **data** are two questions, and from
+   * Phase 8 they can have different answers: a report shared with you renders
+   * its structure and its prose, and turns every figure into a placeholder if
+   * its connection was not shared too.
+   */
+  data_access: boolean
+  privileges: string[]
 }
 
 export interface ReportSummary {
@@ -1307,6 +1340,8 @@ export interface ReportSummary {
   section_count: number
   created_at: string
   updated_at: string
+  shared: boolean
+  owner_name: string | null
 }
 
 /** What a feasibility check answers: the block, and what the verdict came from. */
@@ -1362,6 +1397,13 @@ export interface ReportBlockResult {
   error_code: string | null
   error_message: string | null
   /**
+   * The intersection rule, on a figure: this reader holds `select` on the
+   * report and not on the connection behind it. The heading, the caption and
+   * the position survive so the document still reads as a document; the rows,
+   * the chart and the statement do not.
+   */
+  restricted: boolean
+  /**
    * Whether the query behind this figure differs from the one the *previous*
    * generation ran. **null means there was nothing to compare with** — a first
    * run, or a block that did not exist last time — which is a different answer
@@ -1414,4 +1456,18 @@ export interface ReportChart {
   chart_note: string | null
   reason: string | null
   options: ChartOption[]
+}
+
+// ── the cross-connection warning ──────────────────────────────────────────
+/**
+ * What a grantee would **not** be able to see on a dashboard.
+ *
+ * §19.2's second half: *"sharing warns when its tiles span connections the
+ * grantee cannot read, and names them. The share is still allowed; the
+ * surprise is not."* So the dialog renders this beside an **enabled** Share
+ * button — it is a warning, never a gate.
+ */
+export interface ShareCheck {
+  total_connections: number
+  unreadable: { id: string; name: string }[]
 }

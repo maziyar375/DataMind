@@ -48,6 +48,7 @@ function block(
     status: 'OK',
     error_code: null,
     error_message: null,
+    restricted: false,
     sql_changed: null,
     ...extra,
   }

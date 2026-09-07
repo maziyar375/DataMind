@@ -1645,6 +1645,10 @@ class DashboardRead(BaseModel):
     # The dashboard and its tiles, never their results: a tile's data is asked
     # for separately, because each tile is on its own clock.
     tiles: list[DashboardTileRead] = Field(default_factory=list)
+    # What this reader may do here, from the same table `GET …/actions`
+    # renders from. Embedded so the header does not draw every control enabled
+    # for one frame and then take half of them away.
+    privileges: list[str] = Field(default_factory=list)
 
 
 class DashboardSummaryRead(BaseModel):
@@ -1660,6 +1664,34 @@ class DashboardSummaryRead(BaseModel):
     last_refreshed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    # Somebody else's board, shared with this reader. Drives the "Shared with
+    # me" filter and the owner's name on the card.
+    shared: bool = False
+    owner_name: str | None = None
+
+
+class NamedRef(BaseModel):
+    """An id and the name a person calls it. Nothing else travels."""
+
+    id: UUID
+    name: str
+
+
+class ShareCheckRead(BaseModel):
+    """What a grantee would **not** be able to see on this dashboard.
+
+    §19.2's second half: *"sharing warns when its tiles span connections the
+    grantee cannot read, and names them. The share is still allowed; the
+    surprise is not."* So this is a warning endpoint, never a gate — the
+    dialog renders it beside an enabled Share button.
+
+    `unreadable` names connections, never hosts or credentials: the same thing
+    the tile placeholder shows the grantee, shown to the person about to
+    create that placeholder.
+    """
+
+    total_connections: int = 0
+    unreadable: list[NamedRef] = Field(default_factory=list)
 
 
 class DashboardCreate(BaseModel):
@@ -1886,6 +1918,17 @@ class ReportRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     sections: list[ReportSectionRead] = Field(default_factory=list)
+    # Whether this reader may reach the database this report was built over.
+    # A report is bound to exactly one connection, so unlike a dashboard the
+    # answer is a single boolean rather than a set — but the rule is the same
+    # one: a shared report renders, and the figures it may not show become
+    # named placeholders. False disables Generate and Check in the editor,
+    # which would otherwise offer buttons that can only refuse.
+    data_access: bool = True
+    # What the reader may do here, from the same table `GET …/actions` renders
+    # from. Embedded so the header does not draw every control enabled for one
+    # frame and then take half of them away.
+    privileges: list[str] = Field(default_factory=list)
 
 
 class ReportSummaryRead(BaseModel):
@@ -1905,6 +1948,11 @@ class ReportSummaryRead(BaseModel):
     section_count: int = 0
     created_at: datetime
     updated_at: datetime
+    # Somebody else's report, shared with this reader. Drives the "Shared with
+    # me" filter and the owner's name on the card; a reader who owns it sees
+    # neither, because "shared with you by you" is noise.
+    shared: bool = False
+    owner_name: str | None = None
 
 
 class ReportCreate(BaseModel):
@@ -2082,6 +2130,11 @@ class ReportBlockResultRead(BaseModel):
     kpi: dict[str, Any] | None = None
     computed_at: datetime
     duration_ms: int = 0
+    # The intersection rule, on a figure: this reader holds `select` on the
+    # report and not on the connection behind it, so the block keeps its
+    # heading, its caption and its position and loses its numbers, its chart
+    # and its statement. Blanked in `reports.py`, never written this way.
+    restricted: bool = False
     status: str = "OK"
     error_code: str | None = None
     error_message: str | None = None
@@ -2214,6 +2267,10 @@ class ArtifactRead(BaseModel):
     id: UUID
     kind: str
     spec: dict[str, Any]
+    # As on a run: a reader shared the thread and not its database gets the
+    # artifact's identity and none of its content.
+    restricted: bool = False
+    restricted_reason: str | None = None
 
 
 class GeneratedQueryRead(BaseModel):
@@ -2271,6 +2328,12 @@ class RunRead(BaseModel):
     artifacts: list[ArtifactRead] = Field(default_factory=list)
     queries: list[GeneratedQueryRead] = Field(default_factory=list)
     knowledge: RunKnowledge = Field(default_factory=lambda: RunKnowledge())
+    # The intersection rule, on a turn in a shared thread: this reader may see
+    # the transcript and not the database it was asked against, so the prose
+    # survives and the table, the chart and the statement do not. Set in
+    # `conversations.py`; `artifacts` and `queries` arrive empty beside it.
+    restricted: bool = False
+    restricted_reason: str | None = None
 
 
 class MessageRead(BaseModel):

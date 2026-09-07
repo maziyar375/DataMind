@@ -21,7 +21,7 @@ import type {
   ReportBlockCheck, ReportChart, ReportRun, ReportRunDetail, ReportSection,
   ReportSectionResult,
   ReportSummary, Review, Role, RunDetail, RunEvent, RunKnowledge, SchemaSnapshot,
-  ScopedPrivilege, ServiceAccount, ServiceKey, Team,
+  ScopedPrivilege, ServiceAccount, ServiceKey, ShareCheck, Team,
   SemanticDocument, SemanticJob, Suggestion,
   SemanticLayer, SqlDraft, TemplateCheckResult, TemplateParam,
   TilePosition, TileResult, TileType, TestResult, User,
@@ -357,6 +357,19 @@ export const access = {
   actions: (base: string) => get<Actions>(`/${base}/actions`),
   transfer: (base: string, to: string) =>
     post<void>(`/${base}/transfer`, { to }),
+  /**
+   * Dashboards only, and only because a dashboard is the only artifact whose
+   * tiles carry their own `connection_id`. Asked when a principal is picked in
+   * the share dialog, before Share is pressed: it answers *"what would they
+   * not see"*, and the answer is a warning rather than a refusal.
+   */
+  shareCheck: (dashboardId: string, principal: { user_id?: string; team_id?: string }) =>
+    get<ShareCheck>(
+      `/dashboards/${dashboardId}/share-check?` +
+        new URLSearchParams(
+          Object.entries(principal).filter(([, v]) => v) as [string, string][],
+        ).toString(),
+    ),
 }
 
 // ── service accounts ──────────────────────────────────────────────────────

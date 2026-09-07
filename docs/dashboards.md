@@ -429,16 +429,64 @@ Worth knowing what a few of them pin:
 | Layout per tile, not one JSONB | One row per drag; no lost updates between tabs. | never |
 | Cache in Postgres | An in-process cache goes stale per worker. | never |
 | Pre-validated palettes, no free hex | [charts.md](charts.md) §8. | Someone re-runs the validator, both themes. |
-| **Owner-only, no sharing — *not yet*** | A shared dashboard means user B reads data pulled with user A's credentials against a connection B does not own. That is an authorization model, not a UI feature — and it is now being built. Every route and service here already asks the `Authorizer` port rather than comparing an owner id, so sharing is a change in `app/infra/authz/`, not in `dashboard_service.py`. | Phase 8 of [user-management-and-access-control-plan.md](user-management-and-access-control-plan.md), which grants on dashboards; the intersection rule in its §15.3 is the answer to "who may read through this connection". |
+| **Sharing is a grant, and a shared board is not a shared database** | The worry that kept this owner-only was real: a shared dashboard would have meant user B reading data pulled against a connection B does not own. Phase 8's answer is the **intersection rule** — the board is one grant, each tile's connection is another, and a tile whose database the reader was not given renders as a named placeholder. So B reads exactly what B was granted, tile by tile, on every render. See §9.1. | never — the alternative is a board that either refuses whole or leaks |
 | **No dashboard filters** | `QueryExecutor.execute` takes no bind parameters. Filters need the port extended across all four connectors. **Never by string interpolation.** | Someone extends the port. |
+
+### 9.1 Sharing, and the intersection rule
+
+A dashboard is shareable as of Phase 8 of
+[user-management-and-access-control-plan.md](user-management-and-access-control-plan.md),
+and it was the **last** of the four artifact types to become so, for a reason
+that is a fact about this data model rather than caution: a tile carries its
+**own** `connection_id`, so one board may span four warehouses and *"share this
+dashboard"* has no single meaning until you say what happens to a tile whose
+database the reader was not given.
+
+The answer, in one sentence: **the board renders, and each tile renders iff the
+viewer holds `select` on that tile's connection.**
+
+Five consequences, and each is load-bearing:
+
+* **A tile they cannot see is a named placeholder, never a hidden tile.**
+  Hiding it makes the dashboard silently wrong — a reader would draw
+  conclusions from a grid missing the one number that contradicts them. The
+  placeholder names the data source (`Payroll`) and says what to ask for, which
+  is exactly what `describe` means and no more: never a host, a username or a
+  row.
+* **The check runs *before* the cache, and that is the whole security
+  property.** `dashboard_tile_cache` holds rows read out of the customer's
+  database and is keyed on the tile alone — deliberately, because a cache key
+  carrying a viewer is a fingerprint that decides what somebody *else* is
+  served. What makes that safe is the order: `DashboardService.refresh` asks
+  the authorizer and drops the withheld tiles before it looks the cache up.
+  Move the check below the lookup and a revoked reader keeps being served the
+  last numbers they were allowed to see. `DashboardTileCache`'s docstring
+  carries the trigger sentence and `tests/unit/test_intersection.py` is the
+  tripwire.
+* **It is re-asked per tile, per execution.** Not once when the board was
+  opened. A revoke takes effect on the next refresh, which is the property the
+  whole authorization model is sold on.
+* **Sharing warns, and does not refuse.**
+  `GET /dashboards/{id}/share-check?user_id=…` answers *"what would they not
+  see"* — asked **as the grantee**, through `RequestContext.as_team` or
+  `on_behalf_of`, because that is the only honest way to answer it. The share
+  dialog prints the names beside an **enabled** Share button: a board spanning
+  four warehouses is a legitimate thing to share with somebody who can read
+  two of them. The surprise is what is not legitimate.
+* **A placeholder is audited, once per render, per connection.** §19.1's fourth
+  row: a 200 that is a denial. Per connection rather than per tile, because a
+  board with eight tiles on one unreachable warehouse is one fact about one
+  half-finished share.
+
+`E_NO_DATA_ACCESS` is its own error code and deliberately **not**
+`E_CONNECTION_REMOVED`: *"the data source was deleted"* and *"you were not
+given this data source"* have different remedies — edit the tile, or ask
+somebody — and a reader shown the wrong one goes to the wrong person.
 
 ## 10. Not built
 
-Filters, sharing, and scheduled server-side warm refresh. (Export and import
-are built — §11.) Sharing is *scheduled* rather than declined: Phase 8 of
-[user-management-and-access-control-plan.md](user-management-and-access-control-plan.md).
-The groundwork is already in — this service asks an authorizer, and the answer
-it gets today is ownership.
+Filters and scheduled server-side warm refresh. (Export and import are built —
+§11; sharing is built — §9.1.)
 
 **"Add to dashboard" from a chat run is built.** It was left out first so the
 dashboard would stand on its own — a user who never opens chat still builds one
