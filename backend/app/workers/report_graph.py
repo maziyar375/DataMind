@@ -86,6 +86,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
 from app.core.clock import utcnow
+from app.core.context import RequestContext
 from app.core.errors import DisclosureTooNarrowError
 from app.core.logging import get_logger
 from app.domain.ports.llm import Usage
@@ -340,12 +341,21 @@ async def _execute_blocks(work: ReportWork, config: RunnableConfig) -> str:
     `report_blocks.sql` is a third entry point to the guard and gets no
     exemption: it is re-validated against the connection's *current* snapshot
     on every execution, and `sql_origin` is provenance only.
+
+    It runs **as the run's owner**, through `on_behalf_of` — the one way
+    background work in this codebase names a principal. There is no god
+    context: a scheduled run that its owner could not perform by hand fails,
+    and the failure is the correct answer.
     """
     cfg = _cfg(config)
     assert work.connection is not None
     work.results = (
         await report._execute_blocks(
-            cfg["db"], cfg["settings"], work.connection, work.blocks, work.run.owner_id
+            cfg["db"],
+            cfg["settings"],
+            work.connection,
+            work.blocks,
+            RequestContext.on_behalf_of(work.run.owner_id),
         )
         if work.blocks
         else {}

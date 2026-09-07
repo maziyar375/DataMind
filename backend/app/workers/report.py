@@ -57,6 +57,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clock import utcnow
 from app.core.config import Settings
+from app.core.context import RequestContext
 from app.core.logging import get_logger
 from app.domain.ports.database import ResultColumn
 from app.domain.ports.llm import LLMGateway, ResolvedLLM, Usage
@@ -66,6 +67,7 @@ from app.domain.value_objects import (
     ReportRunStatus,
     ReportSectionResultStatus,
 )
+from app.infra.authz.factory import build_authorizer
 from app.infra.db.models import (
     DatabaseConnection,
     LlmConfig,
@@ -559,7 +561,7 @@ async def _execute_blocks(
     settings: Settings,
     connection: DatabaseConnection,
     blocks: list[tuple[ReportBlock, Any]],
-    owner_id: UUID,
+    ctx: RequestContext,
 ) -> dict[UUID, TileResult]:
     """Run the blocks that have a statement, through the guarded path.
 
@@ -567,6 +569,13 @@ async def _execute_blocks(
     *current* snapshot, so `report_blocks.sql` gets no privileged path — a third
     entry point to the guard, and no exemption for any of them. `sql_origin`
     grants nothing.
+
+    **It runs as the report's owner, and it may be refused.** `ctx` is the
+    principal the run acts for — built by the caller with `on_behalf_of` — not
+    a filter: the authorizer is asked exactly what it would be asked in a
+    browser, and a run whose owner has lost `select` on the connection comes
+    back `E_FORBIDDEN` per block. That is the correct outcome; a report that
+    kept answering after its author lost access would be the bug.
     """
     requests = [
         TileRequest(
@@ -582,7 +591,9 @@ async def _execute_blocks(
     ]
     if not requests:
         return {}
-    return await execute_many(db, settings, requests=requests, owner_id=owner_id)
+    return await execute_many(
+        db, settings, requests=requests, ctx=ctx, authz=build_authorizer(db, settings)
+    )
 
 
 def _chart_intent(block: ReportBlock) -> Any:

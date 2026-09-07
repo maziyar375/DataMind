@@ -112,7 +112,7 @@ def test_a_draft_comes_back_as_json_the_editor_can_render(
     assert body["preview"]["computed_at"] is not None
     assert body["preview"]["error"] is None
     # The route passes the caller's identity, never the body's.
-    assert calls[0]["owner_id"] == USER
+    assert calls[0]["ctx"].user_id == USER
 
 
 def test_a_rejected_draft_is_a_200_with_the_report(

@@ -39,10 +39,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clock import utcnow
 from app.core.config import Settings
+from app.core.context import RequestContext
 from app.core.errors import LLMError, NotFoundError, ValidationError
 from app.core.logging import get_logger
+from app.domain.ports.authz import Authorizer, ResourceRef
 from app.domain.ports.database import DatabaseConnector
 from app.domain.value_objects import StepName
+from app.domain.value_objects.authz import Privilege, ResourceType
 from app.infra.db.models import DatabaseConnection, LlmConfig
 from app.infra.llm.litellm_gateway import LiteLLMGateway
 from app.pipeline.graph import draft_statement
@@ -186,7 +189,8 @@ async def draft_sql(
     connection_id: UUID,
     llm_config_id: UUID,
     question: str,
-    owner_id: UUID,
+    ctx: RequestContext,
+    authz: Authorizer,
     extra_rules: str = "",
     classify: bool = False,
     compose_chart: bool = False,
@@ -232,8 +236,12 @@ async def draft_sql(
     the big number it is actually going to draw. `None` — a caller that does not
     know, or a report block, which has no tiles — behaves exactly as before.
     """
-    connection = await _owned(db, DatabaseConnection, connection_id, owner_id)
-    llm_config = await _owned(db, LlmConfig, llm_config_id, owner_id)
+    connection = await _authorized(
+        db, authz, ctx, ResourceType.CONNECTION, DatabaseConnection, connection_id
+    )
+    llm_config = await _authorized(
+        db, authz, ctx, ResourceType.LLM_CONFIG, LlmConfig, llm_config_id
+    )
     snapshot = await _snapshot_or_refuse(db, connection)
 
     box = secret_box(settings)
@@ -289,7 +297,8 @@ async def draft_sql(
             report=attempt.report,
             snapshot=snapshot,
             connector=connector,
-            owner_id=owner_id,
+            ctx=ctx,
+            authz=authz,
             question=question,
             llm_config_id=llm_config.id,
             want_kpi=tile_type == "METRIC",
@@ -350,7 +359,8 @@ async def validate_sql(
     *,
     connection_id: UUID,
     sql: str,
-    owner_id: UUID,
+    ctx: RequestContext,
+    authz: Authorizer,
     tile_type: str | None = None,
 ) -> SqlDraft:
     """Guard and preview a statement the user wrote or edited. No model.
@@ -363,7 +373,9 @@ async def validate_sql(
     their own `SELECT month, SUM(...)` for a big-number tile sees the delta and
     the sparkline in the editor exactly as the plain-language road does.
     """
-    connection = await _owned(db, DatabaseConnection, connection_id, owner_id)
+    connection = await _authorized(
+        db, authz, ctx, ResourceType.CONNECTION, DatabaseConnection, connection_id
+    )
     snapshot = await _snapshot_or_refuse(db, connection)
     report, _ = guard(sql, policy_from_snapshot(snapshot, connection))
 
@@ -375,7 +387,8 @@ async def validate_sql(
         report=report,
         snapshot=snapshot,
         connector=None,
-        owner_id=owner_id,
+        ctx=ctx,
+        authz=authz,
         want_kpi=tile_type == "METRIC",
     )
 
@@ -390,7 +403,8 @@ async def _draft(
     report: ValidationReport,
     snapshot: dict[str, Any],
     connector: DatabaseConnector | None,
-    owner_id: UUID,
+    ctx: RequestContext,
+    authz: Authorizer,
     question: str | None = None,
     llm_config_id: UUID | None = None,
     want_kpi: bool = False,
@@ -412,7 +426,8 @@ async def _draft(
             # something the tile will never be asked to run.
             sql=sql,
             connection=connection,
-            owner_id=owner_id,
+            ctx=ctx,
+            authz=authz,
             max_rows=PREVIEW_MAX_ROWS,
             connector=connector,
             snapshot=snapshot,
@@ -547,9 +562,29 @@ def _chart_options(preview: TileResult | None) -> list[dict[str, Any]]:
 
 
 # ── loading ──────────────────────────────────────────────────────────────
-async def _owned(db: AsyncSession, model: type, entity_id: UUID, owner_id: UUID) -> Any:
+async def _authorized(
+    db: AsyncSession,
+    authz: Authorizer,
+    ctx: RequestContext,
+    type_: ResourceType,
+    model: type,
+    entity_id: UUID,
+) -> Any:
+    """The row, if this principal may **use** it. 404 either way.
+
+    `select` for both callers, and for the LLM config that is load-bearing
+    rather than tidy: `modify` on one is equivalent to disclosing its API key,
+    so asking a model to write a query must never need more than the right to
+    answer with it.
+
+    A row that exists but is out of reach is reported as absent, which is what
+    every other read path in this codebase does and the reason a list endpoint
+    here is not an existence oracle.
+    """
     entity = await db.get(model, entity_id)
-    if entity is None or entity.owner_id != owner_id:
+    if entity is None or not await authz.allowed(
+        ctx, ResourceRef.to(type_, entity), Privilege.SELECT
+    ):
         raise NotFoundError(f"{model.__name__} not found.")
     return entity
 

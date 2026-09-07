@@ -2,8 +2,12 @@
 `services/semantic_service.py`.
 
 Mounted under `/connections/{connection_id}/semantic` because a semantic layer
-has no life of its own: it describes exactly one connection's schema, is
-scoped by that connection's ownership, and dies with it.
+has no life of its own: it describes exactly one connection's schema and dies
+with it. It is nevertheless a **resource type of its own** — its resource id
+*is* the connection's id — because its audience is not the connection's: a
+Data Engineer curates meaning across every database and still may not read a
+credential or a row. Every route here asks about `semantic_layer`, never about
+`connection`, and that distinction is the whole reason the type exists.
 """
 from __future__ import annotations
 
@@ -13,7 +17,7 @@ from uuid import UUID
 from fastapi import APIRouter, Request, status
 from sqlalchemy import select
 
-from app.api.deps import CtxDep, DbDep, SettingsDep
+from app.api.deps import AuthzDep, CtxDep, DbDep, SettingsDep
 from app.api.schemas import (
     SemanticExpressionCheck,
     SemanticExpressionResult,
@@ -24,6 +28,8 @@ from app.api.schemas import (
     SemanticTableFact,
 )
 from app.core.errors import NotFoundError, ValidationError
+from app.domain.ports.authz import ResourceRef
+from app.domain.value_objects.authz import Privilege, ResourceType
 from app.infra.db.models import DatabaseConnection, SemanticJobRow
 from app.semantic import SemanticDocument, check_expression
 from app.services.semantic_service import SemanticService
@@ -31,15 +37,25 @@ from app.services.semantic_service import SemanticService
 router = APIRouter(prefix="/connections/{connection_id}/semantic", tags=["semantic"])
 
 
-async def _owned(db, connection_id: UUID, ctx) -> DatabaseConnection:
+async def _authorized(
+    db, authz, connection_id: UUID, ctx, privilege: Privilege
+) -> DatabaseConnection:
+    """The connection whose **layer** this principal may act on at `privilege`.
+
+    The row loaded is the connection — a layer has no row of its own until it
+    is generated — but the question asked names `semantic_layer`, so a role
+    carrying `(semantic_layer, manage)` reaches the editor without thereby
+    reaching the credential.
+    """
     result = await db.execute(
-        select(DatabaseConnection).where(
-            DatabaseConnection.id == connection_id,
-            DatabaseConnection.owner_id == ctx.user_id,
-        )
+        select(DatabaseConnection).where(DatabaseConnection.id == connection_id)
     )
     connection = result.scalar_one_or_none()
-    if connection is None:
+    if connection is None or not await authz.allowed(
+        ctx,
+        ResourceRef(type=ResourceType.SEMANTIC_LAYER, id=connection.id, entity=connection),
+        privilege,
+    ):
         raise NotFoundError("Connection not found.")
     return connection
 
@@ -75,7 +91,7 @@ async def _read_payload(
 
 @router.get("", response_model=SemanticLayerRead)
 async def get_semantic_layer(
-    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep, authz: AuthzDep
 ) -> SemanticLayerRead:
     """The stored document, re-bound to the newest schema snapshot.
 
@@ -83,8 +99,8 @@ async def get_semantic_layer(
     been generated: "you have no semantic layer yet" is a state the editor
     renders, not an error it handles.
     """
-    connection = await _owned(db, connection_id, ctx)
-    return await _read_payload(SemanticService(db, settings), connection)
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.SELECT)
+    return await _read_payload(SemanticService(db, settings, authz), connection)
 
 
 @router.put("", response_model=SemanticLayerRead)
@@ -94,6 +110,7 @@ async def save_semantic_layer(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> SemanticLayerRead:
     """Replace the document wholesale.
 
@@ -102,23 +119,23 @@ async def save_semantic_layer(
     dimension the user opened), and a partial update cannot express that
     atomically.
     """
-    connection = await _owned(db, connection_id, ctx)
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.MODIFY)
     try:
         doc = SemanticDocument.model_validate(payload.document)
     except Exception as err:
         raise ValidationError("This semantic layer document is malformed.") from err
 
-    service = SemanticService(db, settings)
+    service = SemanticService(db, settings, authz)
     await service.save(connection, doc)
     return await _read_payload(service, connection)
 
 
 @router.delete("", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_semantic_layer(
-    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep, authz: AuthzDep
 ) -> None:
-    connection = await _owned(db, connection_id, ctx)
-    await SemanticService(db, settings).delete(connection.id)
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.DELETE)
+    await SemanticService(db, settings, authz).delete(connection.id)
 
 
 @router.post("/check", response_model=SemanticExpressionResult)
@@ -128,14 +145,15 @@ async def check_metric_expression(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> SemanticExpressionResult:
     """Validate one expression against the live snapshot, saving nothing.
 
     This is what makes the metric editor honest: the same parser that will
     reject the expression at save time answers while the user is still typing.
     """
-    connection = await _owned(db, connection_id, ctx)
-    index = await SemanticService(db, settings).schema_index(connection.id)
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.MODIFY)
+    index = await SemanticService(db, settings, authz).schema_index(connection.id)
 
     valid, issue = check_expression(
         payload.expression,
@@ -155,17 +173,18 @@ async def generate_semantic_layer(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> SemanticJobRead:
     """Queue a generation and return immediately.
 
     202, not 200: describing forty tables is minutes of model latency, so the
     answer to "did it work" lives on the job row the client then polls.
     """
-    connection = await _owned(db, connection_id, ctx)
-    service = SemanticService(db, settings)
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.MODIFY)
+    service = SemanticService(db, settings, authz)
     job = await service.create_job(
+        ctx=ctx,
         connection=connection,
-        owner_id=ctx.user_id,
         llm_config_id=payload.llm_config_id,
         mode=payload.mode,
         only_tables=payload.only_tables,
@@ -180,18 +199,25 @@ async def generate_semantic_layer(
 
 @router.get("/jobs/latest", response_model=SemanticJobRead | None)
 async def latest_job(
-    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep, authz: AuthzDep
 ) -> Any:
-    await _owned(db, connection_id, ctx)
-    return _job_read(await SemanticService(db, settings).latest_job(connection_id))
+    await _authorized(db, authz, connection_id, ctx, Privilege.SELECT)
+    return _job_read(
+        await SemanticService(db, settings, authz).latest_job(connection_id)
+    )
 
 
 @router.get("/jobs/{job_id}", response_model=SemanticJobRead)
 async def get_job(
-    connection_id: UUID, job_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+    connection_id: UUID,
+    job_id: UUID,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    authz: AuthzDep,
 ) -> SemanticJobRead:
-    await _owned(db, connection_id, ctx)
-    job = await SemanticService(db, settings).get_job(job_id, ctx.user_id)
+    await _authorized(db, authz, connection_id, ctx, Privilege.SELECT)
+    job = await SemanticService(db, settings, authz).get_job(ctx, job_id)
     return SemanticJobRead.model_validate(job)
 
 
@@ -203,10 +229,11 @@ async def cancel_job(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> SemanticJobRead:
-    await _owned(db, connection_id, ctx)
-    service = SemanticService(db, settings)
-    await service.cancel_job(job_id, ctx.user_id)
+    await _authorized(db, authz, connection_id, ctx, Privilege.MODIFY)
+    service = SemanticService(db, settings, authz)
+    await service.cancel_job(ctx, job_id)
     await request.app.state.semantic_executor.cancel(job_id)
-    job = await service.get_job(job_id, ctx.user_id)
+    job = await service.get_job(ctx, job_id)
     return SemanticJobRead.model_validate(job)

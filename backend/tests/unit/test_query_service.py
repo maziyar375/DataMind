@@ -20,8 +20,10 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from app.core.context import RequestContext
 from app.core.errors import ConnectorError
 from app.domain.ports.database import QueryResult, ResultColumn
+from app.infra.authz.owner_only import OwnerOnlyAuthorizer
 from app.services import query_service
 from app.services.query_service import (
     TileRequest,
@@ -33,6 +35,13 @@ from app.services.query_service import (
 from tests.unit.test_sqlguard_hostile import HOSTILE
 
 OWNER = uuid4()
+
+#: The principal every tile in this file runs as, and the authorizer that
+#: answers about them. `OwnerOnlyAuthorizer` needs no session here because
+#: every question is asked about a row already in hand — a `TileRequest`
+#: carries the connection object, which is the whole reason it carries one.
+CTX = RequestContext(user_id=OWNER, email="tiles@example.com", role="USER")
+AUTHZ = OwnerOnlyAuthorizer()
 
 # The same five tables the hostile corpus is written against, in the shape a
 # stored snapshot has — so the corpus can be replayed through a real tile.
@@ -194,6 +203,10 @@ class FakeSettings:
         )
         self.secret_box_key_version = 1
         self.report_narration_concurrency = 4
+        # What `build_authorizer` reads. A fake that omitted it would make the
+        # worker path raise `AttributeError` where production returns an
+        # authorizer, which is a difference between the double and the thing.
+        self.authz_backend = "owner_only"
 
 
 def settings() -> Any:
@@ -204,7 +217,8 @@ async def run_tile(**kwargs: Any) -> TileResult:
     """`execute_saved_sql` with the boring arguments filled in."""
     kwargs.setdefault("sql", VALID_SQL)
     kwargs.setdefault("connection", FakeConnection())
-    kwargs.setdefault("owner_id", OWNER)
+    kwargs.setdefault("ctx", CTX)
+    kwargs.setdefault("authz", AUTHZ)
     kwargs.setdefault("snapshot", SNAPSHOT)
     return await execute_saved_sql(FakeDb(), settings(), **kwargs)
 
@@ -270,7 +284,8 @@ async def test_the_snapshot_is_loaded_when_the_caller_does_not_supply_one() -> N
         settings(),
         sql=VALID_SQL,
         connection=FakeConnection(),
-        owner_id=OWNER,
+        ctx=CTX,
+        authz=AUTHZ,
         connector=connector,
     )
 
@@ -477,7 +492,7 @@ async def test_tiles_on_one_connection_share_one_connector(
     requests = [_request(connection) for _ in range(12)]
 
     results = await execute_many(
-        FakeDb(), settings(), requests=requests, owner_id=OWNER
+        FakeDb(), settings(), requests=requests, ctx=CTX, authz=AUTHZ
     )
 
     assert len(results) == 12
@@ -502,7 +517,7 @@ async def test_two_connections_get_one_connector_each(
     requests = [_request(first), _request(first), _request(second)]
 
     results = await execute_many(
-        FakeDb(), settings(), requests=requests, owner_id=OWNER
+        FakeDb(), settings(), requests=requests, ctx=CTX, authz=AUTHZ
     )
 
     assert len(results) == 3
@@ -521,7 +536,7 @@ async def test_one_broken_tile_does_not_take_the_others_with_it(
     good, hostile = _request(connection), _request(connection, "DROP TABLE orders")
 
     results = await execute_many(
-        FakeDb(), settings(), requests=[good, hostile], owner_id=OWNER
+        FakeDb(), settings(), requests=[good, hostile], ctx=CTX, authz=AUTHZ
     )
 
     assert results[good.tile_id].status == "OK"
@@ -539,7 +554,7 @@ async def test_a_foreign_connection_is_never_dialled_in_a_batch(
     request = _request(FakeConnection(owner_id=uuid4()))
 
     results = await execute_many(
-        FakeDb(), settings(), requests=[request], owner_id=OWNER
+        FakeDb(), settings(), requests=[request], ctx=CTX, authz=AUTHZ
     )
 
     assert results[request.tile_id].error_code == "E_FORBIDDEN"
@@ -556,7 +571,7 @@ async def test_an_unsynced_connection_costs_no_connection_at_all(
 
     request = _request(FakeConnection())
     results = await execute_many(
-        FakeDb(snapshot=None), settings(), requests=[request], owner_id=OWNER
+        FakeDb(snapshot=None), settings(), requests=[request], ctx=CTX, authz=AUTHZ
     )
 
     assert results[request.tile_id].error_code == "E_NO_SNAPSHOT"
@@ -578,11 +593,12 @@ async def test_the_snapshot_is_read_once_per_connection_not_once_per_tile(
         db,
         settings(),
         requests=[_request(connection) for _ in range(5)],
-        owner_id=OWNER,
+        ctx=CTX,
+        authz=AUTHZ,
     )
 
     assert db.queries == 1
 
 
 async def test_an_empty_batch_touches_nothing() -> None:
-    assert await execute_many(FakeDb(), settings(), requests=[], owner_id=OWNER) == {}
+    assert await execute_many(FakeDb(), settings(), requests=[], ctx=CTX, authz=AUTHZ) == {}

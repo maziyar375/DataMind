@@ -41,7 +41,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clock import utcnow
 from app.core.config import Settings
+from app.core.context import RequestContext
 from app.core.logging import get_logger
+from app.infra.authz.factory import build_authorizer
 from app.infra.db.models import (
     BenchmarkResult,
     BenchmarkRun,
@@ -284,7 +286,11 @@ async def _run_one(
 
     gold = await execute_saved_sql(
         db, settings, sql=gold_sql, connection=connection,
-        owner_id=connection.owner_id, max_rows=GOLD_ROW_CAP,
+        # As the connection's owner, delegated — a benchmark is background work
+        # measuring what that principal's questions would return.
+        ctx=RequestContext.on_behalf_of(connection.owner_id),
+        authz=build_authorizer(db, settings),
+        max_rows=GOLD_ROW_CAP,
         connector=connector, snapshot=snapshot,
     )
     if gold.status != "OK":

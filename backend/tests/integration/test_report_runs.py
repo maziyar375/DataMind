@@ -460,10 +460,10 @@ async def test_only_a_metric_block_asks_for_a_kpi(
     seen: dict[str, Any] = {}
 
     async def _spy(
-        _db: Any, _settings: Any, *, requests: list[Any], owner_id: UUID
+        _db: Any, _settings: Any, *, requests: list[Any], ctx: Any, authz: Any
     ) -> dict:
         seen["requests"] = requests
-        seen["owner_id"] = owner_id
+        seen["ctx"] = ctx
         return {}
 
     monkeypatch.setattr(worker, "execute_many", _spy)
@@ -481,8 +481,10 @@ async def test_only_a_metric_block_asks_for_a_kpi(
     await _generate(db)
 
     assert [r.want_kpi for r in seen["requests"]] == [True, False]
-    # Executed as the run's owner, never as anything wider.
-    assert seen["owner_id"] == OWNER
+    # Executed as the run's owner, never as anything wider — and marked
+    # delegated, because nobody was at a keyboard for it.
+    assert seen["ctx"].user_id == OWNER
+    assert seen["ctx"].delegated is True
 
 
 # ── a run is a set of parts ──────────────────────────────────────────────

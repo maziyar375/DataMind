@@ -110,7 +110,7 @@ async def record(
             resource_type=resource_type[:60] or None,
             resource_id=resource_id,
             outcome=outcome[:20],
-            detail=_clean(detail or {}),
+            detail=_clean(_delegation(ctx, detail)),
         )
         db.add(row)
         return row
@@ -118,6 +118,23 @@ async def record(
         # Rule 2. A curator must not lose a saved template to the audit table.
         log.warning("audit_write_failed", action=action)
         return None
+
+
+def _delegation(ctx: RequestContext, detail: dict[str, Any] | None) -> dict[str, Any]:
+    """`detail`, plus `delegated: true` when a worker acted for somebody.
+
+    Added here rather than at the call sites because it is a property of the
+    *context*, not of the action: the row already says who the action is
+    attributed to, and this is the difference between "Sara clicked run" and
+    "the scheduler ran Sara's report at 03:00". A log that cannot tell those
+    apart cannot answer the only question anybody asks it.
+
+    Absent — rather than `false` — on an ordinary request, so the flag reads as
+    an exception in the log rather than as noise on every row.
+    """
+    if not ctx.delegated:
+        return dict(detail or {})
+    return {**(detail or {}), "delegated": True}
 
 
 def _clean(detail: dict[str, Any]) -> dict[str, Any]:

@@ -3021,25 +3021,46 @@ cd frontend && npm run typecheck && npm run build && npm test
 
 ## Phase 2 — `ctx` everywhere, part B
 
-- [ ] `run_service.py` (20 lines)
-- [ ] `sql_draft_service.py` (12)
-- [ ] `semantic_service.py` (8)
-- [ ] `query_service.py` (7)
-- [ ] `knowledge_service.py` (1)
-- [ ] Routers: `conversations.py`, `llm_configs.py`, `connections.py`,
+- [x] `run_service.py` (20 lines)
+- [x] `sql_draft_service.py` (12)
+- [x] `semantic_service.py` (8)
+- [x] `query_service.py` (7)
+- [x] `knowledge_service.py` (1) — the one line is an **exemption**, not a
+      conversion: `_embedding_candidates` picks the *connection owner's*
+      provider rows, which is whose budget pays rather than whose reach is
+      being checked, and it runs from a worker as often as from a request
+- [x] Routers: `conversations.py`, `llm_configs.py`, `connections.py`,
       `semantic.py`, `knowledge.py`, `drafts.py`
-- [ ] `RequestContext.on_behalf_of(user_id)`
-- [ ] `workers/report.py`, `report_graph.py`, `benchmark.py`,
-      `knowledge_maintenance.py`, `semantic.py` use it
-- [ ] `make authz-check` becomes blocking in CI
-- [ ] Test: `RequestContext` cannot be built without a principal id
-- [ ] Test: no worker constructs a context any other way
-- [ ] Doc: `architecture.md` §18
-- [ ] Doc: `CODEBASE.md` §6
-- [ ] Doc: `dashboards.md` §9 and `reports.md` §14
-- [ ] **Gate green including blocking `authz-check`**
-- [ ] **Acceptance:** `owner_id` is a stored fact and nothing in `api/` or
-      `services/` reads it to decide
+- [x] `RequestContext.on_behalf_of(user_id)`, plus `delegate(user_id)` for the
+      worker that already holds one, and `delegated: bool` on the dataclass
+- [x] `workers/report.py`, `report_graph.py`, `benchmark.py`,
+      `knowledge_maintenance.py` use it. **`workers/semantic.py` does not, and
+      that is the honest answer**: it resumes a job that was authorized when it
+      was queued and asks nothing further, so it has nobody to act *for* —
+      `SemanticService` takes its authorizer optionally for exactly that half
+- [x] `infra/authz/factory.build_authorizer` — the one place a setting becomes
+      an implementation, so a worker cannot keep asking the old question after
+      Phase 6 flips it
+- [x] `make authz-check` becomes blocking in CI
+- [x] Test: `RequestContext` cannot be built without a principal id
+- [x] Test: no worker constructs a context any other way (an **AST walk** over
+      `app/workers`, plus its converse — the three modules that run somebody's
+      SQL must still name whose)
+- [x] Test: a delegated action's audit row carries `delegated: true`, and an
+      ordinary one carries no such key at all
+- [x] Doc: `architecture.md` §18
+- [x] Doc: `CODEBASE.md` §6
+- [x] Doc: `dashboards.md` §9 and `reports.md` §14
+- [x] **Gate green including blocking `authz-check`**
+- [x] **Acceptance:** `owner_id` is a stored fact and nothing in `api/` or
+      `services/` reads it to decide. The gate prints **nine** exemptions and
+      every one carries its reason: five `unique (owner, name)` predicates
+      (they ask about the row about to be *written*), one embedding-candidate
+      query, and three lines marked **retires in Phase 3** — `require_admin`,
+      `RequestContext.is_admin` and `can_curate`'s administrator arm, which are
+      the `AdminDep` surface `needs(capability)` replaces. `policy.can_read`,
+      `can_write` and `can_administer_users` were **deleted**: zero callers, so
+      no behaviour moved with them
 
 ## Phase 3 — Roles and capabilities
 
@@ -3320,9 +3341,9 @@ cd frontend && npm run typecheck && npm run build && npm test
 | Phase | Items | Done | Landed |
 |---|:--:|:--:|---|
 | −1 · Planning and investigation | 16 | **16** | 2026-09-06 |
-| 0 · Vocabulary and the port | 16 | 0 | — |
-| 1 · `ctx` part A | 10 | 0 | — |
-| 2 · `ctx` part B | 16 | 0 | — |
+| 0 · Vocabulary and the port | 16 | **16** | 2026-09-06 |
+| 1 · `ctx` part A | 10 | **10** | 2026-09-06 |
+| 2 · `ctx` part B | 16 | **16** | 2026-09-07 |
 | 3 · Roles and capabilities | 32 | 0 | — |
 | 4 · Teams | 20 | 0 | — |
 | 5 · Service users | 25 | 0 | — |
@@ -3332,7 +3353,7 @@ cd frontend && npm run typecheck && npm run build && npm test
 | 9 · Access review | 15 | 0 | — |
 | 10 · Rulebook and seams | 21 | 0 | — |
 | Cross-cutting | 8 | 0 | — |
-| **Total** | **254** | **16** | |
+| **Total** | **254** | **58** | |
 
 ## 30. The one-line acceptance test for the whole plan
 

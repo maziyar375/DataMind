@@ -2,14 +2,16 @@
 `services/knowledge_service.py`.
 
 Mounted under `/connections/{connection_id}/knowledge` for the reason the
-semantic layer is: a template describes exactly one connection's schema, is
-scoped by that connection's ownership, and dies with it.
+semantic layer is: a template describes exactly one connection's schema and
+dies with it. It is its own **resource type** all the same — a knowledge
+manager is not a credential editor — so every route here asks the authorizer
+about `knowledge`, carrying the connection's id, and never about `connection`.
 
-**Every write asks `can_curate`. No endpoint here checks `ctx.is_admin`.** That
-is the whole of decision D4 in `docs/learning-loop-plan.md`: curation is open
-to any signed-in user today because the highest-value correction comes from the
-person who knew the answer, and one settings flag makes it admin-only later
-without touching a single call site.
+**Every write asks `can_curate`, and no endpoint here reads a role string.**
+That is the whole of decision D4 in `docs/learning-loop-plan.md`: curation is
+open to any signed-in user today because the highest-value correction comes
+from the person who knew the answer, and one settings flag makes it stricter
+later without touching a single call site.
 """
 from __future__ import annotations
 
@@ -18,7 +20,7 @@ from uuid import UUID
 from fastapi import APIRouter, Request, status
 from sqlalchemy import func, select
 
-from app.api.deps import CtxDep, DbDep, SettingsDep
+from app.api.deps import AuthzDep, CtxDep, DbDep, SettingsDep
 from app.api.schemas import (
     AnswerFeedbackRead,
     BenchmarkCandidateRead,
@@ -44,6 +46,9 @@ from app.api.schemas import (
     TemplateCheckResult,
 )
 from app.core.errors import ForbiddenError, NotFoundError
+from app.domain.ports.authz import ResourceRef
+from app.domain.value_objects.authz import Privilege, ResourceType
+from app.infra.authz.compose import restrict
 from app.infra.db.models import (
     BenchmarkSet,
     DatabaseConnection,
@@ -81,15 +86,33 @@ router = APIRouter(
 )
 
 
-async def _owned(db, connection_id: UUID, ctx) -> DatabaseConnection:
+async def _authorized(
+    db, authz, connection_id: UUID, ctx, privilege: Privilege
+) -> DatabaseConnection:
+    """The connection whose **knowledge** this principal may act on.
+
+    The row is the connection; the question names `knowledge`, and that is the
+    entire point of the derived type. Requirement 2's own example — *"extensive
+    permissions over Knowledge resources without Admin access to the whole
+    application"* — is a role holding `(knowledge, manage)` and nothing on
+    `connection`, so a curator can teach a database they may not re-credential
+    and may not read.
+
+    `select` to read the store, `modify` to write it. `_require_curator` still
+    runs on top of `modify` for the routes that change what the system has been
+    taught: that flag is a *policy* about curation, this is *reach*, and
+    collapsing the two would make `curation_admin_only` unable to say anything
+    the authorizer had not already said.
+    """
     result = await db.execute(
-        select(DatabaseConnection).where(
-            DatabaseConnection.id == connection_id,
-            DatabaseConnection.owner_id == ctx.user_id,
-        )
+        select(DatabaseConnection).where(DatabaseConnection.id == connection_id)
     )
     connection = result.scalar_one_or_none()
-    if connection is None:
+    if connection is None or not await authz.allowed(
+        ctx,
+        ResourceRef(type=ResourceType.KNOWLEDGE, id=connection.id, entity=connection),
+        privilege,
+    ):
         raise NotFoundError("Connection not found.")
     return connection
 
@@ -98,7 +121,7 @@ def _require_curator(ctx, settings, connection) -> None:
     """Administrator, or the owner of this connection. Never `is_admin` alone.
 
     The connection is passed rather than looked up because every caller has
-    just resolved it through `_owned()` — and because `can_curate` with no
+    just resolved it through `_authorized()` — and because `can_curate` with no
     resource asks the strict question, which is the wrong one here.
     """
     if not can_curate(ctx, settings, connection):
@@ -117,6 +140,7 @@ async def list_templates(
     connection_id: UUID,
     ctx: CtxDep,
     db: DbDep,
+    authz: AuthzDep,
     settings: SettingsDep,
     include_archived: bool = False,
 ) -> KnowledgeTemplateList:
@@ -131,7 +155,9 @@ async def list_templates(
     A row the sweep already withdrew carries `status: "STALE"` and is counted
     in `health` instead.
     """
-    connection = await _owned(db, connection_id, ctx)
+    connection = await _authorized(
+        db, authz, connection_id, ctx, Privilege.SELECT
+    )
     service = KnowledgeService(db, settings)
     rows = await service.list_templates(
         connection, include_archived=include_archived
@@ -159,7 +185,8 @@ async def list_templates(
 
 @router.get("/health", response_model=KnowledgeHealth)
 async def store_health(
-    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep,
+    authz: AuthzDep,
 ) -> KnowledgeHealth:
     """Stale, conflicted and unused counts — §4.7's three rows.
 
@@ -167,13 +194,16 @@ async def store_health(
     knowing that the answer you are about to trust came from a store with four
     conflicts in it is not a privilege.
     """
-    connection = await _owned(db, connection_id, ctx)
+    connection = await _authorized(
+        db, authz, connection_id, ctx, Privilege.SELECT
+    )
     return await _health(KnowledgeService(db, settings), connection)
 
 
 @router.post("/templates/revalidate", response_model=MaintenanceRead)
 async def revalidate_store(
-    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep,
+    authz: AuthzDep,
 ) -> MaintenanceRead:
     """Sweep this connection's store now, and say what changed.
 
@@ -188,7 +218,9 @@ async def revalidate_store(
     conflict half runs statements against the customer's database, which is not
     something every reader of a connection should be able to start.
     """
-    connection = await _owned(db, connection_id, ctx)
+    connection = await _authorized(
+        db, authz, connection_id, ctx, Privilege.MODIFY
+    )
     _require_curator(ctx, settings, connection)
 
     result = await run_maintenance(db, settings, connection)
@@ -230,7 +262,8 @@ async def revalidate_store(
 
 @router.get("/embeddings", response_model=EmbeddingStatus)
 async def embedding_status(
-    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep,
+    authz: AuthzDep,
 ) -> EmbeddingStatus:
     """Whether this store is searched by meaning, and how much of it is indexed.
 
@@ -238,7 +271,9 @@ async def embedding_status(
     counts rows, and both are already visible to anyone who can open the
     Knowledge tab.
     """
-    connection = await _owned(db, connection_id, ctx)
+    connection = await _authorized(
+        db, authz, connection_id, ctx, Privilege.SELECT
+    )
     return await _embedding_status(db, connection)
 
 
@@ -248,6 +283,7 @@ async def set_embedding_search(
     payload: EmbeddingWrite,
     ctx: CtxDep,
     db: DbDep,
+    authz: AuthzDep,
     settings: SettingsDep,
 ) -> EmbeddingStatus:
     """Turn embedding search on or off, and index what is already there.
@@ -266,7 +302,9 @@ async def set_embedding_search(
     embedding endpoint"* is a fix somebody can act on, and *"unavailable"* is
     not.
     """
-    connection = await _owned(db, connection_id, ctx)
+    connection = await _authorized(
+        db, authz, connection_id, ctx, Privilege.MODIFY
+    )
     _require_curator(ctx, settings, connection)
 
     result, message = await set_embeddings(
@@ -345,10 +383,13 @@ async def _embedding_status(db, connection) -> EmbeddingStatus:
 
 @router.get("/capabilities", response_model=KnowledgeCapabilities)
 async def capabilities(
-    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep,
+    authz: AuthzDep,
 ) -> KnowledgeCapabilities:
     """What this reader may do here, so the UI hides rather than disables."""
-    connection = await _owned(db, connection_id, ctx)
+    connection = await _authorized(
+        db, authz, connection_id, ctx, Privilege.SELECT
+    )
     return KnowledgeCapabilities(
         can_curate=can_curate(ctx, settings, connection)
     )
@@ -360,6 +401,7 @@ async def check_template(
     payload: TemplateCheckRequest,
     ctx: CtxDep,
     db: DbDep,
+    authz: AuthzDep,
     settings: SettingsDep,
 ) -> TemplateCheckResult:
     """Validate the SQL and propose parameters — one round trip, one parse.
@@ -369,7 +411,9 @@ async def check_template(
     rejected. This is what makes the editor honest — the same parser that will
     reject the statement at save time answers while it is still being typed.
     """
-    connection = await _owned(db, connection_id, ctx)
+    connection = await _authorized(
+        db, authz, connection_id, ctx, Privilege.SELECT
+    )
     verdict, proposals, sql, params = await KnowledgeService(db, settings).check(
         connection,
         sql=payload.sql,
@@ -399,9 +443,12 @@ async def create_template(
     payload: KnowledgeTemplateWrite,
     ctx: CtxDep,
     db: DbDep,
+    authz: AuthzDep,
     settings: SettingsDep,
 ) -> KnowledgeTemplateRead:
-    connection = await _owned(db, connection_id, ctx)
+    connection = await _authorized(
+        db, authz, connection_id, ctx, Privilege.MODIFY
+    )
     _require_curator(ctx, settings, connection)
 
     source = TemplateSource(payload.source)
@@ -433,9 +480,12 @@ async def update_template(
     payload: KnowledgeTemplatePatch,
     ctx: CtxDep,
     db: DbDep,
+    authz: AuthzDep,
     settings: SettingsDep,
 ) -> KnowledgeTemplateRead:
-    connection = await _owned(db, connection_id, ctx)
+    connection = await _authorized(
+        db, authz, connection_id, ctx, Privilege.MODIFY
+    )
     _require_curator(ctx, settings, connection)
 
     row = await KnowledgeService(db, settings).update(
@@ -471,6 +521,7 @@ async def archive_template(
     template_id: UUID,
     ctx: CtxDep,
     db: DbDep,
+    authz: AuthzDep,
     settings: SettingsDep,
 ) -> KnowledgeTemplateRead:
     """Archives. Never hard-deletes.
@@ -478,7 +529,9 @@ async def archive_template(
     A 200 with the archived row rather than a 204: the row still exists, the
     list still shows it under the archive, and returning it says so.
     """
-    connection = await _owned(db, connection_id, ctx)
+    connection = await _authorized(
+        db, authz, connection_id, ctx, Privilege.MODIFY
+    )
     _require_curator(ctx, settings, connection)
     row = await KnowledgeService(db, settings).archive(connection, template_id)
     await audit.record(
@@ -494,7 +547,8 @@ async def archive_template(
 # ── the score (Phase 6) ──────────────────────────────────────────────────
 @router.get("/benchmarks", response_model=BenchmarkOverview)
 async def list_benchmarks(
-    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep,
+    authz: AuthzDep,
 ) -> BenchmarkOverview:
     """Every set, its recent runs, and how many templates could join one.
 
@@ -502,7 +556,9 @@ async def list_benchmarks(
     **only once a set exists** — never an empty chart — so an empty `sets` is
     the signal for the tab to show nothing rather than zeros.
     """
-    connection = await _owned(db, connection_id, ctx)
+    connection = await _authorized(
+        db, authz, connection_id, ctx, Privilege.SELECT
+    )
     service = BenchmarkService(db, settings)
 
     sets: list[BenchmarkSetRead] = []
@@ -519,7 +575,8 @@ async def list_benchmarks(
 
 @router.get("/benchmarks/candidates", response_model=list[BenchmarkCandidateRead])
 async def benchmark_candidates(
-    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep
+    connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep,
+    authz: AuthzDep,
 ) -> list[BenchmarkCandidateRead]:
     """Templates a set may be built from — live, and still answering questions.
 
@@ -529,7 +586,9 @@ async def benchmark_candidates(
     to a set, because a template cannot be held out of one instrument and
     answering questions for another.
     """
-    connection = await _owned(db, connection_id, ctx)
+    connection = await _authorized(
+        db, authz, connection_id, ctx, Privilege.SELECT
+    )
     rows = await BenchmarkService(db, settings).candidates(connection)
     return [BenchmarkCandidateRead.model_validate(r) for r in rows]
 
@@ -544,6 +603,7 @@ async def create_benchmark(
     payload: BenchmarkSetWrite,
     ctx: CtxDep,
     db: DbDep,
+    authz: AuthzDep,
     settings: SettingsDep,
 ) -> BenchmarkSetRead:
     """Build a set. **This withdraws its members from answering questions.**
@@ -553,7 +613,9 @@ async def create_benchmark(
     answered from its own stored SQL measures nothing. `can_curate`, because it
     changes what the ask path may use.
     """
-    connection = await _owned(db, connection_id, ctx)
+    connection = await _authorized(
+        db, authz, connection_id, ctx, Privilege.MODIFY
+    )
     _require_curator(ctx, settings, connection)
 
     service = BenchmarkService(db, settings)
@@ -588,6 +650,7 @@ async def delete_benchmark(
     set_id: UUID,
     ctx: CtxDep,
     db: DbDep,
+    authz: AuthzDep,
     settings: SettingsDep,
 ) -> None:
     """Delete a set and give its questions back to the ask path.
@@ -596,7 +659,9 @@ async def delete_benchmark(
     an instrument, not somebody's knowledge, and the knowledge it was built
     from is returned intact and `RETRIEVABLE`.
     """
-    connection = await _owned(db, connection_id, ctx)
+    connection = await _authorized(
+        db, authz, connection_id, ctx, Privilege.MODIFY
+    )
     _require_curator(ctx, settings, connection)
     released = await BenchmarkService(db, settings).release(connection, set_id)
     await audit.record(
@@ -622,6 +687,7 @@ async def run_benchmark(
     request: Request,
     ctx: CtxDep,
     db: DbDep,
+    authz: AuthzDep,
     settings: SettingsDep,
     llm_config_id: UUID | None = None,
 ) -> BenchmarkRunRead:
@@ -631,7 +697,9 @@ async def run_benchmark(
     that dies mid-run leaves a `RUNNING` row somebody can see and retry, rather
     than a request that never came back.
     """
-    connection = await _owned(db, connection_id, ctx)
+    connection = await _authorized(
+        db, authz, connection_id, ctx, Privilege.MODIFY
+    )
     _require_curator(ctx, settings, connection)
 
     service = BenchmarkService(db, settings)
@@ -639,7 +707,7 @@ async def run_benchmark(
     run = await service.queue_run(
         connection, set_row,
         actor_id=ctx.user_id,
-        llm_config_id=llm_config_id or await _default_llm_config(db, ctx),
+        llm_config_id=llm_config_id or await _default_llm_config(db, ctx, authz),
     )
     await audit.record(
         db, ctx,
@@ -665,6 +733,7 @@ async def benchmark_results(
     run_id: UUID,
     ctx: CtxDep,
     db: DbDep,
+    authz: AuthzDep,
     settings: SettingsDep,
 ) -> list[BenchmarkResultRead]:
     """Every question's verdict, so a number can be argued with.
@@ -672,7 +741,9 @@ async def benchmark_results(
     A score nobody can drill into is a score nobody should trust — and the
     `failure_reason` on a mismatch is usually the next template to fix.
     """
-    connection = await _owned(db, connection_id, ctx)
+    connection = await _authorized(
+        db, authz, connection_id, ctx, Privilege.SELECT
+    )
     service = BenchmarkService(db, settings)
     run = await service.get_run(connection, run_id)
     return [
@@ -693,20 +764,25 @@ async def _read_set(
     return out
 
 
-async def _default_llm_config(db, ctx) -> UUID | None:
+async def _default_llm_config(db, ctx, authz) -> UUID | None:
     """The caller's model, when the request did not name one.
 
     A benchmark without a model is not a benchmark, and making the UI pick one
     before it can show a score would put a configuration question in front of
     somebody who asked for a number.
     """
+    visible = await authz.visible(ctx, ResourceType.LLM_CONFIG, Privilege.SELECT)
     result = await db.execute(
-        select(LlmConfig)
-        # A provider row can now declare an embedding model and no chat model.
-        # Falling back to one of those would queue a benchmark that cannot
-        # answer a single question.
-        .where(LlmConfig.owner_id == ctx.user_id, LlmConfig.model != "")
-        .order_by(LlmConfig.created_at)
+        restrict(
+            # A provider row can now declare an embedding model and no chat
+            # model. Falling back to one of those would queue a benchmark that
+            # cannot answer a single question.
+            select(LlmConfig)
+            .where(LlmConfig.model != "")
+            .order_by(LlmConfig.created_at),
+            LlmConfig.id,
+            visible,
+        )
     )
     config = result.scalars().first()
     return config.id if config is not None else None
@@ -718,6 +794,7 @@ async def list_reviews(
     connection_id: UUID,
     ctx: CtxDep,
     db: DbDep,
+    authz: AuthzDep,
     settings: SettingsDep,
     state: str = "OPEN",
 ) -> list[ReviewRead]:
@@ -727,7 +804,9 @@ async def list_reviews(
     reported is not a privilege, and it is often the fastest way to find out
     that the answer you are about to trust is already disputed.
     """
-    connection = await _owned(db, connection_id, ctx)
+    connection = await _authorized(
+        db, authz, connection_id, ctx, Privilege.SELECT
+    )
     service = FeedbackService(db, settings)
 
     out: list[ReviewRead] = []
@@ -753,6 +832,7 @@ async def resolve_review(
     payload: ReviewResolve,
     ctx: CtxDep,
     db: DbDep,
+    authz: AuthzDep,
     settings: SettingsDep,
 ) -> AnswerFeedbackRead:
     """Close a flag, and record what happened to it.
@@ -761,7 +841,9 @@ async def resolve_review(
     and the person who raised it is told. Ship this without that link and the
     phase has shipped a suggestion box.
     """
-    connection = await _owned(db, connection_id, ctx)
+    connection = await _authorized(
+        db, authz, connection_id, ctx, Privilege.MODIFY
+    )
     _require_curator(ctx, settings, connection)
 
     if payload.template_id is not None:
@@ -796,6 +878,7 @@ async def list_suggestions(
     connection_id: UUID,
     ctx: CtxDep,
     db: DbDep,
+    authz: AuthzDep,
     settings: SettingsDep,
     limit: int = 30,
 ) -> list[SuggestionRead]:
@@ -810,7 +893,9 @@ async def list_suggestions(
     Everything already taught is excluded, so the list shrinks as it is worked.
     A backlog that does not shrink is a report, not a queue.
     """
-    connection = await _owned(db, connection_id, ctx)
+    connection = await _authorized(
+        db, authz, connection_id, ctx, Privilege.SELECT
+    )
     items = await FeedbackService(db, settings).suggestions(
         connection, limit=max(1, min(limit, 100))
     )

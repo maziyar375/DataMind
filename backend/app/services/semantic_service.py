@@ -24,9 +24,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clock import utcnow
 from app.core.config import Settings
+from app.core.context import RequestContext
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.core.logging import get_logger
+from app.domain.ports.authz import Authorizer, ResourceRef
 from app.domain.value_objects import HintBudget
+from app.domain.value_objects.authz import Privilege, ResourceType
 from app.infra.crypto.aesgcm_box import AesGcmSecretBox
 from app.infra.db.models import (
     DatabaseConnection,
@@ -61,12 +64,34 @@ SEMANTIC_MIN_MAX_TOKENS = 8192
 
 
 class SemanticService:
-    def __init__(self, db: AsyncSession, settings: Settings) -> None:
+    def __init__(
+        self, db: AsyncSession, settings: Settings, authz: Authorizer | None = None
+    ) -> None:
         self._db = db
         self._settings = settings
+        #: Optional because `execute_job` is the body of a generation that was
+        #: already authorized when it was queued — the worker resumes a decided
+        #: job and has nobody to ask about. Every method that takes a `ctx`
+        #: requires one, and says so by raising rather than by deciding for
+        #: itself.
+        self._authz = authz
         self._box = AesGcmSecretBox(
             settings.secret_box_key.get_secret_value(), settings.secret_box_key_version
         )
+
+    def _authorizer(self) -> Authorizer:
+        """The authorizer, or a loud failure.
+
+        A method that takes a `ctx` was called on a service built without one
+        to ask with. That is a wiring mistake, and answering *no* would hide it
+        behind a denial nobody could explain.
+        """
+        if self._authz is None:  # pragma: no cover - a wiring error, not a path
+            raise RuntimeError(
+                "SemanticService was constructed without an Authorizer and asked "
+                "a question that needs one. Pass build_authorizer(db, settings)."
+            )
+        return self._authz
 
     # ── reading ──────────────────────────────────────────────────────────
     async def layer_row(self, connection_id: UUID) -> SemanticLayerRow | None:
@@ -154,8 +179,8 @@ class SemanticService:
     async def create_job(
         self,
         *,
+        ctx: RequestContext,
         connection: DatabaseConnection,
-        owner_id: UUID,
         llm_config_id: UUID,
         mode: str,
         only_tables: list[str] | None,
@@ -183,17 +208,23 @@ class SemanticService:
             )
 
         config = await self._db.get(LlmConfig, llm_config_id)
-        if config is None or config.owner_id != owner_id:
+        # `select`: generating a layer *answers with* the model. `modify` on an
+        # LLM config is equivalent to disclosing its key, so it must never be
+        # what queuing a job requires.
+        if config is None or not await self._authorizer().allowed(
+            ctx, ResourceRef.to(ResourceType.LLM_CONFIG, config), Privilege.SELECT
+        ):
             raise NotFoundError("Model configuration not found.")
 
         job = SemanticJobRow(
             id=uuid.uuid4(),
             connection_id=connection.id,
-            owner_id=owner_id,
+            owner_id=connection.owner_id,
             # Who asked for this build, as against who owns the connection it
-            # describes. The same person until a connection can be shared —
-            # which is why it is set now rather than backfilled by guesswork.
-            actor_id=owner_id,
+            # describes. No longer the same person the moment a connection can
+            # be shared — which is why both are recorded rather than one being
+            # inferred from the other.
+            actor_id=ctx.user_id,
             llm_config_id=config.id,
             model_snapshot={"provider": config.provider, "model": config.model},
             mode=mode,
@@ -216,9 +247,22 @@ class SemanticService:
         )
         return result.scalar_one_or_none()
 
-    async def get_job(self, job_id: UUID, owner_id: UUID) -> SemanticJobRow:
+    async def get_job(
+        self, ctx: RequestContext, job_id: UUID, privilege: Privilege = Privilege.SELECT
+    ) -> SemanticJobRow:
+        """A generation job, if this principal may reach the layer it builds.
+
+        A job is a **leaf**: it has no grant of its own and inherits from the
+        connection whose semantic layer it is writing. That is why the question
+        asked here names `semantic_layer` and the connection's id rather than
+        the job's — a job row is an event in a resource's life, not a resource.
+        """
         job = await self._db.get(SemanticJobRow, job_id)
-        if job is None or job.owner_id != owner_id:
+        if job is None or not await self._authorizer().allowed(
+            ctx,
+            ResourceRef(type=ResourceType.SEMANTIC_LAYER, id=job.connection_id),
+            privilege,
+        ):
             raise NotFoundError("Generation job not found.")
         return job
 
@@ -329,8 +373,8 @@ class SemanticService:
         )
         await self._finish(job_id, "SUCCEEDED", stats=stats.as_dict())
 
-    async def cancel_job(self, job_id: UUID, owner_id: UUID) -> bool:
-        job = await self.get_job(job_id, owner_id)
+    async def cancel_job(self, ctx: RequestContext, job_id: UUID) -> bool:
+        job = await self.get_job(ctx, job_id, Privilege.MODIFY)
         if job.status not in ACTIVE_STATUSES:
             return False
         job.status = "CANCELLED"

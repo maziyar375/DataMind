@@ -8,7 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter, status
 from sqlalchemy import select
 
-from app.api.deps import CtxDep, DbDep, SecretBoxDep, SettingsDep
+from app.api.deps import AuthzDep, CtxDep, DbDep, SecretBoxDep, SettingsDep
 from app.api.schemas import (
     EmbeddingProbe,
     LlmConfigCreate,
@@ -20,7 +20,9 @@ from app.api.schemas import (
 )
 from app.core.clock import utcnow
 from app.core.errors import ConflictError, LLMError, NotFoundError, ValidationError
+from app.domain.ports.authz import ResourceRef
 from app.domain.ports.llm import ProviderCapabilities, ResolvedLLM
+from app.domain.value_objects.authz import Privilege, ResourceType
 from app.domain.value_objects.llm_params import (
     ParamError,
     embedding_specs,
@@ -28,6 +30,7 @@ from app.domain.value_objects.llm_params import (
     validate_completion_params,
     validate_embedding_params,
 )
+from app.infra.authz.compose import restrict
 from app.infra.db.models import LlmConfig
 from app.infra.llm.litellm_gateway import LiteLLMGateway
 from app.services.query_service import can_chat, can_embed
@@ -41,14 +44,22 @@ def _to_read(row: LlmConfig) -> LlmConfigRead:
     return data
 
 
-async def _owned(db, config_id: UUID, ctx) -> LlmConfig:
-    result = await db.execute(
-        select(LlmConfig).where(
-            LlmConfig.id == config_id, LlmConfig.owner_id == ctx.user_id
-        )
-    )
+async def _authorized(db, authz, config_id: UUID, ctx, privilege: Privilege) -> LlmConfig:
+    """The configuration, if this principal may act on it at `privilege`.
+
+    ⚠️ **`modify` here is equivalent to disclosing the API key.** A holder can
+    repoint `base_url` at a host they control and read the key out of the next
+    request's `Authorization` header, which is why every write route in this
+    file asks for `modify` and no share UI will ever offer it (see
+    `KEY_EQUIVALENT_PRIVILEGES` in the authz vocabulary). Reading the row and
+    *using* the model are `select`, and that is all a picker anywhere else in
+    the product ever needs.
+    """
+    result = await db.execute(select(LlmConfig).where(LlmConfig.id == config_id))
     row = result.scalar_one_or_none()
-    if row is None:
+    if row is None or not await authz.allowed(
+        ctx, ResourceRef.to(ResourceType.LLM_CONFIG, row), privilege
+    ):
         raise NotFoundError("Model configuration not found.")
     return row
 
@@ -123,7 +134,10 @@ async def parameter_catalog(ctx: CtxDep) -> list[ParameterCatalog]:
 
 @router.get("", response_model=list[LlmConfigRead])
 async def list_configs(
-    ctx: CtxDep, db: DbDep, purpose: Literal["chat", "embedding"] | None = None
+    ctx: CtxDep,
+    db: DbDep,
+    authz: AuthzDep,
+    purpose: Literal["chat", "embedding"] | None = None,
 ) -> list[LlmConfigRead]:
     """Every provider configuration, or only the ones good for one job.
 
@@ -136,10 +150,13 @@ async def list_configs(
     Filtered with the same two predicates `resolve_llm` refuses on, so a picker
     and the funnel behind it cannot disagree about what a row is for.
     """
+    visible = await authz.visible(ctx, ResourceType.LLM_CONFIG, Privilege.DESCRIBE)
     result = await db.execute(
-        select(LlmConfig)
-        .where(LlmConfig.owner_id == ctx.user_id)
-        .order_by(LlmConfig.created_at)
+        restrict(
+            select(LlmConfig).order_by(LlmConfig.created_at),
+            LlmConfig.id,
+            visible,
+        )
     )
     rows = list(result.scalars())
     if purpose == "chat":
@@ -155,7 +172,10 @@ async def create_config(
 ) -> LlmConfigRead:
     existing = await db.execute(
         select(LlmConfig).where(
-            LlmConfig.owner_id == ctx.user_id, LlmConfig.name == payload.name
+            # Asked about the row about to be *written*, whose owner is the
+            # caller by construction.
+            LlmConfig.owner_id == ctx.user_id,  # authz-ok: unique (owner, name)
+            LlmConfig.name == payload.name,
         )
     )
     if existing.scalar_one_or_none() is not None:
@@ -197,6 +217,7 @@ async def create_config(
 async def test_draft_config(
     payload: LlmConfigTestRequest,
     ctx: CtxDep, db: DbDep, box: SecretBoxDep, settings: SettingsDep,
+    authz: AuthzDep,
 ) -> TestResult:
     """Probe a model configuration straight from the form, saved or not.
 
@@ -211,7 +232,7 @@ async def test_draft_config(
     """
     api_key = payload.api_key.get_secret_value() if payload.api_key else ""
     if payload.config_id is not None and not payload.api_key:
-        row = await _owned(db, payload.config_id, ctx)
+        row = await _authorized(db, authz, payload.config_id, ctx, Privilege.MODIFY)
         if row.encrypted_api_key:
             api_key = box.decrypt(row.encrypted_api_key, aad=f"llm_config:{row.id}")
 
@@ -302,9 +323,9 @@ async def _probe_embedding(
 @router.patch("/{config_id}", response_model=LlmConfigRead)
 async def update_config(
     config_id: UUID, payload: LlmConfigUpdate,
-    ctx: CtxDep, db: DbDep, box: SecretBoxDep,
+    ctx: CtxDep, db: DbDep, box: SecretBoxDep, authz: AuthzDep,
 ) -> LlmConfigRead:
-    row = await _owned(db, config_id, ctx)
+    row = await _authorized(db, authz, config_id, ctx, Privilege.MODIFY)
 
     # The provider the row will have *after* this patch, which is what the
     # parameters have to be legal for. Switching provider and clearing the
@@ -355,8 +376,10 @@ async def update_config(
 
 
 @router.delete("/{config_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_config(config_id: UUID, ctx: CtxDep, db: DbDep) -> None:
-    row = await _owned(db, config_id, ctx)
+async def delete_config(
+    config_id: UUID, ctx: CtxDep, db: DbDep, authz: AuthzDep
+) -> None:
+    row = await _authorized(db, authz, config_id, ctx, Privilege.DELETE)
     await db.delete(row)
     # Inside the request, so a constraint that refuses this is an error the
     # caller sees rather than a 204 followed by a stack trace in the log —
@@ -368,10 +391,10 @@ async def delete_config(config_id: UUID, ctx: CtxDep, db: DbDep) -> None:
 @router.post("/{config_id}/test", response_model=TestResult)
 async def test_config(
     config_id: UUID, ctx: CtxDep, db: DbDep,
-    box: SecretBoxDep, settings: SettingsDep,
+    box: SecretBoxDep, settings: SettingsDep, authz: AuthzDep,
 ) -> TestResult:
     """A real probe: it calls the provider and records what it can actually do."""
-    row = await _owned(db, config_id, ctx)
+    row = await _authorized(db, authz, config_id, ctx, Privilege.MODIFY)
     api_key = ""
     if row.encrypted_api_key:
         api_key = box.decrypt(row.encrypted_api_key, aad=f"llm_config:{row.id}")

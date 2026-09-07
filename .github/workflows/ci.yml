@@ -31,14 +31,13 @@ jobs:
       # §18.4. Four greps, each naming a way of deciding access that this
       # codebase has agreed not to use.
       #
-      # **Non-blocking on purpose, and only until Phase 2.** It fails today on
-      # the ~40 lines that still decide ownership inside a service, and those
-      # lines are removed in Phases 1 and 2 — at which point `continue-on-error`
-      # comes off and this becomes a real gate. Landing it red now is what makes
-      # the count visible in every PR while it goes down.
+      # **Blocking as of Phase 2.** It landed non-blocking in Phase 0 against
+      # ~40 lines that decided ownership inside a service or a route; Phases 1
+      # and 2 removed the last of them, so `continue-on-error` is gone and a
+      # new one now fails the build. The five remaining `# authz-ok:` lines are
+      # printed on every run, and three of them name Phase 3 as their exit.
       - name: Authorization decisions live in the authorizer
         working-directory: .
-        continue-on-error: true
         run: make authz-check
 
       # Milestone item 12 — one grep decides whether the LLM abstraction is

@@ -52,7 +52,7 @@ from app.infra.authz.owner_only import OwnerOnlyAuthorizer
 from app.infra.db.models import Base, DatabaseConnection, LlmConfig
 from app.services.report_service import ReportService
 from app.services.semantic_service import SemanticService
-from tests.unit.test_prompt_version import OWNER, _create, _settings
+from tests.unit.test_prompt_version import CTX, OWNER, _create, _settings
 
 #: The rollup from §6 of the plan, verbatim in shape: three tables of work
 #: unioned into one column set, joined to the person who caused it. Written
@@ -190,9 +190,11 @@ async def test_a_semantic_job_records_who_asked() -> None:
         capabilities={},
     )
     db = _SemanticDb(llm=llm)
-    service = SemanticService(db, _settings())  # type: ignore[arg-type]
+    service = SemanticService(
+        db, _settings(), OwnerOnlyAuthorizer()
+    )  # type: ignore[arg-type]
     job = await service.create_job(
-        connection=connection, owner_id=OWNER, llm_config_id=llm.id,
+        ctx=CTX, connection=connection, llm_config_id=llm.id,
         mode="MERGE", only_tables=None,
     )
     assert job.actor_id == OWNER

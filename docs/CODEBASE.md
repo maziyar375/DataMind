@@ -512,6 +512,17 @@ this is a deliberate product feature, not debug output.
   and the conversation transcript.
 - **Auth** — Argon2id, short-lived JWT access tokens, rotating refresh tokens in
   an HttpOnly cookie with reuse detection.
+- **One authorization decision, in one place** — every route and service asks
+  the `Authorizer` port: `allowed(ctx, ref, privilege)` about a single row,
+  `visible(ctx, type, privilege)` composed into a list's own `SELECT`. Ownership
+  is a **stored fact** on a row, not a rule anybody re-implements: nothing under
+  `api/` or `services/` compares an owner id to decide reach, and `make
+  authz-check` fails the build on one that appears. Background work names its
+  principal through `RequestContext.on_behalf_of(...)` and gets exactly that
+  person's answers — there is no god context. Today the implementation is
+  `OwnerOnlyAuthorizer` and the behaviour is unchanged from the comparisons it
+  replaced; roles, teams and grants land behind the same port. See
+  [user-management-and-access-control-plan.md](user-management-and-access-control-plan.md).
 
 Every claim above names the module that enforces it, and its limits, in
 [security.md](security.md).

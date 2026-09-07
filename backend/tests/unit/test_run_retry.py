@@ -20,22 +20,35 @@ from typing import Any
 
 import pytest
 
+from app.core.context import RequestContext
 from app.core.errors import ConflictError, NotFoundError
 from app.domain.value_objects import RunStatus
+from app.infra.authz.owner_only import OwnerOnlyAuthorizer
 from app.services.run_service import RunService
 
 OWNER = uuid.uuid4()
 
 
 class FakeSession:
-    """`get` out of a dict, `add`/`flush` recorded. Nothing else is reached."""
+    """`get` out of a dict, `add`/`flush` recorded, one `SELECT` answered.
 
-    def __init__(self, rows: dict[Any, Any]) -> None:
+    The `execute` arm exists because a run is a **leaf**: `retry` asks the
+    authorizer whether the caller may modify the run's *conversation*, which
+    is one `SELECT conversations.owner_id`. Answering it from the same dict
+    keeps the scoping this file asserts real rather than stubbed away.
+    """
+
+    def __init__(self, rows: dict[Any, Any], *, owners: dict[Any, Any]) -> None:
         self._rows = rows
+        self._owners = owners
         self.added: list[Any] = []
 
     async def get(self, _model: type, entity_id: Any) -> Any:
         return self._rows.get(entity_id)
+
+    async def execute(self, statement: Any) -> Any:
+        wanted = statement.compile().params.get("id_1")
+        return SimpleNamespace(scalar_one_or_none=lambda: self._owners.get(wanted))
 
     def add(self, row: Any) -> None:
         self.added.append(row)
@@ -74,19 +87,25 @@ def _world(
     )
 
     rows: dict[Any, Any] = {run.id: run, conn_id: connection, llm_id: llm}
-    return FakeSession(rows), run
+    session = FakeSession(rows, owners={run.conversation_id: OWNER})
+    return session, run
+
+
+CTX = RequestContext(user_id=OWNER, email="asker@test.local", role="MEMBER")
 
 
 def _service(session: FakeSession) -> RunService:
     from app.core.config import Settings
 
-    return RunService(session, Settings())  # type: ignore[arg-type]
+    return RunService(
+        session, Settings(), OwnerOnlyAuthorizer(session)  # type: ignore[arg-type]
+    )
 
 
 async def test_a_retry_reuses_the_question_it_is_retrying() -> None:
     session, run = _world()
 
-    retried = await _service(session).retry(run.id, OWNER)
+    retried = await _service(session).retry(CTX, run.id)
 
     assert retried.user_message_id == run.user_message_id
     assert retried.conversation_id == run.conversation_id
@@ -101,7 +120,7 @@ async def test_the_attempt_is_reproduced_not_re_resolved() -> None:
     conversation's picker happens to hold now."""
     session, run = _world()
 
-    retried = await _service(session).retry(run.id, OWNER)
+    retried = await _service(session).retry(CTX, run.id)
 
     assert retried.connection_id == run.connection_id
     assert retried.llm_config_id == run.llm_config_id
@@ -114,7 +133,7 @@ async def test_a_run_still_going_is_not_retried(status: RunStatus) -> None:
     session, run = _world(status=status)
 
     with pytest.raises(ConflictError):
-        await _service(session).retry(run.id, OWNER)
+        await _service(session).retry(CTX, run.id)
     assert session.added == []
 
 
@@ -122,7 +141,7 @@ async def test_a_run_that_answered_is_re_asked_not_retried() -> None:
     session, run = _world(status=RunStatus.SUCCEEDED, answered=True)
 
     with pytest.raises(ConflictError):
-        await _service(session).retry(run.id, OWNER)
+        await _service(session).retry(CTX, run.id)
 
 
 async def test_a_released_database_cannot_be_reproduced() -> None:
@@ -131,11 +150,14 @@ async def test_a_released_database_cannot_be_reproduced() -> None:
     session, run = _world(released="connection")
 
     with pytest.raises(NotFoundError):
-        await _service(session).retry(run.id, OWNER)
+        await _service(session).retry(CTX, run.id)
 
 
 async def test_somebody_else_s_run_is_not_found() -> None:
     session, run = _world()
 
+    stranger = RequestContext(
+        user_id=uuid.uuid4(), email="nobody@test.local", role="MEMBER"
+    )
     with pytest.raises(NotFoundError):
-        await _service(session).retry(run.id, uuid.uuid4())
+        await _service(session).retry(stranger, run.id)

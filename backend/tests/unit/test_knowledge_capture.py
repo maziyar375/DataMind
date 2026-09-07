@@ -83,6 +83,13 @@ class FakeDb:
     def __init__(self) -> None:
         self.connection = _connection()
         self.run = _run()
+        # The thread the run belongs to. A run is a leaf: the routes ask the
+        # authorizer about its *conversation*, so a fake that held no
+        # conversation would answer "not found" for every run in this file.
+        self.conversation = Conversation(
+            id=self.run.conversation_id, owner_id=USER, title="revenue",
+            status="ACTIVE",
+        )
         self.message = Message(
             id=MESSAGE_ID, conversation_id=self.run.conversation_id, seq=1,
             role="USER", content="total revenue last month",
@@ -122,6 +129,16 @@ class FakeDb:
             owner = statement.compile().params.get("owner_id_1")
             scoped = self.run if owner is None or self.run.owner_id == owner else None
             return _Result(scoped, rows=[(self.run, self.message.content)])
+        if entity is Conversation:
+            # Where the scoping this file asserts now actually happens: the
+            # route loads the run and asks the authorizer about the thread,
+            # which is one `SELECT conversations.owner_id`.
+            conv = statement.compile().params.get("id_1")
+            return _Result(
+                self.conversation.owner_id
+                if conv is None or conv == self.conversation.id
+                else None
+            )
         if entity in (DashboardTile, ReportBlock, RunStep, Artifact):
             return _Result(None, rows=[])
         if entity is AnswerFeedback:

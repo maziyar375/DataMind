@@ -47,7 +47,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clock import utcnow
 from app.core.config import Settings
+from app.core.context import RequestContext
 from app.core.logging import get_logger
+from app.infra.authz.factory import build_authorizer
 from app.infra.db.models import DatabaseConnection, KnowledgeTemplateRow
 from app.knowledge import (
     Divergence,
@@ -307,7 +309,12 @@ async def _run(
         settings,
         sql=sql,
         connection=connection,
-        owner_id=connection.owner_id,
+        # The sweep acts **as the connection's owner** and gets no exemption
+        # for it: the same question a browser would ask, asked here, so a
+        # conflict pass can never execute a statement the owner themselves
+        # could not run.
+        ctx=RequestContext.on_behalf_of(connection.owner_id),
+        authz=build_authorizer(db, settings),
         max_rows=COMPARE_ROW_CAP,
         connector=connector,
         snapshot=snapshot,

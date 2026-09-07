@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, status
 from sqlalchemy import select
 
-from app.api.deps import CtxDep, DbDep, SecretBoxDep, SettingsDep
+from app.api.deps import AuthzDep, CtxDep, DbDep, SecretBoxDep, SettingsDep
 from app.api.schemas import (
     ConnectionCreate,
     ConnectionRead,
@@ -17,7 +17,10 @@ from app.api.schemas import (
 )
 from app.core.clock import utcnow
 from app.core.errors import ConflictError, NotFoundError, ValidationError
+from app.domain.ports.authz import ResourceRef
 from app.domain.value_objects import HintBudget
+from app.domain.value_objects.authz import Privilege, ResourceType
+from app.infra.authz.compose import restrict
 from app.infra.connectors.factory import build_connector
 from app.infra.db.models import DatabaseConnection, SchemaSnapshotRow
 from app.services.knowledge_service import KnowledgeService
@@ -25,28 +28,50 @@ from app.services.knowledge_service import KnowledgeService
 router = APIRouter(prefix="/connections", tags=["connections"])
 
 
-async def _owned(db, connection_id: UUID, ctx) -> DatabaseConnection:
-    """Scoping happens here, not in the router body, so it cannot be forgotten."""
+async def _authorized(
+    db, authz, connection_id: UUID, ctx, privilege: Privilege
+) -> DatabaseConnection:
+    """The connection, if this principal may act on it at `privilege`.
+
+    Scoping happens here, not in the router body, so it cannot be forgotten —
+    and it happens by *asking*, so the answer changes with the authorizer
+    rather than with this file. `privilege` is what the caller is about to do:
+    `select` to read the row or query through it, `modify` to edit its
+    credentials or re-sync it, `delete` to destroy it. All three answer the
+    same under `OwnerOnlyAuthorizer`; they stop answering the same in Phase 6,
+    which is the point of naming them now.
+    """
     result = await db.execute(
-        select(DatabaseConnection).where(
-            DatabaseConnection.id == connection_id,
-            DatabaseConnection.owner_id == ctx.user_id,
-        )
+        select(DatabaseConnection).where(DatabaseConnection.id == connection_id)
     )
     connection = result.scalar_one_or_none()
-    if connection is None:
-        # 404, not 403: another user's resource should not be distinguishable
+    if connection is None or not await authz.allowed(
+        ctx, ResourceRef.to(ResourceType.CONNECTION, connection), privilege
+    ):
+        # 404, not 403: a resource out of reach should not be distinguishable
         # from one that does not exist.
         raise NotFoundError("Connection not found.")
     return connection
 
 
 @router.get("", response_model=list[ConnectionRead])
-async def list_connections(ctx: CtxDep, db: DbDep) -> list[DatabaseConnection]:
+async def list_connections(
+    ctx: CtxDep, db: DbDep, authz: AuthzDep
+) -> list[DatabaseConnection]:
+    """Every connection this principal may see, in one query.
+
+    `describe` is the floor on purpose: a Data Engineer holds it over every
+    connection and still needs `select` to ask a question through one, so the
+    list is *"what exists that I may know about"* rather than *"what I may
+    read"*.
+    """
+    visible = await authz.visible(ctx, ResourceType.CONNECTION, Privilege.DESCRIBE)
     result = await db.execute(
-        select(DatabaseConnection)
-        .where(DatabaseConnection.owner_id == ctx.user_id)
-        .order_by(DatabaseConnection.created_at)
+        restrict(
+            select(DatabaseConnection).order_by(DatabaseConnection.created_at),
+            DatabaseConnection.id,
+            visible,
+        )
     )
     return list(result.scalars())
 
@@ -57,7 +82,10 @@ async def create_connection(
 ) -> DatabaseConnection:
     existing = await db.execute(
         select(DatabaseConnection).where(
-            DatabaseConnection.owner_id == ctx.user_id,
+            # Asks about the row that is about to be *written*, whose owner
+            # is the caller by construction — not about anything they can
+            # reach. That is why it is an exemption rather than a miss.
+            DatabaseConnection.owner_id == ctx.user_id,  # authz-ok: unique (owner, name)
             DatabaseConnection.name == payload.name,
         )
     )
@@ -93,7 +121,11 @@ async def create_connection(
 
 @router.post("/test", response_model=ConnectionTestResult)
 async def test_draft_connection(
-    payload: ConnectionTestRequest, ctx: CtxDep, db: DbDep, box: SecretBoxDep
+    payload: ConnectionTestRequest,
+    ctx: CtxDep,
+    db: DbDep,
+    box: SecretBoxDep,
+    authz: AuthzDep,
 ) -> ConnectionTestResult:
     """Probe credentials straight from the form, saved or not.
 
@@ -109,7 +141,9 @@ async def test_draft_connection(
     if payload.password is not None:
         password = payload.password.get_secret_value()
     elif payload.connection_id is not None:
-        connection = await _owned(db, payload.connection_id, ctx)
+        connection = await _authorized(
+            db, authz, payload.connection_id, ctx, Privilege.MODIFY
+        )
         password = box.decrypt(
             connection.encrypted_password, aad=f"connection:{connection.id}"
         )
@@ -140,16 +174,18 @@ async def test_draft_connection(
 
 
 @router.get("/{connection_id}", response_model=ConnectionRead)
-async def get_connection(connection_id: UUID, ctx: CtxDep, db: DbDep) -> DatabaseConnection:
-    return await _owned(db, connection_id, ctx)
+async def get_connection(
+    connection_id: UUID, ctx: CtxDep, db: DbDep, authz: AuthzDep
+) -> DatabaseConnection:
+    return await _authorized(db, authz, connection_id, ctx, Privilege.SELECT)
 
 
 @router.patch("/{connection_id}", response_model=ConnectionRead)
 async def update_connection(
     connection_id: UUID, payload: ConnectionUpdate,
-    ctx: CtxDep, db: DbDep, box: SecretBoxDep,
+    ctx: CtxDep, db: DbDep, box: SecretBoxDep, authz: AuthzDep,
 ) -> DatabaseConnection:
-    connection = await _owned(db, connection_id, ctx)
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.MODIFY)
     data = payload.model_dump(exclude_unset=True, exclude={"password"})
 
     for field, value in data.items():
@@ -169,8 +205,10 @@ async def update_connection(
 
 
 @router.delete("/{connection_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_connection(connection_id: UUID, ctx: CtxDep, db: DbDep) -> None:
-    connection = await _owned(db, connection_id, ctx)
+async def delete_connection(
+    connection_id: UUID, ctx: CtxDep, db: DbDep, authz: AuthzDep
+) -> None:
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.DELETE)
     await db.delete(connection)
     # Flush inside the request, exactly as `update_connection` does. `get_db`
     # commits *after* the handler returns, by which point the 204 has been
@@ -183,9 +221,9 @@ async def delete_connection(connection_id: UUID, ctx: CtxDep, db: DbDep) -> None
 
 @router.post("/{connection_id}/test", response_model=ConnectionTestResult)
 async def test_connection(
-    connection_id: UUID, ctx: CtxDep, db: DbDep, box: SecretBoxDep
+    connection_id: UUID, ctx: CtxDep, db: DbDep, box: SecretBoxDep, authz: AuthzDep
 ) -> ConnectionTestResult:
-    connection = await _owned(db, connection_id, ctx)
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.MODIFY)
     connector = build_connector(
         kind=connection.database_type,
         host=connection.host,
@@ -224,13 +262,14 @@ async def sync_schema(
     db: DbDep,
     box: SecretBoxDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> SchemaRead:
     """Introspect and store a new snapshot version.
 
     Foreign keys are recorded from day one even though the graph view is a
     later release; backfilling them would mean re-syncing every connection.
     """
-    connection = await _owned(db, connection_id, ctx)
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.MODIFY)
     connector = build_connector(
         kind=connection.database_type,
         host=connection.host,
@@ -297,8 +336,10 @@ async def sync_schema(
 
 
 @router.get("/{connection_id}/schema", response_model=SchemaRead)
-async def get_schema(connection_id: UUID, ctx: CtxDep, db: DbDep) -> SchemaRead:
-    await _owned(db, connection_id, ctx)
+async def get_schema(
+    connection_id: UUID, ctx: CtxDep, db: DbDep, authz: AuthzDep
+) -> SchemaRead:
+    await _authorized(db, authz, connection_id, ctx, Privilege.SELECT)
     result = await db.execute(
         select(SchemaSnapshotRow)
         .where(SchemaSnapshotRow.connection_id == connection_id)

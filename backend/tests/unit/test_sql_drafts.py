@@ -22,6 +22,7 @@ import pytest
 
 from app.charts import AxisSpec, ChartIntent
 from app.core.clock import utcnow
+from app.core.context import RequestContext
 from app.core.errors import (
     LLMError,
     NotFoundError,
@@ -30,6 +31,7 @@ from app.core.errors import (
 )
 from app.domain.ports.database import QueryResult, ResultColumn
 from app.domain.ports.llm import Completion
+from app.infra.authz.owner_only import OwnerOnlyAuthorizer
 from app.pipeline.contracts import SqlProposal
 from app.pipeline.prompts import _SQL_RULES, CHART_SYSTEM_COMPOSED, GENERATE_SYSTEM
 from app.services import query_service, sql_draft_service
@@ -41,6 +43,12 @@ from app.services.sql_draft_service import (
 )
 
 OWNER = uuid4()
+
+#: Who is drafting, and the object that answers about them. The authorizer
+#: needs no session: `_authorized` loads the row through `db.get` and hands it
+#: over, so the question is always asked about something already in memory.
+CTX = RequestContext(user_id=OWNER, email="drafter@example.com", role="USER")
+AUTHZ = OwnerOnlyAuthorizer()
 
 SNAPSHOT: dict[str, Any] = {
     "dialect": "postgres",
@@ -260,6 +268,7 @@ class FakeSettings:
         self.llm_max_retries = 0
         self.llm_retry_base_delay_seconds = 0
         self.llm_retry_max_delay_seconds = 0
+        self.authz_backend = "owner_only"
 
 
 def _world(
@@ -307,7 +316,8 @@ async def _draft(
         connection_id=connection.id,
         llm_config_id=llm_config.id,
         question="revenue by status",
-        owner_id=OWNER,
+        ctx=CTX,
+        authz=AUTHZ,
     ), db
 
 
@@ -324,7 +334,8 @@ async def _chart_draft(
         connection_id=connection.id,
         llm_config_id=llm_config.id,
         question="revenue by status",
-        owner_id=OWNER,
+        ctx=CTX,
+        authz=AUTHZ,
         compose_chart=True,
     ), db
 
@@ -367,7 +378,8 @@ async def test_the_preview_is_capped_below_the_connections_own_limit(
         connection_id=connection.id,
         llm_config_id=llm_config.id,
         question="revenue by status",
-        owner_id=OWNER,
+        ctx=CTX,
+        authz=AUTHZ,
     )
 
     sql, max_rows, _timeout = connector.calls[0]
@@ -388,7 +400,8 @@ async def test_one_connector_serves_the_whole_draft_and_is_closed(
         connection_id=connection.id,
         llm_config_id=llm_config.id,
         question="revenue by status",
-        owner_id=OWNER,
+        ctx=CTX,
+        authz=AUTHZ,
     )
 
     assert len(connector.calls) == 1
@@ -525,7 +538,8 @@ async def _classified(
         connection_id=connection.id,
         llm_config_id=llm_config.id,
         question="how is the weather",
-        owner_id=OWNER,
+        ctx=CTX,
+        authz=AUTHZ,
         classify=classify,
     )
 
@@ -669,7 +683,7 @@ async def test_hand_written_sql_is_guarded_and_previewed_without_a_model(
     db, connection, _llm, connector = _world(monkeypatch)
 
     draft = await validate_sql(
-        db, FakeSettings(), connection_id=connection.id, sql=VALID_SQL, owner_id=OWNER
+        db, FakeSettings(), connection_id=connection.id, sql=VALID_SQL, ctx=CTX, authz=AUTHZ
     )
 
     assert draft.validation_status == "VALID"
@@ -691,7 +705,8 @@ async def test_hand_written_sql_gets_the_same_guard_as_a_generated_draft(
         FakeSettings(),
         connection_id=connection.id,
         sql="SELECT * FROM pg_shadow",
-        owner_id=OWNER,
+        ctx=CTX,
+        authz=AUTHZ,
     )
 
     assert draft.validation_status == "REJECTED"
@@ -712,7 +727,8 @@ async def test_validate_refuses_another_users_connection(
             FakeSettings(),
             connection_id=connection.id,
             sql=VALID_SQL,
-            owner_id=OWNER,
+            ctx=CTX,
+        authz=AUTHZ,
         )
 
 
@@ -862,7 +878,8 @@ async def test_the_hand_written_road_asks_no_model_what_to_draw(
         FakeSettings(),
         connection_id=connection.id,
         sql=VALID_SQL,
-        owner_id=OWNER,
+        ctx=CTX,
+        authz=AUTHZ,
     )
 
     assert gateway.chart_calls == []
@@ -955,7 +972,8 @@ async def _typed_draft(
         connection_id=connection.id,
         llm_config_id=llm_config.id,
         question="revenue",
-        owner_id=OWNER,
+        ctx=CTX,
+        authz=AUTHZ,
         tile_type=tile_type,
     ), db
 
@@ -1036,7 +1054,8 @@ async def test_the_hand_written_road_previews_a_big_number_too(
         FakeSettings(),
         connection_id=connection.id,
         sql=VALID_SQL,
-        owner_id=OWNER,
+        ctx=CTX,
+        authz=AUTHZ,
         tile_type="METRIC",
     )
 

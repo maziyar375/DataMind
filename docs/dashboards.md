@@ -386,7 +386,11 @@ made.
    all, so it sends the result's *shape* — counts, ratios, a grain — under every
    policy including `FULL`, and never a row value. A tile *result* reaching the
    owner's own browser is the same exposure as the chat table and needs no new
-   gate. **This stops being true the moment dashboards are shared** — see §9.
+   gate. **This stops being true the moment dashboards are shared** — see §9,
+   and the intersection rule in
+   [user-management-and-access-control-plan.md](user-management-and-access-control-plan.md)
+   §15.3, which is what keeps a shared board from becoming a way past a
+   connection's own access.
 
 ## 8. Tests
 
@@ -425,13 +429,16 @@ Worth knowing what a few of them pin:
 | Layout per tile, not one JSONB | One row per drag; no lost updates between tabs. | never |
 | Cache in Postgres | An in-process cache goes stale per worker. | never |
 | Pre-validated palettes, no free hex | [charts.md](charts.md) §8. | Someone re-runs the validator, both themes. |
-| **Owner-only, no sharing** | A shared dashboard means user B reads data pulled with user A's credentials against a connection B does not own. That is an authorization model, not a UI feature. | There is a real answer for "who may read through this connection" — then add `dashboard_shares`. |
+| **Owner-only, no sharing — *not yet*** | A shared dashboard means user B reads data pulled with user A's credentials against a connection B does not own. That is an authorization model, not a UI feature — and it is now being built. Every route and service here already asks the `Authorizer` port rather than comparing an owner id, so sharing is a change in `app/infra/authz/`, not in `dashboard_service.py`. | Phase 8 of [user-management-and-access-control-plan.md](user-management-and-access-control-plan.md), which grants on dashboards; the intersection rule in its §15.3 is the answer to "who may read through this connection". |
 | **No dashboard filters** | `QueryExecutor.execute` takes no bind parameters. Filters need the port extended across all four connectors. **Never by string interpolation.** | Someone extends the port. |
 
 ## 10. Not built
 
 Filters, sharing, and scheduled server-side warm refresh. (Export and import
-are built — §11.)
+are built — §11.) Sharing is *scheduled* rather than declined: Phase 8 of
+[user-management-and-access-control-plan.md](user-management-and-access-control-plan.md).
+The groundwork is already in — this service asks an authorizer, and the answer
+it gets today is ownership.
 
 **"Add to dashboard" from a chat run is built.** It was left out first so the
 dashboard would stand on its own — a user who never opens chat still builds one

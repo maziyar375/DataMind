@@ -2,13 +2,17 @@
 
 Row-level or column-level security later is a change in this module only.
 
-**`can()` is the one that matters from here on.** The functions below it are
-the single-player rule the product shipped with — ownership, and an
-administrator arm that four of them never found a caller for. `can()` asks the
-`Authorizer` port instead, which is where ownership, grants, teams and role
-scoped privileges are combined into one answer with a reason attached. New code
-calls `can()`; the older functions stay because deleting a working check to
-make a diff tidier is how behaviour changes by accident.
+**`can()` is the one that matters from here on.** It asks the `Authorizer`
+port, which is where ownership, grants, teams and role scoped privileges are
+combined into one answer with a reason attached.
+
+Three functions that used to sit below it — `can_read`, `can_write` and
+`can_administer_users` — are gone as of Phase 2. Not tidying: each had **zero
+callers** anywhere in `app/` or `tests/`, so deleting them changed no
+behaviour, and each carried an `is_admin` arm that would otherwise have to be
+explained to the authorization gate for the rest of the plan. What survives is
+`owns` — a fact, used by exactly one caller — and `can_curate`, which is a
+policy about curation rather than a question about reach.
 """
 from __future__ import annotations
 
@@ -57,19 +61,14 @@ async def can_on(
 
 
 def owns(ctx: RequestContext, resource: Any) -> bool:
+    """Is this principal the row's owner? A **fact**, not a decision.
+
+    Ownership is one of the five facts the authorizer combines; asking it here
+    is legitimate only where the answer is not being used to decide reach.
+    Today that is one caller: `can_curate`, below. Everything else asks
+    `can()`.
+    """
     return getattr(resource, "owner_id", None) == ctx.user_id
-
-
-def can_read(ctx: RequestContext, resource: Any) -> bool:
-    return owns(ctx, resource) or ctx.is_admin
-
-
-def can_write(ctx: RequestContext, resource: Any) -> bool:
-    return owns(ctx, resource)
-
-
-def can_administer_users(ctx: RequestContext) -> bool:
-    return ctx.is_admin
 
 
 def can_curate(
@@ -86,11 +85,11 @@ def can_curate(
 
     **The owner of the connection is the other legitimate curator, and adding
     that is what makes the flip correct rather than merely done.** Without it
-    the flag takes rights away and grants none: `_owned()` already scopes every
-    knowledge endpoint to `owner_id == ctx.user_id`, so an admin cannot reach
-    somebody else's connection either, and admin-only would have meant *the
-    person who owns a connection cannot curate their own store*. That is not
-    what D4 describes and it is not a security posture — it is a lockout.
+    the flag takes rights away and grants none: the knowledge routes already
+    ask the authorizer before they get here, so an admin cannot reach somebody
+    else's connection either, and admin-only would have meant *the person who
+    owns a connection cannot curate their own store*. That is not what D4
+    describes and it is not a security posture — it is a lockout.
 
     So the rule is **administrator, or the owner of the thing being curated**.
     Today those two are the only people who can reach a connection at all, so
@@ -108,4 +107,4 @@ def can_curate(
     """
     if not settings.curation_admin_only:
         return True
-    return ctx.is_admin or owns(ctx, resource)
+    return ctx.is_admin or owns(ctx, resource)  # authz-ok: retires in Phase 3

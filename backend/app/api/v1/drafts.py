@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.deps import CtxDep, DbDep, SettingsDep
+from app.api.deps import AuthzDep, CtxDep, DbDep, SettingsDep
 from app.api.schemas import (
     ChartOptionRead,
     SqlDraftRead,
@@ -48,7 +48,11 @@ def _read(draft: SqlDraft) -> SqlDraftRead:
 
 @router.post("/drafts", response_model=SqlDraftRead)
 async def create_draft(
-    payload: SqlDraftRequest, ctx: CtxDep, db: DbDep, settings: SettingsDep
+    payload: SqlDraftRequest,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    authz: AuthzDep,
 ) -> SqlDraftRead:
     """Turn a plain-language question into an editable, guarded draft.
 
@@ -62,7 +66,8 @@ async def create_draft(
             connection_id=payload.connection_id,
             llm_config_id=payload.llm_config_id,
             question=payload.question,
-            owner_id=ctx.user_id,
+            ctx=ctx,
+            authz=authz,
             # A tile keeps what it is drawn as, so it is worth asking. The
             # report-block route deliberately does not — see `draft_sql`.
             compose_chart=True,
@@ -73,7 +78,11 @@ async def create_draft(
 
 @router.post("/drafts/validate", response_model=SqlDraftRead)
 async def validate_draft(
-    payload: SqlValidateRequest, ctx: CtxDep, db: DbDep, settings: SettingsDep
+    payload: SqlValidateRequest,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    authz: AuthzDep,
 ) -> SqlDraftRead:
     """Guard and preview a statement the user wrote or edited. No model runs.
 
@@ -86,7 +95,8 @@ async def validate_draft(
             settings,
             connection_id=payload.connection_id,
             sql=payload.sql,
-            owner_id=ctx.user_id,
+            ctx=ctx,
+            authz=authz,
             tile_type=payload.tile_type,
         )
     )

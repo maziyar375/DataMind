@@ -752,16 +752,28 @@ pipeline — a report reads a pipeline node, a node knows nothing about a report
 4. **Disclosure is explicit and visible.** §7. The create dialog shows the
    policy in force; generation re-checks it.
 
-**Owner-only**, for the reason [dashboards.md §9](dashboards.md) gives: a
-shared report means user B reading data pulled with user A's stored credentials
-through a connection B does not own. That is an authorization model, not a UI
-feature.
+**Owner-only — for now**, for the reason [dashboards.md §9](dashboards.md)
+gives: a shared report means user B reading data pulled with user A's stored
+credentials through a connection B does not own. That is an authorization
+model, not a UI feature, and it is being built:
+[user-management-and-access-control-plan.md](user-management-and-access-control-plan.md)
+Phase 8 grants on reports, under the intersection rule of its §15.3 — access to
+a report never implies access to the connection behind it. `ReportService`
+already asks the `Authorizer` port for every decision it makes, so what arrives
+is a different answer to the same question rather than a rewrite of this file.
+
+A **scheduled** run is the other half, and it is already true: a generation
+runs as the report's owner through `RequestContext.on_behalf_of`, is asked the
+same questions a browser would ask, and fails if that person has lost access to
+the connection. There is no god context.
 
 ---
 
 ## 15. Not built
 
-Sharing, scheduled generation and email delivery, run-to-run **comparison**,
+Sharing (Phase 8 of
+[user-management-and-access-control-plan.md](user-management-and-access-control-plan.md)),
+scheduled generation and email delivery, run-to-run **comparison**,
 export to Word/PowerPoint, and Tier-3 structural number substitution.
 
 One is cheap once the rest exists, and is the natural next step:

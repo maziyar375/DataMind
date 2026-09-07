@@ -20,17 +20,25 @@
 #      `RequestContext.on_behalf_of`, or it is doing something the model does not
 #      cover.
 #
-# **It fails today, on purpose.** It landed in CI as non-blocking in Phase 0 and
-# flips to blocking at the end of Phase 2, when the last of those lines is gone.
-# A gate that only ever passed would have told nobody anything.
+# **It is blocking as of Phase 2.** It landed non-blocking in Phase 0 against
+# ~40 lines and went green when the last of them was removed; a new one now
+# fails the build. A gate that only ever passed would have told nobody anything,
+# and one that never went green would have been deleted.
 #
 # One escape hatch, and it is deliberately noisy: a line carrying
-# `# authz-ok: <reason>` is exempt, and every exemption is printed at the end of
-# every run. It exists for the one comparison that is *not* an access decision —
-# the `unique (owner, name)` predicate behind `_refuse_duplicate_name`, which asks
-# about the row that is about to be written and so can only be asked of that
-# row's owner. Anything else carrying the marker is a review comment waiting to
-# happen, which is why they are all printed.
+# `# authz-ok: <reason>` **on that line** is exempt, and every exemption is
+# printed at the end of every run. Two kinds are live today:
+#
+#   * The `unique (owner, name)` predicates. These ask about the row that is
+#     about to be *written*, whose owner is the caller by construction, so they
+#     are not access decisions at all. Same for the embedding-candidate query,
+#     which picks whose provider pays rather than who may reach what.
+#   * Three lines that say **retires in Phase 3** — `require_admin`,
+#     `RequestContext.is_admin`, and `can_curate`'s administrator arm. They are
+#     the `AdminDep` surface, and they go when `needs(capability)` replaces it.
+#
+# Anything else carrying the marker is a review comment waiting to happen, which
+# is why they are all printed.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 

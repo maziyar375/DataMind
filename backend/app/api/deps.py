@@ -11,7 +11,7 @@ from app.core.config import Settings, get_settings
 from app.core.context import RequestContext, get_correlation_id
 from app.core.errors import AuthenticationError, ForbiddenError
 from app.domain.ports.authz import Authorizer
-from app.infra.authz.owner_only import OwnerOnlyAuthorizer
+from app.infra.authz.factory import build_authorizer
 from app.infra.crypto.aesgcm_box import AesGcmSecretBox
 from app.infra.db.session import get_sessionmaker
 from app.infra.identity.local import LocalIdentityProvider
@@ -45,16 +45,11 @@ def get_authorizer(db: DbDep, settings: SettingsDep) -> Authorizer:
 
     Wired exactly as `get_identity_provider` is, and for the same reason: the
     port is the seam, the setting picks the implementation, and no caller
-    anywhere in `api/` or `services/` learns which one it got. `rbac` is
-    Phase 6; until it exists, naming it falls back to the rule the product
-    already enforces rather than to something half-built.
+    anywhere in `api/` or `services/` learns which one it got. The choice
+    itself lives in `infra/authz/factory.py`, because `app/workers/` needs the
+    same answer and must reach it without importing FastAPI.
     """
-    if settings.authz_backend == "rbac":  # pragma: no cover - Phase 6
-        raise NotImplementedError(
-            "authz_backend='rbac' arrives in Phase 6; RbacAuthorizer does not "
-            "exist yet. Leave AUTHZ_BACKEND unset or set it to 'owner_only'."
-        )
-    return OwnerOnlyAuthorizer(db)
+    return build_authorizer(db, settings)
 
 
 AuthzDep = Annotated[Authorizer, Depends(get_authorizer)]
@@ -111,7 +106,7 @@ CtxDep = Annotated[RequestContext, Depends(get_ctx)]
 
 
 async def require_admin(ctx: CtxDep) -> RequestContext:
-    if not ctx.is_admin:
+    if not ctx.is_admin:  # authz-ok: retires in Phase 3, see `needs()`
         raise ForbiddenError("This action requires an administrator account.")
     return ctx
 

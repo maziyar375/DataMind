@@ -34,12 +34,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clock import utcnow
 from app.core.config import Settings
+from app.core.context import RequestContext
 from app.core.errors import AppError, ConnectorError, ValidationError
 from app.core.logging import get_logger
+from app.domain.ports.authz import Authorizer, ResourceRef
 from app.domain.ports.database import DatabaseConnector, ResultColumn
 from app.domain.ports.llm import ProviderCapabilities, ResolvedLLM
 from app.domain.ports.secrets import SecretBox
 from app.domain.value_objects import DatabaseKind
+from app.domain.value_objects.authz import Privilege, ResourceType
 from app.infra.connectors.factory import build_connector
 from app.infra.crypto.aesgcm_box import AesGcmSecretBox
 from app.infra.db.models import DatabaseConnection, LlmConfig, SchemaSnapshotRow
@@ -339,7 +342,8 @@ async def execute_saved_sql(
     *,
     sql: str,
     connection: DatabaseConnection,
-    owner_id: UUID,
+    ctx: RequestContext,
+    authz: Authorizer,
     chart_intent: Any | None = None,
     want_kpi: bool = False,
     max_rows: int | None = None,
@@ -367,13 +371,17 @@ async def execute_saved_sql(
     def elapsed() -> int:
         return int((time.perf_counter() - started) * 1000)
 
-    # Re-checked at execution, not only at tile save: the connection may have
-    # been deleted and its id reused, or the tile row edited underneath us.
-    if connection.owner_id != owner_id:
+    # Re-asked at execution, not only at tile save: the connection may have
+    # been deleted and its id reused, the tile row edited underneath us, or the
+    # access that made the tile runnable revoked since it was written.
+    # `select`, because running stored SQL is *using* the connection.
+    if not await authz.allowed(
+        ctx, ResourceRef.to(ResourceType.CONNECTION, connection), Privilege.SELECT
+    ):
         log.warning(
-            "tile_connection_not_owned",
+            "tile_connection_denied",
             connection_id=str(connection.id),
-            owner_id=str(owner_id),
+            actor_id=str(ctx.user_id),
         )
         return _failed(
             "E_FORBIDDEN",
@@ -553,8 +561,8 @@ class TileRequest:
     """One tile to run: what `dashboard_service` maps a `dashboard_tiles` row to.
 
     It carries the connection *object* rather than an id so the batch never
-    re-reads a row per tile, and so ownership is checked against the same
-    object the connector is built from.
+    re-reads a row per tile, and so the authorization question is asked about
+    the same object the connector is built from.
     """
 
     tile_id: UUID
@@ -570,7 +578,8 @@ async def execute_many(
     settings: Settings,
     *,
     requests: list[TileRequest],
-    owner_id: UUID,
+    ctx: RequestContext,
+    authz: Authorizer,
 ) -> dict[UUID, TileResult]:
     """Run a set of tiles, one connector per connection.
 
@@ -594,13 +603,16 @@ async def execute_many(
 
     for connection_id, group in groups.items():
         connection = group[0].connection
-        if connection.owner_id != owner_id:
-            # Not one connector is opened for a connection the caller does not
-            # own — the check happens before anything is decrypted or dialled.
+        if not await authz.allowed(
+            ctx, ResourceRef.to(ResourceType.CONNECTION, connection), Privilege.SELECT
+        ):
+            # Not one connector is opened for a connection the caller may not
+            # reach — the question is asked before anything is decrypted or
+            # dialled.
             log.warning(
-                "tile_connection_not_owned",
+                "tile_connection_denied",
                 connection_id=str(connection_id),
-                owner_id=str(owner_id),
+                actor_id=str(ctx.user_id),
             )
             for request in group:
                 results[request.tile_id] = _failed(
@@ -641,7 +653,8 @@ async def execute_many(
                     settings,
                     sql=request.sql,
                     connection=request.connection,
-                    owner_id=owner_id,
+                    ctx=ctx,
+                    authz=authz,
                     chart_intent=request.chart_intent,
                     want_kpi=request.want_kpi,
                     max_rows=request.max_rows,

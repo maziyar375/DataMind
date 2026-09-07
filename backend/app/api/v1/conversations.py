@@ -11,7 +11,7 @@ from fastapi import APIRouter, Header, Query, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 
-from app.api.deps import CtxDep, DbDep, SettingsDep
+from app.api.deps import AuthzDep, CtxDep, DbDep, SettingsDep
 from app.api.schemas import (
     AnswerFeedbackRead,
     AnswerFeedbackWrite,
@@ -32,7 +32,10 @@ from app.api.schemas import (
     SuggestionsRead,
 )
 from app.core.errors import NotFoundError, ValidationError
+from app.domain.ports.authz import ResourceRef
 from app.domain.value_objects import RunStatus
+from app.domain.value_objects.authz import Privilege, ResourceType
+from app.infra.authz.compose import restrict
 from app.infra.db.models import (
     AnswerFeedback,
     Artifact,
@@ -57,29 +60,41 @@ router = APIRouter(tags=["conversations"])
 
 
 # ── conversations ────────────────────────────────────────────────────────
-async def _owned_conversation(db, conversation_id: UUID, ctx) -> Conversation:
+async def _authorized_conversation(
+    db, authz, conversation_id: UUID, ctx, privilege: Privilege
+) -> Conversation:
+    """The thread, if this principal may act on it at `privilege`.
+
+    A conversation is personal by default and grantable in principle — the
+    resource type exists, the privileges mean something (§13.3) — but nothing
+    shares one today, so the answer is the owner's and only the owner's. What
+    changes in Phase 8 is the authorizer, not this function.
+    """
     result = await db.execute(
-        select(Conversation).where(
-            Conversation.id == conversation_id,
-            Conversation.owner_id == ctx.user_id,
-        )
+        select(Conversation).where(Conversation.id == conversation_id)
     )
     row = result.scalar_one_or_none()
-    if row is None:
+    if row is None or not await authz.allowed(
+        ctx, ResourceRef.to(ResourceType.CONVERSATION, row), privilege
+    ):
         raise NotFoundError("Conversation not found.")
     return row
 
 
 @router.get("/conversations", response_model=list[ConversationRead])
-async def list_conversations(ctx: CtxDep, db: DbDep) -> list[ConversationRead]:
+async def list_conversations(
+    ctx: CtxDep, db: DbDep, authz: AuthzDep
+) -> list[ConversationRead]:
+    visible = await authz.visible(ctx, ResourceType.CONVERSATION, Privilege.DESCRIBE)
     result = await db.execute(
-        select(Conversation)
-        .where(
-            Conversation.owner_id == ctx.user_id,
-            Conversation.status == "ACTIVE",
+        restrict(
+            select(Conversation)
+            .where(Conversation.status == "ACTIVE")
+            .order_by(Conversation.updated_at.desc())
+            .limit(100),
+            Conversation.id,
+            visible,
         )
-        .order_by(Conversation.updated_at.desc())
-        .limit(100)
     )
     conversations = list(result.scalars())
     if not conversations:
@@ -135,9 +150,15 @@ async def create_conversation(
 
 @router.patch("/conversations/{conversation_id}", response_model=ConversationRead)
 async def update_conversation(
-    conversation_id: UUID, payload: ConversationUpdate, ctx: CtxDep, db: DbDep
+    conversation_id: UUID,
+    payload: ConversationUpdate,
+    ctx: CtxDep,
+    db: DbDep,
+    authz: AuthzDep,
 ) -> ConversationRead:
-    conversation = await _owned_conversation(db, conversation_id, ctx)
+    conversation = await _authorized_conversation(
+        db, authz, conversation_id, ctx, Privilege.MODIFY
+    )
     for field, value in payload.model_dump(exclude_unset=True).items():
         if value is not None:
             setattr(conversation, field, value)
@@ -153,8 +174,12 @@ async def update_conversation(
 @router.delete(
     "/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT
 )
-async def delete_conversation(conversation_id: UUID, ctx: CtxDep, db: DbDep) -> None:
-    conversation = await _owned_conversation(db, conversation_id, ctx)
+async def delete_conversation(
+    conversation_id: UUID, ctx: CtxDep, db: DbDep, authz: AuthzDep
+) -> None:
+    conversation = await _authorized_conversation(
+        db, authz, conversation_id, ctx, Privilege.DELETE
+    )
     await db.delete(conversation)
 
 
@@ -163,7 +188,7 @@ async def delete_conversation(conversation_id: UUID, ctx: CtxDep, db: DbDep) -> 
     "/conversations/{conversation_id}/messages", response_model=list[MessageRead]
 )
 async def list_messages(
-    conversation_id: UUID, ctx: CtxDep, db: DbDep,
+    conversation_id: UUID, ctx: CtxDep, db: DbDep, authz: AuthzDep,
     limit: int = Query(default=100, ge=1, le=500),
 ) -> list[MessageRead]:
     """Messages plus the run that produced each assistant turn.
@@ -171,7 +196,9 @@ async def list_messages(
     Steps come from the persisted `run_steps` table rather than from replayed
     events, which is what makes the step chips survive a page refresh.
     """
-    await _owned_conversation(db, conversation_id, ctx)
+    await _authorized_conversation(
+        db, authz, conversation_id, ctx, Privilege.SELECT
+    )
 
     result = await db.execute(
         select(Message)
@@ -222,10 +249,11 @@ async def list_messages(
 async def post_message(
     conversation_id: UUID, payload: MessageCreate,
     ctx: CtxDep, db: DbDep, settings: SettingsDep, request: Request,
+    authz: AuthzDep,
 ) -> MessageAccepted:
-    service = RunService(db, settings)
+    service = RunService(db, settings, authz)
     run = await service.create_run(
-        owner_id=ctx.user_id,
+        ctx=ctx,
         conversation_id=conversation_id,
         content=payload.content,
         connection_id=payload.connection_id,
@@ -246,26 +274,36 @@ async def post_message(
 )
 async def suggest_followups(
     conversation_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep,
+    authz: AuthzDep,
 ) -> SuggestionsRead:
     """Model-proposed follow-up questions, grounded in schema + this thread.
 
     Best-effort: returns an empty list (never an error) when there is no
     schema, no model, or the provider is unavailable.
     """
-    service = RunService(db, settings)
+    service = RunService(db, settings, authz)
     suggestions = await service.suggest_followups(
-        conversation_id=conversation_id, owner_id=ctx.user_id
+        ctx=ctx, conversation_id=conversation_id
     )
     return SuggestionsRead(suggestions=suggestions)
 
 
 # ── runs ─────────────────────────────────────────────────────────────────
-async def _owned_run(db, run_id: UUID, ctx) -> Run:
-    result = await db.execute(
-        select(Run).where(Run.id == run_id, Run.owner_id == ctx.user_id)
-    )
+async def _authorized_run(db, authz, run_id: UUID, ctx, privilege: Privilege) -> Run:
+    """The run, if this principal may act on **its conversation**.
+
+    A run is a leaf: it holds no grant of its own and inherits from the thread
+    it belongs to. Asking about the run's own id would be asking about a
+    resource type that does not exist, and inventing one would mean a share
+    that reached a transcript but not the answers in it.
+    """
+    result = await db.execute(select(Run).where(Run.id == run_id))
     run = result.scalar_one_or_none()
-    if run is None:
+    if run is None or not await authz.allowed(
+        ctx,
+        ResourceRef(type=ResourceType.CONVERSATION, id=run.conversation_id),
+        privilege,
+    ):
         raise NotFoundError("Run not found.")
     return run
 
@@ -366,14 +404,18 @@ async def _all_described(db, connection_id: UUID, tables: set[str]) -> bool:
 
 
 @router.get("/runs/{run_id}", response_model=RunRead)
-async def get_run(run_id: UUID, ctx: CtxDep, db: DbDep) -> RunRead:
-    run = await _owned_run(db, run_id, ctx)
+async def get_run(
+    run_id: UUID, ctx: CtxDep, db: DbDep, authz: AuthzDep
+) -> RunRead:
+    run = await _authorized_run(db, authz, run_id, ctx, Privilege.SELECT)
     return await _hydrate_run(db, run)
 
 
 @router.get("/runs/{run_id}/sql", response_model=list[GeneratedQueryRead])
-async def get_run_sql(run_id: UUID, ctx: CtxDep, db: DbDep) -> list[GeneratedQueryRead]:
-    await _owned_run(db, run_id, ctx)
+async def get_run_sql(
+    run_id: UUID, ctx: CtxDep, db: DbDep, authz: AuthzDep
+) -> list[GeneratedQueryRead]:
+    await _authorized_run(db, authz, run_id, ctx, Privilege.SELECT)
     result = await db.execute(
         select(GeneratedQuery)
         .where(GeneratedQuery.run_id == run_id)
@@ -389,6 +431,7 @@ async def leave_feedback(
     ctx: CtxDep,
     db: DbDep,
     settings: SettingsDep,
+    authz: AuthzDep,
 ) -> AnswerFeedbackRead:
     """Was this right? — open to **any** signed-in user.
 
@@ -399,7 +442,7 @@ async def leave_feedback(
 
     One verdict per person per answer; pressing again is a change of mind.
     """
-    run = await _owned_run(db, run_id, ctx)
+    run = await _authorized_run(db, authz, run_id, ctx, Privilege.SELECT)
     row = await FeedbackService(db, settings).record(
         run, user_id=ctx.user_id, verdict=payload.verdict, comment=payload.comment
     )
@@ -442,7 +485,9 @@ async def _queue_owner(db: DbDep, connection_id: UUID | None) -> str:
 
 
 @router.post("/runs/{run_id}/override", response_model=RunKnowledge)
-async def override_run(run_id: UUID, ctx: CtxDep, db: DbDep) -> RunKnowledge:
+async def override_run(
+    run_id: UUID, ctx: CtxDep, db: DbDep, authz: AuthzDep
+) -> RunKnowledge:
     """*Generate a fresh answer instead.* Records the rejection; asks nothing.
 
     Two calls rather than one, deliberately: this records that a reader did not
@@ -455,7 +500,7 @@ async def override_run(run_id: UUID, ctx: CtxDep, db: DbDep) -> RunKnowledge:
     Idempotent: pressing it twice records one rejection, because a reader
     clicking again is impatience, not a second opinion.
     """
-    run = await _owned_run(db, run_id, ctx)
+    run = await _authorized_run(db, authz, run_id, ctx, Privilege.MODIFY)
     existing = await db.execute(
         select(KnowledgeTemplateHit).where(
             KnowledgeTemplateHit.run_id == run.id,
@@ -495,10 +540,11 @@ async def override_run(run_id: UUID, ctx: CtxDep, db: DbDep) -> RunKnowledge:
 
 @router.post("/runs/{run_id}/cancel", status_code=status.HTTP_202_ACCEPTED)
 async def cancel_run(
-    run_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep, request: Request
+    run_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep, request: Request,
+    authz: AuthzDep,
 ) -> dict[str, bool]:
     await request.app.state.run_executor.cancel(run_id)
-    cancelled = await RunService(db, settings).cancel(run_id, ctx.user_id)
+    cancelled = await RunService(db, settings, authz).cancel(ctx, run_id)
     return {"cancelled": cancelled}
 
 
@@ -508,7 +554,8 @@ async def cancel_run(
     status_code=status.HTTP_202_ACCEPTED,
 )
 async def retry_run(
-    run_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep, request: Request
+    run_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep, request: Request,
+    authz: AuthzDep,
 ) -> MessageAccepted:
     """Run the same question again, against the same user message.
 
@@ -516,8 +563,8 @@ async def retry_run(
     response is the same `MessageAccepted` a new message returns, so the client
     attaches to the new run exactly as it does for a send.
     """
-    service = RunService(db, settings)
-    run = await service.retry(run_id, ctx.user_id)
+    service = RunService(db, settings, authz)
+    run = await service.retry(ctx, run_id)
     await db.commit()
     await request.app.state.run_executor.submit(run.id)
     return MessageAccepted(run_id=run.id, message_id=run.user_message_id)
@@ -525,7 +572,7 @@ async def retry_run(
 
 @router.get("/runs/{run_id}/events")
 async def stream_events(
-    run_id: UUID, ctx: CtxDep, db: DbDep, request: Request,
+    run_id: UUID, ctx: CtxDep, db: DbDep, request: Request, authz: AuthzDep,
     after: int = Query(default=0, ge=0),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
 ) -> StreamingResponse:
@@ -534,7 +581,7 @@ async def stream_events(
     `Last-Event-ID` takes precedence over `?after=`, so a browser reconnect
     resumes without the client having to track anything itself.
     """
-    run = await _owned_run(db, run_id, ctx)
+    run = await _authorized_run(db, authz, run_id, ctx, Privilege.SELECT)
 
     start_from = after
     if last_event_id:
@@ -610,7 +657,7 @@ async def stream_events(
 
 @router.post("/runs/{run_id}/chart", response_model=ChartRedrawRead)
 async def redraw_chart(
-    run_id: UUID, body: ChartRedrawRequest, ctx: CtxDep, db: DbDep
+    run_id: UUID, body: ChartRedrawRequest, ctx: CtxDep, db: DbDep, authz: AuthzDep
 ) -> ChartRedrawRead:
     """Draw this run's result as a different chart type.
 
@@ -634,7 +681,7 @@ async def redraw_chart(
     )
     from app.domain.ports.database import ResultColumn
 
-    await _owned_run(db, run_id, ctx)
+    await _authorized_run(db, authz, run_id, ctx, Privilege.SELECT)
     result = await db.execute(
         select(Artifact).where(Artifact.run_id == run_id, Artifact.kind == "TABLE")
     )
@@ -674,10 +721,11 @@ async def redraw_chart(
 
 @router.get("/runs/{run_id}/events/poll")
 async def poll_events(
-    run_id: UUID, ctx: CtxDep, db: DbDep, after: int = Query(default=0, ge=0)
+    run_id: UUID, ctx: CtxDep, db: DbDep, authz: AuthzDep,
+    after: int = Query(default=0, ge=0),
 ) -> list[dict[str, Any]]:
     """Polling fallback for environments where SSE is proxied away."""
-    await _owned_run(db, run_id, ctx)
+    await _authorized_run(db, authz, run_id, ctx, Privilege.SELECT)
     result = await db.execute(
         select(RunEventRow)
         .where(RunEventRow.run_id == run_id, RunEventRow.seq > after)
@@ -695,14 +743,26 @@ async def poll_events(
 
 @router.get("/artifacts/{artifact_id}", response_model=ArtifactRead)
 async def get_artifact(
-    artifact_id: UUID, ctx: CtxDep, db: DbDep,
+    artifact_id: UUID, ctx: CtxDep, db: DbDep, authz: AuthzDep,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=500, ge=1, le=5000),
 ) -> ArtifactRead:
+    """One run artifact — a table, a chart — paged.
+
+    An artifact is a leaf of a leaf: it belongs to a run, which belongs to a
+    conversation, which is the only thing in that chain anybody can be given.
+    So the join reaches the thread and the filter is the authorizer's, composed
+    into the same statement rather than applied to its result.
+    """
+    visible = await authz.visible(ctx, ResourceType.CONVERSATION, Privilege.SELECT)
     result = await db.execute(
-        select(Artifact, Run)
-        .join(Run, Run.id == Artifact.run_id)
-        .where(Artifact.id == artifact_id, Run.owner_id == ctx.user_id)
+        restrict(
+            select(Artifact, Run)
+            .join(Run, Run.id == Artifact.run_id)
+            .where(Artifact.id == artifact_id),
+            Run.conversation_id,
+            visible,
+        )
     )
     pair = result.first()
     if pair is None:

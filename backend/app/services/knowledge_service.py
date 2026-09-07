@@ -777,7 +777,7 @@ def _index_source(db: AsyncSession, connection: DatabaseConnection) -> Any:
 async def _embedding_candidates(
     db: AsyncSession, connection: DatabaseConnection
 ) -> list[LlmConfig]:
-    """The owner's provider configurations that can serve vectors, best first.
+    """The connection owner's provider configurations that serve vectors.
 
     "Can serve vectors" is a configured `embedding_model` — the field added to
     `llm_configs` for exactly this — with the row's own provider kind as the
@@ -793,7 +793,15 @@ async def _embedding_candidates(
     result = await db.execute(
         select(LlmConfig)
         .where(
-            LlmConfig.owner_id == connection.owner_id,
+            # Whose provider pays, not whose reach is being checked.
+            # A store is embedded with the *connection owner's* configuration
+            # however it was reached — a curator granted access to somebody
+            # else's connection must not silently spend their own provider
+            # budget on it, and must not have the vectors depend on who
+            # happened to trigger the sweep. There is no caller here to ask
+            # about: `_embedding_candidates` runs from a worker as often as
+            # from a request.
+            LlmConfig.owner_id == connection.owner_id,  # authz-ok: whose provider pays
             LlmConfig.embedding_model != "",
             LlmConfig.provider != "Anthropic",
         )

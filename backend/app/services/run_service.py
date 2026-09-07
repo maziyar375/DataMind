@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clock import utcnow
 from app.core.config import Settings
+from app.core.context import RequestContext
 from app.core.errors import (
     ConflictError,
     NotFoundError,
@@ -39,6 +40,7 @@ from app.core.errors import (
     ValidationError,
 )
 from app.core.logging import get_logger
+from app.domain.ports.authz import Authorizer, ResourceRef
 from app.domain.ports.llm import ChatMessage
 from app.domain.value_objects import (
     TRANSIENT_RUN_EVENTS,
@@ -47,6 +49,7 @@ from app.domain.value_objects import (
     RunStatus,
     StepStatus,
 )
+from app.domain.value_objects.authz import Privilege, ResourceType
 from app.infra.crypto.aesgcm_box import AesGcmSecretBox
 from app.infra.db.models import (
     Artifact,
@@ -149,9 +152,16 @@ def _priced_model(state: RunState, run: Run) -> str:
 
 
 class RunService:
-    def __init__(self, db: AsyncSession, settings: Settings) -> None:
+    def __init__(
+        self, db: AsyncSession, settings: Settings, authz: Authorizer | None = None
+    ) -> None:
         self._db = db
         self._settings = settings
+        #: Optional because half of this class is the *execution* half —
+        #: `claim`, `execute`, `heartbeat`, `reconcile_stale` — which drives a
+        #: run that was authorized when it was created and has nobody to ask
+        #: about. Every method taking a `ctx` needs one and says so by raising.
+        self._authz = authz
         self._box = AesGcmSecretBox(
             settings.secret_box_key.get_secret_value(),
             settings.secret_box_key_version,
@@ -177,16 +187,16 @@ class RunService:
     async def create_run(
         self,
         *,
-        owner_id: UUID,
+        ctx: RequestContext,
         conversation_id: UUID,
         content: str,
         connection_id: UUID | None,
         llm_config_id: UUID | None,
         skip_templates: bool = False,
     ) -> Run:
-        conversation = await self._db.get(Conversation, conversation_id)
-        if conversation is None or conversation.owner_id != owner_id:
-            raise NotFoundError("Conversation not found.")
+        conversation = await self._conversation(
+            ctx, conversation_id, Privilege.MODIFY
+        )
 
         # Read before the connection is resolved, because whether this thread
         # has said anything decides what a missing connection *means*: nothing
@@ -204,8 +214,12 @@ class RunService:
         if llm_id is None:
             raise NotFoundError("This conversation has no model configured.")
 
-        connection = await self._owned(DatabaseConnection, conn_id, owner_id)
-        llm_config = await self._owned(LlmConfig, llm_id, owner_id)
+        connection = await self._authorized(
+            ResourceType.CONNECTION, DatabaseConnection, conn_id, ctx
+        )
+        llm_config = await self._authorized(
+            ResourceType.LLM_CONFIG, LlmConfig, llm_id, ctx
+        )
 
         # Refused **before** a run exists, not inside one. A provider row may
         # declare only an embedding model, and `resolve_llm` refuses it at the
@@ -244,13 +258,11 @@ class RunService:
             id=uuid.uuid4(),
             conversation_id=conversation_id,
             user_message_id=user_message.id,
-            owner_id=owner_id,
-            # Who asked, as against who owns the thing asked about. The same
-            # person today — `_owned` above refuses a conversation the caller
-            # does not own — and set from the caller rather than copied from
-            # `owner_id` so it stays true on its own terms the moment a
-            # connection can be shared.
-            actor_id=owner_id,
+            owner_id=conversation.owner_id,
+            # Who asked, as against who owns the thing asked about. Read from
+            # the caller rather than from the conversation, so it stays true on
+            # its own terms the moment a thread can be shared.
+            actor_id=ctx.user_id,
             connection_id=connection.id,
             llm_config_id=llm_config.id,
             model_snapshot=_model_snapshot(llm_config, connection),
@@ -270,7 +282,7 @@ class RunService:
         await self._db.flush()
         return run
 
-    async def retry(self, run_id: UUID, owner_id: UUID) -> Run:
+    async def retry(self, ctx: RequestContext, run_id: UUID) -> Run:
         """Run the same question again, in place.
 
         A second `Run` against the **same `user_message_id`**, which is what
@@ -292,9 +304,7 @@ class RunService:
         FKs are `SET NULL` — and that is a refusal with the same sentence a
         released connection gets anywhere else.
         """
-        run = await self._db.get(Run, run_id)
-        if run is None or run.owner_id != owner_id:
-            raise NotFoundError("Run not found.")
+        run = await self._run(ctx, run_id, Privilege.MODIFY)
         if not RunStatus(run.status).is_terminal:
             raise ConflictError("That run has not finished yet.")
         if run.assistant_message_id is not None:
@@ -304,17 +314,21 @@ class RunService:
         if run.llm_config_id is None:
             raise NotFoundError("This conversation has no model configured.")
 
-        connection = await self._owned(DatabaseConnection, run.connection_id, owner_id)
-        llm_config = await self._owned(LlmConfig, run.llm_config_id, owner_id)
+        connection = await self._authorized(
+            ResourceType.CONNECTION, DatabaseConnection, run.connection_id, ctx
+        )
+        llm_config = await self._authorized(
+            ResourceType.LLM_CONFIG, LlmConfig, run.llm_config_id, ctx
+        )
 
         retried = Run(
             id=uuid.uuid4(),
             conversation_id=run.conversation_id,
             user_message_id=run.user_message_id,
-            owner_id=owner_id,
+            owner_id=run.owner_id,
             # The retry's actor is whoever asked for the retry, not whoever
             # asked the original question — the tokens are spent now, by them.
-            actor_id=owner_id,
+            actor_id=ctx.user_id,
             connection_id=connection.id,
             llm_config_id=llm_config.id,
             model_snapshot=_model_snapshot(llm_config, connection),
@@ -781,7 +795,7 @@ class RunService:
         await self._db.commit()
         return bool(cancel_requested)
 
-    async def cancel(self, run_id: UUID, owner_id: UUID) -> bool:
+    async def cancel(self, ctx: RequestContext, run_id: UUID) -> bool:
         """Record the cancellation. Stopping the work is the owner's job.
 
         The status goes terminal here so the user sees the run close
@@ -791,9 +805,7 @@ class RunService:
         and declines to overwrite it, so the run stays cancelled even though
         its executor keeps going for another heartbeat or two.
         """
-        run = await self._db.get(Run, run_id)
-        if run is None or run.owner_id != owner_id:
-            raise NotFoundError("Run not found.")
+        run = await self._run(ctx, run_id, Privilege.MODIFY)
         if RunStatus(run.status).is_terminal:
             return False
         run.cancel_requested = True
@@ -869,11 +881,71 @@ class RunService:
         row = result.one_or_none()
         return (row[0], row[1]) if row is not None else (None, None)
 
-    async def _owned(self, model: type, entity_id: UUID, owner_id: UUID) -> Any:
+    def _authorizer(self) -> Authorizer:
+        """The authorizer, or a loud failure.
+
+        A `ctx`-taking method was called on a service built for the execution
+        half, which has none. That is a wiring mistake; answering *no* would
+        hide it behind a denial nobody could explain.
+        """
+        if self._authz is None:  # pragma: no cover - a wiring error, not a path
+            raise RuntimeError(
+                "RunService was constructed without an Authorizer and asked a "
+                "question that needs one. Pass build_authorizer(db, settings)."
+            )
+        return self._authz
+
+    async def _authorized(
+        self,
+        type_: ResourceType,
+        model: type,
+        entity_id: UUID,
+        ctx: RequestContext,
+        privilege: Privilege = Privilege.SELECT,
+    ) -> Any:
+        """The row, if this principal may act on it. 404 either way.
+
+        `select` by default, because every caller here is *using* the thing:
+        asking a question through a connection, answering with a model. Both
+        would be wrong at `modify` — on an LLM config in particular, `modify`
+        is equivalent to disclosing the API key.
+        """
         entity = await self._db.get(model, entity_id)
-        if entity is None or entity.owner_id != owner_id:
+        if entity is None or not await self._authorizer().allowed(
+            ctx, ResourceRef.to(type_, entity), privilege
+        ):
             raise NotFoundError(f"{model.__name__} not found.")
         return entity
+
+    async def _conversation(
+        self, ctx: RequestContext, conversation_id: UUID, privilege: Privilege
+    ) -> Conversation:
+        """The thread, if this principal may act on it at `privilege`."""
+        return await self._authorized(
+            ResourceType.CONVERSATION, Conversation, conversation_id, ctx, privilege
+        )
+
+    async def _run(
+        self, ctx: RequestContext, run_id: UUID, privilege: Privilege
+    ) -> Run:
+        """The run, if this principal may act on **its conversation**.
+
+        A run is a **leaf**: it holds no grant of its own and inherits from the
+        thread it belongs to, which is why the question names the conversation.
+        A run whose conversation has gone is unreachable rather than open — the
+        FK is `CASCADE`, so this is a row that cannot exist, and refusing is
+        the honest answer to a question about it.
+        """
+        run = await self._db.get(Run, run_id)
+        if run is None:
+            raise NotFoundError("Run not found.")
+        if not await self._authorizer().allowed(
+            ctx,
+            ResourceRef(type=ResourceType.CONVERSATION, id=run.conversation_id),
+            privilege,
+        ):
+            raise NotFoundError("Run not found.")
+        return run
 
     async def _next_message_seq(self, conversation_id: UUID) -> int:
         result = await self._db.execute(
@@ -1091,7 +1163,7 @@ class RunService:
 
     # ── follow-up suggestions ────────────────────────────────────────────
     async def suggest_followups(
-        self, *, conversation_id: UUID, owner_id: UUID, limit: int = 3
+        self, *, ctx: RequestContext, conversation_id: UUID, limit: int = 3
     ) -> list[str]:
         """Propose a few natural-language follow-up questions for a thread.
 
@@ -1105,18 +1177,33 @@ class RunService:
         `disclose_history`. This prompt reaches the same third-party model the
         run path does; being a convenience feature buys it no exemption.
         """
-        conversation = await self._db.get(Conversation, conversation_id)
-        if conversation is None or conversation.owner_id != owner_id:
-            raise NotFoundError("Conversation not found.")
+        conversation = await self._conversation(
+            ctx, conversation_id, Privilege.SELECT
+        )
 
         conn_id = conversation.default_connection_id
         llm_id = conversation.default_llm_config_id
         if conn_id is None or llm_id is None:
             return []
 
+        # Asked rather than assumed, and quietly: a thread whose defaults the
+        # reader may no longer use gets no suggestions, the same nothing an
+        # unsynced schema or an unreachable provider gets. Refusing loudly here
+        # would turn a convenience into an error banner over a chat that is
+        # working.
         connection = await self._db.get(DatabaseConnection, conn_id)
         llm_config = await self._db.get(LlmConfig, llm_id)
         if connection is None or llm_config is None:
+            return []
+        authz = self._authorizer()
+        may = await authz.allowed_many(
+            ctx,
+            [
+                (ResourceRef.to(ResourceType.CONNECTION, connection), Privilege.SELECT),
+                (ResourceRef.to(ResourceType.LLM_CONFIG, llm_config), Privilege.SELECT),
+            ],
+        )
+        if not all(may):
             return []
 
         snapshot = await latest_snapshot(self._db, conn_id)

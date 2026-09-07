@@ -22,12 +22,15 @@ import pytest
 
 from app.core.clock import utcnow
 from app.core.config import Settings
+from app.core.context import RequestContext
 from app.domain.value_objects import DisclosurePolicy
+from app.infra.authz.owner_only import OwnerOnlyAuthorizer
 from app.infra.db.models import Conversation, DatabaseConnection, LlmConfig, Run
 from app.pipeline.prompts import PROMPT_VERSION
 from app.services.run_service import RunService
 
 OWNER = uuid4()
+CTX = RequestContext(user_id=OWNER, email="asker@test.local", role="MEMBER")
 CONVERSATION_ID = uuid4()
 CONNECTION_ID = uuid4()
 LLM_ID = uuid4()
@@ -116,9 +119,9 @@ def _rows() -> dict[type, Any]:
 
 async def _create(settings: Settings) -> Run:
     db = FakeDb(_rows())
-    service = RunService(db, settings)  # type: ignore[arg-type]
+    service = RunService(db, settings, OwnerOnlyAuthorizer())  # type: ignore[arg-type]
     return await service.create_run(
-        owner_id=OWNER,
+        ctx=CTX,
         conversation_id=CONVERSATION_ID,
         content="revenue by month",
         connection_id=None,
