@@ -40,7 +40,6 @@ class RequestContext:
 
     user_id: UUID
     email: str
-    role: str
     #: HUMAN or SERVICE. **Nothing about authorization reads it** — a service
     #: user with the BI Engineer role has byte-identical capabilities to a
     #: human with it, and a test asserts that equality — so this exists for
@@ -95,19 +94,6 @@ class RequestContext:
         """
         return capability in self.capabilities
 
-    @property
-    def is_admin(self) -> bool:
-        """Deprecated, and no longer a role string.
-
-        It reads `user.manage` because that is what the old `ADMIN` enum
-        actually gated — the People screens — and because the alternative,
-        "holds every capability", would quietly demote an administrator the
-        day a nineteenth capability was added. Its two remaining callers are
-        `require_admin` and `can_curate`; it is deleted in Phase 10 once the
-        gate proves that number is zero.
-        """
-        return Capability.USER_MANAGE in self.capabilities
-
     @classmethod
     def for_user(
         cls,
@@ -123,12 +109,11 @@ class RequestContext:
         `identity` is an `app.domain.ports.identity.AuthenticatedIdentity` and
         is typed loosely on purpose: `app.core` sits below `app.domain` in the
         import graph, and a real annotation here would be a cycle for the sake
-        of a name. What it must have is `user_id`, `email` and `role`.
+        of a name. What it must have is `user_id` and `email`.
         """
         return cls(
             user_id=identity.user_id,
             email=identity.email,
-            role=identity.role,
             kind=PrincipalKind.HUMAN,
             session_id=session_id,
             capabilities=capabilities,
@@ -158,7 +143,6 @@ class RequestContext:
         return cls(
             user_id=identity.user_id,
             email=identity.email,
-            role=identity.role,
             kind=PrincipalKind.SERVICE,
             capabilities=capabilities,
             team_ids=team_ids,
@@ -180,9 +164,9 @@ class RequestContext:
         model does not cover, which is a design conversation rather than a
         default argument.
 
-        `email` and `role` are empty because a worker has neither in hand and
-        neither is an input to any decision, and `capabilities` is empty for a
-        stronger reason: a delegated context holds **no app-wide verb at all**.
+        `email` is empty because a worker does not have one and it is an
+        input to no decision, and `capabilities` is empty for a stronger
+        reason: a delegated context holds **no app-wide verb at all**.
         Nothing background needs one — a scheduled run reads and writes
         *resources*, and reach over a resource is the authorizer's answer, read
         from the database against this principal. A worker that genuinely
@@ -192,7 +176,6 @@ class RequestContext:
         return cls(
             user_id=user_id,
             email="",
-            role="",
             correlation_id=(
                 get_correlation_id() if correlation_id is None else correlation_id
             ),
@@ -220,7 +203,6 @@ class RequestContext:
         return cls(
             user_id=NOBODY,
             email="",
-            role="",
             team_ids=frozenset({team_id}),
             correlation_id=get_correlation_id(),
             delegated=True,
@@ -238,7 +220,6 @@ class RequestContext:
             self,
             user_id=user_id,
             email="",
-            role="",
             # Reset rather than carried: the principal changed, so the old
             # principal's kind is not a fact about the new one. A run started
             # by an API key and delegated to the report's owner must not

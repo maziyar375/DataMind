@@ -40,7 +40,7 @@ OWNER = uuid4()
 #: answers about them. `OwnerOnlyAuthorizer` needs no session here because
 #: every question is asked about a row already in hand — a `TileRequest`
 #: carries the connection object, which is the whole reason it carries one.
-CTX = RequestContext(user_id=OWNER, email="tiles@example.com", role="USER")
+CTX = RequestContext(user_id=OWNER, email="tiles@example.com")
 AUTHZ = OwnerOnlyAuthorizer()
 
 # The same five tables the hostile corpus is written against, in the shape a

@@ -3343,31 +3343,35 @@ cd frontend && npm run typecheck && npm run build && npm test
 
 ## Phase 10 — The rulebook, the conformance check, the seams
 
-- [ ] Write `docs/access-control-rules.md` with all eight required contents (§27)
-- [ ] Pointers from `CLAUDE.md`, `docs/README.md`, `services/policy.py`
-- [ ] `tests/unit/test_authz_conformance.py`: every route carries a `ctx`
-- [ ] …: every `ResourceType` × `Privilege` has a meaning row
-- [ ] …: every owner-scoped list endpoint composes `visible(...)`
-- [ ] …: the four greps, promoted to tests
-- [ ] …: **I5** — a route-table walk calling every mutating route unprivileged
-- [ ] …: **I4** — a property test that no addition ever removes access
-- [ ] Seam test: `external_subject` round-trips `provider~subject`
-- [ ] Seam test: an unknown external group is ignored, not created
-- [ ] Seam test: `team_ids` and `capabilities` each have one resolution site
-- [ ] Seam test: a `capabilities` claim in a JWT is ignored
-- [ ] Synthetic OIDC test: RS256 fixture, static JWKS, expiry / audience /
+- [x] Write `docs/access-control-rules.md` with all eight required contents (§27)
+- [x] Pointers from `CLAUDE.md`, `docs/README.md`, `services/policy.py`
+- [x] `tests/unit/test_authz_conformance.py`: every route carries a `ctx`
+- [x] …: every `ResourceType` × `Privilege` has a meaning row
+- [x] …: every owner-scoped list endpoint composes `visible(...)`
+- [x] …: the four greps, promoted to tests
+- [x] …: **I5** — a route-table walk calling every mutating route unprivileged
+- [x] …: **I4** — a property test that no addition ever removes access
+- [x] Seam test: `external_subject` round-trips `provider~subject`
+- [x] Seam test: an unknown external group is ignored, not created
+- [x] Seam test: `team_ids` and `capabilities` each have one resolution site
+- [x] Seam test: a `capabilities` claim in a JWT is ignored
+- [x] Synthetic OIDC test: RS256 fixture, static JWKS, expiry / audience /
       issuer / `kid` / group / role mapping — **no Keycloak in CI**
-- [ ] Delete `ctx.is_admin`, `AdminDep`
-- [ ] Migration `0029_drop_users_role.py`
-- [ ] Frontend: `api/permissions.ts` and a test that no component reads
-      `user.role`
-- [ ] Doc: `docs/README.md` — this plan becomes **Live**;
+- [x] Delete `ctx.is_admin`, `AdminDep`
+- [x] Migration `0029_drop_users_role.py`
+- [x] Frontend: the permissions module documenting the two hooks — shipped as
+      `src/permissions.tsx` (`useCan`, `usePermissions`) rather than
+      `api/permissions.ts`: it exports a React context, so it is `.tsx` and
+      sits beside `App` rather than under `api/`, which holds the wire client
+- [x] Frontend: a test that no component reads `user.role` —
+      `scripts/permissions.test.ts`, in `npm test`
+- [x] Doc: `docs/README.md` — this plan becomes **Live**;
       `access-control-plan.md` marked superseded
-- [ ] Doc: final pass over `architecture.md`, `security.md`, `frontend.md`,
+- [x] Doc: final pass over `architecture.md`, `security.md`, `frontend.md`,
       `CODEBASE.md`, `CLAUDE.md`
-- [ ] Doc: fill in §29's ledger
-- [ ] **Gate green**
-- [ ] **Acceptance:** the rulebook exists, the conformance test enforces every
+- [x] Doc: fill in §29's ledger
+- [x] **Gate green**
+- [x] **Acceptance:** the rulebook exists, the conformance test enforces every
       mechanical rule in it, and `grep is_admin\|AdminDep\|users.role` returns
       nothing
 
@@ -3375,9 +3379,10 @@ cd frontend && npm run typecheck && npm run build && npm test
 
 - [x] Every new endpoint appears in `docs/architecture.md` §26's endpoint list
 - [x] Every new audit action is named in `services/audit.py`'s vocabulary block
-- [ ] Every new `Capability` and `ResourceType` is named in the rulebook
-- [ ] `docs/README.md`'s *"Users, groups, roles, grants — anything about who
-      may"* row points at this plan, then at the rulebook
+- [x] Every new `Capability` and `ResourceType` is named in the rulebook —
+      asserted by `test_the_rulebook_exists_and_names_the_whole_vocabulary`
+- [x] `docs/README.md`'s *"Users, groups, roles, grants — anything about who
+      may"* row points at the rulebook, then at this plan
 - [x] No new dependency is added to `backend/pyproject.toml` by any phase
 - [x] No phase adds a container to `docker-compose.yml`
 - [x] `.env.example` documents `AUTHZ_BACKEND`, `AUTH_PROVIDER`,
@@ -3403,9 +3408,9 @@ cd frontend && npm run typecheck && npm run build && npm test
 | 7 · The audit half | 15 | **15** | 2026-09-07 |
 | 8 · Grants on artifacts | 26 | **26** | 2026-09-07 |
 | 9 · Access review | 15 | **15** | 2026-09-07 |
-| 10 · Rulebook and seams | 21 | 0 | — |
-| Cross-cutting | 8 | **6** | — |
-| **Total** | **254** | **231** | |
+| 10 · Rulebook and seams | 21 | **21** | 2026-09-08 |
+| Cross-cutting | 8 | **8** | — |
+| **Total** | **254** | **254** | |
 
 ## 30. The one-line acceptance test for the whole plan
 

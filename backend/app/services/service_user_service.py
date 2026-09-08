@@ -45,7 +45,6 @@ from app.core.context import RequestContext
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.core.logging import get_logger
 from app.domain.ports.identity import IssuedKey
-from app.domain.value_objects import Role as LegacyRole
 from app.domain.value_objects import UserStatus
 from app.domain.value_objects.authz import (
     PRIVILEGED_CAPABILITIES,
@@ -176,7 +175,6 @@ class ServiceUserService:
             password_hash=None,
             external_subject=None,
             must_change_password=False,
-            role=LegacyRole.MEMBER,
             status=UserStatus.ACTIVE,
         )
         self._db.add(user)

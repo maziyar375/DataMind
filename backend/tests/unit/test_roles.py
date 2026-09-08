@@ -31,7 +31,6 @@ import pytest
 import sqlalchemy as sa
 
 from app.core.errors import ConflictError, NotFoundError, ValidationError
-from app.domain.value_objects import Role as LegacyRole
 from app.domain.value_objects.authz import (
     ADMINISTRATOR,
     Capability,
@@ -472,7 +471,7 @@ async def test_the_last_administrator_cannot_be_unassigned(
     service = RoleService(db)
     admin_role = await service.by_name(ADMINISTRATOR)
     assert admin_role is not None
-    only = _user(session, "only@test.local", LegacyRole.ADMIN)
+    only = _user(session, "only@test.local")
     await service.assign(ctx(), user_id=only.id, role_id=admin_role.id)
 
     with pytest.raises(ValidationError) as raised:
@@ -488,8 +487,8 @@ async def test_a_second_administrator_makes_the_first_removable(
     service = RoleService(db)
     admin_role = await service.by_name(ADMINISTRATOR)
     assert admin_role is not None
-    first = _user(session, "first@test.local", LegacyRole.ADMIN)
-    second = _user(session, "second@test.local", LegacyRole.ADMIN)
+    first = _user(session, "first@test.local")
+    second = _user(session, "second@test.local")
     await service.assign(ctx(), user_id=first.id, role_id=admin_role.id)
     await service.assign(ctx(), user_id=second.id, role_id=admin_role.id)
 
@@ -507,7 +506,7 @@ async def test_losing_a_different_role_is_never_the_last_administrator(
     admin_role = await service.by_name(ADMINISTRATOR)
     auditor = await service.by_name("Auditor")
     assert admin_role is not None and auditor is not None
-    only = _user(session, "solo@test.local", LegacyRole.ADMIN)
+    only = _user(session, "solo@test.local")
     await service.assign(ctx(), user_id=only.id, role_id=admin_role.id)
     await service.assign(ctx(), user_id=only.id, role_id=auditor.id)
 
@@ -516,11 +515,40 @@ async def test_losing_a_different_role_is_never_the_last_administrator(
     assert Capability.USER_MANAGE in await service.resolve_capabilities(only.id)
 
 
-# ── the legacy column follows, and decides nothing ───────────────────────
-async def test_users_role_is_kept_true_as_a_cache(db: AsyncSessionShim) -> None:
-    """Nothing reads it to decide anything — `make authz-check` enforces that —
-    but a deployment rolled back to a build without `roles` would otherwise
-    find every account demoted to MEMBER."""
+# ── the legacy column is gone ────────────────────────────────────────────
+def test_a_user_has_no_role_column_any_more(db: AsyncSessionShim) -> None:
+    """`users.role` went in `0029`, and this is the tombstone.
+
+    It was kept as a **cache** from `0024` to Phase 10 so that a deployment
+    rolled back to a build without `roles` would not find every account
+    demoted to MEMBER. Every phase in between had such a rollback; Phase 10 is
+    where they stop being reachable, so the column stops being kept.
+
+    Asserted on the mapping rather than by grep because the failure this
+    prevents is a re-introduction: somebody adding `role` back as "just a
+    display field" gets a red test naming the migration that removed it, and
+    `0029`'s downgrade shows them how to reconstruct it from the assignments
+    if they really need one.
+    """
+    from app.infra.db.models import User
+
+    assert "role" not in {column.name for column in User.__table__.columns}
+
+    # And the model that replaced it is what answers the same question.
+    person = _user(db._session, "somebody@test.local")
+    assert hasattr(person, "id") and not hasattr(person, "role")
+
+
+async def test_the_administrator_role_is_what_makes_an_administrator(
+    db: AsyncSessionShim,
+) -> None:
+    """What the cache used to approximate, asked of the thing itself.
+
+    This is the assertion the deleted test was really making — assign the
+    role, hold the capability; unassign it, hold it no longer — and it now
+    reads the same table the authorizer does rather than a string beside it
+    that could disagree.
+    """
     session = db._session
     service = RoleService(db)
     admin_role = await service.by_name(ADMINISTRATOR)
@@ -528,12 +556,14 @@ async def test_users_role_is_kept_true_as_a_cache(db: AsyncSessionShim) -> None:
     person = _user(session, "promoted@test.local")
 
     await service.assign(ctx(), user_id=person.id, role_id=admin_role.id)
-    assert person.role == LegacyRole.ADMIN
+    assert Capability.USER_MANAGE in await service.resolve_capabilities(person.id)
 
-    other = _user(session, "keeps@test.local", LegacyRole.ADMIN)
+    # A second administrator, so the last-administrator guard lets the first go.
+    other = _user(session, "keeps@test.local")
     await service.assign(ctx(), user_id=other.id, role_id=admin_role.id)
     await service.unassign(ctx(), user_id=person.id, role_id=admin_role.id)
-    assert person.role == LegacyRole.MEMBER
+
+    assert Capability.USER_MANAGE not in await service.resolve_capabilities(person.id)
 
 
 # ── assignment behaviour ─────────────────────────────────────────────────

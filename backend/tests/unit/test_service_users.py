@@ -206,7 +206,6 @@ def test_the_three_check_constraints_refuse_a_signable_in_machine(
         "id": str(uuid4()),
         "email": f"svc-{uuid4().hex[:8]}@service.datamind.local",
         "display_name": "Agent",
-        "role": "MEMBER",
         "status": "ACTIVE",
         "kind": "SERVICE",
         "must_change_password": False,
@@ -235,8 +234,8 @@ def test_the_kind_column_refuses_a_word_it_does_not_know(
     with pytest.raises(sa.exc.IntegrityError):
         session.execute(
             sa.text(
-                "INSERT INTO users (id, email, display_name, role, status, kind, "
-                "must_change_password) VALUES (:id, :email, 'x', 'MEMBER', "
+                "INSERT INTO users (id, email, display_name, status, kind, "
+                "must_change_password) VALUES (:id, :email, 'x', "
                 "'ACTIVE', 'ROBOT', false)"
             ),
             {"id": str(uuid4()), "email": f"{uuid4().hex}@test.local"},
@@ -728,7 +727,7 @@ def test_a_service_context_is_the_same_object_as_a_human_one() -> None:
     from app.domain.ports.identity import AuthenticatedIdentity
 
     identity = AuthenticatedIdentity(
-        user_id=uuid4(), email="x@test.local", role="MEMBER"
+        user_id=uuid4(), email="x@test.local"
     )
     capabilities = frozenset({Capability.CONVERSATION_CREATE})
     teams = frozenset({uuid4()})
@@ -754,7 +753,7 @@ def test_delegation_resets_the_kind() -> None:
     nobody can act on.
     """
     machine = RequestContext(
-        user_id=uuid4(), email="", role="", kind=PrincipalKind.SERVICE
+        user_id=uuid4(), email="", kind=PrincipalKind.SERVICE
     )
     assert machine.delegate(uuid4()).kind == PrincipalKind.HUMAN
 
@@ -786,7 +785,6 @@ def test_the_people_write_routes_refuse_a_machine() -> None:
         email="svc-agent-1@service.datamind.local",
         display_name="Nightly reports",
         kind=PrincipalKind.SERVICE,
-        role="MEMBER",
         status="ACTIVE",
     )
 
@@ -805,7 +803,6 @@ def test_the_people_write_routes_refuse_a_machine() -> None:
     app.dependency_overrides[deps.get_ctx] = lambda: RequestContext(
         user_id=uuid4(),
         email="admin@test.local",
-        role="ADMIN",
         capabilities=frozenset({Capability.USER_MANAGE, Capability.USER_READ}),
     )
     client = TestClient(app)

@@ -1,5 +1,12 @@
 """Authorization as functions, not scattered role checks.
 
+> **Writing an endpoint? Read
+> [`docs/access-control-rules.md`](../../../docs/access-control-rules.md)
+> first.** It is the rulebook — seven concepts, five invariants, the
+> effective-permission algorithm verbatim, and a checklist per kind of change.
+> `tests/unit/test_authz_conformance.py` enforces the half of it a machine can
+> check, including the rule this module implements.
+
 Row-level or column-level security later is a change in this module only.
 
 **`can()` asks; `require()` asks and raises.** Both delegate to the

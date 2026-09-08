@@ -57,7 +57,7 @@ class _RecordingIdentity:
                 "an API key reached the JWT verifier; the dispatch fell through"
             )
         return AuthenticatedIdentity(
-            user_id=HUMAN_ID, email="ada@test.local", role="MEMBER"
+            user_id=HUMAN_ID, email="ada@test.local"
         )
 
     async def verify_key(self, token: str) -> AuthenticatedIdentity:
@@ -67,7 +67,6 @@ class _RecordingIdentity:
         return AuthenticatedIdentity(
             user_id=SERVICE_ID,
             email="svc-agent-1@service.datamind.local",
-            role="MEMBER",
             display_name="Nightly reports",
             kind=PrincipalKind.SERVICE,
         )
@@ -190,7 +189,6 @@ def _as_service(app: Any) -> None:
     app.dependency_overrides[deps.get_ctx] = lambda: RequestContext(
         user_id=SERVICE_ID,
         email="svc-agent-1@service.datamind.local",
-        role="MEMBER",
         kind=PrincipalKind.SERVICE,
         capabilities=frozenset({Capability.CONVERSATION_CREATE}),
     )
@@ -232,7 +230,7 @@ def test_a_human_principal_is_not_refused() -> None:
     every assertion above and break the product."""
     app = create_app()
     app.dependency_overrides[deps.get_ctx] = lambda: RequestContext(
-        user_id=HUMAN_ID, email="ada@test.local", role="MEMBER"
+        user_id=HUMAN_ID, email="ada@test.local"
     )
     app.dependency_overrides[deps.get_db] = lambda: _NoPrincipals()
     # 200 with an empty answer: the human got past the kind check, which is

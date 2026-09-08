@@ -192,7 +192,6 @@ async def _me(db, user: User, ctx) -> MeResponse:
         id=user.id,
         email=user.email,
         display_name=user.display_name,
-        role=user.role,
         # `users.kind` is `NOT NULL`, so the fallback only fires for a `User`
         # that was never inserted — which is a test double, not a state the
         # database can be in. Defaulting rather than crashing keeps a fixture
@@ -269,7 +268,6 @@ async def change_my_password(
         AuthenticatedIdentity(
             user_id=user.id,
             email=user.email,
-            role=user.role,
             display_name=user.display_name,
         )
     )

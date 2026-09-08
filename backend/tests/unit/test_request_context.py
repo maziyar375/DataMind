@@ -23,6 +23,7 @@ from uuid import uuid4
 import pytest
 
 from app.core.context import RequestContext, set_correlation_id
+from app.domain.value_objects.authz import Capability
 from app.services import audit
 
 WORKERS = pathlib.Path(__file__).resolve().parents[2] / "app" / "workers"
@@ -47,17 +48,21 @@ def test_on_behalf_of_names_the_principal_and_marks_the_delegation() -> None:
     assert ctx.delegated is True
 
 
-def test_a_delegated_context_is_never_an_administrator() -> None:
-    """A worker has no role in hand, and "we did not look it up" reads as no.
+def test_a_delegated_context_holds_no_app_wide_verb_at_all() -> None:
+    """A worker looked nothing up, and "we did not look it up" reads as no.
 
-    The alternative — carrying the owner's role into background work — would
-    make a scheduled job quietly wider than the click that scheduled it.
+    This used to assert `is_admin is False`, which was the weaker half of the
+    claim and went with the property in Phase 10. What matters is the whole of
+    it: a delegated context holds **no capability**, so there is no app-wide
+    verb a scheduled job can perform that the click which scheduled it could
+    not. Reach over a *resource* is still the authorizer's answer, read from
+    the database against this principal.
     """
     ctx = RequestContext.on_behalf_of(uuid4())
 
-    assert ctx.role == ""
     assert ctx.email == ""
-    assert ctx.is_admin is False
+    assert ctx.capabilities == frozenset()
+    assert not any(ctx.can(capability) for capability in Capability)
 
 
 def test_the_delegation_keeps_the_correlation_id_so_the_chain_is_one_story() -> None:
@@ -70,8 +75,7 @@ def test_the_delegation_keeps_the_correlation_id_so_the_chain_is_one_story() -> 
 def test_delegate_re_points_a_context_and_drops_the_identity() -> None:
     """For the worker that already holds one — the report graph inside a run."""
     someone = RequestContext(
-        user_id=uuid4(), email="sara@example.com", role="ADMIN",
-        session_id=uuid4(), correlation_id="cid-1",
+        user_id=uuid4(), email="sara@example.com", session_id=uuid4(), correlation_id="cid-1",
     )
     other = uuid4()
 
@@ -81,7 +85,7 @@ def test_delegate_re_points_a_context_and_drops_the_identity() -> None:
     assert delegated.delegated is True
     assert delegated.correlation_id == "cid-1"
     # Not carried across: it is no longer that person acting.
-    assert (delegated.email, delegated.role, delegated.session_id) == ("", "", None)
+    assert (delegated.email, delegated.session_id) == ("", None)
 
 
 class _Recorder:
@@ -112,7 +116,7 @@ async def test_an_ordinary_request_carries_no_delegated_flag_at_all() -> None:
 
     await audit.record(
         db,  # type: ignore[arg-type]
-        RequestContext(user_id=uuid4(), email="s@x.io", role="MEMBER"),
+        RequestContext(user_id=uuid4(), email="s@x.io"),
         action="knowledge.template.created",
         detail={"templates": 1},
     )

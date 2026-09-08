@@ -441,7 +441,7 @@ def _client(db: FakeDb) -> TestClient:
     app.dependency_overrides[deps.get_db] = lambda: db
     app.dependency_overrides[deps.get_secret_box] = lambda: FakeSecretBox()
     app.dependency_overrides[deps.get_ctx] = lambda: RequestContext(
-        user_id=USER, email="user@test.local", role="MEMBER", correlation_id="test"
+        user_id=USER, email="user@test.local", correlation_id="test"
     )
     return TestClient(app, raise_server_exceptions=False)
 

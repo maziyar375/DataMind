@@ -91,7 +91,7 @@ def _world(
     return session, run
 
 
-CTX = RequestContext(user_id=OWNER, email="asker@test.local", role="MEMBER")
+CTX = RequestContext(user_id=OWNER, email="asker@test.local")
 
 
 def _service(session: FakeSession) -> RunService:
@@ -157,7 +157,7 @@ async def test_somebody_else_s_run_is_not_found() -> None:
     session, run = _world()
 
     stranger = RequestContext(
-        user_id=uuid.uuid4(), email="nobody@test.local", role="MEMBER"
+        user_id=uuid.uuid4(), email="nobody@test.local"
     )
     with pytest.raises(NotFoundError):
         await _service(session).retry(stranger, run.id)

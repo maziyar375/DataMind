@@ -244,14 +244,16 @@ export const users = {
   /** Which teams this person is in. Changing it is a *team* operation and
    *  lives on the team, which is why there is no setter here. */
   teams: (id: string) => get<Team[]>(`/users/${id}/teams`),
-  create: (payload: { email: string; display_name: string; role: string }) =>
+  /** An invitation. No role — a new account is a Normal User, and anything
+   *  above that is assigned afterwards through the two routes below, which
+   *  are audited and reach the last-administrator guard. */
+  create: (payload: { email: string; display_name: string }) =>
     post<{ user: User; temporary_password: string }>('/users', payload),
   update: (
     id: string,
     payload: {
       display_name?: string
       email?: string
-      role?: string
       status?: string
     },
   ) => patch<User>(`/users/${id}`, payload),

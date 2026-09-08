@@ -44,15 +44,15 @@ STRANGER = uuid4()
 def ctx(user_id=OWNER, role: str = "MEMBER") -> RequestContext:
     """A context whose capabilities match the role it names.
 
-    `role` is the legacy enum and, as of Phase 3, decides nothing. The helper
-    keeps the old argument so the tests below still read as sentences about
-    administrators and members, and derives the capability set from it, which
-    is exactly what `get_ctx` does against the database.
+    `role` is a word **this helper** reads to pick a capability set, and it
+    reaches no context: `users.role` and `RequestContext.role` were both
+    deleted in Phase 10. The argument survives so the tests below still read
+    as sentences about administrators and members, and the derivation is what
+    `get_ctx` does against the database.
     """
     return RequestContext(
         user_id=user_id,
         email="u@test.local",
-        role=role,
         capabilities=(
             frozenset({Capability.USER_MANAGE}) if role == "ADMIN" else frozenset()
         ),
@@ -185,7 +185,7 @@ async def test_an_administrator_does_not_silently_curate(
     connection = _connection(db._session, owner_id=owner.id)
 
     assert not await RbacAuthorizer(db).allowed(
-        ctx(admin.id, role="ADMIN"), _knowledge(connection), Privilege.MODIFY
+        ctx(admin.id), _knowledge(connection), Privilege.MODIFY
     )
 
 
@@ -315,7 +315,7 @@ async def test_failing_to_log_never_fails_the_action() -> None:
 async def test_the_ip_is_recorded_when_there_is_one_and_null_when_there_is_not() -> None:
     db = _FakeDb()
     with_ip = await audit.record(
-        db, RequestContext(user_id=OWNER, email="e", role="MEMBER", actor_ip="10.0.0.4"),
+        db, RequestContext(user_id=OWNER, email="e", actor_ip="10.0.0.4"),
         action="x",
     )
     without = await audit.record(db, ctx(), action="x")

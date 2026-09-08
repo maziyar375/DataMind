@@ -28,7 +28,6 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Session
 
 from app.core.context import RequestContext
-from app.domain.value_objects import Role as LegacyRole
 from app.domain.value_objects.authz import Capability
 from app.infra.db.models import (
     Base,
@@ -243,7 +242,7 @@ def db(engine: sa.Engine) -> Iterator[AsyncSessionShim]:
         session.add(
             User(
                 id=ACTOR, email="actor@test.local", display_name="Actor",
-                password_hash="x", role=LegacyRole.ADMIN, status="ACTIVE",
+                password_hash="x", status="ACTIVE",
                 kind="HUMAN",
             )
         )
@@ -277,10 +276,16 @@ def _seed_roles(session: Session) -> None:
     session.flush()
 
 
-def _user(session: Session, email: str, role: str = LegacyRole.MEMBER) -> User:
+def _user(session: Session, email: str) -> User:
+    """A real `users` row. **No role** — the column went in `0029`.
+
+    What a person may do is `role_assignments`, and a fixture that wanted an
+    administrator says so by assigning one (`assign_by_name`), which is what
+    the product does too.
+    """
     user = User(
         id=uuid4(), email=email, display_name=email.split("@")[0],
-        password_hash="x", role=role, status="ACTIVE", kind="HUMAN",
+        password_hash="x", status="ACTIVE", kind="HUMAN",
     )
     session.add(user)
     session.flush()
@@ -350,7 +355,6 @@ def ctx(user_id: UUID = ACTOR) -> RequestContext:
     return RequestContext(
         user_id=user_id,
         email="actor@test.local",
-        role=LegacyRole.ADMIN,
         capabilities=frozenset({Capability.ROLE_MANAGE, Capability.USER_MANAGE}),
     )
 

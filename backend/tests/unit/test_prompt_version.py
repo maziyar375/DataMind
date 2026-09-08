@@ -30,7 +30,7 @@ from app.pipeline.prompts import PROMPT_VERSION
 from app.services.run_service import RunService
 
 OWNER = uuid4()
-CTX = RequestContext(user_id=OWNER, email="asker@test.local", role="MEMBER")
+CTX = RequestContext(user_id=OWNER, email="asker@test.local")
 CONVERSATION_ID = uuid4()
 CONNECTION_ID = uuid4()
 LLM_ID = uuid4()

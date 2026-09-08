@@ -576,7 +576,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Any:
     app.state.report_executor = FakeExecutor()
     app.dependency_overrides[deps.get_db] = FakeSession
     app.dependency_overrides[deps.get_ctx] = lambda: RequestContext(
-        user_id=USER, email="user@test.local", role="MEMBER", correlation_id="test"
+        user_id=USER, email="user@test.local", correlation_id="test"
     )
     yield TestClient(app)
     app.dependency_overrides.clear()

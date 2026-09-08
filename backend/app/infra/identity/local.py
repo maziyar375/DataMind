@@ -2,7 +2,7 @@
 
 Swapping this for Keycloak means writing an `OidcIdentityProvider` and
 flipping a config value. `services/` never changes, because it only ever
-sees `RequestContext.user_id` and `RequestContext.role`.
+sees `RequestContext.user_id`.
 """
 from __future__ import annotations
 
@@ -105,7 +105,7 @@ class LocalIdentityProvider:
         await self._db.flush()
 
         return AuthenticatedIdentity(
-            user_id=user.id, email=user.email, role=user.role,
+            user_id=user.id, email=user.email,
             display_name=user.display_name,
         )
 
@@ -117,7 +117,12 @@ class LocalIdentityProvider:
         payload = {
             "sub": str(identity.user_id),
             "email": identity.email,
-            "role": identity.role,
+            # No `role`, and no `capabilities` either. The token says **who**;
+            # what they may do is resolved from the database on every request
+            # (decision 15), which is what makes a revoked role take effect on
+            # the next request rather than at the next refresh. A claim here
+            # would quietly undo that, and `test_authz_seams.py` asserts the
+            # identity layer never learns the word.
             "name": identity.display_name,
             "sid": str(session_id),
             "iat": int(now.timestamp()),
@@ -146,7 +151,10 @@ class LocalIdentityProvider:
         return AuthenticatedIdentity(
             user_id=UUID(payload["sub"]),
             email=payload.get("email", ""),
-            role=payload.get("role", "MEMBER"),
+            # A `role` claim in a token minted before Phase 10 is **ignored**,
+            # not read: the identity says who, and what they may do is
+            # resolved from the database on every request. That is also the
+            # rule for a `capabilities` claim an external IdP might send.
             display_name=payload.get("name", ""),
         )
 
@@ -199,7 +207,7 @@ class LocalIdentityProvider:
 
         session.revoked_at = utcnow()
         identity = AuthenticatedIdentity(
-            user_id=user.id, email=user.email, role=user.role,
+            user_id=user.id, email=user.email,
             display_name=user.display_name,
         )
         tokens = await self.issue_session(identity)

@@ -943,13 +943,15 @@ from that answer**, never from a role string — which is what makes "the
 interface offers exactly what the API would allow" a property rather than an
 aspiration.
 
-**Roles, capabilities, and where the answer to "may they?" lives.** As of
-Phase 3 of
-[user-management-and-access-control-plan.md](user-management-and-access-control-plan.md),
-`users.role` is no longer a permission. It is a two-value cache the role
-service keeps true so a rollback is a config flip, and a CI grep
-(`make authz-check`) fails the build on anything that reads it to decide
-something. What decides is a **capability**: one of eighteen app-wide verbs,
+**Roles, capabilities, and where the answer to "may they?" lives.** Phase 3 of
+[user-management-and-access-control-plan.md](user-management-and-access-control-plan.md)
+stopped `users.role` being a permission — it became a two-value cache the role
+service kept true so a rollback stayed a config flip — and **Phase 10 dropped
+the column** (migration `0029`), because a cache of a fact nobody consults is a
+field that can only be wrong. A CI grep (`make authz-check`) and
+`test_authz_conformance.py` both fail the build on anything that reads a role
+string to decide something. What decides is a **capability**: one of eighteen
+app-wide verbs,
 carried by roles, held by principals, and checked in a route dependency —
 `deps.needs(Capability.ROLE_MANAGE)` — which runs *before* the handler body and
 therefore cannot be forgotten by whoever adds the next route. That is this

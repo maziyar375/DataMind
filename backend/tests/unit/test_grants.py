@@ -67,7 +67,6 @@ def who(user_id, *capabilities: Capability) -> RequestContext:
     return RequestContext(
         user_id=user_id,
         email="u@test.local",
-        role="MEMBER",
         capabilities=frozenset(capabilities),
     )
 

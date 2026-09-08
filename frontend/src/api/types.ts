@@ -37,15 +37,6 @@ export interface User {
   id: string
   email: string
   display_name: string
-  /**
-   * The legacy two-value enum. **Do not branch on it.**
-   *
-   * As of Phase 3 of the access-control plan it is a read-only cache the
-   * backend keeps true so a rollback is a config flip; every "may I?" the
-   * interface asks is answered by `capabilities`. It survives here because the
-   * user list still *shows* an Admin chip, and showing is not deciding.
-   */
-  role: 'ADMIN' | 'MEMBER'
   status?: string
   created_at?: string
   /** HUMAN or SERVICE. One value until service users land. */
@@ -57,6 +48,15 @@ export interface User {
    * an access-review answer nobody asked for.
    */
   capabilities?: string[]
+  /**
+   * The names of the roles reaching this principal — directly or through a
+   * team. **What a badge is drawn from**, as of Phase 10: `user.role` and the
+   * column behind it are gone, and a two-value chip could never have said
+   * "Knowledge Manager" anyway.
+   *
+   * To *show*, never to branch on. Every "may I?" the interface asks is
+   * answered by `capabilities`, which is what `useCan()` reads.
+   */
   roles?: string[]
   teams?: string[]
 }

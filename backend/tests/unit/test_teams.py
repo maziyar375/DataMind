@@ -30,7 +30,6 @@ import pytest
 import sqlalchemy as sa
 
 from app.core.errors import ConflictError, NotFoundError, ValidationError
-from app.domain.value_objects import Role as LegacyRole
 from app.domain.value_objects.authz import ADMINISTRATOR, Capability
 from app.infra.db.models import AuditLog, RoleAssignment, TeamMember
 from app.services.role_service import RoleService
@@ -447,7 +446,7 @@ async def test_a_team_holding_administrator_does_not_satisfy_the_guard(
     roles = RoleService(db)
     admin_role = await roles.by_name(ADMINISTRATOR)
     assert admin_role is not None
-    only = _user(db._session, "only-admin@test.local", LegacyRole.ADMIN)
+    only = _user(db._session, "only-admin@test.local")
     await roles.assign(ctx(), user_id=only.id, role_id=admin_role.id)
 
     team = await teams.create(ctx(), name="Admins")

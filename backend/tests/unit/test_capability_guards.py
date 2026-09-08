@@ -192,23 +192,36 @@ def test_each_administration_route_names_its_capability(
     )
 
 
-def test_no_route_in_the_tree_still_uses_the_deprecated_admin_guard() -> None:
-    """`require_admin` survives one release for out-of-tree callers only.
+def test_the_deprecated_admin_guard_is_gone_from_the_tree() -> None:
+    """`require_admin` and `AdminDep` were **deleted** in Phase 10.
 
-    It is now literally `needs(Capability.USER_MANAGE)` — `is_admin` reads the
-    capability set — so nothing can *disagree*; what this asserts is that
-    nothing in the product still spells it the old way, which is the condition
-    for deleting it in Phase 10.
+    This test used to assert that no route still carried them, which was the
+    condition for deleting them. They are gone, so the claim becomes the
+    stronger one: the names do not exist, and nothing can start carrying them
+    again without somebody re-adding a function with a docstring saying it is
+    deprecated — which is a decision, not an accident.
+
+    Asserted on `deps` rather than by grep because a name can be re-exported:
+    what matters is that `deps.require_admin` cannot be reached, since that is
+    what a route would have to import.
     """
-    offenders = [
-        f"{method} {path}"
-        for (method, path), route in _routes().items()
-        if any(
-            dependency.call is deps.require_admin
-            for dependency in route.dependant.dependencies
-        )
-    ]
-    assert offenders == []
+    assert not hasattr(deps, "require_admin")
+    assert not hasattr(deps, "AdminDep")
+
+    # And no **code** under `api/` still spells either one. Comments are
+    # stripped first, because both files carry a tombstone saying the guard
+    # was deleted — and a test that punished those would be a test that
+    # deletes its own explanation.
+    import ast
+    import pathlib as _pathlib
+
+    api = _pathlib.Path(deps.__file__).parent
+    offenders = []
+    for path in api.rglob("*.py"):
+        code = ast.unparse(ast.parse(path.read_text()))
+        if "AdminDep" in code or "require_admin" in code:
+            offenders.append(str(path.relative_to(api)))
+    assert offenders == [], f"{offenders} still name the deleted admin guard"
 
 
 # ── the refusal itself ───────────────────────────────────────────────────
@@ -228,7 +241,6 @@ def _client(capabilities: frozenset[Capability]) -> TestClient:
     app.dependency_overrides[deps.get_ctx] = lambda: RequestContext(
         user_id=uuid4(),
         email="someone@test.local",
-        role="MEMBER",
         capabilities=capabilities,
     )
     return TestClient(app)
@@ -294,8 +306,7 @@ def test_holding_the_read_capability_is_not_holding_the_write_one() -> None:
 async def test_needs_returns_the_context_when_the_capability_is_held() -> None:
     guard = deps.needs(Capability.EVAL_RUN)
     ctx = RequestContext(
-        user_id=uuid4(), email="e@test.local", role="MEMBER",
-        capabilities=frozenset({Capability.EVAL_RUN}),
+        user_id=uuid4(), email="e@test.local", capabilities=frozenset({Capability.EVAL_RUN}),
     )
 
     assert await guard(ctx) is ctx
@@ -304,8 +315,7 @@ async def test_needs_returns_the_context_when_the_capability_is_held() -> None:
 async def test_needs_raises_forbidden_when_it_is_not() -> None:
     guard = deps.needs(Capability.EVAL_RUN)
     ctx = RequestContext(
-        user_id=uuid4(), email="e@test.local", role="MEMBER",
-        capabilities=frozenset({Capability.AUDIT_READ}),
+        user_id=uuid4(), email="e@test.local", capabilities=frozenset({Capability.AUDIT_READ}),
     )
 
     with pytest.raises(ForbiddenError):
@@ -330,8 +340,7 @@ def test_a_guard_is_a_dependency_rather_than_a_call_inside_the_body() -> None:
 
     app.include_router(router)
     app.dependency_overrides[deps.get_ctx] = lambda: RequestContext(
-        user_id=uuid4(), email="x@test.local", role="MEMBER",
-    )
+        user_id=uuid4(), email="x@test.local", )
 
     # Not entered as a context manager: the app's lifespan builds the run
     # executor, which wants a real secret-box key, and none of that is what

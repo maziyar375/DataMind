@@ -31,9 +31,17 @@ import {
 import { EffectiveAccess } from '../components/access'
 import { useCan } from '../permissions'
 
-type Role = 'ADMIN' | 'MEMBER'
 type Status = 'ACTIVE' | 'INVITED' | 'DISABLED'
-type RoleFilter = 'ALL' | 'ADMIN' | 'MEMBER'
+/**
+ * The People toolbar's role filter.
+ *
+ * `ADMINS` / `EVERYONE_ELSE` rather than `ADMIN` / `MEMBER`, and the
+ * renaming is not cosmetic: `MEMBER` was one half of a two-value column
+ * that no longer exists, and an account can now hold several roles or
+ * none. This filter asks one question — *does this person administer the
+ * installation?* — which is the question the screen is for.
+ */
+type RoleFilter = 'ALL' | 'ADMINS' | 'EVERYONE_ELSE'
 type StatusFilter = 'ALL' | 'INVITED' | 'DISABLED'
 type SortKey = 'name' | 'joined' | 'role'
 
@@ -47,6 +55,19 @@ function statusOf(user: User): Status {
   return (user.status as Status) ?? 'ACTIVE'
 }
 
+/**
+ * Whether this account holds the Administrator role.
+ *
+ * Read off `roles`, which the list carries as of Phase 10, rather than off a
+ * two-value `user.role` string — that column is gone, and it could never have
+ * said "Knowledge Manager" anyway. **A label and a filter, never a decision**:
+ * what the interface may *do* is `useCan()`, and what the server will allow is
+ * the server's answer.
+ */
+function isAdministrator(user: User): boolean {
+  return (user.roles ?? []).includes('Administrator') // authz-ok: a badge
+}
+
 function sortUsers(users: User[], key: SortKey): User[] {
   const name = (user: User) => (user.display_name || user.email).toLowerCase()
   const joined = (user: User) => (user.created_at ? new Date(user.created_at).getTime() : 0)
@@ -54,7 +75,8 @@ function sortUsers(users: User[], key: SortKey): User[] {
     if (key === 'joined') return joined(b) - joined(a)
     if (key === 'role') {
       // authz-ok: sorting the list, not deciding who may read it
-      if (a.role !== b.role) return a.role === 'ADMIN' ? -1 : 1 // authz-ok: a sort key
+      const first = isAdministrator(a)
+      if (first !== isAdministrator(b)) return first ? -1 : 1
       return name(a).localeCompare(name(b))
     }
     return name(a).localeCompare(name(b))
@@ -84,7 +106,11 @@ export default function UsersPage({
   const [error, setError] = useState<string | null>(null)
 
   const [query, setQuery] = useState('')
-  const [role, setRole] = useState<RoleFilter>('ALL')
+  // `roleFilter`, not `role`: this is a toolbar segment, and a variable
+  // called `role` compared to a literal is exactly the shape
+  // `make authz-check` refuses — correctly, since it cannot tell a filter
+  // from a permission check, and neither can a reader skimming.
+  const [roleFilter, setRoleFilter] = useState<RoleFilter>('ALL')
   const [status, setStatus] = useState<StatusFilter>('ALL')
   const [sort, setSort] = useState<SortKey>('name')
 
@@ -109,11 +135,11 @@ export default function UsersPage({
     const users = list ?? []
     return {
       total: users.length,
-      // authz-ok: a count shown in the header. The user *list* deliberately
-      // carries accounts and not capability sets — a list that shipped
-      // everybody's permissions would be an access review nobody asked for —
-      // so the cache the backend keeps true is the only thing to count.
-      admins: users.filter((user) => user.role === 'ADMIN').length, // authz-ok: a count
+      // authz-ok: a count shown in the header. The user *list* carries role
+      // **names**, not capability sets — a list that shipped everybody's
+      // permissions would be an access review nobody asked for — so this
+      // counts the role, which is what an administrator is.
+      admins: users.filter(isAdministrator).length,
       invited: users.filter((user) => statusOf(user) === 'INVITED').length,
       disabled: users.filter((user) => statusOf(user) === 'DISABLED').length,
     }
@@ -122,7 +148,8 @@ export default function UsersPage({
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
     const matched = (list ?? []).filter((user) => {
-      if (role !== 'ALL' && user.role !== role) return false
+      if (roleFilter === 'ADMINS' && !isAdministrator(user)) return false
+      if (roleFilter === 'EVERYONE_ELSE' && isAdministrator(user)) return false
       if (status !== 'ALL' && statusOf(user) !== status) return false
       if (!needle) return true
       return (
@@ -131,13 +158,14 @@ export default function UsersPage({
       )
     })
     return sortUsers(matched, sort)
-  }, [list, query, role, status, sort])
+  }, [list, query, roleFilter, status, sort])
 
-  const filtering = query.trim().length > 0 || role !== 'ALL' || status !== 'ALL'
+  const filtering =
+    query.trim().length > 0 || roleFilter !== 'ALL' || status !== 'ALL'
 
   function clearFilters() {
     setQuery('')
-    setRole('ALL')
+    setRoleFilter('ALL')
     setStatus('ALL')
   }
 
@@ -242,12 +270,12 @@ export default function UsersPage({
           <div className="rm-toolbar-group">
             <Segmented
               ariaLabel="Filter by role"
-              value={role}
-              onChange={setRole}
+              value={roleFilter}
+              onChange={setRoleFilter}
               options={[
                 { value: 'ALL', label: 'Everyone' },
-                { value: 'ADMIN', label: `Admins (${stats.admins})` },
-                { value: 'MEMBER', label: 'Members' },
+                { value: 'ADMINS', label: `Admins (${stats.admins})` },
+                { value: 'EVERYONE_ELSE', label: 'Everyone else' },
               ]}
             />
             {/* Offered only once an account is in one of those states; a filter
@@ -372,7 +400,7 @@ export default function UsersPage({
           // authz-ok: a *hint* on a disabled control. The refusal itself is
           // the server's, counted over role assignments, and arrives whatever
           // this says.
-          isOnlyAdmin={editing.role === 'ADMIN' && stats.admins <= 1} // authz-ok: a hint
+          isOnlyAdmin={isAdministrator(editing) && stats.admins <= 1}
           onClose={() => setEditing(null)}
           onDone={(message) => {
             setEditing(null)
@@ -717,13 +745,22 @@ function UserChips({ user, isSelf }: { user: User; isSelf: boolean }) {
   const status = statusOf(user)
   return (
     <>
-      {/* authz-ok below: a badge on somebody else's row. This list carries
-          accounts, not capability sets, so the legacy cache is what there is
-          to draw — and drawing is not deciding. Their actual roles are in the
-          detail dialog, read from the server. */}
-      <Chip tone={user.role === 'ADMIN' ? 'accent' : 'neutral'}> {/* authz-ok: a badge */}
-        {user.role === 'ADMIN' ? 'Admin' : 'Member'} {/* authz-ok: a badge */}
-      </Chip>
+      {/* The roles this account actually holds, by name — not a two-value
+          chip. That one went with `users.role` in Phase 10, and it could
+          never say "Knowledge Manager and Auditor", which is the state a lot
+          of real accounts are in. Drawing is not deciding: what the interface
+          may do is `useCan()`, and what the server will allow is the server's
+          answer. Capped at two so a row stays a row; the detail dialog has
+          the full list and the controls to change it. */}
+      {(user.roles ?? []).slice(0, 2).map((role) => (
+        <Chip key={role} tone={role === 'Administrator' ? 'accent' : 'neutral'}>
+          {role}
+        </Chip>
+      ))}
+      {(user.roles ?? []).length > 2 && (
+        <Chip tone="neutral">+{(user.roles ?? []).length - 2}</Chip>
+      )}
+      {(user.roles ?? []).length === 0 && <Chip tone="amber">No roles</Chip>}
       {/* A machine, on a screen called People. `GET /users` returns every
           principal because the team picker and the audit renderer both have to
           resolve any user id — so the honest thing is to badge it rather than
@@ -840,7 +877,6 @@ function AddUserModal({
 }) {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
-  const [role, setRole] = useState<Role>('MEMBER')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
@@ -854,7 +890,6 @@ function AddUserModal({
       const created = await api.create({
         display_name: name.trim(),
         email: email.trim(),
-        role,
       })
       onCreated({ email: created.user.email, password: created.temporary_password })
     } catch (e) {
@@ -897,12 +932,15 @@ function AddUserModal({
           placeholder="e.g. ada@company.com"
         />
       </Field>
-      <Field label="Role" hint="Admins manage users, connections, and models.">
-        <Select value={role} onChange={(e) => setRole(e.target.value as Role)}>
-          <option value="MEMBER">Member</option>
-          <option value="ADMIN">Admin</option>
-        </Select>
-      </Field>
+      {/* **No role picker.** A new account starts as a Normal User, and
+          anything above that is assigned afterwards in the Roles section of
+          their detail — which is audited and goes through the
+          last-administrator guard, neither of which a field on an invitation
+          could do. It was a two-value control over a column that is gone. */}
+      <p style={{ margin: 0, fontSize: 11.5, color: 'var(--text-faint)', lineHeight: 1.6 }}>
+        They start as a <strong>Normal User</strong>. Open their account
+        afterwards to give them a role — each assignment is recorded.
+      </p>
     </Modal>
   )
 }
@@ -921,7 +959,6 @@ function EditUserModal({
 
   const [name, setName] = useState(user.display_name)
   const [email, setEmail] = useState(user.email)
-  const [role, setRole] = useState<Role>(user.role)
   const [status, setStatus] = useState<Status>(initialStatus)
   const [savingProfile, setSavingProfile] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -935,13 +972,15 @@ function EditUserModal({
   const dirty =
     trimmedName !== user.display_name ||
     trimmedEmail.toLowerCase() !== user.email.toLowerCase() ||
-    role !== user.role ||
     status !== initialStatus
   const canSave = dirty && !!trimmedName && !!trimmedEmail && !savingProfile
 
-  const roleLocked = isSelf || isOnlyAdmin
-  const roleHint = isSelf
-    ? "You can't change your own role."
+  // The two-value Role select used to live beside Status. It is gone with
+  // `users.role`: roles are assigned in the section below this dialog, one at
+  // a time, each with an audit row and each reaching the last-administrator
+  // guard. `isOnlyAdmin` survives as the sentence that says so.
+  const roleNote = isSelf
+    ? "You cannot remove your own roles."
     : isOnlyAdmin
       ? 'The only administrator cannot be demoted.'
       : undefined
@@ -953,12 +992,10 @@ function EditUserModal({
     const payload: {
       display_name?: string
       email?: string
-      role?: string
       status?: string
     } = {}
     if (trimmedName !== user.display_name) payload.display_name = trimmedName
     if (trimmedEmail.toLowerCase() !== user.email.toLowerCase()) payload.email = trimmedEmail
-    if (role !== user.role) payload.role = role
     if (status !== initialStatus) payload.status = status
     try {
       await api.update(user.id, payload)
@@ -1042,16 +1079,29 @@ function EditUserModal({
       </Field>
 
       <div className="rm-col-2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <Field label="Role" hint={roleHint}>
-          <Select
-            value={role}
-            disabled={roleLocked}
-            onChange={(e) => setRole(e.target.value as Role)}
-            style={{ opacity: roleLocked ? 0.6 : 1 }}
+        <Field
+          label="Roles"
+          hint={roleNote ?? 'Assigned below — each change is recorded.'}
+        >
+          <span
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 6,
+              alignItems: 'center',
+              minHeight: 36,
+            }}
           >
-            <option value="MEMBER">Member</option>
-            <option value="ADMIN">Admin</option>
-          </Select>
+              {(user.roles ?? []).length === 0 ? (
+                <Chip tone="amber">No roles</Chip>
+              ) : (
+                (user.roles ?? []).map((name) => (
+                  <Chip key={name} tone={name === 'Administrator' ? 'accent' : 'neutral'}>
+                    {name}
+                  </Chip>
+                ))
+            )}
+          </span>
         </Field>
         <Field label="Status" hint={isSelf ? "You can't change your own status." : undefined}>
           <Select

@@ -66,7 +66,7 @@ def client() -> Any:
     app = create_app()
     app.dependency_overrides[deps.get_db] = lambda: None
     app.dependency_overrides[deps.get_ctx] = lambda: RequestContext(
-        user_id=USER, email="user@test.local", role="MEMBER", correlation_id="test"
+        user_id=USER, email="user@test.local", correlation_id="test"
     )
     yield TestClient(app)
     app.dependency_overrides.clear()

@@ -54,7 +54,7 @@ STRANGER = uuid4()
 
 def ctx(user_id=OWNER) -> RequestContext:
     return RequestContext(
-        user_id=user_id, email="u@test.local", role="MEMBER", correlation_id="t"
+        user_id=user_id, email="u@test.local", correlation_id="t"
     )
 
 
@@ -311,18 +311,18 @@ async def test_owner_only_never_consults_the_admin_flag() -> None:
     """An administrator does not today reach another user's dashboard, and
     adding that here would be a behaviour change smuggled into a refactor.
 
-    The administrator is built the way `get_ctx` builds one as of Phase 3 —
-    from a **capability set**, not a role string — which is also why the
-    assertion below is worth keeping: an authorizer that started consulting
-    `ctx.capabilities` would now have something to find."""
+    The administrator is built the way `get_ctx` builds one — from a
+    **capability set**, and as of Phase 10 there is no role string left to
+    build one from — holding *every* capability in the product. That is what
+    makes the assertion worth keeping: an authorizer that started consulting
+    `ctx.capabilities` would have the maximum possible amount to find here,
+    and would still have to answer no."""
     admin = RequestContext(
         user_id=STRANGER,
         email="a@test.local",
-        role="ADMIN",
         capabilities=frozenset(Capability),
         correlation_id="t",
     )
-    assert admin.is_admin
     decision = await OwnerOnlyAuthorizer().allowed(
         admin, ResourceRef.to(ResourceType.DASHBOARD, _Owned(OWNER)), Privilege.SELECT
     )

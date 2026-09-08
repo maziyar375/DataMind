@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.logging import get_logger
-from app.domain.value_objects import Role, UserStatus
+from app.domain.value_objects import UserStatus
 from app.domain.value_objects.authz import ADMINISTRATOR
 from app.infra.db.models import User
 from app.infra.identity.local import LocalIdentityProvider
@@ -37,7 +37,6 @@ async def ensure_admin(db: AsyncSession, settings: Settings) -> None:
         email=email,
         display_name=settings.admin_display_name,
         password_hash=provider.hash_password(password),
-        role=Role.ADMIN,
         status=UserStatus.ACTIVE,
     )
     db.add(admin)

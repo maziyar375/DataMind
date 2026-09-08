@@ -7,9 +7,15 @@ single thing about any of them, and a DataMind Maintainer holds neither because
 administering people and administering the system are different jobs.
 
 Every route here reaches its guard through `deps.needs(...)`, so the check runs
-before the handler body. `AdminDep` is gone from this module; a route-table walk
-in the tests asserts that every route that used to carry it now carries a
+before the handler body. The deprecated administrator dependency this module
+used to carry was deleted in Phase 10, along with `users.role`; a route-table
+walk in the tests asserts that every route which used to carry it now names a
 capability instead.
+
+**There is no role field on a user any more.** `PATCH /users/{id}` changes a
+name, an address and a status; permissions move through
+`POST /users/{id}/roles` and its `DELETE`, which are audited and reach the
+last-administrator guard through the same count over the same table.
 """
 from __future__ import annotations
 
@@ -33,9 +39,9 @@ from app.api.schemas import (
     UserUpdate,
 )
 from app.core.errors import ConflictError, NotFoundError, ValidationError
-from app.domain.value_objects import Role, UserStatus
-from app.domain.value_objects.authz import ADMINISTRATOR, NORMAL_USER, PrincipalKind
-from app.infra.db.models import User
+from app.domain.value_objects import UserStatus
+from app.domain.value_objects.authz import NORMAL_USER, PrincipalKind
+from app.infra.db.models import Role, RoleAssignment, TeamMember, User
 from app.infra.identity.local import LocalIdentityProvider
 from app.services.grant_service import owned_resources
 from app.services.role_service import RoleService, assign_by_name
@@ -74,9 +80,58 @@ async def _person(db, user_id: UUID) -> User:
 
 
 @router.get("", response_model=list[UserRead])
-async def list_users(ctx: UserReadDep, db: DbDep) -> list[User]:
+async def list_users(ctx: UserReadDep, db: DbDep) -> list[UserRead]:
+    """Every principal, with the roles reaching each one.
+
+    **Two queries for the page, not one per row.** The roles are resolved in a
+    single join and grouped in Python — the same shape `owner_names` uses —
+    because the People screen badges and filters on them now that the
+    two-value `users.role` cache is gone, and a request per card is the
+    version of this that works for twelve accounts and falls over at two
+    hundred.
+
+    A role reaching somebody **through a team** counts, and is why the second
+    arm is a union rather than a simple join: "which roles does Sara hold" has
+    to include the ones her job carries, or the badge disagrees with what she
+    can actually do.
+    """
     result = await db.execute(select(User).order_by(User.created_at))
-    return list(result.scalars())
+    users = list(result.scalars())
+    by_user = await _roles_of(db, [user.id for user in users])
+    return [
+        UserRead.model_validate(user).model_copy(
+            update={"roles": by_user.get(user.id, [])}
+        )
+        for user in users
+    ]
+
+
+async def _roles_of(db, user_ids: list[UUID]) -> dict[UUID, list[str]]:
+    """Role names per principal, direct and through a team, in one query.
+
+    The union is the point. `role_assignments` names either a user or a team,
+    so the direct arm is a plain join and the team arm goes through
+    `team_members` — and a role held both ways is one role, which is what the
+    `set` collapses.
+    """
+    if not user_ids:
+        return {}
+    direct = (
+        select(RoleAssignment.user_id.label("principal"), Role.name)
+        .join(Role, Role.id == RoleAssignment.role_id)
+        .where(RoleAssignment.user_id.in_(user_ids))
+    )
+    via_team = (
+        select(TeamMember.user_id.label("principal"), Role.name)
+        .join(RoleAssignment, RoleAssignment.team_id == TeamMember.team_id)
+        .join(Role, Role.id == RoleAssignment.role_id)
+        .where(TeamMember.user_id.in_(user_ids))
+    )
+    rows = await db.execute(direct.union(via_team))
+    out: dict[UUID, set[str]] = {}
+    for principal, name in rows.all():
+        out.setdefault(principal, set()).add(name)
+    return {principal: sorted(names) for principal, names in out.items()}
 
 
 @router.post("", response_model=UserInviteResponse, status_code=status.HTTP_201_CREATED)
@@ -100,22 +155,18 @@ async def create_user(
         email=email,
         display_name=payload.display_name,
         password_hash=provider.hash_password(temp_password),
-        role=payload.role,
         status=UserStatus.INVITED,
         must_change_password=True,
     )
     db.add(user)
     await db.flush()
-    # The role the legacy enum on the invitation meant. Written here rather
-    # than left for the administrator to add afterwards, because an account
-    # that holds no role at all can do nothing — not even open Chat — and
-    # "invited, then separately given permission" is not a flow the form
-    # offers.
-    await assign_by_name(
-        db,
-        user_id=user.id,
-        role_name=ADMINISTRATOR if payload.role == Role.ADMIN else NORMAL_USER,
-    )
+    # **Normal User, always.** An account holding no role at all can do
+    # nothing — not even open Chat — and "invited, then separately given
+    # permission" is not a flow the form offers, so the floor is written here.
+    # Anything above it is `POST /users/{id}/roles`, which is audited; a role
+    # chosen on the invitation would be the one assignment in the product with
+    # no row behind it.
+    await assign_by_name(db, user_id=user.id, role_name=NORMAL_USER)
     await db.flush()
     return UserInviteResponse(
         user=UserRead.model_validate(user), temporary_password=temp_password
@@ -137,15 +188,6 @@ async def update_user(
             if clash.scalar_one_or_none() is not None:
                 raise ConflictError("A user with that email already exists.")
             user.email = new_email
-    if payload.role is not None:
-        if user.id == ctx.user_id and payload.role != Role.ADMIN:
-            raise ValidationError("You cannot remove your own admin access.")
-        # The legacy two-value control, kept working and made truthful: it now
-        # moves the **assignment**, and `users.role` follows as the cache it
-        # has become. Without this the toggle would write a string nothing
-        # reads and the person's actual permissions would not move — which is
-        # the worst possible outcome for a control labelled "Admin".
-        await _set_administrator(db, ctx, user, payload.role == Role.ADMIN)
     if payload.status is not None:
         if user.id == ctx.user_id and payload.status == UserStatus.DISABLED:
             raise ValidationError("You cannot disable your own account.")
@@ -307,24 +349,3 @@ def _role_read(role) -> RoleRead:
         ],
         created_at=role.created_at,
     )
-
-
-async def _set_administrator(db, ctx, user: User, administrator: bool) -> None:
-    """Move the Administrator assignment, and let `users.role` follow.
-
-    The legacy `PATCH /users/{id}` control speaks in the old two-value
-    vocabulary, and this is the one place that vocabulary is translated. The
-    last-administrator guard lives in `RoleService` and is reached through
-    `unassign`, so **both** routes into "this person is no longer an
-    administrator" — this one and `DELETE /users/{id}/roles/{role_id}` — are
-    stopped by the same count over the same table.
-    """
-    service = RoleService(db)
-    role = await service.by_name(ADMINISTRATOR)
-    if role is None:  # pragma: no cover - the seed is a migration
-        user.role = Role.ADMIN if administrator else Role.MEMBER
-        return
-    if administrator:
-        await service.assign(ctx, user_id=user.id, role_id=role.id)
-    else:
-        await service.unassign(ctx, user_id=user.id, role_id=role.id)

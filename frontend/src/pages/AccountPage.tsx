@@ -148,12 +148,12 @@ function ProfileCard({
         >
           <Stated>{user.email}</Stated>
         </Field>
-        {/* The roles this account actually holds, by name. It read
-            "Administrator" or "Member" off a two-value enum, which since
-            Phase 3 is a cache rather than the truth: somebody can be a
-            Knowledge Manager and an Auditor at once, and neither word was
-            ever either of those. The legacy label is the fallback for an
-            older `/auth/me` that carries no list. */}
+        {/* The roles this account actually holds, by name. It used to read
+            "Administrator" or "Member" off a two-value enum, which was never
+            the truth: somebody can be a Knowledge Manager and an Auditor at
+            once, and neither word is either of those. The enum and the column
+            behind it went in Phase 10, so an account with no roles now says
+            so — which is a real state, and one worth seeing. */}
         <Field label="Roles" hint="Set by an administrator.">
           <Stated>
             <span style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -162,9 +162,7 @@ function ProfileCard({
                   <Chip key={role} tone="accent">{role}</Chip>
                 ))
               ) : (
-                <Chip tone={user.role === 'ADMIN' ? 'accent' : 'neutral'}> {/* authz-ok: a label */}
-                  {user.role === 'ADMIN' ? 'Administrator' : 'Member'} {/* authz-ok: a label */}
-                </Chip>
+                <Chip tone="neutral">No roles</Chip>
               )}
             </span>
           </Stated>

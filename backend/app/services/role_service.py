@@ -37,7 +37,6 @@ from sqlalchemy.orm import selectinload
 from app.core.context import RequestContext
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.core.logging import get_logger
-from app.domain.value_objects import Role as LegacyRole
 from app.domain.value_objects.authz import (
     ADMINISTRATOR,
     NORMAL_USER,
@@ -364,7 +363,6 @@ class RoleService:
         )
         self._db.add(assignment)
         await self._db.flush()
-        await self._sync_legacy_role(user)
         await audit.record(
             self._db, ctx,
             action=ROLE_ASSIGNED, resource_type=ROLE, resource_id=role_id,
@@ -388,7 +386,6 @@ class RoleService:
             )
         )
         await self._db.flush()
-        await self._sync_legacy_role(user)
         await audit.record(
             self._db, ctx,
             action=ROLE_UNASSIGNED, resource_type=ROLE, resource_id=role_id,
@@ -511,28 +508,6 @@ class RoleService:
                     privilege=str(privilege),
                 )
             )
-
-    async def _sync_legacy_role(self, user: User) -> None:
-        """Keep `users.role` true as a **cache**, so a rollback is a flag flip.
-
-        Nothing reads it to decide anything any more — `make authz-check`
-        enforces that — but the column is still in the schema until Phase 10,
-        the SPA still renders a chip from it, and a deployment that rolled back
-        to a build without `roles` would otherwise find every account demoted
-        to MEMBER. Written from the assignments, which are now the truth.
-        """
-        administrator = await self.by_name(ADMINISTRATOR)
-        if administrator is None:  # pragma: no cover - the seed is a migration
-            return
-        result = await self._db.execute(
-            select(RoleAssignment.id).where(
-                RoleAssignment.user_id == user.id,
-                RoleAssignment.role_id == administrator.id,
-            )
-        )
-        user.role = (
-            LegacyRole.ADMIN if result.scalars().first() else LegacyRole.MEMBER
-        )
 
 
 async def assign_by_name(

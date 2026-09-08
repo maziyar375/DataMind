@@ -47,7 +47,7 @@ OWNER = uuid4()
 #: Who is drafting, and the object that answers about them. The authorizer
 #: needs no session: `_authorized` loads the row through `db.get` and hands it
 #: over, so the question is always asked about something already in memory.
-CTX = RequestContext(user_id=OWNER, email="drafter@example.com", role="USER")
+CTX = RequestContext(user_id=OWNER, email="drafter@example.com")
 AUTHZ = OwnerOnlyAuthorizer()
 
 SNAPSHOT: dict[str, Any] = {

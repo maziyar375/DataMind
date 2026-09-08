@@ -80,7 +80,6 @@ def _user(status: str = "ACTIVE", must_change: bool = False) -> User:
         email="member@test.local",
         display_name="Ada",
         password_hash=provider.hash_password(CURRENT),
-        role="MEMBER",
         status=status,
         must_change_password=must_change,
     )
@@ -99,7 +98,7 @@ def _client(db: FakeDb) -> TestClient:
     app = create_app()
     app.dependency_overrides[deps.get_db] = lambda: db
     app.dependency_overrides[deps.get_ctx] = lambda: RequestContext(
-        user_id=USER_ID, email="member@test.local", role="MEMBER", correlation_id="test"
+        user_id=USER_ID, email="member@test.local", correlation_id="test"
     )
     return TestClient(app)
 
@@ -137,17 +136,29 @@ def test_an_empty_name_is_refused(client: Any, db: FakeDb) -> None:
     assert client.patch("/api/v1/auth/me", json={"display_name": ""}).status_code == 422
 
 
-def test_role_and_status_are_not_fields_a_member_can_send(
+def test_permissions_and_status_are_not_fields_a_member_can_send(
     client: Any, db: FakeDb
 ) -> None:
-    """The privilege escalation this schema exists to make unexpressable."""
+    """The privilege escalation this schema exists to make unexpressable.
+
+    `ProfileUpdate` carries a display name and nothing else, so an extra key
+    in the body is ignored by Pydantic rather than refused — which is the
+    stronger property: there is no field to guard, and adding one would be a
+    visible decision rather than an oversight.
+
+    The `role` key here is a **historical** escalation attempt: the column it
+    aimed at was dropped in `0029`. It stays in the body because the thing
+    being asserted is that unknown keys change nothing, and yesterday's
+    attack is as good a stranger as any.
+    """
     client.patch(
         "/api/v1/auth/me",
         json={"display_name": "Ada", "role": "ADMIN", "status": "ACTIVE",
               "email": "someone@else.local"},
     )
-    assert db.user.role == "MEMBER"
+    assert db.user.status == "ACTIVE"
     assert db.user.email == "member@test.local"
+    assert db.user.display_name == "Ada"  # the one field that is hers to set
 
 
 # ── the password ─────────────────────────────────────────────────────────
@@ -244,7 +255,7 @@ def test_the_admin_password_route_still_requires_an_admin() -> None:
     app = create_app()
     app.dependency_overrides[deps.get_db] = lambda: None
     app.dependency_overrides[deps.get_ctx] = lambda: RequestContext(
-        user_id=USER_ID, email="member@test.local", role="MEMBER", correlation_id="test"
+        user_id=USER_ID, email="member@test.local", correlation_id="test"
     )
     client = TestClient(app)
 

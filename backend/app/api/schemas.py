@@ -46,17 +46,20 @@ class TokenResponse(BaseModel):
 class MeResponse(BaseModel):
     """Who is signed in, and — as of Phase 3 — what they may do.
 
-    `role` is still here and is still the legacy `ADMIN`/`MEMBER` cache, so an
-    older SPA build keeps working through the upgrade. Nothing new should read
-    it: `capabilities` is the answer to every "may I?" the interface asks, and
-    `roles` is the list of names to *show*, never to branch on.
+    **`role` is gone as of Phase 10**, with the column behind it. It carried
+    the legacy `ADMIN`/`MEMBER` string and was kept through the migration so
+    an older SPA build would keep working; the model that replaced it has
+    shipped, and a two-value cache of a fact nobody consults is a field that
+    can only be wrong.
+
+    `capabilities` is the answer to every *"may I?"* the interface asks, and
+    `roles` is the list of names to **show**, never to branch on.
     """
 
     model_config = ConfigDict(from_attributes=True)
     id: UUID
     email: str
     display_name: str
-    role: str
     #: HUMAN or SERVICE. One value today; the column arrives in Phase 5, and
     #: the field is here now so the SPA's badge does not need a new release
     #: when it does.
@@ -110,15 +113,30 @@ class ChangePasswordRequest(BaseModel):
 
 # ── users ────────────────────────────────────────────────────────────────
 class UserCreate(BaseModel):
+    """An invitation. **No role**: an account is created, then assigned.
+
+    Phase 10 dropped the two-value `role` field with the column behind it.
+    A new account starts as a Normal User — `assign_by_name` in the route —
+    and anything more is `POST /users/{id}/roles`, which is audited and goes
+    through the last-administrator guard. A role passed at creation time would
+    be the one assignment in the product with no audit row.
+    """
+
     email: EmailStr
     display_name: str = Field(min_length=1, max_length=200)
-    role: Literal["ADMIN", "MEMBER"] = "MEMBER"
 
 
 class UserUpdate(BaseModel):
+    """Name, address, status. **Roles move through their own routes.**
+
+    The legacy two-value toggle lived here and is gone with `users.role`:
+    `POST /users/{id}/roles` and `DELETE /users/{id}/roles/{role_id}` are the
+    two doors, they are audited, and both reach the last-administrator guard
+    through the same count over the same table.
+    """
+
     display_name: str | None = Field(default=None, min_length=1, max_length=200)
     email: EmailStr | None = None
-    role: Literal["ADMIN", "MEMBER"] | None = None
     status: Literal["ACTIVE", "INVITED", "DISABLED"] | None = None
 
 
@@ -138,8 +156,19 @@ class UserRead(BaseModel):
     id: UUID
     email: str
     display_name: str
-    role: str
     status: str
+    #: The roles reaching this principal, by name — directly or through a team.
+    #:
+    #: **What the People screen badges and filters on** as of Phase 10, in
+    #: place of the two-value `role` cache it used to read. It is strictly
+    #: more true: somebody can be a Knowledge Manager *and* an Auditor, and
+    #: neither of those was ever `ADMIN` or `MEMBER`.
+    #:
+    #: Names to **show**, never to branch on: what the interface may *do* is
+    #: `capabilities`, which this list deliberately does not carry — a user
+    #: list shipping everybody's capability set would be an access review
+    #: nobody asked for.
+    roles: list[str] = []
     #: `HUMAN` or `SERVICE`. Present from Phase 5 because `GET /users` returns
     #: **every principal**, machines included — the team picker and the audit
     #: renderer both need to resolve any `users.id` — so every list that draws

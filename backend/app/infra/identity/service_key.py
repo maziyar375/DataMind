@@ -186,7 +186,6 @@ class ServiceKeyProvider:
         return AuthenticatedIdentity(
             user_id=user.id,
             email=user.email,
-            role=user.role,
             display_name=user.display_name,
             kind=PrincipalKind.SERVICE,
         )

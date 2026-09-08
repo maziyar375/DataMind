@@ -93,12 +93,11 @@ class FakeDb:
             status="ACTIVE",
         )
         self.message = Message(
-            id=MESSAGE_ID, conversation_id=self.run.conversation_id, seq=1,
-            role="USER", content="total revenue last month",
+            id=MESSAGE_ID, conversation_id=self.run.conversation_id, seq=1, content="total revenue last month",
         )
         self.user = User(
             id=USER, email="sara@test.local", display_name="Sara A.",
-            password_hash="x", role="MEMBER", status="ACTIVE",
+            password_hash="x", status="ACTIVE",
         )
         self.feedback: list[AnswerFeedback] = []
         self.templates: list[KnowledgeTemplateRow] = []
@@ -252,7 +251,7 @@ def _client(db: FakeDb, *, user: UUID = USER, admin_only: bool = False) -> TestC
     app = create_app()
     app.dependency_overrides[deps.get_db] = lambda: db
     app.dependency_overrides[deps.get_ctx] = lambda: RequestContext(
-        user_id=user, email="u@test.local", role="MEMBER", correlation_id="t"
+        user_id=user, email="u@test.local", correlation_id="t"
     )
     settings = Settings(curation_admin_only=admin_only)
     app.dependency_overrides[get_settings] = lambda: settings
@@ -384,8 +383,7 @@ def test_a_flag_that_became_a_template_says_so(client: Any) -> None:
     template = KnowledgeTemplateRow(
         id=uuid4(), connection_id=CONNECTION_ID, question="total revenue",
         question_normalized="total revenue", sql="SELECT 1", params=[], note="",
-        source="CHAT_CORRECTED", literal_provenance="HUMAN_AUTHORED",
-        role="RETRIEVABLE", status="ACTIVE", status_reason="", schema_version=1,
+        source="CHAT_CORRECTED", literal_provenance="HUMAN_AUTHORED", status="ACTIVE", status_reason="", schema_version=1,
         referenced_tables=[], conflicts_with=[], hit_count=0,
     )
     client.db.add(template)

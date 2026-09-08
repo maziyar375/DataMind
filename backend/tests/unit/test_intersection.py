@@ -63,7 +63,7 @@ from tests.unit.conftest import AsyncSessionShim, _connection, _team_grant, _use
 def who(user_id: UUID) -> RequestContext:
     """A principal holding no app-wide verb — reach comes from grants only."""
     return RequestContext(
-        user_id=user_id, email="u@test.local", role="MEMBER", correlation_id="t"
+        user_id=user_id, email="u@test.local", correlation_id="t"
     )
 
 
@@ -640,7 +640,7 @@ def _llm_client(db: Any) -> Any:
     app.dependency_overrides[deps.get_db] = lambda: db
     app.dependency_overrides[deps.get_secret_box] = lambda: _Box()
     app.dependency_overrides[deps.get_ctx] = lambda: RequestContext(
-        user_id=_OWNER, email="o@test.local", role="MEMBER", correlation_id="t"
+        user_id=_OWNER, email="o@test.local", correlation_id="t"
     )
     return TestClient(app, raise_server_exceptions=False)
 

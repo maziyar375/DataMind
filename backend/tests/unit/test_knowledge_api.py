@@ -238,8 +238,7 @@ def _client(
     app.dependency_overrides[deps.get_db] = lambda: db
     app.dependency_overrides[deps.get_ctx] = lambda: RequestContext(
         user_id=user,
-        email="user@test.local",
-        role="ADMIN" if admin else "MEMBER",
+        email="user@test.local" if admin else "MEMBER",
         correlation_id="test",
     )
     settings = Settings(curation_admin_only=admin_only)

@@ -681,8 +681,17 @@ joined them with Phase 1 of the learning loop.
    default principal for any assignment and for any share: a permission
    attached to a job survives the person leaving it, and one attached to a
    person becomes a row nobody can attribute and nobody dares revoke.
-   `docs/user-management-and-access-control-plan.md` is the whole design, and
-   Phase 10 turns it into a rulebook.
+
+   > **[docs/access-control-rules.md](docs/access-control-rules.md) is the
+   > rulebook — read it before writing an endpoint.** Seven concepts, five
+   > invariants, the effective-permission algorithm verbatim, and three
+   > checklists: a new endpoint, a new resource type, a new capability. It is
+   > short on purpose.
+   > `backend/tests/unit/test_authz_conformance.py` enforces every rule in it
+   > a machine can check, and `make authz-check` greps for the four shapes
+   > this codebase has agreed not to use.
+   > [docs/user-management-and-access-control-plan.md](docs/user-management-and-access-control-plan.md)
+   > is the argument behind all of it.
 
 ---
 

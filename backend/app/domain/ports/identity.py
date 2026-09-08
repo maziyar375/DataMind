@@ -44,7 +44,6 @@ class AuthenticatedIdentity:
 
     user_id: UUID
     email: str
-    role: str
     display_name: str = ""
     external_subject: str | None = None
     kind: PrincipalKind = PrincipalKind.HUMAN

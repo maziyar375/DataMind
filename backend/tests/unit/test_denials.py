@@ -52,8 +52,7 @@ from tests.unit.conftest import AsyncSessionShim, _connection, _team_grant, _use
 def ctx(user_id, *, admin: bool = False, teams=frozenset()) -> RequestContext:
     return RequestContext(
         user_id=user_id,
-        email="u@test.local",
-        role="ADMIN" if admin else "MEMBER",
+        email="u@test.local" if admin else "MEMBER",
         capabilities=(
             frozenset({Capability.USER_MANAGE}) if admin else frozenset()
         ),

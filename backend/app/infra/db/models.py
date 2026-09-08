@@ -86,7 +86,10 @@ class User(Base, TimestampMixin):
     email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False)
     display_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
-    role: Mapped[str] = mapped_column(String(20), nullable=False, default="MEMBER")
+    # `role` used to be here — a two-value `ADMIN`/`MEMBER` string that was
+    # this product's whole authorization model until `0024`, and a cache of a
+    # fact nobody consulted after it. Dropped in `0029`; what a person may do
+    # is `role_assignments` → `roles` → capabilities and scoped privileges.
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
     external_subject: Mapped[str | None] = mapped_column(String(255), nullable=True)

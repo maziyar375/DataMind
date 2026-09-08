@@ -54,7 +54,7 @@ HAND_SQL = "SELECT region, SUM(total_amount) AS revenue FROM public.orders GROUP
 def _other_ctx() -> RequestContext:
     """Somebody else's session, for the 404 case."""
     return RequestContext(
-        user_id=uuid4(), email="other@test.local", role="MEMBER", correlation_id="t"
+        user_id=uuid4(), email="other@test.local", correlation_id="t"
     )
 
 

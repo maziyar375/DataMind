@@ -264,20 +264,11 @@ def on(
     return guard
 
 
-async def require_admin(ctx: CtxDep) -> RequestContext:
-    """Deprecated. `needs(Capability.USER_MANAGE)`, kept for one release.
-
-    It is now literally that — `is_admin` reads the capability set — so the two
-    spellings cannot disagree. Every route in the tree has moved to `needs`; a
-    route-table walk asserts it, and this survives only so an out-of-tree
-    caller does not break on the upgrade. Deleted in Phase 10.
-    """
-    if not ctx.can(Capability.USER_MANAGE):
-        raise ForbiddenError("This action requires an administrator account.")
-    return ctx
-
-
-AdminDep = Annotated[RequestContext, Depends(require_admin)]
+# `require_admin` and `AdminDep` used to live here. Phase 3 replaced every
+# route that carried them with `needs(capability)`, and Phase 10 deleted
+# them once `tests/unit/test_capability_guards.py` proved the count of
+# remaining callers was zero. Nothing in this product asks what role
+# somebody has; it asks what they may do.
 
 #: The four permission-shaped guards the administration screens use, named once
 #: so a route reads as the sentence it enforces.

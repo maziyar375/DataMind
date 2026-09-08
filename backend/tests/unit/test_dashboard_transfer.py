@@ -38,7 +38,7 @@ OWNER = uuid4()
 #: The authorizer is the owner-only one — today's rule — constructed without a
 #: session because every call in this file hands it the row it is asking about.
 CTX = RequestContext(
-    user_id=OWNER, email="owner@test.local", role="MEMBER", correlation_id="t"
+    user_id=OWNER, email="owner@test.local", correlation_id="t"
 )
 CONNECTION_ID = uuid4()
 OTHER_CONNECTION_ID = uuid4()

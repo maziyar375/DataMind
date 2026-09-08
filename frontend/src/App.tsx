@@ -637,9 +637,7 @@ function Sidebar({
               }}
               title={(user.roles ?? []).join(', ')}
             >
-              {user.roles?.length
-                ? user.roles.join(' · ')
-                : user.role === 'ADMIN' ? 'Admin' : 'Member'} {/* authz-ok: a label */}
+              {user.roles?.length ? user.roles.join(' · ') : 'No roles'}
             </span>
           </div>
           </button>
