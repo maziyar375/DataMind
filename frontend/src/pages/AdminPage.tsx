@@ -41,6 +41,18 @@ interface TabSpec {
   label: string
   /** The one capability that puts this tab on the screen. */
   needs: Capability
+  /**
+   * The line under the section title while this tab is open.
+   *
+   * It lives here rather than in the tab, because the section already carries
+   * the title and the strip — the same bargain `UsersPage`'s `embedded` flag
+   * struck, extended to the two tabs that arrived later and kept a standalone
+   * page's chrome. The Audit log and Access review each drew a second <h1> of
+   * the same size directly under "Administration", which reads as two pages
+   * stacked rather than one section with a tab open. Their own sentences are
+   * the ones below, verbatim: the heading was the duplicate, not the prose.
+   */
+  blurb: string
 }
 
 /**
@@ -50,18 +62,38 @@ interface TabSpec {
  * point of building the shell rather than a second standalone page each time.
  */
 const TABS: TabSpec[] = [
-  { value: 'people', label: 'People', needs: 'user.read' },
-  { value: 'roles', label: 'Roles', needs: 'role.read' },
+  {
+    value: 'people',
+    label: 'People',
+    needs: 'user.read',
+    blurb: 'Who can sign in, what each of them may do, and how they get a password.',
+  },
+  {
+    value: 'roles',
+    label: 'Roles',
+    needs: 'role.read',
+    blurb: 'Every set of permissions this installation defines, and who holds each one.',
+  },
   // `team.read` is held by five of the eight seed roles, so this tab is the
   // one most people in the installation will see — which is deliberate: from
   // Phase 6 a team is how somebody will have been given access to anything,
   // and "which teams am I in" stops being a curiosity.
-  { value: 'teams', label: 'Teams', needs: 'team.read' },
+  {
+    value: 'teams',
+    label: 'Teams',
+    needs: 'team.read',
+    blurb: 'Named groups a permission can be granted to, so access outlives whoever set it up.',
+  },
   // The one tab a **DataMind Maintainer** sees. That pairing is the point
   // rather than an accident of the seed: running the installation and
   // administering people are different jobs, and minting an agent belongs to
   // the first — so this role gets the Administration row and no People list.
-  { value: 'service-accounts', label: 'Service accounts', needs: 'service_user.manage' },
+  {
+    value: 'service-accounts',
+    label: 'Service accounts',
+    needs: 'service_user.manage',
+    blurb: 'Machine identities and their keys — what each may do, and when it last did it.',
+  },
   // Last, because it is the one somebody arrives at with a question rather
   // than a task. `audit.read` is Administrator's and **Auditor's** — the role
   // that exists to read this and change nothing anywhere, which is the whole
@@ -70,8 +102,22 @@ const TABS: TabSpec[] = [
   // arrived at with a question rather than a task, and they answer the two
   // halves of one — the log says what happened, the review says what is
   // possible. `access.review` is Administrator's and **Auditor's**.
-  { value: 'access', label: 'Access review', needs: 'access.review' },
-  { value: 'audit', label: 'Audit log', needs: 'audit.read' },
+  {
+    value: 'access',
+    label: 'Access review',
+    needs: 'access.review',
+    blurb:
+      'What one person, machine or team can reach — or everyone who can reach one '
+      + 'thing. Every row says how, so you know what to revoke.',
+  },
+  {
+    value: 'audit',
+    label: 'Audit log',
+    needs: 'audit.read',
+    blurb:
+      'Who did what, and what was refused. Every permission change, every share, '
+      + 'and every denial.',
+  },
 ]
 
 export default function AdminPage({ user }: { user: User }) {
@@ -99,19 +145,32 @@ export default function AdminPage({ user }: { user: User }) {
   if (!active) return <Navigate to={`/admin/${visible[0].value}`} replace />
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
-      <div style={{ padding: '20px 28px 0' }}>
-        <PageHeader
-          title="Administration"
-          subtitle="Who can sign in, what each of them may do, and how those permissions are defined."
+    // `rm-section` is the surface, and it is the whole point of the wrapper:
+    // one accent wash, thrown from above the title so it runs behind the
+    // header and the strip and fades out under whichever tab is open. Before
+    // it, three of these six tabs painted their own `rm-index` wash *below*
+    // the strip and three painted none, so the section's background changed
+    // as you moved along its own tabs — and where it was painted, it began
+    // with a hard horizontal edge at the tab border.
+    <div
+      className="rm-section"
+      style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}
+    >
+      <div className="rm-section-head">
+        <div className="rm-section-title">
+          <PageHeader title="Administration" subtitle={active.blurb} />
+        </div>
+
+        {/* 18, not the default 28: a tab keeps 14px for its own hover pill, so
+            this is what puts the first label on the same 32px edge as the
+            title above it and the tab's content below. */}
+        <Tabs
+          value={active.value}
+          gutter={18}
+          onChange={(next) => navigate(`/admin/${next}`)}
+          items={visible.map((entry) => ({ value: entry.value, label: entry.label }))}
         />
       </div>
-
-      <Tabs
-        value={active.value}
-        onChange={(next) => navigate(`/admin/${next}`)}
-        items={visible.map((entry) => ({ value: entry.value, label: entry.label }))}
-      />
 
       {/* Each tab owns its own scrolling: People is an index that scrolls as a
           page, Roles is a master–detail whose two columns scroll apart. A

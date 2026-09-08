@@ -30,7 +30,7 @@ import { access, connections as connectionsApi, dashboards as dashboardsApi,
   reports as reportsApi, teams as teamsApi, users as usersApi } from '../api/client'
 import type { Connection, DashboardSummary, Reach, ReportSummary, Team, User } from '../api/types'
 import {
-  Chip, EmptyState, ErrorNote, Field, GhostButton, Icon, PageHeader, Select,
+  Chip, EmptyState, ErrorNote, Field, GhostButton, Icon, Select,
   Spinner, initialOf, saveCsv,
 } from '../components/ui'
 
@@ -168,12 +168,9 @@ export default function AccessReviewTab() {
   }
 
   return (
-    <div className="rm-index rm-page-pad" style={{ flex: 1, overflowY: 'auto' }}>
-      <PageHeader
-        title="Access review"
-        subtitle="What one person, machine or team can reach — or everyone who can reach one thing. Every row says how, so you know what to revoke."
-      />
-
+    // See the note in `AuditTab`: the section owns the wash and the heading,
+    // and this tab's own copy of each was drawing a second one of both.
+    <div className="rm-page-pad" style={{ flex: 1, overflowY: 'auto' }}>
       {error && <ErrorNote>{error}</ErrorNote>}
 
       <div

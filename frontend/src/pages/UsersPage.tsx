@@ -185,12 +185,20 @@ export default function UsersPage({
 
   return (
     <div
-      className={embedded ? 'rm-index' : 'rm-index rm-page-pad'}
-      style={{
-        flex: 1,
-        overflowY: 'auto',
-        ...(embedded ? { padding: '20px 28px 32px' } : {}),
-      }}
+      // Embedded, the wash belongs to the section around it (`rm-section`),
+      // which throws one from above the title rather than six from below the
+      // strip; the gutter is the section's 32 so the list lines up under the
+      // tab that opened it. Standalone — a route that only the /users redirect
+      // can still reach — it is an index page like Dashboards and paints its
+      // own.
+      // Embedded, the wash belongs to the section around it (`rm-section`),
+      // which throws one from above the title rather than six from below the
+      // strip — but the gutter is `rm-page-pad`'s either way, so this tab, the
+      // Audit log and Access review beside it all start on the same edge and
+      // narrow together. Standalone — a route only the /users redirect can
+      // still reach — it is an index page like Dashboards and paints its own.
+      className={embedded ? 'rm-page-pad' : 'rm-index rm-page-pad'}
+      style={{ flex: 1, overflowY: 'auto' }}
     >
       {!embedded && (
       <PageHeader

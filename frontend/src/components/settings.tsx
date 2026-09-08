@@ -441,7 +441,7 @@ export function UnsavedNote() {
 }
 
 export function Tabs({
-  value, onChange, items,
+  value, onChange, items, gutter = 28,
 }: {
   value: string
   onChange: (value: string) => void
@@ -455,6 +455,17 @@ export function Tabs({
    * says it will, so it carries an arrow and says so in its tooltip.
    */
   items: { value: string; label: string; count?: number; leaves?: boolean }[]
+  /**
+   * The strip's own inset, when the surface around it is not on 28px.
+   *
+   * A tab keeps 14px of padding for its hover pill, so its *label* sits that
+   * much inside whatever this is — which is the number that has to line up
+   * with the title above. The default suits a detail pane, whose header is on
+   * 28px and whose tab labels are meant to read as one notch inside it. The
+   * Administration section passes 18, because it is a rail destination on the
+   * index gutter of 32 and its title and first tab must share an edge.
+   */
+  gutter?: number
 }) {
   return (
     <div
@@ -465,7 +476,7 @@ export function Tabs({
       style={{
         display: 'flex',
         gap: 2,
-        padding: '0 28px',
+        padding: `0 ${gutter}px`,
         borderBottom: '1px solid var(--border)',
         flexShrink: 0,
       }}

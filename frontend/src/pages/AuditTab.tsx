@@ -35,7 +35,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { audit as api, users as usersApi } from '../api/client'
 import type { AuditEntry, User } from '../api/types'
 import {
-  Chip, ErrorNote, Field, GhostButton, Icon, PageHeader, Select, Spinner,
+  Chip, ErrorNote, Field, GhostButton, Icon, Select, Spinner,
   initialOf, relativeTime,
 } from '../components/ui'
 
@@ -145,12 +145,14 @@ export default function AuditTab() {
   )
 
   return (
-    <div className="rm-index rm-page-pad" style={{ flex: 1, overflowY: 'auto' }}>
-      <PageHeader
-        title="Audit log"
-        subtitle="Who did what, and what was refused. Every permission change, every share, and every denial."
-      />
-
+    // No `rm-index` and no `PageHeader`: this is a tab of the Administration
+    // section, and the section carries both. Its own wash used to start under
+    // the tab strip — a second accent edge across the screen, below the one
+    // the strip already draws — and its own <h1> restated the section's at the
+    // same size. The sentence that was here is now the section's subtitle
+    // while this tab is open, which is where `UsersPage` beside it already
+    // put the same thing.
+    <div className="rm-page-pad" style={{ flex: 1, overflowY: 'auto' }}>
       {error && <ErrorNote>{error}</ErrorNote>}
 
       <div

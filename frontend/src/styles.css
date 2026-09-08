@@ -2860,6 +2860,54 @@ code, pre, .mono {
   background: radial-gradient(70% 100% at 8% 0%, var(--accent-bg), transparent 72%);
 }
 
+/* ── a section with tabs ────────────────────────────────────────────────
+   Administration is the one rail row that is a *section* rather than a page:
+   one title over six tabs, three of them master–detail and three of them
+   indexes. It had no surface of its own. The title sat on the bare app
+   background, and each tab then painted — or did not paint — its own
+   `.rm-index` wash *below* the strip: People, Access review and the Audit
+   log had one, Roles, Teams and Service accounts had none. So the accent
+   restarted under the tabs instead of running behind the title, which drew
+   exactly the hard horizontal seam the note on `.rm-detail-pane` above
+   exists to prevent, and the seam appeared and vanished as you moved along
+   the strip.
+
+   The treatment is that pane's, for that pane's reason: the wash belongs to
+   the **section**, and it starts above the header so the translucent chrome
+   floats on it and the gradient runs out on its own. Six tabs then share one
+   surface rather than arguing about it. Geometry is `.rm-index`'s rather
+   than the pane's — this is a full-width destination, not a column beside a
+   list, so the wash is thrown from the same corner at the same reach as the
+   Dashboards and Reports indexes it sits next to in the rail. */
+.rm-section { position: relative; isolation: isolate; }
+.rm-section::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 340px;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(72% 100% at 12% 0%, var(--accent-bg), transparent 72%);
+}
+
+/* Title and tab strip are one band over the section, as the pane's header is
+   one band over its body — a whisper of panel tone, translucent so the wash
+   still reads through, closed by the strip's own bottom border. They are
+   banded *together* on purpose: a band that stopped under the title would
+   put a second horizontal edge immediately above the tabs, which is a
+   smaller version of the thing being fixed. */
+.rm-section-head {
+  flex-shrink: 0;
+  background: color-mix(in oklch, var(--panel) 45%, transparent);
+}
+
+/* The section's gutter is the index gutter — `.rm-page-pad`'s 32px — because
+   Administration is a rail destination like Dashboards and Reports, and its
+   <h1> must not step sideways when somebody arrives from one of them. The
+   strip is inset by 18px so that the 14px a tab keeps for its own hover pill
+   lands the first *label* on the same 32px edge as the title above it. */
+.rm-section-title { padding: 26px 32px 0; }
+
 .rm-tab { transition: color .12s ease, background .12s ease; }
 .rm-tab:hover { color: var(--text-strong); }
 
@@ -3679,7 +3727,12 @@ code, pre, .mono {
   .rm-tab { white-space: nowrap; }
 
   .rm-detail-pane .rm-page-pad,
+  .rm-section .rm-page-pad,
   .rm-index.rm-page-pad { padding: 16px 14px; }
+
+  /* The section title follows the strip down to the 14px gutter, so the two
+     stay on one edge at every width rather than only at the wide one. */
+  .rm-section-title { padding: 16px 14px 0; }
 
   /* The dashboard toolbar keeps its shape and loses its labels. The group is
      one segmented switch — wrapping it onto two lines would stop it reading
