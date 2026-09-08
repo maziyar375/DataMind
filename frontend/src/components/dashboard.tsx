@@ -660,7 +660,7 @@ function TileBody({
   // transport, and reading only that would put a failure in front of somebody
   // whose only problem is that nobody has given them access yet.
   if (result.error?.code === 'E_NO_DATA_ACCESS') {
-    return <Restricted reason={result.error.message} />
+    return <Restricted reason={result.error.message} connectionId={tile.connection_id} />
   }
 
   if (result.status === 'ERROR' || result.error) {

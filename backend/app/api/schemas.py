@@ -451,6 +451,36 @@ class CapabilityCatalogEntry(BaseModel):
     label: str
 
 
+class ReachRead(BaseModel):
+    """One reason one principal reaches one resource.
+
+    **Reach, and never data.** A row names a principal, a resource and a
+    privilege; it carries no host, no username, no stored statement and no row
+    from a customer's database. An access review that leaked any of those
+    would be a screen that discloses the thing it exists to control, and
+    `tests/unit/test_access_review.py` asserts it against this model.
+
+    `resource_id` is null for a wildcard or a role's scoped privilege: both
+    reach every resource of the type, including ones that do not exist yet,
+    and `resource_name` says so in words rather than leaving a blank cell that
+    reads as a deleted row.
+    """
+
+    principal_id: UUID
+    principal_name: str
+    principal_kind: str
+    resource_type: str
+    resource_id: UUID | None = None
+    resource_name: str
+    privilege: str
+    #: owner · direct · team · role · wildcard — the five facts of §15.2, one
+    #: for one. An identifier rather than a sentence: the UI writes the
+    #: sentence, and a CSV column of prose is a column nobody can filter.
+    path: str
+    #: The team or role the reach arrives through. Empty for the other three.
+    via: str = ""
+
+
 class PermissionsResponse(BaseModel):
     """`GET /me/permissions` — what the UI renders every affordance from.
 
@@ -464,6 +494,15 @@ class PermissionsResponse(BaseModel):
     #: Empty until Phase 4 gives a principal teams. Present now so the SPA's
     #: shape does not change when they arrive.
     teams: list[str] = []
+    #: **Every resource this principal can reach, and how** — the by-principal
+    #: lens of the access review, pointed at yourself (Phase 9).
+    #:
+    #: It is here rather than behind `access.review` because *"what can I
+    #: reach"* is a question everybody may ask about themselves, and answering
+    #: it is the difference between a user who can ask an owner for access and
+    #: one who files a support ticket saying the product is broken. The
+    #: capability gates asking about **somebody else**.
+    reach: list[ReachRead] = []
 
 
 # ── llm configs ──────────────────────────────────────────────────────────
@@ -2324,6 +2363,12 @@ class RunRead(BaseModel):
     total_latency_ms: int | None = None
     db_latency_ms: int | None = None
     model_snapshot: dict[str, Any] = Field(default_factory=dict)
+    #: The database this turn was asked against, so a withheld turn's
+    #: explainer can name the resource the reader needs access to. An
+    #: identifier and nothing else — the connection's *name* was already here,
+    #: in `model_snapshot`, since a past answer has to stay explainable after
+    #: its source is deleted. Null when that has happened.
+    connection_id: UUID | None = None
     steps: list[RunStepRead] = Field(default_factory=list)
     artifacts: list[ArtifactRead] = Field(default_factory=list)
     queries: list[GeneratedQueryRead] = Field(default_factory=list)

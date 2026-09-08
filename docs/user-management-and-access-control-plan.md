@@ -3321,24 +3321,24 @@ cd frontend && npm run typecheck && npm run build && npm test
 
 ## Phase 9 — Access review and the explainer
 
-- [ ] `services/access_review_service.py` — one query, two lenses, five path
+- [x] `services/access_review_service.py` — one query, two lenses, five path
       kinds
-- [ ] `api/v1/access_review.py` gated `access.review`, with CSV
-- [ ] `GET /me/permissions`
-- [ ] Every 403 body carries a structured `reason` from `Decision.because`
-- [ ] Frontend: `/admin/access` — both lenses, filters, CSV export
-- [ ] Frontend: `<Restricted>` and the **Why can I not see this?** popover
-- [ ] Frontend: the popover used by the tile, block and chat-turn placeholders
+- [x] `api/v1/access_review.py` gated `access.review`, with CSV
+- [x] `GET /me/permissions`
+- [x] Every 403 body carries a structured `reason` from `Decision.because`
+- [x] Frontend: `/admin/access` — both lenses, filters, CSV export
+- [x] Frontend: `<Restricted>` and the **Why can I not see this?** popover
+- [x] Frontend: the popover used by the tile, block and chat-turn placeholders
       and every 403 surface
-- [ ] Frontend: **Effective access** in People, Service accounts and Teams
+- [x] Frontend: **Effective access** in People, Service accounts and Teams
       details
-- [ ] Test: the two lenses agree (a property test)
-- [ ] Test: `path` correct for each of the five facts
-- [ ] Test: the review shows reach and **never** data
-- [ ] Test: CSV escaping, RFC 4180 plus the leading-apostrophe rule
-- [ ] Doc: `frontend.md` §2, `docs/README.md`
-- [ ] **Gate green**
-- [ ] **Acceptance:** *"why can Reza curate this?"* answered in one click, naming
+- [x] Test: the two lenses agree (a property test)
+- [x] Test: `path` correct for each of the five facts
+- [x] Test: the review shows reach and **never** data
+- [x] Test: CSV escaping, RFC 4180 plus the leading-apostrophe rule
+- [x] Doc: `frontend.md` §2, `docs/README.md`
+- [x] **Gate green**
+- [x] **Acceptance:** *"why can Reza curate this?"* answered in one click, naming
       the role
 
 ## Phase 10 — The rulebook, the conformance check, the seams
@@ -3402,10 +3402,10 @@ cd frontend && npm run typecheck && npm run build && npm test
 | 6 · Grants on connections | 34 | **34** | 2026-09-07 |
 | 7 · The audit half | 15 | **15** | 2026-09-07 |
 | 8 · Grants on artifacts | 26 | **26** | 2026-09-07 |
-| 9 · Access review | 15 | 0 | — |
+| 9 · Access review | 15 | **15** | 2026-09-07 |
 | 10 · Rulebook and seams | 21 | 0 | — |
 | Cross-cutting | 8 | **6** | — |
-| **Total** | **254** | **216** | |
+| **Total** | **254** | **231** | |
 
 ## 30. The one-line acceptance test for the whole plan
 

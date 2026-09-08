@@ -125,7 +125,7 @@ colours are chosen in JS, and the print stylesheet.
 | **Knowledge** | [`KnowledgePage.tsx`](../frontend/src/pages/KnowledgePage.tsx) | The curation console, across every connection: flags raised, questions nothing answers, the maintenance sweep. |
 | **Data sources** | [`DataSourcesPage.tsx`](../frontend/src/pages/DataSourcesPage.tsx) | The connections DataMind may read, and everything known about each one. |
 | **LLM providers** | [`LlmProvidersPage.tsx`](../frontend/src/pages/LlmProvidersPage.tsx) | The models it may call, and the keys it calls them with. Two groups: *Models* answer questions, the *Embedder* makes vectors — a row is one or the other, and the form shows that kind's fields only. |
-| **Administration** | [`AdminPage.tsx`](../frontend/src/pages/AdminPage.tsx) | `/admin`: a tabbed section over **People** ([`UsersPage.tsx`](../frontend/src/pages/UsersPage.tsx)), **Roles** ([`RolesTab.tsx`](../frontend/src/pages/RolesTab.tsx)) and **Teams** ([`TeamsTab.tsx`](../frontend/src/pages/TeamsTab.tsx)), with Service accounts, Access review and Audit arriving as more tabs. The rail row appears when the viewer holds **any** administration capability, and each tab appears when its own capability is held — so an Auditor sees People and changes nothing, and a DataMind Maintainer sees the section without seeing People at all. `/users` permanently redirects to `/admin/people`. |
+| **Administration** | [`AdminPage.tsx`](../frontend/src/pages/AdminPage.tsx) | `/admin`: a tabbed section over **People** ([`UsersPage.tsx`](../frontend/src/pages/UsersPage.tsx)), **Roles** ([`RolesTab.tsx`](../frontend/src/pages/RolesTab.tsx)), **Teams** ([`TeamsTab.tsx`](../frontend/src/pages/TeamsTab.tsx)), **Service accounts** ([`ServiceAccountsTab.tsx`](../frontend/src/pages/ServiceAccountsTab.tsx)), **Access review** ([`AccessReviewTab.tsx`](../frontend/src/pages/AccessReviewTab.tsx) — two lenses over one set of facts: what one principal can reach, and everyone who can reach one thing) and the **Audit log** ([`AuditTab.tsx`](../frontend/src/pages/AuditTab.tsx)). The rail row appears when the viewer holds **any** administration capability, and each tab appears when its own capability is held — so an Auditor sees People and changes nothing, and a DataMind Maintainer sees the section without seeing People at all. `/users` permanently redirects to `/admin/people`. |
 | **Your account** | [`AccountPage.tsx`](../frontend/src/pages/AccountPage.tsx) | `/settings`: your display name and your password. Reached from the user block in the rail, not from `NAV`. |
 | **Creators** | [`AboutPage.tsx`](../frontend/src/pages/AboutPage.tsx) | Who built it. A colophon, not a destination; the one page on both sides of the sign-in wall. |
 | **Login** | [`LoginPage.tsx`](../frontend/src/pages/LoginPage.tsx) | The only public surface, and therefore the only signed-out route to Creators. |
@@ -162,6 +162,23 @@ failure. `<ReachBadge>` is the header chip that says *Read-only* or *Limited*,
 so a screen with fewer controls than the reader is used to reads as a
 permission rather than as a page that failed to load. Both take what the
 server already sent; neither computes a privilege of its own.
+
+**And one component explains every refusal.** `<WhyNot>` is the *"Why can I
+not see this?"* popover, and the reason it is one component is the expensive
+failure it prevents: not silence, but eight surfaces each inventing their own
+sentence from whatever the server happened to return. `services/policy.require`
+attaches a structured `reason` to every 403 — what was needed, what that
+privilege means *on this type*, what the caller holds, and the paths the
+authorizer tried — and `<WhyNot>` renders those. The prose in the problem
+body and the structure it reads are the same values, so they cannot drift.
+`<Restricted>` hosts it, so a tile, a figure and a turn all explain themselves
+without any of them knowing how.
+
+`<EffectiveAccess>` is the by-principal lens of the access review embedded on
+a detail page — People, Service accounts and Teams — because *"and what can
+she reach?"* is the question somebody has already opened that page to ask. A
+team gets one too: it is a principal, and *"what does joining Finance give
+them"* is asked before somebody is added, not after.
 
 **No screen branches on a role.** `useCan()`
 ([`permissions.tsx`](../frontend/src/permissions.tsx)) reads the capability list

@@ -33,6 +33,7 @@ import {
 import {
   DetailBody, DetailHeader, MasterColumn, MasterItem, Section,
 } from '../components/settings'
+import { EffectiveAccess } from '../components/access'
 import { useCan } from '../permissions'
 
 export default function TeamsTab() {
@@ -427,6 +428,17 @@ function TeamDetail({
           editable={editable}
           onSaved={reload}
         />
+
+        {/* A team is a principal, so it has a lens of its own — and this is
+            the question somebody asks *before* adding a person to it: what
+            does joining this team give them? */}
+        <Section
+          title="Effective access"
+          description="Everything this team can reach. Adding somebody gives them all of it."
+          icon={<Icon.Lock size={13} />}
+        >
+          <EffectiveAccess principalId={team.id} />
+        </Section>
 
         {editable && (
           <SourceSection

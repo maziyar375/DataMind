@@ -1200,10 +1200,29 @@ POST   /api/v1/{resource}/{id}/grants          {privilege, user_id|team_id}  (ma
 DELETE /api/v1/{resource}/{id}/grants/{gid}                                  (manage)
 GET    /api/v1/{resource}/{id}/actions         → {privileges, can, meanings}  (describe)
 POST   /api/v1/{resource}/{id}/transfer        {to}                          (manage)
-#   mounted today on: connections/{id}, connections/{id}/knowledge,
-#   connections/{id}/semantic. The two derived types have no /transfer —
-#   their owner is the connection's owner, so there is one transfer and it
-#   lives on the thing that has an owner.
+POST   /api/v1/{resource}/{id}/grants/self     {privilege}   (user.manage; two audit rows)
+#   mounted on all eight grantable types as of Phase 8: connections/{id},
+#   connections/{id}/knowledge, connections/{id}/semantic, reports/{id},
+#   dashboards/{id}, llm-configs/{id}, conversations/{id}. The two derived
+#   types have no /transfer — their owner is the connection's owner, so there
+#   is one transfer and it lives on the thing that has an owner.
+#   ⚠️ On llm-configs only `describe` and `select` are grantable: `modify`
+#   is equivalent to disclosing the API key.
+
+# the intersection rule (Phase 8)
+GET    /api/v1/dashboards/{id}/share-check   ?user_id|team_id  (manage)
+#   → {total_connections, unreadable: [{id, name}]} — what a grantee would
+#   NOT see. A warning, never a gate: the share is still allowed.
+
+# access review — reach, and never data (Phase 9)
+GET    /api/v1/access-review   ?principal_id           (access.review)
+GET    /api/v1/access-review   ?resource_type&resource_id  (access.review)
+#   → [{principal, resource, privilege, path, via}] — the two lenses over the
+#   same five facts. `&format=csv` returns the same rows as a file.
+#   Exactly one of the two must be named; both, or neither, is a 422.
+GET    /api/v1/auth/me/permissions  → capabilities, roles, teams, and `reach`
+#   The same by-principal lens pointed at yourself. **No capability** — what
+#   you can reach is a question everybody may ask about themselves.
 
 # service accounts (machine identities)
 GET    /api/v1/service-accounts

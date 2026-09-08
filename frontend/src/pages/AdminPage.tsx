@@ -29,6 +29,7 @@ import type { User } from '../api/types'
 import { PageHeader } from '../components/ui'
 import { Tabs } from '../components/settings'
 import { useCan, type Capability } from '../permissions'
+import AccessReviewTab from './AccessReviewTab'
 import AuditTab from './AuditTab'
 import RolesTab from './RolesTab'
 import ServiceAccountsTab from './ServiceAccountsTab'
@@ -45,8 +46,8 @@ interface TabSpec {
 /**
  * The section's tabs, in the order the plan introduces them.
  *
- * Access review arrives in Phase 9 as one more entry here — which is the point
- * of building the shell rather than a second standalone page each time.
+ * Access review arrived in Phase 9 as one more entry here — which was the
+ * point of building the shell rather than a second standalone page each time.
  */
 const TABS: TabSpec[] = [
   { value: 'people', label: 'People', needs: 'user.read' },
@@ -65,6 +66,11 @@ const TABS: TabSpec[] = [
   // than a task. `audit.read` is Administrator's and **Auditor's** — the role
   // that exists to read this and change nothing anywhere, which is the whole
   // reason it is a capability rather than an administrator flag.
+  // Beside the audit log, and second-to-last for the same reason: both are
+  // arrived at with a question rather than a task, and they answer the two
+  // halves of one — the log says what happened, the review says what is
+  // possible. `access.review` is Administrator's and **Auditor's**.
+  { value: 'access', label: 'Access review', needs: 'access.review' },
   { value: 'audit', label: 'Audit log', needs: 'audit.read' },
 ]
 
@@ -119,6 +125,8 @@ export default function AdminPage({ user }: { user: User }) {
         <TeamsTab />
       ) : active.value === 'service-accounts' ? (
         <ServiceAccountsTab />
+      ) : active.value === 'access' ? (
+        <AccessReviewTab />
       ) : (
         <AuditTab />
       )}

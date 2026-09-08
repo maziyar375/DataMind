@@ -35,6 +35,7 @@ import {
 import {
   DetailBody, DetailHeader, MasterColumn, MasterItem, Section,
 } from '../components/settings'
+import { EffectiveAccess } from '../components/access'
 import { useCan } from '../permissions'
 
 /**
@@ -479,6 +480,18 @@ function ServiceAccountDetail({
             </div>
           )}
           {editable && hidden.length > 0 && <PrivilegedNote roles={hidden} />}
+        </Section>
+
+        {/* Roles above are the *inputs*; this is what they add up to. It
+            matters more for a machine than for a person: nobody signs in as a
+            service account and notices it can reach more than intended, so
+            the only place that shows is here. */}
+        <Section
+          title="Effective access"
+          description="Everything a key issued to this account can reach, and how."
+          icon={<Icon.Lock size={13} />}
+        >
+          <EffectiveAccess principalId={account.id} />
         </Section>
 
         <KeysSection

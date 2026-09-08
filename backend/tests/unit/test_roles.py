@@ -642,6 +642,15 @@ def test_exactly_one_authorizer_reads_a_scoped_privilege() -> None:
     `OwnerOnlyAuthorizer` must still answer from ownership alone — it is the
     rollback, and a rollback that quietly kept honouring role wildcards would
     not be one.
+
+    **Phase 9 adds a reader that does not decide.** `access_review_service`
+    reads the same table to *report* — "Reza has modify on every connection,
+    through the BI Engineer role" — and reporting is the opposite failure mode
+    from deciding: a review that computed reach a second way would eventually
+    disagree with the authorizer, and the one on the screen is the one people
+    would trust. So it is listed here with its reason rather than exempted,
+    and the claim narrows to the one that matters: exactly one module reads
+    this table **to answer `allowed`**.
     """
     import pathlib
 
@@ -653,10 +662,19 @@ def test_exactly_one_authorizer_reads_a_scoped_privilege() -> None:
     }
 
     assert readers == {
-        "infra/db/models.py",          # declares it
-        "services/role_service.py",    # writes it
-        "infra/authz/rbac.py",         # Phase 6: the one thing that reads it
+        "infra/db/models.py",                    # declares it
+        "services/role_service.py",              # writes it
+        "infra/authz/rbac.py",                   # Phase 6: the one that decides
+        "services/access_review_service.py",     # Phase 9: reports, never decides
     }
+    # And the reporter really does only report: it never asks or answers the
+    # authorization question, it renders rows.
+    review = (root / "services" / "access_review_service.py").read_text()
+    for decider in ("allowed(", "def can", "satisfying("):
+        assert decider not in review, (
+            f"{decider!r} in the access review — reach is computed in the "
+            "authorizer, and a second implementation is a second answer."
+        )
     assert "RoleScopedPrivilege" not in (
         root / "infra" / "authz" / "owner_only.py"
     ).read_text()

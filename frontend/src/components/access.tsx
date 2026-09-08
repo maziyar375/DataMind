@@ -33,7 +33,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { access, teams as teamsApi, users as usersApi } from '../api/client'
-import type { Actions, Grant, Team, User } from '../api/types'
+import type { Actions, DenialReason, Grant, Reach, Team, User } from '../api/types'
 import {
   Chip, DangerButton, ErrorNote, GhostButton, Icon, Modal, PrimaryButton,
   SearchField, Select, Spinner, initialOf,
@@ -737,6 +737,231 @@ export function TransferControl({
  * affordance, never the boundary.
  */
 /**
+ * `<EffectiveAccess>` — what one principal can reach, on their own detail page.
+ *
+ * The by-principal lens of the access review, embedded where the question
+ * actually gets asked. An administrator looking at Sara's account is one click
+ * from *"and what can she reach?"*, and that click used to be a different
+ * screen, a dropdown and a re-selection of the person already on the page.
+ *
+ * The same rows and the same rule as `/admin/access`: **reach and never
+ * data** — a resource's name and a privilege, never a host, a username or a
+ * stored statement. Three details render it and one of them is a *team*,
+ * which is not a special case: a team is a principal, and *"what does Finance
+ * have"* is the question somebody asks before adding a person to it.
+ *
+ * It renders nothing at all when the viewer lacks `access.review`, rather than
+ * an error: this sits inside a page somebody legitimately reached for another
+ * reason, and a red box on an account screen would read as the account being
+ * broken.
+ */
+export function EffectiveAccess({ principalId }: { principalId: string }) {
+  const [rows, setRows] = useState<Reach[] | null>(null)
+  const [denied, setDenied] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setRows(null)
+    setDenied(false)
+    access.review({ principal_id: principalId })
+      .then((next) => !cancelled && setRows(next))
+      .catch(() => !cancelled && setDenied(true))
+    return () => {
+      cancelled = true
+    }
+  }, [principalId])
+
+  if (denied) return null
+  if (rows === null) return <Spinner size={14} />
+
+  if (rows.length === 0) {
+    return (
+      <p style={{ margin: 0, fontSize: 12.5, color: 'var(--text-dim)', lineHeight: 1.6 }}>
+        Nothing. They own no data source, dashboard or report, and nobody has
+        shared one with them — directly, through a team, or through a role.
+      </p>
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {rows.map((row, index) => (
+        <div
+          key={index}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 9,
+            padding: '7px 11px',
+            borderRadius: 9,
+            border: '1px solid var(--border)',
+            background: 'var(--panel)',
+            flexWrap: 'wrap',
+          }}
+        >
+          <span
+            style={{
+              fontSize: 12.5,
+              fontWeight: 600,
+              color: 'var(--text-strong)',
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {row.resource_name}
+          </span>
+          <Chip tone="neutral">{row.resource_type.replace('_', ' ')}</Chip>
+          <code className="mono" style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+            {row.privilege}
+          </code>
+          {/* The path, and it is the reason this list is worth reading: a
+              permission that arrives through a team is changed on the team. */}
+          <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-faint)' }}>
+            {row.path}
+            {row.via ? `: ${row.via}` : ''}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * `<WhyNot>` — the **"Why can I not see this?"** popover, written once.
+ *
+ * Requirement 6 asks that the UI *"clearly communicate what a user can and
+ * cannot access"*, and the expensive way to fail it is not saying nothing —
+ * it is saying eight slightly different things. Every surface that can be
+ * refused (a dashboard tile, a report figure, a chat turn, and every 403 a
+ * save produces) would otherwise invent its own sentence from whatever the
+ * server happened to return, and a rule explained eight ways is a rule nobody
+ * learns.
+ *
+ * So there is one component and the server hands it the components of the
+ * answer. `services/policy.require` attaches a structured `reason` to every
+ * 403 it raises — what was needed, what that privilege *means on this type*,
+ * what the caller holds, and the paths that were tried — and this renders
+ * them. The prose in `detail` and the structure here are the same values, so
+ * they cannot drift.
+ *
+ * Two things it deliberately does not do:
+ *
+ * * **It does not name who to ask.** That is the owner, and this component
+ *   does not know it; the placeholder that hosts it names the resource, and
+ *   *"ask whoever owns Payroll"* is a sentence the reader can act on without
+ *   the product volunteering a colleague's name into a tooltip.
+ * * **It does not offer a request button.** Access requests are a workflow
+ *   with an approval, a notification and an audit story, and Phase 9's *Not
+ *   included* list says so. A button that emailed somebody would be the
+ *   cheap half of it, and the cheap half is the one that erodes trust.
+ */
+export function WhyNot({
+  reason, label = 'Why can I not see this?',
+}: {
+  /** The `reason` from a 403's problem body, or one a placeholder built. */
+  reason: DenialReason | null | undefined
+  label?: string
+}) {
+  const [open, setOpen] = useState(false)
+  if (!reason) return null
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        style={{
+          background: 'none',
+          border: 'none',
+          padding: 0,
+          font: 'inherit',
+          fontSize: 11.5,
+          color: 'var(--text-dim)',
+          textDecoration: 'underline',
+          textUnderlineOffset: 3,
+          cursor: 'pointer',
+        }}
+      >
+        {label}
+      </button>
+      {open && (
+        <Modal
+          title="Why you cannot see this"
+          onClose={() => setOpen(false)}
+          width={520}
+          footer={<GhostButton onClick={() => setOpen(false)}>Close</GhostButton>}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <p style={{ margin: 0, fontSize: 13, color: 'var(--text)', lineHeight: 1.6 }}>
+              This needs <strong>{reason.needed}</strong> on this {reason.noun}
+              {reason.meaning ? ` — ${reason.meaning.charAt(0).toLowerCase()}${reason.meaning.slice(1)}` : '.'}
+            </p>
+
+            <Line label="You hold">
+              {reason.held.length === 0 ? (
+                <span style={{ color: 'var(--text-faint)' }}>nothing on this</span>
+              ) : (
+                reason.held.map((privilege) => (
+                  <Chip key={privilege} tone="neutral">{privilege}</Chip>
+                ))
+              )}
+            </Line>
+
+            {/* The authorizer's own words for the paths it tried. `via_team`
+                and `via_role` are the two that tell a reader where to go: a
+                permission that arrives through a team is changed on the team,
+                not on them. */}
+            {reason.because.length > 0 && (
+              <Line label="Through">
+                {reason.because.map((path) => (
+                  <Chip key={path} tone="accent">{BECAUSE[path] ?? path}</Chip>
+                ))}
+              </Line>
+            )}
+
+            <p
+              style={{
+                margin: 0,
+                fontSize: 11.5,
+                color: 'var(--text-faint)',
+                lineHeight: 1.6,
+              }}
+            >
+              Permissions are decided per request, so the moment somebody gives
+              you access it takes effect — there is nothing to refresh and no
+              cache to wait out.
+            </p>
+          </div>
+        </Modal>
+      )}
+    </>
+  )
+}
+
+/** How each path in `because` reads. The authorizer's words, in English. */
+const BECAUSE: Record<string, string> = {
+  owner: 'owning it',
+  direct: 'a direct share',
+  via_team: 'a team you are in',
+  via_role: 'one of your roles',
+  wildcard: 'a wildcard grant',
+  intersection: 'the data source behind it',
+}
+
+function Line({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+      <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-dim)', minWidth: 62 }}>
+        {label}
+      </span>
+      {children}
+    </div>
+  )
+}
+
+/**
  * `<ReachBadge>` — *"you may look, not touch"*, said once and quietly.
  *
  * A shared board and a shared report both put a reader in front of a screen
@@ -801,12 +1026,20 @@ export function ReachBadge({ privileges }: { privileges: string[] }) {
  *   The fallback exists for an old response, not as an alternative wording.
  */
 export function Restricted({
-  reason, compact = false,
+  reason, compact = false, connectionId,
 }: {
   /** The server's sentence. It names the data source and what to ask for. */
   reason?: string | null
   /** For a report figure or a chat turn, which sit in flowing text. */
   compact?: boolean
+  /**
+   * The data source behind this, when the caller knows it. With it the
+   * placeholder carries **Why can I not see this?** — the same popover every
+   * 403 surface uses, built from the one fact this state always has: `select`
+   * on a connection is what was missing, and nothing reaches this reader
+   * through it.
+   */
+  connectionId?: string | null
 }) {
   return (
     <div
@@ -833,6 +1066,10 @@ export function Restricted({
       </span>
       <span
         style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 5,
+          alignItems: compact ? 'flex-start' : 'center',
           fontSize: compact ? 12 : 12.5,
           color: 'var(--text-dim)',
           lineHeight: 1.55,
@@ -840,6 +1077,24 @@ export function Restricted({
         }}
       >
         {reason || 'You do not have access to the data source behind this.'}
+        {connectionId && (
+          <WhyNot
+            label="Why?"
+            reason={{
+              needed: 'select',
+              meaning: 'Ask questions through it.',
+              // Nothing reaches them through the connection — that is exactly
+              // what this state *is*. An empty list here is the honest answer
+              // and reads as "you hold nothing on this", which is what the
+              // popover prints.
+              held: [],
+              because: ['intersection'],
+              resource_type: 'connection',
+              resource_id: connectionId,
+              noun: 'data source',
+            }}
+          />
+        )}
       </span>
     </div>
   )

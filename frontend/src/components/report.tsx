@@ -2800,6 +2800,7 @@ export function ReportRunViewer({
                 runId={runId}
                 section={section}
                 figures={figures}
+                connectionId={report?.connection_id ?? null}
                 /* The headline band rides under the executive summary: it is the
                    "at a glance" a reader looks for first, and every number in it
                    was computed by `plan_kpi` rather than written by a model. */
@@ -3254,10 +3255,13 @@ function MethodNotes({
  */
 function SectionView({
   reportId, runId, section, figures, headline, t, busy, onRetry, onProse, onBlock,
+  connectionId,
 }: {
   reportId: string
   runId: string
   section: DocumentSection
+  /** Passed through to a withheld figure's explainer, and nothing else. */
+  connectionId: string | null
   figures: Map<string, number>
   headline: KeyFigure[]
   t: Record<string, string>
@@ -3368,6 +3372,7 @@ function SectionView({
           figure={figures.get(block.id)}
           t={t}
           onBlock={onBlock}
+          connectionId={connectionId}
         />
       ))}
     </section>
@@ -3653,11 +3658,14 @@ function NumericMarker({
  * to a statement is a number nobody should act on.
  */
 function BlockView({
-  reportId, runId, block, figure, t, onBlock,
+  reportId, runId, block, figure, t, onBlock, connectionId,
 }: {
   reportId: string
   runId: string
   block: ReportBlockResult
+  /** The database this document was built over, for a withheld figure's
+   *  "Why?" link. Null once that connection has been deleted. */
+  connectionId: string | null
   /** Its place in the document's numbering; absent for a callout, and while mid-merge. */
   figure: number | undefined
   t: Record<string, string>
@@ -3718,7 +3726,11 @@ function BlockView({
             {caption}
           </span>
         </figcaption>
-        <Restricted reason={block.error_message} compact />
+        <Restricted
+          reason={block.error_message}
+          connectionId={connectionId}
+          compact
+        />
       </figure>
     )
   }

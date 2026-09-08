@@ -23,6 +23,7 @@ from app.api.schemas import (
     MeResponse,
     PermissionsResponse,
     ProfileUpdate,
+    ReachRead,
     TokenResponse,
 )
 from app.core.errors import AuthenticationError, ForbiddenError, ValidationError
@@ -30,6 +31,7 @@ from app.domain.ports.identity import AuthenticatedIdentity, Credentials
 from app.domain.value_objects import UserStatus
 from app.domain.value_objects.authz import PrincipalKind
 from app.infra.db.models import User
+from app.services.access_review_service import AccessReviewService
 from app.services.role_service import RoleService
 from app.services.team_service import TeamService
 
@@ -149,10 +151,30 @@ async def my_permissions(ctx: CtxDep, db: DbDep) -> PermissionsResponse:
     _refuse_service(ctx)
     roles = await RoleService(db).roles_of(ctx.user_id, ctx.team_ids)
     teams = await TeamService(db).teams_of(ctx.user_id)
+    # The by-principal lens, pointed at yourself. Not gated on
+    # `access.review`: *"what can I reach"* is a question everybody may ask
+    # about themselves, and the answer is what lets somebody ask an owner for
+    # access rather than conclude the product is broken. The capability gates
+    # asking about **somebody else**, which is `GET /access-review`.
+    reach = await AccessReviewService(db).by_principal(ctx.user_id)
     return PermissionsResponse(
         capabilities=sorted(str(c) for c in ctx.capabilities),
         roles=[role.name for role in roles],
         teams=[team.name for team in teams],
+        reach=[
+            ReachRead(
+                principal_id=row.principal_id,
+                principal_name=row.principal_name,
+                principal_kind=row.principal_kind,
+                resource_type=row.resource_type,
+                resource_id=row.resource_id,
+                resource_name=row.resource_name,
+                privilege=row.privilege,
+                path=row.path,
+                via=row.via,
+            )
+            for row in reach
+        ],
     )
 
 

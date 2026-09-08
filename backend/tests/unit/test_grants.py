@@ -561,7 +561,19 @@ async def test_describe_and_not_enough_is_a_403_naming_the_privilege(
     assert "select" in message
     assert "Ask questions through it" in message or "ask questions" in message.lower()
     assert "describe" in message  # what they do hold
-    assert caught.value.detail["privilege"] == "select"
+
+    # And the same facts in one structured object, which is what the "Why can
+    # I not see this?" popover renders. Phase 9 replaced three flat keys with
+    # `reason`, so the prose above and the structure below are the same
+    # components and cannot drift.
+    reason = caught.value.detail["reason"]
+    assert reason["needed"] == "select"
+    assert reason["held"] == ["describe"]
+    assert reason["resource_type"] == "connection"
+    assert reason["noun"] == "data source"
+    # The sentence lowercases the meaning's first letter to read as one clause;
+    # the structure keeps it as written. Same words either way.
+    assert reason["meaning"].lower() in message.lower()
 
 
 async def test_the_two_answers_are_the_same_sentence_for_a_missing_row(

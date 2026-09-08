@@ -2117,8 +2117,14 @@ function SortGlyph({ direction }: { direction: 'asc' | 'desc' | null }) {
   )
 }
 
-/** Hands the browser a file it saves rather than opens. */
-function saveCsv(title: string, text: string): void {
+/**
+ * Hands the browser a file it saves rather than opens.
+ *
+ * Exported as of Phase 9: the access review downloads a CSV the **server**
+ * built, and the BOM below is the reason it goes through this function rather
+ * than a `Blob` at the call site.
+ */
+export function saveCsv(title: string, text: string): void {
   // The BOM is not decoration: without it Excel reads a UTF-8 CSV as the local
   // 8-bit codepage, and every Persian heading in this product arrives as
   // mojibake in the one place the user cannot fix it.

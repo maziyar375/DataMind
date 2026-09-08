@@ -166,9 +166,24 @@ async def require(
         f"This needs “{privilege}” on this {_NOUN[ref.type]}: {meaning[0].lower()}"
         f"{meaning[1:]} You hold "
         f"{', '.join(sorted(str(p) for p in held))}.",
-        privilege=str(privilege),
-        resource_type=str(ref.type),
-        held=sorted(str(p) for p in held),
+        # **One structured object, not four flat keys** (Phase 9). Every 403
+        # in the product carries the same shape, so the "Why can I not see
+        # this?" popover is written once and renders any refusal — rather than
+        # each surface inventing its own copy from the sentence, which is how
+        # eight slightly different explanations of one rule get written.
+        #
+        # It is the sentence's own components, so the prose and the structure
+        # cannot drift: what was needed, what they hold, and — from
+        # `Decision.because` — the paths that were tried.
+        reason={
+            "needed": str(privilege),
+            "meaning": meaning,
+            "held": sorted(str(p) for p in held),
+            "because": list(decision.because),
+            "resource_type": str(ref.type),
+            "resource_id": str(ref.id),
+            "noun": _NOUN[ref.type],
+        },
     )
 
 

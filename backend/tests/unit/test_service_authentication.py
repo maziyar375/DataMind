@@ -87,6 +87,12 @@ class _EmptyResult:
     def scalars(self) -> _Empty:
         return _Empty()
 
+    def all(self) -> list[Any]:
+        """Phase 9: `/me/permissions` also reads the by-principal lens, which
+        iterates rows rather than scalars. Nothing to return in a world with
+        no roles, no teams and no resources — which is what this double is."""
+        return []
+
 
 class _NoPrincipals:
     """A session that answers "no roles, no teams" to every resolution read.

@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    access_review,
     audit,
     auth,
     connections,
@@ -37,6 +38,10 @@ api_router.include_router(service_users.router)
 # `audit.read`, and a peer of all of them for the same reason: they are about
 # principals rather than about a connection's data.
 api_router.include_router(audit.router)
+# `access.review`, beside the audit log for the same reason and because they
+# answer the two halves of one question: the log says what happened, the
+# review says what is possible.
+api_router.include_router(access_review.router)
 api_router.include_router(llm_configs.router)
 api_router.include_router(connections.router)
 # Before the connections router would also work; after is fine because the

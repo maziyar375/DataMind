@@ -21,7 +21,7 @@ import type {
   ReportBlockCheck, ReportChart, ReportRun, ReportRunDetail, ReportSection,
   ReportSectionResult,
   ReportSummary, Review, Role, RunDetail, RunEvent, RunKnowledge, SchemaSnapshot,
-  ScopedPrivilege, ServiceAccount, ServiceKey, ShareCheck, Team,
+  Reach, ScopedPrivilege, ServiceAccount, ServiceKey, ShareCheck, Team,
   SemanticDocument, SemanticJob, Suggestion,
   SemanticLayer, SqlDraft, TemplateCheckResult, TemplateParam,
   TilePosition, TileResult, TileType, TestResult, User,
@@ -141,6 +141,31 @@ async function request<T>(
 }
 
 const get = <T>(path: string) => request<T>(path)
+
+/**
+ * The same request, read as text.
+ *
+ * One caller: the access review's CSV. The file is built **on the server** —
+ * RFC 4180 quoting plus the leading-apostrophe defusing that stops Excel
+ * running a display name beginning `=` — and a second implementation here
+ * would be a second set of escaping rules to keep in step, which is how one
+ * of them ends up wrong.
+ *
+ * It repeats `request`'s refresh dance rather than sharing it because
+ * `request` is typed around `response.json()`; making it generic over the
+ * body reader for one caller would cost more than these eight lines.
+ */
+async function requestText(path: string, retry = true): Promise<string> {
+  const headers = new Headers()
+  if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`)
+  const response = await fetch(`${BASE}${path}`, { headers, credentials: 'include' })
+  if (response.status === 401 && retry) {
+    if (await attemptRefresh()) return requestText(path, false)
+    setAccessToken(null)
+  }
+  if (!response.ok) throw await parseError(response)
+  return response.text()
+}
 const post = <T>(path: string, body?: unknown) =>
   request<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined })
 const patch = <T>(path: string, body: unknown) =>
@@ -357,6 +382,39 @@ export const access = {
   actions: (base: string) => get<Actions>(`/${base}/actions`),
   transfer: (base: string, to: string) =>
     post<void>(`/${base}/transfer`, { to }),
+  /**
+   * The access review, in whichever lens the caller names — exactly one of
+   * `principal_id` or `resource_id`, refused rather than defaulted, because
+   * silently picking one would make a mistyped query answer a different
+   * question than the one on screen.
+   */
+  review: (query: {
+    principal_id?: string
+    resource_type?: string
+    resource_id?: string
+    privilege?: string
+  }) =>
+    get<Reach[]>(
+      '/access-review?' +
+        new URLSearchParams(
+          Object.entries(query).filter(([, v]) => v) as [string, string][],
+        ).toString(),
+    ),
+  /**
+   * The same rows as a file, built by the server.
+   *
+   * The escaping is the point of not doing it here: a display name beginning
+   * `=` is a formula to Excel, and the defusing rule lives in one place
+   * (`api/v1/access_review.py`) with a test on it.
+   */
+  reviewCsv: (query: Record<string, string | undefined>) =>
+    requestText(
+      '/access-review?' +
+        new URLSearchParams([
+          ...(Object.entries(query).filter(([, v]) => v) as [string, string][]),
+          ['format', 'csv'],
+        ]).toString(),
+    ),
   /**
    * Dashboards only, and only because a dashboard is the only artifact whose
    * tiles carry their own `connection_id`. Asked when a principal is picked in

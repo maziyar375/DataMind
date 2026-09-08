@@ -36,6 +36,7 @@ chat run **and** the map of all three pipelines (§0), with
 | Orchestration — moving anything else onto LangGraph | [langgraph-migration.md](langgraph-migration.md) | Which surfaces moved and which didn't, the two phases declined on measurement, and the checklist |
 | Knowledge templates — the store, the matcher, the badge, feedback | [learning-loop-plan.md](learning-loop-plan.md) | What a taught question *is*, the guard's fifth entry point, the disclosure rung its literals need, and the phase ledger |
 | Users, service users, roles, teams, grants — anything about *who may* | [user-management-and-access-control-plan.md](user-management-and-access-control-plan.md) | The implementation-ready model: principals, capabilities, the privilege lattice, per-resource grants, the UI placement, and the OIDC seams. It supersedes [access-control-plan.md](access-control-plan.md), whose §0.4 lists the four decisions it reverses |
+| *"Why can this person not see that?"* | **Administration → Access review** (`/admin/access`), then the plan's §15.2 | The screen answers it from the same five facts the authorizer decides from, and every row names the **path** — owner, direct, team, role, wildcard — which is the part somebody can act on. `GET /me/permissions` is the same lens pointed at yourself, and it needs no capability |
 
 `catalog-metadata-plan.md` and `learning-loop-plan.md` are also **plans**, in
 the sense below — they are the reference for their subject *and* the record of

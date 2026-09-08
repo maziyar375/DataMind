@@ -8,6 +8,29 @@ export interface ProblemDetail {
   errors?: { field: string; message: string }[]
   /** A refused dashboard import: every tile it would not store, by title. */
   tiles?: string[]
+  /**
+   * **Why a 403 was a 403**, structured, on every refusal the authorizer
+   * produces (Phase 9). The same components as the sentence in `detail`, so
+   * the two cannot drift — and the reason `<WhyNot>` is written once rather
+   * than once per surface that can be refused.
+   */
+  reason?: DenialReason
+}
+
+/** The shape `services/policy.require` attaches to every 403 it raises. */
+export interface DenialReason {
+  /** The privilege that would have been enough. */
+  needed: string
+  /** What that privilege means on this type — the backend's own sentence. */
+  meaning: string
+  /** What the caller does hold. Never empty: nothing at all is a 404. */
+  held: string[]
+  /** The paths the authorizer tried: `owner`, `direct`, `via_team`, … */
+  because: string[]
+  resource_type: string
+  resource_id: string
+  /** What to call this type in a sentence — "data source", not "connection". */
+  noun: string
 }
 
 export interface User {
@@ -206,6 +229,39 @@ export interface Permissions {
   capabilities: string[]
   roles: string[]
   teams: string[]
+  /**
+   * Everything you can reach and how — the access review's by-principal lens,
+   * pointed at yourself. Not behind `access.review`: *"what can I reach"* is a
+   * question everybody may ask about themselves, and the answer is what lets
+   * somebody ask an owner for access rather than conclude the product is
+   * broken.
+   */
+  reach: Reach[]
+}
+
+/**
+ * One reason one principal reaches one resource.
+ *
+ * **Reach, and never data.** A row names a principal, a resource and a
+ * privilege; it carries no host, no username and no stored statement.
+ *
+ * `resource_id` is null for a wildcard or a role's scoped privilege — both
+ * reach every resource of the type, including ones that do not exist yet — and
+ * `resource_name` says so in words rather than leaving a blank that reads as a
+ * deleted row.
+ */
+export interface Reach {
+  principal_id: string
+  principal_name: string
+  principal_kind: 'HUMAN' | 'SERVICE' | 'TEAM'
+  resource_type: string
+  resource_id: string | null
+  resource_name: string
+  privilege: string
+  /** owner · direct · team · role · wildcard — the five facts, one for one. */
+  path: string
+  /** The team or role it arrives through. Empty for the other three. */
+  via: string
 }
 
 export interface Connection {
@@ -933,6 +989,8 @@ export interface RunDetail {
   total_latency_ms: number | null
   db_latency_ms: number | null
   model_snapshot: Record<string, unknown>
+  /** The database this turn was asked against; null once it is deleted. */
+  connection_id: string | null
   steps: RunStep[]
   artifacts: Artifact[]
   queries: GeneratedQuery[]

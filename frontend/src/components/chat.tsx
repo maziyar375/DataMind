@@ -1665,7 +1665,11 @@ export const AssistantTurn = memo(function AssistantTurn({
           the same one a dashboard tile and a report figure show. */}
       {run?.restricted && (
         <div className="rm-artifact">
-          <Restricted reason={run.restricted_reason} compact />
+          <Restricted
+            reason={run.restricted_reason}
+            connectionId={run.connection_id}
+            compact
+          />
         </div>
       )}
       {run && run.queries.length > 0 && <SqlPanel queries={run.queries} />}

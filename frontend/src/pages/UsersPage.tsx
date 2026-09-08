@@ -28,6 +28,7 @@ import {
   GlyphBadge, Icon, MetaDot, Modal, PageHeader, PrimaryButton, SearchField,
   SecretOncePanel, Segmented, Select, Spinner, TextInput, identityHue, initialOf,
 } from '../components/ui'
+import { EffectiveAccess } from '../components/access'
 import { useCan } from '../permissions'
 
 type Role = 'ADMIN' | 'MEMBER'
@@ -1073,6 +1074,19 @@ function EditUserModal({
       <Divider />
 
       <TeamsSection userId={user.id} />
+
+      <Divider />
+
+      {/* What the two sections above actually add up to. Roles and teams are
+          the *inputs*; this is the answer, and it is the question an
+          administrator opened this page with. Renders nothing for a viewer
+          without `access.review`. */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <label style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+          Effective access
+        </label>
+        <EffectiveAccess principalId={user.id} />
+      </div>
 
       <Divider />
 

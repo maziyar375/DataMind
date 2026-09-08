@@ -291,3 +291,9 @@ TeamManageDep = Annotated[RequestContext, Depends(needs(Capability.TEAM_MANAGE))
 ServiceUserManageDep = Annotated[
     RequestContext, Depends(needs(Capability.SERVICE_USER_MANAGE))
 ]
+#: The access review. A **read** capability an Auditor holds and a Connection
+#: Owner does not: sharing your own dashboard is not a reason to be able to
+#: enumerate everybody else's access.
+AccessReviewDep = Annotated[
+    RequestContext, Depends(needs(Capability.ACCESS_REVIEW))
+]
