@@ -76,7 +76,7 @@ import {
 import type { ParamDrafts, ParamSpec } from '../components/provider-params'
 import {
   DetailBody, DetailHeader, FieldRow, MasterColumn, MasterItem, Section,
-  StatusLine, UnsavedNote,
+  StatusLine, Tabs, UnsavedNote,
 } from '../components/settings'
 import { ListScrim, ListToggle, useListDrawer } from '../components/list-drawer'
 import { PROVIDER_URLS } from '../theme/tokens'
@@ -148,6 +148,36 @@ function reachability(status: string): { tone: 'green' | 'red' | 'neutral'; labe
 const faintNote: React.CSSProperties = {
   fontSize: 12.5, color: 'var(--text-dim)', margin: 0, lineHeight: 1.6,
 }
+
+/**
+ * The detail pane's tabs, and the segment each is written as.
+ *
+ * This page and Data sources are *"meant to be one screen with different
+ * fields"* — the comment on `routeId` has said so since it was written — and
+ * the tab strip is the half of that which never landed. A connection splits
+ * into six addressable tabs; a model was one form roughly two screens tall, so
+ * its Access control, its delete and everything about how it answers sat below
+ * a fold with no address, and *"where do I share a model?"* could not be
+ * answered with a link the way *"where is the disclosure policy?"* can.
+ *
+ * Three, not six, because a model has less to say than a database does:
+ *
+ * * **Model** — what it is and how DataMind reaches it: endpoint, key,
+ *   embeddings, and the delete. The identity of the row.
+ * * **Generation** — how it behaves when it answers: temperature, ceiling, and
+ *   the provider's own documented parameters. Absent on an embedder, which has
+ *   no completion to shape.
+ * * **Access** — who else may answer with it. Absent while creating, because
+ *   there is no row to share yet.
+ *
+ * One Save still covers Model and Generation, and that is deliberate rather
+ * than unfinished: they are one `PATCH` of one row. Data sources splits its
+ * Save because its two halves are edited by different people on different days
+ * — nobody rotates a password because the disclosure policy changed — and no
+ * such split exists here.
+ */
+const TABS = ['model', 'generation', 'access'] as const
+type Tab = (typeof TABS)[number]
 
 /** A heading over one half of the list, and the button that adds to it.
  *
@@ -406,13 +436,24 @@ export default function LlmProvidersPage() {
   const navigate = useNavigate()
   // Below 700px the index is an overlay; above it this does nothing.
   const listDrawer = useListDrawer()
-  const routeId = useMatch('/providers/:id')?.params.id ?? null
+  const withTab = useMatch('/providers/:id/:tab')
+  const plain = useMatch('/providers/:id')
+  const routeId = withTab?.params.id ?? plain?.params.id ?? null
   const creating = routeId === 'new'
   const selectedId = creating ? null : routeId
   const setSelectedId = useCallback(
     (id: string | null, { replace = false } = {}) =>
       navigate(id ? `/providers/${id}` : '/providers', { replace }),
     [navigate],
+  )
+  // An unknown tab reads as the front door rather than as an error — the same
+  // rule Data sources applies to a mistyped or renamed segment.
+  const tab: Tab = TABS.includes(withTab?.params.tab as Tab)
+    ? (withTab!.params.tab as Tab)
+    : 'model'
+  const setTab = useCallback(
+    (next: Tab) => navigate(`/providers/${routeId}/${next}`),
+    [navigate, routeId],
   )
   const [draft, setDraft] = useState<Record<string, any>>(blankDraft('chat'))
   // What the open row is for. Set from the row when one is opened and from the
@@ -507,6 +548,16 @@ export default function LlmProvidersPage() {
         )),
     [creating, draft, apiKey, paramDrafts, embeddingDrafts, blank],
   )
+  // The third argument is the address the work survives inside, and it became
+  // load-bearing the moment this record grew tabs: without it the shell's
+  // blocker treats a move from Model to Generation as leaving the form and
+  // asks about unsaved changes that are going nowhere. The draft is keyed on
+  // the row rather than the tab, so nothing is at stake in that direction —
+  // and a dialog that fires when nothing is at stake is one people learn to
+  // dismiss unread.
+  const recordPath = creating
+    ? '/providers/new'
+    : selectedId ? `/providers/${selectedId}` : undefined
   const releaseUnsaved = useUnsavedWork(
     'provider-form',
     creating
@@ -514,6 +565,7 @@ export default function LlmProvidersPage() {
       : (isDirty
         ? `Your changes to “${selected?.name ?? 'this model'}” have not been saved.`
         : null),
+    recordPath,
   )
 
   const refresh = useCallback(async () => {
@@ -760,6 +812,22 @@ export default function LlmProvidersPage() {
   const embeds = kind !== 'chat'
   const answers = kind !== 'embedding'
 
+  // A tab that this row does not offer sends you to the one every row has.
+  // Two ways to land on one: a bookmark to `/generation` followed to an
+  // embedder, and — the one that happens without anybody typing a URL —
+  // clicking an embedder in the list while standing on a model's Generation
+  // tab. Replace rather than push, so Back does not walk into the tab that
+  // just refused. `/providers/new/…` is the same case: creating has no tabs.
+  useEffect(() => {
+    if (creating && withTab) {
+      navigate('/providers/new', { replace: true })
+      return
+    }
+    if (tab === 'generation' && !answers && selectedId) {
+      navigate(`/providers/${selectedId}/model`, { replace: true })
+    }
+  }, [creating, withTab, tab, answers, selectedId, navigate])
+
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase()
     if (!needle) return list
@@ -910,6 +978,11 @@ export default function LlmProvidersPage() {
                 )
               }
               actions={
+                // Each control belongs to the tabs whose fields it acts on.
+                // Access saves itself, so leaving Save up there would offer to
+                // save a form the reader cannot see — the rule Data sources
+                // already follows on its Schema and Semantic layer tabs.
+                tab === 'access' ? undefined : (
                 <>
                   {!creating && isDirty && <UnsavedNote />}
                   <GhostButton
@@ -943,12 +1016,34 @@ export default function LlmProvidersPage() {
                       : 'Save changes'}
                   </PrimaryButton>
                 </>
+                )
               }
             />
 
+            {!creating && (
+              <Tabs
+                value={tab}
+                onChange={(v) => setTab(v as Tab)}
+                items={[
+                  { value: 'model', label: 'Model' },
+                  // An embedder has no completion to shape, so it is offered
+                  // no tab for shaping one — the same reason the Generation
+                  // section was already gated on `answers`.
+                  ...(answers
+                    ? [{
+                      value: 'generation',
+                      label: 'Generation',
+                      count: configuredCount(paramDrafts) || undefined,
+                    }]
+                    : []),
+                  { value: 'access', label: 'Access' },
+                ]}
+              />
+            )}
+
             <DetailBody>
               {error && <ErrorNote>{error}</ErrorNote>}
-              {testResult && (
+              {tab !== 'access' && testResult && (
                 <StatusLine ok={testResult.ok}>
                   {testResult.ok
                     ? `${testResult.message} · ${testResult.latency_ms}ms`
@@ -979,7 +1074,7 @@ export default function LlmProvidersPage() {
                 </StatusLine>
               )}
 
-              {creating && (
+              {tab === 'model' && creating && (
                 // Asked once, at the top, before anything below it makes
                 // sense: the fields under this differ by kind, and a form that
                 // reshapes itself after the endpoint has been typed is a form
@@ -1001,7 +1096,7 @@ export default function LlmProvidersPage() {
                 </Section>
               )}
 
-              {!creating && kind === 'both' && (
+              {tab === 'model' && !creating && kind === 'both' && (
                 // The shape rows had before the two were separated. Named
                 // rather than migrated: it works, and rewriting somebody's
                 // provider unasked is worse than one sentence.
@@ -1018,6 +1113,8 @@ export default function LlmProvidersPage() {
                 </Section>
               )}
 
+              {tab === 'model' && (
+                <>
               <Section
                 title="Endpoint"
                 description={
@@ -1102,15 +1199,15 @@ export default function LlmProvidersPage() {
                   />
                 </Field>
               </Section>
+                </>
+              )}
 
-              {/* Immediately after Credentials, and that is the whole reason
-                  it moved: it used to sit below Advanced parameters, four
-                  screens down a form, which put *"who else may spend this API
-                  key"* below *"top_p"*. Who holds the key and who may spend it
-                  are one subject, so they are adjacent — and every other
-                  shareable thing in the product puts its access control where
-                  somebody looking for it would stop looking. */}
-              {!creating && selected && (
+              {/* Its own tab now, beside the connection's — which is where
+                  somebody looking for it stops looking, and which gives it an
+                  address to send. It spent a release below Advanced
+                  parameters, four screens down the form, putting *"who else
+                  may spend this API key"* underneath *"top_p"*. */}
+              {tab === 'access' && !creating && selected && (
                 <Section
                   title="Access"
                   description="Who may answer questions with this model. Sharing it never shares its API key."
@@ -1160,7 +1257,7 @@ export default function LlmProvidersPage() {
                   on whether the model field happens to be filled in, or the
                   form would rearrange itself under the cursor of anyone
                   clearing that field to retype it. */}
-              {answers ? (
+              {tab === 'generation' && answers ? (
                 <>
               <Section
                 title="Generation"
@@ -1226,7 +1323,7 @@ export default function LlmProvidersPage() {
                 </>
               ) : null}
 
-              {embeds && (
+              {tab === 'model' && embeds && (
               <Section
                 title="Embeddings"
                 description="One embedder serves the whole app: Knowledge uses it to match questions that mean the same thing in different words, and each store records the model and width it was indexed with."
@@ -1273,36 +1370,36 @@ export default function LlmProvidersPage() {
               </Section>
               )}
 
-              {!creating && selected && (
-                <>
-                  <Section title="How testing works" icon={<Icon.Zap size={14} />}>
-                    <p
-                      style={{
-                        fontSize: 12.5,
-                        color: 'var(--text-dim)',
-                        margin: 0,
-                        lineHeight: 1.6,
-                      }}
-                    >
-                      Testing sends one short prompt and checks whether the provider
-                      accepts a structured-output request. DataMind validates model
-                      output on its own side regardless of what a provider claims to
-                      support.
-                    </p>
-                  </Section>
+              {tab === 'model' && !creating && selected && (
+                <Section
+                  title="Danger zone"
+                  description="Conversations that already ran on this model keep their recorded snapshot."
+                  icon={<Icon.Alert size={14} />}
+                  danger
+                >
+                  <DangerButton onClick={remove} style={{ alignSelf: 'flex-start' }}>
+                    <Icon.Trash />
+                    Delete model
+                  </DangerButton>
+                </Section>
+              )}
 
-                  <Section
-                    title="Danger zone"
-                    description="Conversations that already ran on this model keep their recorded snapshot."
-                    icon={<Icon.Alert size={14} />}
-                    danger
-                  >
-                    <DangerButton onClick={remove} style={{ alignSelf: 'flex-start' }}>
-                      <Icon.Trash />
-                      Delete model
-                    </DangerButton>
-                  </Section>
-                </>
+              {/* What the Test button does, as one line of small print beside
+                  the control it describes — it had a `Section` of its own,
+                  which gave a paragraph of help the same weight on the page as
+                  the endpoint and the key, and put it four cards away from the
+                  button it was about. Withdrawn once there is a real result to
+                  read, because by then it is answering a question nobody still
+                  has. */}
+              {tab === 'model' && !creating && !testResult && (
+                <p style={{ ...faintNote, fontSize: 12 }}>
+                  <strong style={{ color: 'var(--text-dim)', fontWeight: 600 }}>
+                    Testing
+                  </strong>{' '}
+                  sends one short prompt and checks whether the provider accepts a
+                  structured-output request. DataMind validates model output on its
+                  own side regardless of what a provider claims to support.
+                </p>
               )}
             </DetailBody>
           </>

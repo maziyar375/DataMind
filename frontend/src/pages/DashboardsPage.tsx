@@ -734,6 +734,27 @@ function GridGuide({
 /** The header's ghost buttons, one notch tighter than the default. */
 const toolbarBtn: React.CSSProperties = { fontSize: 12.5, padding: '7px 12px' }
 
+/**
+ * The access trigger, sized to the header it stands in.
+ *
+ * `.rm-toolgroup button` in `styles.css`, written as inline style because the
+ * button is rendered by a shared component and inline styles beat a class. The
+ * two must stay in step; the group beside it is the reference.
+ */
+const accessBtn: React.CSSProperties = {
+  fontSize: 12.5,
+  fontWeight: 500,
+  padding: '5px 11px',
+  border: 'none',
+  borderRadius: 7,
+  color: 'var(--text-dim)',
+  background: 'transparent',
+}
+const accessBtnHover: React.CSSProperties = {
+  color: 'var(--text-strong)',
+  background: 'var(--panel-hover)',
+}
+
 // ── layout history ────────────────────────────────────────────────────────
 /** Where one tile sits. The unit both the undo stack and the API deal in. */
 interface TileGeometry {
@@ -1203,22 +1224,33 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
                     so a reader who was shared this board sees a header with
                     no share control rather than one that 403s. */}
                 <ReachBadge privileges={dashboard.privileges} />
-                <AccessPopover
-                  base={`dashboards/${dashboard.id}`}
-                  resourceLabel={dashboard.name}
-                  warn={warnFor(dashboard.id)}
-                  extraActions={
-                    <TransferControl
-                      base={`dashboards/${dashboard.id}`}
-                      title={dashboard.name}
-                      // Back to the index, not a re-read: a transfer leaves
-                      // the previous owner holding nothing, so staying here
-                      // would reload the board they can no longer open and
-                      // show them a 404 for their own transfer.
-                      onTransferred={onBack}
-                    />
-                  }
-                />
+                {/* A group of one, in the same shell as the toolgroup beside it
+                    and the live chip before it — so the header reads as three
+                    pills of one height and then the primary, rather than as a
+                    bordered 36px button shouting over a 28px row. It is not
+                    *in* the toolgroup because that group is this board's modes
+                    plus its export, and who may reach the board is not a mode;
+                    it is also the one label here that changes with the data. */}
+                <div className="rm-toolgroup">
+                  <AccessPopover
+                    base={`dashboards/${dashboard.id}`}
+                    resourceLabel={dashboard.name}
+                    warn={warnFor(dashboard.id)}
+                    buttonStyle={accessBtn}
+                    buttonHoverStyle={accessBtnHover}
+                    extraActions={
+                      <TransferControl
+                        base={`dashboards/${dashboard.id}`}
+                        title={dashboard.name}
+                        // Back to the index, not a re-read: a transfer leaves
+                        // the previous owner holding nothing, so staying here
+                        // would reload the board they can no longer open and
+                        // show them a 404 for their own transfer.
+                        onTransferred={onBack}
+                      />
+                    }
+                  />
+                </div>
                 {/* One control per verb was four ghost buttons of identical
                     weight — a row of equals with no shape. Presentation and
                     arrangement are both *modes*, so they read as one grouped

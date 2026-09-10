@@ -832,6 +832,9 @@ export function ReportOutlineEditor({
           <AccessPopover
             base={`reports/${report.id}`}
             resourceLabel={report.name}
+            // Sized to the ghost buttons it stands beside, which all carry
+            // `toolbarBtn`. It was the one control in this row at 13px.
+            buttonStyle={toolbarBtn}
             extraActions={
               <TransferControl
                 base={`reports/${report.id}`}

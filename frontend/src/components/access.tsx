@@ -47,8 +47,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { access, teams as teamsApi, users as usersApi } from '../api/client'
 import type { Actions, DenialReason, Grant, Reach, Team, User } from '../api/types'
 import {
-  Chip, DangerButton, ErrorNote, GhostButton, Icon, Modal, PrimaryButton,
-  SearchField, Select, Spinner, initialOf,
+  Chip, DangerButton, ErrorNote, GhostButton, HoverButton, Icon, Modal,
+  PrimaryButton, SearchField, Select, Spinner, initialOf,
 } from './ui'
 
 /** The five, in lattice order — the order the radio renders them in. */
@@ -1338,6 +1338,7 @@ export function Restricted({
 
 export function AccessPopover({
   base, resourceLabel, label, warn, extraActions, onChanged,
+  buttonStyle, buttonHoverStyle,
 }: {
   base: string
   /** What to call this thing in the button's title and the modal's heading. */
@@ -1363,6 +1364,25 @@ export function AccessPopover({
   extraActions?: React.ReactNode
   /** Called after any change, so a header showing the summary can re-read. */
   onChanged?: () => void
+  /**
+   * The trigger's own look, as `HoverButton`'s two halves.
+   *
+   * The default is `GhostButton` — a border, near-white ink, `8px 14px` — and
+   * that is right on the Knowledge and Semantic headers, where the buttons
+   * beside it are ghost buttons of exactly that size. It is wrong on the two
+   * headers that have a toolbar vocabulary of their own: a dashboard's ran
+   * 36px tall at 13px beside a 28px toolgroup and a 34px primary, which made
+   * *"who can reach this"* the loudest control on a screen where it is the
+   * quietest thing that happens — louder than **Add tile**, the page's one
+   * real action. A report's was the same button beside `toolbarBtn` siblings.
+   *
+   * So the host says how its own chrome is sized rather than this component
+   * guessing, and the two values are the two `HoverButton` takes, because a
+   * button whose resting state is overridden and whose hover is not stops
+   * responding to the cursor.
+   */
+  buttonStyle?: React.CSSProperties
+  buttonHoverStyle?: React.CSSProperties
 }) {
   const [open, setOpen] = useState(false)
   const [actions, setActions] = useState<Actions | null>(null)
@@ -1396,10 +1416,32 @@ export function AccessPopover({
 
   return (
     <>
-      <GhostButton onClick={() => setOpen(true)} title={`Who can reach ${resourceLabel}`}>
+      {/* `HoverButton` rather than `GhostButton`, so a host can override the
+          hover as well as the rest. The defaults below are `GhostButton`'s own
+          values, so a caller passing nothing gets the button it always had. */}
+      <HoverButton
+        onClick={() => setOpen(true)}
+        title={`Who can reach ${resourceLabel}`}
+        baseStyle={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          fontSize: 13,
+          fontWeight: 500,
+          background: 'transparent',
+          color: 'var(--text-strong)',
+          border: '1px solid var(--border-strong)',
+          padding: '8px 14px',
+          borderRadius: 7,
+          cursor: 'pointer',
+          whiteSpace: 'nowrap',
+          ...buttonStyle,
+        }}
+        hoverStyle={buttonHoverStyle ?? { borderColor: 'var(--accent)' }}
+      >
         <Icon.Users size={14} />
         {label ?? (accessSummary(grants) || 'Access')}
-      </GhostButton>
+      </HoverButton>
       {open && (
         <Modal
           title={`Access to ${resourceLabel}`}
