@@ -35,11 +35,23 @@
 > on the record in [§0.4](#04-the-eighteen-decisions-decided). Where the two
 > disagree, **this document wins**, and §0.4 says why in each case.
 >
-> **Status:** plan, not implementation. Nothing in this document is built. The
-> investigation in Part 1 is done and its findings are marked `[x]` in the
-> master checklist; everything else is `[ ]`.
+> **Status: built.** All eleven phases landed between 2026-09-06 and
+> 2026-09-08 — the master checklist in [Part 6](#part-6--master-implementation-checklist)
+> is 254 of 254, and [§29's ledger](#29-progress-ledger) dates each phase. The
+> line that used to stand here said *"plan, not implementation; nothing in this
+> document is built"*, which was true the day it was written and had been wrong
+> for two days by the time anybody read it again.
 >
-> **Written:** 2026-09-06, against `main` at `cedea10`.
+> **One inconsistency to know about**, because it looks like unfinished work and
+> is not: the per-phase **gate** and **acceptance** boxes inside
+> [Part 4](#part-4--the-eleven-phases) were ticked for Phases 0 and 1 and then
+> left alone — 31 of them still read `[ ]` while their counterparts in Part 6
+> are ticked and dated. **Part 6 is the maintained checklist and wins**; Part 4's
+> boxes are a duplicate that stopped being kept. Do not read them as outstanding
+> work.
+>
+> **Written:** 2026-09-06, against `main` at `cedea10`. Status corrected
+> 2026-09-10.
 
 ---
 

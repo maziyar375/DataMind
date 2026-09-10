@@ -14,7 +14,7 @@ import type { Layout } from 'react-grid-layout'
 import { useLocation, useMatch, useNavigate } from 'react-router-dom'
 
 import { ApiError, access, dashboards as api } from '../api/client'
-import { AccessPanel, AccessPopover, ReachBadge } from '../components/access'
+import { AccessPanel, AccessPopover, ReachBadge, TransferControl } from '../components/access'
 import { useThemeOverride } from '../shell'
 import type { Dashboard, DashboardSummary, DashboardTile } from '../api/types'
 import {
@@ -459,6 +459,20 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
             base={`dashboards/${sharing.id}`}
             title={sharing.name}
             warn={warnFor(sharing.id)}
+            // A dashboard has an owner and the server has always accepted
+            // `POST …/transfer` for one; only the connection detail ever
+            // offered the control, so handing a board over on the way out of a
+            // team meant asking somebody with a terminal.
+            extraActions={
+              <TransferControl
+                base={`dashboards/${sharing.id}`}
+                title={sharing.name}
+                onTransferred={() => {
+                  setSharing(null)
+                  void load()
+                }}
+              />
+            }
           />
         </Modal>
       )}
@@ -1193,6 +1207,17 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
                   base={`dashboards/${dashboard.id}`}
                   resourceLabel={dashboard.name}
                   warn={warnFor(dashboard.id)}
+                  extraActions={
+                    <TransferControl
+                      base={`dashboards/${dashboard.id}`}
+                      title={dashboard.name}
+                      // Back to the index, not a re-read: a transfer leaves
+                      // the previous owner holding nothing, so staying here
+                      // would reload the board they can no longer open and
+                      // show them a 404 for their own transfer.
+                      onTransferred={onBack}
+                    />
+                  }
                 />
                 {/* One control per verb was four ghost buttons of identical
                     weight — a row of equals with no shape. Presentation and

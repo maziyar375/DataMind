@@ -56,7 +56,7 @@ import type {
   ReportBlockType, ReportFeasibility, ReportLanguage, ReportRun, ReportRunDetail,
   ReportSection, ReportSectionResult, ReportSummary, ReportTimeWindow,
 } from '../api/types'
-import { AccessPopover, ReachBadge, Restricted } from './access'
+import { AccessPopover, ReachBadge, Restricted, TransferControl } from './access'
 import { ChartGlyph, ChartTypePicker } from './chart-picker'
 import {
   assembleDocument, captionOf, chartTypeOf, figureNumbers, isCallout, isEdited,
@@ -829,7 +829,19 @@ export function ReportOutlineEditor({
               this report sees a header without a share control rather than
               one whose button 403s. */}
           <ReachBadge privileges={report.privileges} />
-          <AccessPopover base={`reports/${report.id}`} resourceLabel={report.name} />
+          <AccessPopover
+            base={`reports/${report.id}`}
+            resourceLabel={report.name}
+            extraActions={
+              <TransferControl
+                base={`reports/${report.id}`}
+                title={report.name}
+                // See the dashboard header: the previous owner keeps nothing,
+                // so the only honest next screen is the index.
+                onTransferred={onBack}
+              />
+            }
+          />
           {sections.length > 0 && (
             <GhostButton
               onClick={() => setConfirmPropose(true)}

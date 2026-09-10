@@ -9,7 +9,7 @@
  * the only way anybody finds out is a Save that 403s after a form was filled
  * in.
  *
- * Four things here are deliberate, and each is the plan's §21.4 as an
+ * Six things here are deliberate, and each is the plan's §21.4 as an
  * interaction rather than a paragraph:
  *
  * * **The privilege radio is rendered from `GET …/actions`, not from a list in
@@ -17,12 +17,24 @@
  *   means on this resource type*, from the same `PRIVILEGE_MEANINGS` table a
  *   403 quotes. So the label beside a radio button and the refusal somebody
  *   would get are the same words, and adding a resource type needs no change
- *   here.
- * * **Every row shows the path.** *"Sara — select"* is a fact nobody can act on
- *   or verify. *"Sara — select · via the Finance team"* tells them the revoke
- *   they want is on the team, and that clicking revoke on this row would do
- *   nothing. Ownership is shown as a path too, without a revoke control,
- *   because ownership is not a grant — it is moved by transferring.
+ *   here. **The sentence is the label and the enum member is the caption** —
+ *   the shape the Roles tab already uses for a capability, and the reason
+ *   somebody choosing who may read a database is not asked to first learn what
+ *   this product means by `select`.
+ * * **Every row shows the path.** *"Sara"* alone is a fact nobody can act on or
+ *   verify. *"Sara · via this team"* tells them the revoke they want is on the
+ *   team, and that clicking revoke on this row would do nothing. Ownership is
+ *   shown as a path too, without a revoke control, because ownership is not a
+ *   grant — it is moved by transferring.
+ * * **The privilege on a row is a control, not a word.** A grant row is keyed
+ *   by its privilege on the server, so raising somebody is a new row rather
+ *   than an edit — which used to mean the only way to change what a colleague
+ *   may do was to notice they had vanished from the share dialog, revoke them,
+ *   and share again. `change()` does both calls, and the order it does them in
+ *   is the fail-safe direction for each.
+ * * **The dialog greys who already has access instead of hiding them.** The
+ *   list looked filtered — or, on an installation where everybody had some
+ *   access, empty — with nothing on screen saying why.
  * * **Teams are offered first and said to be the better answer.** A permission
  *   attached to a job survives the person leaving it; one attached to a person
  *   becomes a row nobody can attribute and nobody dares revoke. That is the
@@ -57,7 +69,7 @@ interface Principal {
 }
 
 export function AccessPanel({
-  base, title, description, onChanged, warn,
+  base, title, description, onChanged, warn, extraActions,
 }: {
   /**
    * The resource's path, **without** a leading slash and without `/api/v1`:
@@ -87,12 +99,30 @@ export function AccessPanel({
    * table is spelled out.
    */
   warn?: (principal: { user_id?: string; team_id?: string }) => Promise<string[]>
+  /**
+   * Further actions on *who owns this*, rendered in the same row as
+   * **Give access** rather than stacked under it.
+   *
+   * `<TransferControl>` is the only thing that goes here today, and the slot
+   * exists because it used to be dropped in by each page *below* the panel —
+   * which put two buttons of the same subject on two rows at two widths, and
+   * made every surface place it slightly differently. Sharing and transferring
+   * are two answers to one question, so they belong on one line; the panel
+   * owns the line, and the page says what else is on it.
+   *
+   * Rendered only when the viewer holds `manage`, because the panel's whole
+   * action row is — a transfer button beside a sentence explaining you cannot
+   * change access would be a control that only 403s.
+   */
+  extraActions?: React.ReactNode
 }) {
   const [grants, setGrants] = useState<Grant[] | null>(null)
   const [actions, setActions] = useState<Actions | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [sharing, setSharing] = useState(false)
   const [revoking, setRevoking] = useState<Grant | null>(null)
+  /** The grant id whose privilege is mid-change, so its row can say so. */
+  const [changing, setChanging] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
     const next = await access.grants(base)
@@ -112,6 +142,73 @@ export function AccessPanel({
   }, [base])
 
   const mayShare = actions?.can?.share ?? false
+
+  /**
+   * Which privileges this resource type may be given, in lattice order.
+   *
+   * Straight from the server's `meanings`, whose keys are its own enum — a
+   * type that narrows its share surface (a model configuration, where `modify`
+   * is equivalent to handing over the API key) narrows it there and both the
+   * dialog and the per-row changer follow with no second rule here.
+   */
+  const offered = useMemo(
+    () => ORDER.filter((name) => name in (actions?.meanings ?? {})),
+    [actions],
+  )
+
+  /**
+   * Change what one grant allows, **without making somebody revoke and
+   * re-share to do it**.
+   *
+   * A grant row is keyed by its privilege, so raising Reza from `describe` to
+   * `select` is a different row rather than an edit of his. Until this existed
+   * the dialog simply hid everyone who already had access — which turned *"let
+   * him do a bit more"* into a puzzle whose answer was "revoke him first", and
+   * left `Nobody left to give access to.` on screen as the only clue.
+   *
+   * **The order of the two calls depends on the direction**, and that is the
+   * whole care in it. Widening grants the higher privilege first: if the
+   * revoke then fails, the principal holds both, and the union of two
+   * privileges in a lattice *is* the higher one — no more access than was
+   * asked for. Narrowing revokes the higher one first: if the grant then
+   * fails, they hold nothing, which is the wrong amount but the safe
+   * direction. Either way the panel reloads from the server afterwards, so
+   * what is on screen is what the server actually holds rather than what this
+   * function intended.
+   */
+  const change = useCallback(
+    async (grant: Grant, next: string) => {
+      if (!grant.id || next === grant.privilege) return
+      const widening = ORDER.indexOf(next) > ORDER.indexOf(grant.privilege)
+      const principal =
+        grant.principal_kind === 'TEAM'
+          ? { team_id: grant.principal_id }
+          : { user_id: grant.principal_id }
+      setChanging(grant.id)
+      setError(null)
+      try {
+        if (widening) {
+          await access.grant(base, { privilege: next, ...principal })
+          await access.revoke(base, grant.id)
+        } else {
+          await access.revoke(base, grant.id)
+          await access.grant(base, { privilege: next, ...principal })
+        }
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'Could not change what this allows.',
+        )
+      } finally {
+        setChanging(null)
+        // Always, including after a failure: a half-applied change must show
+        // as what it actually is, not as what was clicked.
+        await reload().catch(() => undefined)
+      }
+    },
+    [base, reload],
+  )
 
   useEffect(() => {
     if (!mayShare) {
@@ -165,17 +262,25 @@ export function AccessPanel({
             <GrantRow
               key={grant.id ?? `owner-${grant.principal_id}`}
               grant={grant}
+              offered={offered}
+              meanings={actions.meanings}
+              busy={changing === grant.id}
+              onChange={(next) => change(grant, next)}
               onRevoke={() => setRevoking(grant)}
             />
           ))}
         </div>
       )}
 
-      <div>
+      {/* One row, because sharing and transferring are two answers to the same
+          question — *who is this for* — and stacking them made the second look
+          like an afterthought on every screen that mounted one. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <PrimaryButton onClick={() => setSharing(true)}>
           <Icon.Plus size={14} />
           Give access
         </PrimaryButton>
+        {extraActions}
       </div>
 
       {sharing && actions && (
@@ -210,7 +315,16 @@ export function AccessPanel({
   )
 }
 
-function GrantRow({ grant, onRevoke }: { grant: Grant; onRevoke: () => void }) {
+function GrantRow({
+  grant, offered, meanings, busy, onChange, onRevoke,
+}: {
+  grant: Grant
+  offered: string[]
+  meanings: Record<string, string>
+  busy: boolean
+  onChange: (next: string) => void
+  onRevoke: () => void
+}) {
   const isOwner = grant.path === 'owner'
   return (
     <div
@@ -253,7 +367,8 @@ function GrantRow({ grant, onRevoke }: { grant: Grant; onRevoke: () => void }) {
         {/* The path. Without it a row is a fact nobody can act on: revoking
             here would not touch a permission that arrives through a team. */}
         <span style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>
-          {grant.privilege} · {PATH_LABEL[grant.path] ?? grant.path}
+          {isOwner ? `${grant.privilege} · ` : ''}
+          {PATH_LABEL[grant.path] ?? grant.path}
         </span>
       </span>
 
@@ -265,10 +380,43 @@ function GrantRow({ grant, onRevoke }: { grant: Grant; onRevoke: () => void }) {
         // Saying so beats a disabled button with no explanation.
         <Chip tone="green">Owner</Chip>
       ) : (
-        <GhostButton onClick={onRevoke} title="Remove this access">
-          <Icon.Close size={13} />
-          Revoke
-        </GhostButton>
+        <>
+          {/* The privilege is the editable thing on this row, so it is an
+              editable control rather than a word — see `AccessPanel.change`
+              for why the two calls behind it are ordered the way they are.
+              `title` carries the server's own sentence for the level in
+              force, so the row explains itself without a fifth line of text
+              in a list that is mostly names. */}
+          <Select
+            aria-label={`What ${grant.principal_name} may do`}
+            title={meanings[grant.privilege]}
+            disabled={busy || offered.length === 0}
+            value={grant.privilege}
+            onChange={(event) => onChange(event.target.value)}
+            style={{ width: 'auto', minWidth: 104, padding: '5px 8px', fontSize: 12 }}
+          >
+            {/* The privileges the server offers, plus — if this row somehow
+                holds one it no longer offers — the one actually in force, so
+                the control never silently displays a different level from
+                the one the row has. */}
+            {(offered.includes(grant.privilege)
+              ? offered
+              : [grant.privilege, ...offered]
+            ).map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </Select>
+          <GhostButton
+            onClick={onRevoke}
+            disabled={busy}
+            title="Remove this access"
+          >
+            {busy ? <Spinner /> : <Icon.Close size={13} />}
+            Revoke
+          </GhostButton>
+        </>
       )}
     </div>
   )
@@ -339,17 +487,46 @@ function ShareModal({
     }
   }, [])
 
+  /**
+   * What each principal already has here, by id — **not** a set of people to
+   * hide.
+   *
+   * Hiding them is what this used to do, and it read as an outage: the owner
+   * and everyone already shared with simply were not in the list, and an
+   * installation where everybody had some access showed `Nobody left to give
+   * access to.` with no hint that the list was filtered at all. So they stay,
+   * greyed, saying what they hold — and the row points at the control that
+   * actually changes it, which is the one on the panel behind this dialog.
+   */
   const already = useMemo(
-    () => new Set(existing.map((grant) => grant.principal_id)),
+    () =>
+      new Map(
+        existing.map((grant) => [
+          grant.principal_id,
+          grant.path === 'owner' ? 'owns this' : `already has ${grant.privilege}`,
+        ]),
+      ),
     [existing],
   )
 
   const candidates = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    const pool = (principals ?? []).filter((p) => !already.has(p.id))
-    if (!needle) return pool
-    return pool.filter((p) => p.name.toLowerCase().includes(needle))
+    const pool = needle
+      ? (principals ?? []).filter((p) => p.name.toLowerCase().includes(needle))
+      : (principals ?? [])
+    // Everyone who already has access sinks to the bottom. They are kept
+    // (see `already`) so the list never looks filtered, but a greyed row is
+    // not something anybody came here to press, and leaving them interleaved
+    // put the rows that can be picked below the fold on an installation where
+    // most people already have some access.
+    return [
+      ...pool.filter((p) => !already.has(p.id)),
+      ...pool.filter((p) => already.has(p.id)),
+    ]
   }, [principals, query, already])
+
+  /** How many of the rows on offer can actually be picked. */
+  const grantable = candidates.filter((p) => !already.has(p.id)).length
 
   /**
    * Which privileges this type may be given.
@@ -438,52 +615,91 @@ function ShareModal({
           {principals === null ? (
             <Spinner />
           ) : (
+            /* A bordered, inset scroll box rather than a bare `maxHeight`.
+               The list is longer than its window in any real installation, and
+               an unframed one cut the last visible row in half against the
+               dialog's own background — which reads as a rendering fault
+               rather than as "there is more below". The frame makes the clip
+               deliberate, and `scrollbar-gutter` keeps the rows from shifting
+               sideways when the scrollbar appears. */
             <div
+              role="listbox"
+              aria-label="People and teams"
               style={{
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 4,
-                maxHeight: 200,
+                maxHeight: 208,
                 overflowY: 'auto',
+                scrollbarGutter: 'stable',
+                padding: 5,
+                borderRadius: 11,
+                border: '1px solid var(--border)',
+                background: 'var(--panel-alt)',
               }}
             >
-              {candidates.map((principal) => (
-                <button
-                  key={`${principal.kind}-${principal.id}`}
-                  type="button"
-                  onClick={() => setPicked(principal)}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 10,
-                    padding: '7px 10px',
-                    borderRadius: 9,
-                    textAlign: 'left',
-                    border: '1px solid var(--border)',
-                    background:
-                      picked?.id === principal.id ? 'var(--accent-bg)' : 'var(--panel)',
-                    color: 'var(--text-strong)',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
-                    <span style={{ fontSize: 12.5, fontWeight: 600 }}>
-                      {principal.name}
+              {candidates.map((principal) => {
+                const held = already.get(principal.id)
+                const chosen = picked?.id === principal.id
+                return (
+                  <button
+                    key={`${principal.kind}-${principal.id}`}
+                    type="button"
+                    role="option"
+                    aria-selected={chosen}
+                    disabled={held !== undefined}
+                    onClick={() => setPicked(principal)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 10,
+                      padding: '7px 10px',
+                      borderRadius: 9,
+                      textAlign: 'left',
+                      border: `1px solid ${chosen ? 'var(--accent)' : 'var(--border)'}`,
+                      background: chosen ? 'var(--accent-bg)' : 'var(--panel)',
+                      color: 'var(--text-strong)',
+                      cursor: held ? 'default' : 'pointer',
+                      opacity: held ? 0.55 : 1,
+                    }}
+                  >
+                    <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
+                      <span style={{ fontSize: 12.5, fontWeight: 600 }}>
+                        {principal.name}
+                      </span>
+                      <span style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>
+                        {held ?? principal.hint}
+                      </span>
                     </span>
-                    <span style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>
-                      {principal.hint}
-                    </span>
-                  </span>
-                  {principal.kind === 'TEAM' && <Chip tone="accent">Team</Chip>}
-                  {principal.kind === 'SERVICE' && <Chip tone="accent">Service</Chip>}
-                </button>
-              ))}
+                    {principal.kind === 'TEAM' && <Chip tone="accent">Team</Chip>}
+                    {principal.kind === 'SERVICE' && <Chip tone="accent">Service</Chip>}
+                    {/* A tick, not only a tint: the selected row has to survive
+                        somebody who cannot tell two dark blues apart. */}
+                    {chosen && (
+                      <span aria-hidden style={{ color: 'var(--accent)', display: 'flex' }}>
+                        <Icon.Check size={14} />
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
               {candidates.length === 0 && (
-                <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
-                  Nobody left to give access to.
+                <span style={{ fontSize: 12, color: 'var(--text-faint)', padding: '6px 6px' }}>
+                  {query.trim()
+                    ? `Nobody here matches “${query.trim()}”.`
+                    : 'There is nobody else in this installation yet.'}
                 </span>
               )}
             </div>
+          )}
+          {/* Said only when it is the answer to a question somebody is about
+              to ask: every name on offer is greyed, so the dialog looks broken
+              unless it explains that the change they want lives elsewhere. */}
+          {principals !== null && candidates.length > 0 && grantable === 0 && (
+            <p style={{ margin: 0, fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>
+              Everyone here can already reach this. To change what one of them
+              may do, use the dropdown on their row behind this dialog.
+            </p>
           )}
           {/* Said once, where the decision is being made. */}
           <p style={{ margin: 0, fontSize: 11, color: 'var(--text-faint)', lineHeight: 1.5 }}>
@@ -493,12 +709,25 @@ function ShareModal({
           </p>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div
+          role="radiogroup"
+          aria-label="What they may do"
+          style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
+        >
           <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-dim)' }}>
             What they may do
           </span>
           {/* Rendered from the server's own table, so the label here and the
-              sentence in a 403 are the same words. */}
+              sentence in a 403 are the same words.
+
+              **The sentence leads and the enum member follows**, which is the
+              shape the Roles tab already uses for a capability — *"See the
+              list of people and their accounts."* over `user.read`. It was the
+              other way round here, and `select` in bold monospace over a grey
+              explanation asks somebody choosing who may read a database to
+              first learn what DataMind means by a SQL keyword. The token is
+              still on screen, because it is the word the audit log and every
+              403 will use. */}
           {offered.map((name) => (
             <label
               key={name}
@@ -506,9 +735,9 @@ function ShareModal({
                 display: 'flex',
                 gap: 9,
                 alignItems: 'flex-start',
-                padding: '7px 10px',
+                padding: '8px 10px',
                 borderRadius: 9,
-                border: '1px solid var(--border)',
+                border: `1px solid ${privilege === name ? 'var(--accent)' : 'var(--border)'}`,
                 background: privilege === name ? 'var(--accent-bg)' : 'var(--panel)',
                 cursor: 'pointer',
               }}
@@ -522,20 +751,26 @@ function ShareModal({
               />
               <span style={{ minWidth: 0 }}>
                 <span
-                  className="mono"
-                  style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-strong)' }}
-                >
-                  {name}
-                </span>
-                <span
                   style={{
                     display: 'block',
-                    fontSize: 11,
-                    color: 'var(--text-faint)',
+                    fontSize: 12.5,
+                    fontWeight: 600,
+                    color: 'var(--text-strong)',
                     lineHeight: 1.45,
                   }}
                 >
                   {meanings[name]}
+                </span>
+                <span
+                  className="mono"
+                  style={{
+                    display: 'block',
+                    fontSize: 10.5,
+                    color: 'var(--text-faint)',
+                    marginTop: 2,
+                  }}
+                >
+                  {name}
                 </span>
               </span>
             </label>
@@ -1102,7 +1337,7 @@ export function Restricted({
 
 
 export function AccessPopover({
-  base, resourceLabel, label, warn,
+  base, resourceLabel, label, warn, extraActions, onChanged,
 }: {
   base: string
   /** What to call this thing in the button's title and the modal's heading. */
@@ -1115,6 +1350,19 @@ export function AccessPopover({
   label?: string
   /** Passed straight through — see `AccessPanel`'s own `warn`. */
   warn?: (principal: { user_id?: string; team_id?: string }) => Promise<string[]>
+  /**
+   * Passed straight through — see `AccessPanel`'s own `extraActions`.
+   *
+   * A dashboard and a report are reachable from two share surfaces — the
+   * index card's kebab and this button on their own header — and a control
+   * present on one but not the other is the kind of difference nobody
+   * discovers until they are on the wrong screen. The derived types
+   * (knowledge, semantic layer) pass nothing, because they have no owner of
+   * their own to transfer: theirs is their connection's.
+   */
+  extraActions?: React.ReactNode
+  /** Called after any change, so a header showing the summary can re-read. */
+  onChanged?: () => void
 }) {
   const [open, setOpen] = useState(false)
   const [actions, setActions] = useState<Actions | null>(null)
@@ -1159,7 +1407,19 @@ export function AccessPopover({
           width={620}
           footer={<GhostButton onClick={() => setOpen(false)}>Done</GhostButton>}
         >
-          <AccessPanel base={base} title={resourceLabel} warn={warn} />
+          <AccessPanel
+            base={base}
+            title={resourceLabel}
+            warn={warn}
+            extraActions={extraActions}
+            // The button's own label is a share summary, so a change made
+            // inside the modal has to reach it or the header goes on saying
+            // "Only you" about something just shared.
+            onChanged={() => {
+              access.grants(base).then(setGrants).catch(() => undefined)
+              onChanged?.()
+            }}
+          />
         </Modal>
       )}
     </>

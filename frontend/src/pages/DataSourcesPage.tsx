@@ -745,7 +745,12 @@ export default function DataSourcesPage() {
         title="Data sources"
         open={listDrawer.open}
         icon={<Icon.Database size={15} />}
-        note="Yours only — connections are not shared with your team."
+        // Not "yours only" any more, and the correction matters more than
+        // most copy: it said connections are never shared at a moment when
+        // this very list already mixed in the ones granted to you, and a
+        // sentence that tells somebody their database is private when it is
+        // not is the worst kind of wrong to leave on a screen.
+        note="Ones you own, and ones shared with you."
         count={list.length}
         loading={loading}
         query={filter}
@@ -756,7 +761,7 @@ export default function DataSourcesPage() {
         // connection is genuinely absent here rather than missing, and a
         // second person's first visit should read as an empty list rather
         // than as a database that failed to appear.
-        empty="You have not added a connection yet. Connections belong to the account that made them, so a colleague's will not show up here."
+        empty="No connections yet — you have not added one, and nobody has shared one with you. A connection belongs to whoever added it until they give somebody access on its Access tab."
       >
         {visible.map((connection) => {
           const state = reachability(connection.status)
@@ -1089,20 +1094,24 @@ export default function DataSourcesPage() {
                 description="Everyone here can ask questions through this connection under the disclosure policy on the Policy tab — which is somebody else’s decision about what leaves your database, so read it before you share."
                 icon={<Icon.Users size={13} />}
               >
+                {/* Transfer goes in the panel's own action row rather than in
+                    a second row below it. It is still a different act —
+                    sharing adds somebody, transferring hands the thing over
+                    and the previous owner keeps nothing — but it is an answer
+                    to the same question, and two stacked buttons made the
+                    second read as an afterthought. The dialog behind it is
+                    where the difference gets explained. */}
                 <AccessPanel
                   base={`connections/${selected.id}`}
                   title={selected.name}
+                  extraActions={
+                    <TransferControl
+                      base={`connections/${selected.id}`}
+                      title={selected.name}
+                      onTransferred={() => void refresh()}
+                    />
+                  }
                 />
-                {/* Its own control, below the panel, because it is a different
-                    act: sharing adds somebody, transferring hands the thing
-                    over and the previous owner keeps nothing. */}
-                <div style={{ display: 'flex', gap: 8, paddingTop: 4 }}>
-                  <TransferControl
-                    base={`connections/${selected.id}`}
-                    title={selected.name}
-                    onTransferred={() => void refresh()}
-                  />
-                </div>
               </Section>
             )}
 

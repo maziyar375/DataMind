@@ -22,7 +22,7 @@ import { useMatch, useNavigate } from 'react-router-dom'
 
 import { ApiError, connections as connectionsApi, llmConfigs as modelsApi, reports as api } from '../api/client'
 import type { Connection, LlmConfig, Report, ReportSummary } from '../api/types'
-import { AccessPanel } from '../components/access'
+import { AccessPanel, TransferControl } from '../components/access'
 import { ReportOutlineEditor, ReportRunViewer } from '../components/report'
 import { ReportRunHistory } from '../components/report-history'
 import {
@@ -490,7 +490,22 @@ function ReportsIndex({
           width={620}
           footer={<GhostButton onClick={() => setSharing(null)}>Done</GhostButton>}
         >
-          <AccessPanel base={`reports/${sharing.id}`} title={sharing.name} />
+          <AccessPanel
+            base={`reports/${sharing.id}`}
+            title={sharing.name}
+            // Same gap as the dashboard's: transferable on the server since
+            // Phase 8, with nowhere to press.
+            extraActions={
+              <TransferControl
+                base={`reports/${sharing.id}`}
+                title={sharing.name}
+                onTransferred={() => {
+                  setSharing(null)
+                  void load()
+                }}
+              />
+            }
+          />
         </Modal>
       )}
 

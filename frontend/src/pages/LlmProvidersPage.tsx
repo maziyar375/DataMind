@@ -62,7 +62,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMatch, useNavigate } from 'react-router-dom'
 import { llmConfigs as api } from '../api/client'
-import { AccessPanel } from '../components/access'
+import { AccessPanel, TransferControl } from '../components/access'
 import type { LlmConfig, ParameterCatalog, TestResult } from '../api/types'
 import {
   Chip, DangerButton, EmptyState, ErrorNote, Field, GhostButton, GlyphBadge, Icon,
@@ -785,7 +785,9 @@ export default function LlmProvidersPage() {
         title="LLM providers"
         open={listDrawer.open}
         icon={<Icon.Sparkle size={15} />}
-        note="Yours only — models are not shared with your team."
+        // See the same correction on the Data sources list: models became
+        // shareable in Phase 8, and this line went on claiming they were not.
+        note="Ones you own, and ones shared with you."
         count={list.length}
         loading={loading}
         query={query}
@@ -796,7 +798,7 @@ export default function LlmProvidersPage() {
         // configured. They are per-account: a second person's first visit is
         // an empty list because it is theirs, not because something is
         // missing from it.
-        empty="You have not added a model yet. Providers belong to the account that made them, so a colleague's will not show up here."
+        empty="No models yet — you have not added one, and nobody has shared one with you. A model belongs to whoever added it until they give somebody access in its Access section."
       >
         {/* Two groups, because they are two jobs. The heading is what makes
             "which of these makes vectors?" a glance rather than a reading of
@@ -1101,6 +1103,58 @@ export default function LlmProvidersPage() {
                 </Field>
               </Section>
 
+              {/* Immediately after Credentials, and that is the whole reason
+                  it moved: it used to sit below Advanced parameters, four
+                  screens down a form, which put *"who else may spend this API
+                  key"* below *"top_p"*. Who holds the key and who may spend it
+                  are one subject, so they are adjacent — and every other
+                  shareable thing in the product puts its access control where
+                  somebody looking for it would stop looking. */}
+              {!creating && selected && (
+                <Section
+                  title="Access"
+                  description="Who may answer questions with this model. Sharing it never shares its API key."
+                  icon={<Icon.Users size={14} />}
+                >
+                  {/* ⚠️ **`select` and `describe` only**, and the reason is on
+                      the panel rather than in a comment nobody reading the
+                      screen will see: anybody who can edit this row can point
+                      `base_url` at a host they control and read the key out of
+                      the next request's `Authorization` header. The narrowing
+                      is enforced on the server — `GET …/actions` sends the two
+                      privileges it will accept and the panel renders what it is
+                      sent — so this is one sentence, not a second rule. */}
+                  <p
+                    style={{
+                      fontSize: 12.5,
+                      color: 'var(--text-dim)',
+                      margin: 0,
+                      lineHeight: 1.6,
+                    }}
+                  >
+                    Only <strong>select</strong> and <strong>describe</strong> can
+                    be given here. Anyone who could <em>edit</em> this
+                    configuration could repoint its endpoint at a server they
+                    control and read the stored key out of the next request, so
+                    editing stays with you and with whoever you transfer it to.
+                  </p>
+                  <AccessPanel
+                    base={`llm-configs/${selected.id}`}
+                    title={selected.name}
+                    // The sentence above promises a transfer; until this was
+                    // here there was no way to perform one, on the only screen
+                    // that mentioned it.
+                    extraActions={
+                      <TransferControl
+                        base={`llm-configs/${selected.id}`}
+                        title={selected.name}
+                        onTransferred={() => void refresh()}
+                      />
+                    }
+                  />
+                </Section>
+              )}
+
               {/* Both of these shape a *completion*, so an embedder has
                   nothing to apply them to. Gated on the row's kind rather than
                   on whether the model field happens to be filled in, or the
@@ -1221,36 +1275,6 @@ export default function LlmProvidersPage() {
 
               {!creating && selected && (
                 <>
-                  {/* ⚠️ **`select` and `describe` only**, and the reason is on
-                      the panel rather than in a comment nobody reading the
-                      screen will see: anybody who can edit this row can point
-                      `base_url` at a host they control and read the key out of
-                      the next request's `Authorization` header. The narrowing
-                      is enforced on the server — `GET …/actions` sends the two
-                      privileges it will accept and the panel renders what it is
-                      sent — so this is one sentence, not a second rule. */}
-                  <Section
-                    title="Access"
-                    description="Who may answer questions with this model. Sharing it never shares its API key."
-                    icon={<Icon.Users size={14} />}
-                  >
-                    <p
-                      style={{
-                        fontSize: 12.5,
-                        color: 'var(--text-dim)',
-                        margin: 0,
-                        lineHeight: 1.6,
-                      }}
-                    >
-                      Only <strong>select</strong> and <strong>describe</strong> can
-                      be given here. Anyone who could <em>edit</em> this
-                      configuration could repoint its endpoint at a server they
-                      control and read the stored key out of the next request, so
-                      editing stays with you and with whoever you transfer it to.
-                    </p>
-                    <AccessPanel base={`llm-configs/${selected.id}`} title={selected.name} />
-                  </Section>
-
                   <Section title="How testing works" icon={<Icon.Zap size={14} />}>
                     <p
                       style={{
