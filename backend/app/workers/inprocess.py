@@ -145,11 +145,39 @@ class InProcessRunExecutor:
             except asyncio.CancelledError:
                 log.info("run_cancelled", run_id=str(run_id))
                 raise
-            except Exception:
+            except Exception as err:
                 log.exception("run_executor_failed", run_id=str(run_id))
+                # **Log and stop** was the whole of this for as long as it
+                # existed, and a log line is not a failure anybody asking a
+                # question can see. The run stayed `RUNNING` with nobody
+                # executing it, and the only thing that ever ended it was the
+                # reconciler's staleness sweep — a minute of staleness, a
+                # thirty-second interval, and no event at the end of it. From
+                # the chat's point of view the question simply never came back.
+                await self._fail(run_id, err)
             finally:
                 if heartbeat is not None:
                     heartbeat.cancel()
+
+    async def _fail(self, run_id: UUID, err: BaseException) -> None:
+        """Mark a crashed run failed, on a session of its own.
+
+        The session `_run` used is gone — the exception unwound out of its
+        `async with` — and it may have been the broken thing. A fresh one, and
+        a `try` around all of it, because this runs *inside* an exception
+        handler: raising here would replace a recorded failure with an
+        unrecorded one, which is the state this method exists to end.
+        """
+        from app.infra.db.session import get_sessionmaker
+        from app.services.run_service import RunService
+
+        try:
+            async with get_sessionmaker()() as session:
+                await RunService(session, self._settings).fail_unhandled(
+                    run_id, f"{type(err).__name__}: {err}"
+                )
+        except Exception:
+            log.exception("run_failure_not_recorded", run_id=str(run_id))
 
     async def _heartbeat(self, run_id: UUID) -> None:
         """Say we are alive, and ask whether we have been told to stop.

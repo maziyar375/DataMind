@@ -17,6 +17,17 @@ that a reconnecting client cannot read back from the log.
 the same reason: exactly one process owns a run at a time — see
 `RunService.claim`, which is what makes "exactly one" true rather than hoped
 for.
+
+**That argument is about *who*, not about *when*, and the difference was a
+bug.** One process owns a run at a time; a *second* process can own it later —
+after a restart, when the claim loop reclaims a run whose executor died, or
+when the reconciler sweeps it. This counter lives in memory, so that second
+process starts at zero and re-issues numbers the first already spent. The
+`RunEventRow` insert then violates `uq_run_event_seq`, and `RunService._emit`
+rolls back on any exception *without logging* — so the event vanished, in
+silence, on exactly the runs that most needed to announce how they ended. A
+reclaimed run could not tell anybody it had failed. `prime` is how a process
+taking over says what has already been spent.
 """
 from __future__ import annotations
 
@@ -57,6 +68,19 @@ class InProcessEventBus:
         for queue in queues:
             queue.put_nowait(event)
         return seq
+
+    async def prime(self, run_id: UUID, seq: int) -> None:
+        """Raise this process's watermark to a `seq` already spent elsewhere.
+
+        Called by whoever takes over a run this process did not start, with the
+        high-water mark read from the durable log — the authority this buffer
+        sits in front of. Raises only: a process that has published events of
+        its own must not be wound backwards by a stale read, which would
+        re-issue the numbers it just used.
+        """
+        async with self._lock:
+            if seq > self._seq.get(run_id, 0):
+                self._seq[run_id] = seq
 
     async def deliver(self, run_id: UUID, event: dict[str, Any]) -> bool:
         """Hand a subscriber here an event produced somewhere else.

@@ -520,3 +520,145 @@ def test_the_worker_hands_execute_run_an_authorizer() -> None:
                     f"{name} asks nobody anything and must take no authorizer"
                 )
 
+
+# ── a run that ends must say so ──────────────────────────────────────────
+def test_every_terminal_transition_emits_a_terminal_event() -> None:
+    """The property the chat's whole "is it still thinking?" rests on.
+
+    Both watchers wait on `RUN_FINISHED` and only on that. The SSE generator's
+    in-flight branch parks on `async for event in stream` until one arrives, so
+    a status written without an event never ends the HTTP response — and the
+    browser never reaches the polling fallback, which is the only code that
+    knows how to re-read a run's status instead of waiting for an event.
+
+    `reconcile_stale` was that transition. It marked runs FAILED with a bare
+    bulk `UPDATE`, and a real one measured four minutes twenty-five seconds
+    between `created_at` and `finished_at` with the screen unchanged at both
+    ends. Asserted on the parse rather than by exercising six paths, for the
+    reason the audit suite asserts its own: one silent transition is enough to
+    make every spinner untrustworthy, and a reader cannot tell a hung run from
+    a slow one.
+    """
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse(Path("app/services/run_service.py").read_text())
+    terminal = {"FAILED", "TIMED_OUT", "CANCELLED"}
+
+    def writes_terminal(node: ast.AST) -> bool:
+        for sub in ast.walk(node):
+            # `run.status = RunStatus.FAILED` and `.values(status=RunStatus...)`
+            if (isinstance(sub, ast.Attribute) and sub.attr in terminal
+                    and isinstance(sub.value, ast.Name)
+                    and sub.value.id == "RunStatus"):
+                return True
+        return False
+
+    def emits_finished(node: ast.AST) -> bool:
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Constant) and sub.value == "RUN_FINISHED":
+                return True
+        return False
+
+    offenders = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, ast.AsyncFunctionDef):
+            continue
+        # `_finalise` is where `execute_run`'s own endings are announced, so
+        # the functions that hand off to it are not expected to emit.
+        hands_off = any(
+            isinstance(sub, ast.Attribute) and sub.attr == "_finalise"
+            for sub in ast.walk(fn)
+        )
+        if writes_terminal(fn) and not emits_finished(fn) and not hands_off:
+            offenders.append(fn.name)
+
+    assert not offenders, (
+        f"{offenders} write a terminal run status and emit no RUN_FINISHED. "
+        "Every watcher waits on that event and nothing else, so a run ended "
+        "this way leaves the question on screen spinning forever."
+    )
+
+
+def test_the_worker_records_a_crash_instead_of_only_logging_it() -> None:
+    """`except Exception: log.exception(...)` and nothing else is what turned a
+    wiring bug into a question that never came back.
+
+    A log line is not a failure anybody asking a question can see. The run has
+    to reach a terminal state at the moment it breaks, not sixty seconds later
+    when a sweep notices the heartbeat stopped — and `E_ORPHANED`'s "the worker
+    stopped responding" describes the sweep that noticed rather than the thing
+    that broke.
+    """
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse(Path("app/workers/inprocess.py").read_text())
+    run = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_run"
+    )
+    handler = next(
+        node for node in ast.walk(run)
+        if isinstance(node, ast.ExceptHandler)
+        and isinstance(node.type, ast.Name)
+        and node.type.id == "Exception"
+    )
+    called = {
+        sub.func.attr for sub in ast.walk(handler)
+        if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)
+    }
+    assert "_fail" in called, (
+        "the crash handler must record the failure on the run, not only log it"
+    )
+
+
+# ── the seq a second process would re-issue ──────────────────────────────
+@pytest.mark.asyncio
+async def test_a_process_taking_over_a_run_does_not_re_issue_spent_seqs() -> None:
+    """The silent one, and the reason fixing the two above was not enough.
+
+    `seq` comes from an in-memory counter, justified in the bus's own docstring
+    by "exactly one process owns a run at a time". True — and about *who*,
+    never about *when*. A second process owns it later: after a restart, when
+    the claim loop reclaims a run whose executor died, when the reconciler
+    sweeps it. That process starts at zero and re-issues numbers the first
+    already spent, the `RunEventRow` insert violates `uq_run_event_seq`, and
+    `_emit` rolls back on any exception **without logging**.
+
+    So the event disappeared, in silence, on precisely the runs that had
+    something to announce. Measured on a real reclaimed run: ten durable
+    events, `status` FAILED, and a `RUN_FINISHED` that tried to be seq 1 and
+    was never written — a run that had ended and could not say so.
+    """
+    from app.infra.events.bus import InProcessEventBus
+
+    bus = InProcessEventBus()
+    run_id = uuid.uuid4()
+    # A fresh process, and a run that already has ten events in the log.
+    assert bus.watermark(run_id) == 0
+    await bus.prime(run_id, 10)
+    assert await bus.publish(run_id, "RUN_FINISHED", {}) == 11
+
+    # Priming never winds a counter backwards: a stale read must not make a
+    # process re-issue numbers it has just used itself.
+    await bus.prime(run_id, 4)
+    assert await bus.publish(run_id, "STEP_STARTED", {}) == 12
+
+
+def test_taking_over_a_run_primes_before_it_emits() -> None:
+    """Order is the whole property: priming after the first emit is priming
+    after the collision it exists to prevent."""
+    from pathlib import Path
+
+    source = Path("app/services/run_service.py").read_text()
+    body = source[source.index("async def execute_run("):source.index("async def _finalise(")]
+    assert "_prime_events" in body, "execute_run must prime the watermark"
+    assert body.index("_prime_events") < body.index('"RUN_STARTED"'), (
+        "the watermark has to be primed before the first event is published"
+    )
+
+    # And the sweep, whose runs were executed by a process that is gone.
+    sweep = source[source.index("async def reconcile_stale("):source.index("async def heartbeat(")]
+    assert "_prime_events" in sweep
+    assert sweep.index("_prime_events") < sweep.index('"RUN_FINISHED"')

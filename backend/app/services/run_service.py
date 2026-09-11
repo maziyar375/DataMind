@@ -27,7 +27,7 @@ from datetime import timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clock import utcnow
@@ -427,6 +427,12 @@ class RunService:
         if run is None:  # pragma: no cover - claimed rows exist by definition
             return
         fencing_token = run.fencing_token
+        # What has already been spent on this run, before anything is emitted.
+        # A run this process started has none and the read costs one indexed
+        # query; a run it *reclaimed* has a whole pipeline's worth, and without
+        # this every event from here collides on `uq_run_event_seq` and is
+        # dropped by `_emit`'s silent rollback.
+        await self._prime_events(run_id)
 
         await self._emit(run_id, "RUN_STARTED", {
             "run_id": str(run_id),
@@ -830,7 +836,24 @@ class RunService:
 
     # ── reconciliation ───────────────────────────────────────────────────
     async def reconcile_stale(self) -> int:
-        """A killed process must leave FAILED runs, never RUNNING forever."""
+        """A killed process must leave FAILED runs, never RUNNING forever.
+
+        **And it must say so.** This was the one terminal transition in the
+        product that wrote a status and emitted nothing, which made it the one
+        that nobody watching ever heard about. Both watchers wait on
+        `RUN_FINISHED` and only on that: the SSE generator's in-flight branch
+        parks on `async for event in stream` until a terminal event arrives, so
+        the HTTP response never ends, so the browser never reaches the polling
+        fallback that *does* know how to re-read a run's status. A swept run
+        therefore went FAILED in the database while the screen it was on
+        carried on showing a spinner — for as long as the tab stayed open.
+
+        The ids come back from the `UPDATE` rather than from a `SELECT` before
+        it, so what is announced is exactly what this sweep changed: two
+        replicas reconciling at once each emit for their own rows and neither
+        announces the other's, which a read-then-write would get wrong in the
+        direction of announcing a run twice.
+        """
         cutoff = utcnow() - timedelta(seconds=self._settings.run_stale_after_seconds)
         result = await self._db.execute(
             update(Run)
@@ -845,9 +868,71 @@ class RunService:
                 error_message="The worker handling this run stopped responding.",
                 finished_at=utcnow(),
             )
+            .returning(Run.id)
         )
+        swept = list(result.scalars())
         await self._db.commit()
-        return result.rowcount or 0
+        for run_id in swept:
+            # Swept runs were executed by a process that is gone, so every seq
+            # they used is unknown here and starting from one would collide.
+            await self._prime_events(run_id)
+            # After the commit, deliberately: the row a reconnecting client
+            # replays has to exist before it is told to come and look. A failed
+            # emit leaves a run correctly FAILED and one client waiting, which
+            # is the state this whole method already exists to clean up and is
+            # strictly better than the reverse.
+            await self._emit(run_id, "RUN_FINISHED", {
+                "status": RunStatus.FAILED,
+                "error_code": "E_ORPHANED",
+            })
+        return len(swept)
+
+    async def fail_unhandled(self, run_id: UUID, reason: str) -> bool:
+        """End a run whose executor crashed *outside* the run's own handling.
+
+        `execute_run` guards `pipeline.run` and nothing else: its `try` opens
+        around a hundred and ninety lines in, so the claim, the `RUN_STARTED`
+        emit, the §8b grant re-check, the connection and model resolution, the
+        key decryption and the connector open all sit in front of it. An
+        exception in any of them unwinds past `_finalise` — which is the only
+        thing that would have written a terminal status and emitted a terminal
+        event — and lands in the worker's bare `except Exception`, which used
+        to log and stop.
+
+        **The run then stayed `RUNNING` with nobody executing it**, and the
+        only thing that ever ended it was `reconcile_stale`, sixty seconds of
+        staleness and a thirty-second sweep later. Measured on a real one:
+        four minutes twenty-five seconds between `created_at` and
+        `finished_at`, and because that sweep emits nothing, the screen never
+        changed at either end of it. A question asked in chat simply span.
+
+        Terminal states are adopted, never overwritten — the same rule
+        `_finalise` follows. A run the reader cancelled while it was crashing
+        is cancelled, not failed: they stopped it, and the fact that it was
+        also broken is not the more useful sentence.
+        """
+        status_now, _ = await self._authority(run_id)
+        if status_now is None or RunStatus(status_now).is_terminal:
+            return False
+        run = await self._db.get(Run, run_id)
+        if run is None:  # pragma: no cover - `_authority` just read it
+            return False
+        run.status = RunStatus.FAILED
+        run.error_code = "E_INTERNAL"
+        # The exception's own words, bounded like every other `error_message`.
+        # `E_ORPHANED`'s "the worker stopped responding" is what this looked
+        # like from the outside and it told the reader nothing they could act
+        # on — it describes the sweep that noticed, not the thing that broke.
+        run.error_message = (reason or "The run stopped unexpectedly.")[:500]
+        run.finished_at = utcnow()
+        await self._db.commit()
+        await self._emit(run_id, "RUN_FINISHED", {
+            "status": run.status,
+            "error_code": run.error_code,
+            "repair_count": run.repair_count,
+            "total_latency_ms": run.total_latency_ms,
+        })
+        return True
 
     async def heartbeat(self, run_id: UUID) -> bool:
         """Say we are alive; find out whether we have been asked to stop.
@@ -890,6 +975,19 @@ class RunService:
         return True
 
     # ── helpers ──────────────────────────────────────────────────────────
+    async def _prime_events(self, run_id: UUID) -> None:
+        """Tell the bus the highest `seq` this run has already used.
+
+        `seq` is handed out by an in-memory counter per process, which is
+        correct while one process owns a run and wrong the moment a *second*
+        one takes it over — a restart, a reclaim, a sweep. The durable log is
+        the authority; this is the one read that asks it.
+        """
+        highest = await self._db.execute(
+            select(func.max(RunEventRow.seq)).where(RunEventRow.run_id == run_id)
+        )
+        await event_bus.prime(run_id, highest.scalar() or 0)
+
     async def _emit(self, run_id: UUID, event_type: str, data: dict[str, Any]) -> None:
         seq = await event_bus.publish(run_id, event_type, data)
         if event_type in TRANSIENT_RUN_EVENTS:
