@@ -54,7 +54,6 @@ import {
 } from '../components/chat'
 import { absorbThought, endThought } from '../components/thinking'
 import type { ThinkingState } from '../components/thinking'
-import { AccessPopover } from '../components/access'
 import { TemplateEditor } from '../components/knowledge'
 import { AddToDashboardDialog, AddToReportDialog } from '../components/answer-destinations'
 import {
@@ -1010,19 +1009,14 @@ export default function ChatPage() {
               emptyLabel="Add a model provider…"
               onEmpty={() => navigate('/providers')}
             />
-            {/* Sharing a thread shares the **transcript** — the questions and
-                the prose — and not the database it was asked against. A
-                reader who was not also given the connection sees every turn's
-                table replaced by a placeholder, which is the same rule a
-                dashboard tile follows. The control draws nothing unless this
-                viewer holds `manage` on the thread. */}
-            {activeId && (
-              <AccessPopover
-                key={activeId}
-                base={`conversations/${activeId}`}
-                resourceLabel={activeTitle}
-              />
-            )}
+            {/* **No share control, because a thread is not shareable.** It
+                had one for a release — every artifact got `/grants` in Phase 8
+                and a conversation was treated as one of them — and on a
+                personal thread it only ever read "Only you", which is a
+                control whose whole purpose is to state the rule it cannot
+                change. A conversation reaches its owner and nobody else; the
+                routes behind this are gone too, so the sentence is enforced
+                rather than displayed. */}
           </div>
         </header>
 

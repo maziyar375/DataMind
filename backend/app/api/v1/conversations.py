@@ -31,7 +31,6 @@ from app.api.schemas import (
     RunStepRead,
     SuggestionsRead,
 )
-from app.api.v1.access import attach_access_routes
 from app.core.errors import NotFoundError, ValidationError
 from app.domain.ports.authz import ResourceRef
 from app.domain.value_objects import RunStatus
@@ -60,20 +59,22 @@ from app.services.run_service import RunService
 
 router = APIRouter(tags=["conversations"])
 
-# `/grants`, `/actions` and `/transfer` for a thread. `base` because this
-# router carries no prefix and spells the collection per route.
+# **A conversation is not shareable, and has no access routes.** Phase 8 gave
+# every artifact `/grants`, `/actions` and `/transfer`, a thread included, on
+# the reasoning that sharing a transcript is like sharing a dashboard. It is
+# not: a thread is one person thinking out loud, and the product's answer to
+# *"who can see this?"* is **its owner, always**.
 #
-# **Sharing a thread shares the transcript, not the database behind it.**
-# The grant reaches the conversation; every run in it still asks about the
-# connection separately, so a shared thread whose connection the reader
-# cannot reach shows its questions and its answers and refuses to re-run
-# them — which is the same rule a dashboard tile follows.
-attach_access_routes(
-    router,
-    ResourceType.CONVERSATION,
-    param="conversation_id",
-    base="/conversations",
-)
+# Removed rather than hidden. A share surface taken off the screen while the
+# routes stay open is a capability that still exists and that nothing in the
+# product mentions — which is how a reader ends up believing something private
+# is private for a reason other than the one that makes it true. `grant` has no
+# other door: `GrantService.grant_wildcard` is service-only with no HTTP route,
+# so with these gone a conversation cannot be granted to anybody at all.
+#
+# What stays is the enforcement. `_authorized_conversation` and the
+# `authz.visible` calls in the list routes are what make a thread its owner's,
+# and they are the reason "only your own" is a rule rather than a convention.
 
 
 # ── conversations ────────────────────────────────────────────────────────
@@ -82,10 +83,10 @@ async def _authorized_conversation(
 ) -> Conversation:
     """The thread, if this principal may act on it at `privilege`.
 
-    A conversation is personal by default and grantable in principle — the
-    resource type exists, the privileges mean something (§13.3) — but nothing
-    shares one today, so the answer is the owner's and only the owner's. What
-    changes in Phase 8 is the authorizer, not this function.
+    **A conversation reaches exactly one person: whoever owns it.** It was
+    grantable in principle for one release — the routes existed, the privileges
+    had meanings — and nothing ever shared one. The routes are gone; this is
+    what is left, and it is the part that was doing the work all along.
     """
     result = await db.execute(
         select(Conversation).where(Conversation.id == conversation_id)
@@ -94,9 +95,10 @@ async def _authorized_conversation(
     if row is None:
         raise NotFoundError("Conversation not found.")
     # 404 when nothing reaches them, 403 naming the privilege when something
-    # does — §19.1, through the one function that holds the rule. A thread can
-    # be shared as of Phase 8, so "you may read this transcript but not add to
-    # it" is a real state rather than a broken link.
+    # does — §19.1, through the one function that holds the rule. With sharing
+    # gone the 403 half is now unreachable for a thread and the honest outcome
+    # for somebody else's conversation is *not found*, which is also the only
+    # thing a reader should learn about a thread that is not theirs.
     await require(
         ctx, authz, ResourceRef.to(ResourceType.CONVERSATION, row), privilege, db=db
     )

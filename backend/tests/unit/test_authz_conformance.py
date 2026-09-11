@@ -595,3 +595,50 @@ def _code(source: str) -> str:
         ):
             node.body = body[1:] or [ast.Pass()]
     return ast.unparse(tree)
+
+
+# ── a conversation reaches exactly one person ────────────────────────────
+def test_a_conversation_has_no_share_routes_at_all() -> None:
+    """**A thread is its owner's, and nothing can grant it to anybody.**
+
+    Phase 8 gave every artifact `/grants`, `/actions` and `/transfer` and swept
+    conversations in with the rest, on the reasoning that sharing a transcript
+    is like sharing a dashboard. It is not: a thread is one person thinking out
+    loud. Nothing ever shared one — zero rows, across the whole product — and
+    the control it put on the chat header could only ever read *"Only you"*,
+    which is a share button whose sole function is to state the rule it cannot
+    change.
+
+    Asserted on the routing table rather than on the file, because the point is
+    that the capability is *gone* rather than hidden. A surface taken off the
+    screen while its routes stay open is exactly the shape of the bugs this
+    codebase keeps finding: something reachable that nothing in the product
+    mentions, so the reason a reader believes a thread is private is not the
+    reason it actually is.
+
+    `GrantService.grant_wildcard` is the only other way a grant is created and
+    it has no HTTP route, so with these absent a conversation cannot be granted
+    at all — which is what makes *"everyone sees only their own"* a property of
+    the system rather than of its current data.
+    """
+    app = create_app()
+    shared = [
+        f"{sorted(route.methods or ())} {route.path}"
+        for route in _routes(app)
+        if "/conversations/" in route.path
+        and route.path.rsplit("/", 1)[-1] in {"grants", "actions", "transfer"}
+    ]
+    assert not shared, (
+        "a conversation is not shareable, but these routes share one:\n  "
+        + "\n  ".join(shared)
+    )
+
+    # The enforcement is the half that has to stay: it is what makes a thread
+    # its owner's, and removing the share routes did not touch it.
+    import inspect
+
+    from app.api.v1 import conversations
+
+    source = inspect.getsource(conversations)
+    assert "_authorized_conversation" in source
+    assert "authz.visible(ctx, ResourceType.CONVERSATION" in source
