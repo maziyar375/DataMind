@@ -1036,7 +1036,11 @@ export default function LlmProvidersPage() {
                       count: configuredCount(paramDrafts) || undefined,
                     }]
                     : []),
-                  { value: 'access', label: 'Access' },
+                  // Same tab, and for an embedder a different question — see
+                  // the section below. "Access" on a row nobody can be given
+                  // access to is a label that promises a control that is not
+                  // there.
+                  { value: 'access', label: answers ? 'Access' : 'Ownership' },
                 ]}
               />
             )}
@@ -1207,7 +1211,54 @@ export default function LlmProvidersPage() {
                   address to send. It spent a release below Advanced
                   parameters, four screens down the form, putting *"who else
                   may spend this API key"* underneath *"top_p"*. */}
-              {tab === 'access' && !creating && selected && (
+              {/* An embedder is **resolved, never chosen**, and that one fact
+                  decides what this tab can honestly offer.
+                  `_embedding_candidates` selects on
+                  `LlmConfig.owner_id == connection.owner_id` — whose provider
+                  pays — and reads no grant at all; a row with no `model`
+                  fails `can_chat`, so `resolve_llm(purpose='chat')` refuses it
+                  and `GET /llm-configs?purpose=chat` keeps it out of every
+                  picker. A share on an embedder therefore grants exactly one
+                  thing: seeing it in a list. It was drawn as a full sharing
+                  panel under the sentence *"who may answer questions with this
+                  model"*, which is false twice over — it answers none, and
+                  nobody is given it.
+
+                  Transfer stays, and it is the whole of why this tab survives
+                  for an embedder rather than being hidden: ownership is the
+                  one fact resolution actually reads, so handing the row over
+                  is a real act with a real consequence. */}
+              {tab === 'access' && !creating && selected && !answers && (
+                <Section
+                  title="Ownership"
+                  description="An embedder is resolved, not chosen — so there is nobody to share it with."
+                  icon={<Icon.Users size={14} />}
+                >
+                  <p
+                    style={{
+                      fontSize: 12.5,
+                      color: 'var(--text-dim)',
+                      margin: 0,
+                      lineHeight: 1.6,
+                    }}
+                  >
+                    DataMind picks the embedder from whoever owns the connection
+                    being indexed, never from a grant — so sharing this row would
+                    give nobody anything. What does matter is who owns it:
+                    transfer it to the person whose connections it should embed,
+                    and the vectors already made with it keep being served.
+                  </p>
+                  <div style={{ display: 'flex' }}>
+                    <TransferControl
+                      base={`llm-configs/${selected.id}`}
+                      title={selected.name}
+                      onTransferred={() => void refresh()}
+                    />
+                  </div>
+                </Section>
+              )}
+
+              {tab === 'access' && !creating && selected && answers && (
                 <Section
                   title="Access"
                   description="Who may answer questions with this model. Sharing it never shares its API key."

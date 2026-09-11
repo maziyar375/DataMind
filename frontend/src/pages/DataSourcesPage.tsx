@@ -1089,6 +1089,15 @@ export default function DataSourcesPage() {
             )}
 
             {!creating && tab === 'access' && selected && (
+              // `DetailBody`, like every other tab on this page and like the
+              // whole of LLM providers. Without it this one tab was full-bleed
+              // — no 28px gutter, no `DETAIL_WIDTH` ceiling — so the card grew
+              // to whatever the window was and its heading started several
+              // pixels left of the heading on the tab beside it. That is the
+              // exact failure the note on the Schema tab below warns about:
+              // six tabs of one record must not move under the strip that
+              // switches them.
+              <DetailBody>
               <Section
                 title="Who can reach this data source"
                 description="Everyone here can ask questions through this connection under the disclosure policy on the Policy tab — which is somebody else’s decision about what leaves your database, so read it before you share."
@@ -1113,6 +1122,7 @@ export default function DataSourcesPage() {
                   }
                 />
               </Section>
+              </DetailBody>
             )}
 
             {!creating && tab === 'schema' && (
