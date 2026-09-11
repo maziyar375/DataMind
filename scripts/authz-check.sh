@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The authorization gate — docs/user-management-and-access-control-plan.md §18.4.
+# The authorization gate — docs/plans/user-management-and-access-control.md §18.4.
 #
 # Four greps, and each one names a way of deciding access that this codebase has
 # agreed not to use. §18.4 says there are three enforcement shapes and no fourth:
@@ -76,7 +76,7 @@ grep -rn "authz-ok:" backend/app frontend/src 2>/dev/null || echo "   none"
 if [ "${fail}" -ne 0 ]; then
   echo
   echo "authz-check: the lines above decide access outside the authorizer."
-  echo "Non-blocking until Phase 2 of docs/user-management-and-access-control-plan.md."
+  echo "Non-blocking until Phase 2 of docs/plans/user-management-and-access-control.md."
   exit 1
 fi
 

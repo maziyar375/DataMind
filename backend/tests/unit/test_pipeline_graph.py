@@ -7,7 +7,7 @@ test is an edge that can be quietly dropped, and the two restore edges are
 exactly that kind: `_restore_superseded` fires only when a check-driven retry
 fails, which is not a path anyone reaches by hand.
 
-The port map from [docs/langgraph-migration.md](../../../docs/langgraph-migration.md)
+The port map from [docs/plans/langgraph-migration.md](../../../docs/plans/langgraph-migration.md)
 §4 Phase 1, in one assertion.
 """
 from __future__ import annotations

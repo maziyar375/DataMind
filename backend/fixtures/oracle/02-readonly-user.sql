@@ -7,7 +7,7 @@
 -- That last one is the whole question the catalog-comment feature had to answer
 -- on Oracle: `ALL_TAB_COMMENTS` and `ALL_COL_COMMENTS` show exactly what the
 -- connecting role was granted, so a role with nothing still reads the comments
--- on the tables it can see, and nothing else (docs/catalog-metadata-plan.md §9).
+-- on the tables it can see, and nothing else (docs/reference/catalog-metadata.md §9).
 --
 -- If you widen this user, that property stops being tested. Point a *new* user
 -- at the database instead.

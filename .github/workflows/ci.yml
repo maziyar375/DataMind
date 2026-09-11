@@ -27,7 +27,7 @@ jobs:
       - name: Architecture contracts
         run: lint-imports
 
-      # The authorization gate — docs/user-management-and-access-control-plan.md
+      # The authorization gate — docs/plans/user-management-and-access-control.md
       # §18.4. Four greps, each naming a way of deciding access that this
       # codebase has agreed not to use.
       #
@@ -53,7 +53,7 @@ jobs:
       # request path only while it stays behind the orchestration boundary.
       # `app/pipeline/` holds the chat graph and the shared repair subgraph;
       # `app/workers/` holds the report graph. Nothing else may know it exists.
-      # See docs/langgraph-migration.md.
+      # See docs/plans/langgraph-migration.md.
       - name: LangGraph stays in the orchestration layer
         run: |
           if grep -rnE "^\s*(import|from)\s+(langgraph|langchain_core)\b" app/ \

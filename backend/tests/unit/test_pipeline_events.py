@@ -1,6 +1,6 @@
 """The event contract, pinned run by run.
 
-This is the safety net named in [docs/langgraph-migration.md] §4 Phase 0, and
+This is the safety net named in [docs/plans/langgraph-migration.md] §4 Phase 0, and
 it exists *before* the orchestrator moves so that the move can be proved. Its
 job is non-negotiable #2: the SSE event sequence — same types, same `seq`
 numbering, same order — and the `run_steps` rows written alongside it. The SPA

@@ -1275,7 +1275,7 @@ export interface SqlDraft {
 // ── reports ───────────────────────────────────────────────────────────────
 // A report is a *document*: a structure the user approved, prose written over
 // real results, and a run kept as a snapshot of a moment. It shares no table
-// and no code path with dashboards — see docs/reports-plan.md §1.
+// and no code path with dashboards — see docs/history/reports-plan.md §1.
 
 /**
  * Derived from the request text server-side, never picked in the UI.

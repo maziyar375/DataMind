@@ -5,7 +5,7 @@ second way.** It runs in a dependency, *before* the handler body, and the
 handler cannot obtain its `ctx` without it — which is the answer to OWASP
 API1:2023, because a check that lives in a dependency cannot be forgotten by
 the next route somebody adds. See §18.4 of
-`docs/user-management-and-access-control-plan.md` for the three enforcement
+`docs/plans/user-management-and-access-control.md` for the three enforcement
 shapes and why there is no fourth.
 """
 from __future__ import annotations

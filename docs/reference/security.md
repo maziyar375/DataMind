@@ -9,9 +9,9 @@ rather than trust it. Where a protection has a known limit, the limit is
 stated — a security document that lists only its strengths is a marketing
 document.
 
-Related reading: [architecture.md](architecture.md) for why the system is
-shaped this way, [pipeline.md](pipeline.md) for what each node does,
-[CODEBASE.md](CODEBASE.md) for where things live.
+Related reading: [architecture-proposal.md](../history/architecture-proposal.md) for why the system is
+shaped this way, [pipeline-chat.md](pipeline-chat.md) for what each node does,
+[codebase.md](codebase.md) for where things live.
 
 ---
 
@@ -77,7 +77,7 @@ greps for violations, so this list cannot silently grow.
 
 **Thirteen and not fourteen** because #8 is a use case without a call site: a
 draft reuses the *node* that would have made the call anyway, which is the whole
-point of §0.3 in [pipeline.md](pipeline.md) — a tile's statement is written
+point of §0.3 in [pipeline-chat.md](pipeline-chat.md) — a tile's statement is written
 against the same prompt, the same guard and the same budget as a chat answer.
 An earlier count of fourteen counted `sql_draft_service.py` as a site because it
 *constructs* the gateway there; constructing one sends nothing.
@@ -123,7 +123,7 @@ a provider's vector width rather than assume it from a model name.
 > defined once, sent under the policy in force at narration time. The line
 > numbers above moved with that refactor (`:880` → `:742`, `:961` → `:823`);
 > the functions did not change. See
-> [langgraph-migration.md](langgraph-migration.md) Phase 3.
+> [langgraph-migration.md](../plans/langgraph-migration.md) Phase 3.
 
 > **Changed:** #10–#12 are Reports, and were missing from this table until
 > 2026-08-12 — the list had not been revisited since the feature landed.
@@ -288,7 +288,7 @@ re-validates them against the connection's current snapshot like any tile
 
 ### 2.4 Catalog descriptions are a new class of content, and it is untrusted
 
-Since [catalog-metadata-plan.md](catalog-metadata-plan.md) landed, the schema
+Since [catalog-metadata.md](catalog-metadata.md) landed, the schema
 block carries one more thing: the **descriptions the target database itself
 holds** — `COMMENT ON` on PostgreSQL, MySQL and Oracle, `MS_Description`
 extended properties on SQL Server — for tables, columns, and the database or
@@ -423,7 +423,7 @@ WHERE tier = 'ENTERPRISE' AND region = 'EMEA'
 ```
 
 Rendered into a prompt — which is what Phase 5 of
-[learning-loop-plan.md](learning-loop-plan.md) does — or into a *"this is the
+[learning-loop.md](../plans/learning-loop.md) does — or into a *"this is the
 saved answer"* panel, that puts **two column values** in front of the model on
 a connection whose policy may say none may go. Under `NONE` and `AGGREGATE`,
 `HintBudget.value_lists` is false and no value read from a row reaches the
@@ -568,7 +568,7 @@ contain a literal — `WHERE status = 'churned'` — that originally came from a
 value list a wider policy once allowed. It is a single token, it is already on
 the user's screen as an auditable artifact, and stripping it would take from a
 follow-up the one thing it most needs. Also noted in
-[pipeline.md](pipeline.md) §5.
+[pipeline-chat.md](pipeline-chat.md) §5.
 
 A **taught** question's SQL reaches the narration call the same way when a
 short-circuit answers from it, which is the second half of §3.3 — same residual,
@@ -863,7 +863,7 @@ and looks authoritative. A deployment behind a proxy that does not set
 `X-Real-IP` records the proxy's address, which is honest and fixable in one
 line of that proxy's config.
 
-**One half of [mvp2 §D4](mvp2-plan.md) landed with Phase 7 and one half has
+**One half of [mvp2 §D4](../plans/mvp2.md) landed with Phase 7 and one half has
 not.** Every ask now records the **disclosure policy in force for it**, under
 `ask.recorded` — written at ask time rather than read off the connection
 afterwards, because the policy can change between one question and the next,
@@ -944,7 +944,7 @@ interface offers exactly what the API would allow" a property rather than an
 aspiration.
 
 **Roles, capabilities, and where the answer to "may they?" lives.** Phase 3 of
-[user-management-and-access-control-plan.md](user-management-and-access-control-plan.md)
+[user-management-and-access-control.md](../plans/user-management-and-access-control.md)
 stopped `users.role` being a permission — it became a two-value cache the role
 service kept true so a rollback stayed a config flip — and **Phase 10 dropped
 the column** (migration `0029`), because a cache of a fact nobody consults is a
@@ -1148,7 +1148,7 @@ The defaults are development defaults. Before real data:
       `admin@raymand.local` / `raymand`, and the API logs a loud warning about
       it — **on the boot that creates the account, and only that one.**
       `ensure_admin` returns early once the user exists
-      ([`services/bootstrap.py`](../backend/app/services/bootstrap.py)), so a
+      ([`services/bootstrap.py`](../../backend/app/services/bootstrap.py)), so a
       deployment left on the default gets no reminder after its first start.
       Change it *in the product* — the account screen at `/settings`, which
       asks for the current password — rather than only in `.env`: the variable

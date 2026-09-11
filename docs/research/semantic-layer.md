@@ -1,8 +1,8 @@
 # The semantic layer as a model — competitor research and options for DataMind
 
-> **Subject:** [mvp2-plan.md §1.3](../mvp2-plan.md#13-the-semantic-layer-is-a-blob-not-a-model) —
+> **Subject:** [mvp2.md §1.3](../plans/mvp2.md#13-the-semantic-layer-is-a-blob-not-a-model) —
 > *"The semantic layer is a blob, not a model"*, rated **High**. The render bug
-> under it was fixed 2026-08-30 ([A6](../mvp2-plan.md#a6-fix-the-semantic-layer-render--s--done-2026-08-30));
+> under it was fixed 2026-08-30 ([A6](../plans/mvp2.md#a6-fix-the-semantic-layer-render--s--done-2026-08-30));
 > the design ceilings it names are what this document is about.
 > **Scope:** how Microsoft Data Formulator, Wren AI, Databricks AI/BI Genie and
 > Power BI / Fabric Copilot store, version, review and *enforce* a semantic
@@ -989,4 +989,4 @@ how to explain — including the whole-layer re-key sentence.
   `backend/app/pipeline/state.py:234` ·
   `frontend/src/components/semantic.tsx` · `semantic-drift.ts` ·
   [CLAUDE.md § The semantic layer](../../CLAUDE.md) ·
-  [mvp2-plan.md §1.3](../mvp2-plan.md#13-the-semantic-layer-is-a-blob-not-a-model)
+  [mvp2.md §1.3](../plans/mvp2.md#13-the-semantic-layer-is-a-blob-not-a-model)

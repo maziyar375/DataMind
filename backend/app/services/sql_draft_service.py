@@ -13,7 +13,7 @@ disclosure budget, and refused by the same guard. The preview under the editor
 is produced by `execute_saved_sql` — the code that will run the tile at 03:00 —
 so what the user approves is what will actually run.
 
-That sharing is Phase 2 of `docs/langgraph-migration.md`, and it is worth
+That sharing is Phase 2 of `docs/plans/langgraph-migration.md`, and it is worth
 knowing why. This module used to drive those nodes with a `for` loop of its
 own, which made it a **second executor over one node set**: every change to
 repair semantics had to be made twice or diverge silently, and it did —
@@ -477,7 +477,7 @@ async def _chart_suggestion(
        what this function returned for every draft before the model was asked.
        The statement is already valid and its preview already ran; losing a
        picker default to a presentation failure would break the rule in
-       [pipeline.md §4.1](../../../docs/pipeline.md) that a step which has
+       [pipeline-chat.md §4.1](../../../docs/reference/pipeline-chat.md) that a step which has
        produced correct data may not lose it to one.
     3. **The model's answer is never stored raw.** It goes through `plan_chart`
        like any other intent, so it gets the same name check and shape repair a

@@ -717,7 +717,7 @@ class ConnectionUpdate(BaseModel):
     conflict_checks_enabled: bool | None = None
     #: Whether taught questions reach the generate prompt as few-shot examples.
     #: Off is byte-identical to v8 and is the default, until the eval gate in
-    #: `docs/eval.md` §6.1 says otherwise.
+    #: `docs/reference/eval.md` §6.1 says otherwise.
     knowledge_examples_enabled: bool | None = None
 
 
@@ -1484,7 +1484,7 @@ class SuggestionRead(BaseModel):
     sql: str = ""
     source: str = ""
     #: Whether the literals in `sql` were a model's choice — which decides
-    #: whether they may be disclosed. `docs/security.md`.
+    #: whether they may be disclosed. `docs/reference/security.md`.
     model_derived: bool = False
     origin_id: str = ""
     words: list[str] = Field(default_factory=list)

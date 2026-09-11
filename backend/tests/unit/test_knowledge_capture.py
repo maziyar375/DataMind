@@ -450,7 +450,7 @@ def test_a_flag_becomes_the_first_row_of_the_backlog(client: Any) -> None:
     assert flagged[0]["question"] == "total revenue last month"
     assert "sales_daily_rollup" in flagged[0]["sql"]
     # A generated statement's literals were the model's choice, so a template
-    # confirmed from it is gated like a sample value. `docs/security.md`.
+    # confirmed from it is gated like a sample value. `docs/reference/security.md`.
     assert flagged[0]["model_derived"] is True
 
 

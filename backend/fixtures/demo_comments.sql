@@ -9,7 +9,7 @@
 --
 -- WRITTEN TO THE RENDER CAP, NOT THE STORED CAP
 -- Stored caps are 400 (table) / 240 (column), but the run prompt clips column
--- comments at ~120 chars on a word boundary (docs/catalog-metadata-plan.md
+-- comments at ~120 chars on a word boundary (docs/reference/catalog-metadata.md
 -- §4.4). So every column comment below front-loads the fact that changes the
 -- SQL — the filter to apply, the unit, what NULL means — and leaves colour for
 -- the tail, where losing it costs nothing.

@@ -1,100 +1,153 @@
-# Documentation index
+# Documentation
 
-Twenty-one documents plus five research notes. This page exists so you don't have
-to open `architecture.md` (1,600 lines) to answer a question about charts.
+Thirty-six documents, in five groups. **Which group a document is in tells
+you how to read it**, and that is the whole point of the arrangement:
 
-The three `pipeline*.md` files are one set: [pipeline.md](pipeline.md) holds the
-chat run **and** the map of all three pipelines (§0), with
-[pipeline-dashboard.md](pipeline-dashboard.md) and
-[pipeline-report.md](pipeline-report.md) taking the other two in the same shape.
+| Folder | What it is | How to read it |
+| --- | --- | --- |
+| this page, [status.md](status.md), [decisions.md](decisions.md), [development.md](development.md) | Orientation | Start here |
+| [`reference/`](reference/) | **How the built system works** | As fact. Where a reference doc and any other document disagree, the reference doc is right |
+| [`plans/`](plans/) | Work: what is being built, in what order, and its ledger | As intent, plus a dated record of what landed |
+| [`research/`](research/) | Arguments with evidence — what other products do, and what that implies | As argument. **Never** as a description of this codebase |
+| [`history/`](history/) | Superseded or pre-build documents | For the *reasoning*, which is not recoverable from the code. **Not** as a description of the present |
+
+Two more entry points sit outside `docs/`: [../README.md](../README.md) for
+people *using* DataMind, and [../CLAUDE.md](../CLAUDE.md) for anyone — human or
+agent — about to *change* it.
+
+---
 
 ## Start here
 
-| If you are… | Read |
+| If you are asking… | Read |
 | --- | --- |
-| Using DataMind | [../README.md](../README.md) |
-| About to change code | [../CLAUDE.md](../CLAUDE.md) — the map, the invariants, the gotchas |
-| Learning the stack | [CODEBASE.md](CODEBASE.md) — a code-grounded tour |
-| Asking *why* it is shaped this way | [architecture.md](architecture.md) |
+| What is this project? | [../README.md](../README.md) |
+| Where is the project right now? What is built, what is next? | **[status.md](status.md)** |
+| What has already been decided, and why? | **[decisions.md](decisions.md)** |
+| I am about to change code | [../CLAUDE.md](../CLAUDE.md) — the map, the invariants, the gotchas |
+| How do I run, test and verify it? | [development.md](development.md) |
+| How does the whole stack fit together? | [reference/codebase.md](reference/codebase.md) — a code-grounded tour |
+| Why is it shaped this way? | [decisions.md](decisions.md) first, then [history/architecture-proposal.md](history/architecture-proposal.md) |
 
-## By what you are touching
+## Before you touch…
 
 | Touching | Read first | Why |
 | --- | --- | --- |
-| Anything under `frontend/src/` — a page, a component, a token, a class | [frontend.md](frontend.md) | The shell and every section in it, what each owns, the components they share, the breakpoint table, and the design-system rules nothing in CI enforces |
-| `sqlguard/`, `disclosure.py`, `HintBudget`, or adding an LLM call site | [security.md](security.md) | Every claim names the module that enforces it, and states its limits |
-| A prompt, or anything a model is sent | [llm-calls.md](llm-calls.md) | Every unique LLM call: trigger, gateway method, the verbatim system and user prompt, what fills each placeholder, and what happens when it fails |
-| A pipeline node, a prompt, the routing | [pipeline.md](pipeline.md) | The chat run node by node — plus §0, which maps all three pipelines and lists every LLM call site |
-| A tile's SQL or its refresh | [pipeline-dashboard.md](pipeline-dashboard.md) | Authoring (model, once) vs refresh (no model, forever), step by step, with every error code |
-| Outline, feasibility, report generation | [pipeline-report.md](pipeline-report.md) | The four report flows node by node: prompts, salvage parsing, prose, and what each failure costs |
-| Chart selection, Vega-Lite output | [charts.md](charts.md) | What it draws, what it refuses to draw, and why |
-| Tiles, saved-SQL execution, `query_service.py` | [dashboards.md](dashboards.md) | The second entry point to the guard, and the six rules it obeys |
-| Report generation, prose, print | [reports.md](reports.md) | Data model, generation order, where the numbers come from |
-| Retrieval, prompts, anything you want to prove helped | [eval.md](eval.md) | The golden set, the metrics, and the CI gate |
-| Claiming, cancelling, SSE fan-out, the reconciler | [cross-replica.md](cross-replica.md) | What stops being true with more than one API process, and the seven fixes |
-| A connector's catalog reads, or what a DDL comment does to a prompt | [catalog-metadata-plan.md](catalog-metadata-plan.md) | Each engine's comment SQL as actually executed, the layer-wins suppression rule, and the per-engine hazards |
-| Orchestration — moving anything else onto LangGraph | [langgraph-migration.md](langgraph-migration.md) | Which surfaces moved and which didn't, the two phases declined on measurement, and the checklist |
-| Knowledge templates — the store, the matcher, the badge, feedback | [learning-loop-plan.md](learning-loop-plan.md) | What a taught question *is*, the guard's fifth entry point, the disclosure rung its literals need, and the phase ledger |
-| **Writing an endpoint that touches anything permission-shaped** | [access-control-rules.md](access-control-rules.md) | **The rulebook.** Seven concepts, five invariants, the algorithm verbatim, and three checklists. Short enough to read first; `test_authz_conformance.py` enforces the mechanical half |
-| Users, service users, roles, teams, grants — anything about *who may* | [access-control-rules.md](access-control-rules.md), then [user-management-and-access-control-plan.md](user-management-and-access-control-plan.md) | **The rulebook first** — seven concepts, five invariants, the algorithm, and a checklist per kind of change. The plan behind it is the implementation-ready model: principals, capabilities, the privilege lattice, per-resource grants, the UI placement, and the OIDC seams. It supersedes [access-control-plan.md](access-control-plan.md), whose §0.4 lists the four decisions it reverses |
-| *"Why can this person not see that?"* | **Administration → Access review** (`/admin/access`), then the plan's §15.2 | The screen answers it from the same five facts the authorizer decides from, and every row names the **path** — owner, direct, team, role, wildcard — which is the part somebody can act on. `GET /me/permissions` is the same lens pointed at yourself, and it needs no capability |
+| `sqlguard/`, `disclosure.py`, `HintBudget`, or adding an LLM call site | [reference/security.md](reference/security.md) | Every claim names the module that enforces it, and states its limits |
+| **Anything permission-shaped — any endpoint at all** | [reference/access-control.md](reference/access-control.md) | **The rulebook.** Seven concepts, five invariants, the algorithm verbatim, three checklists. Short on purpose; `test_authz_conformance.py` and `make authz-check` enforce the mechanical half |
+| A pipeline node, a prompt, the routing | [reference/pipeline-chat.md](reference/pipeline-chat.md) | The chat run node by node — and §0 maps all three pipelines |
+| A tile's SQL or its refresh | [reference/pipeline-dashboard.md](reference/pipeline-dashboard.md) | Authoring (model, once) vs refresh (no model, forever), with every error code |
+| Outline, feasibility, report generation | [reference/pipeline-report.md](reference/pipeline-report.md) | The four report flows node by node |
+| A prompt, or anything a model is sent | [reference/llm-calls.md](reference/llm-calls.md) | Every unique call: trigger, gateway method, the verbatim prompts, what fills each placeholder, what happens when it fails |
+| Provider rows, model parameters, embedder configuration | [reference/llm-providers.md](reference/llm-providers.md) | The two creatable kinds, the parameter catalog, and the three rules about what reaches the wire |
+| Anything under `frontend/src/` | [reference/frontend.md](reference/frontend.md) | The shell, what each section owns, the breakpoints, and the design-system rules nothing in CI enforces |
+| Chart selection or Vega-Lite output | [reference/charts.md](reference/charts.md) | What it draws, what it refuses to draw, and why |
+| Tiles, saved-SQL execution, `query_service.py` | [reference/dashboards.md](reference/dashboards.md) | The second entry point to the guard, and the six rules it obeys |
+| Report generation, prose, print | [reference/reports.md](reference/reports.md) | Data model, generation order, where the numbers come from |
+| The semantic layer — generation, render, validation | [reference/semantic-layer.md](reference/semantic-layer.md) | The tiered fit, what is refused, and what survives a regeneration |
+| Knowledge templates — the store, the matcher, the badge, feedback | [reference/knowledge-templates.md](reference/knowledge-templates.md) | What a taught question *is*, the guard's fifth entry point, and the two switches that ship off |
+| A connector's catalog reads, or what a DDL comment does to a prompt | [reference/catalog-metadata.md](reference/catalog-metadata.md) | Each engine's comment SQL as executed, the layer-wins rule, the per-engine hazards |
+| Retrieval, prompts, anything you want to prove helped | [reference/eval.md](reference/eval.md) | The golden set, the metrics, and the CI gate |
+| Claiming, cancelling, SSE fan-out, the reconciler | [reference/cross-replica.md](reference/cross-replica.md) | What stops being true with more than one API process, and the seven fixes |
+| Orchestration — moving anything else onto LangGraph | [plans/langgraph-migration.md](plans/langgraph-migration.md) | Which surfaces moved, which didn't, and the two phases declined on measurement |
+| *"Why can this person not see that?"* | **Administration → Access review** (`/admin/access`), then [plans/user-management-and-access-control.md](plans/user-management-and-access-control.md) §15.2 | The screen answers it from the same five facts the authorizer decides from, and every row names the **path** — owner, direct, team, role, wildcard. `GET /me/permissions` is the same lens pointed at yourself, and needs no capability |
 
-`catalog-metadata-plan.md` and `learning-loop-plan.md` are also **plans**, in
-the sense below — they are the reference for their subject *and* the record of
-how it was built. `user-management-and-access-control-plan.md` and `access-control-plan.md` are the
-odd ones out: they are plans for something **not built**, so read them as
-proposals and not as descriptions — and read the first one, which supersedes the
-second. Read the §-pointers in the status table before starting anywhere else in
-them.
+## `reference/` — how the built system works
 
-## Plans and records
+The authoritative description of what exists. Seventeen documents.
 
-These eight are **narratives of work**, not references: each was written to be
-executed against, and each carries a dated ledger of what changed while it was
-being executed. They stay in `docs/` rather than in a `plans/` subfolder because
-the cross-links point at them from the reference docs — the classification below
-is the organisation, not the directory.
+**The system:** [codebase.md](reference/codebase.md) ·
+[frontend.md](reference/frontend.md) ·
+[security.md](reference/security.md) ·
+[access-control.md](reference/access-control.md) ·
+[cross-replica.md](reference/cross-replica.md)
 
-| Doc | Status |
+**The three pipelines** — one set, written to the same shape:
+[pipeline-chat.md](reference/pipeline-chat.md) (which also maps all three in
+its §0) · [pipeline-dashboard.md](reference/pipeline-dashboard.md) ·
+[pipeline-report.md](reference/pipeline-report.md)
+
+**The model layer:** [llm-calls.md](reference/llm-calls.md) (what is sent) ·
+[llm-providers.md](reference/llm-providers.md) (how a provider is configured)
+
+**The features:** [dashboards.md](reference/dashboards.md) ·
+[reports.md](reference/reports.md) ·
+[charts.md](reference/charts.md) ·
+[semantic-layer.md](reference/semantic-layer.md) ·
+[knowledge-templates.md](reference/knowledge-templates.md) ·
+[catalog-metadata.md](reference/catalog-metadata.md) ·
+[eval.md](reference/eval.md)
+
+Two of these are **also** the record of how their subject was built, because
+nothing superseded them: `catalog-metadata.md` carries its own phase ledger
+(§10), and `eval.md` carries the baseline table. Both are still the reference
+for their subject.
+
+## `plans/` — work, and its ledger
+
+A plan is a **narrative of work**, not a reference: written to be executed
+against, and carrying a dated record of what changed while it was. Read
+[status.md](status.md) for which are done.
+
+| Plan | State |
 | --- | --- |
-| [langgraph-migration.md](langgraph-migration.md) | **Live.** Phases 0–3 and 6 are done — the chat pipeline and the report worker are compiled graphs, the repair region is one subgraph with two callers, and the cross-replica work landed as [cross-replica.md](cross-replica.md). Phase 4 (checkpointing) and Phase 5 (durable clarification) are argued and *declined*, each with the measurement that decided it. Read it before moving anything else onto LangGraph. |
-| [catalog-metadata-plan.md](catalog-metadata-plan.md) | **Live, and still the reference.** Unlike `reports-plan.md` this one was never superseded by a companion: it is both the plan and the only description of catalog comments, so §10's ledger and "decisions changed while executing" are the record of what actually shipped. Read §1 for the per-engine SQL and §4 for what reaches the model. |
-| [learning-loop-plan.md](learning-loop-plan.md) | **Live.** Teaching the system a question and measuring whether it helped. All nine phases are in the tree — the store and the curation surface, match/short-circuit/badge, feedback and the backlog, store health, few-shot, the in-product benchmark, the embedding matcher, permissions — but **three of them ship *off***: the few-shot block, the embedding matcher and Phase 0's own baselines all wait on the same thing, a provider key this environment does not have. §13 is the ledger, one checkbox per deliverable with the check that proves its state, and §13.13 is the dated record of each landing. Read §0.2 before arguing with any of it — four decisions are recorded there rather than re-argued. **§4.2's information architecture was superseded** by the UI audit: the console is a rail entry at `/knowledge` as well as a connection tab, and the correction is inline where the original reasoning is. |
-| [mvp2-plan.md](mvp2-plan.md) | **Live.** The wider second-milestone plan the learning loop is one strand of. Where it and `learning-loop-plan.md` disagree about the knowledge store, §1.3 of the latter is the correction. |
-| [reports-plan.md](reports-plan.md) | **Superseded.** The phase-by-phase plan for Reports, kept as the record of what was intended. [reports.md](reports.md) describes what was built — where they disagree, reports.md is right. |
-| [access-control-rules.md](access-control-rules.md) | **Live. The rulebook — read it before writing an endpoint.** Seven concepts, five invariants, the effective-permission algorithm verbatim, and a checklist each for a new endpoint, a new resource type and a new capability. Short on purpose; the argument is in the plan below. `backend/tests/unit/test_authz_conformance.py` enforces every rule in it a machine can check. |
-| [user-management-and-access-control-plan.md](user-management-and-access-control-plan.md) | **Live, and built — Phases 0–10 shipped.** Users, **service users**, roles carrying capabilities and wildcard privileges, teams, and grants on eight resource types — argued from [research/access-control.md](research/access-control.md), from a fresh reading of the codebase, and from new external research into Power BI, Superset, Metabase, Grafana, Looker and Tableau. Eleven phases, each with its own gate and acceptance criteria, and a master checklist at the foot. Read §0.4 first: eighteen decisions, four of which reverse `access-control-plan.md`. **The day-to-day document is the rulebook above**; this is where its reasoning lives. |
-| [access-control-plan.md](access-control-plan.md) | **Superseded by [user-management-and-access-control-plan.md](user-management-and-access-control-plan.md), and kept as the argument.** Users, groups, roles and grants, argued from [research/access-control.md](research/access-control.md). Nothing in it shipped *as written* — the product was owner-only when it was drafted, and the model that shipped is the plan that superseded it — but its port, its lattice, its intersection rule and its OIDC recipe all survive into that plan; §0.4 there names the four decisions it reverses. Read §0 of the research note first: it corrects two things this repo believed about its own authorization. |
-| [ui-improvment-plan.md](ui-improvment-plan.md) | **Done.** All seven phases and all 55 checklist items, one commit per phase. The remediation plan for the frontend's information architecture — sixteen findings from a whole-app UI/UX audit, sequenced by dependency first and importance second. The two load-bearing ones were Phase 1's routing (`react-router-dom` was a declared dependency imported nowhere, so nothing in the product had a URL) and Phase 2's Chat→Dashboard/Report bridge (the backend treats all three as one guarded path; the UI exposed no route between them). Read it now for *why* each surface is shaped the way it is, and **§ The ledger** at its foot for what actually landed: a row per phase with its commit and size, the four decisions taken while executing, and the five things review found wrong afterwards — including a deep-link bug that five phases of verification missed because every scripted check reached the page from inside the app. [frontend.md](frontend.md) describes what was built; where they disagree, frontend.md is right. Four Low-priority findings are under *Out of scope* rather than dropped — F20 was resolved as a side effect. |
+| [mvp2.md](plans/mvp2.md) | **Live — the current milestone.** Where MVP1 is weak, what the other four products do about it, and a three-tier proposal. Five of its strands have since been built as the plans below; §4 of [status.md](status.md) is what remains |
+| [learning-loop.md](plans/learning-loop.md) | **Built**, 82/85 items. The store, the matcher, the badge, feedback, store health, the benchmark, provenance. **Two switches ship off** and Phase 0's three baselines are unmade — all three wait on a provider key, not on code. §13 is the ledger. Built state: [reference/knowledge-templates.md](reference/knowledge-templates.md) |
+| [user-management-and-access-control.md](plans/user-management-and-access-control.md) | **Built** — all eleven phases, 254/254. Users, service users, roles, teams, grants on eight resource types. Read §0.4 first: eighteen decisions, four of which reverse [history/access-control-plan.md](history/access-control-plan.md). Part 6 is the maintained checklist; Part 4's per-phase boxes stopped being kept and are **not** outstanding work. The day-to-day document is [reference/access-control.md](reference/access-control.md) |
+| [token-accounting.md](plans/token-accounting.md) | **Built** — all six phases, migration `0023`. Usage travels by sink; tokens and cost are counted rather than assumed, per node, per operation, per user |
+| [langgraph-migration.md](plans/langgraph-migration.md) | **Live.** Phases 0–3 and 6 done; Phases 4 (checkpointing) and 5 (durable clarification) argued and **declined**, each with the measurement that decided it. Read it before moving anything else onto LangGraph |
 
-## Research
+## `research/` — arguments, not descriptions
 
-`research/` holds five notes. Four of them answer *"what do the other four
-products do about this, and what does that tell us"*: [the learning
-loop](research/learning-loop.md) (the argument behind
-`learning-loop-plan.md` — read it for *why*, and the plan for *what*),
-[retrieval at scale](research/retrieval-at-scale.md), [the semantic layer as a
-model](research/semantic-layer-as-a-model.md), and [the data
-surface](research/data-surface.md).
+Six notes. Each reads what other products do and proposes what DataMind should
+take from it. **Where a research note and a reference doc disagree, the
+reference doc is what the code does.**
 
-The fifth, [access control](research/access-control.md), takes a different
-comparison set because the subject demands one — it reads **Lakekeeper**'s
-Keycloak-plus-OpenFGA design down to its `.fga` model files and its `Authorizer`
-trait, calibrates against **Metabase, Superset and Grafana**, and proposes what
-DataMind should build for users, groups, roles and grants ([mvp2-plan.md
-§1.5](mvp2-plan.md#15-single-player-by-construction) and its Theme D). Read §0
-and §5.2 first: they correct two things this repo currently believes about its
-own authorization, including that `services/policy.py` is a seam — four of its
-five functions have no caller anywhere outside the module.
+| Note | Becomes |
+| --- | --- |
+| [learning-loop.md](research/learning-loop.md) | [plans/learning-loop.md](plans/learning-loop.md) — read this for *why*, the plan for *what* |
+| [access-control.md](research/access-control.md) | [plans/user-management-and-access-control.md](plans/user-management-and-access-control.md). Reads Lakekeeper's Keycloak-plus-OpenFGA design down to its `.fga` files, calibrated against Metabase, Superset and Grafana. Its §0 and §5.2 correct two things this repo believed about its own authorization |
+| [llm-observability.md](research/llm-observability.md) | [plans/token-accounting.md](plans/token-accounting.md). Four options for LLM observability, and why fixing the usage-reporting gap comes first |
+| [retrieval-at-scale.md](research/retrieval-at-scale.md) | Not yet a plan — mvp2 Theme B |
+| [semantic-layer.md](research/semantic-layer.md) | Not yet a plan — mvp2 §1.3 and Theme B. Its §5 carries three corrections to that section |
+| [data-surface.md](research/data-surface.md) | Not yet a plan — mvp2 Theme E |
 
-They are arguments with evidence, not descriptions of this codebase; where a
-research note and a shipped doc disagree, the shipped doc is what the code
-does.
+## `history/` — superseded, and kept
+
+Nothing here describes the present. Each is kept because it carries reasoning
+that the code does not, and each names the document that replaced it.
+
+| Document | Superseded by | Why it is kept |
+| --- | --- | --- |
+| [architecture-proposal.md](history/architecture-proposal.md) | [reference/codebase.md](reference/codebase.md) for what exists | The pre-build proposal, and still the best answer to *"why is it like this, and what was deferred on what trigger?"*. Read its status banner: five things have moved decisively since |
+| [reports-plan.md](history/reports-plan.md) | [reference/reports.md](reference/reports.md) | The phase-by-phase intent, and the arguments behind each decision, which are not recoverable from the code |
+| [access-control-plan.md](history/access-control-plan.md) | [plans/user-management-and-access-control.md](plans/user-management-and-access-control.md) | Nothing shipped *as written*, but its port, its lattice, its intersection rule and its OIDC recipe all survive into the plan that replaced it |
+| [ui-improvement-plan.md](history/ui-improvement-plan.md) | [reference/frontend.md](reference/frontend.md) | **Done** — all seven phases, 55 items. Read it for *why* each surface is shaped the way it is, and its ledger for the four decisions taken while executing and the five things review found wrong afterwards |
 
 ## Not documentation
 
-`assets/` holds the original UI design concept (`ui-design-concept.html`) and
-its generated runtime bundle (`support.js`). The frontend's `theme/tokens.ts`
-takes its **dark** colour values from that file verbatim; the light palette is
-not in it — the concept is dark-only. Nothing in `assets/` is prose — skip it
-when searching.
+- [`assets/`](assets/) — the original UI design concept (`ui-design-concept.html`)
+  and its generated bundle. `theme/tokens.ts` takes its **dark** values from it
+  verbatim; the concept is dark-only and the light palette was designed
+  afterwards. Nothing in here is prose — skip it when searching.
+- [`screenshots/`](screenshots/) — the three images the root README embeds, with
+  a note on how to re-capture them.
+- `backend/app/eval/reports/` and `backend/app/eval/suites/CHANGELOG.md` live
+  beside the code that produces them. The reports are write-ups of past eval
+  runs; the changelog is the frozen golden set's correction log. Both are
+  referenced from [reference/eval.md](reference/eval.md).
+
+---
+
+## Conventions
+
+- **One source of truth per subject.** If two documents could answer the same
+  question, one of them says which is authoritative — in its own header, in the
+  first paragraph. Add that line before adding the second document.
+- **Status banners are load-bearing.** Every plan and every historical document
+  opens with what state it is in. Update it in the commit that changes the
+  state, never in a batch afterwards.
+- **A ledger is ticked by the commit that lands the work** — never in advance,
+  never in a batch. *A checklist that runs ahead of the tree is worse than no
+  checklist.*
+- **Cross-link rather than restate.** Duplicated prose drifts; a link does not.

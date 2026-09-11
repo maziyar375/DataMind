@@ -1,6 +1,6 @@
 # The learning loop — competitor research and options for DataMind
 
-> **Subject:** [mvp2-plan.md §1.1](../mvp2-plan.md) — *"No learning loop — a correction
+> **Subject:** [mvp2.md §1.1](../plans/mvp2.md) — *"No learning loop — a correction
 > cannot become knowledge"*, rated **Critical**.
 > **Scope:** how Microsoft Data Formulator, Wren AI, Databricks AI/BI Genie and
 > Power BI / Fabric Copilot solve this, what is verifiable from public
@@ -58,7 +58,7 @@ Four things worth knowing before reading further, because they change the design
    expects: *your verified examples can be wrong, can contradict each other, and
    the contradiction degrades accuracy on questions unrelated to either one*.
 4. **Nobody has solved the measurement trap, and DataMind's plan walks into it.**
-   [mvp2-plan.md §A3](../mvp2-plan.md) proposes that verified pairs and benchmark
+   [mvp2.md §A3](../plans/mvp2.md) proposes that verified pairs and benchmark
    rows *share a table*. If a pair is both injected into the prompt and scored as
    a benchmark row, the benchmark is measuring memorisation. See §6.4 — this is
    the single most consequential correction this research offers.
@@ -762,7 +762,7 @@ the feature is worth.
 
 ### 6.1 Is a verified pair a **disclosure**? ⚠️ the one nobody else got right
 
-**This is not covered by [mvp2-plan.md §A1](../mvp2-plan.md), and it should be.**
+**This is not covered by [mvp2.md §A1](../plans/mvp2.md), and it should be.**
 §A1 correctly identifies a pair as a *guard* question — hostile input, a fifth
 entry point, replay the corpus. It does not identify it as a *disclosure*
 question, and it is one.
@@ -814,7 +814,7 @@ real:
 `HintBudget.value_lists` is true, and treat this exactly as §B3 treats value
 dictionaries — *"a disclosure decision, not a performance feature"*, with its own
 control, its own rung on the ladder, and its own section in
-[security.md](../security.md). This is Lesson L7, and Microsoft shipping verified
+[security.md](../reference/security.md). This is Lesson L7, and Microsoft shipping verified
 answers with RLS unsupported is the evidence for taking it seriously.
 
 ### 6.2 The guard: a fifth entry point, and a re-validation policy
@@ -856,7 +856,7 @@ is the thing that stops a curated store from decaying into noise.
 
 ### 6.4 ⚠️ The measurement trap — and a correction to §A3
 
-[mvp2-plan.md §A3](../mvp2-plan.md) says of benchmarks and verified pairs:
+[mvp2.md §A3](../plans/mvp2.md) says of benchmarks and verified pairs:
 *"A1's verified pairs are already exactly this shape, so the two features share a
 table."*
 
@@ -1083,6 +1083,6 @@ Stated so nobody re-runs the same searches.
 - [Text-to-SQL Empowered by Large Language Models: A Benchmark Evaluation (DAIL-SQL)](https://arxiv.org/abs/2308.15363) — 86.6% execution accuracy on Spider; the source for question-similarity, **masked** question-similarity, and joint question+query selection of few-shot examples.
 
 **DataMind, internal**
-- [docs/mvp2-plan.md](../mvp2-plan.md) §1.1, §1.3, §1.10, Theme A, Theme B
+- [docs/plans/mvp2.md](../plans/mvp2.md) §1.1, §1.3, §1.10, Theme A, Theme B
 - [CLAUDE.md](../../CLAUDE.md) — the four non-negotiable invariants, the five failure postures, the semantic layer, the eval harness
-- [docs/eval.md](../eval.md) · [docs/security.md](../security.md) · [docs/pipeline.md](../pipeline.md)
+- [docs/reference/eval.md](../reference/eval.md) · [docs/reference/security.md](../reference/security.md) · [docs/reference/pipeline-chat.md](../reference/pipeline-chat.md)

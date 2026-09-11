@@ -1,6 +1,6 @@
 """One repair loop, two callers.
 
-Phase 2 of [docs/langgraph-migration.md](../../../docs/langgraph-migration.md).
+Phase 2 of [docs/plans/langgraph-migration.md](../../../docs/plans/langgraph-migration.md).
 Before it there were **two executors over one node set**: `AnalyticsPipeline`
 and a hand-rolled `for` loop in `sql_draft_service.draft_sql`. The cost of that
 is not hypothetical — it had already been paid twice:

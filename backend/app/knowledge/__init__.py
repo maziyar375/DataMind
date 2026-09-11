@@ -17,7 +17,7 @@ and the contract in `pyproject.toml` is what keeps that true.
     validate_template       the guard's fifth entry point, plus slot agreement
 
 Phase 2 adds `matcher.py` and `bind.py` beside these; Phase 6 adds
-`compare.py`. See `docs/learning-loop-plan.md`.
+`compare.py`. See `docs/plans/learning-loop.md`.
 """
 from __future__ import annotations
 

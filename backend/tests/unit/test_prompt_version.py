@@ -8,7 +8,7 @@ hardcoded default of `"v2"` that stayed put while
 database claimed a version none of them had run and any figure sliced by it was
 fiction.
 
-Phase 0 of [docs/learning-loop-plan.md](../../../docs/learning-loop-plan.md)
+Phase 0 of [docs/plans/learning-loop.md](../../../docs/plans/learning-loop.md)
 calls this "fixing the ruler": nothing measured after it means anything until
 the label is true. These tests fail on the code as it was.
 """

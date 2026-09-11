@@ -2,7 +2,7 @@
 
 A run is executed by one process. A browser watching it may be connected to
 any of them. Something has to carry an event across, and the migration record
-([docs/langgraph-migration.md](../../../../docs/langgraph-migration.md) §4,
+([docs/plans/langgraph-migration.md](../../../../docs/plans/langgraph-migration.md) §4,
 Phase 6) originally said Redis. It is Postgres instead, for the reason Phase 4
 declined a checkpointer: **the rows already exist.** `run_events` is a durable,
 ordered log with `UNIQUE(run_id, seq)`, written on every emit, and the SPA

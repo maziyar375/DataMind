@@ -7,7 +7,7 @@
 -- than a fourth mirror: it is the only Oracle target in the repository, and it
 -- exists so somebody can point DataMind at Oracle and see the thing Oracle is
 -- interesting for — `ALL_TAB_COMMENTS` / `ALL_COL_COMMENTS` reaching the model
--- (docs/catalog-metadata-plan.md).
+-- (docs/reference/catalog-metadata.md).
 --
 -- Every comment below is load-bearing for that demo:
 --   * ORDERS.STATUS carries *code meanings* no column name could convey, and a

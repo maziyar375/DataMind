@@ -3,7 +3,7 @@
 **Read this before writing an endpoint.** It is short on purpose: everything
 here is a rule you can break in twenty minutes and nobody will notice for a
 release. The argument behind each one is in
-[user-management-and-access-control-plan.md](user-management-and-access-control-plan.md);
+[user-management-and-access-control.md](../plans/user-management-and-access-control.md);
 this is the part you need in your head while you type.
 
 Two machines check most of it — `make authz-check` and
@@ -184,7 +184,7 @@ Eight places, and the conformance test fails on six of them.
 - [ ] The migration that adds it to those roles.
 - [ ] `deps.needs(...)` at the route, never a check in the body.
 - [ ] An audit action, if it guards a mutation.
-- [ ] A row in `docs/security.md`'s capability table.
+- [ ] A row in `docs/reference/security.md`'s capability table.
 
 ---
 

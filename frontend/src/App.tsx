@@ -29,7 +29,7 @@ import { applyTheme, type ThemeName } from './theme/tokens'
  * The rail's destinations, ordered by how often a row is opened — which is
  * also the order the product is used, and the order in which its rows stop
  * being about today's work and start being about keeping it running. The list
- * stays flat and uncaptioned (see `docs/frontend.md`); the ordering is what
+ * stays flat and uncaptioned (see `docs/reference/frontend.md`); the ordering is what
  * carries the grouping, so it must not zig-zag across that boundary.
  *
  * The paths are the product's vocabulary now that there is a router, so they

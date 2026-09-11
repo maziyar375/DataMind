@@ -29,7 +29,7 @@ Format per entry:
 ### 2026-08-31 — the retrieve budget is a runner flag, and lowering it breaks comparability
 
 - **What changed:** `python -m app.eval.runner` gained `--retrieve-budget CHARS`
-  (Phase 0 of [docs/learning-loop-plan.md](../../../../docs/learning-loop-plan.md)).
+  (Phase 0 of [docs/plans/learning-loop.md](../../../../docs/plans/learning-loop.md)).
   It lowers `app.pipeline.nodes._RETRIEVE_BUDGET_CHARS` for that run only. No
   gold answer, no fixture, and no shipped default moved: absent the flag the run
   is byte-identical to every run before it, and the effective value is now

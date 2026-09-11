@@ -1,6 +1,6 @@
 """Masked question similarity — the embedding matcher, with no I/O in it.
 
-Phase 7 of `docs/learning-loop-plan.md`, and **a swap rather than a rewrite**,
+Phase 7 of `docs/plans/learning-loop.md`, and **a swap rather than a rewrite**,
 which is the whole return on decision D3: `EmbeddingMatcher` implements the
 same `TemplateMatcher` Protocol `LexicalMatcher` does, so the `match` node, the
 thresholds, the short-circuit and the badge are untouched.

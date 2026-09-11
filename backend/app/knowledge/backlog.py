@@ -114,7 +114,7 @@ class Suggestion:
     #: the SQL came from — which decides whether its literals are disclosable.
     source: str = ""
     #: `GENERATED_EDITED` literals were chosen by a model and edited by a
-    #: person, so they are gated like sample values. `docs/security.md`.
+    #: person, so they are gated like sample values. `docs/reference/security.md`.
     model_derived: bool = False
     #: The run or row this came from, so the UI can link back to it.
     origin_id: str = ""

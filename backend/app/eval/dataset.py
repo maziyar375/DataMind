@@ -95,7 +95,7 @@ class FixtureSpec:
     # runner is asked for the commented arm (`--comments`). A second fixture
     # entry would have been the obvious shape and is the wrong one: a record's
     # `connection_fixture` is part of the frozen golden set, so switching arms
-    # would mean editing the suite — the one thing docs/eval.md forbids. The
+    # would mean editing the suite — the one thing docs/reference/eval.md forbids. The
     # arms are therefore the same fixture loaded two ways.
     comments_path: Path | None = None
     # The fixture's hand-written semantic layer, loaded when the runner is asked

@@ -23,7 +23,7 @@ Three properties are load-bearing:
   header, close a block, or open a fake `Tables:` list. (The guard is what makes
   an injection *harmless* — AST validation fails closed, so the worst outcome is
   a wrong query — but there is no reason to make it easy. See §3.2 of
-  `docs/catalog-metadata-plan.md`.)
+  `docs/reference/catalog-metadata.md`.)
 * **A comment that teaches nothing is dropped, not stored.** `"orders"` on
   `orders`, `InnoDB free: 4096 kB`, `TODO` — each costs tokens on every question
   and buys nothing.

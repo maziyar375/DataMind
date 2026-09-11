@@ -5,8 +5,8 @@ follows. This is the orientation doc — it stops at the point where a feature
 doc takes over, and says which one that is.
 
 **Authority is code, not this page.** The tokens in
-[`theme/tokens.ts`](../frontend/src/theme/tokens.ts) and the primitives in
-[`components/ui.tsx`](../frontend/src/components/ui.tsx) are the design system;
+[`theme/tokens.ts`](../../frontend/src/theme/tokens.ts) and the primitives in
+[`components/ui.tsx`](../../frontend/src/components/ui.tsx) are the design system;
 where this document and they disagree, they are right. The dark tokens are
 copied verbatim from `assets/ui-design-concept.html` — the original concept,
 which is dark-only. The light palette was designed afterwards against it.
@@ -15,9 +15,9 @@ which is dark-only. The light palette was designed afterwards against it.
 
 ## 1. The shell
 
-[`main.tsx`](../frontend/src/main.tsx) mounts a **data router**
+[`main.tsx`](../../frontend/src/main.tsx) mounts a **data router**
 (`createBrowserRouter`) whose one catch-all route renders
-[`App.tsx`](../frontend/src/App.tsx), which is the whole shell: an auth gate, a
+[`App.tsx`](../../frontend/src/App.tsx), which is the whole shell: an auth gate, a
 232px rail, and one page filling the rest.
 
 **Every screen has a URL.** The rail is `NAV` in `App.tsx` — a path, a label
@@ -119,16 +119,16 @@ colours are chosen in JS, and the print stylesheet.
 
 | Section | Page | What it is for |
 | --- | --- | --- |
-| **Chat** | [`ChatPage.tsx`](../frontend/src/pages/ChatPage.tsx) | Ask one question, watch it answered, keep the thread. The section the product opens on. |
-| **Dashboards** | [`DashboardsPage.tsx`](../frontend/src/pages/DashboardsPage.tsx) | Numbers that are always current: a grid of tiles that refresh themselves. |
-| **Reports** | [`ReportsPage.tsx`](../frontend/src/pages/ReportsPage.tsx) | A document whose structure a human approved, generated over real results and kept as a snapshot. |
-| **Knowledge** | [`KnowledgePage.tsx`](../frontend/src/pages/KnowledgePage.tsx) | The curation console, across every connection: flags raised, questions nothing answers, the maintenance sweep. |
-| **Data sources** | [`DataSourcesPage.tsx`](../frontend/src/pages/DataSourcesPage.tsx) | The connections DataMind may read, and everything known about each one. |
-| **LLM providers** | [`LlmProvidersPage.tsx`](../frontend/src/pages/LlmProvidersPage.tsx) | The models it may call, and the keys it calls them with. Two groups: *Models* answer questions, the *Embedder* makes vectors — a row is one or the other, and the form shows that kind's fields only. |
-| **Administration** | [`AdminPage.tsx`](../frontend/src/pages/AdminPage.tsx) | `/admin`: a tabbed section over **People** ([`UsersPage.tsx`](../frontend/src/pages/UsersPage.tsx)), **Roles** ([`RolesTab.tsx`](../frontend/src/pages/RolesTab.tsx)), **Teams** ([`TeamsTab.tsx`](../frontend/src/pages/TeamsTab.tsx)), **Service accounts** ([`ServiceAccountsTab.tsx`](../frontend/src/pages/ServiceAccountsTab.tsx)), **Access review** ([`AccessReviewTab.tsx`](../frontend/src/pages/AccessReviewTab.tsx) — two lenses over one set of facts: what one principal can reach, and everyone who can reach one thing) and the **Audit log** ([`AuditTab.tsx`](../frontend/src/pages/AuditTab.tsx)). The rail row appears when the viewer holds **any** administration capability, and each tab appears when its own capability is held — so an Auditor sees People and changes nothing, and a DataMind Maintainer sees the section without seeing People at all. `/users` permanently redirects to `/admin/people`. |
-| **Your account** | [`AccountPage.tsx`](../frontend/src/pages/AccountPage.tsx) | `/settings`: your display name and your password. Reached from the user block in the rail, not from `NAV`. |
-| **Creators** | [`AboutPage.tsx`](../frontend/src/pages/AboutPage.tsx) | Who built it. A colophon, not a destination; the one page on both sides of the sign-in wall. |
-| **Login** | [`LoginPage.tsx`](../frontend/src/pages/LoginPage.tsx) | The only public surface, and therefore the only signed-out route to Creators. |
+| **Chat** | [`ChatPage.tsx`](../../frontend/src/pages/ChatPage.tsx) | Ask one question, watch it answered, keep the thread. The section the product opens on. |
+| **Dashboards** | [`DashboardsPage.tsx`](../../frontend/src/pages/DashboardsPage.tsx) | Numbers that are always current: a grid of tiles that refresh themselves. |
+| **Reports** | [`ReportsPage.tsx`](../../frontend/src/pages/ReportsPage.tsx) | A document whose structure a human approved, generated over real results and kept as a snapshot. |
+| **Knowledge** | [`KnowledgePage.tsx`](../../frontend/src/pages/KnowledgePage.tsx) | The curation console, across every connection: flags raised, questions nothing answers, the maintenance sweep. |
+| **Data sources** | [`DataSourcesPage.tsx`](../../frontend/src/pages/DataSourcesPage.tsx) | The connections DataMind may read, and everything known about each one. |
+| **LLM providers** | [`LlmProvidersPage.tsx`](../../frontend/src/pages/LlmProvidersPage.tsx) | The models it may call, and the keys it calls them with. Two groups: *Models* answer questions, the *Embedder* makes vectors — a row is one or the other, and the form shows that kind's fields only. |
+| **Administration** | [`AdminPage.tsx`](../../frontend/src/pages/AdminPage.tsx) | `/admin`: a tabbed section over **People** ([`UsersPage.tsx`](../../frontend/src/pages/UsersPage.tsx)), **Roles** ([`RolesTab.tsx`](../../frontend/src/pages/RolesTab.tsx)), **Teams** ([`TeamsTab.tsx`](../../frontend/src/pages/TeamsTab.tsx)), **Service accounts** ([`ServiceAccountsTab.tsx`](../../frontend/src/pages/ServiceAccountsTab.tsx)), **Access review** ([`AccessReviewTab.tsx`](../../frontend/src/pages/AccessReviewTab.tsx) — two lenses over one set of facts: what one principal can reach, and everyone who can reach one thing) and the **Audit log** ([`AuditTab.tsx`](../../frontend/src/pages/AuditTab.tsx)). The rail row appears when the viewer holds **any** administration capability, and each tab appears when its own capability is held — so an Auditor sees People and changes nothing, and a DataMind Maintainer sees the section without seeing People at all. `/users` permanently redirects to `/admin/people`. |
+| **Your account** | [`AccountPage.tsx`](../../frontend/src/pages/AccountPage.tsx) | `/settings`: your display name and your password. Reached from the user block in the rail, not from `NAV`. |
+| **Creators** | [`AboutPage.tsx`](../../frontend/src/pages/AboutPage.tsx) | Who built it. A colophon, not a destination; the one page on both sides of the sign-in wall. |
+| **Login** | [`LoginPage.tsx`](../../frontend/src/pages/LoginPage.tsx) | The only public surface, and therefore the only signed-out route to Creators. |
 
 Three of these are **index pages** — Dashboards, Reports, and People inside
 Administration — and they share their furniture deliberately: the same page
@@ -142,7 +142,7 @@ about it is unchanged, which is the point of reusing it rather than writing a
 second one.
 
 **Sharing lives in one component, and every screen mounts it.**
-[`components/access.tsx`](../frontend/src/components/access.tsx) holds
+[`components/access.tsx`](../../frontend/src/components/access.tsx) holds
 `AccessPanel` (who can reach this, and one way to change it), `AccessPopover`
 (the same panel behind a header button that draws nothing unless the viewer
 holds `manage`), `TransferControl`, `ReachBadge` and `Restricted`. Eight
@@ -181,7 +181,7 @@ team gets one too: it is a principal, and *"what does joining Finance give
 them"* is asked before somebody is added, not after.
 
 **No screen branches on a role.** `useCan()`
-([`permissions.tsx`](../frontend/src/permissions.tsx)) reads the capability list
+([`permissions.tsx`](../../frontend/src/permissions.tsx)) reads the capability list
 `/auth/me` returned — the same set the API will check on the next request — and
 the four `user.role === 'ADMIN'` comparisons that used to decide what to render
 are gone. The remaining ones are labels and counts, each carrying an
@@ -189,7 +189,7 @@ are gone. The remaining ones are labels and counts, each carrying an
 
 Five are **master–detail** — Data sources, LLM providers, Knowledge and the
 Roles and Teams tabs — and share the frame in
-[`components/settings.tsx`](../frontend/src/components/settings.tsx)
+[`components/settings.tsx`](../../frontend/src/components/settings.tsx)
 (`MasterColumn`, `MasterItem`, `DetailHeader`, `DetailBody`, `Section`,
 `FieldRow`, `Tabs`, `StatusLine`, `UnsavedNote`). Two pages that configure a
 credential and probe it should not each invent their own shape, and the third
@@ -268,9 +268,9 @@ at the first request.
 
 | Component | Serves |
 | --- | --- |
-| [`VegaChart.tsx`](../frontend/src/components/VegaChart.tsx) | a chat turn, a `CHART` tile, a report figure, and the print redraw |
-| [`chart-picker.tsx`](../frontend/src/components/chart-picker.tsx) | chat (redraws the stored artifact — never re-queries), report, tile editor |
-| `ResultTable` / `Kpi` ([`ui.tsx`](../frontend/src/components/ui.tsx)) | chat results, `TABLE` and `METRIC` tiles, report figures and `plan_kpi` bands |
+| [`VegaChart.tsx`](../../frontend/src/components/VegaChart.tsx) | a chat turn, a `CHART` tile, a report figure, and the print redraw |
+| [`chart-picker.tsx`](../../frontend/src/components/chart-picker.tsx) | chat (redraws the stored artifact — never re-queries), report, tile editor |
+| `ResultTable` / `Kpi` ([`ui.tsx`](../../frontend/src/components/ui.tsx)) | chat results, `TABLE` and `METRIC` tiles, report figures and `plan_kpi` bands |
 
 `ResultTable` carries three behaviours worth naming, all of them client-side
 over rows it already has — **none of them ever re-runs a query**, for the same
@@ -289,7 +289,7 @@ reason the chart picker redraws from rows already returned:
   spreadsheet has to compute with them. Escaping is RFC 4180, plus a leading
   apostrophe on anything starting `=`, `+` or `@`, which Excel would otherwise
   treat as a formula.
-| `TemplateEditor` ([`knowledge.tsx`](../frontend/src/components/knowledge.tsx)) | the Knowledge tab, and *Save as template* on a chat answer |
+| `TemplateEditor` ([`knowledge.tsx`](../../frontend/src/components/knowledge.tsx)) | the Knowledge tab, and *Save as template* on a chat answer |
 
 That last one is the rule stated generally: **when two screens must agree about
 a guard verdict, a disclosure rule or a parameter proposal, they share the
@@ -325,7 +325,7 @@ generation poll both pause on `document.hidden`. A forgotten background tab is
 how a feature becomes the reason someone's production database is slow.
 
 **What a page may ask of the shell is one module**
-([`shell.tsx`](../frontend/src/shell.tsx)), and both entries in it exist
+([`shell.tsx`](../../frontend/src/shell.tsx)), and both entries in it exist
 because a page was reaching past its own edge:
 
 | Hook | For |
@@ -342,7 +342,7 @@ never disagree about what the theme is or about whether it is safe to leave.
 
 Three layers, and which one a change belongs in is not a preference.
 
-**[`theme/tokens.ts`](../frontend/src/theme/tokens.ts)** — every colour, in
+**[`theme/tokens.ts`](../../frontend/src/theme/tokens.ts)** — every colour, in
 oklch, with a dark *and* a light definition. Also `NODE_META` (the pipeline
 steps, in order), `DATABASE_TYPES` (removing an entry removes the engine from
 the picker) and `PROVIDER_URLS` (likewise, the provider picker). Never hardcode
@@ -365,7 +365,7 @@ themes — otherwise the colour stops being a legend — while the lightness it 
 mixed at belongs to the ground, which is what `glyph-tint-l` / `glyph-ink-l`
 are for.
 
-**[`components/ui.tsx`](../frontend/src/components/ui.tsx)** — ~40 primitives,
+**[`components/ui.tsx`](../../frontend/src/components/ui.tsx)** — ~40 primitives,
 every dimension lifted from the design concept rather than invented: `Logo`,
 `Icon.*`, `Field` / `TextInput` / `Select` / `TextArea` / `Toggle` /
 `NumberStepper` / `InlineEdit`, `PrimaryButton` / `GhostButton` / `QuietAction`
@@ -377,7 +377,7 @@ Compose from these before writing a new one. **There is no component library**
 and adding one is not on the table; `react-grid-layout` is a layout engine, not
 a counter-example.
 
-**[`styles.css`](../frontend/src/styles.css)** — everything a style attribute
+**[`styles.css`](../../frontend/src/styles.css)** — everything a style attribute
 cannot express, in ~30 banner-commented regions: the three self-hosted
 `@font-face` families (Inter, JetBrains Mono, **Vazirmatn** — never from Google,
 because this ships behind firewalls and a printed Persian report is a
@@ -478,7 +478,7 @@ need to give way differ by screen. The set, and what each does:
 rail already collapsed to 66px at 860px, but the second column did not give
 ground with it, so a 375px screen had about a hundred pixels left for the
 transcript, the form or the document. The mechanism is one module —
-[`list-drawer.tsx`](../frontend/src/components/list-drawer.tsx) — shared by
+[`list-drawer.tsx`](../../frontend/src/components/list-drawer.tsx) — shared by
 Chat, Data sources, LLM providers and Knowledge, and it closes on the path
 changing rather than on each page remembering to call back: every one of those
 lists navigates when you pick something, and a drawer left open over the thing
@@ -491,7 +491,7 @@ token set over `applyTheme`'s inline styles, hides the shell, keeps a figure
 whole across a page break, opens collapsed disclosures, and gives the article a
 definite width. The two halves a stylesheet cannot reach — fonts, and redrawing
 each Vega plot at page width in the light palette — are
-[`report-print.ts`](../frontend/src/components/report-print.ts).
+[`report-print.ts`](../../frontend/src/components/report-print.ts).
 
 ---
 
@@ -522,10 +522,10 @@ eslint is neither a dependency nor configured. Run `npm test` yourself.
 | A tile, the grid, the refresh clock | [dashboards.md §6](dashboards.md) |
 | The outline editor, the viewer, the PDF | [reports.md §11–§12](reports.md) |
 | A chart, the picker, a colour in one | [charts.md](charts.md) |
-| The knowledge console, the badge, the copy | [learning-loop-plan.md §4](learning-loop-plan.md) — the one full design brief in the repo; §4.2's information architecture is superseded twice and says so where it stands: the console is a rail entry as well as a tab, and its three stacked sections are now four views (Taught · Suggested · Flagged · Archive) with edit and archive on the row itself |
-| Why a surface is shaped the way it is | [ui-improvment-plan.md](ui-improvment-plan.md) — the audit this shell was rebuilt from, sixteen findings in seven phases, with the decisions taken while executing recorded inline |
-| The schema browser, catalog descriptions | [catalog-metadata-plan.md](catalog-metadata-plan.md) |
-| What a step chip means | [pipeline.md](pipeline.md) — the nodes behind `NODE_META` |
+| The knowledge console, the badge, the copy | [learning-loop.md §4](../plans/learning-loop.md) — the one full design brief in the repo; §4.2's information architecture is superseded twice and says so where it stands: the console is a rail entry as well as a tab, and its three stacked sections are now four views (Taught · Suggested · Flagged · Archive) with edit and archive on the row itself |
+| Why a surface is shaped the way it is | [ui-improvement-plan.md](../history/ui-improvement-plan.md) — the audit this shell was rebuilt from, sixteen findings in seven phases, with the decisions taken while executing recorded inline |
+| The schema browser, catalog descriptions | [catalog-metadata.md](catalog-metadata.md) |
+| What a step chip means | [pipeline-chat.md](pipeline-chat.md) — the nodes behind `NODE_META` |
 | What may be shown to whom | [security.md](security.md) — the disclosure policy the header badge names |
 
 The file-header docblock of the component you are about to change is generally

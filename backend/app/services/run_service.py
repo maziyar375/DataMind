@@ -5,7 +5,7 @@ broker. The swap point for Celery is `RunExecutor`; nothing here knows how a
 run gets scheduled.
 
 Three of the rules here exist because more than one replica may be running
-(Phase 6 of [docs/langgraph-migration.md](../../../docs/langgraph-migration.md)):
+(Phase 6 of [docs/plans/langgraph-migration.md](../../../docs/plans/langgraph-migration.md)):
 
 * **`claim` is how a run starts, and it is atomic.** Exactly one process may
   execute a run, and "exactly one" has to be enforced by the database rather

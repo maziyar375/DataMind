@@ -2,20 +2,20 @@
 
 What happens between "user types a request" and "a document with figures,
 paragraphs and an executive summary". Companion to
-[pipeline.md](pipeline.md) (the chat run, and the shared machinery every
+[pipeline-chat.md](pipeline-chat.md) (the chat run, and the shared machinery every
 pipeline sits on), [pipeline-dashboard.md](pipeline-dashboard.md) (tiles), and
 [reports.md](reports.md) (the data model, the API, the UI and the print
 handoff). **This file is only the pipelines**: the flows, the nodes, the exact
 prompts, and what happens when each step fails.
 
-Code: [`backend/app/reports/`](../backend/app/reports/) —
+Code: [`backend/app/reports/`](../../backend/app/reports) —
 `outline.py` (propose a structure and read the reply), `narrate.py` (the prose
 prompts), `facts.py` (the arithmetic), `checks.py` (the numeric check),
 `language.py`, `prompts.py` (`REPORT_PROMPT_VERSION`);
-[`workers/report.py`](../backend/app/workers/report.py) (the generation run);
-[`services/report_service.py`](../backend/app/services/report_service.py) (the
+[`workers/report.py`](../../backend/app/workers/report.py) (the generation run);
+[`services/report_service.py`](../../backend/app/services/report_service.py) (the
 gates, the outline write, the feasibility check);
-[`services/sql_draft_service.py`](../backend/app/services/sql_draft_service.py)
+[`services/sql_draft_service.py`](../../backend/app/services/sql_draft_service.py)
 (question → SQL, shared with tiles).
 
 ---
@@ -47,7 +47,7 @@ Two rules cut across all four, and both are re-checked rather than inherited:
   itself. `assert_wide_enough` is checked at report creation, at run creation,
   at the *start of the generation*, and at the start of a retry — four times,
   because a policy tightened between any two of them must stop the work
-  ([report_service.py:197-213](../backend/app/services/report_service.py#L197-L213)).
+  ([report_service.py:197-213](../../backend/app/services/report_service.py#L197-L213)).
 - **The connection is pinned.** A report is bound to the connection it was
   created against; re-sending the same one is a no-op, naming a different one
   is 422. Same rule, same reason, as `run_service._bind_connection`: a template
@@ -66,7 +66,7 @@ section and block routes are how an outline is *edited*).
 ### 2.1 The gates, before a token is spent
 
 `ReportService.propose_outline`
-([report_service.py:435-507](../backend/app/services/report_service.py#L435-L507))
+([report_service.py:435-507](../../backend/app/services/report_service.py#L435-L507))
 refuses in this order, each with its own message:
 
 | # | Refused when | Why here rather than later |
@@ -99,7 +99,7 @@ everywhere else, with the semantic layer scoped to those tables by
 which is the one place a very wide schema can produce a very large prompt (§8).
 
 **System prompt — `REPORT_OUTLINE_SYSTEM`**
-([prompts.py:65-157](../backend/app/reports/prompts.py#L65-L157)). Its rules,
+([prompts.py:65-157](../../backend/app/reports/prompts.py#L65-L157)). Its rules,
 and what each one is protecting against:
 
 | Rule | The failure it prevents |
@@ -122,7 +122,7 @@ and what each one is protecting against:
 `LANGUAGE_NAMES`), the exact section count, the dialect, the request verbatim,
 then the schema block. The count rides in the *user* message deliberately: the
 system prompt is house style and identical for every report, so it stays
-cacheable ([outline.py:146-176](../backend/app/reports/outline.py#L146-L176)).
+cacheable ([outline.py:146-176](../../backend/app/reports/outline.py#L146-L176)).
 
 **The model is asked with `complete`, not `structured`** — the one deliberate
 exception in the product. `structured` fails the whole reply when the JSON will
@@ -133,7 +133,7 @@ whatever the provider row says.
 
 ### 2.3 Reading the reply — a malformed part costs that part, never the proposal
 
-`outline.parse` ([outline.py:216-246](../backend/app/reports/outline.py#L216-L246))
+`outline.parse` ([outline.py:216-246](../../backend/app/reports/outline.py#L216-L246))
 is a salvage parser, in three descending readings
 (`_candidates` → `_salvage`):
 
@@ -148,7 +148,7 @@ is a salvage parser, in three descending readings
    *blocks* of the section that never closed, and are dropped — a block promoted
    to a section arrives with no heading and nothing under it.
 
-Then, per candidate ([`_section`](../backend/app/reports/outline.py#L256-L311)):
+Then, per candidate ([`_section`](../../backend/app/reports/outline.py#L256-L311)):
 
 | Condition | Cost | Why |
 |---|---|---|
@@ -209,7 +209,7 @@ POST .../blocks/{id}/check          PUT .../blocks/{id}/sql
 ### 3.1 `route` runs here, and only here outside chat
 
 `draft_sql(..., classify=True)`
-([sql_draft_service.py:169-178](../backend/app/services/sql_draft_service.py#L169-L178))
+([sql_draft_service.py:169-178](../../backend/app/services/sql_draft_service.py#L169-L178))
 runs the chat pipeline's `route` node before anything else, and refuses
 anything that is not `ANALYTICAL`.
 
@@ -223,7 +223,7 @@ shown**, so without this check the block goes green and reaches a run as a
 figure nobody asked for.
 
 The refusals are written for a stored verdict, not for a chat reply
-(`_OUT_OF_SCOPE`, [sql_draft_service.py:99-121](../backend/app/services/sql_draft_service.py#L99-L121)):
+(`_OUT_OF_SCOPE`, [sql_draft_service.py:99-121](../../backend/app/services/sql_draft_service.py#L99-L121)):
 CHITCHAT, UNSUPPORTED and **METADATA** each get their own sentence — a schema
 question is refused because "a list of table names is not a figure".
 
@@ -235,7 +235,7 @@ nothing and widens nothing.
 The draft path walks the chat pipeline's own nodes — not through
 `AnalyticsPipeline`, but through `DRAFT_GRAPH`, which builds the **same
 compiled repair region** the chat graph does (`_add_repair_region` in
-[graph.py](../backend/app/pipeline/graph.py)):
+[graph.py](../../backend/app/pipeline/graph.py)):
 
 ```
 [route →] retrieve → generate ⇄ validate        # 2 attempts, max
@@ -244,7 +244,7 @@ compiled repair region** the chat graph does (`_add_repair_region` in
 `classify=True` is what puts `route` in front — a conditional entry edge, with
 the refusal raised from a `refuse` node as `QuestionOutOfScopeError` in this
 service's wording. Until Phase 2 of
-[langgraph-migration.md](langgraph-migration.md) this was a hand-rolled `for`
+[langgraph-migration.md](../plans/langgraph-migration.md) this was a hand-rolled `for`
 loop in `sql_draft_service`, i.e. a second executor over the same node set;
 what remains of it is the ceiling, which was always `RunState.max_repairs`.
 
@@ -265,7 +265,7 @@ gets — and is refused by the same guard. What differs, deliberately:
 
 Appended to `GENERATE_SYSTEM` (and to `REPAIR_SYSTEM` / `REVIEW_SYSTEM`, since
 a repair is a fresh conversation) through `NodeDeps.extra_rules`
-([prompts.py:208-220](../backend/app/reports/prompts.py#L208-L220)):
+([prompts.py:208-220](../../backend/app/reports/prompts.py#L208-L220)):
 
 - names the block's window as a phrase (`TIME_WINDOW_PHRASES`: "the last 3
   months", "the previous quarter", "this year, to date"…);
@@ -334,7 +334,7 @@ statement that will be drawn as a big number.
 ### 3.5 The verdict ladder
 
 `_verdict(draft)`
-([report_service.py:120-168](../backend/app/services/report_service.py#L120-L168))
+([report_service.py:120-168](../../backend/app/services/report_service.py#L120-L168))
 turns everything above into one stored answer:
 
 | Outcome | Stored status | Reason stored |
@@ -397,7 +397,7 @@ load.
 
 ### 4.1 Everything refused before a run is queued
 
-`create_run` ([report_service.py:694-763](../backend/app/services/report_service.py#L694-L763)):
+`create_run` ([report_service.py:694-763](../../backend/app/services/report_service.py#L694-L763)):
 a second concurrent run (409 `ConflictError`), a removed connection, a
 disclosure policy that has since narrowed, a missing model configuration, and —
 last — **an outline where no block has SQL** (*"an unchecked block has no SQL to
@@ -411,7 +411,7 @@ step too).
 
 ### 4.2 The executor
 
-`ReportRunExecutor` ([workers/report.py](../backend/app/workers/report.py)) —
+`ReportRunExecutor` ([workers/report.py](../../backend/app/workers/report.py)) —
 mirrors `workers/semantic.py`, deliberately does not share it:
 
 - `MAX_CONCURRENT_JOBS = 2`. A generation already runs its blocks concurrently
@@ -427,7 +427,7 @@ mirrors `workers/semantic.py`, deliberately does not share it:
   finished section. **There is no checkpoint behind this**: the rows are the
   progress record, written in the same transaction as the work, so a resume
   cannot disagree with the document. See
-  [langgraph-migration.md](langgraph-migration.md) §4 Phase 4.
+  [langgraph-migration.md](../plans/langgraph-migration.md) §4 Phase 4.
 - **It does keep a heartbeat**, added in Phase 6 and load-bearing for exactly
   the resume above: `_watch` writes `report_runs.heartbeat_at` every
   `run_heartbeat_seconds`, and `stranded_runs` filters on it. Without that a
@@ -446,10 +446,10 @@ mirrors `workers/semantic.py`, deliberately does not share it:
 ### 4.3 The run, node by node
 
 `generate_run` → `run_generation`
-([workers/report_graph.py](../backend/app/workers/report_graph.py)). Five
+([workers/report_graph.py](../../backend/app/workers/report_graph.py)). Five
 phases; the ordering is the design.
 
-Since Phase 3 of [langgraph-migration.md](langgraph-migration.md) those phases
+Since Phase 3 of [langgraph-migration.md](../plans/langgraph-migration.md) those phases
 are **nodes of a compiled graph** —
 `check_disclosure → resolve_outline → [clear_section] → execute_blocks →
 write_results → narrate_section (loop, one wave per pass) → summarise → finish`
@@ -559,7 +559,7 @@ Three consequences:
   sibling task's attribute read into a lazy load on a busy session.
 
 For each section in the wave (`_narrate`,
-[workers/report.py:687-779](../backend/app/workers/report.py#L687-L779)):
+[workers/report.py:687-779](../../backend/app/workers/report.py#L687-L779)):
 
 **1. Disclose.** `_narration(result, policy)` runs each stored result through
 `disclose()` — at *narration* time, under the policy in force **now**, not the
@@ -733,7 +733,7 @@ connection is refused), sets the run back to `RUNNING` with
 renders the section rebuilding itself — no new endpoint, no new protocol.
 
 `retry_section` → `run_retry`
-([workers/report_graph.py](../backend/app/workers/report_graph.py)) — the
+([workers/report_graph.py](../../backend/app/workers/report_graph.py)) — the
 **same graph as a full generation**, entered in `retry` mode, which is what
 collapsed the two drivers this section and §4.3 used to describe separately:
 
@@ -786,7 +786,7 @@ almost always means one of the last two:
 ## 7. Prompt versioning
 
 `REPORT_PROMPT_VERSION` (currently **r4**) lives in
-[`app/reports/prompts.py`](../backend/app/reports/prompts.py) and is recorded on
+[`app/reports/prompts.py`](../../backend/app/reports/prompts.py) and is recorded on
 every `report_runs` row. It is separate from the pipeline's `PROMPT_VERSION` for
 a structural reason, not a filing one: `app.reports` sits *below* the pipeline —
 a report reads a pipeline node, and a node knows nothing about a report.
@@ -846,5 +846,5 @@ compared with one generated after it.
    been missing since the feature landed, which made the section's own claim
    (*"this list cannot silently grow"*) false for as long as nobody re-read it.
    Three prompts and one table: when you add an LLM call site to
-   `app/reports/`, security.md §2 and [pipeline.md §0.4](pipeline.md) are the
+   `app/reports/`, security.md §2 and [pipeline-chat.md §0.4](pipeline-chat.md) are the
    two lists that have to grow with it.

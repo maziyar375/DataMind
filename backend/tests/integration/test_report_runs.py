@@ -1219,7 +1219,7 @@ async def test_a_restart_reports_the_runs_it_interrupted_rather_than_failing_the
 ) -> None:
     """A process that died mid-run leaves a row saying RUNNING forever.
 
-    **Changed deliberately in Phase 4** of `docs/langgraph-migration.md`. This
+    **Changed deliberately in Phase 4** of `docs/plans/langgraph-migration.md`. This
     used to fail every such run on the reasoning that "nothing here knows how
     far it got" — which was never quite true: the result and section rows say
     exactly how far it got. A report run is minutes long, so failing it charged

@@ -1,6 +1,6 @@
 """Store health: the sweep that stops a curated store decaying into noise.
 
-Phase 4 of `docs/learning-loop-plan.md`. A curated store degrades two ways and
+Phase 4 of `docs/plans/learning-loop.md`. A curated store degrades two ways and
 both are handled here.
 
 **Staleness** is a parse. On every schema sync, every live template is

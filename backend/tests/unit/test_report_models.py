@@ -8,7 +8,7 @@ to `Base.metadata` column by column. A new revision that touches these tables
 belongs in `MIGRATIONS` below; leaving it out is how the check quietly stops
 covering the newest column.
 
-The rest of the file pins the choices in §4 of `docs/reports-plan.md` that are
+The rest of the file pins the choices in §4 of `docs/history/reports-plan.md` that are
 easy to "tidy" into a bug: a report survives its connection, a *run* survives
 the block it was generated from, NULL means Auto, NULL means "not edited", and
 every enum-shaped column is a plain string.

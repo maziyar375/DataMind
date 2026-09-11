@@ -1,6 +1,6 @@
 """A context always names a principal, and background work says whose.
 
-Phase 2 of `docs/user-management-and-access-control-plan.md`. The claim the
+Phase 2 of `docs/plans/user-management-and-access-control.md`. The claim the
 whole plan rests on is that `owner_id` is a *fact stored on a row* and nothing
 in `api/` or `services/` reads it to decide anything — which only holds if
 every call carries a principal to decide *about*. Three properties keep that

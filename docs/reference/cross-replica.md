@@ -3,11 +3,11 @@
 What changes when the process serving a request is not the process doing the
 work, what was done about each, and how to prove it on your own machine.
 
-This is Phase 6 of [langgraph-migration.md](langgraph-migration.md), and the
+This is Phase 6 of [langgraph-migration.md](../plans/langgraph-migration.md), and the
 phase record there says it should be folded into production-readiness work
 rather than done as a LangGraph phase. It was — nothing here is a graph change.
-Companion to [architecture.md](architecture.md) §17 (which deferred the shared
-queue and named the trigger) and [pipeline.md](pipeline.md) (the run itself).
+Companion to [architecture-proposal.md](../history/architecture-proposal.md) §17 (which deferred the shared
+queue and named the trigger) and [pipeline-chat.md](pipeline-chat.md) (the run itself).
 
 ---
 
@@ -45,7 +45,7 @@ checkpointer: **the rows already exist.**
 every emit inside `RunService._emit`, and the SPA already had a polling
 fallback reading it. A broker would be a second copy of that fact, in a second
 deployment unit, with its own delivery semantics to reason about — against
-[CLAUDE.md](../CLAUDE.md)'s "no microservices, no broker, no vector DB", which
+[CLAUDE.md](../../CLAUDE.md)'s "no microservices, no broker, no vector DB", which
 is a standing commitment rather than an accident.
 
 **The notification carries `run_id:seq` and nothing else.** Three things fall
@@ -142,7 +142,7 @@ SELECT count(*) FROM pg_locks WHERE locktype = 'advisory';  -- 0
 
 - **A chat run does not survive the death of its process.** It is claimable
   again once its heartbeat lapses, but its partial work is gone — chat runs are
-  not checkpointed, which [Phase 4](langgraph-migration.md) decided on
+  not checkpointed, which [Phase 4](../plans/langgraph-migration.md) decided on
   measurement (88 KB per node, 97% of it the schema block, for a run of 5–60
   seconds). Report runs *do* survive, from their result rows.
 - **Cross-replica cancel is not instant.** The owner learns on its next

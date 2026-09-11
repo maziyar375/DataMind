@@ -5,10 +5,10 @@ decision becomes a Vega-Lite spec.
 
 Everything here is implemented. The chart system is `backend/app/charts/`
 (one module, ~2,100 lines), the renderer is
-[`VegaChart.tsx`](../frontend/src/components/VegaChart.tsx), and the picker is
-[`chart-picker.tsx`](../frontend/src/components/chart-picker.tsx).
+[`VegaChart.tsx`](../../frontend/src/components/VegaChart.tsx), and the picker is
+[`chart-picker.tsx`](../../frontend/src/components/chart-picker.tsx).
 
-Companion to [pipeline.md](pipeline.md) (where the `chart` node sits),
+Companion to [pipeline-chat.md](pipeline-chat.md) (where the `chart` node sits),
 [dashboards.md](dashboards.md) (how a tile stores a chart) and
 [security.md](security.md) (what the chart prompt may say about a result).
 
@@ -295,7 +295,7 @@ artifact carrying value, label, optional comparison delta and sparkline series.
 
 It is planned on the **backend** (`plan_kpi`): which column, how the figure is
 written, whether extra rows are a comparison or clutter. One renderer,
-[`Kpi`](../frontend/src/components/ui.tsx), serves both a chat turn and a
+[`Kpi`](../../frontend/src/components/ui.tsx), serves both a chat turn and a
 dashboard `METRIC` tile — which is what stops the two from disagreeing about
 the same number.
 
@@ -324,11 +324,11 @@ deferred until it can be measured against the palette rather than guessed at.
 
 ## 8. Colour
 
-The palette in [`VegaChart.tsx`](../frontend/src/components/VegaChart.tsx) is
+The palette in [`VegaChart.tsx`](../../frontend/src/components/VegaChart.tsx) is
 **measured, not chosen**: OKLab ΔE separation, Machado-2009 CVD simulation,
 contrast against the chart's own surface, per-mode accent anchoring. The
 numbers are in that file's header, and
-[`palette.test.ts`](../frontend/src/components/palette.test.ts) re-checks them
+[`palette.test.ts`](../../frontend/src/components/palette.test.ts) re-checks them
 (`npm run test:palette`).
 
 A free hex picker destroys all of that silently, so there isn't one.

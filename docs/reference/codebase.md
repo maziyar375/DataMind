@@ -1,9 +1,9 @@
 # DataMind — Codebase Documentation
 
 A code-grounded tour of *what the code is* and *what technology it uses*. It
-sits between the user-facing [README](../README.md), the concise developer map
-[CLAUDE.md](../CLAUDE.md), and the full design rationale
-[architecture.md](architecture.md).
+sits between the user-facing [README](../../README.md), the concise developer map
+[CLAUDE.md](../../CLAUDE.md), and the full design rationale
+[architecture-proposal.md](../history/architecture-proposal.md).
 
 DataMind is a **conversational business-intelligence** application. You ask a
 question in plain English (or Persian); it decides what you mean, writes SQL,
@@ -168,13 +168,16 @@ guard, and the fifth entry point exists precisely so it reuses the same
 ## 3. Directory-by-directory
 
 ### `backend/app/api` — the edge
-Eleven routers under `v1/`: `auth`, `users`, `llm_configs`, `connections`,
+Sixteen routers under `v1/`: `auth`, `users`, `llm_configs`, `connections`,
 `semantic`, `knowledge`, `conversations`, `drafts`, `dashboards`, `reports`,
-`audit`. The split between the first two is about *who*, not about *what*:
-everything under `/users` is `AdminDep`, and the two self-scoped routes a member
-has to their own account — `PATCH /auth/me` and `PUT /auth/me/password` — live
-on `auth` and take no user id at all, so there is no path parameter that could
-name somebody else. Each router only shapes HTTP: extracts the identity, validates the DTO
+`audit`, plus the six the access-control work added — `access` (the five grant
+routes, mounted on all eight grantable types), `access_review`, `roles`,
+`teams`, `service_users`, and the self-scoped `/me/permissions`. The split
+between `auth` and `users` is about *who*, not about *what*: administration of
+other people is capability-gated, and the two self-scoped routes a member has to
+their own account — `PATCH /auth/me` and `PUT /auth/me/password` — live on
+`auth` and take no user id at all, so there is no path parameter that could name
+somebody else. Each router only shapes HTTP: extracts the identity, validates the DTO
 (`schemas.py`, 1.7k lines), and calls a service. Errors map to RFC 7807 `problem+json`
 (`errors.py`). `main.py` is the ASGI factory — it wires CORS, a correlation-id
 middleware (every response carries `X-Correlation-ID`), health probes, and a
@@ -190,12 +193,22 @@ Config (pydantic-settings), structured logging with secret redaction, the error
 hierarchy, correlation context, and a clock. No business logic.
 
 ### `backend/app/domain` — the pure core
-`value_objects/` holds the enums the whole system speaks in: `Role`,
+`value_objects/` holds the enums the whole system speaks in:
 `UserStatus`, `DatabaseKind` (postgres/mysql/mssql/oracle, each with a
 `sqlglot_dialect` and `default_port`), `RunStatus`, `StepName`, `StepStatus`,
 `MessageRole`, `ArtifactKind`, `DashboardStatus`, `TileType`, `SqlOrigin`, the
 seven `Report*` enums, `DisclosurePolicy` (NONE/AGGREGATE/SAMPLE/FULL),
 `RunEventType`, and `HintBudget` with the `SENSITIVE_COLUMN_TOKENS` floor.
+`authz.py` beside them holds the authorization vocabulary — `PrincipalKind`,
+`Privilege`, `ResourceType`, `Capability` and `PRIVILEGE_MEANINGS`, the matrix
+every route resolves to exactly one cell of.
+
+> A `Role` **StrEnum** (`ADMIN`/`MEMBER`) still sits at the top of
+> `value_objects/__init__.py` with **no importers anywhere** — a role is a row
+> in the `roles` table now, and `users.role` was dropped in migration `0029`.
+> `Role` in current code means `infra/db/models.Role`. The enum is a vestige,
+> not a second answer; don't reach for it.
+
 `ports/` holds the Protocols and their immutable dataclass value objects
 (`SchemaSnapshot`, `TableInfo`, `ColumnInfo`, `RelationshipInfo`, `QueryResult`,
 `ConnectionProbe`, `Completion`, …). `entities/` is intentionally empty —
@@ -249,7 +262,7 @@ halts before any SQL is written. `prompts/` holds versioned prompt templates
 which tables a schema question is about. A node crash is caught and recorded as
 a *run failure*, never a bare 500.
 
-Full node-by-node reference: [pipeline.md](pipeline.md).
+Full node-by-node reference: [pipeline-chat.md](pipeline-chat.md).
 
 ### `backend/app/sqlguard` — the safety net
 Self-contained (import-linter forbids it from importing infra/api/frameworks).
@@ -277,7 +290,7 @@ result-set comparator, shared with the eval and the benchmark),
 (masked-question similarity — the vocabulary, the cosine, and the fingerprint
 that makes staleness derived rather than tracked). Self-contained like
 `sqlguard`, and allowed to call it. See
-[learning-loop-plan.md](learning-loop-plan.md).
+[learning-loop.md](../plans/learning-loop.md).
 
 ### `backend/app/semantic` — what the schema *means*
 `models.py` (the document), `validate.py` (bind it to a snapshot, parse metric
@@ -522,7 +535,7 @@ this is a deliberate product feature, not debug output.
   person's answers — there is no god context. Today the implementation is
   `OwnerOnlyAuthorizer` and the behaviour is unchanged from the comparisons it
   replaced; roles, teams and grants land behind the same port. See
-  [user-management-and-access-control-plan.md](user-management-and-access-control-plan.md).
+  [user-management-and-access-control.md](../plans/user-management-and-access-control.md).
 
 Every claim above names the module that enforces it, and its limits, in
 [security.md](security.md).
@@ -591,11 +604,11 @@ were not modified — and `match`, added afterwards, cost the wiring nothing.
 Two phases were argued and **declined** on measurement rather than skipped —
 checkpointing (88 KB per node, 97% of it the schema block, for a run of 5–60
 seconds) and durable clarification. See
-[langgraph-migration.md](langgraph-migration.md) for both arguments and the
+[langgraph-migration.md](../plans/langgraph-migration.md) for both arguments and the
 gates.
 
 Still deferred **on purpose**, with named triggers to revisit each in
-[architecture.md](architecture.md): rolling conversation summaries, Celery +
+[architecture-proposal.md](../history/architecture-proposal.md): rolling conversation summaries, Celery +
 Redis, dashboard filters (`QueryExecutor.execute` takes no bind parameters, and
 never by string interpolation), scheduled report generation, and sharing a
 dashboard or report with another user — which is an authorization model, not a

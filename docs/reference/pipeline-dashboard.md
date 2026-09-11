@@ -1,20 +1,20 @@
 # The dashboard pipelines, node by node
 
 What happens between "user asks for a tile" and "twelve tiles redraw themselves
-at 03:00 with nobody watching". Companion to [pipeline.md](pipeline.md) (the
+at 03:00 with nobody watching". Companion to [pipeline-chat.md](pipeline-chat.md) (the
 chat run, and the shared machinery), [pipeline-report.md](pipeline-report.md)
 (documents), and [dashboards.md](dashboards.md) (the data model, the API, the
 grid, the tile editor). **This file is only the pipelines**: the flows, the
 nodes, the prompts, and what happens when each step fails.
 
 Code:
-[`services/sql_draft_service.py`](../backend/app/services/sql_draft_service.py)
+[`services/sql_draft_service.py`](../../backend/app/services/sql_draft_service.py)
 (question → guarded draft),
-[`services/query_service.py`](../backend/app/services/query_service.py)
+[`services/query_service.py`](../../backend/app/services/query_service.py)
 (stored SQL → result; the batch path),
-[`services/dashboard_service.py`](../backend/app/services/dashboard_service.py)
+[`services/dashboard_service.py`](../../backend/app/services/dashboard_service.py)
 (CRUD, the cache, the refresh policy),
-[`frontend/src/components/dashboard-schedule.ts`](../frontend/src/components/dashboard-schedule.ts)
+[`frontend/src/components/dashboard-schedule.ts`](../../frontend/src/components/dashboard-schedule.ts)
 (which tiles are due).
 
 ---
@@ -59,7 +59,7 @@ nothing but a query.
 ### A1 · The plain-language road: `POST /sql/drafts`
 
 `draft_sql(db, settings, connection_id, llm_config_id, question, owner_id)`
-([sql_draft_service.py:182-300](../backend/app/services/sql_draft_service.py#L182-L300)).
+([sql_draft_service.py:182-300](../../backend/app/services/sql_draft_service.py#L182-L300)).
 
 **It is deliberately not a run.** No conversation, no `messages` row, no `runs`
 row, no SSE, no step trail. A draft is a thing the user is looking at, and
@@ -100,7 +100,7 @@ read months later.
 `_RETRIEVE_BUDGET_CHARS` (50,000), `EXACT_MATCH` + one FK hop above it. With
 `history=[]`, `_tables_from_history` contributes nothing, so a wide-schema draft
 leans entirely on substring matching against the question — see
-[pipeline.md §7](pipeline.md) gap 4 for what that gets wrong.
+[pipeline-chat.md §7](pipeline-chat.md) gap 4 for what that gets wrong.
 
 The connection's **semantic layer** is loaded on exactly the run path's terms
 (`load_document`, and `RetrievedContext.render` scopes and gates it). A draft is
@@ -120,10 +120,10 @@ cannot see this.
 
 **Node 3+4 — `generate` → `validate`, up to twice.**
 
-Since Phase 2 of [langgraph-migration.md](langgraph-migration.md) this is not a
+Since Phase 2 of [langgraph-migration.md](../plans/langgraph-migration.md) this is not a
 loop in this service at all. It is the **same compiled repair region the chat
 graph builds** — `_add_repair_region` in
-[graph.py](../backend/app/pipeline/graph.py) — reached through `DRAFT_GRAPH`:
+[graph.py](../../backend/app/pipeline/graph.py) — reached through `DRAFT_GRAPH`:
 
 ```python
 await draft_statement(                    # [route →] retrieve → generate ⇄ validate
@@ -194,7 +194,7 @@ Four properties bound it, in the order they matter:
   (`_check_deadline` runs before it, as before each `generate`), an unparseable
   intent: each falls back to the heuristic's pick, which is what this returned
   for every draft before the model was asked. Fail *backwards*, per
-  [pipeline.md §4.1](pipeline.md).
+  [pipeline-chat.md §4.1](pipeline-chat.md).
 - **The answer is never stored raw.** It goes through `plan_chart` like any
   other intent, so it gets the same name check and shape repair. A model that
   ignores `CHART_SYSTEM_COMPOSED` and answers `"none"` is refused by
@@ -223,7 +223,7 @@ same thing.
 ### A3 · Saving is a second guard, not a receipt
 
 `_validated_tile_fields`
-([dashboard_service.py:337-400](../backend/app/services/dashboard_service.py#L337-L400))
+([dashboard_service.py:337-400](../../backend/app/services/dashboard_service.py#L337-L400))
 runs on add **and** on update, and validates the *resulting* tile rather than the
 field that changed — switching a TEXT tile to a CHART is legal, and it is the
 whole tile that has to make sense:
@@ -251,7 +251,7 @@ to send.
 ### B1 · The browser decides what is due
 
 `dueTileIds(tiles, results, now)`
-([dashboard-schedule.ts](../frontend/src/components/dashboard-schedule.ts)) —
+([dashboard-schedule.ts](../../frontend/src/components/dashboard-schedule.ts)) —
 one pure, DOM-free function, tested on its own (`npm run test:schedule`),
 because getting it wrong in the eager direction turns a forgotten browser tab
 into a load generator pointed at the customer's database, and getting it wrong
@@ -275,7 +275,7 @@ dashboard is the *exception* (first paint), not the normal call.
 
 ### B2 · `DashboardService.refresh` — the cache gate
 
-([dashboard_service.py:592-660](../backend/app/services/dashboard_service.py#L592-L660))
+([dashboard_service.py:592-660](../../backend/app/services/dashboard_service.py#L592-L660))
 
 1. Load the dashboard (404 if not the caller's) and the tiles asked for.
 2. Skip tiles with nothing to compute (TEXT, or blank SQL).
@@ -310,7 +310,7 @@ serving it: the reader is told how old the number is.
 
 ### B3 · `execute_many` — the batch shape
 
-([query_service.py:497-590](../backend/app/services/query_service.py#L497-L590))
+([query_service.py:497-590](../../backend/app/services/query_service.py#L497-L590))
 
 1. Group requests by `connection.id`.
 2. A group whose connection is not the caller's fails as a group with
@@ -329,7 +329,7 @@ serving it: the reader is told how old the number is.
 
 ### B4 · `execute_saved_sql` — the node that runs a stored statement
 
-([query_service.py:265-371](../backend/app/services/query_service.py#L265-L371)).
+([query_service.py:265-371](../../backend/app/services/query_service.py#L265-L371)).
 The second entry point into the guarded path, and it gets **no shortcut**:
 
 | # | Step | Fails as |

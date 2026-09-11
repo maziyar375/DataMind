@@ -1,22 +1,29 @@
 # CLAUDE.md — orientation for developers and agents
 
-Read this before touching the code. It is the map, not the territory: it tells
-you where things live, what must not break, and how to run and test — so you
+Read this before touching the code. **It is the map, not the territory**: where
+things live, what must not break, and where the rest is written down — so you
 can make a change without reading the whole codebase first.
 
-Every section below has a fuller document behind it; this file is the part you
-must not skip, and the `>` note at the top of each section says where the rest
-lives. [docs/README.md](docs/README.md) indexes all fifteen. For users, see
-[README.md](README.md).
+Everything here is deliberately short. Each section names the document that
+owns its subject, and **that document is the authority** — where this file and
+a reference doc disagree, the reference doc is right.
 
-The four you will reach for most:
+| Question | Answer lives in |
+|---|---|
+| What is built? What is next? | [docs/status.md](docs/status.md) |
+| What has already been decided, and why? | [docs/decisions.md](docs/decisions.md) |
+| How do I run, test, verify? | [docs/development.md](docs/development.md) |
+| How does the whole stack fit together? | [docs/reference/codebase.md](docs/reference/codebase.md) |
+| Everything else | [docs/README.md](docs/README.md) — the index, and the routing table |
+
+**The four you will reach for most:**
 
 | | |
 |---|---|
-| [docs/CODEBASE.md](docs/CODEBASE.md) | a code-grounded tour of the whole stack — start here if the map below is not enough |
-| [docs/security.md](docs/security.md) | **read before** changing `sqlguard/`, `disclosure.py`, `HintBudget`, or adding an LLM call site |
-| [docs/pipeline.md](docs/pipeline.md) | **read before** changing a node; §0 maps all three pipelines |
-| [docs/architecture.md](docs/architecture.md) | the "why" — a pre-build proposal, so read its status banner first |
+| [docs/reference/security.md](docs/reference/security.md) | **read before** changing `sqlguard/`, `disclosure.py`, `HintBudget`, or adding an LLM call site |
+| [docs/reference/access-control.md](docs/reference/access-control.md) | **read before** writing any endpoint — it is the rulebook, and it is short |
+| [docs/reference/pipeline-chat.md](docs/reference/pipeline-chat.md) | **read before** changing a node; its §0 maps all three pipelines |
+| [docs/reference/codebase.md](docs/reference/codebase.md) | the code-grounded tour, when the map below is not enough |
 
 ---
 
@@ -32,23 +39,20 @@ connector interface.
 A single modular-monolith **FastAPI** backend on one PostgreSQL app database,
 plus a **React + Vite** SPA. No microservices, no broker, no vector DB.
 
+Three surfaces sit on one guarded path: **Chat** (one question), **Dashboards**
+(numbers kept current), **Reports** (a document).
+
 > **Naming gotcha:** the product is *DataMind*, but the Python package is still
 > `raymand` (import `app.*`), and so are the compose project and the app
-> database. Renaming the package is a separate, deliberate task — don't do it
-> incidentally.
->
-> The bootstrap admin address is **inconsistent in the repo today**, and it is
-> the kind of thing that costs someone twenty minutes: `core/config.py` and
-> `docker-compose.yml` both fall back to `admin@raymand.local`, while
-> `.env.example` — copied to `.env` by `make secrets`, and read by compose in
-> preference to its own fallback — sets `admin@raymand.com`, as does
-> `scripts/seed_demo_dashboard.py`. Anyone who followed the quick start signs in
-> as `admin@raymand.com`. Reconcile it deliberately or read `.env`; don't assume
-> either address.
+> database. Renaming is a separate, deliberate task — don't do it incidentally.
+> Two config values are caught in the middle of it and disagree between
+> `.env.example` and the code; both are tabulated in
+> [docs/status.md §7](docs/status.md#7-known-inconsistencies-in-the-repo-itself).
+> **Read your `.env` rather than assuming either.**
 
 ---
 
-## Tech stack (one line each)
+## Tech stack
 
 - **Backend:** Python 3.12, FastAPI, SQLAlchemy 2.0 async + asyncpg, Alembic,
   Pydantic v2 / pydantic-settings, structlog.
@@ -57,221 +61,50 @@ plus a **React + Vite** SPA. No microservices, no broker, no vector DB.
   (`app/infra/llm/litellm_gateway.py`, the one module allowed to import it).
 - **Run orchestration:** LangGraph — *only* inside `app/pipeline/` and
   `app/workers/`. Same bargain as LiteLLM: an import-linter contract and a CI
-  grep hold the boundary.
-
-> **These two are different layers and neither replaced the other.** LiteLLM is
-> the *provider adapter* — it turns `ChatMessage[]` into a call to OpenAI,
-> Anthropic, Ollama or vLLM, and that is all it does. LangGraph is the
-> *orchestrator* — it decides which node runs next. LangGraph was adopted in the
-> migration ([docs/langgraph-migration.md](docs/langgraph-migration.md));
-> LiteLLM was never touched by it and is still the only way a prompt leaves the
-> process.
->
-> **The UI offers exactly two creatable provider kinds**, and they are the keys
-> of `PROVIDER_URLS` in `frontend/src/theme/tokens.ts`: `OpenAI-compatible`
-> (which covers everything speaking that API — OpenRouter, Ollama, vLLM, a local
-> gateway — and gets an `openai/` model prefix added in the gateway when the
-> model name carries no `/`) and `Anthropic`. A legacy `"Custom"` value is still
-> handled in `litellm_gateway.py` for rows created before it was dropped, but
-> nothing creates one now. Removing a key from that map removes the choice.
->
-> **What each of those two accepts beyond `temperature` and `max_tokens` is a
-> catalog, and the catalog is data**: `app/domain/value_objects/llm_params.py`,
-> one entry per parameter the provider's own API reference documents, under the
-> provider's own name for it — `stop_sequences` and `thinking` for Anthropic,
-> `stop` and `seed` for OpenAI-compatible. Stored in `llm_configs.params`
-> (JSONB), validated against that catalog **before** the row is written, merged
-> into the request by `_kwargs`, and served to the SPA over
-> `GET /llm-configs/parameters` so the form is *generated* rather than written.
-> Adding a parameter is one line there: **no DTO field, no form field, no
-> request-shaping branch.** `{}` — every row before migration `0022` — builds
-> byte-identically to before the column existed.
->
-> Three rules that are not style:
-> **nothing the gateway owns is configurable** (`RESERVED`: `model`, `messages`,
-> `stream`, `response_format`, `temperature`, `max_tokens`, `api_key`,
-> `api_base`, …, refused inside `extra_body` too);
-> **a parameter the *selected* provider does not document is refused on save**,
-> because `litellm.drop_params` is on and a silently-dropped parameter is a row
-> describing a behaviour that never happens;
-> and **nothing may be catalogued that cannot be shown to reach the wire** —
-> `tests/unit/test_provider_params.py` drives every entry through litellm's own
-> parameter mapping and fails if one is misnamed or unsupported. The gateway
-> renames exactly one thing (`_ANTHROPIC_TO_LITELLM`: Anthropic's documented
-> `metadata.user_id` is litellm's `user`), and a test pins that it is the only
-> one. `extra_body` is the one open door and it is the OpenAI *client's* own
-> documented passthrough, for what an endpoint defines for itself (vLLM's
-> `top_k`, OpenRouter's provider routing).
->
-> **A provider row declares what it is *for*, and there is no `kind` column.**
-> `model` and `embedding_model` are both optional and a row must have at least
-> one; `query_service.can_chat` / `can_embed` derive the rest, the way vector
-> staleness is derived rather than tracked. That is what lets an endpoint which
-> serves **only** vectors — a self-hosted TEI or Infinity server, an Ollama with
-> one embedding model pulled — be configured at all: it used to need an invented
-> chat model, whose Test button could only fail against something that does not
-> exist. Consequences, all enforced in one place each:
-> `resolve_llm(purpose=...)` refuses at the **funnel** every chat call site goes
-> through (a run, a draft, a semantic layer, a report outline, a report section,
-> a benchmark), so there is no eleventh site to forget;
-> `GET /llm-configs?purpose=chat|embedding` filters with those same two
-> predicates, and **every picker that chooses a model to answer with passes
-> `purpose=chat`**;
-> and `create_run` refuses an embeddings-only row *before* a run row exists —
-> `resolve_llm`'s refusal escapes the executor's failure handling, so a run made
-> that way sat `RUNNING` until the reconciler killed it as `E_ORPHANED`, which
-> tells the reader nothing. Same posture as `_bind_connection` beside it.
->
-> **Embedding models live on the same table and the same screen** —
-> `llm_configs.embedding_model` / `.embedding_params`, in the form's
-> *Embeddings* section — because an embedding endpoint needs exactly what a
-> provider row already holds (kind, base URL, encrypted key) and
-> `LLMGateway.embed` already took a resolved provider plus a model *name*. A
-> second screen would duplicate the credential form, the `llm_config:{id}` AAD
-> scheme, the probe and the delete guard to hold one string.
-> **But a row is one job**, and the screen says so: `/providers` lists *Models*
-> and *Embedder* as two groups, creating asks which kind, and the form shows
-> that kind's fields only — an embedder has no temperature or advanced
-> completion parameters, a model has no Embeddings section, and the kind is
-> cleared out of the payload on save (`kindPayload`) so the separation reaches
-> the wire instead of being a hidden field. The kind is **derived**
-> (`kindOf` on the frontend, `can_chat` / `can_embed` on the server), never
-> stored: a `kind` column would be a third answer able to disagree with the two
-> fields it describes. Rows written before this that declare both still work,
-> appear in both groups, and are told what they are rather than migrated. Anthropic is
-> refused an embedding model at save time, for the same reason
-> `probe_embedding` refuses it with no network call.
-> Do **not** confuse this with `database_connections.embedding_model` /
-> `.embedding_dimension`: those are a record of *an index* — what the vectors in
-> a knowledge store were actually made with, measured from a real reply — and
-> `.embedding_llm_config_id` (migration `0022`) names the provider that made
-> them. **LangChain is not a dependency**: the one `langchain_core` import is
-> `RunnableConfig`, a type LangGraph pulls in, used in `pipeline/graph.py` and
-> `workers/report_graph.py` and nowhere else.
+  grep hold the boundary. **LangChain is not a dependency** — the one
+  `langchain_core` import is `RunnableConfig`, a type LangGraph pulls in.
 - **Crypto/auth:** argon2-cffi (Argon2id), PyJWT, `cryptography` (AES-256-GCM).
-- **Target DB drivers:** asyncpg (Postgres), aiomysql (MySQL), oracledb *thin*
-  (Oracle), pymssql (SQL Server). All ship wheels — no system DB client needed.
+- **Target DB drivers:** asyncpg, aiomysql, oracledb *thin*, pymssql. All ship
+  wheels — no system DB client needed.
 - **Frontend:** React 18 + TypeScript 5.6, Vite 5.4, react-router-dom 6,
-  Vega-Lite (`vega`/`vega-lite`/`vega-embed`) for charts, `react-grid-layout`
-  for the dashboard grid. That is the whole dependency list — the design system
-  is custom, on oklch CSS variables, with **no component library**.
-- **Dev/CI:** pytest + pytest-asyncio, ruff, mypy, **import-linter** (seven
-  contracts; enforces the layer rule), Docker Compose. mypy is configured
-  `strict` but runs `|| true` in CI — strict mode is being adopted module by
-  module, so a green tick is not a type-clean tree. The frontend job runs
-  `tsc --noEmit` and `vite build` only: **`npm test` is not in CI**, and
-  `npm run lint` is a dead script (eslint is not a devDependency and there is no
-  eslint config — it fails everywhere).
+  Vega-Lite for charts, `react-grid-layout` for the dashboard grid. That is the
+  whole dependency list — the design system is custom, on oklch CSS variables,
+  with **no component library**.
+- **Dev/CI:** pytest + pytest-asyncio, ruff, mypy, **import-linter** (eight
+  contracts), Docker Compose.
+
+> **LiteLLM and LangGraph are different layers and neither replaced the other.**
+> LiteLLM is the *provider adapter*; LangGraph is the *orchestrator*. How a
+> provider row is configured, what parameters it may carry, and why there is no
+> `kind` column: **[docs/reference/llm-providers.md](docs/reference/llm-providers.md)**.
 
 ---
 
 ## Commands
 
 ```bash
-make secrets   # copy .env.example to .env, then write a fresh AES key + JWT secret (run once)
-make up        # build & start everything, in the FOREGROUND (docker compose up --build)
-make down      # stop everything
-make logs      # follow api logs
-
-make test      # full backend suite (cd backend && pytest -q)
-make guard     # the hostile SQL corpus alone — the hard CI gate
-make lint      # ruff + import-linter contracts
-make fmt       # ruff format
-make migrate   # alembic upgrade head
-make fixtures  # rebuild + verify the sales fixtures (PG/MySQL/MSSQL) from clean
-make db-repair # recreate the empty PGDATA runtime dirs the studio drive strips
+make test         # full backend suite, ~1,790 tests, well under a minute
+make guard        # the hostile SQL corpus alone — the hard CI gate
+make lint         # ruff + the eight import-linter contracts
+make authz-check  # prove no module decides access for itself
+make up / down / logs / secrets / migrate / fixtures / db-repair
 ```
 
-`make up` starts the app db, **all three** demo databases, the api and the web
-container, and it does not detach — `docker compose up -d` is the backgrounded
-form the README's quick start uses.
+From `frontend/`: `npm run typecheck`, `npm run build`, `npm test` (fifteen
+suites). **`npm run lint` is a dead script** — eslint is neither a devDependency
+nor configured.
 
-Frontend, from `frontend/`: `npm run dev`, `npm run build` (`tsc -b && vite
-build`), `npm run typecheck` (`tsc --noEmit`), `npm test` (all fourteen DOM-free
-logic suites: schedule, format, dashboard document, palette, chat format, report
-document, report readiness, print, semantic drift, semantic metrics, knowledge
-template, thinking, queue, provider params). **`npm run lint` does not
-work** — the script exists but eslint is neither a devDependency nor
-configured. Typecheck plus build plus `npm test` is the real gate.
+**Verification loop before you claim done:** `make test` for backend, plus
+`make guard` if you touched `sqlguard/` or a connector, plus `make authz-check`
+if you touched anything permission-shaped; `npm run typecheck && npm run build
+&& npm test` for frontend. Several past bugs only surfaced end-to-end via the
+API, not in the UI — **actually exercise the path you changed.**
 
-The **eval harness is not in `make test`** — it calls a real provider and costs
-money. `python -m app.eval.runner --suite sales_v1` from `backend/`, or
-`backend/scripts/eval_run.sh` behind a rate-limiting provider. See
-[docs/eval.md](docs/eval.md).
-
-**Verification loop before you claim done:** `npm run typecheck` + `npm run
-build` + `npm test` for frontend changes; `make test` (and `make guard` if you
-touched `sqlguard/` or a connector) for backend. The backend suite is ~1,790
-tests plus 14 skips and takes well under a minute. (It used to take three,
-because an unhandled exception inside an API test was logged through
-structlog's **rich** console renderer, which walks every frame's locals — one
-of which is a SQLAlchemy `Select`. `tests/conftest.py` now forces JSON logs;
-a single failing API test used to cost over a minute of rendering and made the
-suite look hung.) Several past bugs only surfaced
-end-to-end via the API, not in the UI — actually exercise the path you changed.
-
-Four environment facts that read like "the tooling is missing" but aren't:
-
-- **node is not on `PATH`** in this environment — it is under
-  `~/.nvm/versions/node/*/bin`. Export it and `npm ci` in `frontend/` (fast, the
-  cache is warm), and all three frontend commands work. `frontend/node_modules`
-  is gitignored, so installing on the host costs nothing.
-- **…unless the compose stack has been up**, in which case host `npm ci` fails
-  `EACCES`: the web container leaves `frontend/node_modules` behind as an empty
-  root-owned mount point. Don't chase the permissions — run
-  `docker exec datamind-web-1 sh -lc 'cd /app && npm run typecheck && npm run
-  build && npm test'` against the same bind-mounted source instead.
-- **pytest works as-is**; `alembic` is not installed in that env, and
-  `core/config.py` reads `.env` **relative to the cwd**, so running alembic or
-  uvicorn from `backend/` needs a copy of the root `.env` there.
-- **`.data/db` is a real local database** with real dashboards and connections
-  in it. Clean up anything an end-to-end script creates.
-
-**Ports:** web `5173`, api `8000` (`/docs` for OpenAPI), app db `5432`, demo
-`sales` db `5433`, Sakila `3307`, demo `aurora` db `5434`. On a remote host,
-expose **only 5173**; the SPA calls the same-origin `/api/v1` and Vite proxies
-it to `api:8000`.
-
-### The three demo databases
-
-All three start with the stack, across **two** engines. They are not
-interchangeable and picking the wrong one wastes an afternoon:
-
-| | engine | host port | tables | what it is for |
-|---|---|---|---|---|
-| `aurora` | PostgreSQL | `5434` | 13 | **the demo.** Clean, one obvious join path per question, `COMMENT ON` throughout |
-| `sales` | PostgreSQL | `5433` | 42 | **the eval fixture.** Messy on purpose |
-| `sakila` | MySQL | `3307` | 16 | the second engine |
-
-- **`aurora`** (`backend/fixtures/demo_seed.sql` + `demo_comments.sql`) is a
-  coffee chain over 24 months. Its cardinalities are **tuned to the constants in
-  `app/charts/__init__.py`** — `product_categories` = 6 = `MAX_PIE_SLICES`,
-  `channels` and `loyalty_tiers` = 4 ≤ `MAX_SERIES`, `stores` = 18, above
-  `HORIZONTAL_BAR_FROM` and below `MAX_CATEGORY_MARKS` — so the obvious question
-  yields an untrimmed chart. **If you change a chart budget, that tuning is a
-  thing you can break**, and the seed's header comment is where the reasoning
-  lives. Its schema estimate is ~6k against the 50k retrieve budget, so the
-  whole snapshot always reaches the generator. `orders` is the single source of
-  truth and `daily_store_metrics` is derived from it by aggregation, so asking
-  the same question two ways reconciles — deliberately the opposite of `sales`'s
-  `sales_daily_rollup` trap. (The seed header says "12 tables"; there are 13.)
-- **`sales`** is the eval fixture and its messiness is the point — near-duplicate
-  names, legacy cruft columns, soft-delete traps, a stale rollup that gives wrong
-  answers. Do not "clean it up": an eval that never fails measures nothing.
-  `sales_comments.sql` is the commented arm of the catalog-comments A/B.
-- Only `db` and `sales` are in the api service's `depends_on`; `sakila` and
-  `aurora` start alongside but the api does not wait on them.
-
-**No engine but those two has a demo server.** The Oracle and SQL Server compose
-services were **removed** (~2 GB of RAM each, rarely started), so a change to
-`infra/connectors/oracle.py` or `mssql.py` **cannot be driven against a live
-server from `make up`** — bring your own, or start one by hand. Their seeds
-survive in `backend/fixtures/`: `sales_seed_mssql.sql` is the same 42-table
-mirror as Postgres, and `oracle/` is the small four-table schema whose
-**`COMMENT ON` metadata is the point** — the fixture that exercises catalog
-comments end to end, whose `analytics_ro` deliberately holds no roles at all,
-not even `CONNECT`. `make fixtures` is unaffected: `rebuild_fixtures.sh` starts
-its own throwaway containers and never used the compose services.
+> The eval harness is **not** in `make test` — it calls a real provider and
+> costs money. The commands, the environment's sharp edges (node is not on
+> `PATH`; `.data/db` is a real database), the ports, the three demo databases
+> and what CI does and does not gate are all in
+> **[docs/development.md](docs/development.md)**.
 
 ---
 
@@ -349,7 +182,7 @@ backend/app/
                   registry), runner.py (CLI + scorecard to eval_runs/
                   eval_results), metrics.py (pure scoring), suites/ (the FROZEN
                   golden sets + CHANGELOG), reports/ (past run write-ups).
-                  Costs real money; not in `make test`. See docs/eval.md
+                  Costs real money; not in `make test`. See docs/reference/eval.md
   infra/          adapters implementing the ports:
     db/           SQLAlchemy models.py + Alembic migrations + session
     repositories/ query helpers over the ORM models
@@ -386,7 +219,7 @@ backend/           ← these are SIBLINGS of app/, not inside it
                   24k → 50k and the fixture estimates 26,480, so a default run
                   is entirely FULL_SNAPSHOT and recall is 1.0 by construction.
                   `--retrieve-budget CHARS` lowers the ceiling for one run,
-                  which is how recall is measured now (docs/eval.md §1 — read it
+                  which is how recall is measured now (docs/reference/eval.md §1 — read it
                   before quoting a recall number).
                   sales_comments.sql is the eval's commented arm and
                   sales_semantic.json its semantic-layer arm.
@@ -458,7 +291,7 @@ frontend/src/
                             report-print.ts (the print handoff: fonts, and
                             redrawing charts at page width —
                             `npm run test:print`)
-  pages/                    Login, Chat, DataSources, LlmProviders, Users,
+  pages/                    Login, Chat, DataSources, LlmProviders,
                             Dashboards, Reports, Knowledge (`/knowledge` — the
                             curation console promoted out of a connection's
                             fourth tab; `KnowledgeTab` behind a connection
@@ -466,102 +299,20 @@ frontend/src/
                             sources tab that now points here rather than
                             rendering a second copy; the rail's only count
                             badge — red for a flag somebody raised, amber for
-                            a backlog), Account (`/settings` — your own
+                            a backlog), Admin (`/admin` — master-detail over
+                            six tabs: People, Service accounts, Teams, Roles,
+                            Access review, Audit. `/users` redirects here, to
+                            /admin/people), Account (`/settings` — your own
                             display name and password, the only two things a
-                            member may change about themselves; every route
-                            under /users is admin-only), About (who built it — the one
-                            page reachable from both sides of the sign-in wall:
-                            the rail's footer group when signed in, a link on
-                            the login screen when not; portraits come from
-                            public/team/ and fall back to an initial)
+                            member may change about themselves), About (who
+                            built it — the one page reachable from both sides
+                            of the sign-in wall: the rail's footer group when
+                            signed in, a link on the login screen when not;
+                            portraits come from public/team/ and fall back to
+                            an initial)
 ```
 
 ---
-
-## Frontend conventions (nothing enforces these — the tree is just consistent)
-
-`npm run lint` is a dead script and `npm test` is not in CI, so every rule
-below is held up by the code agreeing with itself. Breaking one costs nothing
-at commit time and shows up as drift a release later. Full tour:
-[docs/frontend.md](docs/frontend.md).
-
-- **Every screen has a URL, and the router is a *data* router.** `main.tsx`
-  mounts `createBrowserRouter` — not `<BrowserRouter>` — because `useBlocker`
-  exists only on that one, and it is what stops a navigation out of a dirty
-  form. `App.tsx` holds the rail (`NAV`) and the route table; each section owns
-  a `/*` path and reads its own sub-routes with `useMatch` rather than nesting
-  a second `<Routes>`, so the section stays mounted across open and close (a
-  remount would drop a chat's live stream). A new section is a `NAV` entry and
-  a `<Route>`. Unknown paths redirect to `/chat`, and **whatever serves the
-  build must return `index.html` for unknown paths.**
-- **Hydrate a form from the row, not from the URL.** A detail page whose form
-  is filled from a list must key that effect on `selected?.id`, never on the id
-  in the path: on a deep link the path has an id before the list has arrived,
-  so a URL-keyed effect fires once against `null`, bails, and leaves a blank
-  form claiming unsaved changes — with the navigation guard then refusing to
-  let anyone leave it. The *id*, not the row: the row is a new object after
-  every list refresh and would re-hydrate over what was typed.
-- **A page asks the shell for what is not its own.** `shell.tsx`:
-  `useThemeOverride` (a dashboard pinned to a theme — `App` resolves
-  `override ?? the user's choice` and is the only caller of `applyTheme`) and
-  `useUnsavedWork(key, reason, within?)` (a dirty form, which the shell's one
-  blocker asks about before letting a navigation through). `within` is the
-  address the work survives inside — pass a record's own path when its tabs
-  are routes, or the guard stops a form from reaching the tab beside it to
-  protect edits a tab switch does not touch.
-- **Long work announces itself; in-page errors stay put.** `shell.tsx`'s
-  `useNotify` raises a `Notice` in the shell's `aria-live` corner, and
-  `useBackgroundWatch` hands the shell a `{key, poll}` so a job outlives the
-  page that started it (semantic generation, benchmark runs). It is for
-  events that outlive their screen — **not** an error channel: a failed save
-  still says so in an `ErrorNote` beside the button that failed, and moving
-  those would make every failure less legible.
-- **Connections are two things, and the screen says so.** `/sources/:id`
-  opens **Connection** (host, port, database, user, password, SSL, schema
-  allowlist, and the Danger zone) and `/sources/:id/policy` opens **Policy**
-  (disclosure, DB comments, taught examples, clarify, conflict checks, row cap,
-  timeout — the set is `POLICY_KEYS` in `DataSourcesPage.tsx`). The strip's
-  fifth entry, Knowledge, is a **door**: it navigates to `/knowledge/:id`,
-  where the console actually lives, and `/sources/:id/knowledge` redirects
-  there. Each of the two forms has its
-  own dirty state and its own Save, and each Save sends **only its own half**,
-  so two people editing two tabs cannot overwrite each other. `Test connection`
-  belongs to Connection, which is the only half it probes.
-- **Styling is two places, and which one is not a preference.** Layout,
-  spacing and one-off values are inline `style={}` in the JSX. Anything a
-  style attribute cannot express — `:hover`, `:focus-visible`, selection,
-  keyframes, `@media print`, the responsive reflow — is an `.rm-*` class in
-  `styles.css`. There are no CSS modules and no utility classes.
-- **No component library, and no new dependency to get one.** The whole list is
-  React, `react-grid-layout` (a layout engine, not components), Vega, and the
-  router that is not used. Primitives live in `components/ui.tsx`; the
-  master–detail frame that Data sources and LLM providers share is
-  `components/settings.tsx`. Compose from those before writing a new one.
-- **Below 700px no page has two fixed columns.** The chat list and the
-  settings master column become off-canvas drawers beside the collapsed rail
-  (`components/list-drawer.tsx`: `useListDrawer`, `ListToggle`, `ListScrim`),
-  closing on Escape, on the scrim, and on any navigation — which is what
-  "close on select" means when every list here navigates. A page with a
-  second column gets a `ListToggle` in its header and passes `open` to the
-  column; that is the whole contract.
-- **Never hardcode a colour.** Every value comes from a CSS variable defined in
-  `theme/tokens.ts`, which ships a **dark and a light** definition for each.
-  A literal hex or `oklch()` in a component is a bug in both themes — one of
-  them just has not been looked at yet. Chart colours are the one exception and
-  they live in `components/palette.ts`, tested apart from React.
-- **The fourteen DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
-  `table-format.ts`, `dashboard-document.ts`, `palette.ts`, `chat-format.ts`,
-  `report-document.ts`, `report-readiness.ts`, `report-print.ts`,
-  `semantic-drift.ts`, `semantic-metrics.ts`, `knowledge-template.ts`,
-  `thinking.ts`, `knowledge-queue.ts`, `provider-params.ts` — they hold the
-  logic whose failures are quiet, they are the *only* tested code in the
-  frontend, and their suites are plain `node --experimental-strip-types`
-  scripts. One React import turns a suite into a thing that cannot run.
-- **Text a person wrote gets `dir={dirOf(value)}`.** The product ships Persian.
-  SQL is always `dir="ltr"`, in both themes and both directions — a
-  bidi-reordered statement is unreadable and, worse, ambiguous.
-- **Status is never colour alone**: every state carries a glyph and a word, so
-  the screen survives greyscale and the print stylesheet.
 
 ## The dependency rule (enforced, not documented)
 
@@ -641,65 +392,43 @@ joined them with Phase 1 of the learning loop.
    applies at capture under every policy, including FULL, because the schema
    block is sent on every question while a result is only sent for the query
    the user asked for.
-5. **One place answers "may they?", and it is the `Authorizer` port.** Nothing
-   under `api/` or `services/` compares an owner id or reads a role string to
-   decide anything: a single row asks `authz.allowed(ctx, ref, privilege)`, a
-   list composes `authz.visible(...)` into the `SELECT` it was already going to
-   run, and an app-wide verb is a route dependency, `deps.needs(capability)`,
-   which runs before the handler body and so cannot be forgotten by the next
-   route. `make authz-check` fails the build on the four shapes this codebase
-   has agreed not to use, and every exemption carries its reason on the line.
-   Background work names its principal through
-   `RequestContext.on_behalf_of(owner)` and gets exactly that person's
-   answers — **there is no god context**, and a scheduled run its owner could
-   not perform by hand is supposed to fail.
+5. **One place answers "may they?", and it is the `Authorizer` port.**
+   Nothing under `api/` or `services/` compares an owner id or reads a role
+   string to decide anything: a single row asks `authz.allowed(ctx, ref,
+   privilege)`, a list composes `authz.visible(...)` into the `SELECT` it was
+   already going to run, and an app-wide verb is a route dependency,
+   `deps.needs(capability)`, which runs before the handler body and so cannot
+   be forgotten by the next route. Background work names its principal through
+   `RequestContext.on_behalf_of(owner)` — **there is no god context.**
 
-   **The answer is computed from five facts, and there is no sixth.** As of
-   Phase 6 `RbacAuthorizer` is the default: ownership, a direct grant, a team
-   grant, a role's scoped privilege, and a wildcard grant. The lattice
-   (`manage ⊃ delete ⊃ modify ⊃ select ⊃ describe`) is **data, expanded at read
-   time** — so a `modify` holder passes a `select` check with no row saying so,
-   and changing the lattice never needs a backfill.
+   The answer is computed from **five facts and there is no sixth**: ownership,
+   a direct grant, a team grant, a role's scoped privilege, a wildcard grant.
+   The lattice (`manage ⊃ delete ⊃ modify ⊃ select ⊃ describe`) is **data,
+   expanded at read time**, so changing it never needs a backfill.
 
-   Three things follow that are easy to regress:
+   Three things that are easy to regress: **`manage` is not implied by
+   `modify`** (editing a connection's credentials and deciding who else may
+   read through it are different acts); **there is no administrator arm** — if
+   you are adding `if ctx.is_admin` to a decision, that is the thing this model
+   exists to not have; and **404 above 403, in one place** (`services/policy.require`)
+   — a second copy turns a list endpoint into an existence oracle.
 
-   * **`manage` is not implied by `modify`.** Editing a connection's
-     credentials and deciding who else may read through it are different acts.
-     The same split is why the disclosure policy has its own `manage`-gated
-     endpoint rather than being a field on `PATCH`.
-   * **There is no administrator arm.** An administrator does not silently
-     reach another person's resource — reach is an explicit self-grant that
-     writes a grant row *and* an `admin.self_granted` row. If you find yourself
-     adding `if ctx.is_admin` to a decision, that is the thing this model
-     exists to not have.
-   * **404 above 403, in one place.** `services/policy.require` is it: 404 when
-     no fact reaches the principal (not audited — a 404 is indistinguishable
-     from a typo), 403 naming the privilege when something does. A second copy
-     anywhere turns a list endpoint into an existence oracle.
-
-   **When you grant something, grant it to a team.** A team is the recommended
-   default principal for any assignment and for any share: a permission
-   attached to a job survives the person leaving it, and one attached to a
-   person becomes a row nobody can attribute and nobody dares revoke.
-
-   > **[docs/access-control-rules.md](docs/access-control-rules.md) is the
-   > rulebook — read it before writing an endpoint.** Seven concepts, five
-   > invariants, the effective-permission algorithm verbatim, and three
-   > checklists: a new endpoint, a new resource type, a new capability. It is
-   > short on purpose.
-   > `backend/tests/unit/test_authz_conformance.py` enforces every rule in it
-   > a machine can check, and `make authz-check` greps for the four shapes
-   > this codebase has agreed not to use.
-   > [docs/user-management-and-access-control-plan.md](docs/user-management-and-access-control-plan.md)
+   > **[docs/reference/access-control.md](docs/reference/access-control.md) is
+   > the rulebook — read it before writing an endpoint.** Seven concepts, five
+   > invariants, the algorithm verbatim, and a checklist each for a new
+   > endpoint, a new resource type and a new capability. It is short on
+   > purpose. `make authz-check` and
+   > `backend/tests/unit/test_authz_conformance.py` enforce every rule in it a
+   > machine can check;
+   > [docs/plans/user-management-and-access-control.md](docs/plans/user-management-and-access-control.md)
    > is the argument behind all of it.
 
 ---
-
 ## Three pipelines, one set of nodes
 
 There are **three** pipelines in this product, and only one of them is a state
 machine. Know which you are in before you go looking for an executor that does
-not exist. [docs/pipeline.md](docs/pipeline.md) §0 is the full map.
+not exist. [docs/reference/pipeline-chat.md](docs/reference/pipeline-chat.md) §0 is the full map.
 
 | | **Chat** | **Dashboard** | **Report** |
 |---|---|---|---|
@@ -770,888 +499,245 @@ Two rules keep them honest:
 
 ## How a run works
 
-> Node-by-node reference — what each node does, its exact logic, the prompts it
-> sends, the control-flow rules, and the LangGraph port map:
-> **[docs/pipeline.md](docs/pipeline.md)**. Read that before changing a node.
-> Its §0 maps all three pipelines (chat, dashboard, report), lists every LLM
-> call site in the product, and names the five failure postures (§4.1); the
-> other two have the same treatment in
-> **[docs/pipeline-dashboard.md](docs/pipeline-dashboard.md)** and
-> **[docs/pipeline-report.md](docs/pipeline-report.md)**.
+> Node by node — what each does, its exact logic, the prompts it sends, the
+> control-flow rules and the LangGraph port map:
+> **[docs/reference/pipeline-chat.md](docs/reference/pipeline-chat.md)**. Read
+> that before changing a node. The other two pipelines get the same treatment
+> in [pipeline-dashboard.md](docs/reference/pipeline-dashboard.md) and
+> [pipeline-report.md](docs/reference/pipeline-report.md).
 
 `POST /conversations/{id}/messages` → `run_service.create_run` writes the user
-`message`, **flushes**, then the `runs` row (FK order matters — see below),
-hands off to the in-process executor. `AnalyticsPipeline.run` invokes a
-**compiled LangGraph** (`pipeline/graph.py`) whose chain is linear with one
-bounded repair loop — plus five edges that are not the chain, listed below:
+`message`, **flushes**, then the `runs` row (FK order matters), and hands off to
+the in-process executor. `AnalyticsPipeline.run` invokes a **compiled
+LangGraph** (`pipeline/graph.py`) whose chain is linear with one bounded repair
+loop:
 
 ```
-route → retrieve → describe → clarify → generate → validate → execute →
-inspect → present → chart
+route → match → retrieve → describe → clarify → generate → validate →
+execute → inspect → present → chart
 ```
 
-The five non-chain edges are the reason this is a graph and not a list: three
-repairs **back** into `generate` (from `validate`, `execute` and `inspect`) and
-two restores **forward** into `present` (from `validate` and `execute`, via
-`_restore_superseded`, skipping `execute` and `inspect`). The node functions
-know nothing about any of it — they name a label in `NodeResult.goto` and the
-adapter in `graph.py` routes it. **The adapter, not the nodes, owns the
-deadline check, the `seq` counter, the `run_steps` write and both `emit`
-calls**, which is what keeps the SSE sequence identical;
-`tests/unit/test_pipeline_events.py` is that contract and
-`tests/unit/test_pipeline_graph.py` is the wiring's.
+**Five edges are not the chain**, and they are why this is a graph and not a
+list: three repairs **back** into `generate` (from `validate`, `execute` and
+`inspect`) and two restores **forward** into `present` (via
+`_restore_superseded`, skipping `execute` and `inspect`).
 
-- `route` classifies intent, reading the recent turns once a thread has any: a
-  follow-up carries no subject of its own ("and by month?"), and classified
-  alone it could come back CHITCHAT or UNSUPPORTED and halt the run before any
-  SQL. A first turn sends the old history-free prompt byte-identically.
-  CHITCHAT and UNSUPPORTED halt here with a canned reply; **METADATA continues**
-  to `describe`.
-- `retrieve` selects tables — from the question, plus the tables the recent
-  turns' SQL actually queried, so a follow-up inherits its subject instead of
-  falling to an arbitrary `tables[:20]` — then attaches the **semantic layer**;
-  `RetrievedContext.render` appends a block describing only the retrieved
-  tables — business names, grain, defined metrics with their SQL, time
-  conventions, fan-out cautions. See "The semantic layer" below. A METADATA
-  question over a snapshot too wide to send whole selects differently
-  (`SCHEMA_QUESTION`): the tables it named, then the largest of the rest, since
-  "what is in this database?" shares no words with any table name.
-- `describe` answers a **METADATA** question ("what tables do I have?", "what
-  does `order_items` count?") from that block — schema *and* semantic layer —
-  streamed like any other answer, and **HALTs before any SQL**. Every other
-  intent gets `SKIPPED`, so the common path costs nothing. It sits after
-  `retrieve` for one reason: the answer to most schema questions is the grain,
-  the labels and the metrics in the layer, and `route` runs before the layer is
-  loaded. It never generates SQL — a schema question sent to `generate` becomes
-  a query against `information_schema`, which the guard always rejects as a
-  system table. `metadata.py` is what it builds on: `select_tables` (which
-  tables), `census` (how many there are in total, and the names of any left
-  out — counts and names only, never a row-count total outside `HintBudget`),
-  and `answer_metadata`, the plain rendering of the snapshot that this node
-  used to be, kept as the **fallback** for a provider failure and for an empty
-  snapshot (which costs no model call at all). The exhaustive `_describe_schema`
-  render stays for the follow-up-suggestions prompt, which needs every column
-  name.
-- A validation/execution failure can `goto` back to `generate` (bounded repair);
-  a hard ceiling of 24 transitions and a per-run deadline prevent runaway loops.
-- `clarify` is the one node that can end a run by *asking*. It runs after
-  `retrieve` so it judges the question against the same schema block and
-  semantic layer the generator will see, and it **fails open** — any provider
-  error, or a malformed answer, proceeds to `generate`, because a guessed
-  answer shown with its SQL beats no answer. When it does ask, the question
-  becomes the assistant message, the run ends `NEEDS_CLARIFICATION` with a
-  `CLARIFICATION` artifact carrying the options, and the user's reply arrives
-  as an ordinary new run — no durable interrupt, no resume. It asks **at most
-  once per exchange**, enforced in `run_service` by checking whether the
-  previous run in the thread asked, not by trusting the model to remember.
-  That same check (`_pending_clarification`) also makes the reply carry its
-  question: a reply is usually a complete question on its own ("total sales"),
-  so `_compose_question` rebuilds the exchange into one question before the
-  pipeline sees it — otherwise the generator answers the criterion and drops
-  the subject. Composed in the service, never in a prompt, so
-  `GENERATE_SYSTEM` stays byte-identical and every node downstream of
-  `state.question` is fixed at once. Switched per connection with
-  `connections.clarify_enabled`; off is
-  byte-identical to the pre-feature pipeline. `GENERATE_SYSTEM` is untouched
-  by it on purpose — see the note in `pipeline/prompts`.
-- `inspect` covers the third failure mode: the query ran and the answer is
-  wrong. Its checks are **structural** — SQL + snapshot + result *shape*, never
-  a result value — so they cost no tokens and behave identically under every
-  disclosure policy. Only `retry=True` findings spend a regeneration, at most
-  once per run, and the superseded result is restored if that retry fails, so a
-  check can never turn a working answer into a failed run. See
-  `pipeline/checks.py`.
-- Each step persists a `run_step` and emits an SSE event; the SPA renders the
-  **live step trail**, which is a valued feature — keep it visible, don't
-  collapse it behind a "Thought for Xs" summary by default.
-- `chart` is **best-effort and fail-open** (the opposite of the SQL guard): the
-  model proposes a constrained `ChartIntent` compiled to Vega-Lite, with a
-  data-shape heuristic as the fallback; any failure just yields no chart, since
-  the answer and table are already persisted. The model's pick is a
-  *suggestion*, never the last word: `charts.plan_chart` profiles the result
-  first (cardinality, numeric range, constant columns) and owns the decision —
-  it vetoes charts the data cannot support (a single row, a measure identical
-  in every row, an id column as the measure), repairs salvageable intents (pie
-  → bar past 6 slices, line → bar over unordered text, swapped axes,
-  mislabelled axis types), and caps category charts at `MAX_CATEGORY_MARKS`
-  while labelling the chart with what was dropped. The veto runs *before* the
-  model call, so an unchartable result costs no tokens.
-- A conversation is **bound to one connection + model**, picked in the chat
-  header before the first message; the pickers lock once the transcript is
-  non-empty. The choice is stored as the conversation's `default_connection_id`
-  / `default_llm_config_id`. `create_run` still accepts a per-message override
-  and snapshots what it used onto the run, so earlier turns stay explainable —
-  but the **connection** override is now refused once the transcript is
-  non-empty (`_bind_connection`, 422). History is keyed on the conversation, so
-  a thread spanning two connections would hand one connection's answers to the
-  other's prompt under the other's disclosure policy. The model may still be
-  switched mid-thread; that changes who reads the transcript, not what is in
-  it.
-- Terminal states: `SUCCEEDED | FAILED | TIMED_OUT | CANCELLED`.
-  `NEEDS_CLARIFICATION` is deliberately **not** terminal — a run that asked a
-  question is mid-exchange, so `cancel` still applies to it while the
-  reconciler (which sweeps `QUEUED`/`RUNNING`) leaves it alone.
+Six facts that decide how a change lands:
 
-A node crash is caught and recorded as a **run failure**, never a bare HTTP
-500. A process that dies mid-run is healed by the reconciler + a startup sweep,
-so no row is stuck `RUNNING`.
+- **The adapter owns the plumbing, not the nodes.** A node names a label in
+  `NodeResult.goto`; `graph.py` routes it, and the adapter — not the node —
+  owns the deadline check, the `seq` counter, the `run_steps` write and both
+  `emit` calls. That is what keeps the SSE sequence identical.
+  `test_pipeline_events.py` is that contract; `test_pipeline_graph.py` is the
+  wiring's.
+- **`match` can end the run without a model call.** A taught question skips
+  four nodes and lands on the guard. See
+  [knowledge-templates.md](docs/reference/knowledge-templates.md).
+- **`describe` halts before any SQL**, answering METADATA questions from the
+  schema block and the semantic layer. Every other intent gets `SKIPPED`.
+- **`clarify` is the one node that can end a run by asking**, and it **fails
+  open**. At most once per exchange, enforced in `run_service` rather than
+  trusted to the model.
+- **`inspect` reads SQL, snapshot and result *shape* — never a result value**,
+  so it costs no tokens and behaves identically under every disclosure policy.
+- **`chart` is fail-open, the opposite of the guard.** The veto runs *before*
+  the model call, so an unchartable result costs nothing.
 
-**More than one API replica is supported, and three rules make it work** — see
-[docs/cross-replica.md](docs/cross-replica.md) before touching any of them:
+Terminal states: `SUCCEEDED | FAILED | TIMED_OUT | CANCELLED`.
+`NEEDS_CLARIFICATION` is deliberately **not** terminal. A node crash is recorded
+as a run failure, never a bare 500; a process that dies mid-run is healed by the
+reconciler plus a startup sweep.
 
-1. **A run is claimed before it is executed.** `RunService.claim` is
-   `SELECT … FOR UPDATE SKIP LOCKED` + a conditional `UPDATE`, so exactly one
-   process runs a given run and the loser skips instead of blocking. The
-   direct hand-off from the POST handler is still the normal path; a claim
-   poller picks up runs left unowned by a process that died before submitting.
-2. **Cancelling is a row, not a task handle.** `runs.cancel_requested` and
-   `report_runs.cancel_requested` reach the process actually doing the work,
-   which reads them on its heartbeat (so worst case is
-   `run_heartbeat_seconds`). The local `executor.cancel` stays as the
-   same-replica fast path. `_finalise` will not overwrite a terminal status it
-   did not set, or a cancel from elsewhere would be undone on the way out.
-3. **Events cross processes over `LISTEN`/`NOTIFY`, not a broker.** The
-   notification carries `run_id:seq`; the body is read from `run_events`, which
-   was always being written. It is issued on the transaction that writes the
-   row — that is the delivery guarantee, not a style choice — and the SSE
-   endpoint backfills from the log before attaching to the local bus.
+**More than one API replica is supported**, and three rules make it work — a run
+is claimed before it is executed, cancelling is a row rather than a task handle,
+and events cross processes over `LISTEN`/`NOTIFY` on the transaction that writes
+them. Read
+[docs/reference/cross-replica.md](docs/reference/cross-replica.md) before
+touching any of the three.
 
 ---
 
-## The semantic layer
+## The curated documents
 
-The schema snapshot says what *exists*. The semantic layer says what it
-**means**: the business name and **grain** of each table ("one row per line
-item"), the columns worth explaining, **metrics** bound to exact SQL including
-the filters that belong to the definition rather than the question, **time
-conventions** (fiscal year, week start, whether "last month" is calendar or
-rolling), the rows that **should not count** unless asked for (soft deletes,
-test accounts — free text, because the rule spans tables that do not share a
-column), a glossary, and per-join **fan-out cautions**. One editable document
-per connection, in `semantic_layers`.
+Two things a person writes that change what the model sees. Neither is
+described here — each has its own reference:
 
-It exists because the eval said so: FK-neighbour retrieval lifted recall 70→86%
-with **flat** execution accuracy, and the residual DeepSeek failures were
-interpretation, not retrieval — rolling-vs-calendar windows, long-vs-wide
-shapes. That is the class this addresses.
+| | What it is | Reference |
+|---|---|---|
+| **The semantic layer** | What the schema *means* — business names, grain, metrics bound to exact SQL, time conventions, fan-out cautions. One document per connection | [docs/reference/semantic-layer.md](docs/reference/semantic-layer.md) |
+| **Knowledge templates** | A question somebody already answered correctly, stored as a parameterized question→SQL template so the system answers it the same way next time | [docs/reference/knowledge-templates.md](docs/reference/knowledge-templates.md) |
 
-- **Generate** — `POST /connections/{id}/semantic/generate` with an
-  `llm_config_id` queues a `semantic_jobs` row and returns **202**; the SPA
-  polls it. `app/semantic/generator.py` runs **one model call per table**, four
-  concurrently: a whole-schema call returns forty one-line descriptions and no
-  metrics, per-table calls return grain and real expressions. **Joins are
-  derived, never asked for** — cardinality is readable off the catalog.
-- **Nothing unchecked is kept.** Generated names are resolved against the
-  snapshot and metric expressions parsed with SQLGlot; an invalid *generated*
-  metric is dropped (and counted in the job's stats), while an invalid
-  *human-written* one is flagged and kept, because deleting a person's work to
-  hide drift is worse than showing it. Flagged entries never reach the prompt.
-- **Regeneration is safe.** Any field a user edits sets `provenance.edited`, and
-  `merge_documents` keeps those entities; `REPLACE` is the explicit "start
-  over" the UI makes you choose.
-- **It is off-by-absence.** With no layer, or with
-  `connections.semantic_layer_enabled` false, `RetrievedContext.render` emits
-  **byte-identical** output to before the feature existed — verified by a test.
-  That switch is how you A/B a layer against the bare schema on the eval suite
-  without deleting it. `PROMPT_VERSION` moved when it shipped, because two runs
-  either side of it are otherwise indistinguishable from the outside.
-- **It widens no disclosure.** Generation reads the same schema block a run
-  reads, under the same `HintBudget`, and column `value_meanings` are filtered
-  to values already in the snapshot — the model cannot invent a key to leak.
-- **The cap is an allocation, not a truncation** (`app/semantic/render.py`).
-  Over the 8k `DEFAULT_MAX_CHARS` cap the block is fitted **line by line**, in
-  three tiers, each filled **round-robin** across the retrieved tables:
-  1. every table's head line — business name, grain, role, date column,
-     synonyms;
-  2. metrics, one per table per pass — the lines that change the SQL;
-  3. column meanings, one per table per pass.
-
-  Round-robin because relevance is unknown here: under `FULL_SNAPSHOT` the
-  retrieved order is catalog order, so a table with sixty described columns must
-  not spend the budget forty others needed. A line that does not fit is skipped,
-  never cut in half — half a metric is where the `WHERE` clause lived. The
-  section behind the tables (join cautions, then glossary) is fitted the same
-  way rather than dropped whole.
-
-  *This replaced a real bug, fixed 2026-08-30.* The block used to be assembled
-  in sections and pop whole sections off the back, and every table description
-  was **one** section: past a cliff at six retrieved tables the layer arrived as
-  `business_context` plus the time conventions and nothing else — `sales` (42
-  entities) rendered 545 chars describing **0** tables, `aurora` (13) rendered
-  606 describing **0**. Both fixtures sit far under the 50k retrieve budget, so
-  they always take `FULL_SNAPSHOT`, pass every table, and were always past the
-  cliff: the business names, grain and metrics reached the generator on no
-  question at all. It was masked by the layer-wins-per-entity rule — coverage
-  reported nothing covered, so the DDL `COMMENT ON` text rendered instead and a
-  well-commented database still looked informed. The old trim test used one
-  table and `max_chars=250` and only asserted the output was short, which is why
-  it was never caught; `tests/unit/test_semantic_render.py` now fits 42 tables
-  under the real cap. `PROMPT_VERSION` moved v7 → v8: this changes what the
-  generator sees on every question asked against a connection with a layer.
-- **Coverage is a projection of the render, not a second opinion.**
-  `render_with_coverage` returns the block and the tables/columns it speaks
-  about from one fit; `render_semantic` and `covered_keys` are its two halves.
-  It has to be one call now that entities render *partially* — a table
-  described with three of its six columns is normal, and the other three still
-  need their DDL comments.
-- **Editing** lives in Data sources → Semantic layer
-  (`frontend/src/components/semantic.tsx`). Metric expressions are validated
-  live by `POST .../semantic/check`, which is the *same parser* the save path
-  uses — the editor never promises something the backend will reject.
-- **A metric is *defined* on its entity and *browsed* in a list, and those are
-  two different questions.** The definition stays on the table it measures — an
-  aggregate needs a grain, columns and a validator that can resolve them, which
-  is why every product with this feature anchors it somewhere (a dataset in
-  Superset, a home table in Power BI, a source in a Databricks metric view).
-  The **Metrics** panel above the table list is the other reading of the same
-  document: `semantic-metrics.ts` flattens every entity's metrics, sorts by name
-  then table, and a click routes back to that table's own card opened on its
-  metrics section — one editor, two ways in, no second copy and no migration.
-  It exists for the two questions the tree cannot answer: *what does this
-  database measure*, and *does a name mean one thing*. `required_joins` is the
-  tell that the tree was never the whole truth, since a metric already reaches
-  through joins into tables it does not hang off.
-- **A metric name means one thing, and `_refuse_ambiguous_metrics` enforces
-  it.** Every other check in `semantic/validate.py` binds a definition to the
-  *schema*; this one checks the document against itself. `revenue` on `orders`
-  and `revenue` on `invoices` are each valid, each render into the same prompt,
-  and the model then picks one — silently, and not always the same one. Both are
-  refused with a sentence naming the other, the same posture the knowledge store
-  takes with two templates that disagree. Two deliberate exemptions: an
-  **excluded** entity claims nothing, because it is not in the prompt at all;
-  and a metric already invalid for a schema reason keeps that reason, since it
-  is out of the prompt either way and the collision surfaces the moment it is
-  fixed. The panel computes the same collision client-side, so it is visible
-  while it is being typed rather than only after a save.
+Both are **off-by-absence**: with neither present, the prompt is byte-identical
+to what it was before the features existed. That is what makes an A/B possible,
+and it is a property to preserve rather than an accident.
 
 ---
 
-## Knowledge templates
+## The three surfaces
 
-> The store the learning loop fills, and the plan behind it:
-> **[docs/learning-loop-plan.md](docs/learning-loop-plan.md)**. Phases 1–8 are
-> in the tree: the store, the match and short-circuit, feedback and the
-> backlog, the sweep that keeps the store from rotting, few-shot injection
-> (shipped **off**), the in-product benchmark, the embedding matcher (also
-> **off** until somebody points it at a provider), and the audit trail.
+Each has a reference doc; what follows is only what you can break from outside
+it.
 
-The semantic layer says what the schema *means*. A knowledge template is the
-next thing along: **a question somebody already answered correctly**, stored so
-the system answers it the same way next time. One editable row per taught
-question in `knowledge_templates`, scoped to a connection and dying with it,
-edited in Data sources → Knowledge.
+**Dashboards** ([docs/reference/dashboards.md](docs/reference/dashboards.md)) —
+a grid of tiles, each a saved query on its own connection and refresh rate.
 
-- **The artifact is a parameterized question→SQL template, not a literal
-  pair.** `revenue by month for {region} in {year}` with `:region` and `:year`
-  in the SQL. A literal store's hit rate stays near zero, and retrofitting
-  parameters onto pairs authored without them means re-curating everything.
-- **The curator does not type `:params`. The AST offers them.**
-  `app/knowledge/params.py` walks the tree the guard already produced and
-  proposes a slot for every literal it can classify — a date bound, an equality
-  against a categorical column, a threshold on a measure — and **refuses** the
-  ones that are almost always part of the definition: anything inside a `<>`,
-  a `NOT IN`, a `CASE` or a `COALESCE`, a list, a pattern. A refusal is
-  *returned* with its reason and shown unticked, because showing the rejected
-  candidate teaches the rule better than hiding it. No model call: this is a
-  tree walk, and it is the one thing here no competitor can do, because none of
-  them has a guard that already parses the statement.
-- **The substitution happens on the tree, in the server.** `parameterize`
-  replaces the ticked literal node; a `str.replace` would rewrite the `'EMEA'`
-  in a `CASE` arm too. Placeholders are written `:name` in every dialect —
-  Postgres' generator spells `exp.Placeholder` as `%(name)s`, which is a
-  driver's binding syntax and not what this store agrees on.
-- **A template is guarded twice, and gets no exemption.** On save: is this
-  legal at all, against the current snapshot — a rejection shows the guard's
-  own message verbatim. On every use: is it *still* legal against the schema as
-  it is **now** — a failure marks the template `STALE`, withdraws it, and lets
-  the run fall through to generation. **Never fails the run, never silently
-  deletes the row** — a stale template *fails as a value*, and an invalid
-  human-written entry is flagged and kept, exactly as in the semantic layer.
-- **`note` is written for the next curator and never reaches a prompt.** The
-  research measured more prose in the prompt lowering execution accuracy. If it
-  ever renders, that moves `PROMPT_VERSION` and goes through an eval arm like
-  everything else.
-- **`role` decides what a template is for**: `RETRIEVABLE` (answers questions),
-  `BENCHMARK_ONLY` and `HELD_OUT` (measure accuracy). A held-out question
-  answered from its own stored SQL measures nothing, so the exclusion is a
-  column and is enforced in the query that builds the candidate set.
-- **A template's literals are a disclosure** — `may_render_literals` in
-  `app/knowledge/models.py`, and [docs/security.md](docs/security.md) for why.
-  Hand-authored literals travel with structure like a catalog comment; ones a
-  model chose are gated like sample values, at *render* time.
-- **Curation is gated by exactly one function**, `services.policy.can_curate`,
-  and no endpoint checks `ctx.is_admin` directly — a test asserts that on the
-  parse. Phase 8 turned `curation_admin_only` **on by default**, and the rule
-  it means is **administrator *or* the owner of the connection**. The second
-  half is what makes the flip correct rather than a lockout: `_owned()` already
-  scopes every knowledge endpoint to `owner_id == ctx.user_id`, so admin-only
-  alone would have meant *the person who owns a connection cannot curate their
-  own store*. Nobody can observe a difference today; it starts mattering the
-  moment a connection can be **shared** (mvp2 §D1), which is why it is on
-  before sharing exists rather than after.
-- **`app/knowledge/` is self-contained** on the same terms as `sqlguard`,
-  `semantic` and `reports` — no fastapi, sqlalchemy, litellm, `app.infra` or
-  `app.services`. It *may* import `app.sqlguard`: validating a template **is**
-  calling the guard, and that is the point.
-
-**Answering from the store — the `match` node (Phase 2).** Between `route` and
-`retrieve`, no model call, and on the short-circuit path it changes an answer
-**without changing a byte of the prompt**. (Phase 5 gave the same node a second
-job on a *miss* — see below — and that is what moved `PROMPT_VERSION` to v9.)
-
-- **Two thresholds, not one.** `SHORT_CIRCUIT_THRESHOLD` (0.85) answers;
-  `FEW_SHOT_THRESHOLD` is Phase 5's. A near-miss is not a hit: a miss costs
-  today's behaviour, a false hit costs a confident wrong answer. The threshold
-  is tuned from the **override rate**, not from taste.
-- **`pg_trgm` is an index, not the verdict.** The row source narrows with the
-  GIN index where the extension exists; the score is always computed by
-  `trigram_similarity`, Postgres' own algorithm reimplemented. One scoring
-  path, so a deployment without the extension gets the same verdicts more
-  slowly rather than a different feature.
-- **The template's declared values are masked out of the question before
-  scoring.** Without it the canonical example — a `{region}` pattern against a
-  question naming EMEA — scores 0.83 and never fires, and lowering the
-  threshold to compensate would let real differences in. Masking can only
-  remove a difference the *curator* declared to be a value.
-- **Binding has a veto.** `bind.py` fills each slot from the question — a small
-  date grammar, a value the parameter's comment lists, a single numeral — and
-  **any slot that will not bind cancels the hit**, logged as
-  `REJECTED_UNBOUND`. A half-bound template is a confident wrong answer, and
-  the log is how the next grammar gets chosen. Substitution is on the tree:
-  there is no rendering in which a bound value becomes SQL.
-- **A hit lands on `validate`**, the guard's own entry point, so it is
-  re-validated against the current snapshot, rewritten and row-capped like
-  generated SQL. There is no new execution code in this phase.
-- **A stale template fails as a value**: `REJECTED_STALE`, the run falls
-  through to generation, the row is not deleted and the run does not fail.
-- **`NodeDeps.matcher = None` is the pre-feature path exactly** — SKIPPED,
-  nothing read, byte-identical prompt. The draft graph and the eval runner both
-  take it.
-- **Every verdict is logged** to `knowledge_template_hits`, including
-  `OVERRIDDEN_BY_USER` — written when a reader presses *Generate a fresh answer
-  instead*. That is the honest measure of whether the short-circuit is trusted,
-  and no vendor in the research publishes its equivalent.
-- **The badge is three tiers and "Generated" is not a warning.** Verified earns
-  a green chip **plus the matched question and the bound parameters** — the
-  reader's only defence against a confident wrong match. Grounded is a quiet
-  accent chip. Generated gets one honest sentence in faint text, because it is
-  most answers and dressing it in amber would train everyone to ignore amber.
-
-**Capture — feedback, the queue and the backlog (Phase 3).** Ships no accuracy.
-Ships the reason anyone curates.
-
-- **`POST /runs/{id}/feedback` is open to any signed-in user**, deliberately —
-  it does **not** ask `can_curate`, while resolving a flag does. The person
-  best placed to notice a wrong answer is the person who asked the question,
-  and they are usually not the person allowed to fix it; gating the *report* on
-  the right to *repair* loses exactly the reports worth having.
-- **Three verdicts, not two.** `CORRECT` / `WRONG` / `NEEDS_REVIEW`, because
-  "this is wrong" and "please look at this" are different asks. A `CORRECT`
-  arrives already `RESOLVED`, by the person who gave it — otherwise the tab
-  would carry a number no curator could ever clear.
-- **`answer_feedback.became_template` is the loop closing.** One nullable FK,
-  surfaced back to the flagger on their own answer. Without it the phase has
-  shipped a suggestion box, and people learn their thumbs-down goes nowhere.
-- **A dismissal takes a reason**, shown back to the flagger: a dismissal with
-  no note is indistinguishable from being ignored.
-- **The backlog is five ranked sources** (`app/knowledge/backlog.py`, pure):
-  flagged, backfill, traffic, failed, and **words the retrieval did not
-  recognise** — Power BI's *Review questions*, nearly free here because the
-  semantic layer already holds the vocabulary. Everything already taught is
-  excluded, so the list shrinks as it is worked.
-- **The backfill reads what is already there.** `dashboard_tiles` and
-  `report_blocks` with `sql_origin IN ('GENERATED_EDITED','HANDWRITTEN')` are
-  verified question→SQL pairs that exist right now and are read by nothing.
-  They arrive as **proposals**, never approved templates, and a
-  `GENERATED_EDITED` one is `MODEL_DERIVED`.
-- **The curator decides the shape, not a router.** A correction is
-  question-shaped (a template), definition-shaped (the semantic layer), or
-  neither (dismiss with a reason) — three radios, §1.5's rule as an
-  interaction.
-
-**Few-shot injection — the one change that can make the product worse (Phase
-5).** `PROMPT_VERSION` moves **v8 → v9** here, and the whole of that move is one
-slot.
-
-- **Off renders the v8 bytes, exactly.** The slot is written
-  `{schema}\n{examples}\n{history}` and `RetrievedContext.render_examples`
-  returns the empty string when there is nothing to show, so it collapses to the
-  newline that was already there. A connection with no store, one with
-  `knowledge_examples_enabled` off (**the default**), the draft graph and the
-  templates-off eval arm all take that path — which is what keeps every number
-  in [docs/eval.md](docs/eval.md) meaningful.
-- **The default is a measurement, not caution.** Eval Round 2 measured an
-  unconditional addition to this exact prompt costing ten points of execution
-  accuracy on a small model (36% → 26%) by crowding out the schema, and
-  few-shot examples are that shape of change. The plan gates the flip on
-  held-out accuracy not being worse; until [eval.md §6.1](docs/eval.md) has both
-  numbers, off is the honest default.
-- **Last, and small.** Schema first, semantic layer second, examples third. At
-  most four, each capped, the block capped at a fifth of what catalog comments
-  get, and a long example skipped whole rather than truncated so it cannot shut
-  out the short ones behind it.
-- **`match` collects them on a miss, never on a hit.** A run answered from the
-  store has no generator to teach. `STALE`, `CONFLICTED`, `BENCHMARK_ONLY` and
-  `HELD_OUT` templates are excluded here exactly as they are from the
-  short-circuit — a stale template teaching the generator a pattern the schema
-  no longer supports is worse than one refusing to answer.
-- **The disclosure gate is at render time**, like every other rung: a
-  `MODEL_DERIVED` template's literals are withheld under `NONE`/`AGGREGATE`, and
-  the *whole example* is withheld rather than stripped, because there is no way
-  to remove a literal from a `WHERE` clause and leave a statement that still
-  teaches anything.
-- **`--templates on|off` is how it gets measured.** The arm builds a store out
-  of the suite's own questions, holds out two in five deterministically, and
-  excludes every record from the store it is measured against. Only the
-  `held_out` row of the per-tag breakdown is worth quoting.
-
-**Store health — staleness and conflict (Phase 4).** A curated store decays two
-ways, and the two have different costs, so they are two different jobs.
-
-- **Staleness is a parse, so it runs inline on the sync that caused it.**
-  `KnowledgeService.sweep_staleness` re-validates every live template against
-  the snapshot `POST /schema/sync` just wrote: `ACTIVE` → `STALE` with the
-  guard's own sentence in `status_reason` (*"column `orders.region` no longer
-  exists"*, plus the fix), withdrawn from matching and from few-shot, **never
-  deleted**. The reverse transition is there too — a template that resolves
-  again returns to `ACTIVE` on its own, without which the first bad sync is
-  permanent and healing the store means editing forty rows by hand. An empty
-  snapshot changes nothing: that is a broken sync, not a broken store.
-- **Conflict is an execution, and it is what no competitor can do.** Fabric
-  reasons over SQL *text* and reports a confidence of 1–5.
-  `app/workers/knowledge_maintenance.py` finds near-duplicate normalised
-  questions (0.60, measured against real pairs, not picked), binds **both** to
-  the same probe values, runs both through `execute_saved_sql` — the guard's
-  own door, read-only, row-capped at 500 — and compares with
-  `app/knowledge/compare.py`. Differ → **both** rows `CONFLICTED`,
-  `conflicts_with` populated, and the diverging rows stored in
-  `conflict_evidence` from each row's own point of view. The system never picks
-  a winner.
-- **Probe values are derived, never invented.** A date slot gets a fixed past
-  window; a string slot gets a value the *curator* declared; a string slot with
-  no declared vocabulary **stops the pair**, logged with the slot's name. A
-  guessed noun would compare two empty result sets and call that agreement —
-  a check that reports the store healthy because it could not test it.
-- **The comparator moved down a layer, and that is deliberate.** `values_equal`
-  / `result_sets_match` / the tolerances now live in `app/knowledge/compare.py`
-  and `app/eval/metrics.py` re-exports them. `app.eval` is offline-only by
-  contract, and the conflict checker and Phase 6's in-product benchmark both
-  need exactly these tolerances: one implementation, both callers, contract
-  intact.
-- **The customer's off switch is `connections.conflict_checks_enabled`**,
-  checked *before* a connector is opened. It stops only the half that runs SQL
-  on their database; the staleness sweep is a parse and keeps working.
-- **The matching-mode strip is drawn for every connection, taught or not.**
-  It was gated on `rows.length > 0`, which hid the control in the two states
-  that need it most: a connection with nothing taught could not be switched to
-  embedding search *before* teaching anything (`aurora` was in exactly that
-  state, `sales` was not, and that is the whole of why the two screens
-  differed), and a connection that had it on lost the only control that turns
-  it off the moment its last template was archived — pin intact, invisible.
-  `embeddingView` grew a `templates === 0` branch instead, because *"ready,
-  and the first question is indexed as it is saved"* is a true sentence and
-  *"all 0 questions indexed"* is not.
-- **Pruning is surfaced, never enforced.** Ninety days with no hits earns one
-  faint line and no action button. Genie caps instructions at 100 per agent;
-  DataMind's version of that cap is visibility, because a template written for
-  a question asked once a year is not waste.
-
-**The score — a benchmark of the customer's own (Phase 6).** Where a connection
-owner gets a number about *their* data, without a developer.
-
-- **Separate tables, deliberately.** `benchmark_sets` / `benchmark_runs` /
-  `benchmark_results`, **not** `eval_runs` / `eval_results`. MVP2 Part 5's
-  meta-rule: the customer-facing instrument and the frozen developer suite must
-  stay architecturally separate *"or the two will contaminate each other within
-  a month"*, and sharing a table is how that starts. They share a vocabulary
-  and one comparator; they share no table and no import, and a test asserts the
-  second on the parse.
-- **Building a set withdraws its members from answering.** That is the point,
-  not a side effect: §1.3's rule is that a template is retrievable **or**
-  benchmarkable and never both, and it is enforced in the query the ask path
-  uses. Deleting the set gives the questions back.
-- **A fixed fraction is `HELD_OUT` at creation**, deterministically by sorted id
-  so the split is reproducible from the set's own membership list. **That is
-  the only number worth putting in front of a customer.**
-- **Two numbers, and the strip says which to believe.** Held-out first and
-  larger and on the sparkline; questions answered *from* a template second and
-  smaller, because that one goes up for the wrong reasons. `from_template` is
-  the **observed** fact of what the run did, not a label assigned before it ran.
-  Genie's Evaluations tab shows one number.
-- **Nothing that did not run is in a denominator.** A member whose parameters
-  could not be probed, or whose stored answer no longer executes, is counted in
-  `total` and in neither accuracy — and the difference is shown. An accuracy
-  over a shrinking denominator always flatters.
-- **No LLM judge.** Labels come from `app/knowledge/compare.py`, the same
-  deterministic comparator the eval and the conflict checker use. Fabric fell
-  back to a judge and gets *true / false / unclear*.
-- **Runs execute in `app/workers/benchmark.py`**, through the real
-  `AnalyticsPipeline` — a benchmark that measured a simplified path would
-  measure something nobody experiences. A run stranded by a restart is **failed,
-  not resumed**: half of it was scored against a store, a schema and a model
-  that may all have moved.
-
-**Searching the store by meaning — the embedding matcher (Phase 7).** D3's
-return, collected: `EmbeddingMatcher` sits behind the same Protocol
-`LexicalMatcher` does, so this phase is a **constructor change** and the `match`
-node, both thresholds, the binder, the short-circuit and the badge are untouched.
-
-- **Masked question similarity (DAIL-SQL).** Table names, column names, the
-  values a *curator* declared, and literals are all replaced with `<table>`,
-  `<column>` and `<value>` before anything is embedded — so *"revenue in July
-  for West"* retrieves the template written for *"revenue in March for East"*.
-  Three tokens rather than one, because `revenue by <column>` and `revenue by
-  <table>` are different questions.
-- **The loop degrades to lexical, never to nothing.** `FallbackMatcher` reads an
-  empty result from the embedding half as *"ask the trigram one"*, and every way
-  it can fail produces one: no model pinned, no fresh vector, a revoked key, a
-  provider that changed width. **Word matching is not a degraded state** —
-  `pg_trgm` needs no provider, no key and no budget, and it is the default.
-- **Staleness is derived, never tracked.** A stored vector carries the SHA-256 of
-  the three things that made it (masked text, model id, width). Asking whether it
-  is current is recomputing that and comparing, so a template edit, a schema
-  re-sync (the mask reads the schema's own names) and a model change each
-  invalidate exactly what they should — and there is no invalidation call
-  anybody can forget. A vector that fails is *ignored*, never deleted.
-- **No pgvector, no vector DB, no new deployment unit.** Vectors are a
-  `double precision[]` beside the template and cosine is computed in
-  `app/knowledge/embed.py`, for the same reason `trigram_similarity` is computed
-  in the matcher: **the index narrows, the matcher decides.**
-- **Availability is a capability check.** Anthropic is refused with no network
-  call; anything OpenAI-compatible is *asked*, and the width that comes back is
-  **measured** and pinned on the connection — two gateways serving one model
-  name at different widths is a thing that happens.
-- **Which provider embeds is a row, and it used to be nothing at all.**
-  `_embedding_llm` resolved the owner's `llm_configs.is_default`, and
-  **nothing in the product has ever written `is_default`** — no route, no
-  service, no form — so the lookup returned `None` for every connection of
-  every account and *"Add a default model provider first"* was the only answer
-  `PUT /knowledge/embeddings` could give. Phase 7 was unreachable from the
-  interface. A provider is now a candidate when it *declares* an
-  `embedding_model` (`knowledge_service.can_embed`, which also refuses
-  Anthropic), the connection records which one indexed it in
-  `embedding_llm_config_id` — `SET NULL`, so deleting a provider releases a
-  store rather than deleting it — and `is_default` survives only as a sort key.
-  `tests/unit/test_embedding_provider.py` asserts on the parse that nothing
-  writes it, so the sentence above cannot quietly go stale.
-- **One embedder serves the deployment, and it is resolved rather than chosen.**
-  `embedding_provider(db, connection)` is the only answer to "which endpoint
-  makes vectors here": the connection's pin first — those vectors were made with
-  it and must keep being made with it or every one of them is silently re-meant
-  — then the head of `_embedding_candidates`. **Nothing names one**:
-  `EmbeddingWrite` carries `enabled` and an optional `model` (the escape hatch
-  for a self-hosted endpoint serving a name the row does not declare) and no
-  provider field, `PUT /knowledge/embeddings` reports the resolved row back as
-  `embedder`, and the knowledge panel is a switch rather than a form. The model
-  a **curator** chooses is the one that *answers*, and it is offered where a
-  question is asked — chat, a dashboard tile, a report — because those pick
-  between behaviours a reader can judge, while two stores embedded by two
-  endpoints is a fact to keep straight for no benefit: vectors are only ever
-  compared inside one store. Setting up the embedder is one step in LLM
-  providers, which is what the refusal sentence names.
-- **Indexing is a worker's job.** `index_embeddings` is the third pass of the
-  six-hourly sweep, after staleness and conflicts so it never spends a call on a
-  row those two just withdrew. Turning the feature on indexes inline, so it
-  works on the next question rather than in six hours.
-- **`--matcher lexical|embedding` is how it gets measured**, and the report
-  prints retrieval *and* execution accuracy on one line with the reason:
-  FK-neighbour expansion once moved recall 70% → 86% with **flat** accuracy.
-
-**Provenance — who did what, and whose queue a flag lands in (Phase 8).**
-`audit_logs` has been in the schema since migration `0001` with **nothing
-writing to it**; mvp2 §D4 calls turning it on the best ratio in that document,
-because a product whose positioning is *"you decide what leaves your database"*
-could not prove what left.
-
-- **Every curation write leaves a row** — template created / updated /
-  archived, a store sweep, an embedding switch, a review resolved, a benchmark
-  set built, deleted or run, and a flag recorded. A test asserts each of those
-  route functions calls `audit.record`, on the parse: one unlogged write is
-  enough to make the log untrustworthy, because a reader cannot tell a gap from
-  a quiet week.
-- **Three rules in `services/audit.py`, and each is how this kind of log
-  rots.** (1) The row joins the caller's transaction and is never flushed on
-  its own — a log that commits while the action rolls back invents history.
-  (2) Failing to log never fails the action; the **opposite** posture to the
-  guard's, and right for the same reason the guard's is right: this observes,
-  it does not authorise. (3) `detail` carries identifiers and counts, **never**
-  SQL, question text or result rows — enforced in one function rather than
-  trusted at ten call sites, because a log that became a second copy of the
-  store is a second thing to secure.
-- **`GET /audit` is administrators only.** An audit log is a record *about
-  people*; a curator needs to change their connection's knowledge and has no
-  operational need to read who else did what, and from where. The actor is a
-  display name, never an address — the review queue's rule.
-- **`actor_ip` reads `X-Real-IP`, never `X-Forwarded-For`.** The second is
-  client-settable, and a log holding an address the actor chose is worse than
-  one holding none: the first is wrong and looks authoritative.
-- **A flag is routed to the connection's owner, and the server says whose queue
-  it went to.** `AnswerFeedbackRead.routed_to` is a display name resolved at
-  write time, so the acknowledgement stays true when ownership moves — prose
-  baked into the SPA would quietly start lying. Until mvp2 §D1 gives a
-  connection an explicit grant list, "the owner" and "whoever can act on this"
-  are the same person by construction, which is honest about the limitation
-  rather than pretending.
-
----
-
-## Dashboards
-
-> Full reference — the six rules `execute_saved_sql` obeys, the data model, the
-> scheduler, the tile editor, and export/import:
-> **[docs/dashboards.md](docs/dashboards.md)**. Authoring vs refresh step by
-> step, with every error code:
-> **[docs/pipeline-dashboard.md](docs/pipeline-dashboard.md)**.
-
-A grid of tiles, each a saved query bound to **its own connection** and **its
-own refresh rate**, drawn as a chart, a table, a big number, or plain text.
-Three tables (`0005`, `0006`).
-
-The one thing that makes this hard, and everything else is CRUD:
-
-- **A tile is the second entry point into guarded execution**, and it gets no
-  exemption. `services/query_service.py::execute_saved_sql` re-validates stored
-  SQL against the connection's **current** snapshot on *every* execution — not
-  because it passed when it was saved. A re-sync that dropped a table fails the
-  tile closed with `E_SCHEMA_CHANGED` rather than returning an empty result that
-  looks like "no data". `tests/unit/test_query_service.py` replays the hostile
-  corpus through a tile; that test is what proves dashboards opened no bypass.
-- **`dashboard_tiles.sql` is hostile input by definition** — the user types into
-  it directly. `sql_origin` (`GENERATED | GENERATED_EDITED | HANDWRITTEN`) is
-  provenance only; the guard cannot tell them apart and must not try.
+- **Nothing calls a model at refresh time.** The most load-bearing "no" in the
+  product: a dashboard keeps working after the provider key is revoked. A model
+  runs at *authoring* time only.
 - **A tile failure is a *value*, not an exception.** One broken tile must never
-  fail the dashboard response. Error codes the UI branches on: `E_SCHEMA_CHANGED`,
-  `E_NO_SNAPSHOT`, `E_FORBIDDEN`, `E_CONNECTION_REMOVED`, `E_QUERY_FAILED`,
-  `E_INTERNAL`, else the guard's own `rule_id` verbatim.
-- **Nothing calls a model at refresh time.** That is the most load-bearing "no"
-  in the product: a dashboard keeps working after the provider key is revoked.
-  A model runs at *authoring* time only — two calls per drafted tile (SQL, then
-  chart), **zero** per refresh.
-- **Containment is the connection's, not the tile's.** A tile override may only
-  *lower* `max_rows` and `statement_timeout_ms`, never raise them.
-- **Batching reads before it fans out.** `execute_many` groups tiles by
-  connection, builds one connector per connection under
-  `MAX_CONCURRENT_TILES = 4`, and does **every database read in sequence before
-  the tiles fan out** — an `AsyncSession` is not safe for concurrent use.
-- **The cache is in Postgres** (`dashboard_tile_cache`), not in-process, because
-  an in-process cache goes stale per worker. `result_fingerprint` hashes
-  `(connection_id, sql, max_rows, chart_config)` — **not the SQL alone**, so a
-  tile switched from pie to line does not keep serving the pie until its
-  interval elapses. `table_config` is deliberately **excluded**: renaming a
-  column header must not send a query to the customer's database. **Failures are
-  cached too**, or a broken tile re-runs on every tick of every open browser.
-- **One `setInterval(1000)` per open dashboard, not one timer per tile.** Each
-  tick computes which tiles are due and fires **one** `POST /data {tile_ids}`.
-  It pauses on `document.hidden` and on return refreshes what went overdue
-  **once**, not once per missed interval. The due rule is DOM-free in
-  `dashboard-schedule.ts` — a forgotten background tab that polls forever is how
-  this feature becomes the reason someone's production database is slow.
-- **Import is a fourth door to the guard.** `sql` in a `.json` file is typed as
-  easily as `sql` in a textarea, so every tile in a document goes through
-  `_validated_tile_fields` — the same call the save path makes — and **every
-  tile is validated before anything is created**, so a refused import leaves no
-  half-built dashboard.
+  fail the dashboard response.
+- **A tile is the second entry point into guarded execution and gets no
+  exemption** — stored SQL is re-validated against the connection's *current*
+  snapshot on every execution.
+- **Containment is the connection's, not the tile's.** An override may only
+  *lower* `max_rows` and `statement_timeout_ms`.
 
-Not built, on purpose: filters (`QueryExecutor.execute` takes no bind
-parameters — **never** by string interpolation) and sharing.
+**Charts** ([docs/reference/charts.md](docs/reference/charts.md)) —
+`profile_result → unchartable_reason → [model proposes] → plan_chart →
+compile_vega_lite`. Every surface decides its picture with the same planner.
 
-**"Add to dashboard" from a chat run is built now** (`docs/dashboards.md` §10):
-the answer's action row picks a board and opens the tile editor prefilled with
-the run's own question, statement, connection and chart type. It re-asks no
-model and re-runs no query — the editor checks the statement it was handed, the
-same one the reader watched succeed, and the guard runs again at save and on
-every refresh as it does for a typed one.
+- **The model proposes; the platform decides.**
+- **The veto runs before the model call**, so a hopeless result costs zero
+  tokens.
+- **Prompt/type parity.** A chart type is added when `CHART_SYSTEM` describes
+  when to pick it *and* `ResultProfile.describe()` carries the facts that rule
+  is stated in terms of. **A bullet describing behaviour the code no longer has
+  is a bug in the prompt.**
+- `PROMPT_VERSION` does **not** move for chart-prompt changes — nothing on the
+  SQL-producing path changed. Same convention for `CLARIFY_SYSTEM` and
+  `DESCRIBE_SYSTEM`.
+
+**Reports** ([docs/reference/reports.md](docs/reference/reports.md)) — a
+structure a human approved, prose written over real results, re-runnable months
+later. Six tables (`0008`), no table and no code path shared with Dashboards.
+
+- **Numbers come from the rows, not the model.** `plan_kpi` computes the
+  headline; `reports/facts.py` computes what a paragraph needs; `checks.py`
+  verifies what the prose says against the rows.
+- **Reports refuse `NONE`/`AGGREGATE` disclosure**, at creation *and* at every
+  generation.
+- **A run's status is derived from its sections**, which is what makes
+  progressive rendering and per-section retry fall out for free.
 
 ---
 
-## Charts
+## Proving a change helped
 
-> Full reference — the eight types, every veto and repair, the constants and
-> their reasoning, the colour work: **[docs/charts.md](docs/charts.md)**.
+> The golden set, every metric, the CI gate, and how to read a result honestly:
+> **[docs/reference/eval.md](docs/reference/eval.md)**. The numbers as they
+> stand, and how to quote them without lying:
+> **[docs/status.md §6](docs/status.md#6-the-numbers-and-how-to-read-them)**.
 
-`backend/app/charts/` is one module: `profile_result` → `unchartable_reason` →
-[model proposes `ChartIntent`] → `plan_chart` → `compile_vega_lite`, plus
-`plan_kpi` for a big number. Every surface — chat, tile, report — decides its
-picture with the same planner.
-
-Four rules, and breaking any of them is quiet:
-
-1. **The model proposes; the platform decides.** A `ChartIntent` is a
-   *suggestion*. `plan_chart` vetoes what the data cannot support, repairs what
-   is salvageable, and falls back to a shape heuristic when the model errors or
-   returns garbage.
-2. **The veto runs *before* the model call.** `unchartable_reason` is pure
-   arithmetic over the profile, so a hopeless result costs zero tokens — and the
-   step trail shows a fact about the data instead of "the model declined".
-3. **Prompt/type parity.** A chart type is not "added" when the compiler draws
-   it. It is added when `CHART_SYSTEM` describes when to pick it *and*
-   `ResultProfile.describe()` carries the facts that rule is stated in terms of.
-   Any change to `ChartType`, `_fit`, or a threshold constant is unfinished
-   until both are updated. **A bullet describing behaviour the code no longer
-   has is a bug in the prompt.**
-4. **`chart_type: "none"` does not mean "draw nothing".** `validate_intent`
-   refuses it, so `plan_chart` falls through to the heuristic and draws whatever
-   the shape suggests — the model's reading discarded without a word. The
-   picker's *Table only* sets `tile_type = TABLE` instead.
-
-`PROMPT_VERSION` does **not** move for chart-prompt changes — the eval scores
-generated SQL, and nothing on the SQL-producing path changes. Same convention as
-`CLARIFY_SYSTEM` and `DESCRIBE_SYSTEM`.
-
-The palette in `VegaChart.tsx` is **measured, not chosen** (OKLab ΔE, Machado
-CVD simulation, contrast per mode) and `palette.test.ts` re-checks it. There is
-no free hex picker because one would destroy all of that silently; adding a
-second palette means re-running the validator **in both themes** first.
-
----
-
-## Reports
-
-> Full reference — the data model, the two roads to a block's SQL, the
-> generation order, where the numbers come from, and the print handoff:
-> **[docs/reports.md](docs/reports.md)**. `docs/reports-plan.md` is the record
-> of what was intended, phase by phase.
-
-Chat answers one question. A dashboard watches numbers that are always current.
-**A report is a document**: a structure a human approved, prose written over
-real results, and a snapshot of a moment that stays readable after the data has
-moved on. Six tables (`0008_reports.py`), no table and no code path shared with
-Dashboards.
-
-The things worth knowing before you touch it:
-
-- **A run's status is derived, not set.** `SUCCEEDED | PARTIAL | FAILED` comes
-  from its sections, which is why progressive rendering and per-section retry
-  need no resume machinery: a successful retry turns `PARTIAL` into `SUCCEEDED`
-  with no state machine. Every result row is written the moment it lands, so
-  the poll response *is* the progressive render.
-- **Two prose columns.** `prose` is the model's, `edited_prose` is the user's,
-  and **NULL means not edited** (so `null` is the revert). Both live on the
-  *run*, never on the template — editing never destroys, regenerating never
-  overwrites. The same rule sends a chart redraw to the run.
-- **`report_blocks.sql` is a third entry point to the guard and gets no
-  exemption.** It is re-validated against the connection's current snapshot on
-  every execution through `execute_saved_sql`, and `sql_origin` is provenance
-  only — `tests/unit/test_report_guard.py` replays the hostile corpus through
-  it. Two routes write that column: `/check` asks a model, `PUT .../sql` asks
-  nobody. Neither is privileged.
-- **Editing a question resets the verdict, and only sometimes the SQL.** A
-  generated draft is dropped (one click to reproduce); a hand-written or
-  hand-edited one is kept — the semantic layer's rule about not deleting a
-  person's work, applied to the same question.
-- **The language is derived and the length is the user's.** Nobody picks a
-  language: `reports/language.py` reads it off the request (script count, no
-  model call) at creation and again whenever the request is rewritten, so the
-  document cannot disagree with the thing it was asked for. `section_target`
-  (2–8, default 5) is what the outline prompt asks for — the executive summary
-  is added on top of it, and the user adds and deletes sections afterwards
-  like any other edit. Both live on `reports`; a run snapshots the language it
-  was written in, so past documents stay readable in their own.
-- **Reports refuse `NONE`/`AGGREGATE`.** Prose written from no values beside
-  charts drawn from real ones is a document that disagrees with itself. Gated
-  at creation *and* re-checked at the start of every generation, because a
-  policy tightened in between has to stop the run.
-- **Time windows resolve in the SQL** (`CURRENT_DATE - INTERVAL '3 months'`),
-  not in stored parameters and not by regenerating. `NodeDeps.extra_rules`
-  carries the dialect rules, and a **METRIC dashboard tile** is the only other
-  caller that appends anything (`METRIC_SQL_RULES` — a big number needs a time
-  series before it can carry a delta or a sparkline). Empty for everyone else,
-  so a chat run's SQL prompt is byte-identical to pre-feature and a test says
-  so. Two callers means they **compose rather than override**
-  (`_sql_rules_for`): a rule that silently replaced another would be found only
-  by reading a prompt nobody prints.
-- **A figure is captioned with a statement, and one number is not a figure.**
-  A block carries both a `question` (what is asked of the database) and a
-  `title` (what the document calls the exhibit); the caption is the title, and
-  **an empty title falls back to the question**, which is what every block
-  written before prompt r4 has. The question is not lost — it moves to the
-  query panel and the appendix, where provenance belongs. A block whose result
-  is a single number is drawn as a callout in the flow of its section rather
-  than a numbered exhibit, and `figureNumbers` skips it so "Figure 4" still
-  means something a reader can turn to.
-- **Sections are narrated in waves, and the wave size is a quality dial.**
-  A generation's wall clock is almost entirely provider latency — one call per
-  section — so `report_narration_concurrency` (default **4**) writes that many
-  paragraphs at once and commits them in document order. It is a wave and not a
-  fan-out because of `established`: a section is told what the sections *before*
-  it found, which is what stops section five restating section two, and sections
-  inside one wave cannot see each other. So `1` is a strictly sequential
-  document where each section reads every earlier one, and a number at or above
-  the section count writes them all at once with no section reading any other.
-  `other_headings` is unaffected at any setting — it comes off the outline, and
-  every section always had all of it. Two consequences that are not obvious: the
-  cancel check lands **between waves**, and a genuine crash in one section does
-  not cost the paragraphs gathered beside it (`return_exceptions=True`, commit
-  what came back, then re-raise). The whole thing is only legal because
-  `_narrate` touches no session; an `AsyncSession` is not safe for concurrent
-  use, so nothing inside a wave may reach one.
-- **No model is asked to do arithmetic.** `plan_kpi` computes the headline,
-  `reports/facts.py` computes what a paragraph needs (and yields *nothing* for
-  a partial or capped result, because a total over a prefix is a wrong total),
-  and `reports/checks.py` flags figures the rows do not support — it flags,
-  it never blocks.
-
----
-
-## Proving a change helped — the eval harness
-
-> Full reference — the golden set, every metric, the CI gate, and how to read a
-> result honestly: **[docs/eval.md](docs/eval.md)**.
-
-`app/eval/` runs the **real** pipeline — same `AnalyticsPipeline`, same
-`NodeDeps`, same `GuardPolicy`, same connector as the HTTP path — against a
-fresh fixture database in a throwaway container. It calls a real provider, so it
-**costs real money and is not in `make test`**. An import-linter contract keeps
-`app.eval` off the request path entirely.
-
-```bash
-cd backend
-python -m app.eval.runner --suite sales_v1 --llm-config <uuid>
-python -m app.eval.runner --suite sales_v1 --comments   # the catalog-comment arm
-python -m app.eval.runner --suite sales_v1_negative     # must route, execute nothing
-scripts/eval_run.sh --suite sales_v1 ...                # behind a rate-limiting provider
-```
+`app/eval/` runs the **real** pipeline against a fresh fixture database in a
+throwaway container. It calls a real provider, so it costs money and is not in
+`make test`; an import-linter contract keeps `app.eval` off the request path.
 
 Four rules that matter more than any number it prints:
 
 1. **The golden set is frozen.** Questions are *never* edited to make a score go
-   up. `gold_sql` is corrected **only when demonstrably wrong**, and every
-   correction is logged in `suites/CHANGELOG.md` with the evidence. Prompts and
-   retrieval may be tuned freely; the gold answers may not. **An eval you are
-   allowed to edit measures your willingness to edit it.**
-2. **Golds are checked against something other than themselves.** Each record
-   has a structurally different twin in `tests/eval/sales_v1_verify.json`, and
-   `test_golden_set.py` asserts the two agree on the fixture. Adding a question
-   means adding its twin.
-3. **The baseline file is model-specific.** `sales_v1.baseline.json` records
-   0.36 measured on **DeepSeek V4 Pro at temperature 0.2 under `PROMPT_VERSION`
-   v2**, on 2026-07-26. Against a different model or different settings it is
-   meaningless — read its `_README` before quoting it, and never put two numbers
-   from different models in one sentence. That `v2` is genuine: the constant
-   really was v2 that day. It is **v8 now**. Rows written between 2026-07-26 and
-   2026-08-31 claim `v2` whatever they ran, because `runs.prompt_version` was
-   stamped from a config default that had drifted — fixed in Phase 0 (see
-   "Adding things → Prompt changes"), but **no historical row was rewritten**,
-   so a version field on a run from that window is still not evidence.
-4. **Retrieval recall is 1.0 by construction at the shipped ceiling — lower it
-   to measure it.** `_RETRIEVE_BUDGET_CHARS` was raised 24k → 50k and the
-   fixture estimates 26,480, so a default run takes `FULL_SNAPSHOT` on every
-   question. `--retrieve-budget CHARS` lowers it for one run (a runner flag, not
-   a code edit — the shipped ceiling is the one the request path must use), and
-   the effective value is recorded on the scorecard as `retrieve_budget_chars`.
-   Never compare a lowered-budget recall figure to a full-snapshot one.
+   up. `gold_sql` is corrected only when demonstrably wrong, logged in
+   `suites/CHANGELOG.md` with the evidence. **An eval you are allowed to edit
+   measures your willingness to edit it.**
+2. **Golds are checked against something other than themselves** — each record
+   has a structurally different twin. Adding a question means adding its twin.
+3. **The baseline file is model-specific.** Read its `_README` before quoting
+   it, and never put two numbers from different models in one sentence.
+4. **Retrieval recall is 1.0 by construction at the shipped ceiling.** Lower it
+   with `--retrieve-budget` to measure it — a runner flag, never a code edit —
+   and never compare a lowered-budget figure to a full-snapshot one.
 
-An exhausted retry scores `OUTCOME_ERROR`, which is **indistinguishable in the
-report from the model getting the question wrong** — which is why the wrapper
-exists and why it raises `RUN_DEADLINE_SECONDS` alongside the backoff. Widening
-the retries without moving the deadline achieves nothing.
-
-Two prompt changes have been measured to *lower* accuracy, and both are recorded
-where someone would otherwise repeat them: a "getting the answer right" block in
-`GENERATE_SYSTEM` (36% → 26%), and making `C_NULLABLE_INNER_JOIN` retry-eligible
-(0 wins / 4 losses). **More instruction is not better here.**
+**Two prompt changes have been measured to *lower* accuracy**, and both are
+recorded where someone would otherwise repeat them: a "getting the answer right"
+block in `GENERATE_SYSTEM` (36% → 26%), and making `C_NULLABLE_INNER_JOIN`
+retry-eligible (0 wins / 4 losses). **More instruction is not better here.**
 
 ---
+
+## Frontend conventions (nothing enforces these — the tree is just consistent)
+
+`npm run lint` is a dead script and `npm test` is not in CI, so every rule
+below is held up by the code agreeing with itself. Breaking one costs nothing
+at commit time and shows up as drift a release later. Full tour:
+[docs/reference/frontend.md](docs/reference/frontend.md).
+
+- **Every screen has a URL, and the router is a *data* router.** `main.tsx`
+  mounts `createBrowserRouter` — not `<BrowserRouter>` — because `useBlocker`
+  exists only on that one, and it is what stops a navigation out of a dirty
+  form. `App.tsx` holds the rail (`NAV`) and the route table; each section owns
+  a `/*` path and reads its own sub-routes with `useMatch` rather than nesting
+  a second `<Routes>`, so the section stays mounted across open and close (a
+  remount would drop a chat's live stream). A new section is a `NAV` entry and
+  a `<Route>`. Unknown paths redirect to `/chat`, and **whatever serves the
+  build must return `index.html` for unknown paths.**
+- **Hydrate a form from the row, not from the URL.** A detail page whose form
+  is filled from a list must key that effect on `selected?.id`, never on the id
+  in the path: on a deep link the path has an id before the list has arrived,
+  so a URL-keyed effect fires once against `null`, bails, and leaves a blank
+  form claiming unsaved changes — with the navigation guard then refusing to
+  let anyone leave it. The *id*, not the row: the row is a new object after
+  every list refresh and would re-hydrate over what was typed.
+- **A page asks the shell for what is not its own.** `shell.tsx`:
+  `useThemeOverride` (a dashboard pinned to a theme — `App` resolves
+  `override ?? the user's choice` and is the only caller of `applyTheme`) and
+  `useUnsavedWork(key, reason, within?)` (a dirty form, which the shell's one
+  blocker asks about before letting a navigation through). `within` is the
+  address the work survives inside — pass a record's own path when its tabs
+  are routes, or the guard stops a form from reaching the tab beside it to
+  protect edits a tab switch does not touch.
+- **Long work announces itself; in-page errors stay put.** `shell.tsx`'s
+  `useNotify` raises a `Notice` in the shell's `aria-live` corner, and
+  `useBackgroundWatch` hands the shell a `{key, poll}` so a job outlives the
+  page that started it (semantic generation, benchmark runs). It is for
+  events that outlive their screen — **not** an error channel: a failed save
+  still says so in an `ErrorNote` beside the button that failed, and moving
+  those would make every failure less legible.
+- **Connections are two things, and the screen says so.** `/sources/:id`
+  opens **Connection** (host, port, database, user, password, SSL, schema
+  allowlist, and the Danger zone) and `/sources/:id/policy` opens **Policy**
+  (disclosure, DB comments, taught examples, clarify, conflict checks, row cap,
+  timeout — the set is `POLICY_KEYS` in `DataSourcesPage.tsx`). The strip's
+  fifth entry, Knowledge, is a **door**: it navigates to `/knowledge/:id`,
+  where the console actually lives, and `/sources/:id/knowledge` redirects
+  there. Each of the two forms has its
+  own dirty state and its own Save, and each Save sends **only its own half**,
+  so two people editing two tabs cannot overwrite each other. `Test connection`
+  belongs to Connection, which is the only half it probes.
+- **Styling is two places, and which one is not a preference.** Layout,
+  spacing and one-off values are inline `style={}` in the JSX. Anything a
+  style attribute cannot express — `:hover`, `:focus-visible`, selection,
+  keyframes, `@media print`, the responsive reflow — is an `.rm-*` class in
+  `styles.css`. There are no CSS modules and no utility classes.
+- **No component library, and no new dependency to get one.** The whole list is
+  React, `react-grid-layout` (a layout engine, not components), Vega, and
+  `react-router-dom`. Primitives live in `components/ui.tsx`; the
+  master–detail frame that Data sources and LLM providers share is
+  `components/settings.tsx`. Compose from those before writing a new one.
+- **Below 700px no page has two fixed columns.** The chat list and the
+  settings master column become off-canvas drawers beside the collapsed rail
+  (`components/list-drawer.tsx`: `useListDrawer`, `ListToggle`, `ListScrim`),
+  closing on Escape, on the scrim, and on any navigation — which is what
+  "close on select" means when every list here navigates. A page with a
+  second column gets a `ListToggle` in its header and passes `open` to the
+  column; that is the whole contract.
+- **Never hardcode a colour.** Every value comes from a CSS variable defined in
+  `theme/tokens.ts`, which ships a **dark and a light** definition for each.
+  A literal hex or `oklch()` in a component is a bug in both themes — one of
+  them just has not been looked at yet. Chart colours are the one exception and
+  they live in `components/palette.ts`, tested apart from React.
+- **The fourteen DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
+  `table-format.ts`, `dashboard-document.ts`, `palette.ts`, `chat-format.ts`,
+  `report-document.ts`, `report-readiness.ts`, `report-print.ts`,
+  `semantic-drift.ts`, `semantic-metrics.ts`, `knowledge-template.ts`,
+  `thinking.ts`, `knowledge-queue.ts`, `provider-params.ts` — they hold the
+  logic whose failures are quiet, they are (with `scripts/permissions.test.ts`,
+  the fifteenth suite) the *only* tested code in the frontend, and their suites
+  are plain `node --experimental-strip-types` scripts. **One React import turns
+  a suite into a thing that cannot run.**
+- **Text a person wrote gets `dir={dirOf(value)}`.** The product ships Persian.
+  SQL is always `dir="ltr"`, in both themes and both directions — a
+  bidi-reordered statement is unreadable and, worse, ambiguous.
+- **Status is never colour alone**: every state carries a glyph and a word, so
+  the screen survives greyscale and the print stylesheet.
 
 ## Gotchas learned the hard way
 
@@ -1664,7 +750,7 @@ where someone would otherwise repeat them: a "getting the answer right" block in
   route whose write can be refused by the database must `await db.flush()`
   inside the handler**, so the refusal becomes an error the caller sees. Same
   root cause as the read-after-write race in
-  [docs/dashboards.md](docs/dashboards.md) "Known issue".
+  [docs/reference/dashboards.md](docs/reference/dashboards.md) "Known issue".
 - **Every reference to `database_connections` and `llm_configs` is `SET NULL`,
   and `runs` was the last to get there** (migration `0014`). A run is the record
   of a question that was asked and answered; `model_snapshot` already carries
@@ -1741,7 +827,7 @@ where someone would otherwise repeat them: a "getting the answer right" block in
   **filter the allowlist through `business_schemas`**, which drops the engine's
   own dictionary schemas but never empties the list. A comment reaches a prompt
   under *every* disclosure policy (it is DDL a person wrote, not data — see
-  [docs/security.md](docs/security.md) §2.4), so it must be one line, capped, and
+  [docs/reference/security.md](docs/reference/security.md) §2.4), so it must be one line, capped, and
   cleaned. Verify on a read-only role: this is the read most likely to need a
   privilege you cannot ask a customer for.
 - **A new API route:** router in `api/v1/`, DTO in `schemas.py`, business logic
@@ -1754,7 +840,7 @@ where someone would otherwise repeat them: a "getting the answer right" block in
   exactly one cell of. The check itself is asked through the `Authorizer` port
   (`domain/ports/authz.py`), never by comparing `owner_id` or a role string in
   the handler: `make authz-check` greps for those three shortcuts, and
-  [docs/user-management-and-access-control-plan.md](docs/user-management-and-access-control-plan.md)
+  [docs/plans/user-management-and-access-control.md](docs/plans/user-management-and-access-control.md)
   §18.4 gives the three enforcement shapes and says there is no fourth. A route
   that cannot name its type and privilege is a route whose access rule has not
   been decided yet.
@@ -1777,7 +863,7 @@ where someone would otherwise repeat them: a "getting the answer right" block in
   `run_service` stamped it from `settings.prompt_version` (`core/config.py`), a
   *separate* string whose default said `"v2"` while the constant moved to v8, so
   every run written between 2026-07-26 and 2026-08-31 claims a version it never
-  ran. **Fixed 2026-08-31** (Phase 0 of `docs/learning-loop-plan.md`): a run now
+  ran. **Fixed 2026-08-31** (Phase 0 of `docs/plans/learning-loop.md`): a run now
   records `prompts.PROMPT_VERSION` — resolved by `RunService._prompt_version`,
   stamped at creation and again by the process that renders the prompt, so a run
   queued by one replica and claimed by another after a deploy is filed under the
@@ -1787,7 +873,7 @@ where someone would otherwise repeat them: a "getting the answer right" block in
 
   **Historical rows were deliberately not rewritten** — a backfill would invent
   a version for a run nobody can re-render. Treat any `prompt_version` on a run
-  from that window as unknown, not as v2; `docs/pipeline.md` §7 and the eval
+  from that window as unknown, not as v2; `docs/reference/pipeline-chat.md` §7 and the eval
   reports under `app/eval/reports/` record the drift where it happened.
 
 ---
@@ -1796,13 +882,25 @@ where someone would otherwise repeat them: a "getting the answer right" block in
 
 - This sandbox has **no GitHub auth** — `git push` will fail; the user pushes
   from their own terminal. Commit locally; don't attempt to push.
-- Commit or branch only when asked. Config keys: `SECRET_BOX_KEY`, `JWT_SECRET`,
-  `ADMIN_EMAIL`/`ADMIN_PASSWORD`, `DATABASE_URL`, `CORS_ORIGINS`,
-  `MAX_CONCURRENT_RUNS`, `RUN_DEADLINE_SECONDS`,
-  `LLM_REQUEST_TIMEOUT_SECONDS`, `REPORT_NARRATION_CONCURRENCY`. The last two default to 120 and 60 in
-  `core/config.py` and are raised to 300 and 120 by `docker-compose.yml`, which
-  is headroom for slow hosted models — a chat run makes four or five sequential
-  provider calls. Losing `SECRET_BOX_KEY` means re-entering every stored
-  credential.
+- Commit or branch only when asked. Commit messages follow
+  `type(scope): a declarative sentence` — lowercase, no trailing period.
 - `.env` is gitignored; `.env.example` is the tracked template `make secrets`
   copies from. Editing `.env.example` changes what every fresh clone gets.
+- Losing `SECRET_BOX_KEY` means every stored credential must be re-entered.
+
+The rest — ports, the three demo databases, the environment's four sharp edges,
+what CI gates — is in [docs/development.md](docs/development.md).
+
+---
+
+## Keeping the documentation true
+
+This file, [docs/status.md](docs/status.md) and every plan's ledger go stale in
+the same way: somebody lands the work and ticks the box next week. **Tick it in
+the commit that lands the work.** A checklist that runs ahead of the tree is
+worse than no checklist.
+
+When you change something this file describes, change it here *and* in the
+reference doc that owns it — or, better, change it only in the reference doc and
+make sure this file merely points there. **The goal for this file is to stay
+small enough that it is always read.**

@@ -9,13 +9,13 @@ Written against LangGraph **1.2.10** (`langgraph-checkpoint` 4.2.0,
 `f4f9578` — ten chat nodes, `PROMPT_VERSION = "v7"`, `REPORT_PROMPT_VERSION`
 at r4.
 
-Companion to [pipeline.md](pipeline.md) (the chat run, node by node — its §6 is
+Companion to [pipeline-chat.md](../reference/pipeline-chat.md) (the chat run, node by node — its §6 is
 the short port map this file is the long form of),
-[pipeline-dashboard.md](pipeline-dashboard.md) and
-[pipeline-report.md](pipeline-report.md) (the other two pipelines, which is
+[pipeline-dashboard.md](../reference/pipeline-dashboard.md) and
+[pipeline-report.md](../reference/pipeline-report.md) (the other two pipelines, which is
 where the callers that reuse the chat nodes are described),
-[architecture.md](architecture.md) (which deferred LangGraph, and on what
-triggers) and [eval.md](eval.md) (which is how each phase is proved safe).
+[architecture-proposal.md](../history/architecture-proposal.md) (which deferred LangGraph, and on what
+triggers) and [eval.md](../reference/eval.md) (which is how each phase is proved safe).
 
 > **Re-planned against the current code.** The first version of this record was
 > written before `describe`, before the composed chart call, and before the
@@ -66,8 +66,8 @@ triggers) and [eval.md](eval.md) (which is how each phase is proved safe).
 
 **This table counts orchestration positions, not prompts.** #6 and #9 are the
 same function reached from two places; #12 and #14 are the same two functions
-driven by two executors. [pipeline.md §0.4](pipeline.md) counts *prompts* — 11
-plus the probe — and [security.md §2](security.md) counts *use cases* —
+driven by two executors. [pipeline-chat.md §0.4](../reference/pipeline-chat.md) counts *prompts* — 11
+plus the probe — and [security.md §2](../reference/security.md) counts *use cases* —
 thirteen, across fifteen sites. Nothing below adds to either count, and no
 phase may: see non-negotiable #6.
 
@@ -150,7 +150,7 @@ the two triggers differ in exactly one argument: chat passes
 `state.disclosure_policy`, a tile draft passes nothing and gets `NONE`. That
 single omission is what makes "no result value ever reaches a model on the
 dashboard path" true at **every** policy, including `FULL`
-([pipeline-dashboard.md §5](pipeline-dashboard.md)). It is one keyword argument
+([pipeline-dashboard.md §5](../reference/pipeline-dashboard.md)). It is one keyword argument
 standing between a documented guarantee and a quiet regression, which is
 precisely the kind of thing a rewiring loses.
 
@@ -185,8 +185,8 @@ reason to migrate this; resume-after-crash and one driver are.
 
 > **Superseded 2026-09-04, and only in part.** Sections are now narrated in
 > **waves** of `settings.report_narration_concurrency` (default 4) rather than
-> one at a time — see `docs/reports.md` §"generation order" and
-> `docs/pipeline-report.md` C5. The reasoning above is why it is a *wave* and
+> one at a time — see `docs/reference/reports.md` §"generation order" and
+> `docs/reference/pipeline-report.md` C5. The reasoning above is why it is a *wave* and
 > not the `Send` fan-out it warns against: `established` is still threaded
 > forward, wave to wave, and the loop edge is still what carries it. What
 > changed is that a section is no longer told about the two or three sections
@@ -280,8 +280,8 @@ is wrong, not the rule.
    at every retry; and `propose_chart_intent` still receives the run's policy
    from chat and **no policy at all** from a tile draft.
 6. **The LLM call-site inventory does not grow.** Twelve use cases across
-   fourteen sites ([security.md §2](security.md)), eleven prompts plus a probe
-   ([pipeline.md §0.4](pipeline.md)). A rewiring that gives the chart ask two
+   fourteen sites ([security.md §2](../reference/security.md)), eleven prompts plus a probe
+   ([pipeline-chat.md §0.4](../reference/pipeline-chat.md)). A rewiring that gives the chart ask two
    node identities, or that turns a shared function into two graph nodes with
    two prompts, adds a row to a security document — which is a decision, not a
    refactor.
@@ -328,11 +328,11 @@ No behaviour change. This phase exists so every later phase can be proved.
   things to record by hand while you are there:
   - **The prompt version is `v7`, whatever the row says.** `runs.prompt_version`
     is written from `settings.prompt_version` (default `"v2"`), not from the
-    `PROMPT_VERSION` constant — [pipeline.md §7](pipeline.md) records this drift.
+    `PROMPT_VERSION` constant — [pipeline-chat.md §7](../reference/pipeline-chat.md) records this drift.
     Write the constant into the baseline note or the comparison is meaningless.
   - **The negative suite is no longer cheap.** Since `describe` landed, each of
     the 3 METADATA records costs a second schema-bearing call
-    ([eval.md](eval.md)). Expect the token line to be higher than the record
+    ([eval.md](../reference/eval.md)). Expect the token line to be higher than the record
     count suggests; that is not a regression.
 - **Write the SSE snapshot test.** Drive a run end to end with a scripted fake
   gateway and assert the full ordered list of `(seq, type, name, status)` events
@@ -689,7 +689,7 @@ thread, which the reconciler, the cancel path and the SPA all currently reason
 about. An abandoned clarification becomes a checkpoint that lives forever unless
 something reaps it.
 
-> [pipeline.md §6](pipeline.md) calls this "the one thing worth migrating for".
+> [pipeline-chat.md §6](../reference/pipeline-chat.md) calls this "the one thing worth migrating for".
 > That line predates the discovery of the second executor on the draft path, and
 > this record disagrees with it: #8 is the strongest case and Phase 4 is the
 > payoff. Clarification is a real upgrade, but it is the one phase that can be
@@ -736,7 +736,7 @@ stale when it is finally read.** The pause is at `clarify`, two nodes past
 `retrieve`, and neither `describe` nor `clarify` adds materially to state — so
 the row is the 88,368 B in Phase 4's table, **97% of it the schema block**.
 Phase 4 declined that write for a run lasting 5–60 seconds. Here the same row is
-held across human think-time, which [architecture.md §13.2](architecture.md)
+held across human think-time, which [architecture-proposal.md §13.2](../history/architecture-proposal.md)
 puts in hours, and *then read back*. The reading is the new part: today the reply
 is an ordinary new run, so `retrieve` runs again and sees the current snapshot.
 A resumed thread instead answers against a schema block captured before the
@@ -744,7 +744,7 @@ pause — re-sync a connection while a clarification is open and the resumed run
 generates SQL against columns that may have moved. That failure does not exist
 today, and this phase would introduce it.
 
-**3. [architecture.md §13.2](architecture.md) already decided this, and nothing
+**3. [architecture-proposal.md §13.2](../history/architecture-proposal.md) already decided this, and nothing
 found since has weakened it.** Its title is "Why clarification is a run outcome,
 not an interrupt", and unlike §13.3's LangGraph triggers it was never a
 deferral — it is a decision, with reasons that still hold: the round trip is
@@ -784,7 +784,7 @@ turn out to be already satisfied by the design that stayed:
 
 **When to revisit.** If a clarification ever has to pause *inside* a node rather
 than between turns — an analyst approving generated SQL before it executes, which
-is architecture.md §13.3's third trigger and the serious version of this idea —
+is history/architecture-proposal.md §13.3's third trigger and the serious version of this idea —
 then an interrupt expresses something the run-outcome design cannot, and this
 decision is wrong. Reopen it then, and reopen Phase 4's finding 1 with it: the
 checkpoint and the work product have to land in one transaction, which is the
@@ -803,7 +803,7 @@ LangGraph does not solve those three on its own — but Phase 4 is what makes
 solving them possible.
 
 #### Done, and folded in as the record said. Full write-up:
-#### [cross-replica.md](cross-replica.md)
+#### [cross-replica.md](../reference/cross-replica.md)
 
 Not one line of graph code changed, which is the strongest evidence the
 instruction above was right. Four things came out differently from the sketch.
@@ -823,7 +823,7 @@ it. So the transport is Postgres `LISTEN`/`NOTIFY`, and the notification carries
 `run_id:seq` rather than the event — which sidesteps the 8000-byte payload
 ceiling, and gets ordering and visibility from the fact that Postgres delivers a
 notification *at commit*, in the same transaction that wrote the row. No second
-deployment unit, and [CLAUDE.md](../CLAUDE.md)'s "no broker" holds.
+deployment unit, and [CLAUDE.md](../../CLAUDE.md)'s "no broker" holds.
 
 **3. Phase 4 left a cross-replica hazard that this phase had to close.** Startup
 resume took *every* `QUEUED`/`RUNNING` report run, which at one replica could
@@ -877,7 +877,7 @@ A phase is done when all five pass, not when the code runs.
 - [x] CI grep: `import langgraph` outside `app/pipeline/` and `app/workers/` fails the build
 - [ ] **Eval baseline captured** (`eval_run` UUID, accuracy, companion metrics, model, temperature 0) and recorded here
       → **outstanding.** The slot and the protocol are
-      [`backend/app/eval/reports/langgraph_phase0_baseline.md`](../backend/app/eval/reports/langgraph_phase0_baseline.md);
+      [`backend/app/eval/reports/langgraph_phase0_baseline.md`](../../backend/app/eval/reports/langgraph_phase0_baseline.md);
       the harness calls a real provider and costs real money, so it needs an
       account. **Phase 2 must not start until this is filled in** — until it is,
       Phase 1 has four of its five gates, not five.
@@ -885,7 +885,7 @@ A phase is done when all five pass, not when the code runs.
 - [x] SSE snapshot tests written and passing against the current pipeline, for
       **three** runs: analytical, METADATA (the `describe` halt), and a failed
       check-driven retry (the `_restore_superseded` forward jump)
-      → [`tests/unit/test_pipeline_events.py`](../backend/tests/unit/test_pipeline_events.py).
+      → [`tests/unit/test_pipeline_events.py`](../../backend/tests/unit/test_pipeline_events.py).
       **Five runs, not three:** the other two walk `validate → generate` and
       `execute → generate` / `execute → present`, so that all five non-linear
       edges have a snapshot before Phase 1 rewires them.
@@ -907,7 +907,7 @@ A phase is done when all five pass, not when the code runs.
       linear-successor table `_next` reads, and as what `test_clarify.py` asserts on)
 - [x] **All five** non-linear edges wired: three repairs into `generate`, two
       restores forward to `present` — pinned structurally in
-      [`tests/unit/test_pipeline_graph.py`](../backend/tests/unit/test_pipeline_graph.py)
+      [`tests/unit/test_pipeline_graph.py`](../../backend/tests/unit/test_pipeline_graph.py)
       and behaviourally in the event snapshots
 - [x] `HALT` and `FAILED` route to `END`
 - [x] `_MAX_TRANSITIONS` is `recursion_limit` **and** `GraphRecursionError` is
@@ -956,7 +956,7 @@ A phase is done when all five pass, not when the code runs.
       see "The §1 divergence table, resolved" above
 - [x] New test: chat and draft produce the same SQL for the same question —
       and from a **byte-identical prompt**, which is the stronger half
-      ([`tests/unit/test_repair_region.py`](../backend/tests/unit/test_repair_region.py))
+      ([`tests/unit/test_repair_region.py`](../../backend/tests/unit/test_repair_region.py))
 - [x] `test_query_service.py`, `test_report_guard.py`, `test_sql_drafts.py` green
 - [x] Tile creation and report-block `/check` unchanged from the UI —
       `test_drafts_api.py`, `test_report_feasibility.py`, `test_report_sql_editor.py`
@@ -1034,7 +1034,7 @@ A phase is done when all five pass, not when the code runs.
 - [x] **Explicit go/no-go decision recorded — no-go.** Three findings, any one
       sufficient: `_compose_question` would have survived the change, an
       88 KB checkpoint would be held across human think-time and read back
-      stale, and [architecture.md §13.2](architecture.md) already decided this
+      stale, and [architecture-proposal.md §13.2](../history/architecture-proposal.md) already decided this
       on reasons that still hold. See "The go/no-go, made" above
 - [x] ~~`interrupt()` replaces the end-run-and-recompose design~~ → not adopted;
       a clarify round-trip stays two runs and a `CLARIFICATION` artifact
@@ -1054,7 +1054,7 @@ A phase is done when all five pass, not when the code runs.
 - [x] ~~Redis-backed~~ **Postgres `LISTEN`/`NOTIFY`** `EventPublisher` adapter —
       the notification carries `run_id:seq`, the body is read from the
       `run_events` log that was already being written
-      ([`infra/events/listener.py`](../backend/app/infra/events/listener.py)).
+      ([`infra/events/listener.py`](../../backend/app/infra/events/listener.py)).
       No broker, for Phase 4's reason: the rows already exist
 - [x] `SELECT … FOR UPDATE SKIP LOCKED` claim over `runs` (`RunService.claim`),
       plus a claim poller for runs left unowned by a process that died between
@@ -1110,7 +1110,7 @@ same*.
       `langgraph` import reached `app.domain`, `app.sqlguard`, `app.semantic`,
       `app.reports`, `app.charts` or `app.api`
 
-> **Three line references in [security.md §2](security.md) had drifted, and are
+> **Three line references in [security.md §2](../reference/security.md) had drifted, and are
 > now fixed.** The call sites are the same functions; Phases 3 and 6 moved the
 > lines: #7 `run_service.py:736` → **893**, #11 `workers/report.py:880` →
 > **742**, #12 `:961` → **823**. Its "Trigger" column also understated #11 and

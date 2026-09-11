@@ -1,6 +1,6 @@
 """Two entries, one graph — and the differences that must survive the merge.
 
-Phase 3 of [docs/langgraph-migration.md](../../../docs/langgraph-migration.md)
+Phase 3 of [docs/plans/langgraph-migration.md](../../../docs/plans/langgraph-migration.md)
 collapsed `_generate` and `_retry` into one compiled graph entered two ways.
 `tests/integration/test_report_runs.py` is the equivalence proof: 43 tests that
 drove the two hand-rolled drivers and now drive the graph, **unmodified**.

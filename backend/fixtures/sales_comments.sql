@@ -10,7 +10,7 @@
 --   python -m app.eval.runner --suite sales_v1 --comments      # commented arm
 --
 -- The compose `sales` demo mounts this as a second init script, so the running
--- demo shows descriptions in the schema browser (docs/catalog-metadata-plan.md
+-- demo shows descriptions in the schema browser (docs/reference/catalog-metadata.md
 -- §7 Phase 6). `make fixtures` loads and counts them.
 --
 -- WHAT IS DOCUMENTED

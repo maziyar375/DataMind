@@ -4,7 +4,7 @@
  * A third section peer to Chat and Dashboards. Chat answers one question and
  * moves on; a dashboard watches numbers that are always current; a **report is
  * a document** — a structure the user approved, prose written over real
- * results, and a run kept as a snapshot of a moment (docs/reports-plan.md §1).
+ * results, and a run kept as a snapshot of a moment (docs/history/reports-plan.md §1).
  *
  * This file is the shell: list, create, rename, archive, delete, and the switch
  * between the index and one open report. The outline editor itself lives in

@@ -11,12 +11,12 @@
 >    permissions, resource-level access, UI, backend authorization, data model,
 >    OIDC readiness).
 > 2. The existing repository documentation and research — chiefly
->    [research/access-control.md](research/access-control.md) (Lakekeeper's
+>    [research/access-control.md](../research/access-control.md) (Lakekeeper's
 >    `Authorizer` trait and `.fga` model read against Metabase, Superset and
->    Grafana) and [access-control-plan.md](access-control-plan.md), plus
->    [architecture.md](architecture.md), [security.md](security.md),
->    [frontend.md](frontend.md), [CODEBASE.md](CODEBASE.md) and
->    [mvp2-plan.md](mvp2-plan.md) Theme D.
+>    Grafana) and [access-control-plan.md](../history/access-control-plan.md), plus
+>    [architecture-proposal.md](../history/architecture-proposal.md), [security.md](../reference/security.md),
+>    [frontend.md](../reference/frontend.md), [codebase.md](../reference/codebase.md) and
+>    [mvp2.md](mvp2.md) Theme D.
 > 3. **New external research** performed for this plan: Power BI / Fabric
 >    workspace roles, Apache Superset's Flask-AppBuilder RBAC and its
 >    `DASHBOARD_RBAC` flag, Metabase's two-axis permissions and its API-key
@@ -24,7 +24,7 @@
 >    roles, Tableau's Allow/Deny/Unspecified capabilities, machine-identity
 >    practice, and OWASP API1:2023. Sources are cited in [§28](#28-sources).
 >
-> **Relationship to [access-control-plan.md](access-control-plan.md).** That
+> **Relationship to [access-control-plan.md](../history/access-control-plan.md).** That
 > document is the direct ancestor of this one and **most of it survives
 > unchanged** — the port, the lattice idea, the `Visible` subquery, the
 > intersection rule, the 404/403 rule, the audit posture, the OIDC seams. This
@@ -92,7 +92,7 @@ Keycloak, no OpenFGA, no second container, no second store. DataMind's resource
 graph is **two levels deep with eight resource types**. Lakekeeper's *model* is
 worth copying; its *service* is not. What is copied instead is the **port** —
 the thing that makes the choice reversible — and that is
-[research/access-control.md](research/access-control.md) L2.
+[research/access-control.md](../research/access-control.md) L2.
 
 ## 0.3 The eleven phases at a glance
 
@@ -116,7 +116,7 @@ gate.
 
 **Phases 0–2 are worth doing even if the rest is cancelled**, because they
 replace a false docstring with a true one:
-[`services/policy.py`](../backend/app/services/policy.py) opens with *"Row-level
+[`services/policy.py`](../../backend/app/services/policy.py) opens with *"Row-level
 or column-level security later is a change in this module only"*, and that
 sentence is not true of the code today — `can_read`, `can_write` and
 `can_administer_users` have **zero call sites** while **213 lines** across
@@ -129,7 +129,7 @@ they exist; grants can land a month later.
 ## 0.4 The eighteen decisions, decided
 
 ⚠️ marks a decision that would change the schema if reversed. **↺ marks a
-decision that reverses or corrects [access-control-plan.md](access-control-plan.md).**
+decision that reverses or corrects [access-control-plan.md](../history/access-control-plan.md).**
 
 | # | Question | **Decision** | Consequence |
 |:--:|---|---|---|
@@ -150,7 +150,7 @@ decision that reverses or corrects [access-control-plan.md](access-control-plan.
 | 15 | Are capabilities and team membership carried in the JWT? | **No — resolved from the database once per request.** The access token carries the subject and nothing about authorization. | Costs one indexed query per request; buys **immediate** effect for a role change or a team removal, instead of up to one access-token lifetime. Partially closes the plan's open question 3. |
 | 16 ↺ | Migration numbering | **0024–0029.** `0022_llm_params_and_embeddings` and `0023_token_accounting` are taken. | The plan's `0022_groups` / `0023_grants` numbers are stale; using them would collide. |
 | 17 ↺ | What is the gate? | **`make lint && make test`, plus `npm run typecheck && npm run build && npm test` in `frontend/`.** | **There is no `make check` target**; the plan's gates name one that does not exist. A new `make authz-check` target carries the greps this plan adds. |
-| 18 | Where does administration live in the UI? | **One `/admin` section, master–detail, six tabs.** `/users` becomes a redirect to `/admin/people`. Resource-level access lives **beside the resource**. | The rail is deliberately seven flat rows and its ordering carries the grouping ([frontend.md §1](frontend.md)); four more rows would break that. §21 is the full argument. |
+| 18 | Where does administration live in the UI? | **One `/admin` section, master–detail, six tabs.** `/users` becomes a redirect to `/admin/people`. Resource-level access lives **beside the resource**. | The rail is deliberately seven flat rows and its ordering carries the grouping ([frontend.md §1](../reference/frontend.md)); four more rows would break that. §21 is the full argument. |
 
 ---
 
@@ -163,15 +163,15 @@ call-site counts are from `main` at `cedea10`.*
 
 | | |
 |---|---|
-| API surface | **109 route decorators** across 11 routers in [`backend/app/api/v1/`](../backend/app/api/v1/) |
+| API surface | **109 route decorators** across 11 routers in [`backend/app/api/v1/`](../../backend/app/api/v1) |
 | Principals | **users only.** No groups, no teams, no service accounts |
-| Roles | **2** — `Role.ADMIN`, `Role.MEMBER` ([`domain/value_objects/__init__.py`](../backend/app/domain/value_objects/__init__.py)) |
+| Roles | **2** — `Role.ADMIN`, `Role.MEMBER` ([`domain/value_objects/__init__.py`](../../backend/app/domain/value_objects/__init__.py)) |
 | User states | `ACTIVE`, `INVITED`, `DISABLED` |
 | Resource-level grants | **none** |
-| Authorization module | [`services/policy.py`](../backend/app/services/policy.py), **67 lines**, of which four functions have **zero callers** |
+| Authorization module | [`services/policy.py`](../../backend/app/services/policy.py), **67 lines**, of which four functions have **zero callers** |
 | `owner_id` references in `api/` + `services/` + `workers/` | **213 lines** |
 | Latest migration | `0023_token_accounting` |
-| Audit | [`services/audit.py`](../backend/app/services/audit.py) writes 9 curation actions; `SUCCESS`/`DENIED`/`FAILED` exist and **nothing produces a `DENIED`** |
+| Audit | [`services/audit.py`](../../backend/app/services/audit.py) writes 9 curation actions; `SUCCESS`/`DENIED`/`FAILED` exist and **nothing produces a `DENIED`** |
 
 ### 1.1 The five things the code says
 
@@ -217,7 +217,7 @@ belong to, with at least `select`"*. The distribution is favourable:
 number of places, not a diffuse one.
 
 **(c) `dashboard_tile_cache` has no viewer in its key**
-([`models.py:717`](../backend/app/infra/db/models.py#L717)), and freshness is a
+([`models.py:717`](../../backend/app/infra/db/models.py#L717)), and freshness is a
 SHA-256 over `connection_id`, `sql`, `max_rows` and `chart_config`. Correct under
 grant-based sharing, because execution happens under the **connection's** grant
 and everyone who may see the tile sees the same rows. It becomes a silent
@@ -226,9 +226,9 @@ sentence, and Phase 8 writes a test that fails if the key changes without it.
 
 **(d) A dashboard's shareability is an intersection, not a property.** Tiles
 carry their **own** `connection_id`
-([`models.py:642`](../backend/app/infra/db/models.py#L642)) so one dashboard may
+([`models.py:642`](../../backend/app/infra/db/models.py#L642)) so one dashboard may
 span several connections. `Report.connection_id` is single and immutable after
-creation ([`models.py:746`](../backend/app/infra/db/models.py#L746)), and a
+creation ([`models.py:746`](../../backend/app/infra/db/models.py#L746)), and a
 conversation is pinned to one connection the same way. **Reports are the easy
 case and dashboards the hard one** — which is the opposite of the intuitive
 build order.
@@ -238,21 +238,21 @@ function in the codebase that has thought about a shared connection, and its
 rule — *administrator, or the owner of the thing being curated*, with the
 fail-closed reading of "I don't know who owns this" being **no** — is the
 template every other permission function should follow. Seven tests in
-[`test_audit_and_permissions.py`](../backend/tests/unit/test_audit_and_permissions.py)
+[`test_audit_and_permissions.py`](../../backend/tests/unit/test_audit_and_permissions.py)
 pin it.
 
 ### 1.2 What is already right and must be preserved
 
 | | Item | Where |
 |:--:|---|---|
-| ✅ | Argon2id + HS256 access tokens + rotating refresh with reuse detection | [`infra/identity/local.py`](../backend/app/infra/identity/local.py) |
-| ✅ | `IdentityProvider` Protocol, five methods — **the authentication seam already exists** | [`domain/ports/identity.py`](../backend/app/domain/ports/identity.py) |
-| ✅ | `users.external_subject` column, present since `0001` and **never read or written** | [`models.py:61`](../backend/app/infra/db/models.py#L61) |
-| ✅ | `AdminDep` and `_guard_last_admin` — the precedent for refusing a destructive action with an explanation | [`deps.py`](../backend/app/api/deps.py), [`users.py:132`](../backend/app/api/v1/users.py#L132) |
-| ✅ | `audit.record()` joining the caller's transaction, never failing the action, carrying identifiers and counts and never content | [`services/audit.py`](../backend/app/services/audit.py) |
-| ✅ | `GET /audit`, administrators only | [`api/v1/audit.py`](../backend/app/api/v1/audit.py) |
+| ✅ | Argon2id + HS256 access tokens + rotating refresh with reuse detection | [`infra/identity/local.py`](../../backend/app/infra/identity/local.py) |
+| ✅ | `IdentityProvider` Protocol, five methods — **the authentication seam already exists** | [`domain/ports/identity.py`](../../backend/app/domain/ports/identity.py) |
+| ✅ | `users.external_subject` column, present since `0001` and **never read or written** | [`models.py:61`](../../backend/app/infra/db/models.py#L61) |
+| ✅ | `AdminDep` and `_guard_last_admin` — the precedent for refusing a destructive action with an explanation | [`deps.py`](../../backend/app/api/deps.py), [`users.py:132`](../../backend/app/api/v1/users.py#L132) |
+| ✅ | `audit.record()` joining the caller's transaction, never failing the action, carrying identifiers and counts and never content | [`services/audit.py`](../../backend/app/services/audit.py) |
+| ✅ | `GET /audit`, administrators only | [`api/v1/audit.py`](../../backend/app/api/v1/audit.py) |
 | ✅ | Import-linter contracts keeping `app.domain` free of `sqlalchemy` and `fastapi` | `backend/pyproject.toml` |
-| ✅ | `PUT /auth/me/password` and `PATCH /auth/me` taking **no user id**, with a test that walks the route table to keep it that way | [`api/v1/auth.py`](../backend/app/api/v1/auth.py) |
+| ✅ | `PUT /auth/me/password` and `PATCH /auth/me` taking **no user id**, with a test that walks the route table to keep it that way | [`api/v1/auth.py`](../../backend/app/api/v1/auth.py) |
 | ✅ | `test_openapi_has_no_secrets.py` — no read model exposes a password or `api_key` | `backend/tests/unit/` |
 
 ### 1.3 The resource surfaces, as they are scoped today
@@ -279,10 +279,10 @@ new feature so much as the fix for a first-run cliff.
 
 ## 2. The frontend, as it stands
 
-Read from [`frontend/src/`](../frontend/src/) and
-[docs/frontend.md](frontend.md).
+Read from [`frontend/src/`](../../frontend/src) and
+[docs/reference/frontend.md](../reference/frontend.md).
 
-**The shell** ([`App.tsx`](../frontend/src/App.tsx)) renders a **seven-row flat
+**The shell** ([`App.tsx`](../../frontend/src/App.tsx)) renders a **seven-row flat
 rail**, in a deliberate order: the four surfaces you *work* in (Chat,
 Dashboards, Reports, Knowledge), then the three you *keep* (Data sources, LLM
 providers, Users). `frontend.md` §1 states the rule that governs any addition:
@@ -326,20 +326,20 @@ section with its furniture intact.
 
 | Document | What it decided that this plan keeps | What this plan changes |
 |---|---|---|
-| [research/access-control.md](research/access-control.md) | L1 split authn from authz and ship authz first · L2 the port before the second implementation · L3 the lattice declared once in data · L5 revocation is administration · L6 a denial carries a reason into the audit log · L7 list-filtering is a different operation from row-checking · L8 two stores means a reconciler | L4 said groups should nest; this plan keeps them **flat** with a written trigger, for the reason the sibling plan gives — IdPs emit flat paths |
-| [access-control-plan.md](access-control-plan.md) | The `Authorizer` port · `Decision` / `Visible` · the `Subquery` composition · ownership as a fact not a grant · the intersection rule (I2) · the 404/403 rule · `on_behalf_of` for background work · the OIDC recipe · no `deny` | Decisions 1, 2, 6, 7 of §0.4 above (service users, roles-as-a-table, LLM configs, knowledge as its own type), plus the migration numbers and the gate command |
-| [architecture.md §9, §18](architecture.md) | JWT + refresh, RBAC named as the model, secrets encrypted with row-bound AAD | §18 still describes ownership as the enforcement mechanism; Phase 2 corrects it |
-| [security.md §3, §6](security.md) | The disclosure policy governs three render paths · credentials bound by AAD · no read model exposes a secret · `X-Real-IP` only · audit holds identifiers and counts, never content | §6 gains a subsection on **service credentials**; §3 gains the sharing interaction — one person's disclosure choice now governs another person's questions |
-| [frontend.md §1, §2](frontend.md) | The flat seven-row rail and why · the index / master–detail / workspace shapes · "when two screens must agree about a verdict, they share the component" | §2's table gains `/admin`; the Users row's meaning widens |
-| [mvp2-plan.md](mvp2-plan.md) Theme D | D1 is blocking and nothing is shared before it · a shared object executes under the **connection's** grant, re-checked at every execution · D3 (RLS) is out of scope with a trigger · D4 the audit log | D2's *"read-only share"* widens to the five-rung lattice |
-| [CLAUDE.md](../CLAUDE.md) | The dependency rule · the four non-negotiable invariants · "a new API route: router in `api/v1/`, DTO in `schemas.py`, logic in `services/*`" | Gains a fifth invariant (§16) and a pointer to the rulebook |
+| [research/access-control.md](../research/access-control.md) | L1 split authn from authz and ship authz first · L2 the port before the second implementation · L3 the lattice declared once in data · L5 revocation is administration · L6 a denial carries a reason into the audit log · L7 list-filtering is a different operation from row-checking · L8 two stores means a reconciler | L4 said groups should nest; this plan keeps them **flat** with a written trigger, for the reason the sibling plan gives — IdPs emit flat paths |
+| [access-control-plan.md](../history/access-control-plan.md) | The `Authorizer` port · `Decision` / `Visible` · the `Subquery` composition · ownership as a fact not a grant · the intersection rule (I2) · the 404/403 rule · `on_behalf_of` for background work · the OIDC recipe · no `deny` | Decisions 1, 2, 6, 7 of §0.4 above (service users, roles-as-a-table, LLM configs, knowledge as its own type), plus the migration numbers and the gate command |
+| [architecture-proposal.md §9, §18](../history/architecture-proposal.md) | JWT + refresh, RBAC named as the model, secrets encrypted with row-bound AAD | §18 still describes ownership as the enforcement mechanism; Phase 2 corrects it |
+| [security.md §3, §6](../reference/security.md) | The disclosure policy governs three render paths · credentials bound by AAD · no read model exposes a secret · `X-Real-IP` only · audit holds identifiers and counts, never content | §6 gains a subsection on **service credentials**; §3 gains the sharing interaction — one person's disclosure choice now governs another person's questions |
+| [frontend.md §1, §2](../reference/frontend.md) | The flat seven-row rail and why · the index / master–detail / workspace shapes · "when two screens must agree about a verdict, they share the component" | §2's table gains `/admin`; the Users row's meaning widens |
+| [mvp2.md](mvp2.md) Theme D | D1 is blocking and nothing is shared before it · a shared object executes under the **connection's** grant, re-checked at every execution · D3 (RLS) is out of scope with a trigger · D4 the audit log | D2's *"read-only share"* widens to the five-rung lattice |
+| [CLAUDE.md](../../CLAUDE.md) | The dependency rule · the four non-negotiable invariants · "a new API route: router in `api/v1/`, DTO in `schemas.py`, logic in `services/*`" | Gains a fifth invariant (§16) and a pointer to the rulebook |
 
 ---
 
 # Part 2 — External research
 
 *Performed for this plan on 2026-09-06. The research note
-[research/access-control.md](research/access-control.md) already covers
+[research/access-control.md](../research/access-control.md) already covers
 Lakekeeper in depth and summarises Metabase, Superset and Grafana; this part
 does not repeat it. It goes further on the four things the requirements need and
 that note did not cover: **named roles**, **service accounts**, **permission
@@ -1332,7 +1332,7 @@ CREATE INDEX ix_grants_wildcard  ON grants (resource_type, privilege)
 **No foreign key on `resource_id`**, because it is polymorphic across eight
 types, two of which are derived and share their parent's id. The cost is that a
 deleted resource can leave an orphaned grant; the answer is a delete hook in the
-service **plus** a sweep in [`workers/reconciler.py`](../backend/app/workers/reconciler.py),
+service **plus** a sweep in [`workers/reconciler.py`](../../backend/app/workers/reconciler.py),
 and **not** eight nullable FK columns.
 
 **No `grantor` column beyond `created_by`.** Nothing walks a chain on revoke,
@@ -1540,7 +1540,7 @@ read, and names them. The share is still allowed; the surprise is not.
   owner must be `ACTIVE`.
 - `DELETE /users/{id}` **refuses** while the principal owns any grantable
   resource, naming what they own.
-  [`_guard_last_admin`](../backend/app/api/v1/users.py#L132) is the precedent for
+  [`_guard_last_admin`](../../backend/app/api/v1/users.py#L132) is the precedent for
   refusing a destructive action with an explanation; it becomes
   `_guard_last_administrator`, counting `role_assignments` rather than
   `users.role`.
@@ -1552,7 +1552,7 @@ read, and names them. The share is still allowed; the surprise is not.
 
 ### 19.4 The audit vocabulary this plan adds
 
-Appended to [`services/audit.py`](../backend/app/services/audit.py), which
+Appended to [`services/audit.py`](../../backend/app/services/audit.py), which
 already has the machinery and the three rules. **`DENIED` finally gets a
 producer.**
 
@@ -1575,7 +1575,7 @@ row.
 ### 19.5 The disclosure interaction
 
 Each connection declares a `disclosure_policy` — how much of a result may reach
-the model provider ([security.md §3](security.md)). Today the person who chose
+the model provider ([security.md §3](../reference/security.md)). Today the person who chose
 that policy is the only person who can trigger a query under it. **The moment a
 connection is shared, one person's disclosure choice governs another person's
 questions**, and that person may not know what it is.
@@ -1681,7 +1681,7 @@ CI never starts — the treatment `docker-compose.replicas.yml` already gets.
 
 ### 21.1 The constraint the existing UI imposes
 
-[frontend.md §1](frontend.md) states the rule that decides this whole section:
+[frontend.md §1](../reference/frontend.md) states the rule that decides this whole section:
 
 > *"The list stays flat and uncaptioned; the ordering is what carries the
 > grouping, so it must not zig-zag across that boundary."*
@@ -1722,7 +1722,7 @@ written down rather than assumed.
 ### 21.3 `/admin` — master–detail, six tabs
 
 It takes the **master–detail** frame from
-[`components/settings.tsx`](../frontend/src/components/settings.tsx) that Data
+[`components/settings.tsx`](../../frontend/src/components/settings.tsx) that Data
 sources, LLM providers and Knowledge already share, because that is what it is:
 a configuration surface where you pick a record on the left and work on it on the
 right. The tab strip is in the URL (`/admin/:tab`, `/admin/:tab/:id`) for exactly
@@ -2128,7 +2128,7 @@ get shipped.
 
 **Frontend.** None.
 
-**Docs.** None yet — `architecture.md` is corrected in Phase 2, once the claim is
+**Docs.** None yet — `history/architecture-proposal.md` is corrected in Phase 2, once the claim is
 fully false rather than half.
 
 **Tests.** **No test assertion changes.** The existing dashboard and report suites
@@ -2175,10 +2175,10 @@ makes every later phase a change in one module.
 **Frontend.** None.
 
 **Docs.**
-- `docs/architecture.md` §18, where it describes ownership as the enforcement
+- `docs/history/architecture-proposal.md` §18, where it describes ownership as the enforcement
   mechanism.
-- `docs/CODEBASE.md` §6, same.
-- `docs/dashboards.md` §9 and `docs/reports.md` §14, which both say sharing is
+- `docs/reference/codebase.md` §6, same.
+- `docs/reference/dashboards.md` §9 and `docs/reference/reports.md` §14, which both say sharing is
   impossible — they now say *not yet*, with a pointer here.
 
 **Tests.**
@@ -2247,9 +2247,9 @@ read-only cache written by `role_service`.
 - `useCan()` replaces every `user.role === 'ADMIN'` in the tree.
 
 **Docs.**
-- `docs/security.md` §6 gains a paragraph on the role model and on decision 15
+- `docs/reference/security.md` §6 gains a paragraph on the role model and on decision 15
   (capabilities resolved per request, not carried in the token).
-- `docs/frontend.md` §2's table gains `/admin`.
+- `docs/reference/frontend.md` §2's table gains `/admin`.
 - This plan's ledger.
 
 **Tests.**
@@ -2312,7 +2312,7 @@ first grant anyone makes can already be made to a team.
   resources it holds.
 - People detail gains a **Teams** section.
 
-**Docs.** `docs/security.md`; this plan's ledger; a note in `CLAUDE.md` that a
+**Docs.** `docs/reference/security.md`; this plan's ledger; a note in `CLAUDE.md` that a
 team is the recommended default principal for any grant.
 
 **Tests.**
@@ -2381,10 +2381,10 @@ join teams the moment both exist.
   principal picker.
 
 **Docs.**
-- **`docs/security.md` §6 gains a subsection**: what a service key is, why
+- **`docs/reference/security.md` §6 gains a subsection**: what a service key is, why
   SHA-256 rather than Argon2id, the prefix's purpose, the expiry default, and
   the rule that a machine may not mint administrators.
-- `docs/security.md` §7's deployment checklist gains *"review service accounts
+- `docs/reference/security.md` §7's deployment checklist gains *"review service accounts
   and their keys"*.
 - `README.md` gains a short *Programmatic access* section.
 
@@ -2470,10 +2470,10 @@ behaviour at no extra modelling cost.
 - Data sources list renders connections reached by grant, with an owner column.
 
 **Docs.**
-- `docs/security.md` §3 gains **the sharing interaction**: one person's
+- `docs/reference/security.md` §3 gains **the sharing interaction**: one person's
   disclosure choice governing another person's questions, and the three rules.
-- `docs/security.md` §6 gains ownership transfer and the deletion refusal.
-- `docs/architecture.md` §18 rewritten around the authorizer.
+- `docs/reference/security.md` §6 gains ownership transfer and the deletion refusal.
+- `docs/history/architecture-proposal.md` §18 rewritten around the authorizer.
 - `CLAUDE.md` gains invariant 5 (§16) and a pointer to the future rulebook.
 - This plan's ledger.
 
@@ -2511,7 +2511,7 @@ Denial auditing (Phase 7). Access review (Phase 9).
 
 **What.** Every authorization event becomes a row, including the denials.
 
-**Why.** [`audit.py`](../backend/app/services/audit.py) has had a `DENIED`
+**Why.** [`audit.py`](../../backend/app/services/audit.py) has had a `DENIED`
 constant and **no producer** since migration `0001`. A product whose positioning
 is *"you decide what leaves your database"* has to be able to answer *"who tried,
 and was refused"*. It lands immediately after the first grants so the record
@@ -2540,7 +2540,7 @@ distinctly (tone, not a separate list — a denial beside the grant that precede
 it is the story). Actor shown as a display name and **never** an address, the
 rule the review queue already follows.
 
-**Docs.** `docs/security.md` §4.8 extends to authorization events; its sentence
+**Docs.** `docs/reference/security.md` §4.8 extends to authorization events; its sentence
 *"this is not the whole of mvp2 §D4"* becomes true in a smaller way.
 
 **Tests.**
@@ -2615,8 +2615,8 @@ read, naming them; the share is still allowed.
 - **"Shared with me"** filter chip on both index toolbars.
 - `Limited` / `Read-only` badges driven by `…/actions`.
 
-**Docs.** `docs/dashboards.md` §9 and `docs/reports.md` §14 rewritten — they
-currently say sharing is impossible. `docs/frontend.md` §2's sub-section map
+**Docs.** `docs/reference/dashboards.md` §9 and `docs/reference/reports.md` §14 rewritten — they
+currently say sharing is impossible. `docs/reference/frontend.md` §2's sub-section map
 gains the Access tab and the Share dialogs.
 
 **Tests.**
@@ -2683,7 +2683,7 @@ rewriting eight of them.
 - **Effective access** section in People, Service accounts and Teams details,
   reusing the by-principal lens.
 
-**Docs.** `docs/frontend.md` §2 and the sub-section map; a short *How do I find
+**Docs.** `docs/reference/frontend.md` §2 and the sub-section map; a short *How do I find
 out why someone cannot see something?* entry in `docs/README.md`'s
 by-what-you-are-touching table.
 
@@ -2720,7 +2720,7 @@ for five weeks — and both are why this phase exists rather than being assumed.
 **Depends on.** Everything.
 
 **Backend / repo.**
-- **Write [`docs/access-control-rules.md`](access-control-rules.md)** — §26's
+- **Write [`docs/reference/access-control.md`](../reference/access-control.md)** — §26's
   deliverable. Not a summary of this plan: a short, imperative rulebook read
   *before* writing an endpoint.
 - Pointers to it from `CLAUDE.md`, `docs/README.md`, and the module docstring of
@@ -2754,21 +2754,21 @@ for five weeks — and both are why this phase exists rather than being assumed.
 hooks, and a lint-style test that no component imports `user.role`.
 
 **Docs.**
-- `docs/access-control-rules.md` (new).
+- `docs/reference/access-control.md` (new).
 - `docs/README.md`: this plan moves from *Proposed* to *Live*, and the row for
-  `access-control-plan.md` records that it is superseded by this document.
-- `docs/architecture.md`, `docs/security.md`, `docs/frontend.md`,
-  `docs/CODEBASE.md`, `CLAUDE.md` — final pass.
+  `history/access-control-plan.md` records that it is superseded by this document.
+- `docs/history/architecture-proposal.md`, `docs/reference/security.md`, `docs/reference/frontend.md`,
+  `docs/reference/codebase.md`, `CLAUDE.md` — final pass.
 - The ledger in §27 filled in.
 
 **Tests.** The conformance module is itself the deliverable; plus a test that
-`docs/access-control-rules.md` exists and that every `ResourceType` and
+`docs/reference/access-control.md` exists and that every `ResourceType` and
 `Capability` is named in it (a cheap doc-drift guard, the same trick the prompt
 version test uses).
 
 **Acceptance criteria.**
 - [ ] Gate green.
-- [ ] `docs/access-control-rules.md` exists and the conformance test enforces
+- [ ] `docs/reference/access-control.md` exists and the conformance test enforces
       every rule it states that is mechanically checkable.
 - [ ] `grep -rn "is_admin\|AdminDep\|users.role" backend/app` returns nothing.
 - [ ] The OIDC seam tests pass with **no Keycloak in CI**.
@@ -2872,7 +2872,7 @@ Not deferrals — things this plan cannot settle.
 
 ## 27. The rulebook — what Phase 10 must produce
 
-**`docs/access-control-rules.md`** is a deliverable, not documentation as an
+**`docs/reference/access-control.md`** is a deliverable, not documentation as an
 afterthought. Its audience is whoever writes the *next* feature, most likely with
 no memory of this plan. It must be short enough to read before writing an
 endpoint.
@@ -2914,12 +2914,12 @@ Required contents:
 
 ## 28. Sources
 
-**Repository documents read for this plan** — [research/access-control.md](research/access-control.md) ·
-[access-control-plan.md](access-control-plan.md) · [architecture.md](architecture.md) ·
-[security.md](security.md) · [frontend.md](frontend.md) · [CODEBASE.md](CODEBASE.md) ·
-[mvp2-plan.md](mvp2-plan.md) · [learning-loop-plan.md](learning-loop-plan.md) ·
-[dashboards.md](dashboards.md) · [reports.md](reports.md) · [README.md](README.md) ·
-[../CLAUDE.md](../CLAUDE.md).
+**Repository documents read for this plan** — [research/access-control.md](../research/access-control.md) ·
+[access-control-plan.md](../history/access-control-plan.md) · [architecture-proposal.md](../history/architecture-proposal.md) ·
+[security.md](../reference/security.md) · [frontend.md](../reference/frontend.md) · [codebase.md](../reference/codebase.md) ·
+[mvp2.md](mvp2.md) · [learning-loop.md](learning-loop.md) ·
+[dashboards.md](../reference/dashboards.md) · [reports.md](../reference/reports.md) · [README.md](../README.md) ·
+[../CLAUDE.md](../../CLAUDE.md).
 
 **External sources** — read on 2026-09-06.
 
@@ -2955,11 +2955,11 @@ cd frontend && npm run typecheck && npm run build && npm test
 - [x] Read `docs/research/access-control.md` (1,725 lines) — Lakekeeper's
       `Authorizer` trait, the OpenFGA model, the eight lessons, the Metabase /
       Superset / Grafana calibration, and the nine open questions
-- [x] Read `docs/access-control-plan.md` (1,087 lines) — the six concepts, the
+- [x] Read `docs/history/access-control-plan.md` (1,087 lines) — the six concepts, the
       three invariants, the eight phases, the nine decisions, the ledger
-- [x] Read `docs/architecture.md` §9 and §18, `docs/security.md` §3/§4.8/§6/§7,
-      `docs/CODEBASE.md`, `docs/frontend.md` §1–§3, `docs/README.md`,
-      `docs/mvp2-plan.md` Theme D, `CLAUDE.md`
+- [x] Read `docs/history/architecture-proposal.md` §9 and §18, `docs/reference/security.md` §3/§4.8/§6/§7,
+      `docs/reference/codebase.md`, `docs/reference/frontend.md` §1–§3, `docs/README.md`,
+      `docs/plans/mvp2.md` Theme D, `CLAUDE.md`
 - [x] Enumerate the API surface — 109 route decorators across 11 routers
 - [x] Count and locate every `owner_id` decision site — **213 lines**, 18 files,
       133 of them in two services
@@ -2985,7 +2985,7 @@ cd frontend && npm run typecheck && npm run build && npm test
       machine-identity practice; OWASP API1:2023
 - [x] Identify the `llm_config` `base_url` key-exfiltration finding
 - [x] Decide the eighteen decisions of §0.4, including the four that reverse
-      `access-control-plan.md`
+      `history/access-control-plan.md`
 - [x] Write this plan
 
 ## Phase 0 — Vocabulary, the port, the switches
@@ -3063,8 +3063,8 @@ cd frontend && npm run typecheck && npm run build && npm test
       SQL must still name whose)
 - [x] Test: a delegated action's audit row carries `delegated: true`, and an
       ordinary one carries no such key at all
-- [x] Doc: `architecture.md` §18
-- [x] Doc: `CODEBASE.md` §6
+- [x] Doc: `history/architecture-proposal.md` §18
+- [x] Doc: `reference/codebase.md` §6
 - [x] Doc: `dashboards.md` §9 and `reports.md` §14
 - [x] **Gate green including blocking `authz-check`**
 - [x] **Acceptance:** `owner_id` is a stored fact and nothing in `api/` or
@@ -3266,7 +3266,7 @@ cd frontend && npm run typecheck && npm run build && npm test
 - [x] Test: **a Knowledge Manager curates and cannot read, edit or widen** —
       requirement 2's named acceptance test
 - [x] Test: 404 with nothing, 403 with `describe`, message names the privilege
-- [x] Doc: `security.md` §3 (sharing interaction) and §6; `architecture.md` §18;
+- [x] Doc: `security.md` §3 (sharing interaction) and §6; `history/architecture-proposal.md` §18;
       `CLAUDE.md` invariant 5; the ledger
 - [x] **Gate green**
 - [x] **Acceptance:** the two-user connection scenario, all four refusals, every
@@ -3355,7 +3355,7 @@ cd frontend && npm run typecheck && npm run build && npm test
 
 ## Phase 10 — The rulebook, the conformance check, the seams
 
-- [x] Write `docs/access-control-rules.md` with all eight required contents (§27)
+- [x] Write `docs/reference/access-control.md` with all eight required contents (§27)
 - [x] Pointers from `CLAUDE.md`, `docs/README.md`, `services/policy.py`
 - [x] `tests/unit/test_authz_conformance.py`: every route carries a `ctx`
 - [x] …: every `ResourceType` × `Privilege` has a meaning row
@@ -3378,9 +3378,9 @@ cd frontend && npm run typecheck && npm run build && npm test
 - [x] Frontend: a test that no component reads `user.role` —
       `scripts/permissions.test.ts`, in `npm test`
 - [x] Doc: `docs/README.md` — this plan becomes **Live**;
-      `access-control-plan.md` marked superseded
-- [x] Doc: final pass over `architecture.md`, `security.md`, `frontend.md`,
-      `CODEBASE.md`, `CLAUDE.md`
+      `history/access-control-plan.md` marked superseded
+- [x] Doc: final pass over `history/architecture-proposal.md`, `security.md`, `frontend.md`,
+      `reference/codebase.md`, `CLAUDE.md`
 - [x] Doc: fill in §29's ledger
 - [x] **Gate green**
 - [x] **Acceptance:** the rulebook exists, the conformance test enforces every
@@ -3389,7 +3389,7 @@ cd frontend && npm run typecheck && npm run build && npm test
 
 ## Cross-cutting, do not forget
 
-- [x] Every new endpoint appears in `docs/architecture.md` §26's endpoint list
+- [x] Every new endpoint appears in `docs/history/architecture-proposal.md` §26's endpoint list
 - [x] Every new audit action is named in `services/audit.py`'s vocabulary block
 - [x] Every new `Capability` and `ResourceType` is named in the rulebook —
       asserted by `test_the_rulebook_exists_and_names_the_whole_vocabulary`

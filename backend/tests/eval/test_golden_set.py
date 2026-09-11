@@ -197,7 +197,7 @@ def test_the_comments_overlay_covers_enough_of_the_schema() -> None:
 
 def test_the_two_planted_comments_are_still_planted() -> None:
     """One stale and one wrong, on purpose (see the overlay's header and §10 of
-    docs/catalog-metadata-plan.md). A future reader who "fixes" either of them
+    docs/reference/catalog-metadata.md). A future reader who "fixes" either of them
     quietly turns the A/B into a measurement against perfect documentation,
     which no real catalog is — so the plants are asserted, not just commented."""
     sql = _overlay()

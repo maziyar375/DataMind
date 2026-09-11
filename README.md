@@ -91,7 +91,7 @@ asking the model nicely.
 The full argument for both — every point where data reaches a provider and
 exactly what each one sends, the disclosure ladder, the guard's rejection codes,
 and a pre-production checklist — is in
-[**docs/security.md**](docs/security.md).
+[**docs/reference/security.md**](docs/reference/security.md).
 
 ---
 
@@ -173,7 +173,7 @@ your browser, which is why `localhost` would be wrong in the form.
 tested — the stack simply ships no demo server for them (they cost ~2 GB of RAM
 each and were removed), so point a data source at one of your own. Their seeds
 are still in `backend/fixtures/`. Running the two processes without Docker is in
-[docs/CODEBASE.md](docs/CODEBASE.md) §7.
+[docs/reference/codebase.md](docs/reference/codebase.md) §7.
 
 **3. Sync the schema.** **Sync schema** on the connection reads its tables,
 columns, and primary and foreign keys into a stored snapshot. This step is not
@@ -281,8 +281,8 @@ back with its reason rather than being compiled into something misleading.
 Answered turns also suggest follow-up questions, scoped to the tables the thread
 has been asking about.
 
-Node-by-node reference: **[docs/pipeline.md](docs/pipeline.md)**.
-Chart decisions: **[docs/charts.md](docs/charts.md)**.
+Node-by-node reference: **[docs/reference/pipeline-chat.md](docs/reference/pipeline-chat.md)**.
+Chart decisions: **[docs/reference/charts.md](docs/reference/charts.md)**.
 
 ### Dashboards
 
@@ -315,7 +315,7 @@ against one database can be rebuilt against another. The file holds the layout
 and the SQL and nothing else: no ids, no results, and nothing from inside a
 connection — you pick which of *your* data sources each of its databases is on
 the way in, and every statement in it faces the guard exactly like one you
-typed. **[docs/dashboards.md](docs/dashboards.md)**.
+typed. **[docs/reference/dashboards.md](docs/reference/dashboards.md)**.
 
 ### Reports
 
@@ -349,7 +349,7 @@ and a separate pure check flags any figure the rows do not support. Runs are
 kept, and a regeneration never overwrites one — your edits and the model's prose
 live in separate columns. Persian and English, with the language read off the
 request rather than asked for, so a Persian request cannot produce an English
-document. **[docs/reports.md](docs/reports.md)**.
+document. **[docs/reference/reports.md](docs/reference/reports.md)**.
 
 ### The semantic layer
 
@@ -388,7 +388,7 @@ generation reads the same schema block a run reads, under the same budget.
   a local gateway) and **Anthropic**
 - In-process run executor with heartbeats and a stale-run reconciler, so no run
   is left stuck when a process dies
-- An offline eval harness with a nightly CI run — **[docs/eval.md](docs/eval.md)**
+- An offline eval harness with a nightly CI run — **[docs/reference/eval.md](docs/reference/eval.md)**
 - **Programmatic access** — service accounts and API keys, below
 
 ### Programmatic access
@@ -486,7 +486,7 @@ column becomes a drawer instead of leaving a hundred pixels for the content.
 
 **Not built yet:** rolling conversation summaries, sharing a dashboard or a
 report with another user, and scheduled report generation. Each is deferred
-deliberately — see [docs/architecture.md](docs/architecture.md) for the
+deliberately — see [docs/history/architecture-proposal.md](docs/history/architecture-proposal.md) for the
 reasoning.
 
 ---
@@ -520,7 +520,7 @@ they depend on nothing in it: `sqlguard/` (the parser and the allowlist),
 reconciler and the report graph) and `eval/`, which one of the seven
 import-linter contracts keeps off the request path entirely. For the tree —
 what is in each one, down to the module — see
-[docs/CODEBASE.md](docs/CODEBASE.md) §3, or the code map in
+[docs/reference/codebase.md](docs/reference/codebase.md) §3, or the code map in
 [CLAUDE.md](CLAUDE.md) if you are about to change something.
 
 **LangGraph was deferred, and has since been adopted.** The bet the
@@ -530,7 +530,7 @@ and the report worker are compiled graphs, the repair region is one subgraph
 with two callers, and the ten node functions were not modified. Two phases were
 then argued and **declined on measurement**: checkpointing (88 KB of state per
 node, 97% of it the schema block, for a run of 5–60 seconds) and durable
-clarification. [docs/langgraph-migration.md](docs/langgraph-migration.md) has
+clarification. [docs/plans/langgraph-migration.md](docs/plans/langgraph-migration.md) has
 both arguments and the gates.
 
 ### Still deferred on purpose
@@ -538,12 +538,23 @@ both arguments and the gates.
 | Deferred | Why | Trigger to revisit |
 | --- | --- | --- |
 | Celery + Redis | A run is 5–60 seconds. Durability comes from the `runs` table plus a heartbeat; Celery would add a deployment unit and make SSE fan-out harder. | p95 run > ~5 min, or runs must survive rolling deploys |
-| Sharing a dashboard or report | User B would read data pulled with user A's credentials, against a connection B does not own. That is an authorization model, not a UI feature. | There is a real answer for "who may read through this connection" |
 | Dashboard filters | `QueryExecutor.execute` takes no bind parameters. Filters need the port extended across all four connectors — **never** by string interpolation. | Someone extends the port |
 | Rolling conversation summaries, scheduled report generation | Neither is load-bearing yet; the history tail and a manual re-run cover the cases. | A thread outgrows the last-six-messages window |
+| SSO / OIDC | The seams are built — `auth_provider`, provider-namespaced identities, `(provider_id, source_id)` on teams and roles — but no adapter is. | First deployment that names it |
+
+> **Sharing used to be on this list, and no longer is.** The trigger it named —
+> *"there is a real answer for who may read through this connection"* — fired.
+> Users, service users, roles, teams and per-resource grants on eight resource
+> types are built, and an artifact can be shared without sharing the data
+> behind it: a tile renders only if the viewer holds `select` on **that tile's**
+> connection, re-checked at execution. See
+> [docs/reference/access-control.md](docs/reference/access-control.md).
+
+The full list, each item with its trigger, is
+[docs/status.md §5](docs/status.md#5-deferred-on-purpose-with-triggers).
 
 More than one API replica *is* supported — see
-[docs/cross-replica.md](docs/cross-replica.md) for the three rules that make it
+[docs/reference/cross-replica.md](docs/reference/cross-replica.md) for the three rules that make it
 work.
 
 LiteLLM is kept, but strictly behind `LLMGateway`, and LangGraph is confined to
@@ -574,9 +585,12 @@ From `frontend/`:
 ```bash
 npm run typecheck   # tsc --noEmit
 npm run build       # tsc -b && vite build
-npm test            # the nine DOM-free logic modules: schedule, format,
-                    # dashboard document, palette, chat format, report
-                    # document, report readiness, print, semantic drift
+npm test            # fifteen suites: the fourteen DOM-free logic modules
+                    # (schedule, format, dashboard document, palette, chat
+                    # format, report document, report readiness, print,
+                    # semantic drift, semantic metrics, knowledge template,
+                    # thinking, knowledge queue, provider params) plus the
+                    # permissions script
 ```
 
 Typecheck plus build is the real frontend gate. There is a `npm run lint`
@@ -590,7 +604,7 @@ boundary greps, the hostile corpus and the full backend suite, plus `tsc
 module by module. Worth knowing before trusting a green tick.
 
 The offline eval harness is separate and costs real tokens — see
-[docs/eval.md](docs/eval.md).
+[docs/reference/eval.md](docs/reference/eval.md).
 
 ---
 
@@ -606,7 +620,7 @@ The offline eval harness is separate and costs real tokens — see
 | `MAX_CONCURRENT_RUNS` | Executor concurrency limit | `8` |
 | `RUN_DEADLINE_SECONDS` | Hard per-run time budget | `120` in code, raised to `300` by compose |
 | `LLM_REQUEST_TIMEOUT_SECONDS` | Per-provider-call timeout | `60` in code, raised to `120` by compose |
-| `AUTHZ_BACKEND` | Which `Authorizer` answers "may they?" — `owner_only` or `rbac` | `owner_only` |
+| `AUTHZ_BACKEND` | Which `Authorizer` answers "may they?" — `owner_only` or `rbac` | `rbac` in code, but `.env.example` sets `owner_only`, so **a fresh clone runs owner-only** |
 | `AUTH_PROVIDER` | Who verifies a human. One value today | `local` |
 | `ALLOW_PRIVILEGED_SERVICE_USERS` | May a service account hold `user.manage`, `role.manage`, `service_user.manage` or `settings.manage`? | `false` |
 | `SERVICE_KEY_DEFAULT_TTL_DAYS` | Lifetime of a new API key when none is named | `365` |
@@ -638,23 +652,27 @@ never touches data.
 
 ## Documentation
 
-Fifteen documents. [docs/README.md](docs/README.md) is the index and classifies
-all of them; this is the short version.
+Thirty-six documents in five groups, and **which group a document is in tells
+you how to read it**: `reference/` is how the built system works,
+`plans/` is work and its ledger, `research/` is argument rather than
+description, and `history/` is superseded but kept for the reasoning.
+[docs/README.md](docs/README.md) is the index. This is the short version.
 
 | Doc | Read it when |
 | --- | --- |
+| [docs/status.md](docs/status.md) | You want to know what is built, what is next, and what is deferred |
+| [docs/decisions.md](docs/decisions.md) | You want to know what has already been decided, and where it is argued |
 | [CLAUDE.md](CLAUDE.md) | You are about to change code — the map, the invariants, the gotchas |
-| [docs/CODEBASE.md](docs/CODEBASE.md) | You want a code-grounded tour of the whole stack |
-| [docs/architecture.md](docs/architecture.md) | You want the *why*, including what was deferred and on what trigger |
-| [docs/security.md](docs/security.md) | You are touching `sqlguard/`, disclosure, or adding an LLM call site |
-| [docs/pipeline.md](docs/pipeline.md) | You are changing a node — and §0 maps all three pipelines |
-| [docs/pipeline-dashboard.md](docs/pipeline-dashboard.md) · [docs/pipeline-report.md](docs/pipeline-report.md) | You are changing how a tile or a report gets its SQL |
-| [docs/charts.md](docs/charts.md) | You are changing what gets drawn |
-| [docs/dashboards.md](docs/dashboards.md) | You are changing tiles or saved-SQL execution |
-| [docs/reports.md](docs/reports.md) | You are changing the document |
-| [docs/eval.md](docs/eval.md) | You want to measure whether a change helped |
-| [docs/cross-replica.md](docs/cross-replica.md) | You are running more than one API process |
-| [docs/langgraph-migration.md](docs/langgraph-migration.md) · [docs/catalog-metadata-plan.md](docs/catalog-metadata-plan.md) · [docs/reports-plan.md](docs/reports-plan.md) | Plans and records — the narrative of a piece of work, with a dated ledger of what changed while it was executed |
+| [docs/development.md](docs/development.md) | You want the commands, the environment's sharp edges, and what CI gates |
+| [docs/reference/codebase.md](docs/reference/codebase.md) | You want a code-grounded tour of the whole stack |
+| [docs/reference/security.md](docs/reference/security.md) | You are touching `sqlguard/`, disclosure, or adding an LLM call site |
+| [docs/reference/access-control.md](docs/reference/access-control.md) | You are writing any endpoint — it is the rulebook |
+| [docs/reference/pipeline-chat.md](docs/reference/pipeline-chat.md) | You are changing a node — and §0 maps all three pipelines |
+| [docs/reference/pipeline-dashboard.md](docs/reference/pipeline-dashboard.md) · [docs/reference/pipeline-report.md](docs/reference/pipeline-report.md) | You are changing how a tile or a report gets its SQL |
+| [docs/reference/charts.md](docs/reference/charts.md) · [docs/reference/dashboards.md](docs/reference/dashboards.md) · [docs/reference/reports.md](docs/reference/reports.md) | You are changing what gets drawn, a tile, or the document |
+| [docs/reference/semantic-layer.md](docs/reference/semantic-layer.md) · [docs/reference/knowledge-templates.md](docs/reference/knowledge-templates.md) | You are changing what a person can teach the system |
+| [docs/reference/eval.md](docs/reference/eval.md) | You want to measure whether a change helped |
+| [docs/history/architecture-proposal.md](docs/history/architecture-proposal.md) | You want the original *why* — a pre-build proposal, so read its status banner |
 
 ---
 

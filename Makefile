@@ -43,9 +43,8 @@ lint:
 
 # The authorization gate: four greps, each naming a way of deciding access that
 # this codebase has agreed not to use. The script says which and why, and prints
-# every `# authz-ok:` exemption it honoured. It fails today on purpose — it is
-# non-blocking in CI until Phase 2 of
-# docs/user-management-and-access-control-plan.md removes the last of those lines.
+# every `# authz-ok:` exemption it honoured. It is clean, and CI fails on a new
+# violation — the rules are docs/reference/access-control.md.
 authz-check:
 	@bash scripts/authz-check.sh
 

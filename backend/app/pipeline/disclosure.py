@@ -107,7 +107,7 @@ def disclose(execution: ExecutionResult, policy: str) -> DisclosedResult:
 # 'churned'`) may have come from a column value list that a wider policy's
 # HintBudget once allowed into the schema block. It is one token, the user is
 # already looking at it, and stripping it would take from a follow-up the one
-# thing it most needs. Recorded in docs/pipeline.md §5.
+# thing it most needs. Recorded in docs/reference/pipeline-chat.md §5.
 #
 # Not a summary and not a rewrite: a turn is kept whole or replaced whole, in
 # keeping with the rule that nothing in this pipeline paraphrases the user.

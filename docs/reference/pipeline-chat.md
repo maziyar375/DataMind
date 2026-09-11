@@ -1,8 +1,8 @@
 # The chat run pipeline, node by node
 
 What happens between "user hits enter" and "answer + table + chart appear".
-Companion to [architecture.md](architecture.md) (the why) and
-[CODEBASE.md](CODEBASE.md) (the whole stack).
+Companion to [architecture-proposal.md](../history/architecture-proposal.md) (the why) and
+[codebase.md](codebase.md) (the whole stack).
 
 **There are three pipelines in this product, and this file is the first of
 three.** §0 maps all three and states what they share; §1 onwards is the chat
@@ -14,7 +14,7 @@ run in full. The other two have files of their own, written to the same shape:
 | **Dashboard** | a tile's SQL (once), then its result (forever) | [pipeline-dashboard.md](pipeline-dashboard.md) |
 | **Report** | an outline, a statement per block, then a written document | [pipeline-report.md](pipeline-report.md) |
 
-Code: [`backend/app/pipeline/`](../backend/app/pipeline/) —
+Code: [`backend/app/pipeline/`](../../backend/app/pipeline) —
 `graph.py` (the compiled LangGraph, `ORDER`, and the node adapter),
 `pipeline.py` (the `AnalyticsPipeline` facade over it — a re-export since the
 port), `nodes/__init__.py` (all eleven nodes), `state.py` (typed state),
@@ -49,7 +49,7 @@ product is a claim about one of them:
 1. **`LLMGateway`** — six methods, one adapter (nodes see only the first
    three: `complete`, `stream`, `structured`; `probe`, `embed` and
    `probe_embedding` are reached from services)
-   ([`app/infra/llm/`](../backend/app/infra/llm/)). `import litellm` outside
+   ([`app/infra/llm/`](../../backend/app/infra/llm)). `import litellm` outside
    that package fails CI. Before any node sees an error, the gateway has
    already: retried transient failures (429/5xx/connection/timeout) up to
    `llm_max_retries` (default **4**) with exponential backoff from 2s to 30s,
@@ -62,7 +62,7 @@ product is a claim about one of them:
    (`STRUCTURED_REPAIRS = 1`). Only then is `LLMError` raised. `Completion`
    carries `truncated` (`finish_reason == "length"`) so a caller can tell a
    short answer from a cut-off one.
-2. **The SQL guard** ([`app/sqlguard/`](../backend/app/sqlguard/)) — parse with
+2. **The SQL guard** ([`app/sqlguard/`](../../backend/app/sqlguard)) — parse with
    SQLGlot, walk the AST against an allowlist, resolve every name against the
    connection's stored snapshot, rewrite with the row `LIMIT`. **Fails closed:
    an unknown node type is a rejection, not a warning.** Five entry points —
@@ -122,7 +122,7 @@ where a chat run is checked before *every* node).
 Since Phase 2 those are the **only** differences, and each one is a value in
 the invoke config rather than a second executor: `retrieve → generate ⇄
 validate` is one compiled region (`_add_repair_region` in
-[graph.py](../backend/app/pipeline/graph.py)) that both callers build, and the
+[graph.py](../../backend/app/pipeline/graph.py)) that both callers build, and the
 draft's hand-rolled `for _ in range(DRAFT_MAX_REPAIRS + 1)` is gone. The
 ceiling it provided was always `RunState.max_repairs` — `validate` asks for a
 repair only while `repair_count < max_repairs` — so the loop was counting to
@@ -173,9 +173,9 @@ key is revoked.
   | `stream(llm, messages)` | `AsyncIterator[str]` | `present`, `describe` |
 
 - **The orchestrator is a compiled LangGraph**, built in
-  [graph.py](../backend/app/pipeline/graph.py) and reached through the same
+  [graph.py](../../backend/app/pipeline/graph.py) and reached through the same
   `AnalyticsPipeline.run` facade in
-  [pipeline.py](../backend/app/pipeline/pipeline.py). It replaced a `while`
+  [pipeline.py](../../backend/app/pipeline/pipeline.py). It replaced a `while`
   loop that did index arithmetic over an ordered node list — see §6 for what
   moved and what did not.
 
@@ -201,7 +201,7 @@ knowing before you go looking for an executor that does not exist:
 | SQL drafting | `DRAFT_GRAPH` — the same compiled repair region the chat graph builds | it *is* a small state machine, and pretending otherwise is what let a second executor grow over the same nodes. What a draft does not want — a step trail, SSE, the run's deadline rule — are no-ops and values in the invoke config, not a second implementation |
 
 The report worker is the one place a LangGraph port would buy something real —
-see [langgraph-migration.md](langgraph-migration.md) Phase 3.
+see [langgraph-migration.md](../plans/langgraph-migration.md) Phase 3.
 
 ---
 
@@ -249,7 +249,7 @@ see [langgraph-migration.md](langgraph-migration.md) Phase 3.
   chart    (data veto → model → plan_chart → Vega-Lite)
 ```
 
-`ORDER` in [graph.py:102-125](../backend/app/pipeline/graph.py#L102-L125) is the
+`ORDER` in [graph.py:102-125](../../backend/app/pipeline/graph.py#L102-L125) is the
 single source of truth for sequence. Nodes never decide what runs next beyond an
 optional `goto`. (It moved there with the LangGraph port — `pipeline.py` is now
 a 21-line re-export that keeps `from app.pipeline.pipeline import ORDER`
@@ -328,7 +328,7 @@ connection's disclosure policy like every other prompt — see §3.9.
 
 ### 2. `match` — has somebody already answered this?
 
-> Phase 2 of [learning-loop-plan.md](learning-loop-plan.md). **The first node
+> Phase 2 of [learning-loop.md](../plans/learning-loop.md). **The first node
 > that can change an answer — and on the short-circuit path it does so without
 > changing a byte of the prompt.** Phase 5 gave this node a second job: on a
 > *miss*, near matches are collected onto `state.examples` and `retrieve`
@@ -381,7 +381,7 @@ runner both take it.
 
 **No LLM call.** Cost: zero tokens, sub-millisecond.
 
-**Logic** ([nodes/__init__.py:429-510](../backend/app/pipeline/nodes/__init__.py#L429-L510)):
+**Logic** ([nodes/__init__.py:429-510](../../backend/app/pipeline/nodes/__init__.py#L429-L510)):
 1. `approx_chars = sum(60 + 40 * len(columns))` over all snapshot tables,
    against `_RETRIEVE_BUDGET_CHARS = 50_000`. (The `sales` fixture sits at
    26,480 — under the ceiling, so it takes step 2.)
@@ -446,7 +446,7 @@ Two independent gates apply here:
 - **`HintBudget.from_policy(policy)`** decides whether row counts, value lists,
   distinct counts, null fractions and ranges render at all. Structure is never
   gated; *content* always is.
-- **`render_semantic`** ([semantic/render.py](../backend/app/semantic/render.py))
+- **`render_semantic`** ([semantic/render.py](../../backend/app/semantic/render.py))
   scopes the layer to the retrieved tables and drops anything invalid or
   excluded. **No layer → no block, not even a blank line** — byte-identical to
   the pre-feature prompt, which is what keeps the eval baseline comparable and
@@ -457,7 +457,7 @@ Two independent gates apply here:
   first, then metrics, then column meanings. It used to drop whole sections off
   the back instead, and since the table descriptions were one section, a layer
   of more than about five tables reached the model as its `business_context`
-  alone — see the entry in [CLAUDE.md](../CLAUDE.md#the-semantic-layer). Fixed
+  alone — see [semantic-layer.md](semantic-layer.md). Fixed
   2026-08-30 at `PROMPT_VERSION` v8.
 
 ### 4. `describe` — the schema question, answered from the schema
@@ -664,7 +664,7 @@ repair opens a *fresh two-message conversation* — the model has never seen
 Until v5 both repair prompts omitted every mandatory rule, which meant a repair
 could fix the flagged issue, break a rule it had never been shown, and be
 rejected a second time with a budget of 1 already spent.
-[test_generate_prompt.py](../backend/tests/unit/test_generate_prompt.py) asserts
+[test_generate_prompt.py](../../backend/tests/unit/test_generate_prompt.py) asserts
 each prompt carries the rules, the dialect and the history, so the three cannot
 drift apart again.
 
@@ -775,7 +775,7 @@ otherwise fire on nearly every query.
 the third thing the policy governs, alongside the result and the schema block:
 
 - `disclose_history(history, policy)`
-  ([disclosure.py](../backend/app/pipeline/disclosure.py)) filters the
+  ([disclosure.py](../../backend/app/pipeline/disclosure.py)) filters the
   transcript at **read** time, against the policy in force *now* — the same
   rule `HintBudget` follows, and the same rule the chat header promises. Under
   `SAMPLE` and `FULL` it is the **identity function**, so a wide connection
@@ -845,7 +845,7 @@ already persisted, so any failure here just means no chart.
 
 ## 4. Control flow rules
 
-Every rule lives in [graph.py](../backend/app/pipeline/graph.py) — in `_adapt`,
+Every rule lives in [graph.py](../../backend/app/pipeline/graph.py) — in `_adapt`,
 the wrapper that turns a node function into a graph node and keeps the old
 executor's duties.
 
@@ -932,7 +932,7 @@ scrolls away. The step trail keeps whatever succeeded before it.
 ## 5. Prompt versioning
 
 `PROMPT_VERSION` (currently **v9**) is recorded on every run.
-[prompts/__init__.py](../backend/app/pipeline/prompts/__init__.py) is the only
+[prompts/__init__.py](../../backend/app/pipeline/prompts/__init__.py) is the only
 place run prompts live — except the semantic-layer *generation* prompts, which
 live in `app/semantic/prompts.py` under `SEMANTIC_PROMPT_VERSION`, because
 `app.semantic` sits *below* the pipeline: the pipeline reads a layer, a layer
@@ -1011,13 +1011,13 @@ multi-turn suite would need re-measuring.
 
 > **Recorded version drift — fixed 2026-08-31, and the old rows were left
 > alone.** `runs.prompt_version` used to come from `settings.prompt_version`
-> ([config.py](../backend/app/core/config.py), whose default said `"v2"`) rather
+> ([config.py](../../backend/app/core/config.py), whose default said `"v2"`) rather
 > than from the `PROMPT_VERSION` constant the prompts actually carry, so every
 > run written between 2026-07-26 and 2026-08-31 is recorded under a version it
 > did not run. It now records the constant, resolved by
 > `RunService._prompt_version` and re-stamped by the process that renders the
 > prompt; the setting is an override for an experiment and is empty by default
-> (Phase 0 of [learning-loop-plan.md](learning-loop-plan.md)). **No historical
+> (Phase 0 of [learning-loop.md](../plans/learning-loop.md)). **No historical
 > row was rewritten** — a backfill would invent a version for a run nobody can
 > re-render — so a `prompt_version` from that window means "unknown", not "v2".
 
@@ -1026,7 +1026,7 @@ multi-turn suite would need re-measuring.
 ## 6. The LangGraph port — what moved (Phase 1, done)
 
 The shapes lined up, and nothing needed redesigning. What the port actually
-did, in [graph.py](../backend/app/pipeline/graph.py):
+did, in [graph.py](../../backend/app/pipeline/graph.py):
 
 | before | now |
 |---|---|
@@ -1054,7 +1054,7 @@ a minutes-long report run survive a process death. And clarification — today a
 clarifying question ends the run and the user's reply arrives as a brand-new
 run, with continuity carried by the history tail; `interrupt()` plus a
 checkpointer would make it a real durable pause. That is Phase 5, it is
-optional, and [langgraph-migration.md](langgraph-migration.md) argues it is
+optional, and [langgraph-migration.md](../plans/langgraph-migration.md) argues it is
 *not* the strongest case. Full plan and phase gates there.
 
 ---
@@ -1062,7 +1062,7 @@ optional, and [langgraph-migration.md](langgraph-migration.md) argues it is
 ## 7. Known gaps (1–9 verified in code 2026-07-31; 10 added 2026-08-12)
 
 1. **Token accounting only counts `route`.** `state.prompt_tokens` is written
-   in exactly one place — [nodes/__init__.py:157-158](../backend/app/pipeline/nodes/__init__.py#L157-L158)
+   in exactly one place — [nodes/__init__.py:157-158](../../backend/app/pipeline/nodes/__init__.py#L157-L158)
    — because `complete()` returns a `Completion` with usage while
    `structured()` and `stream()` return the parsed model / a delta iterator and
    drop it. So `runs.prompt_tokens` and the eval's `estimate_cost_usd` count

@@ -1,8 +1,8 @@
 """Who did what to this connection's knowledge, and when.
 
-Phase 8 of `docs/learning-loop-plan.md`, and the table it writes to has been
+Phase 8 of `docs/plans/learning-loop.md`, and the table it writes to has been
 sitting in the schema since migration `0001` with **nothing writing to it** —
-`mvp2-plan.md` §D4 calls turning it on the best ratio in that document, for a
+`docs/plans/mvp2.md` §D4 calls turning it on the best ratio in that document, for a
 reason worth restating:
 
 > The product's whole positioning is *"you decide what leaves your database."*

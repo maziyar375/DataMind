@@ -3,20 +3,28 @@
 > **Status:** research and proposal, written 2026-08-27 against `main` at
 > `354a87e` (tagged `v0.0.5`). Part 1 is grounded in the code; Part 2 is desk
 > research on four competing products; Parts 3–5 are the argument. Read the
-> status banner convention from [architecture.md](architecture.md) — this is
+> status banner convention from [architecture-proposal.md](../history/architecture-proposal.md) — this is
 > that kind of document.
 >
 > **Update 2026-08-30 — one item is now built.** [A6](#a6-fix-the-semantic-layer-render--s--done-2026-08-30),
 > the render bug that made the semantic layer inert, is fixed; §1.3 records what
 > changed and what did not. Everything else here is still proposal.
 >
+> **Current state lives in [status.md](../status.md), not here.** Five strands
+> of this document have since been designed, built and merged — Theme A (the
+> learning loop), Theme D's sharing half (user management and access control),
+> token accounting, the UI remediation and catalog metadata. The per-item notes
+> below are kept where they were written; **[status.md §4](../status.md#4-what-is-next)
+> is the maintained answer to "what is left".**
+>
 > **Update 2026-09-01 — Theme A is no longer a proposal.** A1–A4 were designed
-> and built as [learning-loop-plan.md](learning-loop-plan.md), which is the
-> reference for all four of them now: where this document and that one disagree
-> about the knowledge store, **that one is the correction**, and each item below
-> says where. §D4's audit log is **half** built by the same work and says which
-> half. A5, the rest of Theme D, and all of Themes B, C, E and F are untouched
-> proposals still.
+> and built as [learning-loop.md](learning-loop.md); the built feature is
+> described in
+> [reference/knowledge-templates.md](../reference/knowledge-templates.md).
+> Where this document and either of those disagree about the knowledge store,
+> **they are the correction**, and each item below says where. §D4's audit log
+> was half built by the same work and **completed** by the access-control work
+> — see the note on that item.
 
 ---
 
@@ -75,7 +83,7 @@ building, and none of it matters if the answers are wrong.
 | 1 | No learning loop — a correction cannot become knowledge | **Critical** | [1.1](#11-the-system-cannot-learn-and-that-is-the-whole-ballgame) |
 | 2 | Retrieval is a placeholder and does not scale past the demo | **Critical** | [1.2](#12-retrieval-is-a-placeholder-with-a-hard-ceiling) |
 | 3 | The semantic layer is a blob, not a model *(render bug fixed 2026-08-30)* | **High** | [1.3](#13-the-semantic-layer-is-a-blob-not-a-model) |
-| 4 | One question = one SQL statement; there is no *analysis* | **High** | [1.4](#14-one-question-one-query-there-is-no-analysis) |
+| 4 | One question = one SQL statement; there is no *analysis* | **High** | [1.4](#14-one-question-one-query--there-is-no-analysis) |
 | 5 | Single-player: no sharing, no teams, no audit trail | **High** | [1.5](#15-single-player-by-construction) |
 | 6 | Linear chat only; exploration and publishing are disconnected | **High** | [1.6](#16-the-interaction-model-is-a-transcript) |
 | 7 | Narrow data surface — no files, no warehouses, no export | **High** | [1.7](#17-the-data-surface-is-narrow-in-both-directions) |
@@ -225,7 +233,7 @@ Three separable pieces, in order of value:
    the existing exact-match is strictly better than either alone.
 3. **An entity/value index** — opt-in per column, per connection, with an
    explicit disclosure decision attached, because a value dictionary is
-   customer data by any reading of [security.md](security.md) §2.4.
+   customer data by any reading of [security.md](../reference/security.md) §2.4.
 
 ---
 
@@ -411,7 +419,7 @@ The consequences:
 
 ### Why the deferral, and why it should end
 
-The deferral is well-argued in [architecture.md](architecture.md): *"User B
+The deferral is well-argued in [architecture-proposal.md](../history/architecture-proposal.md): *"User B
 would read data pulled with user A's credentials, against a connection B does
 not own. That is an authorization model, not a UI feature."* That is exactly
 right and it is why sharing should not be bolted on.
@@ -470,7 +478,7 @@ the rows the prose above it was written from."
 ### The four limits
 
 **Context falls off a cliff at six messages.** No summarization
-(`architecture.md` defers "rolling conversation summaries"). A long analytical
+(`history/architecture-proposal.md` defers "rolling conversation summaries"). A long analytical
 session forgets its own beginning, silently, with no indication in the UI. The
 deferral's stated trigger — "a thread outgrows the last-six-messages window" —
 happens on approximately the seventh message.
@@ -492,7 +500,7 @@ research identifies: *"natural language can be quite universal, but it can be
 verbose for describing the visualization intent and it may not be very
 precise."*
 
-**Exploration and publishing are disconnected.** `architecture.md` lists
+**Exploration and publishing are disconnected.** `history/architecture-proposal.md` lists
 `"add to dashboard" from a chat run` under *not built, on purpose*. So the
 natural workflow — explore in chat until you find the number that matters, then
 keep watching it — requires the user to *re-create the tile from scratch* in the
@@ -1014,17 +1022,17 @@ weeks), **L** (a month or more).
 *From: Genie example SQL queries / trusted assets; Wren `queries.yml`.*
 
 > **Built 2026-08-31 / 2026-09-01, as
-> [learning-loop-plan.md](learning-loop-plan.md) Phases 1, 2 and 5 — read that
+> [learning-loop.md](learning-loop.md) Phases 1, 2 and 5 — read that
 > instead of this.** The store is `knowledge_templates`, the four write paths
 > below all exist, and the read path is two paths rather than one:
 > a near-exact match **short-circuits** (Phase 2, shipped on) and near misses
 > become few-shot examples (Phase 5, shipped **off** pending the eval gate in
-> [eval.md §6.1](eval.md)). Three things this item did not anticipate and the
+> [eval.md §6.1](../reference/eval.md)). Three things this item did not anticipate and the
 > plan had to add: a template needs a **`role`** (§A3 below), a **`status`** for
-> when the schema moves under it ([§1.4](learning-loop-plan.md)), and a
+> when the schema moves under it ([§1.4](learning-loop.md)), and a
 > **`literal_provenance`**, because a stored statement's literals are a
 > disclosure this document does not mention at all — [security.md
-> §3.3](security.md) is that argument.
+> §3.3](../reference/security.md) is that argument.
 
 A new per-connection store of `(question, sql, note, verified_by, verified_at)`.
 Written from four places, all of which already exist:
@@ -1052,7 +1060,7 @@ replayed through it (`test_verified_pairs_guard.py`, mirroring
 ### A2. "Verified" as a visible property of an answer · **S**
 *From: Genie's Trusted badge; Power BI's approved-for-Copilot friction.*
 
-> **Built 2026-08-31, as [learning-loop-plan.md](learning-loop-plan.md) Phase
+> **Built 2026-08-31, as [learning-loop.md](learning-loop.md) Phase
 > 2**, with the three tiers below intact. What the design added: **Verified**
 > shows the matched question and the bound parameters, not just a chip — a badge
 > that
@@ -1076,7 +1084,7 @@ value legible to the person deciding whether to invest in curation.
 ### A3. Benchmarks and a score, in the product · **M**
 *From: Genie benchmarks + Evaluations tab; Wren's eval runner.*
 
-> **Built 2026-09-01, as [learning-loop-plan.md](learning-loop-plan.md)
+> **Built 2026-09-01, as [learning-loop.md](learning-loop.md)
 > Phase 6.** The sentence below is also the one thing in this document that plan had to
 > correct — the correction follows it.
 
@@ -1086,8 +1094,8 @@ already exactly this shape**, so the two features share a table. Run the set
 against a connection; label each **Correct** (result set matches) or **Needs
 review**; show accuracy over time.
 
-> **The correction ([learning-loop-plan.md
-> §1.3](learning-loop-plan.md#13-the-three-roles)).** They share a *table*; they
+> **The correction ([plans/learning-loop.md
+> §1.3](learning-loop.md#13-the-three-roles)).** They share a *table*; they
 > must not share a *row's purpose*. A pair that both teaches the generator and
 > scores it is measuring the store's ability to hold a string — the store is
 > graded on the answers it was handed. So a template carries a **`role`**:
@@ -1100,7 +1108,7 @@ review**; show accuracy over time.
 > rows are `benchmark_sets` / `benchmark_runs` / `benchmark_results`, named
 > deliberately *not* `eval_runs` / `eval_results` so the customer's benchmark
 > and the developer's harness cannot silently become the same instrument
-> ([eval.md §6.2](eval.md)).
+> ([eval.md §6.2](../reference/eval.md)).
 
 *Why it fits:* it makes accuracy the customer's number instead of the
 developer's, which is the only way curation gets done. It also gives the
@@ -1117,7 +1125,7 @@ stack.
 ### A4. Ask-for-review workflow · **S–M**
 *From: Genie's Ask for Review.*
 
-> **Built 2026-08-31, as [learning-loop-plan.md](learning-loop-plan.md) Phase
+> **Built 2026-08-31, as [learning-loop.md](learning-loop.md) Phase
 > 3**, with the flag open to **any** signed-in user rather than to curators —
 > the person who notices a wrong answer is rarely the person allowed to fix
 > it. A correction
@@ -1156,7 +1164,7 @@ test (one table, `max_chars=250`, asserted only "short") is replaced by tests
 that assert *which* content survives at 42 tables under the real cap, and by one
 that pins coverage to what the block actually said — entities render partially
 now, so `render_with_coverage` returns the block and its coverage from one fit.
-See §1.3 for the measurements and [CLAUDE.md](../CLAUDE.md#the-semantic-layer)
+See §1.3 for the measurements and [reference/semantic-layer.md](../reference/semantic-layer.md)
 for the rule.
 
 *Still outstanding:* `PROMPT_VERSION` moved v7 → v8, which is the point — **take
@@ -1197,7 +1205,7 @@ categorical columns so "Florida" becomes `WHERE state = 'FL'`. Reuse the
 ⚠️ **This is a disclosure decision, not a performance feature.** A value list is
 customer data — more so than a column hint. It needs its own explicit control,
 its own place in the disclosure ladder, and a section in
-[security.md](security.md). Do not fold it silently into `HintBudget`.
+[security.md](../reference/security.md). Do not fold it silently into `HintBudget`.
 
 *Bonus:* the same dictionaries become dashboard filter drop-downs once C4 lands.
 
@@ -1284,7 +1292,7 @@ touching colour.
 *Serves §1.5. Sequenced deliberately: the authorization model first, features on top.*
 
 ### D1. An answer to "who may read through this connection" · **M** · ⚠️ blocking
-The precondition `architecture.md` names. A connection carries an explicit grant
+The precondition `history/architecture-proposal.md` names. A connection carries an explicit grant
 list (or belongs to a workspace). A shared object executes under the
 **connection's** grant, re-checked at every execution — the same posture
 `execute_saved_sql` already takes with the snapshot. Nothing is shared until
@@ -1303,15 +1311,18 @@ it unmentioned.
 
 ### D4. Turn on the audit log · **S** · ⭐ best ratio in the document
 
-> **Half built 2026-09-01, as [learning-loop-plan.md](learning-loop-plan.md)
-> Phase 8.** `app/services/audit.py` exists, all nine curation writes emit a
-> row, and `GET /audit` is the admin view — a log nobody can read answers *"who did
-> what"* exactly as badly as an empty one. **The ask path is still unlogged**,
-> which is most of the sentence below: no question, no policy, no statement, no
-> row count. The service is shaped so those arrive as more `record()` calls, and
-> three rules bind them when they do — the row joins the caller's transaction, a
-> logging failure never fails the action, and `detail` carries identifiers and
-> counts but **never content** ([security.md §4.8](security.md)).
+> **Done.** Half built 2026-09-01 as [learning-loop.md](learning-loop.md)
+> Phase 8 — `app/services/audit.py`, all nine curation writes, and `GET /audit`
+> as the admin view — and **completed** by
+> [user-management-and-access-control.md](user-management-and-access-control.md)
+> Phase 7, which added every authorization event including denials, and the ask
+> path: `audit.ASK_RECORDED` in `run_service` records the run id, the
+> disclosure policy in force, whether clarify and the semantic layer were on,
+> and the model — written at *ask* time rather than read off the connection
+> afterwards, because the policy can change between one question and the next.
+> Three rules bind all of it: the row joins the caller's transaction, a logging
+> failure never fails the action, and `detail` carries identifiers and counts
+> but **never content** ([security.md §4.8](../reference/security.md)).
 
 The table exists at `models.py:940` and nothing writes to it. Write: who asked
 what, against which connection, under which disclosure policy, what SQL ran, how
@@ -1359,7 +1370,7 @@ CSV and Excel from any result — chat, tile, report figure. **It is currently
 impossible to get a number out of DataMind except by retyping it.** Gate it by
 disclosure policy? No — export goes to the *user*, who already sees the rows on
 screen; the policy governs what reaches the **model provider**. Worth stating
-explicitly in [security.md](security.md) so nobody re-litigates it later.
+explicitly in [security.md](../reference/security.md) so nobody re-litigates it later.
 
 ### E4. Warehouse connectors · **M each**
 Snowflake, BigQuery, ClickHouse, Databricks. The `DatabaseConnector` port makes
@@ -1481,7 +1492,7 @@ it is an L in a tier of Ms.
 
 ## Tier 3 — Named, scoped, and deferred on purpose
 
-Write these down with triggers, in the [architecture.md](architecture.md)
+Write these down with triggers, in the [architecture-proposal.md](../history/architecture-proposal.md)
 "Still deferred" style, so the deferral is a decision rather than an omission.
 
 | Item | § | Trigger to revisit |

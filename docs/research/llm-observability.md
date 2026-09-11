@@ -1,6 +1,18 @@
-# LLM Harness Observability Options
+# LLM harness observability — options
 
-## Technical Discussion and Architectural Analysis
+> **What this is: research, not a description of the code.** Four approaches to
+> LLM observability, weighed against this codebase's `LLMGateway` choke point.
+> Read it as an argument with evidence; where it and a reference doc disagree,
+> the reference doc is what the code does.
+>
+> **Its conclusion was acted on.** Conclusion 10 — *"fix the existing
+> usage-reporting problem first"* — became
+> [plans/token-accounting.md](../plans/token-accounting.md), which is built.
+> Options 2–4 (LiteLLM instrumentation, Langfuse, a general APM) are **not
+> adopted**, and §25's question is still the one to answer before any of them
+> is: *what observability information does the harness actually need?*
+
+## Technical discussion and architectural analysis
 
 ### 1. Context
 

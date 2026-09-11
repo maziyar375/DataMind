@@ -1,6 +1,6 @@
 """Running a benchmark set — one model call per question, off the request path.
 
-Phase 6 of `docs/learning-loop-plan.md`. This is where a customer gets a number
+Phase 6 of `docs/plans/learning-loop.md`. This is where a customer gets a number
 of their own, and the whole design is about that number being honest.
 
 **It runs the real pipeline.** The same `AnalyticsPipeline`, the same guard, the

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prove the catalog-comment reads, engine by engine, before any of it is code.
 
-`docs/catalog-metadata-plan.md` §1 lists a query per engine for table, column,
+`docs/reference/catalog-metadata.md` §1 lists a query per engine for table, column,
 schema and database descriptions. They were written from documentation and had
 never been executed. This script executes them — against a real server, through
 **the same driver the connector uses**, and (the part that matters) **as the

@@ -582,7 +582,7 @@ async def _queue_owner(db: DbDep, connection_id: UUID | None) -> str:
 
     The connection's owner. That is the whole of the routing rule today, and it
     is honest about its limitation rather than pretending: until
-    [mvp2 §D1](../../../docs/mvp2-plan.md) gives a connection an explicit grant
+    [mvp2 §D1](../../../../docs/plans/mvp2.md) gives a connection an explicit grant
     list, its creator is the only person who can reach its queue at all, so
     "the owner" and "whoever can act on this" are the same person by
     construction rather than by policy.

@@ -123,7 +123,7 @@ def test_the_empty_slot_is_byte_identical_to_v8() -> None:
     """The promise the whole phase rests on.
 
     Not "nearly the same" and not "semantically equivalent": the same bytes.
-    A stray newline here silently invalidates every baseline in `docs/eval.md`
+    A stray newline here silently invalidates every baseline in `docs/reference/eval.md`
     and nobody finds out until a number moves for no reason.
     """
     from app.pipeline.prompts import GENERATE_SYSTEM

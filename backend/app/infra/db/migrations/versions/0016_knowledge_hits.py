@@ -1,6 +1,6 @@
 """The hit log, and the one column that makes a Verified badge safe to show.
 
-Phase 2 of `docs/learning-loop-plan.md`. Two things:
+Phase 2 of `docs/plans/learning-loop.md`. Two things:
 
 **`knowledge_template_hits`** — one row per run that consulted the store,
 whatever the verdict. The refusals are the point: `REJECTED_UNBOUND` is how we

@@ -1,8 +1,8 @@
 # The data surface — competitor research and options for DataMind
 
-> **Subject:** [mvp2-plan.md §1.7](../mvp2-plan.md#17-the-data-surface-is-narrow-in-both-directions) —
+> **Subject:** [mvp2.md §1.7](../plans/mvp2.md#17-the-data-surface-is-narrow-in-both-directions) —
 > *"The data surface is narrow, in both directions"*, rated **High** (#7 of ten).
-> It is the plan's Theme E ([E1–E5](../mvp2-plan.md#theme-e--reach)).
+> It is the plan's Theme E ([E1–E5](../plans/mvp2.md#theme-e--reach)).
 > **Scope:** how Microsoft Data Formulator, Wren AI, Databricks AI/BI Genie and
 > Power BI / Fabric Copilot get data **in** (files, warehouses, federation,
 > re-sync) and get answers **out** (export, API, MCP, embed), what is verifiable
@@ -14,7 +14,7 @@
 > the decisions that have to be made before any of it is built.
 > **Siblings:** [learning-loop.md](learning-loop.md) (§1.1) ·
 > [retrieval-at-scale.md](retrieval-at-scale.md) (§1.2) ·
-> [semantic-layer-as-a-model.md](semantic-layer-as-a-model.md) (§1.3). The
+> [semantic-layer.md](semantic-layer.md) (§1.3). The
 > overlaps with §1.2 are load-bearing here and are marked.
 
 ---
@@ -124,8 +124,8 @@ bet, and it is already better specified.
 
 **Getting data out — the weak half.** 0.7 documents *"Build and export reports
 as image or PDF to tell the story"*. **A CSV/Excel export of a derived table is
-not documented**, and no public API or MCP server is either. ⚠️ [mvp2-plan.md
-§2.6](../mvp2-plan.md#26-the-matrix) scores Data Formulator `●` on "Result
+not documented**, and no public API or MCP server is either. ⚠️ [mvp2.md
+§2.6](../plans/mvp2.md#26-the-matrix) scores Data Formulator `●` on "Result
 export (CSV/Excel)"; this research could not verify that from the repository or
 the release notes and would score it `◐`. §9.1 records it as unverified.
 
@@ -264,7 +264,7 @@ had. DataMind does not have one yet (§8.5).
 
 > Genie Ontology, announced at DAIS 2026 as a learned context layer with an
 > "ontorank" authority score, is adjacent to this document and belongs to
-> [semantic-layer-as-a-model.md](semantic-layer-as-a-model.md). Sources for it
+> [semantic-layer.md](semantic-layer.md). Sources for it
 > are secondary (Atlan, Dawiso, datapao) and it is not relied on here.
 
 ### 1.4 Power BI and Fabric — the widest surface, and the honest warning label
@@ -331,7 +331,7 @@ against CSV injection on the way out:
 > first character of the text is one of the following: **=, @, +, -**
 
 DataMind's threat model treats database content as untrusted
-([security.md §2.4](../security.md)). A CSV writer that does not do this hands
+([security.md §2.4](../reference/security.md)). A CSV writer that does not do this hands
 that untrusted content to Excel as a formula. §8.3.
 
 **The programmatic path.** `exportToFile` renders a report to PDF/PPTX/PNG
@@ -430,8 +430,8 @@ product — but it should be a decision, not a default. §5.7.
 
 **5. Export is a governance surface everywhere it is mature.** Power BI gates it
 five ways, escapes formula characters, and monitors it. Genie caps it at ~1 GB
-and expires results at seven days. [mvp2-plan.md
-E3](../mvp2-plan.md#e3-result-export--s) says *"Gate it by disclosure policy?
+and expires results at seven days. [plans/mvp2.md
+E3](../plans/mvp2.md#e3-result-export--s) says *"Gate it by disclosure policy?
 No"* — that is **right**, and it is not the whole question. Export is not a
 disclosure decision; it is an **audit** decision and an **injection** decision.
 §8.3.
@@ -550,7 +550,7 @@ report surface. **What does not exist is a credential a third party could
 hold.** This matters because it moves E2's cost from "build an API" to "build an
 authentication primitive", which is a different, larger, and more interesting
 piece of work that belongs next to
-[§1.5](../mvp2-plan.md#15-single-player-by-construction), not next to E3.
+[§1.5](../plans/mvp2.md#15-single-player-by-construction), not next to E3.
 
 **② "Schema sync is manual and total … no notification that a table changed
 shape."** True, and incomplete: snapshots are versioned and never overwritten
@@ -560,7 +560,7 @@ explainer for an all-or-nothing re-key; the backend already has
 `semantic/validate.py`, which is the part a scheduled job would call.
 
 **③ The size of E1 is understated in one direction and overstated in another.**
-[E1](../mvp2-plan.md#e1-file-upload--csv--excel--m--best-acquisition-move) says
+[E1](../plans/mvp2.md#e1-file-upload--csv--excel--m---best-acquisition-move) says
 landing a file "in a per-user DuckDB or a scratch Postgres schema … becomes an
 ordinary connection — the entire guard, snapshot, semantic layer and disclosure
 machinery applies unchanged." For the **scratch Postgres schema** that is
@@ -615,7 +615,7 @@ snapshot, the semantic layer or the disclosure policy changes at all.**
 - ⚠️ **It puts customer row data in the application database**, which today
   holds only metadata, credentials and results. That is a real change to the
   blast radius of an app-DB compromise and to backup/retention policy, and
-  `docs/security.md` would need a new section, not a new sentence.
+  `docs/reference/security.md` would need a new section, not a new sentence.
 - Requires a *write* path to a Postgres server from application code, in a
   codebase whose entire posture is "we never write to a database we did not
   create". The writer must be strictly separated from the guarded read path or
@@ -743,7 +743,7 @@ someone will propose it.
 
 #### Option W1 — Warehouse connectors, one at a time, behind the existing port
 
-**What.** [E4](../mvp2-plan.md#e4-warehouse-connectors--m-each). Snowflake,
+**What.** [E4](../plans/mvp2.md#e4-warehouse-connectors--m-each). Snowflake,
 BigQuery, Databricks SQL, ClickHouse, Redshift — each a `DatabaseConnector`
 implementation, a `DatabaseKind`, a `factory.py` line, a `DATABASE_TYPES` entry,
 a hostile-corpus arm and a real read-only role verified against a live server.
@@ -854,7 +854,7 @@ state it as one rather than let it happen by omission.
 
 #### Option S1 — Scheduled re-sync and a snapshot diff
 
-**What.** [E5](../mvp2-plan.md#e5-scheduled-and-incremental-schema-sync). A
+**What.** [E5](../plans/mvp2.md#e5-scheduled-and-incremental-schema-sync--s). A
 periodic job per connection that re-introspects, writes the next
 `SchemaSnapshotRow` version, **diffs it against the previous version**, and
 surfaces "three tables changed shape, one column your semantic layer references
@@ -876,7 +876,7 @@ that second half.
 - A background job that opens a customer database on a timer is a new
   operational behaviour: it consumes connections, it can hammer a busy server,
   it fails when a credential is rotated, and *someone has to see the failure*
-  ([§1.8](../mvp2-plan.md#18-nobody-can-see-the-system-running) says nobody can).
+  ([§1.8](../plans/mvp2.md#18-nobody-can-see-the-system-running) says nobody can).
 - Hint capture under `HintBudget` runs `probe_values` queries; doing that nightly
   on a large table is not free for the customer.
 - **Incremental** introspection (the other half of E5) is per-engine work with a
@@ -916,7 +916,7 @@ federation engine.
   a hard problem is not a market position.
 
 **Verdict: name it, scope it out, and say why** — the way
-[§1.5](../mvp2-plan.md#15-single-player-by-construction) scopes out RLS. Revisit
+[§1.5](../plans/mvp2.md#15-single-player-by-construction) scopes out RLS. Revisit
 after the disclosure model has a per-column story.
 
 ### Group III — Getting answers out
@@ -925,7 +925,7 @@ after the disclosure model has a per-column story.
 
 #### Option O1 — Result export: CSV first, Excel if asked for
 
-**What.** [E3](../mvp2-plan.md#e3-result-export--s). One endpoint per result
+**What.** [E3](../plans/mvp2.md#e3-result-export--s). One endpoint per result
 kind — chat artifact, dashboard tile, report block — returning `text/csv` with a
 `Content-Disposition` filename, built on the read paths that already exist and
 already authorise (§4.3). Frontend reuses `exportDashboard`'s blob-download
@@ -947,7 +947,7 @@ helper verbatim (§4.4).
   large sheets. **Ship CSV first; treat Excel as a separate decision**, and note
   that only Power BI of the four actually ships `.xlsx`.
 - ⚠️ **CSV injection.** Result values are untrusted content
-  ([security.md §2.4](../security.md)); a cell beginning `=`, `@`, `+` or `-`
+  ([security.md §2.4](../reference/security.md)); a cell beginning `=`, `@`, `+` or `-`
   becomes a formula in Excel. Power BI escapes these with a leading `'` and
   DataMind must too. This is small, but it is not optional and it needs a test.
 - ⚠️ **The export ceiling is not the result ceiling.** A chat result is capped
@@ -999,7 +999,7 @@ listed in the UI; and `POST /api/v1/ask {question, connection_id}` returning
 
 #### Option O3 — An MCP server over the same service functions
 
-**What.** [E2](../mvp2-plan.md#e2-an-mcp-server--sm--highest-leverage-per-line-of-code).
+**What.** [E2](../plans/mvp2.md#e2-an-mcp-server--sm---highest-leverage-per-line-of-code).
 Expose `list_connections`, `get_schema`, `ask`, `generate_sql`, `run_sql`,
 `export_result` over MCP — the Wren tool list almost verbatim (§1.2), because it
 maps almost one-to-one onto DataMind's existing nodes and services.
@@ -1087,7 +1087,7 @@ engine, chosen by a customer.** Connecting to a 4,000-table Snowflake account
 with a 50,000-character retrieval budget and a substring matcher produces
 confident wrong answers at scale. That is a worse outcome than the current `○`.
 When it does happen: Snowflake or BigQuery first (whichever a real customer
-has), and restate invariant #2 per engine in `docs/security.md` *in the same
+has), and restate invariant #2 per engine in `docs/reference/security.md` *in the same
 pull request* — with `maximum_bytes_billed` / `STATEMENT_TIMEOUT_IN_SECONDS` as
 first-class connection settings, not constants.
 
@@ -1098,7 +1098,7 @@ machine credential, and DataMind does not. Either budget for an identity project
 produces a public, agent-callable surface over production databases with an
 authorisation model of "whatever this user owns". The good news is that the
 identity work is the *same* work
-[§1.5/D1](../mvp2-plan.md#15-single-player-by-construction) needs, so scheduling
+[§1.5/D1](../plans/mvp2.md#15-single-player-by-construction) needs, so scheduling
 them together makes both cheaper.
 
 **Not recommended for MVP2:** F3 (right end state, wrong first step), F4 (never),
@@ -1109,7 +1109,7 @@ differentiator — revisit if W1 proves too slow), X1 (name it and scope it out)
 
 ## 6. Why this order, and not the plan's
 
-[Part 4 of the plan](../mvp2-plan.md#tier-2--the-differentiators) puts **13 (file
+[Part 4 of the plan](../plans/mvp2.md#tier-2--the-differentiators) puts **13 (file
 upload)** and **14 (MCP + REST API)** in its recommended cut of three. This
 research agrees with the instinct and disagrees with the ordering, for three
 reasons.
@@ -1125,7 +1125,7 @@ below a feature that takes weeks and that a subset of users hits once.
 The plan's own words are *"highest leverage per line of code"*, and per line of
 code that is true. But the lines of code are not the cost: the cost is an
 authentication and authorisation primitive that does not exist and that
-[D1](../mvp2-plan.md#d1-an-answer-to-who-may-read-through-this-connection--m--blocking)
+[D1](../plans/mvp2.md#d1-an-answer-to-who-may-read-through-this-connection--m---blocking)
 already marks **⚠️ blocking**. The plan files the credential under Theme D and
 the surface under Theme E and never joins them. Joined, E2 is an **M–L**, not an
 **S–M** — and it becomes considerably cheaper if it is built *as* D1's machine
@@ -1279,8 +1279,8 @@ have no default:
 
 ### 8.2 ⚠️ Export is not a disclosure decision — settle it in writing
 
-[E3](../mvp2-plan.md#e3-result-export--s) already gets this right and the
-reasoning deserves to be in `docs/security.md` rather than in a plan:
+[E3](../plans/mvp2.md#e3-result-export--s) already gets this right and the
+reasoning deserves to be in `docs/reference/security.md` rather than in a plan:
 
 > The disclosure policy governs **what reaches the model provider**. It has
 > never governed what reaches the user. A user looking at a result table on
@@ -1314,7 +1314,7 @@ spirit.
 
 **Should an export be audited?** `audit_logs` exists in the schema and has never
 been written to
-([D4](../mvp2-plan.md#d4-turn-on-the-audit-log--s--best-ratio-in-the-document)
+([D4](../plans/mvp2.md#d4-turn-on-the-audit-log--s---best-ratio-in-the-document)
 is *"best ratio in the document"*). Every mature product in §1 logs data egress;
 Power BI goes as far as Defender policies on *"downloading sensitive data … to
 unmanaged devices"*. **Export is the single most natural first writer for
@@ -1335,7 +1335,7 @@ role can't write by trying."* Neither clause survives a warehouse unchanged:
 | DuckDB (F2) | `read_only=True` on the handle — *stronger* than a role | none native | n/a |
 
 Three things follow. **(a)** Invariant #2 must be restated per engine, in
-`docs/security.md`, in the same pull request as the first warehouse connector —
+`docs/reference/security.md`, in the same pull request as the first warehouse connector —
 not afterwards, or CLAUDE.md silently becomes false. **(b)** `probe()`'s
 "prove it by trying" needs a per-engine definition and an honest
 `readonly_confirmed=False` where it cannot be proven, rather than a comfortable
@@ -1445,7 +1445,7 @@ Listed so the next person does not re-do the searching.
 
 1. **Does Data Formulator export a derived table as CSV/Excel?** Not documented
    in the README or the release notes; only *"Build and export reports as image
-   or PDF"*. [mvp2-plan.md §2.6](../mvp2-plan.md#26-the-matrix) scores it `●`.
+   or PDF"*. [mvp2.md §2.6](../plans/mvp2.md#26-the-matrix) scores it `●`.
    Answering it means running the app.
 2. **How does Wren AI's Cloud CSV upload store the file?** The 100 MB limit is
    documented; the storage and query engine are not. The OSS DuckDB path is
@@ -1523,9 +1523,9 @@ Listed so the next person does not re-do the searching.
 [Snowflake: cost controls for warehouses](https://docs.snowflake.com/en/user-guide/cost-controlling-controls)
 
 **DataMind, in this repository**
-[mvp2-plan.md §1.7](../mvp2-plan.md#17-the-data-surface-is-narrow-in-both-directions) ·
-[Theme E](../mvp2-plan.md#theme-e--reach) ·
-[security.md](../security.md) ·
-[CODEBASE.md](../CODEBASE.md) ·
-[pipeline.md](../pipeline.md) ·
-[architecture.md](../architecture.md)
+[mvp2.md §1.7](../plans/mvp2.md#17-the-data-surface-is-narrow-in-both-directions) ·
+[Theme E](../plans/mvp2.md#theme-e--reach) ·
+[security.md](../reference/security.md) ·
+[codebase.md](../reference/codebase.md) ·
+[pipeline-chat.md](../reference/pipeline-chat.md) ·
+[architecture-proposal.md](../history/architecture-proposal.md)

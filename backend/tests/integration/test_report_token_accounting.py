@@ -8,7 +8,7 @@ writer.
 
 The property that carries the weight is concurrency. Sections are narrated in
 waves, so accumulation cannot happen inside a shared counter: §1.1 of
-[docs/token-accounting-plan.md](../../../docs/token-accounting-plan.md) rejects
+[docs/plans/token-accounting.md](../../../docs/plans/token-accounting.md) rejects
 a gateway-instance counter precisely because one `LiteLLMGateway` is shared
 across a wave and four sections' counts would interleave into one bucket with
 no way to separate them. Each call collects into a list of its own; the wave's
