@@ -107,6 +107,53 @@ const CODE: React.CSSProperties = {
   overflowX: 'auto',
 }
 
+/**
+ * Who can reach this store — the control, for whichever header is over it.
+ *
+ * The store is a **separately grantable resource** — `knowledge`, carrying
+ * this connection's id — which is the whole of requirement 2: somebody can be
+ * given curation over a database whose data they cannot read. So it gets its
+ * own Access control rather than borrowing the connection's, and it renders
+ * nothing at all for a viewer who cannot share it.
+ *
+ * It lives here, next to the resource it grants, and the page renders it into
+ * its header — because the header is where this app has always put the answer
+ * to *who else can reach this*: chat's, a report's, a dashboard's. Down in the
+ * console's toolbar it was in a row about **which rows to show** and **what to
+ * do with them**, sharing a cluster with the primary action; the label is the
+ * share summary, so the widest control in that row was the one nobody came for
+ * and its width moved every time somebody was added.
+ *
+ * The label says `Store access` rather than that summary, which is the one
+ * thing the toolbar had going for it. The header's title is the *connection's*
+ * name and its neighbour here is **Connection settings**, so a bare
+ * "Shared with 1 person" in that row would be read as a sentence about the
+ * database — exactly the two resources this control exists to keep apart. The
+ * count is the first thing inside the panel; the confusion would not be
+ * recoverable.
+ */
+export function KnowledgeAccess({ connection }: { connection: Connection }) {
+  return (
+    <AccessPopover
+      base={`connections/${connection.id}/knowledge`}
+      resourceLabel="this knowledge store"
+      label="Store access"
+      // Sized to the ghost link it stands beside in the header, which runs
+      // 12.5px in a 34px box. `AccessPopover`'s own default is the toolbar
+      // ghost button it used to sit among, and left alone it was the taller
+      // of the two.
+      buttonStyle={{
+        fontSize: 12.5,
+        fontWeight: 600,
+        padding: '7px 11px',
+        borderRadius: 8,
+        borderColor: 'var(--border)',
+        color: 'var(--text-dim)',
+      }}
+    />
+  )
+}
+
 export function KnowledgeTab({ connection }: { connection: Connection }) {
   const [rows, setRows] = useState<KnowledgeTemplate[]>([])
   const [staleIds, setStaleIds] = useState<string[]>([])
@@ -445,16 +492,11 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
             }))}
           />
           <span style={{ flex: 1 }} />
-          {/* The store is a **separately grantable resource** — `knowledge`,
-              carrying this connection's id — which is the whole of
-              requirement 2: somebody can be given curation over a database
-              whose data they cannot read. So it gets its own Access control
-              here rather than borrowing the connection's, and the popover
-              renders nothing at all for a viewer who cannot share it. */}
-          <AccessPopover
-            base={`connections/${connection.id}/knowledge`}
-            resourceLabel="this knowledge store"
-          />
+          {/* Access used to stand here, and this is the wrong row for it. What
+              is left are the two things you do to the *contents* — check them,
+              add one — and the primary now ends the row instead of trailing a
+              share control wider than itself. `KnowledgeAccess` is in the
+              header, beside the other fact about the store as a whole. */}
           {canCurate && synced && rows.length > 1 && (
             <GhostButton onClick={sweep} disabled={sweeping}>
               {sweeping ? <Spinner size={13} /> : <Icon.Refresh size={13} />}

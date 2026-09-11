@@ -27,7 +27,7 @@ import {
 } from '../components/ui'
 import { DetailHeader, MasterColumn, MasterItem } from '../components/settings'
 import { ListScrim, ListToggle, useListDrawer } from '../components/list-drawer'
-import { KnowledgeTab } from '../components/knowledge'
+import { KnowledgeAccess, KnowledgeTab } from '../components/knowledge'
 import { byUrgency, forConnection, toneOf } from '../components/knowledge-queue'
 import type { QueueRow } from '../components/knowledge-queue'
 
@@ -184,11 +184,19 @@ export default function KnowledgePage() {
               title={selected.name}
               subtitle={`${selected.host}:${selected.port}/${selected.database_name}`}
               chips={<QueueChips queue={queue} connectionId={selected.id} />}
+              // Two controls about the store as a whole, in the one row this
+              // screen has for them. Who can reach it comes first because it
+              // is about *this* screen; the way out to the connection is last,
+              // where a way out belongs — and each names its own resource, so
+              // the header cannot be read as sharing the database.
               actions={
-                <GhostLink
-                  onClick={() => navigate(`/sources/${selected.id}`)}
-                  label="Connection settings"
-                />
+                <>
+                  <KnowledgeAccess connection={selected} />
+                  <GhostLink
+                    onClick={() => navigate(`/sources/${selected.id}`)}
+                    label="Connection settings"
+                  />
+                </>
               }
             />
             {/* Keyed on the connection so switching one out replaces the
