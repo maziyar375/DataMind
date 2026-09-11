@@ -498,7 +498,8 @@ check('and are clamped rather than allowed to overflow', sparkHeights([-1, 2]), 
 function index(over: Partial<EmbeddingState> = {}): EmbeddingState {
   return {
     enabled: true, model: 'text-embedding-3-small', dimension: 1536,
-    hasEmbedder: true, templates: 10, indexed: 10, message: '', ...over,
+    hasEmbedder: true, templates: 10, indexed: 10, message: '',
+    pin: 'OK', servesModel: '', embedderName: 'House OpenAI', ...over,
   }
 }
 
@@ -539,7 +540,55 @@ check('a pinned store with nothing taught yet is not claiming to be on',
       embeddingView(index({ templates: 0, indexed: 0 })).tone, 'indexing')
 check('and it says what will happen rather than counting zero of zero',
       embeddingView(index({ templates: 0, indexed: 0 })).detail,
-      'Ready with text-embedding-3-small. The first question taught here is indexed as it is saved.')
+      'Ready with text-embedding-3-small. Questions taught here are indexed by '
+      + 'the next check of the store, or straight away with Re-index.')
+// It used to promise indexing "as it is saved", which nothing implements:
+// `KnowledgeService.create` writes no vector, so the first taught question sat
+// unindexed for up to six hours behind a sentence saying it was already done.
+check('and it no longer promises indexing at save time, which nothing does',
+      embeddingView(index({ templates: 0, indexed: 0 })).detail.includes('as it is saved'),
+      false)
+
+// ── the pin faults ──────────────────────────────────────────────────────
+// Every one of these leaves `enabled` true, the vectors in place and
+// `indexed === templates`, so the four states above all report a confident
+// `on` for a store where every question is falling through to word matching.
+// They are the reason `pin` exists.
+check('a store whose embedder was deleted does not report itself as on',
+      embeddingView(index({ pin: 'NO_EMBEDDER', embedderName: '' })).tone, 'problem')
+check('and it says the provider is gone rather than counting the dead vectors',
+      embeddingView(index({ pin: 'NO_EMBEDDER', embedderName: '' })).detail
+        .includes('no longer configured'), true)
+check('and it names the one thing that would fix it',
+      embeddingView(index({ pin: 'NO_EMBEDDER', embedderName: '' })).detail
+        .includes('Add an embedder in LLM providers'), true)
+check('a store now resolved to a different provider says so',
+      embeddingView(index({ pin: 'PROVIDER_MOVED', embedderName: 'Local Ollama' })).tone,
+      'problem')
+check('and it names who answers for it now',
+      embeddingView(index({ pin: 'PROVIDER_MOVED', embedderName: 'Local Ollama' })).detail
+        .includes('Local Ollama'), true)
+check('and it is honest that nothing can check the vectors still mean the same',
+      embeddingView(index({ pin: 'PROVIDER_MOVED', embedderName: 'Local Ollama' })).detail
+        .includes('nothing can tell'), true)
+check('an embedder whose model was edited is a fault, not a silent no-op',
+      embeddingView(index({ pin: 'MODEL_MOVED', servesModel: 'text-embedding-3-large' })).tone,
+      'problem')
+check('and it names both models, because the gap between them is the whole fault',
+      embeddingView(index({ pin: 'MODEL_MOVED', servesModel: 'text-embedding-3-large' })).detail,
+      'This store is indexed with text-embedding-3-small, but House OpenAI now '
+      + "serves text-embedding-3-large. Changing an embedder's model does not "
+      + 're-index the stores pinned to it — re-index to move this one.')
+check('a fault falls back to a generic name rather than printing undefined',
+      embeddingView(index({ pin: 'MODEL_MOVED', embedderName: '' })).detail
+        .includes('the embedder now serves'), true)
+// Word matching is not a pin fault: with nothing pinned there is nothing to
+// honour, and the server returns OK for it. The off state must keep reading as
+// a choice rather than inheriting a warning.
+check('word matching is never a pin fault',
+      embeddingView(index({ enabled: false, pin: 'OK' })).tone, 'off')
+check('the provider\'s own sentence still outranks a derived fault',
+      embeddingView(index({ pin: 'NO_EMBEDDER', message: 'no key' })).detail, 'no key')
 
 // The sweep's indexing sentence. It can report a failure without the sweep
 // having failed — staleness and conflicts both completed, and the vectors are

@@ -80,6 +80,18 @@ class _Result:
     def scalar_one_or_none(self) -> Any:
         return self._value
 
+    def scalar_one(self) -> Any:
+        """Zero, for the count `delete_config` takes before it deletes.
+
+        It reads how many knowledge stores are pinned to the provider about to
+        go — `stores_released` in the audit row, which is the number that makes
+        that row worth reading. Zero is the honest answer for a fake holding no
+        connections, and the same reasoning as `rowcount`: the count is written
+        to a log, never branched on, so a double that returned something
+        interesting would only be testing the double.
+        """
+        return 0
+
     @property
     def rowcount(self) -> int:
         return 0

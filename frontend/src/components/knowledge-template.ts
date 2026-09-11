@@ -671,6 +671,14 @@ export interface EmbeddingState {
    *  has nothing to switch to, and saying so is the difference between an
    *  offer and a button that fails. */
   hasEmbedder: boolean
+  /** Whether the pin can still be honoured, derived by the server. `enabled`
+   *  only ever said a pin *exists*. */
+  pin: 'OK' | 'NO_EMBEDDER' | 'PROVIDER_MOVED' | 'MODEL_MOVED'
+  /** What the resolved embedder serves today, when it is not what this store
+   *  was indexed with. */
+  servesModel: string
+  /** The resolved embedder's display name, for the sentence that names it. */
+  embedderName: string
 }
 
 export interface EmbeddingView {
@@ -694,9 +702,19 @@ export interface EmbeddingView {
  *   Saying *on* here would promise a behaviour the next question will not
  *   show; the count says exactly how far along it is.
  * * **on** — pinned, and every live question is indexed.
- * * **problem** — the provider said no. Its own sentence is shown, because
- *   *"Anthropic does not offer an embedding endpoint"* is a fix somebody can
- *   act on and *"unavailable"* is not.
+ * * **problem** — the provider said no, *or* the pin no longer means what it
+ *   says. Its own sentence is shown, because *"Anthropic does not offer an
+ *   embedding endpoint"* is a fix somebody can act on and *"unavailable"* is
+ *   not.
+ *
+ * **The pin states are the ones a boolean actively lied about.** `enabled` is
+ * `bool(connection.embedding_model)` on the server — it asks whether a model
+ * is pinned and never whether the provider behind it still exists. Delete that
+ * provider and the vectors stay, the counts stay, `indexed === templates`
+ * stays, and this function returned a confident `on` while every question on
+ * the connection fell through to word matching. All three faults happen on the
+ * LLM providers screen, so none of them can be noticed from here without being
+ * asked about — which is why the server derives them on every read.
  */
 export function embeddingView(state: EmbeddingState): EmbeddingView {
   if (state.message) {
@@ -722,6 +740,41 @@ export function embeddingView(state: EmbeddingState): EmbeddingView {
       tone: 'off',
     }
   }
+  if (state.pin !== 'OK') {
+    // Named rather than folded into one "something is wrong": the three faults
+    // have three different fixes, and the difference between "add a provider"
+    // and "press re-index" is the whole value of saying anything at all.
+    const who = state.embedderName || 'the embedder'
+    if (state.pin === 'NO_EMBEDDER') {
+      return {
+        label: 'Embedding search · not running',
+        detail:
+          `The provider that indexed this store with ${state.model} is no ` +
+          'longer configured, so questions are matching on words. Add an ' +
+          'embedder in LLM providers, then re-index.',
+        tone: 'problem',
+      }
+    }
+    if (state.pin === 'PROVIDER_MOVED') {
+      return {
+        label: 'Embedding search · check the embedder',
+        detail:
+          'These vectors were made by a provider that is no longer ' +
+          `configured. ${who} answers for this store now, and nothing can ` +
+          `tell whether it means the same thing by ${state.model}. Re-index ` +
+          'to rebuild them with it.',
+        tone: 'problem',
+      }
+    }
+    return {
+      label: 'Embedding search · indexed with an older model',
+      detail:
+        `This store is indexed with ${state.model}, but ${who} now serves ` +
+        `${state.servesModel}. Changing an embedder's model does not ` +
+        're-index the stores pinned to it — re-index to move this one.',
+      tone: 'problem',
+    }
+  }
   if (state.templates === 0) {
     // Pinned, with nothing taught. Not "indexing" (there is nothing to index
     // and the count would read `0 of 0`) and not "on" either, because nothing
@@ -729,9 +782,15 @@ export function embeddingView(state: EmbeddingState): EmbeddingView {
     // and waiting for the first question.
     return {
       label: 'Embedding search',
+      // It used to say the first question is indexed *as it is saved*, and
+      // nothing has ever done that: `KnowledgeService.create` writes no
+      // vector, and only the six-hourly sweep and an explicit re-index do.
+      // A sentence promising a behaviour no code implements is worse than no
+      // sentence, because the state it describes — one taught question,
+      // unindexed for up to six hours — looks identical to the one it claims.
       detail:
-        `Ready with ${state.model}. The first question taught here is indexed ` +
-        'as it is saved.',
+        `Ready with ${state.model}. Questions taught here are indexed by the ` +
+        'next check of the store, or straight away with Re-index.',
       tone: 'indexing',
     }
   }

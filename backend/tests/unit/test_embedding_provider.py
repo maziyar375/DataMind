@@ -38,8 +38,13 @@ import pytest
 from app.infra.db.models import DatabaseConnection, LlmConfig
 from app.services import knowledge_service
 from app.services.knowledge_service import (
+    PIN_MODEL_MOVED,
+    PIN_NO_EMBEDDER,
+    PIN_OK,
+    PIN_PROVIDER_MOVED,
     _embedding_candidates,
     embedding_provider,
+    pin_health,
     set_embeddings,
 )
 
@@ -422,15 +427,22 @@ def test_nothing_in_the_interface_can_name_a_provider_to_embed_with() -> None:
 
     A picker removed from a component while the field stays on the request body
     is a choice that has only become invisible — the next form to be written
-    finds it and offers it again. `EmbeddingWrite` carries `enabled` and an
+    finds it and offers it again. `EmbeddingWrite` carries `enabled`, an
     optional `model` (the escape hatch for a self-hosted endpoint serving a
-    name the row does not declare), and nothing that identifies a provider.
+    name the row does not declare) and `force` (rebuild what the fingerprints
+    say is already current), and **nothing that identifies a provider**.
+
+    Pinned as an exact set rather than as three `not in` checks, because the
+    failure this guards against is a field nobody thought to exclude. Adding
+    one is meant to land here and be justified: `force` says *what to do to
+    this store*, which is the same kind of thing `enabled` says. A field
+    saying *which provider to do it with* is the one that may not exist.
     """
     import inspect
 
     from app.api.schemas import EmbeddingWrite
 
-    assert set(EmbeddingWrite.model_fields) == {"enabled", "model"}
+    assert set(EmbeddingWrite.model_fields) == {"enabled", "model", "force"}
     assert "llm_config_id" not in inspect.signature(set_embeddings).parameters
 
 
@@ -499,3 +511,223 @@ def test_the_switch_still_lives_behind_the_gateway_port() -> None:
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.col_offset == 0:
             assert node.module is not None and "litellm" not in node.module
+
+
+# ── whether the pin still means what it says ─────────────────────────────
+#
+# Every case below leaves `embedding_model`, `embedding_dimension` and every
+# stored vector exactly where they were, so `EmbeddingStatus.enabled` stays
+# true and `indexed` stays equal to `templates`. That is the whole problem:
+# the fault is in the *relationship* between a connection and a provider row,
+# which is the one thing neither row holds, and the panel reported a confident
+# "all questions indexed" for all three while the matcher fell through to
+# `pg_trgm` on every question.
+
+
+def test_a_store_on_word_matching_has_no_pin_to_break() -> None:
+    """Off is the shipped state, not a degraded one. A connection with nothing
+    pinned must never inherit a warning about a pin it does not have."""
+    assert pin_health(_connection(), None) == (PIN_OK, "")
+    assert pin_health(_connection(), _config(name="openrouter")) == (PIN_OK, "")
+
+
+def test_a_healthy_pin_is_the_row_that_made_it_still_serving_that_model() -> None:
+    config = _config(name="openrouter")
+    connection = _connection(
+        embedding_model="text-embedding-3-small",
+        embedding_dimension=1536,
+        embedding_llm_config_id=config.id,
+    )
+    assert pin_health(connection, config) == (PIN_OK, "text-embedding-3-small")
+
+
+def test_deleting_the_only_embedder_is_a_fault_and_not_a_quiet_fallback() -> None:
+    """The case the whole state exists for. `SET NULL` releases the pin, the
+    vectors stay, `_embedding_llm` returns `None`, `_embedder` returns `[]` and
+    `FallbackMatcher` answers on words — correctly, silently, and for as long
+    as nobody looks at the matcher hit table."""
+    connection = _connection(
+        embedding_model="text-embedding-3-small",
+        embedding_dimension=1536,
+        embedding_llm_config_id=None,
+    )
+    assert pin_health(connection, None) == (PIN_NO_EMBEDDER, "")
+
+
+def test_a_second_embedder_inheriting_a_released_store_is_a_fault() -> None:
+    """Not because it cannot work — it may serve the same name at the same
+    width and be fine — but because **nothing can tell**. A fingerprint hashes
+    the masked text, the model id and the width; two endpoints agreeing on all
+    three over different weights leaves every fingerprint valid and every
+    cosine meaningless. Only a person can decide, so a person is asked."""
+    heir = _config(name="local ollama")
+    connection = _connection(
+        embedding_model="text-embedding-3-small",
+        embedding_dimension=1536,
+        embedding_llm_config_id=None,
+    )
+    assert pin_health(connection, heir) == (
+        PIN_PROVIDER_MOVED, "text-embedding-3-small",
+    )
+
+
+def test_the_endpoint_moving_outranks_the_model_name_agreeing() -> None:
+    """Reported as PROVIDER_MOVED even though the names match, because the
+    width was measured from a real call for exactly this reason: one model
+    name served by two gateways is the case that motivated the pin."""
+    heir = _config(name="local ollama", embedding_model="text-embedding-3-small")
+    connection = _connection(
+        embedding_model="text-embedding-3-small",
+        embedding_llm_config_id=uuid4(),
+    )
+    state, _ = pin_health(connection, heir)
+    assert state == PIN_PROVIDER_MOVED
+
+
+def test_editing_an_embedders_model_is_a_no_op_until_somebody_re_indexes() -> None:
+    """The silent one. `_embedder` and `index_embeddings` both pass
+    `connection.embedding_model`, so the pin wins on both paths and the edit
+    changes **nothing** for a store already pinned to that row — it does not
+    re-index, it does not fail, and until this state it did not say so."""
+    config = _config(name="openrouter", embedding_model="text-embedding-3-large")
+    connection = _connection(
+        embedding_model="text-embedding-3-small",
+        embedding_dimension=1536,
+        embedding_llm_config_id=config.id,
+    )
+    assert pin_health(connection, config) == (
+        PIN_MODEL_MOVED, "text-embedding-3-large",
+    )
+
+
+def test_a_pinned_row_that_declares_no_model_is_not_a_model_change() -> None:
+    """`can_embed` would have refused it upstream, and an empty string is the
+    absence of a declaration rather than a different declaration. Reporting it
+    as a model change would put a sentence naming `''` in front of somebody."""
+    config = _config(name="openrouter", embedding_model="")
+    connection = _connection(
+        embedding_model="text-embedding-3-small",
+        embedding_llm_config_id=config.id,
+    )
+    assert pin_health(connection, config) == (PIN_OK, "")
+
+
+# ── re-indexing, the repair derived staleness cannot make ────────────────
+@pytest.mark.asyncio
+async def test_a_re_index_clears_every_fingerprint_so_every_row_is_rebuilt(
+    _no_network: list[Any],
+) -> None:
+    """`force` exists because an endpoint change invalidates nothing a
+    fingerprint hashes. Clearing them is what makes `needs_embedding` return
+    work for every row — and what drops them out of `_index_source`, which
+    reads only rows that have one, so the store answers on words while it
+    rebuilds instead of comparing against vectors nobody trusts."""
+    config = _config(name="openrouter")
+    connection = _connection(
+        embedding_model="text-embedding-3-small",
+        embedding_dimension=1536,
+        embedding_llm_config_id=config.id,
+    )
+    db = FakeDb([config])
+
+    _, message = await set_embeddings(
+        db, object(), connection, enabled=True, force=True,
+    )
+
+    assert message == ""
+    updates = [
+        statement for statement in db.statements
+        if statement.__visit_name__ == "update"
+    ]
+    assert updates, "force must clear the fingerprints"
+    cleared = updates[0].compile().params
+    assert "" in cleared.values(), "the fingerprint is blanked, not the vector"
+    # The vectors themselves are left alone: "a vector that fails the check is
+    # ignored, not deleted" is the module's rule and it holds here too.
+    assert "embedding" not in updates[0]._values
+
+
+@pytest.mark.asyncio
+async def test_without_force_a_switch_on_clears_no_fingerprints(
+    _no_network: list[Any],
+) -> None:
+    """The default path must stay exactly what it was: re-pinning already
+    invalidates by fingerprint whenever the model or the width moved, and
+    clearing them unconditionally would re-embed a whole store — the owner's
+    budget — every time somebody pressed the switch."""
+    config = _config(name="openrouter")
+    connection = _connection()
+    db = FakeDb([config])
+
+    await set_embeddings(db, object(), connection, enabled=True)
+
+    assert not [
+        statement for statement in db.statements
+        if statement.__visit_name__ == "update"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_refused_probe_leaves_a_forced_re_index_with_its_index_intact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """*"A refusal leaves the connection exactly as it was"* has to hold for a
+    re-index too, or asking for one against an endpoint that had stopped
+    answering would throw away a working index to no purpose and leave the
+    store on words until somebody noticed. The clear happens **after** the
+    probe, and this is the test that keeps it there."""
+    async def refuse(self: Any, llm: Any, *, model: str = "") -> _Capability:
+        return _Capability(available=False, reason="Connection refused.")
+
+    from app.infra.llm import litellm_gateway
+    from app.services import query_service
+
+    monkeypatch.setattr(litellm_gateway.LiteLLMGateway, "probe_embedding", refuse)
+    monkeypatch.setattr(
+        litellm_gateway.LiteLLMGateway, "from_settings",
+        classmethod(lambda cls, _settings: cls(timeout_seconds=1)),
+    )
+    monkeypatch.setattr(query_service, "secret_box", lambda _settings: _Box())
+
+    config = _config(name="openrouter")
+    connection = _connection(
+        embedding_model="text-embedding-3-small",
+        embedding_dimension=1536,
+        embedding_llm_config_id=config.id,
+    )
+    db = FakeDb([config])
+
+    _, message = await set_embeddings(
+        db, object(), connection, enabled=True, force=True,
+    )
+
+    assert message == "Connection refused."
+    assert not [
+        statement for statement in db.statements
+        if statement.__visit_name__ == "update"
+    ]
+    assert connection.embedding_model == "text-embedding-3-small"
+    assert connection.embedding_llm_config_id == config.id
+
+
+def test_the_match_path_will_not_wait_a_completions_timeout_for_a_vector() -> None:
+    """Sixty seconds was the gateway's own timeout, sized for a completion, and
+    `FallbackMatcher` swallowed the wait as thoroughly as it swallows the
+    error — so a revoked key or an endpoint that stopped answering cost every
+    question on the connection a full minute before the lexical matcher it was
+    always going to use answered instead. The embedding matcher exists to be
+    cheaper than generating SQL; a vector that has not arrived inside this
+    budget has already lost."""
+    from app.core.config import Settings
+
+    settings = Settings()
+    assert settings.embedding_match_timeout_seconds < settings.llm_request_timeout_seconds
+
+    source = Path(knowledge_service.__file__).read_text()
+    body = source[source.index("def _embedder("):source.index("def _index_source(")]
+    assert "wait_for" in body, "the ask path must bound its own wait"
+    assert "embedding_match_timeout_seconds" in body
+    # Indexing keeps the long timeout: it runs in a worker, where slow is free
+    # and a batch of two hundred legitimately takes longer than one question.
+    indexing = source[source.index("async def index_embeddings("):]
+    assert "embedding_match_timeout_seconds" not in indexing

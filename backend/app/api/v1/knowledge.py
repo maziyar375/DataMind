@@ -84,6 +84,7 @@ from app.services.knowledge_service import (
     FeedbackService,
     KnowledgeService,
     embedding_provider,
+    pin_health,
     set_embeddings,
 )
 from app.services.policy import require
@@ -354,6 +355,7 @@ async def set_embedding_search(
         db, settings, connection,
         enabled=payload.enabled,
         model=payload.model,
+        force=payload.force,
     )
     await audit.record(
         db, ctx,
@@ -370,6 +372,10 @@ async def set_embedding_search(
             # of "who did what with what" this log exists to answer.
             "llm_config_id": str(connection.embedding_llm_config_id or ""),
             "indexed": result.embedded,
+            # A re-index spends the owner's budget on vectors that already
+            # existed, and it is the action somebody takes after an endpoint
+            # moved — which is exactly the shape of thing this log is for.
+            "force": payload.force,
             "reason": message or result.error,
         },
     )
@@ -405,12 +411,20 @@ async def _embedding_status(db, connection) -> EmbeddingStatus:
     # makes *"set one up first"* the honest thing to show rather than a button
     # that fails.
     embedder = await embedding_provider(db, connection)
+    # Asked here, of the two rows this function already has in hand, because
+    # the fault it reports lives in the *relationship* between them and so
+    # cannot be read off either one. See `pin_health` for what each state
+    # means; the short version is that `enabled` asks whether a pin exists and
+    # this asks whether it can still be honoured.
+    pin, serves = pin_health(connection, embedder)
     return EmbeddingStatus(
         enabled=bool(connection.embedding_model),
         model=connection.embedding_model or "",
         dimension=connection.embedding_dimension or 0,
         templates=live.scalar_one() or 0,
         indexed=indexed.scalar_one() or 0,
+        pin=pin,
+        serves_model=serves if serves != connection.embedding_model else "",
         embedder=(
             EmbeddingProvider(
                 id=embedder.id,

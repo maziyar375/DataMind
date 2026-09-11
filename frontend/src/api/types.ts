@@ -720,6 +720,15 @@ export interface EmbeddingStatus {
    *  posted. Null is the state where the control has nothing to switch to and
    *  says so instead of offering a button that fails. */
   embedder: EmbeddingProvider | null
+  /** Whether the pin still means what it says, derived by the server on every
+   *  read rather than stored. `enabled` says a model is pinned; this says
+   *  whether the provider behind it can still be honoured — the two questions
+   *  came apart the moment a provider row could be deleted, re-pointed or
+   *  re-modelled from a different screen. */
+  pin: 'OK' | 'NO_EMBEDDER' | 'PROVIDER_MOVED' | 'MODEL_MOVED'
+  /** What the resolved embedder would use *today*, when that is not what this
+   *  store was indexed with. Empty when they agree, which is the normal case. */
+  serves_model: string
 }
 
 export interface EmbeddingProvider {

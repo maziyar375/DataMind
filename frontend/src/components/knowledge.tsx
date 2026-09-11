@@ -555,11 +555,13 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
           status={embeddings}
           canCurate={canCurate}
           busy={switching}
-          onToggle={async (enabled) => {
+          onToggle={async (enabled, force = false) => {
             setSwitching(true)
             setSweepNote(null)
             try {
-              const next = await api.setEmbeddings(connection.id, enabled)
+              const next = await api.setEmbeddings(
+                connection.id, enabled, '', force,
+              )
               setEmbeddings(next)
             } catch (err) {
               setError(messageOf(err))
@@ -2430,6 +2432,15 @@ function asRow(t: KnowledgeTemplate): TemplateRow {
  * still missing, and calling that "on" would promise a behaviour the next
  * question will not show.
  *
+ * **The pin faults are the states this panel used to be silent in.** A
+ * provider deleted, replaced, or its embedding model edited all happen on a
+ * different screen and all leave `enabled` true, the vectors in place and the
+ * counts full — so this read `on` while every question fell to word matching.
+ * `pin` is derived by the server on every read for that reason, and *Re-index*
+ * is the fix for all three; it is also the only way to index a store before
+ * the next six-hourly check, which is why it is offered in the healthy state
+ * too.
+ *
  * **There is no provider to pick here, and that is the point.** One embedder
  * serves the whole deployment — set up once in LLM providers, resolved by the
  * server for every connection — so this control is a switch and not a form.
@@ -2444,14 +2455,28 @@ function MatchingMode({
   status: EmbeddingStatus
   canCurate: boolean
   busy: boolean
-  onToggle: (enabled: boolean) => void
+  onToggle: (enabled: boolean, force?: boolean) => void
 }) {
-  const view = embeddingView({ ...status, hasEmbedder: status.embedder !== null })
+  const view = embeddingView({
+    ...status,
+    hasEmbedder: status.embedder !== null,
+    servesModel: status.serves_model,
+    embedderName: status.embedder?.name ?? '',
+  })
   const tint: Record<string, string> = {
     off: 'var(--text-faint)',
     indexing: 'var(--text-muted)',
     on: 'var(--accent)',
-    problem: 'var(--warn)',
+    // `var(--warn)` for as long as this map has existed, and **no such token
+    // is defined anywhere in the product** — so `problem` fell back to the
+    // inherited colour and was the one tone that did not tint. It went
+    // unnoticed because the state was unreachable in a resting panel: only a
+    // `message` produced it, and a message only exists in the seconds after
+    // somebody presses the switch and the provider refuses. The pin faults
+    // made `problem` a state a store can sit in for weeks, which is what
+    // turned a dead variable into a missing warning. `--amber` is the token
+    // the rest of this file already warns in.
+    problem: 'var(--amber)',
   }
   // Which provider made these vectors, or would. Never a picker: with one
   // embedder the answer is not a decision, and with none the button is hidden
@@ -2469,7 +2494,19 @@ function MatchingMode({
         // is room for both.
         display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap',
         padding: '8px 10px', borderRadius: 8,
-        border: '1px solid var(--border-subtle)',
+        // The surface carries the fault, not just the label on it. Two
+        // reasons, and the second is the one that decided it: a warning must
+        // not be legible *only* as a colour applied to text, and measured on
+        // the warm paper `--amber` is 3.51:1 against `--bg` at this size —
+        // fine for the `aria-hidden` glyphs and tinted badges every other
+        // `var(--amber)` in this product is, under AA for a twelve-pixel label
+        // that is the whole signal. The tint and the border are the same
+        // tokens a warning badge already uses, so this reads as the product's
+        // existing warning language rather than a new one.
+        border: `1px solid ${
+          view.tone === 'problem' ? 'var(--amber-border)' : 'var(--border-subtle)'
+        }`,
+        background: view.tone === 'problem' ? 'var(--amber-bg)' : undefined,
       }}
     >
       <div style={{ flex: 1, minWidth: 230 }}>
@@ -2479,21 +2516,43 @@ function MatchingMode({
         <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 2 }}>
           {view.detail}
         </div>
-        {status.enabled && using && (
+        {status.enabled && using && status.pin === 'OK' && (
           // Which endpoint made these vectors, said rather than implied: a
           // store is only reproducible if the provider is known as well as the
           // model name and the width, and that is the sentence somebody needs
           // when two providers serve one model name at two widths.
+          //
+          // **Silent in every pin fault**, because in two of the three `using`
+          // is not who made these vectors — it is whoever the server would
+          // resolve *now*, which is exactly the thing that went wrong. Saying
+          // "Indexed by Ollama" under a sentence explaining that the provider
+          // which indexed this store is gone would be the same untruth in
+          // smaller type.
           <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 2 }}>
             Indexed by {using.name} at {status.dimension} dimensions.
           </div>
         )}
       </div>
       {canCurate && (status.enabled || canSwitchOn) && (
-        <GhostButton onClick={() => onToggle(!status.enabled)} disabled={busy}>
-          {busy ? <Spinner size={13} /> : null}
-          {status.enabled ? 'Use word matching' : 'Use embedding search'}
-        </GhostButton>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {/* Rebuild every vector, even though the fingerprints all still
+              match. It is the one repair derived staleness cannot make for
+              itself — an endpoint that moved underneath an unchanged model
+              name and width invalidates nothing it hashes — and it is also
+              the only way to index a store before the next six-hourly check.
+              Offered whenever there is an embedder to do it with, including
+              in the three pin faults above, where it *is* the fix. */}
+          {status.enabled && canSwitchOn && (
+            <GhostButton onClick={() => onToggle(true, true)} disabled={busy}>
+              {busy ? <Spinner size={13} /> : <Icon.Refresh size={13} />}
+              Re-index
+            </GhostButton>
+          )}
+          <GhostButton onClick={() => onToggle(!status.enabled)} disabled={busy}>
+            {busy && !status.enabled ? <Spinner size={13} /> : null}
+            {status.enabled ? 'Use word matching' : 'Use embedding search'}
+          </GhostButton>
+        </div>
       )}
     </div>
   )

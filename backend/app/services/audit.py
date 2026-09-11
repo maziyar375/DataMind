@@ -117,6 +117,7 @@ ASK_RECORDED = "ask.recorded"
 #:                                  ownership.transferred · disclosure.changed
 #: services/policy.py               access.denied
 #: api/v1/llm_configs.py            llm_config.endpoint.changed
+#:                                  llm_config.deleted
 #: ```
 #:
 #: Phase 7 added `access.denied` — the producer `DENIED` had been waiting for
@@ -125,6 +126,16 @@ ASK_RECORDED = "ask.recorded"
 #: than a service, because the rule it records lives in the PATCH handler that
 #: compares the endpoint before and after, and moving the word away from that
 #: comparison would be moving it away from the only code that can decide it.
+#:
+#: `llm_config.deleted` joined it for the same reason and a sharper one. Most
+#: provider deletions are unremarkable, but deleting the row that *embeds*
+#: releases every knowledge store pinned to it — `SET NULL`, so a store is
+#: never deleted with a provider — and drops each of them back to word matching
+#: without anything failing. It was the one provider action that left no trace
+#: at all, while the cosmetically smaller act of re-pointing a base URL had
+#: been audited since Phase 8. `stores_released` in its detail is the number
+#: worth reading: how many stores stopped being searched by meaning at that
+#: moment.
 
 #: How much of a `detail` value survives. Generous for an identifier or a
 #: status reason, mean enough that nobody is tempted to pass a statement.

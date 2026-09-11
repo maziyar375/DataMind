@@ -147,6 +147,14 @@ class Settings(BaseSettings):
 
     # ── llm ──────────────────────────────────────────────────────────────
     llm_request_timeout_seconds: int = 60
+    # What the *matcher* will wait for one question's vector, as opposed to
+    # what an indexing pass will wait for a batch of them. Deliberately a small
+    # fraction of the timeout above: the embedding matcher exists to be cheaper
+    # than generating SQL, and `FallbackMatcher` answers on words the moment
+    # this expires — so waiting the full sixty seconds only ever delayed an
+    # answer the lexical matcher was always going to give. Indexing runs in a
+    # worker and keeps the long one, where slow costs nothing.
+    embedding_match_timeout_seconds: int = 5
     # Transient-failure retry (rate limits / 5xx). Bounded exponential backoff;
     # a permanent error (auth, bad request) is never retried. 0 disables it.
     llm_max_retries: int = 4

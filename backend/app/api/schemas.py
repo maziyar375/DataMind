@@ -1142,6 +1142,12 @@ class EmbeddingWrite(BaseModel):
 
     enabled: bool
     model: str = Field(default="", max_length=200)
+    #: Rebuild every vector even though the fingerprints all still match.
+    #: Ignored when `enabled` is false, where clearing the pin already clears
+    #: them. This is the only way to recover a store whose endpoint moved
+    #: underneath an unchanged model name and width — derived staleness cannot
+    #: see that, because nothing it hashes has changed.
+    force: bool = False
 
 
 class EmbeddingProvider(BaseModel):
@@ -1185,6 +1191,22 @@ class EmbeddingStatus(BaseModel):
     #: control has nothing to switch to, and saying so is the difference
     #: between an offer and a button that fails.
     embedder: EmbeddingProvider | None = None
+    #: Whether the pin still means what it says — `OK`, `NO_EMBEDDER`,
+    #: `PROVIDER_MOVED` or `MODEL_MOVED`, from `knowledge_service.pin_health`.
+    #:
+    #: **Derived on every read, never stored**, the same rule vector staleness
+    #: follows, and for the same reason: the three things that can break a pin
+    #: — the provider deleted, replaced, or its model edited — all happen on a
+    #: *different* screen from this one, and any of them would otherwise have
+    #: to remember to come back and write a flag here. `enabled` answers
+    #: whether a pin exists; this answers whether it can still be honoured, and
+    #: the gap between those two questions is where a store went on reporting
+    #: itself fully indexed while every question fell to word matching.
+    pin: str = "OK"
+    #: The embedding model the resolved provider would use *today*, when that
+    #: is not the one this store was indexed with. Empty when they agree — and
+    #: empty is the normal state.
+    serves_model: str = ""
 
 
 # ── benchmarks and the score (Phase 6) ───────────────────────────────────

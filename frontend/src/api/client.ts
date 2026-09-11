@@ -589,10 +589,19 @@ export const knowledge = {
   // status this returns names the one it used. The choice a curator makes is
   // the model that *answers* — that one is on every screen that asks a
   // question, and it is a different list (`llmConfigs.list('chat')`).
-  setEmbeddings: (connectionId: string, enabled: boolean, model = '') =>
+  // `force` rebuilds every vector even though the fingerprints all still
+  // match. That is not redundant with the derived staleness rule, it is the
+  // hole in it: a fingerprint hashes the masked text, the model id and the
+  // width, so an *endpoint* that changed underneath an unchanged name and
+  // width invalidates nothing while making every stored cosine meaningless.
+  // Only a person can say that happened, so only a person can ask for this.
+  setEmbeddings: (
+    connectionId: string, enabled: boolean, model = '', force = false,
+  ) =>
     put<EmbeddingStatus>(`/connections/${connectionId}/knowledge/embeddings`, {
       enabled,
       model,
+      force,
     }),
   check: (
     connectionId: string,

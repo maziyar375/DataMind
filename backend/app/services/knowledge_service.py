@@ -717,13 +717,45 @@ def _embedder(
     """
 
     async def embed(texts: Any) -> list[list[float]]:
+        import asyncio
+
         from app.infra.llm.litellm_gateway import LiteLLMGateway
 
         llm = await _embedding_llm(db, settings, connection)
         if llm is None:
             return []
         gateway = LiteLLMGateway.from_settings(settings)
-        return await gateway.embed(llm, list(texts), model=connection.embedding_model)
+        try:
+            # ⚠️ **Bounded far tighter than the indexing pass, and this is the
+            # difference between degrading and stalling.** `FallbackMatcher`
+            # swallows every failure here, which is right — but until this cap
+            # it swallowed a *sixty-second* one: `llm_request_timeout_seconds`
+            # is the gateway's own, sized for a completion, and a deleted key
+            # or an endpoint that stopped answering meant every question on
+            # this connection waited out that whole timeout before the lexical
+            # matcher it would have used anyway answered. "The loop degrades to
+            # lexical, never to nothing" was true and cost a minute a question.
+            #
+            # The number is a budget, not a guess: the embedding matcher exists
+            # to be *cheaper* than generating SQL, so a vector that has not
+            # arrived by now has already lost to the trigram index and the
+            # honest move is to stop waiting for it. Indexing keeps the long
+            # timeout — that one runs in a worker, where slow is free.
+            return await asyncio.wait_for(
+                gateway.embed(llm, list(texts), model=connection.embedding_model),
+                timeout=settings.embedding_match_timeout_seconds,
+            )
+        except (TimeoutError, asyncio.CancelledError):
+            # `[]` rather than a raise, because that is this callable's
+            # contract and `FallbackMatcher` reads it as "ask the lexical one".
+            # Caught here as well as there so the *reason* stays local to the
+            # thing that imposed it.
+            log.warning(
+                "knowledge_embedding_match_timeout",
+                connection_id=str(connection.id),
+                timeout=settings.embedding_match_timeout_seconds,
+            )
+            return []
 
     return embed
 
@@ -859,6 +891,70 @@ async def embedding_provider(
     return candidates[0] if candidates else None
 
 
+#: The pin can still be honoured and still describes what would be made today.
+PIN_OK = "OK"
+#: A model is pinned and **nothing can embed** — the provider that made these
+#: vectors was deleted and no other row declares an embedding model. Every
+#: question falls to lexical, silently, and the store reads as fully indexed
+#: because the vectors are all still sitting there.
+PIN_NO_EMBEDDER = "NO_EMBEDDER"
+#: A model is pinned, the row that made it is gone, and a *different* row would
+#: answer for it now. It may serve the same model name at the same width, in
+#: which case nothing is wrong; it may serve the same name at the same width
+#: with different weights, in which case every cosine in this store is noise.
+#: The fingerprint cannot tell those apart — only re-indexing can.
+PIN_PROVIDER_MOVED = "PROVIDER_MOVED"
+#: The pinned row is still there and still embeds, but it now declares a
+#: *different* embedding model than the one this store was indexed with.
+#: Editing `embedding_model` on a provider is a no-op for every connection
+#: already pinned to it, because the pin wins on both the ask path and in
+#: `index_embeddings` — so the edit silently means nothing until somebody
+#: re-indexes, and this is the sentence that says so.
+PIN_MODEL_MOVED = "MODEL_MOVED"
+
+
+def pin_health(
+    connection: DatabaseConnection, embedder: LlmConfig | None
+) -> tuple[str, str]:
+    """Whether this connection's pin still means what it says — **derived.**
+
+    `(state, the model the embedder would use today)`. Pure in both arguments
+    so it is a unit test rather than a fixture, and computed on every read for
+    the same reason vector staleness is recomputed rather than tracked: there
+    is no invalidation call anybody can forget, and the three things that can
+    break a pin — the provider deleted, the provider replaced, the provider's
+    model edited — each fall out of it instead of being three pieces of
+    bookkeeping nobody runs.
+
+    **This is the gap `enabled` left.** `EmbeddingStatus.enabled` is
+    `bool(connection.embedding_model)`, which asks whether a pin *exists* and
+    never whether it can still be honoured. A deleted embedder releases
+    `embedding_llm_config_id` (`SET NULL`, so a store is never deleted with a
+    provider) and leaves the model, the width and every vector exactly where
+    they were — so the panel went on saying *"All 42 questions indexed"* while
+    `_embedding_llm` returned `None`, `_embedder` returned `[]` and
+    `FallbackMatcher` quietly answered on words. Nothing in the product said
+    so, and nothing could: the fault is in the *relationship* between two rows,
+    which is the one thing neither row holds.
+    """
+    if not connection.embedding_model:
+        # Word matching. There is no pin to honour, and this is the shipped
+        # state rather than a fault in it.
+        return PIN_OK, ""
+    if embedder is None:
+        return PIN_NO_EMBEDDER, ""
+    serves = embedder.embedding_model or ""
+    if connection.embedding_llm_config_id != embedder.id:
+        # Includes the NULL case, which is exactly what a deleted provider
+        # leaves behind. Reported before the model comparison because the
+        # endpoint moving matters more than the name agreeing: two gateways
+        # serving one name is the case the width was measured for.
+        return PIN_PROVIDER_MOVED, serves
+    if serves and serves != connection.embedding_model:
+        return PIN_MODEL_MOVED, serves
+    return PIN_OK, serves
+
+
 async def _embedding_llm(
     db: AsyncSession, settings: Settings, connection: DatabaseConnection
 ) -> Any | None:
@@ -975,9 +1071,15 @@ async def index_embeddings(
 
     llm = await _embedding_llm(db, settings, connection)
     if llm is None:
+        # The sentence migration `0022` existed to delete. It named
+        # `is_default` — a column **nothing in this product has ever written**
+        # — so it told every reader to go and set something no screen offers,
+        # and it outlived the resolution rule it described by pointing at the
+        # dead end rather than at the fix.
         out.error = (
-            "No default model is configured for this connection's owner, so "
-            "there is nothing to embed with."
+            "No model provider is set up to embed, so there is nothing to "
+            "index with. Give an OpenAI-compatible provider an embedding "
+            "model in LLM providers."
         )
         return out
 
@@ -1040,6 +1142,7 @@ async def set_embeddings(
     *,
     enabled: bool,
     model: str = "",
+    force: bool = False,
 ) -> tuple[IndexResult, str]:
     """Turn embedding search on or off for a connection, and say what happened.
 
@@ -1054,6 +1157,23 @@ async def set_embeddings(
     Off: clear the pin *and* the vectors. Keeping them would leave a store that
     looks indexed to anyone reading the table and is invisible to the matcher,
     and the vectors are derived data that one pass rebuilds.
+
+    **`force` is the one thing derived staleness cannot do for itself.** A
+    fingerprint is `sha256(masked text, model id, width)`, so a template edit,
+    a schema re-sync and a model change each invalidate exactly what they
+    should — and *an endpoint change invalidates nothing at all*. Two
+    OpenAI-compatible rows can serve one model name at one width over different
+    weights, and every fingerprint in the store still matches while every
+    cosine in it has quietly become noise. Nothing observable distinguishes
+    that from a healthy store, which is precisely why it needs a person to say
+    *"re-index"* rather than a rule to detect it. `force` is that sentence:
+    every fingerprint on the connection is cleared, so `needs_embedding`
+    returns work for every row and `_index_source` — which reads only rows with
+    a fingerprint — drops them until they are rebuilt. The store answers on
+    words while it re-indexes, which is the same thing it does for a
+    half-indexed store, and the vectors themselves are left where they are.
+    A vector that fails the check is ignored, never deleted: that rule holds
+    here too.
     """
     if not enabled:
         await db.execute(
@@ -1090,6 +1210,19 @@ async def set_embeddings(
     if not capability.available:
         return IndexResult(), capability.reason or (
             "That provider did not return an embedding."
+        )
+
+    if force:
+        # **After the probe, never before.** A refusal leaves the connection
+        # exactly as it was — that is this function's contract in the `enabled`
+        # branch and it has to hold for a re-index too, or asking for one
+        # against an endpoint that has stopped answering would throw away a
+        # working index to no purpose and leave the store on words until
+        # somebody noticed.
+        await db.execute(
+            update(KnowledgeTemplateRow)
+            .where(KnowledgeTemplateRow.connection_id == connection.id)
+            .values(embedding_fingerprint="")
         )
 
     # Re-pinning invalidates every stored vector by fingerprint alone — the

@@ -6,7 +6,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.deps import AuthzDep, CtxDep, DbDep, SecretBoxDep, SettingsDep
 from app.api.schemas import (
@@ -32,7 +32,7 @@ from app.domain.value_objects.llm_params import (
     validate_embedding_params,
 )
 from app.infra.authz.compose import restrict
-from app.infra.db.models import LlmConfig
+from app.infra.db.models import DatabaseConnection, LlmConfig
 from app.infra.llm.litellm_gateway import LiteLLMGateway
 from app.services import audit
 from app.services.policy import require
@@ -47,6 +47,16 @@ router = APIRouter(prefix="/llm-configs", tags=["llm-configs"])
 #: one, and an administrator reading the log can tell "somebody re-pointed the
 #: house model at their own gateway" from "somebody renamed it".
 ENDPOINT_CHANGED = "llm_config.endpoint.changed"
+
+#: **Where an embedder stopped existing.** A provider row is not a curation
+#: write, and most deletions here are unremarkable — but deleting the row that
+#: embeds releases every knowledge store pinned to it (`SET NULL`, so a store
+#: is never deleted with a provider) and silently drops each of them back to
+#: word matching. That is at least as consequential as re-pointing a base URL,
+#: which has been audited since Phase 8, and it was the one provider action
+#: that left no trace anywhere. The knowledge panel now *says* a store has lost
+#: its embedder; this is how an administrator finds out **who** and **when**.
+CONFIG_DELETED = "llm_config.deleted"
 
 # `/grants`, `/actions` and `/transfer`, above the `/{config_id}` routes so
 # `/parameters` and `/test` still win their match.
@@ -457,6 +467,35 @@ async def delete_config(
     config_id: UUID, ctx: CtxDep, db: DbDep, authz: AuthzDep
 ) -> None:
     row = await _authorized(db, authz, config_id, ctx, Privilege.DELETE)
+    # Read before the delete, and recorded whether or not anything was pinned
+    # to it: "nobody was using it" is a fact worth having in the log too, and a
+    # row written only on the interesting case is one whose absence means
+    # nothing.
+    embedded = (
+        await db.execute(
+            select(func.count())
+            .select_from(DatabaseConnection)
+            .where(  # authz-ok: counting the blast radius of a row already authorized
+                DatabaseConnection.embedding_llm_config_id == row.id
+            )
+        )
+    ).scalar_one() or 0
+    await audit.record(
+        db, ctx,
+        action=CONFIG_DELETED,
+        resource_type=str(ResourceType.LLM_CONFIG),
+        resource_id=row.id,
+        # Identifiers and counts, never the key and never a base URL's
+        # credentials — `services/audit.py`'s third rule. `stores_released` is
+        # the number that makes this row worth reading: it is how many
+        # knowledge stores dropped to word matching at this moment.
+        detail={
+            "name": row.name,
+            "provider": row.provider,
+            "embedding_model": row.embedding_model or "",
+            "stores_released": embedded,
+        },
+    )
     await db.delete(row)
     # Inside the request, so a constraint that refuses this is an error the
     # caller sees rather than a 204 followed by a stack trace in the log —
