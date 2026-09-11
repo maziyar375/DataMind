@@ -194,6 +194,55 @@ body {
     var(--bg) !important;
 }
 
+/* ── the ambient field ─────────────────────────────────────────────────────
+   The shell's one piece of atmosphere, and the only thing in the product that
+   moves without being asked to.
+
+   The rule the grid motif states below — *texture goes on surfaces that have
+   nothing on them, and is gone the moment content arrives* — is why this is
+   two soft lights and not a grid: this layer is behind **every** screen,
+   including the ones that are a table of numbers, and a repeating line
+   pattern under a result set costs legibility on the product's most important
+   surface. Two radial washes at the alphas in `--field-a` / `--field-b` cost
+   none: panels, tables and the rail are opaque and sit on top, so the field is
+   only ever visible in the open space *between* them, which is exactly the
+   space that read as dead flat black before.
+
+   It drifts, on a 54-second cycle nobody will ever catch in the act — the one
+   ambient motion in the app, against which every other animation in this file
+   is a response to something a person did. Two things keep it honest. The
+   movement is a `transform` on a layer with nothing inside it, so it composites
+   rather than repainting the screen under it. And `inset: 0` with the scale
+   doing the overflow is deliberate: an oversized box would put every gradient
+   position on a different scale from the viewport's, which is a trap this
+   stylesheet has already been caught by once (see `.rm-auth::before`).
+
+   `isolation` + `z-index: -1` is `.rm-index`'s idiom, and load-bearing here:
+   an absolutely positioned pseudo-element otherwise paints *above* the
+   in-flow rail and content beside it. */
+.rm-app { isolation: isolate; }
+.rm-app::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(40% 36% at 16% 4%, var(--field-a), transparent 68%),
+    radial-gradient(36% 38% at 90% 94%, var(--field-b), transparent 70%);
+  will-change: transform;
+  animation: rm-field-drift 54s ease-in-out infinite alternate;
+}
+@keyframes rm-field-drift {
+  from { transform: none; }
+  to { transform: translate3d(-2.5%, 1.5%, 0) scale(1.12); }
+}
+/* Frozen rather than removed: the field is the ground the open areas sit on,
+   and taking it away would leave them flat. Only the drift is the effect. */
+@media (prefers-reduced-motion: reduce) {
+  .rm-app::before { animation: none; }
+}
+
 *, *::before, *::after { box-sizing: border-box; }
 
 /* Motion is opt-out globally, not per effect. The rules further down silence
@@ -209,18 +258,96 @@ body {
   }
 }
 
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; }
+/* The scrollbar is chrome the reader's hand lands on, and it was a flat bar
+   at full strength on every scrollable surface in the app — including the
+   chat transcript and every table, where a permanent light stripe down the
+   right edge is the loudest vertical line on the screen. It now rests quiet
+   and comes up under the pointer, which is the same bargain every other
+   control in this product makes. Inset borders rather than a margin, because
+   a scrollbar thumb cannot take one.
+
+   Firefox gets the same two colours through its own two properties; it has no
+   hover state to offer, so it is given the resting one. */
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--border-strong); background-clip: padding-box; }
 ::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-corner { background: transparent; }
+* { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 
 a { color: var(--accent); text-decoration: none; }
 a:hover { filter: brightness(1.12); }
 
 input, select, textarea, button { font-family: inherit; }
 
+/* A field is a well: cut into the page rather than laid on it. See `--well`
+   in tokens.ts for the sheet/well pair this is one half of.
+
+   Excluded by selector rather than by class: a checkbox and a radio are
+   drawn by the platform and an inner shadow on one lands wherever that
+   platform decided to put its box, which is not reliably the control. */
+input:not([type='checkbox']):not([type='radio']):not([type='range']),
+select,
+textarea {
+  box-shadow: var(--well);
+}
+
+/* Three fields in the product draw no border, because something around them
+   draws it instead: the composer is a rounded bar that owns the ring and the
+   lift, the SQL box is a shell with a toolbar under the text, and the number
+   stepper is a figure between two buttons. For those, the rules above are not
+   a refinement but a second ring *inside* the first — which is exactly what
+   went wrong when they were made global.
+
+   `!important` on both, because the focus rule has to carry it too (the
+   primitives set their border inline, so a plain rule never reached them) and
+   specificity alone cannot beat an `!important` from the same origin. The
+   stepper keeps its own `outline` ring a few lines above; the other two are
+   already answered by the shell. */
+.rm-composer textarea,
+.rm-sqlbox > textarea,
+.rm-stepper input,
+.rm-composer textarea:focus-visible,
+.rm-sqlbox > textarea:focus-visible,
+.rm-stepper input:focus-visible {
+  box-shadow: none !important;
+}
+
+/* A placeholder is text somebody has to read to know what the field wants,
+   and on `--text-faint` it measured 3.66:1 in dark and 3.62:1 on paper —
+   under the 4.5:1 floor in both, which is the kind of thing that is only ever
+   found by measuring, because it looks like a deliberately quiet grey.
+   `--text-dim` is the same grey one step up and clears it; it stays well
+   below `--text`, so a placeholder still cannot be mistaken for a value.
+
+   The browser's own default is a *derived* colour — roughly the computed
+   `color` at 54% — so leaving it alone was never "no decision", it was a
+   different wrong number per engine. */
+input::placeholder,
+textarea::placeholder { color: var(--text-dim); opacity: 1; }
+
+/* Every field in the product now focuses the way the index search field
+   always did: the border goes accent *and* a soft ring blooms outside it.
+   The border alone was a one-pixel change of hue on a control that is already
+   bordered — findable if you knew where you had clicked, and nearly invisible
+   at a glance on a form of eight fields. The ring is `--accent-bg`, which is
+   the accent at 10–14% and therefore reads on both grounds.
+
+   It lives here rather than on `inputStyle` in ui.tsx because `:focus-visible`
+   is the whole point and a style attribute cannot express it — and the
+   `!important` is not new: the primitives set their border inline, so a
+   plain rule never reached them. */
 input:focus-visible,
 select:focus-visible,
-textarea:focus-visible { border-color: var(--accent) !important; }
+textarea:focus-visible {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px var(--accent-bg) !important;
+}
 
 /* Keyboard users must be able to see where they are. */
 button:focus-visible,
@@ -315,6 +442,70 @@ code, pre, .mono {
     linear-gradient(to bottom, var(--border) 1px, transparent 1px);
   --grid-cell: 46px;
 }
+
+/* ── raised, and the one thing that means "a model did this" ───────────────
+   Two small vocabularies, both defined once here because the alternative is
+   each surface inventing its own.
+
+   **Raised.** A thing that floats catches light on its top edge and casts a
+   shadow under itself, and `.rm-raised` is those two facts — an inset hairline
+   of `--sheen` and one of the three `--elev-*` heights, composed in a single
+   `box-shadow` so it costs no pseudo-element and changes no box. What wears it
+   is the restriction that makes it mean anything: **only things that actually
+   float.** A menu over the page, a modal, a drawer, a notice, a tile being
+   dragged, a filled control. A card sitting in a column is not floating, and
+   giving it a shadow would take the word away from the things that are.
+
+   The hairline is drawn *inside* the top edge rather than as a border because
+   a border would move the element by a pixel, and half of these are already
+   positioned against something.
+
+   **The AI family.** The product had one accent doing two unrelated jobs: on
+   a nav row it means *here*, and on the model picker it means *a language
+   model is involved*. `--ai` is the second job's own colour — the accent
+   carried into violet — and it appears in exactly four places: the model
+   picker, the thinking trail, the sparkle badge on an empty chat, and the LLM
+   providers rail glyph. That list is the feature. A gradient on a fifth thing
+   makes it decoration and takes the meaning off the other four. */
+.rm-raised { box-shadow: inset 0 1px 0 0 var(--sheen), var(--elev-1); }
+.rm-raised-2 { box-shadow: inset 0 1px 0 0 var(--sheen), var(--elev-2); }
+.rm-raised-3 { box-shadow: inset 0 1px 0 0 var(--sheen), var(--elev-3); }
+
+/* The glyph badge on an AI surface: the gradient as a *fill*, with the tinted
+   version for a badge that has to stay behind an icon rather than beside it.
+   Never on text — emphasis in this product comes from weight and size. */
+.rm-ai-fill {
+  background: var(--ai);
+  color: var(--on-accent);
+  box-shadow: inset 0 1px 0 0 var(--sheen-strong), var(--elev-1);
+}
+.rm-ai-tint {
+  background: var(--ai-soft);
+  border: 1px solid var(--ai-border) !important;
+  color: var(--accent);
+}
+
+/* ── the two pickers in the chat header ───────────────────────────────────
+   They sit side by side and were drawn identically, which made the header
+   read as two settings. It is not two settings: it is the sentence *this
+   question goes to **that** model, against **that** database*, and the model
+   half is the one place in the working app where a person chooses which
+   intelligence answers them. So it is the first site of `--ai`.
+
+   The trigger's fill moved out of the JSX to make room for this; the border
+   stayed inline, because it tracks the open state, which is React's.
+
+   The wash is `--ai-soft` — the family gradient at 12–16% — over the panel
+   the other picker has, so the difference is a temperature rather than a
+   second component. The glyph goes to `--accent-2` outright: a gradient
+   drawn through a 15px line drawing reads as a rendering fault. */
+.rm-picker > button { background: var(--panel); }
+.rm-picker.is-ai > button {
+  background: var(--ai-soft), var(--panel);
+  border-color: var(--ai-border);
+}
+.rm-picker.is-ai > button > svg { stroke: var(--accent-2); }
+.rm-picker.is-ai > button:hover:not(:disabled) { border-color: var(--accent-2); }
 
 /* Ambient treatment for the welcome screen only.
    Deliberately not applied to the app shell, for the reason above. Here there
@@ -1196,11 +1387,73 @@ code, pre, .mono {
   .rm-auth-tagline { transition: opacity 0.01ms; }
 }
 
-/* Composer send button — a brand-tinted lift when it can fire. */
+/* ── the filled controls ──────────────────────────────────────────────────
+   `PrimaryButton` and the composer's send disc are the same object at two
+   sizes: the one thing on a screen that is *filled* with the accent. Both are
+   built the same way here, and the recipe is the whole of what "premium"
+   means on a control this small.
+
+   A slab of flat `--accent` is a rectangle of colour. What makes it read as a
+   physical button is three things arriving together: a gradient down to
+   `--accent-deep`, so it is lit from above rather than evenly; a `--sheen`
+   hairline *inside* the top edge, which is that light catching the lip; and
+   `--accent-cast` under it — a shadow the colour a light of that hue would
+   actually throw, with a real offset and blur, because a zero-offset ring of
+   accent is a halo and a halo is a sticker, not a shadow.
+
+   Press is the other half. Hover brightens and lifts a pixel; `:active` puts
+   it back down and shortens the cast, so the button goes *into* the page
+   under the finger. It costs four lines and it is most of the difference
+   between a control that responds and one that merely changes colour. */
+.rm-primary {
+  background: linear-gradient(180deg, var(--accent), var(--accent-deep));
+  color: var(--on-accent);
+  box-shadow: inset 0 1px 0 0 var(--sheen-strong), var(--accent-cast);
+  cursor: pointer;
+  font-family: inherit;
+  transition: transform .12s ease, box-shadow .14s ease, filter .14s ease;
+}
+.rm-primary:hover:not(:disabled) {
+  filter: brightness(1.07);
+  transform: translateY(-1px);
+}
+.rm-primary:active:not(:disabled) {
+  transform: translateY(0);
+  filter: brightness(0.98);
+  box-shadow:
+    inset 0 1px 0 0 var(--sheen-strong),
+    0 1px 3px -1px oklch(0 0 0 / 0.3);
+}
+/* A disabled primary keeps its shape and loses its light: it is still the
+   action, it just cannot be taken yet. Flattening the cast is what says so —
+   an unavailable control that still floats reads as one that is broken. */
+/* Disabled is a *fill* change, not an opacity change, and the difference is
+   the whole reason this is four lines instead of one.
+   `opacity` fades the label along with the ground, so on the light theme's
+   paper a 50%-faded plum under near-white ink left the word barely readable —
+   the control was not restrained, it was unreadable. Mixing the accent back
+   towards the panel desaturates the button while the ink stays at full
+   strength, so a disabled Save still says "Save". The cast goes flat, because
+   an unavailable control that still floats reads as one that is broken. */
+.rm-primary:disabled {
+  cursor: not-allowed;
+  background: color-mix(in oklch, var(--accent) 26%, var(--panel));
+  /* `--text2`, not `--text-dim`: the fill and the flattened cast are what say
+     "not yet", and they say it without help. Measured at 3.8:1 with dimmer
+     ink, which is a label people squint at for no gain. */
+  color: var(--text2);
+  box-shadow: inset 0 1px 0 0 var(--sheen);
+  transform: none;
+}
+
+/* Composer send button — the same object, round, and with one extra state
+   (`.is-running`) that the primary does not have. */
 .rm-send-btn {
   transition: transform 0.14s ease, box-shadow 0.14s ease, filter 0.14s ease, background 0.15s ease;
 }
-.rm-send-btn:not(:disabled) { box-shadow: 0 6px 18px -8px var(--accent); }
+.rm-send-btn:not(:disabled) {
+  box-shadow: inset 0 1px 0 0 var(--sheen-strong), var(--accent-cast);
+}
 .rm-send-btn:hover:not(:disabled) { transform: translateY(-1px) scale(1.04); filter: brightness(1.06); }
 .rm-send-btn:active:not(:disabled) { transform: translateY(0) scale(0.97); }
 
@@ -1249,6 +1502,7 @@ code, pre, .mono {
   border-radius: 5px;
   background: var(--panel-alt);
   border: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 0 var(--sheen), var(--elev-1);
   color: var(--text-dim);
 }
 
@@ -1354,17 +1608,18 @@ code, pre, .mono {
    resting border from the stylesheet. */
 .rm-tile {
   border: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 0 var(--sheen);
   transition: border-color .15s ease, box-shadow .15s ease;
 }
 .rm-tile:hover {
   border-color: var(--border-strong);
-  box-shadow: 0 8px 24px -14px rgba(0, 0, 0, 0.4);
+  box-shadow: inset 0 1px 0 0 var(--sheen), var(--elev-2);
 }
 /* While arranging, the picked-up tile floats above its neighbours. */
 .react-grid-item.react-draggable-dragging .rm-tile,
 .react-grid-item.resizing .rm-tile {
   border-color: var(--accent-border);
-  box-shadow: 0 18px 44px -18px rgba(0, 0, 0, 0.55);
+  box-shadow: inset 0 1px 0 0 var(--sheen), var(--elev-3);
 }
 
 /* Index cards: the whole card is the link (the title button stretches over
@@ -1378,11 +1633,12 @@ code, pre, .mono {
 .rm-dash-card {
   cursor: pointer;
   border: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 0 var(--sheen);
   transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease;
 }
 .rm-dash-card:hover {
   border-color: var(--border-strong);
-  box-shadow: 0 14px 34px -18px rgba(0, 0, 0, 0.5);
+  box-shadow: inset 0 1px 0 0 var(--sheen), var(--elev-2);
   transform: translateY(-2px);
 }
 .rm-dash-card-link::after { content: ''; position: absolute; inset: 0; }
@@ -1482,7 +1738,7 @@ code, pre, .mono {
     z-index: 60;
     width: min(320px, 86vw) !important;
     border-left: 1px solid var(--border-strong);
-    box-shadow: -18px 0 50px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--elev-3);
   }
   /* The tile editor is a form, not a settings list: at floating width its
      two-column rows have ~150px a side, which is a select showing four
@@ -1576,11 +1832,16 @@ code, pre, .mono {
    A spinner says "wait"; a skeleton says "wait, and here is the shape of
    what is coming". Reserving the boxes is also what stops a dashboard's
    first paint from dropping the whole finished layout in at once. */
+/* The sweep carries a breath of the accent at its crest. A grey-on-grey
+   shimmer says "loading" and nothing else; this says the product is doing it.
+   It is one stop, mixed at 22% so the bone still reads as an empty box rather
+   than as a filled one — the skeleton must not compete with the content it is
+   standing in for. */
 .rm-bone {
   background: linear-gradient(
     90deg,
     var(--panel-alt) 25%,
-    var(--panel-hover) 37%,
+    color-mix(in oklch, var(--accent) 22%, var(--panel-hover)) 37%,
     var(--panel-alt) 63%
   );
   background-size: 400% 100%;
@@ -1626,6 +1887,7 @@ code, pre, .mono {
   background: var(--amber-bg);
   border: 1px solid var(--amber-border);
   border-radius: 10px;
+  box-shadow: inset 0 1px 0 0 var(--sheen);
 }
 .rm-attention > button {
   margin-left: auto;
@@ -1693,7 +1955,7 @@ code, pre, .mono {
   outline: none;
   transition: border-color .12s ease, box-shadow .12s ease;
 }
-.rm-search input::placeholder { color: var(--text-faint); }
+.rm-search input::placeholder { color: var(--text-dim); }
 .rm-search input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-bg);
@@ -1750,6 +2012,10 @@ code, pre, .mono {
   background: var(--panel-alt);
   border: 1px solid var(--border);
   border-radius: 9px;
+  /* The track is a well and the chosen button is the sheet sitting in it —
+     which is what makes a segmented control read as one object with a piece
+     that moves, rather than as three buttons of two colours. */
+  box-shadow: var(--well);
 }
 .rm-seg button,
 .rm-toolgroup button {
@@ -1774,7 +2040,7 @@ code, pre, .mono {
 .rm-toolgroup button.is-on {
   background: var(--panel);
   color: var(--text-strong);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.16);
+  box-shadow: inset 0 1px 0 0 var(--sheen), var(--elev-1);
 }
 
 /* Text for a screen reader and no one else.
@@ -1968,6 +2234,7 @@ code, pre, .mono {
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: var(--input-bg);
+  box-shadow: var(--well);
   overflow: hidden;
   transition: border-color .12s ease, box-shadow .12s ease;
 }
@@ -2575,6 +2842,38 @@ code, pre, .mono {
    the top and bottom corners rather than a straight edge. A full-bleed square
    row can wear that marker (this is where VS Code's file tree gets it); a
    rounded pill cannot, and the pill is the shape the whole product uses. */
+/* The rail's own surface, which used to be an inline fill and a hairline.
+   It is the one element on screen at all times, so it is the cheapest place
+   in the product to buy depth, and the three things here are what turn a
+   flat column into an object the content sits beside:
+
+   a vertical gradient, so the rail is lit from the top rather than being one
+   slab of `--sidebar-bg` — the bottom is mixed a little way towards `--bg`,
+   which is *darker* in dark mode and *lighter* on paper, so the same rule
+   reads as the same light from above in both;
+
+   an inset hairline down the right edge instead of a border, because a border
+   would have to pick one colour and the seam between two surfaces is really a
+   dark line with a light one beside it; and
+
+   a soft cast to the right, so the canvas reads as being *behind* the rail.
+   It is deliberately shallow — this is the standing furniture of the app, not
+   something that floats over it, so it does not wear `--elev-*`.
+
+   Moved out of App.tsx's style attribute because a gradient plus two shadows
+   is no longer a one-off value: it is the definition of a surface, and the
+   inline fill would have won over every line of it. */
+.rm-sidebar {
+  background: linear-gradient(
+    180deg,
+    var(--sidebar-bg) 0%,
+    color-mix(in oklch, var(--sidebar-bg) 88%, var(--bg)) 100%
+  );
+  box-shadow:
+    inset -1px 0 0 0 var(--border),
+    4px 0 24px -18px oklch(0 0 0 / 0.55);
+}
+
 .rm-brand {
   display: flex;
   align-items: center;
@@ -2584,7 +2883,10 @@ code, pre, .mono {
 .rm-brand-name {
   font-size: 15px;
   font-weight: 700;
-  letter-spacing: -0.015em;
+  /* Tightened from -0.015em. A wordmark is set closer than running text —
+     it is read as one shape rather than as five letters — and at 15px this is
+     the difference between the product having a name and having a label. */
+  letter-spacing: -0.03em;
   color: var(--text-strong);
 }
 .rm-brand-tag {
@@ -2592,9 +2894,14 @@ code, pre, .mono {
   padding: 2px 6px;
   border-radius: 5px;
   background: var(--panel-alt);
+  box-shadow: inset 0 1px 0 0 var(--sheen);
   color: var(--text-faint);
   font-size: 10px;
   font-weight: 600;
+  /* A version string is a figure, so it gets the figure face and the tracking
+     that keeps four characters from setting as one blur. */
+  font-family: 'JetBrains Mono', Vazirmatn, ui-monospace, monospace;
+  letter-spacing: 0.02em;
 }
 
 .rm-nav-btn {
@@ -2616,8 +2923,28 @@ code, pre, .mono {
   transition: background .12s ease, color .12s ease;
 }
 .rm-nav-btn:hover { background: var(--panel-hover); color: var(--text); }
+
+/* The open row. It was a flat `--accent-bg` fill; it is now that same tint
+   lit from its left edge and closed with a hairline ring.
+
+   The ring is the part worth explaining, because the note above records an
+   accent *spine* being removed from exactly this element. A spine is an inset
+   shadow on one side, and a 9px radius bends it around the corners into a
+   hook — that argument is unchanged and the spine has not come back. A ring
+   is the same shadow on all four sides, which the radius follows perfectly
+   because it is the shape itself. It also does a different job: the spine was
+   a fourth cue for "here", whereas the ring is what separates a tinted pill
+   from the tinted pill of a *hovered* row beside it — a distinction the old
+   flat fill left entirely to a 10% difference in ground. */
 .rm-nav-btn.is-on {
-  background: var(--accent-bg);
+  background: linear-gradient(
+    100deg,
+    var(--accent-bg),
+    color-mix(in oklch, var(--accent-bg) 40%, transparent) 86%
+  );
+  box-shadow:
+    inset 0 0 0 1px var(--accent-border),
+    inset 0 1px 0 0 var(--sheen);
   color: var(--text-strong);
   font-weight: 600;
 }
@@ -2634,6 +2961,7 @@ code, pre, .mono {
   background: var(--panel-alt);
   border: 1px solid var(--border);
   border-radius: 10px;
+  box-shadow: var(--well);
 }
 .rm-theme button {
   flex: 1;
@@ -2657,7 +2985,9 @@ code, pre, .mono {
 .rm-theme button.is-on {
   background: var(--panel);
   color: var(--text-strong);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.16);
+  /* Was a hardcoded rgba, which is a black cast on paper as well as in the
+     dark — the one thing the light theme's warm neutrals cannot take. */
+  box-shadow: inset 0 1px 0 0 var(--sheen), var(--elev-1);
 }
 
 .rm-sidebar-user {
@@ -2832,12 +3162,43 @@ code, pre, .mono {
   cursor: pointer;
   transition: background .12s ease, border-color .12s ease;
 }
-.rm-list-new:hover { background: color-mix(in oklch, var(--accent) 20%, transparent); }
+.rm-list-new {
+  box-shadow: inset 0 1px 0 0 var(--sheen);
+  transition: background .14s ease, box-shadow .14s ease;
+}
+.rm-list-new:hover {
+  background: color-mix(in oklch, var(--accent) 20%, transparent);
+  box-shadow: inset 0 1px 0 0 var(--sheen), inset 0 0 0 1px var(--accent-border);
+}
+
+/* ── what a pointer does to a row ─────────────────────────────────────────
+   Three of the four lists in the product answered a hover with a change of
+   ground and nothing else, which is legible and completely static — the row
+   lights up where a physical one would also give. A pointer-only, 1px slide
+   toward the reader is the smallest thing that turns the list from a painted
+   surface into a stack of objects, and at 1px it cannot disturb a column of
+   text that somebody is reading down.
+
+   Keyed to `@media (hover: hover)` because a translate on a touch device
+   fires on the tap that also navigates, which reads as the row flinching. */
+@media (hover: hover) {
+  .rm-master-item,
+  .rm-chat-item,
+  .rm-krow,
+  .rm-history-row {
+    transition: background .14s ease, border-color .14s ease, transform .14s ease;
+  }
+  .rm-master-item:hover,
+  .rm-chat-item:hover,
+  .rm-krow:hover,
+  .rm-history-row:hover { transform: translateX(1px); }
+}
 
 /* The pane's header is a toolbar over its body, exactly as the dashboard's is
    over its canvas. */
 .rm-detail-header {
   background: color-mix(in oklch, var(--panel) 45%, transparent);
+  box-shadow: inset 0 1px 0 0 var(--sheen);
 }
 
 /* One restrained accent wash at the top of the pane, in the theme's own
@@ -2899,6 +3260,7 @@ code, pre, .mono {
 .rm-section-head {
   flex-shrink: 0;
   background: color-mix(in oklch, var(--panel) 45%, transparent);
+  box-shadow: inset 0 1px 0 0 var(--sheen);
 }
 
 /* The section's gutter is the index gutter — `.rm-page-pad`'s 32px — because
@@ -2930,6 +3292,7 @@ code, pre, .mono {
    approach instead of lifting, the way the dense dashboard rows do. */
 .rm-table-card {
   border: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 0 var(--sheen);
   transition: border-color .14s ease, background .14s ease;
 }
 .rm-table-card:hover { border-color: var(--border-strong); }
@@ -2952,7 +3315,7 @@ code, pre, .mono {
   background: var(--accent);
   border-radius: 9px;
   text-decoration: none;
-  box-shadow: 0 12px 30px -12px rgba(0, 0, 0, 0.55);
+  box-shadow: inset 0 1px 0 0 var(--sheen-strong), var(--accent-cast);
 }
 .rm-skip:focus { left: 10px; }
 .rm-app-view:focus { outline: none; }
@@ -3610,14 +3973,28 @@ code, pre, .mono {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 12px 12px 12px 13px;
+  padding: 12px 12px 12px 15px;
   border: 1px solid var(--border);
-  /* The tone is a rail, not a fill: a green card and a red card at this size
-     read as two different components rather than two states of one. */
-  border-left: 3px solid var(--rm-notice-tone, var(--border));
+  /* The tone is an edge light, not a fill: a green card and a red card at
+     this size read as two different components rather than two states of one.
+
+     It was a 3px rail, which did that job and is also the single most
+     recognisable tell of a generated interface — and here it was carrying a
+     third copy of a fact the glyph and the sentence already give. What
+     replaces it says the same thing in the vocabulary the rest of the app
+     now speaks: the tone tints the left hairline, and a short wash of it
+     falls across the first third of the card, as if the light on this
+     surface were coloured. The card stays `--panel` everywhere it is read. */
+  border-left-color: color-mix(in oklch, var(--rm-notice-tone, var(--border)) 60%, var(--border));
   border-radius: 10px;
-  background: var(--panel);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in oklch, var(--rm-notice-tone, transparent) 14%, transparent),
+      transparent 38%
+    ),
+    var(--panel);
+  box-shadow: inset 0 1px 0 0 var(--sheen), var(--elev-2);
   animation: rm-notice-in 0.18s ease-out;
 }
 
@@ -3685,7 +4062,7 @@ code, pre, .mono {
     z-index: 55;
     width: min(280px, calc(100vw - 76px)) !important;
     border-right: 1px solid var(--border-strong) !important;
-    box-shadow: 18px 0 50px rgba(0, 0, 0, 0.4);
+    box-shadow: var(--elev-3);
     transform: translateX(calc(-100% - 70px));
     transition: transform 0.18s ease;
   }

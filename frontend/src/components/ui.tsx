@@ -811,32 +811,43 @@ export function ProgressBar({
 }
 
 // ── buttons ───────────────────────────────────────────────────────────────
+/**
+ * The one filled control in the product, and now the one lit one.
+ *
+ * The fill, the hover and the press moved to `.rm-primary` in the stylesheet.
+ * That is not tidying: a filled accent slab is the thing on the page that most
+ * needs to look like an object — a gradient so it is lit from its top edge, a
+ * `--sheen` hairline inside that edge, and an accent-tinted cast beneath it —
+ * and an inline `background` would have won over every one of those. What
+ * stays here is the box: the callers that override anything override padding,
+ * and `style` still spreads last so they keep winning.
+ *
+ * It is a plain button again rather than a `HoverButton`. Hover was the only
+ * reason for the wrapper, `:hover` says it better, and this drops a `useState`
+ * from every primary action on screen.
+ */
 export function PrimaryButton({
-  children, style, ...rest
+  children, style, className, ...rest
 }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
-    <HoverButton
+    <button
       {...rest}
-      baseStyle={{
+      className={className ? `rm-primary ${className}` : 'rm-primary'}
+      style={{
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
         gap: 6,
         fontSize: 13,
         fontWeight: 600,
-        background: 'var(--accent)',
-        color: 'var(--on-accent)',
         border: 'none',
         padding: '9px 16px',
         borderRadius: 8,
-        cursor: rest.disabled ? 'not-allowed' : 'pointer',
-        opacity: rest.disabled ? 0.55 : 1,
         ...style,
       }}
-      hoverStyle={{ filter: 'brightness(1.08)' }}
     >
       {children}
-    </HoverButton>
+    </button>
   )
 }
 
@@ -1145,6 +1156,10 @@ export function EmptyState({
             background: 'var(--accent-bg)',
             border: '1px solid var(--accent-border)',
             color: 'var(--accent)',
+            // An empty state is a first run, and this glyph is the only object
+            // on the screen — so it is the one badge that gets a cast as well
+            // as an edge. It is genuinely the thing in front.
+            boxShadow: 'inset 0 1px 0 0 var(--sheen), var(--elev-1)',
             marginBottom: 2,
           }}
         >
@@ -1315,7 +1330,10 @@ export function Modal({
           background: 'var(--panel)',
           border: '1px solid var(--border-strong)',
           borderRadius: 14,
-          boxShadow: '0 24px 64px -20px rgba(0,0,0,0.55)',
+          // `--elev-3`, not a hardcoded rgba: the old one cast pure black,
+          // which on the light theme's warm paper reads as dirt rather than
+          // as shadow. The inset hairline is the top edge catching light.
+          boxShadow: 'inset 0 1px 0 0 var(--sheen), var(--elev-3)',
           overflow: 'hidden',
         }}
       >
@@ -1772,6 +1790,11 @@ export function GlyphBadge({
         background: tint?.background ?? 'var(--panel-alt)',
         border: tint?.border ?? '1px solid var(--border)',
         color: tint?.color ?? 'var(--text-dim)',
+        // The highest-frequency object in the product — one on nearly every
+        // row of every list — so it is the cheapest place to spend a pixel of
+        // light. The hairline inside the top edge turns a tinted square into
+        // a small chip; it changes no box and costs no layer.
+        boxShadow: 'inset 0 1px 0 0 var(--sheen)',
       }}
     >
       {children}
@@ -2389,15 +2412,24 @@ export function PageHeader({
         <h1
           style={{
             margin: 0,
-            fontSize: 25,
+            fontSize: 26,
             fontWeight: 700,
-            letterSpacing: '-0.022em',
+            // Tighter than before, and the reason is the size: tracking wants
+            // to fall as type grows, and -0.022em was a body-text value left
+            // on a 25px heading. `text-wrap: balance` is here for the same
+            // job at the other end — a two-word title that wraps at a narrow
+            // width should break evenly rather than leaving one orphan.
+            letterSpacing: '-0.032em',
+            lineHeight: 1.15,
+            textWrap: 'balance',
             color: 'var(--text-strong)',
           }}
         >
           {title}
         </h1>
-        <span style={{ fontSize: 13.5, color: 'var(--text-dim)' }}>{subtitle}</span>
+        <span style={{ fontSize: 13.5, lineHeight: 1.5, color: 'var(--text-dim)' }}>
+          {subtitle}
+        </span>
       </div>
       {actions && (
         <div

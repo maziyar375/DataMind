@@ -154,7 +154,49 @@ export function KnowledgeAccess({ connection }: { connection: Connection }) {
   )
 }
 
+/**
+ * Is a sticky bar currently stuck, rather than sitting where it was written?
+ *
+ * Returns a ref for a zero-height sentinel placed immediately *above* the bar,
+ * and the answer. The sentinel is what gets observed because a sticky element
+ * cannot report on itself — it never leaves the top of its scroller, which is
+ * the whole point of it. When the scroller has clipped the sentinel away, the
+ * bar has taken its place.
+ *
+ * It exists because of what the bar's background costs at rest. The fill has
+ * a real job — the list scrolls *under* this bar, and without it the rows
+ * read straight through the tabs — but it is an opaque `--bg` laid over the
+ * pane's accent wash, so at the top of the page, where nothing is scrolling
+ * and nothing needs hiding, it drew a plain rectangle with a hard horizontal
+ * seam across the pane. That is the exact seam the note on `.rm-detail-pane`
+ * in styles.css exists to prevent. Painting only while stuck gives the bar
+ * its job back and costs nothing the rest of the time.
+ */
+function useStuck(): [(node: HTMLDivElement | null) => void, boolean] {
+  const [stuck, setStuck] = useState(false)
+  const watcher = useRef<IntersectionObserver | null>(null)
+  // A *callback* ref, not a ref object read from an effect. This tab renders
+  // its loading state before its content, so a `useEffect` with empty deps
+  // runs once while the sentinel is still null and then never again — which
+  // is exactly the bug this replaces: the bar fell back to "stuck" on mount
+  // and stayed painted forever. A callback ref fires whenever the node
+  // actually appears, and again with null when it goes.
+  const ref = useCallback((node: HTMLDivElement | null) => {
+    watcher.current?.disconnect()
+    watcher.current = null
+    if (!node) return
+    // No observer (jsdom, a very old browser): keep the fill, which is the
+    // behaviour this bar had before the hook existed.
+    if (typeof IntersectionObserver === 'undefined') return setStuck(true)
+    watcher.current = new IntersectionObserver(([entry]) => setStuck(!entry.isIntersecting))
+    watcher.current.observe(node)
+  }, [])
+  useEffect(() => () => watcher.current?.disconnect(), [])
+  return [ref, stuck]
+}
+
 export function KnowledgeTab({ connection }: { connection: Connection }) {
+  const [stickyTop, stuck] = useStuck()
   const [rows, setRows] = useState<KnowledgeTemplate[]>([])
   const [staleIds, setStaleIds] = useState<string[]>([])
   const [health, setHealth] = useState<KnowledgeHealth | null>(null)
@@ -458,11 +500,15 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
         />
       )}
 
+      {/* Zero-height, and out of the layout: it is only here to be watched.
+          The negative margin keeps it from adding a pixel above the bar. */}
+      <div ref={stickyTop} aria-hidden style={{ height: 1, marginBottom: -1 }} />
       <div
         style={{
           position: 'sticky', top: 0, zIndex: 2, display: 'flex',
           flexDirection: 'column', gap: 10, padding: '2px 0 10px',
-          background: 'var(--bg)',
+          background: stuck ? 'var(--bg)' : 'transparent',
+          transition: 'background .18s ease',
         }}
       >
         <div

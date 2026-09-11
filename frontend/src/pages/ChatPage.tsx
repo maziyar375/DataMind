@@ -1000,6 +1000,7 @@ export default function ChatPage() {
               }
             />
             <HeaderSelect
+              ai
               icon={<Icon.Sparkle size={15} stroke="var(--accent)" />}
               label="Model"
               value={modelId}
@@ -1149,7 +1150,7 @@ export default function ChatPage() {
                 border: '1px solid var(--border-strong)',
                 color: 'var(--text-dim)',
                 cursor: 'pointer',
-                boxShadow: '0 4px 14px rgba(0,0,0,0.16)',
+                boxShadow: 'var(--elev-2)',
               }}
             >
               <Icon.ArrowDown size={15} />
@@ -2344,7 +2345,7 @@ function Composer({
  */
 function HeaderSelect({
   icon, label, value, onChange, options, badge, width = 190, disabled = false,
-  emptyLabel, onEmpty,
+  emptyLabel, onEmpty, ai = false,
 }: {
   icon: React.ReactNode
   label: string
@@ -2359,6 +2360,16 @@ function HeaderSelect({
   /** What to offer when there is nothing to choose — "Add a database…". */
   emptyLabel?: string
   onEmpty?: () => void
+  /**
+   * This control chooses a *language model*, so it wears the AI family.
+   *
+   * The two pickers sit side by side and were drawn identically, which made
+   * the header say "here are two settings" when what it says is "this
+   * question will be put to **that** model against **that** database". Only
+   * the styling knows about it (`.rm-picker.is-ai`); the behaviour is one
+   * component.
+   */
+  ai?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -2390,7 +2401,11 @@ function HeaderSelect({
     // `rm-picker`: below 700px the header wraps onto its own line and the two
     // pickers share it, so the fixed trigger width — which exists to stop them
     // jumping on every change — has to give way to an equal share.
-    <div ref={ref} className="rm-picker" style={{ position: 'relative', flexShrink: 0 }}>
+    <div
+      ref={ref}
+      className={ai ? 'rm-picker is-ai' : 'rm-picker'}
+      style={{ position: 'relative', flexShrink: 0 }}
+    >
       <button
         onClick={() => !disabled && setOpen((v) => !v)}
         disabled={disabled}
@@ -2406,7 +2421,6 @@ function HeaderSelect({
           alignItems: 'center',
           gap: 8,
           width,
-          background: 'var(--panel)',
           border: `1px solid ${open ? 'var(--accent)' : 'var(--border-strong)'}`,
           borderRadius: 9,
           padding: '6px 10px',
@@ -2473,7 +2487,7 @@ function HeaderSelect({
             border: '1px solid var(--border-strong)',
             borderRadius: 10,
             padding: 5,
-            boxShadow: '0 10px 30px rgba(0,0,0,0.22)',
+            boxShadow: 'inset 0 1px 0 0 var(--sheen), var(--elev-2)',
             zIndex: 50,
           }}
         >

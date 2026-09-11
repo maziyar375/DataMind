@@ -116,7 +116,7 @@ export const UserBubble = memo(function UserBubble({ text }: { text: string }) {
         lineHeight: 1.55,
         whiteSpace: 'pre-wrap',
         wordBreak: 'break-word',
-        boxShadow: '0 1px 3px rgba(0,0,0,0.10)',
+        boxShadow: 'var(--elev-1)',
       }}
     >
       {text}

@@ -517,13 +517,15 @@ function Sidebar({
     <nav
       aria-label="Main"
       className="rm-sidebar"
+      // The fill and the right-hand seam used to be here and are now in
+      // `.rm-sidebar` — a gradient plus two inset shadows is the definition
+      // of a surface rather than a one-off value, and an inline `background`
+      // would have won over all of it.
       style={{
         width: 232,
         flexShrink: 0,
         display: 'flex',
         flexDirection: 'column',
-        background: 'var(--sidebar-bg)',
-        borderRight: '1px solid var(--border)',
         padding: '18px 12px 14px',
       }}
     >

@@ -554,6 +554,11 @@ export function Section({
         border: `1px solid ${danger ? 'var(--red-border)' : 'var(--border)'}`,
         borderRadius: 12,
         background: 'var(--panel)',
+        // An edge, not a shadow. This card does not float — it is the page —
+        // and giving it a cast would take the word "raised" away from the
+        // menus and dialogs that genuinely are. What it gets is the hairline
+        // of light along its top, which is what a sheet of anything has.
+        boxShadow: 'inset 0 1px 0 0 var(--sheen)',
         overflow: 'hidden',
       }}
     >
@@ -564,7 +569,12 @@ export function Section({
           gap: 10,
           padding: '12px 16px',
           borderBottom: '1px solid var(--border)',
-          background: danger ? 'var(--red-bg)' : 'var(--panel-alt)',
+          // The header band falls away into the card's own fill rather than
+          // sitting on it as a flat stripe, so the card reads as one piece of
+          // material with a lit top rather than as two stacked rectangles.
+          background: danger
+            ? 'var(--red-bg)'
+            : 'linear-gradient(180deg, var(--panel-alt), var(--panel))',
         }}
       >
         {icon && (

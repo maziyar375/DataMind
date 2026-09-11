@@ -917,7 +917,7 @@ function ReportMenu({
               background: 'var(--panel)',
               border: '1px solid var(--border-strong)',
               borderRadius: 10,
-              boxShadow: '0 16px 40px -14px rgba(0,0,0,.5)',
+              boxShadow: 'inset 0 1px 0 0 var(--sheen), var(--elev-2)',
             }}
           >
             {items.map((item) => (

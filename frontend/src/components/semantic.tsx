@@ -1133,7 +1133,7 @@ function SaveBar({
           borderRadius: 12,
           background: 'var(--panel)',
           border: '1px solid var(--border-strong)',
-          boxShadow: '0 18px 44px -18px rgba(0,0,0,0.6)',
+          boxShadow: 'inset 0 1px 0 0 var(--sheen), var(--elev-3)',
         }}
       >
         <span style={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
@@ -1346,7 +1346,7 @@ function PillTabs<T extends string>({
               border: 'none',
               color: active ? 'var(--text-strong)' : 'var(--text-dim)',
               background: active ? 'var(--panel)' : 'transparent',
-              boxShadow: active ? '0 1px 3px rgba(0,0,0,0.10)' : 'none',
+              boxShadow: active ? 'inset 0 1px 0 0 var(--sheen), var(--elev-1)' : 'none',
             }}
           >
             {option.label}
@@ -1410,7 +1410,7 @@ function FilterBar({
         borderRadius: 11,
         background: 'var(--panel)',
         border: '1px solid var(--border)',
-        boxShadow: '0 10px 24px -18px rgba(0,0,0,0.55)',
+        boxShadow: 'var(--elev-1)',
       }}
     >
       <PillTabs
