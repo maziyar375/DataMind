@@ -455,3 +455,68 @@ async def test_a_run_someone_else_holds_is_not_executed() -> None:
     # No session access at all: if it got past the claim it would raise
     # AttributeError on the bare `object()` above.
     await service.execute_run(uuid.uuid4(), worker_id="w")
+
+
+# ── the worker's own wiring ──────────────────────────────────────────────
+def test_the_worker_hands_execute_run_an_authorizer() -> None:
+    """The regression that broke every question asked in chat.
+
+    `RunService`'s `authz` is optional **by design**: half the class is the
+    execution half — `claim`, `heartbeat`, `reconcile_stale` — which drives a
+    run that was authorized when it was created and has nobody to ask about.
+    Phase 8 ended that for `execute_run` alone by adding the §8b re-check: a
+    grant can be revoked between queueing and execution, so the run is
+    re-asked as its own actor before it spends a key or reads a database.
+
+    The re-check landed in `execute_run` and never reached `_run`, the one
+    place that calls it. Every run then raised the wiring error `_authorizer`
+    exists to make loud, the bare `except Exception` in `_run` caught it, and
+    it surfaced as `run_executor_failed` — a log line naming the symptom, on
+    every question, with no test failing anywhere.
+
+    **Nothing else could have caught it.** The parameter is optional, so mypy
+    is silent by construction; the one `execute_run` test returns at a failed
+    claim and never reaches line 469; and `_authorizer`'s raise carries
+    `pragma: no cover - a wiring error, not a path`, which is exactly the
+    claim that turned out to be false. So the assertion is on the parse, where
+    the mistake actually lives — a construction site, not a behaviour.
+    """
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse(Path("app/workers/inprocess.py").read_text())
+    run = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_run"
+    )
+    built = [
+        node for node in ast.walk(run)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "RunService"
+    ]
+    assert built, "_run must construct the service it executes with"
+    for call in built:
+        assert len(call.args) + len(call.keywords) >= 3, (
+            "_run builds the RunService that executes a run, and execute_run "
+            "re-checks the actor's grants — it must be passed an authorizer."
+        )
+
+    # And the sibling sites must *not* grow one by cargo cult: passing one to a
+    # path that asks nobody anything makes "does this authorize?" unreadable
+    # from the call, which is the property that made this bug findable at all.
+    for name in ("_claim_loop", "_heartbeat"):
+        fn = next(
+            (node for node in ast.walk(tree)
+             if isinstance(node, ast.AsyncFunctionDef) and node.name == name),
+            None,
+        )
+        if fn is None:
+            continue
+        for call in ast.walk(fn):
+            if (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                    and call.func.id == "RunService"):
+                assert len(call.args) + len(call.keywords) == 2, (
+                    f"{name} asks nobody anything and must take no authorizer"
+                )
+

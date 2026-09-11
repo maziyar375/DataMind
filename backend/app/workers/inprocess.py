@@ -111,6 +111,7 @@ class InProcessRunExecutor:
                 log.exception("run_claimer_failed")
 
     async def _run(self, run_id: UUID) -> None:
+        from app.infra.authz.factory import build_authorizer
         from app.infra.db.session import get_sessionmaker
         from app.services.run_service import RunService
 
@@ -118,7 +119,27 @@ class InProcessRunExecutor:
             heartbeat: asyncio.Task[None] | None = None
             try:
                 async with get_sessionmaker()() as session:
-                    service = RunService(session, self._settings)
+                    # ⚠️ **`execute_run` needs one, and this is the only
+                    # construction site on its path.** `RunService`'s authorizer
+                    # is optional because the execution half was written to
+                    # drive a run "that was authorized when it was created and
+                    # has nobody to ask about" — true until Phase 8 added the
+                    # §8b re-check, which asks, as the run's own actor, whether
+                    # a grant was revoked between queueing and execution. The
+                    # re-check landed in `execute_run` without reaching the
+                    # worker that calls it, so every run raised the wiring
+                    # error `_authorizer` exists to make loud, was caught by the
+                    # bare `except Exception` below, and died as
+                    # `run_executor_failed` — which is to say every question
+                    # asked in chat failed, and the log named the symptom.
+                    #
+                    # The sibling sites deliberately keep passing nothing:
+                    # `claimable_runs`, `heartbeat` and `reconcile_stale` ask
+                    # nobody anything, and handing them an authorizer would make
+                    # "does this path authorize?" unreadable from the call.
+                    service = RunService(
+                        session, self._settings, build_authorizer(session, self._settings)
+                    )
                     heartbeat = asyncio.create_task(self._heartbeat(run_id))
                     await service.execute_run(run_id, worker_id=self._worker_id)
             except asyncio.CancelledError:
