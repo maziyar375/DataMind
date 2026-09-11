@@ -44,7 +44,7 @@ EXPECT_TABLES=42
 # built; `_RETRIEVE_BUDGET_CHARS` has since moved to 50,000, so clearing 24,000
 # no longer means retrieval is exercised — at 26,480 this fixture now takes the
 # FULL_SNAPSHOT branch. Kept as a floor because a narrow fixture is still wrong;
-# see docs/eval.md §1 for what that costs the recall metric.
+# see docs/reference/eval.md §1 for what that costs the recall metric.
 MIN_BUDGET=24000
 RED=$'\033[31m'; GRN=$'\033[32m'; YEL=$'\033[33m'; NC=$'\033[0m'
 fail() { echo "${RED}FAIL:${NC} $*" >&2; exit 1; }

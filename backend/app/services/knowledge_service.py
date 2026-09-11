@@ -1520,7 +1520,7 @@ class FeedbackService:
 
         They arrive as **proposals**, never as approved templates, and a
         `GENERATED_EDITED` one is `MODEL_DERIVED`: a human edited a statement
-        whose *literals* the model chose (`docs/security.md`).
+        whose *literals* the model chose (`docs/reference/security.md`).
         """
         out: list[Suggestion] = []
 

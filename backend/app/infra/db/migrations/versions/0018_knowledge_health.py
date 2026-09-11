@@ -1,6 +1,6 @@
 """Store health: the conflict's evidence, and the switch that turns it off.
 
-Phase 4 of `docs/learning-loop-plan.md`. Two columns and no new table, because
+Phase 4 of `docs/plans/learning-loop.md`. Two columns and no new table, because
 staleness and conflict are *states a template is in* and the status column
 already exists to hold them.
 

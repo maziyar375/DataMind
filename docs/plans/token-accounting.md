@@ -1,12 +1,25 @@
 # Token accounting — closing the `structured()` / `stream()` gap
 
-**Status:** proposed, not built. Written 2026-09-05.
+> **Status: built.** All six phases landed on the
+> `feat/llm-token-observability` branch and merged to `main` — migration
+> `0023_token_accounting`, the `Usage` sink, per-node accumulation on the chat
+> pipeline, reports and semantic jobs, the attribution tests, and one structured
+> log line per provider call. The line that used to stand here said *"proposed,
+> not built"*, which was true the day it was written.
+>
+> Read it now as the record of **why** token accounting is shaped this way —
+> §1's six design decisions are the part that stays useful. §5, *"what this
+> leaves undone"*, is still open work.
+>
+> **Written:** 2026-09-05. **Status corrected:** 2026-09-11.
+> The argument behind it is
+> [research/llm-observability.md](../research/llm-observability.md).
 
 A plan to make the token numbers this product already records *true*, and to
 make them attributable — per node, per operation, and per user.
 
-Read [docs/pipeline.md](pipeline.md) §0 for the call-site map this plan touches
-and [docs/security.md](security.md) before changing anything near a gateway
+Read [docs/reference/pipeline-chat.md](../reference/pipeline-chat.md) §0 for the call-site map this plan touches
+and [docs/reference/security.md](../reference/security.md) before changing anything near a gateway
 call site.
 
 ---
@@ -34,19 +47,19 @@ has one honest call site and ten that silently report zero.
 
 | Call site | Method | Usage recorded? |
 |---|---|---|
-| [nodes/__init__.py:150](../backend/app/pipeline/nodes/__init__.py#L150) `route` | `complete` | **yes** — the only one |
-| [nodes/__init__.py:690](../backend/app/pipeline/nodes/__init__.py#L690) `describe` | `stream` | no |
-| [nodes/__init__.py:788](../backend/app/pipeline/nodes/__init__.py#L788) `clarify` | `structured` | no |
-| [nodes/__init__.py:953](../backend/app/pipeline/nodes/__init__.py#L953) `generate` | `structured` | no |
-| [nodes/__init__.py:1315](../backend/app/pipeline/nodes/__init__.py#L1315) `present` | `stream` | no |
-| [nodes/__init__.py:1399](../backend/app/pipeline/nodes/__init__.py#L1399) `chart` | `structured` | no |
-| [semantic/generator.py:400](../backend/app/semantic/generator.py#L400) | `structured` | no |
-| [semantic/generator.py:435](../backend/app/semantic/generator.py#L435) | `structured` | no |
-| [semantic/generator.py:474](../backend/app/semantic/generator.py#L474) | `structured` | no |
-| [reports/outline.py:203](../backend/app/reports/outline.py#L203) | `complete` | no — returns a `Completion`, reads `.text` only |
-| [workers/report.py:743](../backend/app/workers/report.py#L743) section narration | `complete` | no — same |
-| [workers/report.py:824](../backend/app/workers/report.py#L824) executive summary | `complete` | no — same |
-| [services/run_service.py:1113](../backend/app/services/run_service.py#L1113) follow-up suggestions | `complete` | no — same |
+| [nodes/__init__.py:150](../../backend/app/pipeline/nodes/__init__.py#L150) `route` | `complete` | **yes** — the only one |
+| [nodes/__init__.py:690](../../backend/app/pipeline/nodes/__init__.py#L690) `describe` | `stream` | no |
+| [nodes/__init__.py:788](../../backend/app/pipeline/nodes/__init__.py#L788) `clarify` | `structured` | no |
+| [nodes/__init__.py:953](../../backend/app/pipeline/nodes/__init__.py#L953) `generate` | `structured` | no |
+| [nodes/__init__.py:1315](../../backend/app/pipeline/nodes/__init__.py#L1315) `present` | `stream` | no |
+| [nodes/__init__.py:1399](../../backend/app/pipeline/nodes/__init__.py#L1399) `chart` | `structured` | no |
+| [semantic/generator.py:400](../../backend/app/semantic/generator.py#L400) | `structured` | no |
+| [semantic/generator.py:435](../../backend/app/semantic/generator.py#L435) | `structured` | no |
+| [semantic/generator.py:474](../../backend/app/semantic/generator.py#L474) | `structured` | no |
+| [reports/outline.py:203](../../backend/app/reports/outline.py#L203) | `complete` | no — returns a `Completion`, reads `.text` only |
+| [workers/report.py:743](../../backend/app/workers/report.py#L743) section narration | `complete` | no — same |
+| [workers/report.py:824](../../backend/app/workers/report.py#L824) executive summary | `complete` | no — same |
+| [services/run_service.py:1113](../../backend/app/services/run_service.py#L1113) follow-up suggestions | `complete` | no — same |
 
 So the gap is wider than "two methods discard usage". Four `complete()` callers
 receive accurate token counts in hand and drop them, because nothing downstream
@@ -61,7 +74,7 @@ tokens anywhere**. `semantic_jobs` — one model call per table, four
 concurrently, across a 42-table schema — likewise records zero.
 
 The eval harness is the one place this works properly: it reads
-`state.prompt_tokens` and calls `estimate_cost_usd` ([runner.py:237-240](../backend/app/eval/runner.py#L237-L240)).
+`state.prompt_tokens` and calls `estimate_cost_usd` ([runner.py:237-240](../../backend/app/eval/runner.py#L237-L240)).
 It works there because the eval runs the chat pipeline, where `route` happens to
 be instrumented. It is measuring one call out of five and calling it a run.
 
@@ -107,7 +120,7 @@ set: `on_reasoning` is the same shape, for the same reason.
 
 **Why not accumulate inside the gateway instance.** A per-instance counter is
 fewest edits and wrong: one `LiteLLMGateway` is shared across the report worker's
-concurrent narration waves ([workers/report.py](../backend/app/workers/report.py),
+concurrent narration waves ([workers/report.py](../../backend/app/workers/report.py),
 `report_narration_concurrency` default 4), so four sections' counts would
 interleave into one bucket with no way to separate them. The sink is called with
 one call's usage, synchronously, by the coroutine that made it — concurrency-safe
@@ -171,7 +184,7 @@ rule, and the distinction is the one `audit.py` already articulates.
 Per-user totals need a user. Today `runs.owner_id`, `report_runs.owner_id` and
 `semantic_jobs.owner_id` all exist and all hold the authenticated caller —
 `create_run` takes `owner_id` from `ctx.user_id` and refuses a conversation the
-caller does not own ([run_service.py:160-172](../backend/app/services/run_service.py#L160-L172)),
+caller does not own ([run_service.py:160-172](../../backend/app/services/run_service.py#L160-L172)),
 so **owner and actor are the same person in every row that exists today.**
 
 They will not stay that way. The platform is heading for multiple users working
@@ -248,7 +261,7 @@ usage row whose actor was deleted is still a true record of tokens spent. It is
 ownership filters match on it).
 
 **Costing** uses the existing `estimate_cost_usd` in
-[litellm_gateway.py:713](../backend/app/infra/llm/litellm_gateway.py#L713),
+[litellm_gateway.py:713](../../backend/app/infra/llm/litellm_gateway.py#L713),
 which already returns `None` for a model litellm cannot price (a local Ollama
 model, say). Null cost with non-null tokens is the correct and expected state for
 self-hosted deployments, and no query should treat null as zero.
@@ -302,10 +315,10 @@ sentence`, lowercase, no trailing period). Each phase names its two below.
 
 *Adds an optional parameter that nothing passes yet. Zero behaviour change.*
 
-1. Add `Usage` and `UsageSink` to [domain/ports/llm.py](../backend/app/domain/ports/llm.py);
+1. Add `Usage` and `UsageSink` to [domain/ports/llm.py](../../backend/app/domain/ports/llm.py);
    add `Completion.usage()`.
 2. Add `on_usage` to the `LLMGateway` Protocol's `structured` and `stream`.
-3. Implement in [litellm_gateway.py](../backend/app/infra/llm/litellm_gateway.py):
+3. Implement in [litellm_gateway.py](../../backend/app/infra/llm/litellm_gateway.py):
    - `structured()` — read `response.usage` after `_structured_call` /
      `_structured_stream_call`, fire the sink. It fires **once per attempt**, so a
      repaired call (`STRUCTURED_REPAIRS`) reports both; that is correct, both were
@@ -342,7 +355,7 @@ test(llm): the usage sink fires per attempt and never fails the call
    `actor_id` on all three run-ish tables.
 5. Backfill `actor_id` from `owner_id` in the same migration (§1.5). Token columns
    are **not** backfilled (§2).
-6. Mirror all of it in [infra/db/models.py](../backend/app/infra/db/models.py).
+6. Mirror all of it in [infra/db/models.py](../../backend/app/infra/db/models.py).
 
 **Tests:**
 
@@ -370,18 +383,18 @@ end to end, so nothing is half-wired.*
    The existing `llm_latency_ms` / `prompt_tokens` / `completion_tokens` fields
    stay and become *accurate* rather than partial.
 8. Rewrite `route`'s hand-rolled accumulation
-   ([nodes/__init__.py:158-160](../backend/app/pipeline/nodes/__init__.py#L158-L160))
+   ([nodes/__init__.py:158-160](../../backend/app/pipeline/nodes/__init__.py#L158-L160))
    to call `record_usage(completion.usage())` — one path, not two.
 9. Pass `on_usage=state.record_usage` at the five other pipeline call sites
    (`describe`, `clarify`, `generate`, `present`, `chart`).
 10. Widen the adapter's `on_step` callback in
-    [pipeline/graph.py](../backend/app/pipeline/graph.py) to carry the node's
+    [pipeline/graph.py](../../backend/app/pipeline/graph.py) to carry the node's
     usage bucket, and write it to the new `run_steps` columns.
     **The adapter owns this, not the nodes** — CLAUDE.md is explicit that the
     adapter owns the `seq` counter, the `run_steps` write and both `emit` calls,
     and that separation is what keeps the SSE sequence identical run after run. A
     node writing its own token row would be the first exception to that rule.
-11. `run_service._finalise` ([run_service.py:687-690](../backend/app/services/run_service.py#L687-L690))
+11. `run_service._finalise` ([run_service.py:687-690](../../backend/app/services/run_service.py#L687-L690))
     additionally writes `cost_usd` via `estimate_cost_usd`, and `create_run` sets
     `actor_id` from `ctx.user_id`.
 
@@ -467,7 +480,7 @@ test(usage): per-user totals group across all three tables and survive deletion
 
 18. Emit an `llm_call` event from the gateway: model, provider, prompt/completion
     tokens, latency, cost, and the correlation id
-    [core/logging.py](../backend/app/core/logging.py) already attaches.
+    [core/logging.py](../../backend/app/core/logging.py) already attaches.
 19. **No prompt text, no completion text, no question.** `audit.py`'s rule 3,
     applied here: identifiers and counts only. A log that became a second copy of
     what reached the provider is a second thing to secure and the one place

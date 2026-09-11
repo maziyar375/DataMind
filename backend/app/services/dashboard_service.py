@@ -11,7 +11,7 @@ row, `visible` composed into the query for a list. The answer is identical today
 — `OwnerOnlyAuthorizer` returns exactly what the comparison did — and that is
 the point: when grants arrive, sharing a dashboard is a change in
 `app/infra/authz/`, not a change here. See
-`docs/user-management-and-access-control-plan.md` §18.
+`docs/plans/user-management-and-access-control.md` §18.
 
 The two parts that are not CRUD:
 

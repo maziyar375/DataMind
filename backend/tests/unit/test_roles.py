@@ -1,6 +1,6 @@
 """The eight seed roles, the four refusals, and the one query per request.
 
-Phase 3 of `docs/user-management-and-access-control-plan.md`. What this file
+Phase 3 of `docs/plans/user-management-and-access-control.md`. What this file
 pins down, in the order it would hurt if it broke:
 
 * **The seed *is* the specification.** §12.3 of the plan says exactly what each

@@ -1,6 +1,6 @@
 """Reading the audit log. Administrators only.
 
-Phase 8 of `docs/learning-loop-plan.md`. The writing half is
+Phase 8 of `docs/plans/learning-loop.md`. The writing half is
 `services/audit.py`; this is the half that makes the table worth having, and
 it is deliberately small.
 
@@ -29,7 +29,7 @@ is why `outcome` is a filter: *"what has been refused, and to whom"* is the
 question an audit log exists for, and it was unanswerable here until there were
 denials to find.
 
-One half of [mvp2 §D4](../../../../docs/mvp2-plan.md) also landed: every ask
+One half of [mvp2 §D4](../../../../docs/plans/mvp2.md) also landed: every ask
 now records the **disclosure policy in force** for it, under `ask.recorded`.
 What is still not here is the SQL that ran, the rows returned, and what reached
 the model provider — those live on the run, which this row points at.

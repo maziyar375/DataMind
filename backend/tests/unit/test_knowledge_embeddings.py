@@ -1,6 +1,6 @@
 """The embedding matcher — a swap, not a rewrite.
 
-Phase 7 of `docs/learning-loop-plan.md`. What is actually being claimed here,
+Phase 7 of `docs/plans/learning-loop.md`. What is actually being claimed here,
 in the order it would hurt if it broke:
 
 * **the loop degrades to lexical, never to nothing** — every way the embedding

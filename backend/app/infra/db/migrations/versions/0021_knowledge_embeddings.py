@@ -1,6 +1,6 @@
 """The embedding matcher's index, and the pin that makes it reproducible.
 
-Phase 7 of `docs/learning-loop-plan.md`. Five columns and no new table.
+Phase 7 of `docs/plans/learning-loop.md`. Five columns and no new table.
 
 **No pgvector, and that is a decision rather than an omission.** The base image
 is `postgres:16-alpine`, which does not carry the extension, and §3.8 buys

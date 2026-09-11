@@ -2066,7 +2066,7 @@ export function TemplateEditor({
         // If the curator edited the statement they were shown, the literals
         // are now theirs and travel with structure; if they only confirmed it,
         // they are still the model's and are gated like sample values.
-        // `docs/security.md`.
+        // `docs/reference/security.md`.
         source: prefill
           ? sql.trim() === prefill.sql.trim()
             ? prefill.source ?? 'CHAT_CONFIRMED'

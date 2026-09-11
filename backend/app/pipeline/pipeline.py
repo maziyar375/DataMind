@@ -2,7 +2,7 @@
 
 The state machine is now a compiled LangGraph — see
 [`graph.py`](graph.py) and
-[docs/langgraph-migration.md](../../../docs/langgraph-migration.md). The node
+[docs/plans/langgraph-migration.md](../../../docs/plans/langgraph-migration.md). The node
 signatures were built LangGraph-shaped from the start, so adopting it was the
 wiring change the architecture doc predicted rather than a rewrite: the ten
 node functions are untouched, and what moved is the `while` loop that did index

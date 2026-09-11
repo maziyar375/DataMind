@@ -11,7 +11,7 @@ That rule used to be spelled `WHERE owner_id = :actor`. It is now one question
 asked of one object, and the answer is identical today — `OwnerOnlyAuthorizer`
 returns exactly what the comparison did. That is the point: when grants arrive,
 sharing a report is a change in `app/infra/authz/`, not a change here. See
-`docs/user-management-and-access-control-plan.md` §18.
+`docs/plans/user-management-and-access-control.md` §18.
 
 Three rules here are not CRUD, and each is a decision the rest of the feature
 rests on:

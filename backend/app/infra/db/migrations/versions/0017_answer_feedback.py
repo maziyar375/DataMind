@@ -1,6 +1,6 @@
 """Feedback on an answer, and what became of it.
 
-Phase 3 of `docs/learning-loop-plan.md`. The hardest part of curation is not
+Phase 3 of `docs/plans/learning-loop.md`. The hardest part of curation is not
 writing a template — it is knowing *which* template to write, and the system
 already knows: it is sitting in `runs`. This table is the other half of that,
 the part only a person can supply.

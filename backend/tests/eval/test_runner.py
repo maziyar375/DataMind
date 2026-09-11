@@ -299,7 +299,7 @@ async def test_negative_routing_scored_without_sql() -> None:
     assert wrong.outcome == "SQL_LEAK"
 
 
-# ── the arms (Phase 0 of docs/learning-loop-plan.md: "fix the ruler") ────────
+# ── the arms (Phase 0 of docs/plans/learning-loop.md: "fix the ruler") ────────
 #
 # Both are OFF by default, and that is the load-bearing property: every number
 # recorded before they existed was measured with the layer absent and the

@@ -162,7 +162,7 @@ async def evaluate_record(
     vectors: dict[str, list[float]] | None = None,
 ) -> RecordOutcome:
     # The arm's split rides on `tags`, so `aggregate`'s per-tag breakdown
-    # reports it for free and `docs/eval.md` §6.1 quotes one row of it.
+    # reports it for free and `docs/reference/eval.md` §6.1 quotes one row of it.
     tags = list(record.tags)
     if templates is not None:
         tags.append(
@@ -531,7 +531,7 @@ def load_semantic(spec: FixtureSpec, snapshot: dict[str, Any]) -> dict[str, Any]
 HELD_OUT_FRACTION = 0.4
 
 #: Tags added in the templates arm so `aggregate`'s per-tag breakdown reports
-#: the split for free. `docs/eval.md` §6.1 quotes the `held_out` row.
+#: the split for free. `docs/reference/eval.md` §6.1 quotes the `held_out` row.
 HELD_OUT_TAG = "held_out"
 TAUGHT_TAG = "taught"
 
@@ -544,7 +544,7 @@ def held_out_ids(
     Deterministic and not random: two runs of one arm that held out different
     questions are two different measurements, and nobody would notice. Sorted
     by id and taken at a fixed stride rather than hashed, so the split is
-    reproducible from the suite file alone — a reader of `docs/eval.md` can
+    reproducible from the suite file alone — a reader of `docs/reference/eval.md` can
     work out which questions were held out without re-running anything.
     """
     ordered = sorted(r.id for r in records)
@@ -1034,7 +1034,7 @@ async def _amain(args: argparse.Namespace) -> int:
             report_dict["semantic_layer"] = semantic is not None
             # Which arm, and how the split fell. Recorded on the scorecard
             # rather than only in the shell that launched it: the gate in
-            # `docs/eval.md` §6.1 compares two `eval_runs` rows, and two runs
+            # `docs/reference/eval.md` §6.1 compares two `eval_runs` rows, and two runs
             # that differ only in this are otherwise indistinguishable.
             report_dict["templates"] = templates is not None
             report_dict["templates_in_store"] = len(templates or [])
@@ -1047,7 +1047,7 @@ async def _amain(args: argparse.Namespace) -> int:
             # Which matcher retrieved. Recorded because Phase 7's whole claim is
             # a *delta* between two runs that differ only in this, and two
             # scorecards that do not say which matcher ran cannot be compared —
-            # `docs/eval.md` §6.3.
+            # `docs/reference/eval.md` §6.3.
             report_dict["matcher"] = (
                 args.matcher if templates is not None else "none"
             )

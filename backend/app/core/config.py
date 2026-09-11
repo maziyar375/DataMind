@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     # be routed through the port before the policy changed. `rbac` adds grants,
     # teams, role scoped privileges and wildcards on top of ownership, and **is
     # the default as of Phase 6** of
-    # `docs/user-management-and-access-control-plan.md`.
+    # `docs/plans/user-management-and-access-control.md`.
     #
     # The previous value stays a working rollback for one release, and the
     # rollback is a config flip in both directions rather than a migration: no

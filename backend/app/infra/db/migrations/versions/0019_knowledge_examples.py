@@ -1,6 +1,6 @@
 """Few-shot injection's rollback switch.
 
-Phase 5 of `docs/learning-loop-plan.md`. One column, and the only interesting
+Phase 5 of `docs/plans/learning-loop.md`. One column, and the only interesting
 thing about it is its default.
 
 `PROMPT_VERSION` moves v8 → v9 with this phase because `GENERATE_SYSTEM` gains
@@ -14,7 +14,7 @@ this exact prompt costing ten points of execution accuracy on a small model
 (36% → 26%) by crowding out the schema, and few-shot examples are that shape of
 change. The plan's gate says ship it only if execution accuracy on **held-out**
 questions is not worse than the Phase 0 baseline, at the same retrieval budget,
-on the same suite. Until `docs/eval.md` §6.1 carries both numbers, the honest
+on the same suite. Until `docs/reference/eval.md` §6.1 carries both numbers, the honest
 default is the one that changes nothing — the switch exists, the arm exists,
 and a connection owner who wants to try it can turn it on.
 

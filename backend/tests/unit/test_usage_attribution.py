@@ -7,7 +7,7 @@ tables that record three different kinds of work, joined on a column added in
 
 Nothing here is new production code. It is the phase that proves the per-user
 story holds end to end before anything is built on top of it, per Phase 5 of
-[docs/token-accounting-plan.md](../../../docs/token-accounting-plan.md), and it
+[docs/plans/token-accounting.md](../../../docs/plans/token-accounting.md), and it
 pins three things that are each quietly easy to break:
 
 * **`actor_id` is set at creation, by all three writers.** A service that

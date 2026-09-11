@@ -1,6 +1,6 @@
 """The customer's own accuracy number.
 
-Phase 6 of `docs/learning-loop-plan.md`. Three tables, and the first thing to
+Phase 6 of `docs/plans/learning-loop.md`. Three tables, and the first thing to
 say about them is what they are **not**: `eval_runs` / `eval_results`.
 
 MVP2 Part 5's meta-rule is explicit — the customer-facing instrument and the

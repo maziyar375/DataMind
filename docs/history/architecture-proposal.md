@@ -7,23 +7,23 @@
 > trigger?". It is **not** a description of the code as it stands, and it is not
 > maintained as one. Where a section shows an interface, a table or an endpoint,
 > read it as *what was proposed*, and check the code or
-> [CODEBASE.md](CODEBASE.md) for what exists.
+> [codebase.md](../reference/codebase.md) for what exists.
 >
 > Five things have moved decisively since:
 >
 > - **LangGraph was adopted** (§1's first row, §13.3). The chat pipeline and the
 >   report worker are compiled graphs — see
->   [langgraph-migration.md](langgraph-migration.md).
+>   [langgraph-migration.md](../plans/langgraph-migration.md).
 > - **Dashboards, Reports and the semantic layer were built**, and none of them
->   exists here. See [dashboards.md](dashboards.md), [reports.md](reports.md),
->   and the semantic-layer section of [../CLAUDE.md](../CLAUDE.md).
+>   exists here. See [dashboards.md](../reference/dashboards.md), [reports.md](../reference/reports.md),
+>   and the semantic-layer section of [../CLAUDE.md](../../CLAUDE.md).
 > - **Multiple API replicas are supported** — §17 deferred the shared queue and
 >   named the trigger; the trigger fired. See
->   [cross-replica.md](cross-replica.md).
+>   [cross-replica.md](../reference/cross-replica.md).
 > - **The pipeline is eleven nodes and §5's diagram is nine**, differently
 >   ordered and partly renamed: `retrieve` precedes `clarify`, `describe` and
 >   `match` were added, `analyze` shipped as `inspect` and `answer` as
->   `present`. [pipeline.md](pipeline.md) is the node-by-node reference.
+>   `present`. [pipeline-chat.md](../reference/pipeline-chat.md) is the node-by-node reference.
 > - **The SPA is not MUI**, wherever this document says it is — the architecture
 >   diagram, the directory tree, and the chart-renderer trade-off all assume it.
 >   The design concept it was built to is a custom system on oklch
@@ -35,7 +35,7 @@
 >   rather than re-derived; the **light** palette is not in that file at all —
 >   the concept is dark-only — and was designed against it afterwards as warm
 >   "paper" neutrals with a plum accent drawn from the logo. There is **no
->   component library** — see [CODEBASE.md](CODEBASE.md) §1.
+>   component library** — see [codebase.md](../reference/codebase.md) §1.
 >
 > The example sections — **§26 endpoints, §27 models, §28 protocols, §29
 > directory layout, §30 deployment** — are the most divergent and should be
@@ -55,7 +55,7 @@ Three decisions differ from the research direction in your prompt, and each is a
 
 | Research direction | My recommendation | Why |
 |---|---|---|
-| LangGraph for the AI pipeline | **Defer.** Plain async Python functions over a typed Pydantic state, behind a `Pipeline` protocol with LangGraph-shaped node signatures. *(Superseded — adopted for the chat pipeline, see §13.3 and [langgraph-migration.md](langgraph-migration.md). The last sentence of this row is what made that cheap.)* | The MVP graph is linear with one bounded retry loop. LangGraph earns its keep when you need durable interrupts, parallel fan-out, or resume-after-crash mid-graph — none of which the MVP needs. Adopting it later is a wiring change, not a rewrite. |
+| LangGraph for the AI pipeline | **Defer.** Plain async Python functions over a typed Pydantic state, behind a `Pipeline` protocol with LangGraph-shaped node signatures. *(Superseded — adopted for the chat pipeline, see §13.3 and [langgraph-migration.md](../plans/langgraph-migration.md). The last sentence of this row is what made that cheap.)* | The MVP graph is linear with one bounded retry loop. LangGraph earns its keep when you need durable interrupts, parallel fan-out, or resume-after-crash mid-graph — none of which the MVP needs. Adopting it later is a wiring change, not a rewrite. |
 | Celery + Redis for background execution | **Defer.** In-process asyncio run executor, run state durable in Postgres, stale-run reconciler on startup and on a timer. | A text-to-SQL run is 5–60 seconds, not 5 hours. Celery adds a second deployment unit and a serialization boundary that makes SSE fan-out harder, in exchange for durability you can get more cheaply from a `runs` table plus a heartbeat. Swap point is a single `RunExecutor` protocol. |
 | LiteLLM SDK | **Keep**, but strictly behind `LLMGateway`. | Genuine value: one call shape across OpenAI, Anthropic, Ollama, vLLM. But it is a heavy, fast-moving dependency; the gateway protocol is small enough that a direct `httpx` OpenAI-compatible adapter is a ~200-line escape hatch. |
 
@@ -749,7 +749,7 @@ Your mock pauses and asks "revenue or units sold?", then continues. The tempting
 This is better because the clarification round-trip is already a message in the conversation — the UI shows it as one, the history needs it as one, and it may take hours. Holding a graph checkpoint open across that window buys nothing and costs you a durable-state system.
 
 > **Revisited with the graph in hand, and upheld.** Phase 5 of
-> [langgraph-migration.md](langgraph-migration.md) existed to reopen this once
+> [langgraph-migration.md](../plans/langgraph-migration.md) existed to reopen this once
 > `interrupt()` was actually available. It was reopened and the answer is the
 > same, on two reasons this section could not have known and one it already
 > gave. The new ones: `_compose_question` would not have disappeared — a
@@ -766,7 +766,7 @@ This is better because the clarification round-trip is already a message in the 
 ### 13.3 When to adopt LangGraph
 
 > **Adopted.** The chat pipeline is a compiled graph as of Phase 1 of
-> [langgraph-migration.md](langgraph-migration.md) — and note *which* trigger
+> [langgraph-migration.md](../plans/langgraph-migration.md) — and note *which* trigger
 > fired. Not fan-out and not human-in-the-loop: the real one was that the graph
 > turned out to have **five** non-linear edges, and a second executor
 > (`sql_draft_service.draft_sql`) had grown over the same nodes, so every
@@ -933,7 +933,7 @@ lives* without changing the rule; Phase 6 changed the rule, and every call site
 was already asking the right question.
 
 The default implementation is now `RbacAuthorizer`
-([user-management-and-access-control-plan.md](user-management-and-access-control-plan.md)),
+([user-management-and-access-control.md](../plans/user-management-and-access-control.md)),
 which answers from **five facts** rather than one:
 
 | fact | stored in | reaches |
@@ -1110,7 +1110,7 @@ For each: why needed · what it solves · what it costs · can we live without i
 
 **LiteLLM** — Provider normalization. Cost: heavy transitive dependency tree, fast release cadence, occasional behavioural surprises across versions. Can the MVP live without it? Yes — most target providers are OpenAI-compatible and Anthropic is one adapter. **Decision: use it, pin it exactly, and keep `LLMGateway` small enough that a direct httpx adapter is a weekend of work.** That option is the reason the abstraction exists.
 
-**LangGraph** — **Adopted for the chat pipeline** (Phase 1 of [langgraph-migration.md](langgraph-migration.md)); deferred for everything else, §13. Solves durable, branching, interruptible workflows. What actually forced it was not fan-out but *duplication*: the chat graph has five non-linear edges, and a second hand-rolled executor over the same nodes had grown on the dashboard draft path. Costs paid: the LangChain core object model on the request path, confined by an import-linter contract and a CI grep, and compiled once at module scope so no request pays for `.compile()`. Costs still deferred: the checkpoint schema and its second Postgres driver (Phase 4). The pull toward putting domain logic inside graph nodes is answered by the shape of the port — the ten node functions were **not modified**, and `graph.py` is wiring only.
+**LangGraph** — **Adopted for the chat pipeline** (Phase 1 of [langgraph-migration.md](../plans/langgraph-migration.md)); deferred for everything else, §13. Solves durable, branching, interruptible workflows. What actually forced it was not fan-out but *duplication*: the chat graph has five non-linear edges, and a second hand-rolled executor over the same nodes had grown on the dashboard draft path. Costs paid: the LangChain core object model on the request path, confined by an import-linter contract and a CI grep, and compiled once at module scope so no request pays for `.compile()`. Costs still deferred: the checkpoint schema and its second Postgres driver (Phase 4). The pull toward putting domain logic inside graph nodes is answered by the shape of the port — the ten node functions were **not modified**, and `graph.py` is wiring only.
 
 **Celery/Redis** — **Deferred**, §17. Solves durable queuing, scheduling, and process isolation; the MVP gets sufficient durability from Postgres plus a reconciler. Costs a broker, a worker deployment, and a serialization boundary that complicates SSE. Adoption path is `RunExecutor` + `EventPublisher`.
 
@@ -1476,7 +1476,7 @@ raymand/
 │   └── golden/sales.jsonl
 └── docs/
     ├── adr/                        # 0001-modular-monolith.md, 0002-defer-langgraph.md, …
-    ├── architecture.md
+    ├── history/architecture-proposal.md
     └── runbook.md
 ```
 

@@ -286,7 +286,7 @@ def test_an_untouched_exclusion_rule_is_replaced_by_the_generation() -> None:
 
 # ── Oracle identifier case ───────────────────────────────────────────────
 # These four assert **current behaviour, hazard included**, and are deliberately
-# not a fix (docs/catalog-metadata-plan.md §6.1.3). `build_index` lower-cases
+# not a fix (docs/reference/catalog-metadata.md §6.1.3). `build_index` lower-cases
 # every key, which is right for Oracle almost all of the time: unquoted SQL is
 # case-insensitive there and the catalog stores `HR.EMPLOYEES` upper-cased, so
 # folding is what lets a document written in lower case bind at all.

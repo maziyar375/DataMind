@@ -12,7 +12,7 @@
 > semantic **s4**.
 >
 > Companion documents: [security.md §2](security.md) owns the *inventory* of
-> call sites and the disclosure argument; [pipeline.md](pipeline.md) owns node
+> call sites and the disclosure argument; [pipeline-chat.md](pipeline-chat.md) owns node
 > ordering. This file owns the *content* of each call.
 
 ---
@@ -1406,7 +1406,7 @@ What actually leaves, for all three:
 ```
 
 **A question is not customer data read from a row**, which is the same test
-`docs/security.md` §2.4 applies to a catalog comment: a person typed it, it does
+`docs/reference/security.md` §2.4 applies to a catalog comment: a person typed it, it does
 not change when the data changes, and it already reaches the provider verbatim
 on every question through call 4. The masking makes this strictly *less* than
 what call 4 already sends — table names, column names, declared values and
@@ -1638,7 +1638,7 @@ guard means an injected instruction cannot produce dangerous SQL, but it can
 influence the *prose*; `NONE`/`AGGREGATE` remove the vector. And a literal
 inside kept SQL (`WHERE status = 'churned'`) may have come from a value list a
 wider policy once allowed. Both are recorded in [security.md](security.md) and
-[pipeline.md §5](pipeline.md).
+[pipeline-chat.md §5](pipeline-chat.md).
 
 ---
 

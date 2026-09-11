@@ -1,7 +1,7 @@
 # Eval baseline — LangGraph migration, Phase 0
 
 **Status: NOT YET MEASURED.** This file is the slot and the protocol. It is
-committed empty on purpose: [docs/langgraph-migration.md](../../../../docs/langgraph-migration.md)
+committed empty on purpose: [docs/plans/langgraph-migration.md](../../../../docs/plans/langgraph-migration.md)
 §4 Phase 0 requires the baseline to exist *before* Phase 1 moves the
 orchestrator, and §5 makes every later phase compare against **this run**, not
 against `suites/sales_v1.baseline.json` — which was measured on a different
@@ -58,7 +58,7 @@ so a baseline captured before or after them is the same baseline.
 **The prompt version is `v7`.** `runs.prompt_version` is written from
 `settings.prompt_version`, whose default is still `"v2"` — it is not read from
 the `PROMPT_VERSION` constant in `app/pipeline/prompts/__init__.py`, which is
-`"v7"`. [docs/pipeline.md](../../../../docs/pipeline.md) §7 records the drift.
+`"v7"`. [docs/reference/pipeline-chat.md](../../../../docs/reference/pipeline-chat.md) §7 records the drift.
 Every eval row this run writes will therefore claim `v2`. Write the constant
 down here, or the comparison against a later phase is meaningless:
 

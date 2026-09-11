@@ -6,7 +6,7 @@ revision is replayed here against a recorder rather than a connection — the
 pattern `test_report_models.py` established — and compared to `Base.metadata`
 column by column.
 
-The rest of the file pins the decisions in §2 of `docs/token-accounting-plan.md`
+The rest of the file pins the decisions in §2 of `docs/plans/token-accounting.md`
 that are easy to "tidy" into a bug, and every one of them is about a **null**:
 
 * a token column defaulted to `0` cannot be asked whether a node made no call

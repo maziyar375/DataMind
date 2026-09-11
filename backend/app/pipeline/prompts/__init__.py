@@ -39,8 +39,8 @@ PROMPT_VERSION = "v9"
 # order, they have their own small ceiling (`_EXAMPLE_CHARS_BLOCK`, a fifth of
 # what catalog comments get), the feature is **off by default per connection**,
 # and `--templates on|off` on the eval runner is how the two numbers get
-# reported side by side. See `docs/eval.md` §6.1 and
-# `docs/learning-loop-plan.md` §3.6 — the gate is that held-out accuracy must
+# reported side by side. See `docs/reference/eval.md` §6.1 and
+# `docs/plans/learning-loop.md` §3.6 — the gate is that held-out accuracy must
 # not be worse, and a negative delta is a result to publish rather than a
 # reason to tune until it goes positive.
 #

@@ -67,7 +67,7 @@ depends_on = None
 
 
 #: The eight system roles, exactly as
-#: `docs/user-management-and-access-control-plan.md` §12.3 specifies them.
+#: `docs/plans/user-management-and-access-control.md` §12.3 specifies them.
 #: **This is the specification, written out.** A table test asserts the same
 #: eight sets from an independent literal, because a test that derived its
 #: expectation from this tuple would agree with any mistake in it.

@@ -1,6 +1,6 @@
 """The knowledge store: taught questions, scoped to a connection.
 
-Phase 1 of `docs/learning-loop-plan.md`. The store ships **inert** — nothing
+Phase 1 of `docs/plans/learning-loop.md`. The store ships **inert** — nothing
 reads from it until Phase 2 — which is the point of landing it on its own: the
 guard's fifth entry point and the disclosure decision are in the tree before
 anything comes through that door.

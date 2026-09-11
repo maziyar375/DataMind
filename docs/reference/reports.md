@@ -6,11 +6,11 @@ gets a written analytical document — prose, tables and charts — built from t
 database, saved, re-runnable months later against fresh data, and printable to
 PDF. Persian and English.
 
-Companion to [dashboards.md](dashboards.md) (the grid), [pipeline.md](pipeline.md)
+Companion to [dashboards.md](dashboards.md) (the grid), [pipeline-chat.md](pipeline-chat.md)
 (the AI run), [charts.md](charts.md) (what gets drawn), [security.md](security.md)
-(the guard and disclosure) and [architecture.md](architecture.md) (the why).
+(the guard and disclosure) and [architecture-proposal.md](../history/architecture-proposal.md) (the why).
 
-This describes what is **built**. [reports-plan.md](reports-plan.md) is the
+This describes what is **built**. [reports-plan.md](../history/reports-plan.md) is the
 record of what was intended and why, phase by phase, including the things the
 build settled differently.
 
@@ -756,7 +756,7 @@ pipeline — a report reads a pipeline node, a node knows nothing about a report
 gives: a shared report means user B reading data pulled with user A's stored
 credentials through a connection B does not own. That is an authorization
 model, not a UI feature, and it is being built:
-[user-management-and-access-control-plan.md](user-management-and-access-control-plan.md)
+[user-management-and-access-control.md](../plans/user-management-and-access-control.md)
 Phase 8 grants on reports, under the intersection rule of its §15.3 — access to
 a report never implies access to the connection behind it. `ReportService`
 already asks the `Authorizer` port for every decision it makes, so what arrives
@@ -772,7 +772,7 @@ the connection. There is no god context.
 ## 14.1 Sharing, and the second half of a reader's access
 
 A report is shareable as of Phase 8 of
-[user-management-and-access-control-plan.md](user-management-and-access-control-plan.md),
+[user-management-and-access-control.md](../plans/user-management-and-access-control.md),
 and it was the **first** artifact type to become so — the opposite of the
 intuitive order, and for a reason that is a fact about this data model: a
 report is bound to exactly one connection and cannot be repointed, so there is

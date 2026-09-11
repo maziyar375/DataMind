@@ -14,7 +14,7 @@
  * include, and `node --experimental-strip-types` runs it either way.
  *
  * The rule it holds up is invariant I1 from
- * [`docs/access-control-rules.md`](../../docs/access-control-rules.md), on
+ * [`docs/reference/access-control.md`](../../docs/reference/access-control.md), on
  * this side of the wire. The SPA asks *"may I?"* through `useCan()`, which
  * reads the capability list `/auth/me` returned — the same set the API will
  * check on the next request — and never asks *"what am I?"*. That is what

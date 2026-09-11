@@ -11,7 +11,7 @@ Three fields carry more weight than they look like they do:
   measured that more prose in the prompt lowers execution accuracy; a note
   that never reaches a prompt cannot.
 * **`literal_provenance`** decides whether the template's literals may be
-  shown under a restrictive disclosure policy — see `docs/security.md`.
+  shown under a restrictive disclosure policy — see `docs/reference/security.md`.
 * **`role`** decides whether a template may be retrieved, benchmarked, or
   neither. A column rather than a convention, because a convention will not
   survive six months.
@@ -92,7 +92,7 @@ class LiteralProvenance(StrEnum):
     person typed it, it is not read from a row, and it does not change when the
     data changes. One a *model* chose may have come from sampled values
     disclosed under a policy that has since been tightened, so it is gated like
-    a sample value. `docs/security.md`.
+    a sample value. `docs/reference/security.md`.
     """
 
     HUMAN_AUTHORED = "HUMAN_AUTHORED"

@@ -529,7 +529,7 @@ class DatabaseConnection(Base, TimestampMixin):
     # execution accuracy on a small model by crowding out the schema. Off is
     # byte-identical to v8, so a connection that never turns it on is running
     # the prompt every recorded baseline was measured on. It flips to True by
-    # default when `docs/eval.md` §6.1 has both numbers in it and they say so.
+    # default when `docs/reference/eval.md` §6.1 has both numbers in it and they say so.
     knowledge_examples_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     # The embedding model this connection's knowledge store is indexed with,
     # and the width it answers at. Empty means the lexical matcher — which is
@@ -538,7 +538,7 @@ class DatabaseConnection(Base, TimestampMixin):
     # the loop *quieter* when present and change nothing when absent.
     #
     # Pinned per connection rather than read from the LLM config on every ask,
-    # for the reason `docs/learning-loop-plan.md` §3.8 gives: reproducibility.
+    # for the reason `docs/plans/learning-loop.md` §3.8 gives: reproducibility.
     # A stored vector is only comparable to a question embedded by the same
     # model at the same width, so the pair that produced the index has to be
     # written down next to it. Both are set by the capability probe, never
@@ -941,7 +941,7 @@ class Dashboard(Base, TimestampMixin):
     Owner-only in v1 and deliberately so: a shared dashboard would let user B
     read data pulled with user A's stored credentials, through a connection B
     does not own. That is an authorization model, not a UI feature — see §9 of
-    `docs/dashboards.md`.
+    `docs/reference/dashboards.md`.
     """
 
     __tablename__ = "dashboards"
@@ -1250,7 +1250,7 @@ class ReportBlock(Base, TimestampMixin):
     chart_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     # A label only. The window lives in the SQL as relative date arithmetic the
     # database resolves on every run; this is never substituted into a
-    # statement. See §6 of `docs/reports-plan.md`.
+    # statement. See §6 of `docs/history/reports-plan.md`.
     time_window: Mapped[str] = mapped_column(String(30), nullable=False, default="none")
 
     feasibility_status: Mapped[str] = mapped_column(
@@ -1454,7 +1454,7 @@ class KnowledgeTemplateRow(Base, TimestampMixin):
     The learning loop's artifact: a question *pattern* with typed slots and SQL
     with `:params`, not a literal question→SQL pair. A literal store's hit rate
     stays near zero and retrofitting parameters onto pairs authored without
-    them means re-curating everything — see `docs/learning-loop-plan.md` §D1.
+    them means re-curating everything — see `docs/plans/learning-loop.md` §D1.
 
     `sql` is hostile input on the same terms as `dashboard_tiles.sql`: a person
     typed it into a textarea, so it is guarded on save *and* re-guarded against
@@ -1502,7 +1502,7 @@ class KnowledgeTemplateRow(Base, TimestampMixin):
     #: Whether the literals in `sql` may be shown under a restrictive
     #: disclosure policy. A hand-authored literal travels with structure, like
     #: a catalog comment; one a model chose is gated like a sample value.
-    #: `docs/security.md`.
+    #: `docs/reference/security.md`.
     literal_provenance: Mapped[str] = mapped_column(
         String(20), nullable=False, default="HUMAN_AUTHORED"
     )

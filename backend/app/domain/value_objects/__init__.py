@@ -195,7 +195,7 @@ class ReportTimeWindow(StrEnum):
     It drives the prompt when a block is checked and gives the UI something to
     show; it is never substituted into a statement at runtime. The window lives
     in the SQL itself as relative date arithmetic the database resolves on
-    every run — see §6 of `docs/reports-plan.md`.
+    every run — see §6 of `docs/history/reports-plan.md`.
     """
 
     NONE = "none"

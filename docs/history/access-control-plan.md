@@ -1,9 +1,9 @@
 # Access control — build plan
 
-> **Subject:** [mvp2-plan.md §1.5](mvp2-plan.md#15-single-player-by-construction)
-> and [Theme D](mvp2-plan.md#theme-d--make-it-a-team-product) (D1, D2, D4;
+> **Subject:** [mvp2.md §1.5](../plans/mvp2.md#15-single-player-by-construction)
+> and [Theme D](../plans/mvp2.md#theme-d--make-it-a-team-product) (D1, D2, D4;
 > D3 and D5 deferred with triggers).
-> **Source of the design:** [research/access-control.md](research/access-control.md)
+> **Source of the design:** [research/access-control.md](../research/access-control.md)
 > — Lakekeeper's `Authorizer` trait and `.fga` model, read against Metabase,
 > Superset and Grafana. This document is the **decision and the schedule**; that
 > one is the argument. Where they disagree, this one wins, and §0.3 says why.
@@ -14,8 +14,8 @@
 > true.
 > **Status:** plan. Decisions in §0.3 are made, not open; §13 lists what remains
 > genuinely open.
-> **Siblings:** [security.md](security.md) · [architecture.md](architecture.md) ·
-> [learning-loop-plan.md](learning-loop-plan.md) (Phase 8 built `audit.py`,
+> **Siblings:** [security.md](../reference/security.md) · [architecture-proposal.md](architecture-proposal.md) ·
+> [learning-loop.md](../plans/learning-loop.md) (Phase 8 built `audit.py`,
 > which this plan finishes).
 
 ---
@@ -49,7 +49,7 @@ makes the choice reversible.
 
 ### 0.3 The nine decisions, decided
 
-[research/access-control.md §8](research/access-control.md) lists nine open
+[research/access-control.md §8](../research/access-control.md) lists nine open
 questions. This plan closes all nine, because the schema cannot be written until
 four of them are answered. **⚠️ marks the ones that would change the schema if
 reversed.**
@@ -57,7 +57,7 @@ reversed.**
 | # | Question | **Decision** | Consequence |
 |---|---|---|---|
 | 1 ⚠️ | Whose credentials does a shared object execute under? | **The connection's grant.** A viewer executes a tile only if *they* hold `select` on that tile's connection, re-checked at every execution — never at share time. | Grants exist on connections **and** on artifacts. Both are checked. This is the whole reason D1 is blocking. |
-| 2 ⚠️ | Does `dashboard_tile_cache` grow a viewer in its key? | **No — and the reason is written into the model's docstring as a trigger.** The trigger: *the first time a tile's result depends on who is looking.* | Cache stays keyed on `tile_id` ([`models.py:632`](../backend/app/infra/db/models.py#L632)). Phase 6 adds a test that fails if a viewer-dependent filter is introduced without the key changing. |
+| 2 ⚠️ | Does `dashboard_tile_cache` grow a viewer in its key? | **No — and the reason is written into the model's docstring as a trigger.** The trigger: *the first time a tile's result depends on who is looking.* | Cache stays keyed on `tile_id` ([`models.py:632`](../../backend/app/infra/db/models.py#L632)). Phase 6 adds a test that fails if a viewer-dependent filter is introduced without the key changing. |
 | 3 | Does an administrator read everything? | **No implicit read. An admin may _grant themselves_ access, and the grant is an audited row.** | The enforced behaviour today (admins see nothing they do not own) becomes the documented one. Lakekeeper's escalation path, adopted. |
 | 4 ⚠️ | Is granting `select` on a connection a disclosure decision? | **Yes.** `describe` exposes `disclosure_policy`; only the owner or a `manage_grants` holder may change it; every ask records the policy in force. | `disclosure_policy` splits out of the ordinary `modify` surface. |
 | 5 ⚠️ | Per-resource grants now, or a workspace now? | **Per-resource now, workspace shape reserved.** `grants.resource_type` is a string and the check is a join, so a `workspace` row type is additive. | E→F stays a migration of existing grants into a container, which is a real migration but a known one. §12 writes the trigger. |
@@ -91,7 +91,7 @@ context window of focused work ending at a green `make check`.
 | **7** | The rulebook, the seams, and the conformance check | S–M | 1–2 | no — makes the rules enforceable |
 
 **Phases 0–2 are worth doing even if Theme D is cancelled**, because they replace
-a false docstring with a true one. [`policy.py`](../backend/app/services/policy.py)
+a false docstring with a true one. [`policy.py`](../../backend/app/services/policy.py)
 opens with *"Row-level or column-level security later is a change in this module
 only"*, and that sentence is not true of the code today: `can_read`, `can_write`
 and `can_administer_users` have **zero call sites**, while **208 lines** across
@@ -105,7 +105,7 @@ and `can_administer_users` have **zero call sites**, while **208 lines** across
 
 Everything in this plan is one of six things. A new feature that cannot be
 expressed in these six is a feature that needs a design change, not a workaround —
-that rule is what [§14](#18-the-rulebook) makes checkable.
+that rule is what [§14](#14-the-rulebook--what-phase-7-must-produce) makes checkable.
 
 ### 1.1 Principal — *who is asking*
 
@@ -206,7 +206,7 @@ _SATISFIED_BY: dict[Privilege, frozenset[Privilege]] = {
 }
 ```
 
-**Why `curate` is not a fifth privilege.** [`policy.can_curate`](../backend/app/services/policy.py)
+**Why `curate` is not a fifth privilege.** [`policy.can_curate`](../../backend/app/services/policy.py)
 already answers *administrator, or the owner of the connection*. Under grants that
 becomes **`modify` on the connection**, which is the same rule in the new
 vocabulary and preserves the property D4 wants: *a reader granted access to
@@ -314,7 +314,7 @@ enforceable rules in the Phase 7 rulebook.
 > **I3. Every authorization event is a row.**
 > Grant, revoke, ownership transfer, admin self-escalation, and every 403.
 > `Decision.because` travels with it. Identifiers and counts, never content —
-> the rule [`audit.py`](../backend/app/services/audit.py) already states.
+> the rule [`audit.py`](../../backend/app/services/audit.py) already states.
 
 ---
 
@@ -431,7 +431,7 @@ real, not to be written.
 | *`OpenFgaAuthorizer`* | — | never. The `Ids` arm of `Visible` exists so this stays possible rather than so it happens. |
 
 Selected by `authz_backend: Literal["owner_only", "grants"] = "owner_only"` in
-`core/config.py`, resolved in [`api/deps.py`](../backend/app/api/deps.py) exactly
+`core/config.py`, resolved in [`api/deps.py`](../../backend/app/api/deps.py) exactly
 as `get_identity_provider` already resolves the identity port. **The default flips
 to `grants` at the end of Phase 4**, and the previous value remains a working
 rollback for one release.
@@ -467,8 +467,8 @@ because a seam nothing exercises is a comment.
 
 | # | Seam | Phase | Status today |
 |---|---|:--:|---|
-| S1 | `IdentityProvider` Protocol, five methods | — | ✅ exists, [`domain/ports/identity.py:31`](../backend/app/domain/ports/identity.py#L31) |
-| S2 | `users.external_subject` column | — | ✅ exists since `0001` ([`models.py:61`](../backend/app/infra/db/models.py#L61)), **never read or written** |
+| S1 | `IdentityProvider` Protocol, five methods | — | ✅ exists, [`domain/ports/identity.py:31`](../../backend/app/domain/ports/identity.py#L31) |
+| S2 | `users.external_subject` column | — | ✅ exists since `0001` ([`models.py:61`](../../backend/app/infra/db/models.py#L61)), **never read or written** |
 | S3 | `ctx.group_ids` — resolved once per request, source unknown downstream | 3 | to build |
 | S4 | `groups.(provider_id, source_id)` — a group may name an external group | 3 | to build |
 | S5 | `auth_provider` config switch, one implementation | 0 | to build |
@@ -508,12 +508,12 @@ treatment `docker-compose.replicas.yml` already gets.
 
 **This is the part the research did not cover and the code will hit in Phase 4.**
 
-`RequestContext` is built in [`get_ctx`](../backend/app/api/deps.py) from a bearer
+`RequestContext` is built in [`get_ctx`](../../backend/app/api/deps.py) from a bearer
 token. Background work has no bearer token, and today it improvises: `app/workers/`
 reconstructs identity from `connection.owner_id`
-([`benchmark.py:287`](../backend/app/workers/benchmark.py#L287),
-[`knowledge_maintenance.py:310`](../backend/app/workers/knowledge_maintenance.py#L310),
-[`report.py:561`](../backend/app/workers/report.py#L561)). Once `owner_id` stops
+([`benchmark.py:287`](../../backend/app/workers/benchmark.py#L287),
+[`knowledge_maintenance.py:310`](../../backend/app/workers/knowledge_maintenance.py#L310),
+[`report.py:561`](../../backend/app/workers/report.py#L561)). Once `owner_id` stops
 being the authorization answer, that improvisation is a hole.
 
 **The rule: background work runs as a named principal, never as "no principal".**
@@ -543,7 +543,7 @@ reopening the model — §11 makes that explicit.
 ## 8. The disclosure interaction
 
 Each connection declares a `disclosure_policy` — how much of a result may reach
-the model provider ([security.md §3](security.md)). Today, the person who chose
+the model provider ([security.md §3](../reference/security.md)). Today, the person who chose
 that policy is the only person who can trigger a query under it. **The moment a
 connection is shared, one person's disclosure choice governs another person's
 questions**, and that person may not know what it is.
@@ -568,7 +568,7 @@ Superset or Grafana model consent to it at all. §13 keeps it open.
 ## 9. Ownership transfer, and deleting a user
 
 `dashboards.owner_id` is already `ON DELETE CASCADE`
-([`models.py:524`](../backend/app/infra/db/models.py#L524)). Today, deleting a user
+([`models.py:524`](../../backend/app/infra/db/models.py#L524)). Today, deleting a user
 destroys only their private work. **After sharing exists, it destroys work other
 people depend on** — which is why transfer ships in the same phase as the first
 grant.
@@ -576,7 +576,7 @@ grant.
 - `POST /{resource}/{id}/transfer` — gated on `manage_grants`, audited, and the
   new owner must be `ACTIVE`.
 - `DELETE /users/{id}` refuses while the user owns any grantable resource, naming
-  what they own. `_guard_last_admin` ([`users.py:132`](../backend/app/api/v1/users.py#L132))
+  what they own. `_guard_last_admin` ([`users.py:132`](../../backend/app/api/v1/users.py#L132))
   is the precedent for refusing a destructive action with an explanation.
 - `DISABLED` keeps every grant, because disabling is reversible and re-enabling
   must not be a re-grant.
@@ -688,7 +688,7 @@ a row and nothing else in `api/` or `services/` reads it to make a decision.**
 - [ ] A test asserting `RequestContext` cannot be constructed without a user id.
 
 **Gate.** `make check` green including the new grep · full suite unchanged ·
-`docs/architecture.md` updated where it describes ownership as the enforcement
+`docs/history/architecture-proposal.md` updated where it describes ownership as the enforcement
 mechanism.
 
 ---
@@ -763,7 +763,7 @@ disclosure policy · every grant and revoke appears in `GET /audit`.
 
 ## Phase 5 — The audit half: grant, revoke, denial, escalation · **S** · ~1 session
 
-**Goal.** [`audit.py`](../backend/app/services/audit.py) has a `DENIED` constant
+**Goal.** [`audit.py`](../../backend/app/services/audit.py) has a `DENIED` constant
 and **nothing produces one**. After this phase, every authorization event is a row.
 
 **Activities**
@@ -795,7 +795,7 @@ last because they are the hard case** — which is the opposite of the intuitive
 order.
 
 **6a — Reports** (a report's `connection_id` is single and **immutable after
-creation**, [`models.py:700`](../backend/app/infra/db/models.py#L700), so there is
+creation**, [`models.py:700`](../../backend/app/infra/db/models.py#L700), so there is
 no intersection to resolve):
 
 - [ ] `grants` on `resource_type='report'`; share panel; `visible` in the list
@@ -804,7 +804,7 @@ no intersection to resolve):
       results; missing the second gives the tile-level message of §10, not a 500.
 
 **6b — Dashboards** (a tile carries its **own** `connection_id`,
-[`models.py:578`](../backend/app/infra/db/models.py#L578), so one dashboard may
+[`models.py:578`](../../backend/app/infra/db/models.py#L578), so one dashboard may
 span several connections):
 
 - [ ] **The intersection rule, implemented and documented:** the dashboard renders;
@@ -832,7 +832,7 @@ with none of this context.
 
 **Activities**
 
-- [ ] **Write [`docs/access-control-rules.md`](access-control-rules.md)** — the
+- [ ] **Write [`docs/reference/access-control.md`](../reference/access-control.md)** — the
       deliverable §14 specifies. Not a summary of this plan: a short, imperative
       rulebook a feature author reads *before* writing an endpoint.
 - [ ] Add a pointer to it from `CLAUDE.md`, from `docs/README.md`, and from the
@@ -847,11 +847,11 @@ with none of this context.
 - [ ] **Seam tests (§6)** — assert `external_subject` round-trips a namespaced
       `provider~subject`; assert an unknown external group is **ignored, not
       created**; assert `ctx.group_ids` has exactly one resolution site.
-- [ ] Update `docs/security.md` with a §on authorization, and `docs/architecture.md`
+- [ ] Update `docs/reference/security.md` with a §on authorization, and `docs/history/architecture-proposal.md`
       where it still says sharing is impossible.
 - [ ] Fill in the ledger in §15 of this document.
 
-**Gate.** `make check` green · `docs/access-control-rules.md` exists and the
+**Gate.** `make check` green · `docs/reference/access-control.md` exists and the
 conformance test enforces every rule it states that is mechanically checkable.
 
 ---
@@ -861,7 +861,7 @@ conformance test enforces every rule it states that is mechanically checkable.
 ## 11. How each future feature lands on this model
 
 The test of this design is not what it does today. It is what the **next ten
-features** cost. Each row is a real item from [mvp2-plan.md](mvp2-plan.md).
+features** cost. Each row is a real item from [mvp2.md](../plans/mvp2.md).
 
 | Feature | What it needs from access control | Cost on this model |
 |---|---|:--:|
@@ -929,7 +929,7 @@ Not deferrals — things this plan cannot settle.
 
 ## 14. The rulebook — what Phase 7 must produce
 
-**`docs/access-control-rules.md`** is a deliverable, not documentation-as-an-
+**`docs/reference/access-control.md`** is a deliverable, not documentation-as-an-
 afterthought. Its audience is whoever writes the *next* feature, most likely with
 no memory of this plan. It must be short enough to read before writing an endpoint.
 
@@ -970,14 +970,14 @@ Required contents:
 
 | | Item | Where |
 |:--:|---|---|
-| ✅ | Argon2id + HS256 access tokens + rotating refresh with reuse detection | [`infra/identity/local.py`](../backend/app/infra/identity/local.py) |
-| ✅ | `IdentityProvider` port, five methods | [`domain/ports/identity.py:31`](../backend/app/domain/ports/identity.py#L31) |
-| ✅ | `users.external_subject` column (**unread**) | [`models.py:61`](../backend/app/infra/db/models.py#L61), since `0001` |
+| ✅ | Argon2id + HS256 access tokens + rotating refresh with reuse detection | [`infra/identity/local.py`](../../backend/app/infra/identity/local.py) |
+| ✅ | `IdentityProvider` port, five methods | [`domain/ports/identity.py:31`](../../backend/app/domain/ports/identity.py#L31) |
+| ✅ | `users.external_subject` column (**unread**) | [`models.py:61`](../../backend/app/infra/db/models.py#L61), since `0001` |
 | ✅ | `Role.ADMIN` / `MEMBER`, and `ACTIVE` / `INVITED` / `DISABLED` | `domain/value_objects/` |
-| ✅ | `AdminDep`, and `_guard_last_admin` as the precedent for refusing destruction | [`deps.py:97`](../backend/app/api/deps.py#L97), [`users.py:132`](../backend/app/api/v1/users.py#L132) |
-| ✅ | `audit.py` with `SUCCESS/DENIED/FAILED` and nine curation actions | [`services/audit.py`](../backend/app/services/audit.py) |
-| ✅ | `GET /audit`, admin-only | [`api/v1/audit.py`](../backend/app/api/v1/audit.py) |
-| ✅ | `can_curate` — the template every other permission function follows | [`services/policy.py`](../backend/app/services/policy.py) |
+| ✅ | `AdminDep`, and `_guard_last_admin` as the precedent for refusing destruction | [`deps.py:97`](../../backend/app/api/deps.py#L97), [`users.py:132`](../../backend/app/api/v1/users.py#L132) |
+| ✅ | `audit.py` with `SUCCESS/DENIED/FAILED` and nine curation actions | [`services/audit.py`](../../backend/app/services/audit.py) |
+| ✅ | `GET /audit`, admin-only | [`api/v1/audit.py`](../../backend/app/api/v1/audit.py) |
+| ✅ | `can_curate` — the template every other permission function follows | [`services/policy.py`](../../backend/app/services/policy.py) |
 | ✅ | Import-linter contracts keeping `domain/` free of `sqlalchemy` | `pyproject.toml` |
 | ❌ | Anything that produces a `DENIED` row | — |
 | ❌ | `can_read` / `can_write` / `can_administer_users` call sites (**zero**) | — |
@@ -1008,7 +1008,7 @@ Required contents:
 - [ ] Remaining routers (`conversations`, `llm_configs`, `connections`, `semantic`, `knowledge`, `drafts`)
 - [ ] `RequestContext.on_behalf_of` + all four workers
 - [ ] `make check` grep gate: zero `owner_id ==` in `api/`, `services/`
-- [ ] `architecture.md` updated
+- [ ] `history/architecture-proposal.md` updated
 
 ### 15.5 Phase 3 — Principals · **0 / 7**
 
@@ -1055,11 +1055,11 @@ Required contents:
 
 ### 15.9 Phase 7 — The rulebook and the seams · **0 / 6**
 
-- [ ] **`docs/access-control-rules.md`** (§14)
+- [ ] **`docs/reference/access-control.md`** (§14)
 - [ ] Pointers from `CLAUDE.md`, `docs/README.md`, `policy.py`
 - [ ] `tests/unit/test_authz_conformance.py` — four mechanical rules
 - [ ] Seam tests (§6): namespaced subject, unknown group ignored, one `group_ids` site
-- [ ] `security.md` + `architecture.md` updated
+- [ ] `security.md` + `history/architecture-proposal.md` updated
 - [ ] This ledger filled in
 
 ### 15.10 Deliberately not built — with the trigger that would change that

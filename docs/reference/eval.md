@@ -9,13 +9,13 @@ describes the only part of the system whose output is a *number*, and numbers
 invite self-deception. Most of the design below exists to make the number harder
 to fake.
 
-Code: [`backend/app/eval/`](../backend/app/eval/) — `dataset.py` (the record
+Code: [`backend/app/eval/`](../../backend/app/eval) — `dataset.py` (the record
 schema and the fixture registry), `runner.py` (the harness), `metrics.py` (pure
 scoring), `suites/` (the frozen golden sets), `reports/` (write-ups of past
-runs). Tests: [`backend/tests/eval/`](../backend/tests/eval/).
+runs). Tests: [`backend/tests/eval/`](../../backend/tests/eval).
 
-Companion to [pipeline.md](pipeline.md) (what is being measured) and
-[architecture.md](architecture.md) (why the semantic layer exists — the eval is
+Companion to [pipeline-chat.md](pipeline-chat.md) (what is being measured) and
+[architecture-proposal.md](../history/architecture-proposal.md) (why the semantic layer exists — the eval is
 what argued for it).
 
 ---
@@ -34,7 +34,7 @@ production rejects it here, and it costs the run a point.
 > suite measures the *generated* path — which is the only honest way to measure
 > it. A run that answered a golden question from a template stored for that
 > question would score 1.0 and mean nothing. Phase 5 of
-> [learning-loop-plan.md](learning-loop-plan.md) adds a `--templates on|off`
+> [learning-loop.md](../plans/learning-loop.md) adds a `--templates on|off`
 > arm, and it is an arm precisely so both numbers exist side by side.
 
 The target database is a **fresh container** spun from a fixture seed via
@@ -61,7 +61,7 @@ exercised rather than trivially correct.
 > `retrieval_recall: 0.864` was measured under the old ceiling.
 >
 > **The decision taken (2026-08-31, Phase 0 of
-> [learning-loop-plan.md](learning-loop-plan.md)): the eval can be run at a lower
+> [learning-loop.md](../plans/learning-loop.md)): the eval can be run at a lower
 > ceiling, and the fixture was left alone.** `--retrieve-budget CHARS` lowers it
 > for one run — a runner flag, never a code edit, because the ceiling that ships
 > is the one the request path must run at. Widening the fixture instead would
@@ -69,10 +69,10 @@ exercised rather than trivially correct.
 > run is byte-identical to every run before it, and the effective value is
 > recorded on the scorecard as `retrieve_budget_chars`, because **a recall
 > figure cannot be read without it** — see
-> [`suites/CHANGELOG.md`](../backend/app/eval/suites/CHANGELOG.md), and never
+> [`suites/CHANGELOG.md`](../../backend/app/eval/suites/CHANGELOG.md), and never
 > put a lowered-budget recall in the same sentence as a full-snapshot one.
 > Originally found on 2026-08-14 while building the commented arm below — see
-> [catalog-metadata-plan.md](catalog-metadata-plan.md) §10.
+> [catalog-metadata.md](catalog-metadata.md) §10.
 
 ### The semantic-layer arm
 
@@ -108,7 +108,7 @@ rows that differ only in this can be told apart afterwards.
 `backend/fixtures/sales_comments.sql`, 21 table and 42 column descriptions plus
 the database's own — and turns on `include_db_comments`, so the run prompt
 carries them under the rules in
-[catalog-metadata-plan.md](catalog-metadata-plan.md) §4. Without the flag the
+[catalog-metadata.md](catalog-metadata.md) §4. Without the flag the
 fixture is byte-for-byte the one every earlier run measured, which is what makes
 the two comparable at all:
 
@@ -229,7 +229,7 @@ than the record count suggests.
 ### The golden set is frozen
 
 This is the rule the whole exercise rests on, and it is written at the top of
-[`suites/CHANGELOG.md`](../backend/app/eval/suites/CHANGELOG.md):
+[`suites/CHANGELOG.md`](../../backend/app/eval/suites/CHANGELOG.md):
 
 > Questions are never edited to make a score go up. Gold SQL is corrected
 > **only when demonstrably wrong** — it does not answer the question the English
@@ -246,7 +246,7 @@ wrong), not a justification.
 
 `gold_sql` that was written by staring at the schema is a hypothesis, not a
 reference. So each record carries `verification: "dual_form"`, and
-[`tests/eval/sales_v1_verify.json`](../backend/tests/eval/sales_v1_verify.json)
+[`tests/eval/sales_v1_verify.json`](../../backend/tests/eval/sales_v1_verify.json)
 holds a **second, structurally different** query per record — a subtraction
 where the gold used a filter, a subquery where the gold used a join.
 `tests/eval/test_golden_set.py` asserts the two agree on the fixture.
@@ -363,7 +363,7 @@ real fixture — deterministic, free, and still the real pipeline.
 
 ## 5. The CI gate
 
-[`.github/workflows/eval-nightly.yml`](../.github/workflows/eval-nightly.yml)
+[`.github/workflows/eval-nightly.yml`](../../.github/workflows/eval-nightly.yml)
 runs at 07:00 UTC and on demand. It boots a throwaway app DB, seeds an
 `llm_configs` row from `EVAL_API_KEY` via `backend/scripts/eval_seed_llm_config.py`, and
 runs:
@@ -386,7 +386,7 @@ and fork PRs never break for lack of a key.
 
 ### The baseline file is model-specific — read its `_README`
 
-[`suites/sales_v1.baseline.json`](../backend/app/eval/suites/sales_v1.baseline.json)
+[`suites/sales_v1.baseline.json`](../../backend/app/eval/suites/sales_v1.baseline.json)
 currently records `execution_accuracy: 0.36`, measured 2026-07-26 on DeepSeek V4
 Pro at temperature 0.2 under `PROMPT_VERSION` v2, with companion metrics
 (retrieval recall 0.864, full-hit 0.74, parse rate 1.0, policy violation rate
@@ -421,7 +421,7 @@ rather than in the tool output.
 
 ### The Phase 0 baselines — the ruler, before anything is measured with it
 
-[learning-loop-plan.md §3.1](learning-loop-plan.md#31-phase-0--fix-the-ruler)
+[learning-loop.md §3.1](../plans/learning-loop.md#31-phase-0--fix-the-ruler)
 blocks its Phase 5 on three numbers being on paper here. The instruments exist
 as of 2026-08-31; **the three runs have not been made** — each calls a real
 provider and needs an `llm_configs` row with a working key. Fill this table from
@@ -449,7 +449,7 @@ this suite, and the plan's Phase 5 (few-shot injection) is not allowed to start.
 
 ### 6.1 The few-shot gate — the one arm that can fail
 
-[learning-loop-plan.md §3.6](learning-loop-plan.md#36-phase-5--few-shot-injection-behind-an-eval-gate)
+[learning-loop.md §3.6](../plans/learning-loop.md#36-phase-5--few-shot-injection-behind-an-eval-gate)
 ships few-shot injection **only if it earns it**, and it is the only phase of
 that plan with a rule written so it can fail:
 
@@ -483,7 +483,7 @@ whether the pair means anything:
   id so it is reproducible from the suite file), and additionally excludes
   every record's *own* row from the store it is measured against. A question
   answered with help from its own stored SQL measures the store's ability to
-  hold a string — [§1.3](learning-loop-plan.md#13-the-three-roles)'s
+  hold a string — [§1.3](../plans/learning-loop.md#13-the-three-roles)'s
   measurement trap, which is why `role` is a column in the product.
 - **Read `6. templates:` on the scorecard before reading the accuracy.** It
   prints what fraction of questions were actually shown an example, how many
@@ -521,7 +521,7 @@ each other within a month."* Sharing a table is how that starts — one schema
 serving two lifecycles, and the first migration that suits one breaks the other.
 
 **They do share one thing, and only one:** the result-set comparator in
-[`app/knowledge/compare.py`](../backend/app/knowledge/compare.py). It was
+[`app/knowledge/compare.py`](../../backend/app/knowledge/compare.py). It was
 written here, and moved down a layer in Phase 4 so both callers use one
 implementation with one documented tolerance. `metrics.py` re-exports it; the
 benchmark worker imports it directly and imports nothing else from `app.eval`,
@@ -588,7 +588,7 @@ selects on names and never reads a comment, and this fixture no longer clears th
 budget (§1). Two things the run did establish: neither of the fixture's
 deliberately false comments was ever believed, and parse, guard-pass,
 execution-success and policy-violation rates all improved. Both are in
-[`reports/sales_v1_catalog_comments_2026-08-14.md`](../backend/app/eval/reports/sales_v1_catalog_comments_2026-08-14.md),
+[`reports/sales_v1_catalog_comments_2026-08-14.md`](../../backend/app/eval/reports/sales_v1_catalog_comments_2026-08-14.md),
 which also throws out two of its own apparent gains after checking them — worth
 reading as an example of the standard: an A/B whose author wanted a win, did not
 get one, and said so.

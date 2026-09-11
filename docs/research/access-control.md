@@ -1,8 +1,8 @@
 # Access control — how Lakekeeper does it, and what DataMind should build
 
-> **Subject:** [mvp2-plan.md §1.5](../mvp2-plan.md#15-single-player-by-construction) —
+> **Subject:** [mvp2.md §1.5](../plans/mvp2.md#15-single-player-by-construction) —
 > *"Single-player by construction"*, and the whole of its
-> [Theme D](../mvp2-plan.md#theme-d--make-it-a-team-product) (D1–D5).
+> [Theme D](../plans/mvp2.md#theme-d--make-it-a-team-product) (D1–D5).
 > **Scope:** how **Lakekeeper** — an Apache Iceberg REST catalog in Rust — splits
 > authentication (OIDC, typically Keycloak) from authorization (OpenFGA), read at
 > the level of its actual `.fga` model files and its Rust `Authorizer` trait; what
@@ -17,7 +17,7 @@
 > the decisions that have to be made before any of it is built.
 > **Siblings:** [learning-loop.md](learning-loop.md) ·
 > [retrieval-at-scale.md](retrieval-at-scale.md) ·
-> [semantic-layer-as-a-model.md](semantic-layer-as-a-model.md) ·
+> [semantic-layer.md](semantic-layer.md) ·
 > [data-surface.md](data-surface.md) (§8.1's file-ownership question is the same
 > question this document answers generally).
 
@@ -356,7 +356,7 @@ Three absences, each load-bearing:
 - **No row or column filtering.** OpenFGA answers *may this principal perform
   this action on this object* — it never rewrites a query. Lakekeeper's row-level
   story lives in the engines above it (or in Cedar's attribute conditions), not
-  here. This is the same boundary [mvp2 §D3](../mvp2-plan.md#d3-row-level-security--l--scope-out-of-mvp2-deliberately)
+  here. This is the same boundary [mvp2 §D3](../plans/mvp2.md#d3-row-level-security--l--scope-out-of-mvp2-deliberately)
   draws for DataMind, and it is drawn in the same place for the same reason.
 - **Almost no negative permissions.** The model has exactly one `but not`, and it
   is the `managed_access` clause. Deny rules compose badly and make "why can this
@@ -782,7 +782,7 @@ provides the alternative (Cedar) rather than insisting.
 
 | | |
 |---|---|
-| API surface | **106 endpoints** across 11 routers in [`backend/app/api/v1/`](../../backend/app/api/v1/) |
+| API surface | **106 endpoints** across 11 routers in [`backend/app/api/v1/`](../../backend/app/api/v1) |
 | Roles | **2** — `Role.ADMIN`, `Role.MEMBER` ([`value_objects/__init__.py`](../../backend/app/domain/value_objects/__init__.py)) |
 | User states | `ACTIVE`, `INVITED`, `DISABLED` |
 | Groups / teams / workspaces | **none** |
@@ -798,7 +798,7 @@ Argon2id with tunable cost, HS256 access tokens at 15 minutes, rotating refresh
 tokens in an HttpOnly cookie at 14 days with **reuse detection that kills the
 whole family** ([`local.py:159`](../../backend/app/infra/identity/local.py#L159)),
 hashed refresh tokens, and session revocation on admin password reset.
-[security.md §6](../security.md) describes it accurately.
+[security.md §6](../reference/security.md) describes it accurately.
 
 **And the OIDC hooks are already in the tree, unused.** Three of them:
 
@@ -1041,7 +1041,7 @@ someone else may ask questions through it and build their **own** dashboards on
 it; no artifact is shared.
 
 - **For:** it is the precondition
-  [architecture.md](../architecture.md) names, and it is *strictly* the smaller
+  [architecture-proposal.md](../history/architecture-proposal.md) names, and it is *strictly* the smaller
   half. It brings the semantic layer and the knowledge store with it for free
   (§5.3), and `can_curate` is **already written for it** (§5.2e). It avoids the
   dashboard-intersection problem (§5.2d) entirely, because nothing is shared that
@@ -1499,7 +1499,7 @@ model exposes and cannot answer.
 
 ### 8.1 ⚠️ Whose credentials does a shared object execute under? — the load-bearing one
 
-[architecture.md](../architecture.md) states the problem exactly: *"User B would
+[architecture-proposal.md](../history/architecture-proposal.md) states the problem exactly: *"User B would
 read data pulled with user A's credentials, against a connection B does not
 own."* Three answers, and they are genuinely different products:
 
@@ -1546,7 +1546,7 @@ admin read this dashboard" is a fact in `audit_logs` rather than an absence.
 ### 8.4 ⚠️ Granting `select` on a connection is a disclosure decision, not only an access one
 
 Each connection declares `disclosure_policy` — how much of a result may reach the
-model provider ([security.md §3](../security.md)). Today the person who chose that
+model provider ([security.md §3](../reference/security.md)). Today the person who chose that
 policy is the only person who can trigger a query under it. **The moment a
 connection is shared, the owner's disclosure choice governs somebody else's
 questions**, and that person may not know what it is.

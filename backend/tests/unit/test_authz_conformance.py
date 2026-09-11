@@ -1,6 +1,6 @@
 """The rulebook, as assertions. Phase 10's deliverable.
 
-[`docs/access-control-rules.md`](../../../docs/access-control-rules.md) states
+[`docs/reference/access-control.md`](../../../docs/reference/access-control.md) states
 the rules; this file is what stops them from being comments. Every claim below
 is a line in that document, and the two are meant to be read together — §8 of
 the rulebook is the index of which rows are here.
@@ -45,7 +45,7 @@ from tests.unit.conftest import AsyncSessionShim, _connection, _team_grant, _use
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 APP = ROOT / "app"
-RULEBOOK = ROOT.parent / "docs" / "access-control-rules.md"
+RULEBOOK = ROOT.parent / "docs" / "reference" / "access-control.md"
 
 
 # ── the vocabulary is complete ───────────────────────────────────────────
@@ -152,7 +152,7 @@ def test_nothing_under_api_or_services_decides_access_for_itself(
                 offenders.append(f"{path.relative_to(ROOT)}:{number}: {line.strip()}")
     assert not offenders, (
         f"these lines {what} outside the authorizer:\n  " + "\n  ".join(offenders)
-        + "\n\ndocs/access-control-rules.md §2 (I1). If it is legitimate — a "
+        + "\n\ndocs/reference/access-control.md §2 (I1). If it is legitimate — a "
         "badge, a sort key, a uniqueness predicate — add `# authz-ok: <reason>` "
         "to the line."
     )
@@ -190,7 +190,7 @@ def test_every_route_resolves_a_context() -> None:
     assert not missing, (
         "these routes resolve no principal:\n  " + "\n  ".join(missing)
         + "\n\nEvery route takes `ctx: CtxDep`, or a guard that produces one "
-        "(`deps.needs`, `deps.on`). See docs/access-control-rules.md §4."
+        "(`deps.needs`, `deps.on`). See docs/reference/access-control.md §4."
     )
 
 
@@ -268,7 +268,7 @@ def test_every_module_that_selects_an_owned_table_scopes_the_result() -> None:
         "these modules read an owned table and scope it neither way:\n  "
         + "\n  ".join(sorted(offenders))
         + f"\n\n(owned models: {sorted(owned)}) — a list composes `visible`, "
-        "a detail asks `require`. See docs/access-control-rules.md §4."
+        "a detail asks `require`. See docs/reference/access-control.md §4."
     )
 
 
@@ -324,7 +324,7 @@ def test_every_mutating_route_is_guarded() -> None:
         "these mutating routes check nothing:\n  " + "\n  ".join(unguarded)
         + "\n\nA mutating route names a resource (and goes through `require`) "
         "or names a capability (`deps.needs`). See "
-        "docs/access-control-rules.md §4."
+        "docs/reference/access-control.md §4."
     )
 
 
@@ -494,7 +494,7 @@ def test_the_places_that_should_point_at_the_rulebook_do() -> None:
         ROOT.parent / "docs" / "README.md",
         APP / "services" / "policy.py",
     ):
-        assert "access-control-rules" in path.read_text(), (
+        assert "reference/access-control.md" in path.read_text(), (
             f"{path.name} does not point at the rulebook"
         )
 

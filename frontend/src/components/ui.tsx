@@ -1820,7 +1820,7 @@ export function dirOf(value: string): 'rtl' | 'ltr' {
  * A query result as a table. It lived in `chat.tsx` until dashboards
  * needed it: a TABLE tile and a chat answer render the same thing, and a
  * second copy is how the two quietly stop agreeing about what a null cell
- * or an empty result looks like. Moved, not copied (docs/dashboards.md §6).
+ * or an empty result looks like. Moved, not copied (docs/reference/dashboards.md §6).
  *
  * The shape is the artifact spec, which is also the shape a tile result
  * carries — columns, rows, and the semantic type that decides which cells
@@ -1929,7 +1929,7 @@ export function Kpi({ spec, compact = false }: {
               the data does not carry: a rising refund rate is not good news,
               and the backend cannot know which metric this is. A semantic
               pair is deferred until it can be measured against the palette
-              rather than guessed at here — docs/charts.md §7. */}
+              rather than guessed at here — docs/reference/charts.md §7. */}
           <span aria-hidden style={{ opacity: 0.8 }}>
             {spec.delta.direction === 'up' ? '▲'
               : spec.delta.direction === 'down' ? '▼' : '—'}
@@ -2378,7 +2378,7 @@ export function ResultTable({
  * field, the same segmented filter, and — in its create dialog — the same
  * disclosure badge the chat header shows. Copying them is how the two indexes
  * quietly stop agreeing about what a filter looks like, which is the reason
- * `ResultTable` was moved here rather than duplicated (docs/dashboards.md §6).
+ * `ResultTable` was moved here rather than duplicated (docs/reference/dashboards.md §6).
  */
 /**
  * The title block every index page opens with: a name, one line of facts about

@@ -4,9 +4,9 @@ A Superset/Power-BI-shaped grid of tiles. Each tile is a saved query bound to
 **its own connection** and **its own refresh rate**, drawn as a chart, a table,
 a big number, or plain text.
 
-Companion to [pipeline.md](pipeline.md) (the AI run), [charts.md](charts.md)
+Companion to [pipeline-chat.md](pipeline-chat.md) (the AI run), [charts.md](charts.md)
 (what gets drawn), [security.md](security.md) (the guard and disclosure) and
-[architecture.md](architecture.md) (the why).
+[architecture-proposal.md](../history/architecture-proposal.md) (the why).
 
 ---
 
@@ -208,9 +208,9 @@ through the connection's `DisclosurePolicy` and semantic layer, unchanged.
 
 ## 6. The UI
 
-[`DashboardsPage.tsx`](../frontend/src/pages/DashboardsPage.tsx) (index and one
-dashboard), [`dashboard.tsx`](../frontend/src/components/dashboard.tsx) (grid,
-tile shell, scheduler), [`tile-editor.tsx`](../frontend/src/components/tile-editor.tsx).
+[`DashboardsPage.tsx`](../../frontend/src/pages/DashboardsPage.tsx) (index and one
+dashboard), [`dashboard.tsx`](../../frontend/src/components/dashboard.tsx) (grid,
+tile shell, scheduler), [`tile-editor.tsx`](../../frontend/src/components/tile-editor.tsx).
 
 **Index → open.** A searchable, sortable index of cards or rows — filterable by
 status, since archiving is otherwise a verb with nowhere for the result to go.
@@ -261,7 +261,7 @@ that polls forever is how this feature becomes the reason someone's production
 database is slow.
 
 The due rule is a pure function in
-[`dashboard-schedule.ts`](../frontend/src/components/dashboard-schedule.ts) —
+[`dashboard-schedule.ts`](../../frontend/src/components/dashboard-schedule.ts) —
 no React, no DOM — because its two failure modes are "a background tab hammers
 the customer's database" and "a 30-second tile silently shows ten-minute-old
 numbers". `npm run test:schedule` runs it against a frozen clock.
@@ -357,7 +357,7 @@ same rule — **neither re-runs the query**:
   Persian correctly, and a leading apostrophe on any value starting `=`, `+`,
   `@` or a control character, which is the spreadsheet formula-injection guard.
 
-Rules live in [`table-format.ts`](../frontend/src/components/table-format.ts),
+Rules live in [`table-format.ts`](../../frontend/src/components/table-format.ts),
 DOM-free for the same reason as the scheduler: every way they can be wrong is
 quiet. `npm run test:format`.
 
@@ -388,7 +388,7 @@ made.
    owner's own browser is the same exposure as the chat table and needs no new
    gate. **This stops being true the moment dashboards are shared** — see §9,
    and the intersection rule in
-   [user-management-and-access-control-plan.md](user-management-and-access-control-plan.md)
+   [user-management-and-access-control.md](../plans/user-management-and-access-control.md)
    §15.3, which is what keeps a shared board from becoming a way past a
    connection's own access.
 
@@ -435,7 +435,7 @@ Worth knowing what a few of them pin:
 ### 9.1 Sharing, and the intersection rule
 
 A dashboard is shareable as of Phase 8 of
-[user-management-and-access-control-plan.md](user-management-and-access-control-plan.md),
+[user-management-and-access-control.md](../plans/user-management-and-access-control.md),
 and it was the **last** of the four artifact types to become so, for a reason
 that is a fact about this data model rather than caution: a tile carries its
 **own** `connection_id`, so one board may span four warehouses and *"share this

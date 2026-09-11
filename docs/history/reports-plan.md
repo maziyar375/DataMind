@@ -3,7 +3,7 @@
 > **This document is superseded. It is the record of what was *intended*, phase
 > by phase, not a description of what exists.** For the built system — the data
 > model as shipped, the two roads to a block's SQL, the generation order, and
-> the print handoff — read **[reports.md](reports.md)**. Where the two disagree,
+> the print handoff — read **[reports.md](../reference/reports.md)**. Where the two disagree,
 > `reports.md` is right and this file is the reason. It is kept because the
 > phasing and the arguments behind each decision are not recoverable from the
 > code.
@@ -14,9 +14,9 @@ gets a written analytical document — prose, tables and charts — built from t
 database, saved, re-runnable months later against fresh data, and printable to
 PDF. Persian and English.
 
-Companion to [dashboards.md](dashboards.md) (the grid), [pipeline.md](pipeline.md)
-(the AI run), [charts.md](charts.md) (what gets drawn), [security.md](security.md)
-(the guard and disclosure) and [architecture.md](architecture.md) (the why).
+Companion to [dashboards.md](../reference/dashboards.md) (the grid), [pipeline-chat.md](../reference/pipeline-chat.md)
+(the AI run), [charts.md](../reference/charts.md) (what gets drawn), [security.md](../reference/security.md)
+(the guard and disclosure) and [architecture-proposal.md](architecture-proposal.md) (the why).
 
 ---
 
@@ -227,7 +227,7 @@ would have to rewrite the statement.
 
 Three doors, two of them closed:
 
-- **Bind parameters** — [dashboards.md §9](dashboards.md) already closed it:
+- **Bind parameters** — [dashboards.md §9](../reference/dashboards.md) already closed it:
   *"`QueryExecutor.execute` takes no bind parameters. Filters need the port
   extended across all four connectors. Never by string interpolation."*
 - **Regenerate the SQL each run** — breaks the promise the feature is built on
@@ -240,7 +240,7 @@ Three doors, two of them closed:
 WHERE order_date >= CURRENT_DATE - INTERVAL '3 months'
 ```
 
-The guard already permits this. From [sqlguard/policy.py](../backend/app/sqlguard/policy.py):
+The guard already permits this. From [sqlguard/policy.py](../../backend/app/sqlguard/policy.py):
 
 ```python
 exp.Substring, exp.Concat, exp.Extract, exp.DateTrunc, exp.DateAdd,
@@ -423,13 +423,13 @@ and reusing it is how a report ends up reading like a chat transcript.
 ## 11. PDF
 
 The browser prints it. Charts are already SVG —
-[VegaChart.tsx](../frontend/src/components/VegaChart.tsx) embeds with
+[VegaChart.tsx](../../frontend/src/components/VegaChart.tsx) embeds with
 `renderer: 'svg'` — so they print at full resolution, and `dirOf` has already
 solved the bidi problem that server-side rendering would start from zero.
 
 Six things it needs:
 
-1. **Self-host Vazirmatn.** [index.html](../frontend/index.html) loads it from
+1. **Self-host Vazirmatn.** [index.html](../../frontend/index.html) loads it from
    `fonts.googleapis.com`. A BI tool pointed at a production database is
    routinely deployed behind a firewall, and there the Persian font silently
    falls back and the *deliverable* renders wrong. Drop the woff2 in `public/`
@@ -492,7 +492,7 @@ job with a progress bar and needs no extra table.
 Every route that returns a report or a run **resolves display names** and
 returns the written row, so the page can splice it into state instead of
 re-reading — the read-after-write race documented at the end of
-[dashboards.md](dashboards.md) is app-wide and this feature must not walk into
+[dashboards.md](../reference/dashboards.md) is app-wide and this feature must not walk into
 it.
 
 ---
@@ -512,7 +512,7 @@ it.
 4. **Disclosure is explicit and visible.** §7. The create dialog shows the
    policy in force, the way the chat header does. Generation re-checks it.
 
-**Owner-only in v1**, for the reason [dashboards.md §9](dashboards.md) gives: a
+**Owner-only in v1**, for the reason [dashboards.md §9](../reference/dashboards.md) gives: a
 shared report means user B reads data pulled with user A's stored credentials
 through a connection B does not own. That is an authorization model, not a UI
 feature.
@@ -829,9 +829,9 @@ and unbroken charts.
   through `sql_draft_service.validate_sql`, setting `sql_origin` to
   `GENERATED_EDITED` or `HANDWRITTEN`. This is the tile-editor pattern and can
   reuse much of its shape.
-- `docs/reports.md` — the *shipped* reference doc, written from this plan and
+- `docs/reference/reports.md` — the *shipped* reference doc, written from this plan and
   describing what actually exists, peer to `dashboards.md`. This file
-  (`reports-plan.md`) stays as the record of what was intended and why.
+  (`history/reports-plan.md`) stays as the record of what was intended and why.
 - A Reports paragraph in `README.md` and in `CLAUDE.md`'s code map.
 
 **Done when** a report created today can be regenerated against tomorrow's data
@@ -1262,7 +1262,7 @@ three clicks from a document or thirty.
       `PUT /reports/{id}/blocks/{bid}/sql`
 - [x] `sql_origin` → `GENERATED_EDITED` / `HANDWRITTEN`, derived from what the
       block already held rather than asserted by the client
-- [x] `docs/reports.md` written — the shipped reference doc
+- [x] `docs/reference/reports.md` written — the shipped reference doc
 - [x] `README.md` — a Reports paragraph
 - [x] `CLAUDE.md` — Reports in the code map, and a section of its own
 - [x] **Gate:** `make test` (1,078) · `make guard` · `make lint` (6/6

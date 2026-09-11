@@ -25,7 +25,7 @@ Three rules decide everything in this module:
   should be readable by whoever ends up holding it.
 
 The import side is in `dashboard_service.import_document`, and the one thing to
-know about it is in `docs/dashboards.md` §2: **an imported statement is hostile
+know about it is in `docs/reference/dashboards.md` §2: **an imported statement is hostile
 input like any other.** `sql` in this file arrives from a text editor as easily
 as from an export, so every tile goes through `_validated_tile_fields` — the
 same guard call the save path makes — before a row is written.
@@ -237,7 +237,7 @@ def _one_of(value: str, allowed: tuple[str, ...], fallback: str | None = None) -
     """A stored status column, narrowed to what the document may say.
 
     The status columns are plain `String` so a new member needs no DDL
-    (`docs/dashboards.md` §4). That freedom stops at the file: a row holding
+    (`docs/reference/dashboards.md` §4). That freedom stops at the file: a row holding
     something this version does not know exports as the default rather than
     writing a document its own importer would reject.
     """

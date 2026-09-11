@@ -1,6 +1,6 @@
 # Retrieval at scale — competitor research and options for DataMind
 
-> **Subject:** [mvp2-plan.md §1.2](../mvp2-plan.md) — *"Retrieval is a placeholder
+> **Subject:** [mvp2.md §1.2](../plans/mvp2.md) — *"Retrieval is a placeholder
 > and does not scale past the demo"*, rated **Critical**.
 > **Question asked:** how do Microsoft Data Formulator, Wren AI, Databricks AI/BI
 > Genie and Power BI / Fabric Copilot handle **very large databases**, and what
@@ -973,7 +973,7 @@ are today.
 - [Text-to-SQL Empowered by Large Language Models: A Benchmark Evaluation (DAIL-SQL)](https://arxiv.org/abs/2308.15363) — masked question similarity and selection strategies
 
 **DataMind, internal**
-- [docs/mvp2-plan.md](../mvp2-plan.md) §1.2, §1.3, Theme B
+- [docs/plans/mvp2.md](../plans/mvp2.md) §1.2, §1.3, Theme B
 - [docs/research/learning-loop.md](learning-loop.md) — §1.1, and the shared retrieval infrastructure
 - [CLAUDE.md](../../CLAUDE.md) — the invariants, the failure postures, the eval rules
 - `backend/app/pipeline/nodes/__init__.py::retrieve` · `backend/app/pipeline/metadata.py` ·

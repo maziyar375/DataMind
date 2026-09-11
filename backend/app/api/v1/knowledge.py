@@ -998,7 +998,7 @@ async def _display_name(db, user_id: UUID | None) -> str:
 
 
 def _provenance(source: TemplateSource) -> LiteralProvenance:
-    """Who chose the literals — the disclosure question (`docs/security.md`).
+    """Who chose the literals — the disclosure question (`docs/reference/security.md`).
 
     A statement typed or corrected in the editor carries literals a person
     wrote. One confirmed from a generated answer without editing carries

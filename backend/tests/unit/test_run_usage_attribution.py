@@ -12,7 +12,7 @@ a model litellm cannot price, which is the *normal* state for a self-hosted
 deployment — so the property worth pinning is not that a cost appears, but that
 an unknown one stays null and is never quietly rounded down to free.
 
-Phase 5 of [docs/token-accounting-plan.md](../../../docs/token-accounting-plan.md)
+Phase 5 of [docs/plans/token-accounting.md](../../../docs/plans/token-accounting.md)
 widens this to report runs and semantic jobs; this file covers the chat run,
 which is the only one Phase 3 touches.
 """

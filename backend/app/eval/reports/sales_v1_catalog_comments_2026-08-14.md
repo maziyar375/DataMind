@@ -18,7 +18,7 @@
 Both arms are the **same fixture**: arm B loads `fixtures/sales_comments.sql`
 (21 table + 42 column descriptions, plus the database's and the schema's) on top
 of the identical seed, and renders them into the run prompt. This is Phase 6 of
-[docs/catalog-metadata-plan.md](../../../../docs/catalog-metadata-plan.md).
+[docs/reference/catalog-metadata.md](../../../../docs/reference/catalog-metadata.md).
 
 ---
 

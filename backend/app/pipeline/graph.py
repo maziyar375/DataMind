@@ -7,7 +7,7 @@ This module is wiring — an adapter that turns each one into a LangGraph node,
 and edge lists that replaced the index arithmetic `pipeline.py` used to do over
 `ORDER`.
 
-See [docs/langgraph-migration.md](../../../docs/langgraph-migration.md) §4.
+See [docs/plans/langgraph-migration.md](../../../docs/plans/langgraph-migration.md) §4.
 Three things to read before changing anything here:
 
 **The adapter owns the executor's job, not the node's.** The deadline check,

@@ -3,7 +3,7 @@
  *
  * This is the screen the whole feature turns on. A report is not a question
  * answered once; it is a **document whose structure a human approved**, and
- * this is where that approval happens (docs/reports-plan.md §2). The model
+ * this is where that approval happens (docs/history/reports-plan.md §2). The model
  * proposes headings and questions, the user rewrites them, and only then is a
  * single model call spent per section on prose.
  *
@@ -2704,7 +2704,7 @@ export function ReportRunViewer({
 
               The browser's own date, title and URL are gone by then: the
               stylesheet claims all six `@page` margin boxes, so there is
-              nowhere left for the browser to print them (docs/reports.md
+              nowhere left for the browser to print them (docs/reference/reports.md
               §12). */}
           {!running && document_.length > 0 && (
             <GhostButton

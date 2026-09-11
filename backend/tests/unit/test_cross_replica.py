@@ -10,7 +10,7 @@ Postgres, and `make test` has none. What is checked here is everything either
 side of it — that a notification is issued on the transaction that wrote the
 row, that a delivered event reaches subscribers exactly once, and that the
 in-memory buffer behind it is now released. The wire between them is proved by
-the two-replica compose profile in `docs/cross-replica.md`.
+the two-replica compose profile in `docs/reference/cross-replica.md`.
 """
 from __future__ import annotations
 

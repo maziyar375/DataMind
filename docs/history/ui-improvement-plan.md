@@ -7,7 +7,7 @@
 > executing, and what had to be fixed afterwards.
 >
 > Read this file for *why* a surface is shaped the way it is.
-> [frontend.md](frontend.md) describes what was built — where the two
+> [frontend.md](../reference/frontend.md) describes what was built — where the two
 > disagree, frontend.md is right.
 
 Derived from the information-architecture audit of the frontend. Sixteen
@@ -758,7 +758,7 @@ wrong while following it. They are the honest part of the record.
    trio in falling order of use. This is the ordering half of **F18**, which
    the audit raised and this plan excluded; the weighting half — captions, a
    divider, a quieter treatment for setup rows — is still out of scope, and
-   [frontend.md](frontend.md) says why an uncaptioned flat list is the right
+   [frontend.md](../reference/frontend.md) says why an uncaptioned flat list is the right
    shape.
 
 ---

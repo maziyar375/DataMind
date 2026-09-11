@@ -8,7 +8,7 @@ Three things about this route table are deliberate:
   a literal from being read as a path parameter.
 * **Every write returns the written row, resolved.** The page splices what comes
   back into its state instead of re-reading, which is the only way past the
-  read-after-write race documented at the end of `docs/dashboards.md`.
+  read-after-write race documented at the end of `docs/reference/dashboards.md`.
 * **Blocks are addressed flatly** (`/reports/{id}/blocks/{bid}`) while they are
   *created* under their section. Editing a block never needs its section, and
   the outline editor reorders blocks between sections often enough that a path

@@ -113,13 +113,13 @@ class NodeDeps:
     # carries nothing, the `{examples}` slot collapses. False by default here
     # for the same reason `clarify_enabled` is: a `NodeDeps` built without the
     # connection in hand renders what it always rendered. It is also the
-    # *column's* default until the eval gate in `docs/eval.md` §6.1 has been run.
+    # *column's* default until the eval gate in `docs/reference/eval.md` §6.1 has been run.
     examples_enabled: bool = False
     # Extra constraints appended to every SQL-producing prompt, for callers
     # whose SQL has to satisfy something a chat question does not. Today that
     # is exactly one caller: a report block, whose statement is saved and
     # re-run months later and therefore may not contain a literal date
-    # (`app/reports/prompts.py`, §6 of `docs/reports-plan.md`).
+    # (`app/reports/prompts.py`, §6 of `docs/history/reports-plan.md`).
     #
     # **Empty by default, and empty means byte-identical.** With no report in
     # play every SQL prompt is exactly what it was before this field existed,
@@ -897,7 +897,7 @@ async def generate(state: RunState, deps: NodeDeps) -> NodeResult:
     # matched nothing and on every connection with the feature off — in which
     # case the slot collapses and the prompt is byte-for-byte v8's. Rendered
     # against the same disclosure policy as the schema block above it, because
-    # a template's literals are a rung of the same ladder (`docs/security.md`
+    # a template's literals are a rung of the same ladder (`docs/reference/security.md`
     # §3.3) and the gate applies at render time, not at retrieval.
     #
     # First attempt only, deliberately. A repair is a fresh conversation about
@@ -1400,7 +1400,7 @@ async def propose_chart_intent(
 
     The one place `CHART_SYSTEM` is sent, for both of its triggers: the `chart`
     node at the end of a chat run, and a dashboard tile's draft. Keeping it one
-    function is what keeps [security.md §2](../../../docs/security.md)'s
+    function is what keeps [security.md §2](../../../../docs/reference/security.md)'s
     inventory of call sites true — a second trigger is a row's worth of change
     there, a second `structured` call would be a new line to audit.
 
@@ -1420,7 +1420,7 @@ async def propose_chart_intent(
     column's `min`/`max`, and a caller that wants it shared has to say so. The
     chat node passes the run's policy because a chat result already reaches a
     model through `present`. A tile draft passes nothing, which is what lets
-    [pipeline-dashboard.md §5](../../../docs/pipeline-dashboard.md) keep saying
+    [pipeline-dashboard.md §5](../../../../docs/reference/pipeline-dashboard.md) keep saying
     that no result value ever reaches a model on the dashboard path — at any
     policy, including `FULL`.
 

@@ -1,7 +1,7 @@
 """Authorization as functions, not scattered role checks.
 
 > **Writing an endpoint? Read
-> [`docs/access-control-rules.md`](../../../docs/access-control-rules.md)
+> [`docs/reference/access-control.md`](../../../docs/reference/access-control.md)
 > first.** It is the rulebook — seven concepts, five invariants, the
 > effective-permission algorithm verbatim, and a checklist per kind of change.
 > `tests/unit/test_authz_conformance.py` enforces the half of it a machine can

@@ -8,7 +8,7 @@ compared to `Base.metadata` column by column. A new revision that touches these
 tables belongs in `MIGRATIONS` below; leaving it out is how the check quietly
 stops covering the newest column.
 
-The rest of the file pins the choices in §4 of `docs/dashboards.md` that are
+The rest of the file pins the choices in §4 of `docs/reference/dashboards.md` that are
 easy to "tidy" into a bug: a tile survives its connection, NULL means Auto,
 NULL means inherit, and every enum-shaped column is a plain string.
 """

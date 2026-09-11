@@ -293,7 +293,7 @@ class RetrievedContext(BaseModel):
         Two gates, in this order:
 
         * **Disclosure.** A template's literals are a rung of the ladder
-          (`docs/security.md` §3.3): hand-authored literals travel with
+          (`docs/reference/security.md` §3.3): hand-authored literals travel with
           structure like a catalog comment, and ones a *model* chose are gated
           like sample values, because they may have come from values disclosed
           under a policy that has since been tightened. Applied here, at render

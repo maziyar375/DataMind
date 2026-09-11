@@ -1,6 +1,6 @@
 """Report generation as a compiled graph, with two entry points.
 
-Phase 3 of [docs/langgraph-migration.md](../../../docs/langgraph-migration.md).
+Phase 3 of [docs/plans/langgraph-migration.md](../../../docs/plans/langgraph-migration.md).
 The argument for moving this one is the same argument Phase 2 made about the
 dashboard draft path, plus a second one the chat pipeline never had:
 

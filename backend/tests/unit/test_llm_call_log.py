@@ -4,7 +4,7 @@
 Neither can say what one *call* cost, and the difference is not academic: a
 `generate` that repaired is one step row and two provider requests, and only
 this log says what each of them spent. Phase 6 of
-[docs/token-accounting-plan.md](../../../docs/token-accounting-plan.md) buys
+[docs/plans/token-accounting.md](../../../docs/plans/token-accounting.md) buys
 that grain on the logging pipeline that already exists — no new dependency, no
 metrics stack, no exporter.
 

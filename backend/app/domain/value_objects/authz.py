@@ -23,7 +23,7 @@ purpose:
   word this module does not know is *ignored with a warning* rather than
   raising. A downgrade must not lock everyone out of the installation.
 
-See `docs/user-management-and-access-control-plan.md` §12 and §13.
+See `docs/plans/user-management-and-access-control.md` §12 and §13.
 """
 from __future__ import annotations
 
