@@ -840,11 +840,47 @@ Tick each box **in the commit that lands it**, not afterwards.
 > version branches on the raw one and spells 9,999 as `10.0k` and 10,000 as
 > `10k` — two spellings one token apart — and 999,999 as `1000k`.
 
-**Phase 5 — the chart spec**
+**Phase 5 — the chart spec** — built 2026-09-13
 
-- [ ] 19 · the spec builder
-- [ ] 20 · the totals and the partiality sentences
-- [ ] 21 · the suite, and fifteen in the map
+- [x] 19 · the spec builder
+- [x] 20 · the totals and the partiality sentences
+- [x] 21 · the suite, and fifteen in the map
+
+> **`npm test` now runs sixteen suites, not fifteen.** §5C's phase gate says
+> fifteen, counting the *modules*: there were fourteen DOM-free modules and a
+> fifteenth suite in `scripts/`. Fifteen modules, sixteen suites. Both counts
+> are stated in CLAUDE.md and again in `docs/development.md`, and the second
+> file is not in §5C's list — a count that is right in the map and wrong in
+> the manual is the same stale checklist the rule is about, so both moved here.
+>
+> **`palette` is nullable, and a screen passes `null`.** §1.5 wants the chart
+> theme-correct "for free", and pinning a range into the spec is the one way
+> to lose that: `VegaChart` sets `config.range.category` from `palette.ts` for
+> the theme in force and re-embeds on a flip, but an encoding-level range
+> outranks a config one, so a spec built with a palette is frozen in the theme
+> it was built in. Null inherits the renderer's — which is still
+> `palette.ts`'s first two categorical slots, still no literal here. The
+> argument stays for the callers whose theme is fixed rather than followed
+> (print, a pinned board) and for the suite, which needs the range somewhere
+> it can read it.
+>
+> **`usageTotals` refuses a cost rather than trusting a null.** §5B asks it
+> never to report one when `unpriced` covers the whole scope; the obvious
+> reading is that `cost_usd` is already null there and nothing is needed.
+> `SUM` returns null only when *every* row is null, so a `0.0` over a fully
+> unpriced window means somebody coalesced the column — and a deployment
+> reported as free is exactly the failure §5's rules exist to prevent. The
+> refusal is a line of its own and a test of its own.
+>
+> **A token total is null rather than `0` where nothing was measured**, on the
+> step chip's rule one layer down. A scope of genuinely free work still reads
+> `0`; one whose every operation went unmeasured reads nothing at all, and the
+> two are told apart by `unmeasured`, not by the arithmetic.
+>
+> Four mutations were run against the suite: trusting `cost_usd` when the
+> scope is wholly unpriced fails one test, printing the unmeasured zero fails
+> one, dropping the segments that drew nothing fails four, and removing the
+> `order` channel fails two.
 
 **Phase 6 — the screen**
 

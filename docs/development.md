@@ -35,12 +35,12 @@ From `frontend/`: `npm run dev`, `npm run build` (`tsc -b && vite build`),
 work** — the script exists but eslint is neither a devDependency nor
 configured.
 
-`npm test` runs **fifteen** suites with `node --experimental-strip-types`:
-fourteen DOM-free logic modules under `src/components/` — `dashboard-schedule`,
+`npm test` runs **sixteen** suites with `node --experimental-strip-types`:
+fifteen DOM-free logic modules under `src/components/` — `dashboard-schedule`,
 `table-format`, `dashboard-document`, `palette`, `chat-format`,
 `report-document`, `report-readiness`, `report-print`, `semantic-drift`,
 `semantic-metrics`, `knowledge-template`, `thinking`, `knowledge-queue`,
-`provider-params` — plus `scripts/permissions.test.ts`. They hold the logic
+`provider-params`, `usage-chart` — plus `scripts/permissions.test.ts`. They hold the logic
 whose failures are quiet, and they are the *only* tested code in the frontend.
 **One React import turns a suite into a thing that cannot run.**
 
