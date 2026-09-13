@@ -2418,12 +2418,28 @@ class MessageCreate(BaseModel):
 
 
 class RunStepRead(BaseModel):
+    """One node's row in the trail, and what that node cost.
+
+    The three token fields are **`None` by default and never `0`**, which is
+    the whole of the rule the columns were added under: `validate` and
+    `execute` call no model, and a row of zeroes beside `generate` would read
+    as a measurement of nothing rather than as the absence of one. The chip
+    renders them only where `llm_calls` is set and above zero, so a node that
+    called nothing is unchanged.
+
+    `llm_calls` is not derivable from the step existing: `generate` repairs,
+    and a repaired call is two calls that were both paid for.
+    """
+
     model_config = ConfigDict(from_attributes=True)
     seq: int
     name: str
     status: str
     detail: str | None = None
     duration_ms: int | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    llm_calls: int | None = None
 
 
 class ArtifactRead(BaseModel):
@@ -2487,6 +2503,18 @@ class RunRead(BaseModel):
     repair_count: int = 0
     total_latency_ms: int | None = None
     db_latency_ms: int | None = None
+    #: What the whole turn cost, as the run row recorded it — and it equals the
+    #: sum of `steps` below, because both are written from the same calls. Null
+    #: on a run written before the counting existed, and on one whose provider
+    #: reported no usage; the trail's header prints a total only when there is
+    #: one, never `0 tokens`, which reads as a measurement and is not one.
+    #:
+    #: **No `cost_usd` here.** A price on a chat turn is a different screen's
+    #: question — the usage screen answers it, over a window, where a partial
+    #: total can say it is partial. Beside one answer it is a number nobody
+    #: can act on.
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
     model_snapshot: dict[str, Any] = Field(default_factory=dict)
     #: The database this turn was asked against, so a withheld turn's
     #: explainer can name the resource the reader needs access to. An
