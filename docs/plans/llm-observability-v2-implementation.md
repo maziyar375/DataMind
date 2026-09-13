@@ -882,12 +882,53 @@ Tick each box **in the commit that lands it**, not afterwards.
 > one, dropping the segments that drew nothing fails four, and removing the
 > `order` channel fails two.
 
-**Phase 6 — the screen**
+**Phase 6 — the screen** — built 2026-09-13
 
-- [ ] 22 · your own usage
-- [ ] 23 · the rail row and the route
-- [ ] 24 · the privileged view
-- [ ] 25 · verification, including the `curl`
+- [x] 22 · your own usage
+- [x] 23 · the rail row and the route
+- [x] 24 · the privileged view
+- [x] 25 · verification, including the `curl`
+
+> **The `curl` passed, and it is the only check that could have.** An ordinary
+> user — a fresh **Normal User**, holding `conversation.create`,
+> `dashboard.create`, `report.create` and `team.read` and nothing else — got
+> **200** on `/usage/me` with their own name and an empty series, and **403**
+> on both `/usage/users` and `/usage/total`, each refusal naming
+> `usage.read`. Invariant I5 holds: the tab strip is an affordance and the
+> gate is the API's. The test user was created and deleted against the real
+> `.data/db`.
+>
+> **The installation's own data forced two sentence fixes**, which is what
+> §6D's manual pass is for. Its whole history in the window is *one* run,
+> unpriced — so the first real rendering of these sentences said "No price is
+> known for any of these 1 operation" and "1 of 1 operation reported no token
+> count". Both are arithmetically right and neither is a sentence, and a
+> window holding a single run is the ordinary case on a quiet installation
+> rather than an edge. `usageTotals` now writes a scope of one as one, with
+> its own test; the total tab's departed-actor line got the same treatment.
+>
+> **The chart was compiled through the installed vega-lite rather than
+> eyeballed**, and it answered the one claim Phase 5 could only assert: with
+> no palette the compiled colour scale's range is the literal string
+> `"category"` — the renderer's config supplies it, so a theme flip repaints
+> it — and with a palette it is that theme's first two slots, frozen. All
+> three arms and the empty window compile to a drawable spec.
+>
+> **`windowSince` was added to the tested module in commit 22**, which §6A
+> does not mention. It is UTC midnight `days - 1` days back, and an
+> off-by-one in a window boundary is the quiet kind: the chart still draws,
+> the total is still a total, and the only symptom is a figure disagreeing
+> with the same figure elsewhere. The module is fifteen either way; this
+> added a function to it, not a sixteenth module.
+>
+> **What was not verified here: the rendering.** This environment has no
+> browser, so the page was checked by compiling its chart, by typecheck,
+> build and the sixteen suites, and by confirming `/usage` serves and the
+> page reaches the bundle — but nobody has looked at it. The reflow rule is
+> satisfied by construction rather than by measurement: the figures are an
+> `auto-fit` grid that folds to one column, the table is the page's only
+> element allowed to be wider than the screen and scrolls in its own box, and
+> there is no second fixed column at any width.
 
 **Phase 7 — documentation**
 

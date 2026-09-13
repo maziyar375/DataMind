@@ -184,9 +184,12 @@ check(
   '3 of 12 operations reported no token count, so every figure here understates.',
 )
 check('the figure it understates is still shown', partly.tokens, '1,000')
-check('one operation is not "1 operations"', usageTotals(series({
+// A window holding one run is the ordinary case on a quiet installation, and
+// the real one this was first pointed at held exactly that. "1 of 1 operation
+// reported no token count" is arithmetically right and is not a sentence.
+check('a scope of one is written as one, not as a ratio of itself', usageTotals(series({
   runs: 1, prompt_tokens: 5, unmeasured: 1,
-})).unmeasuredNote, '1 of 1 operation reported no token count, so every figure here understates.')
+})).unmeasuredNote, 'This operation reported no token count, so the figures here understate.')
 check(
   'a scope that measured nothing at all shows no token figure, and never a zero',
   usageTotals(series({ runs: 4, unmeasured: 4 })).tokens,
@@ -213,6 +216,11 @@ check(
   'and says why',
   usageTotals(series({ runs: 12, prompt_tokens: 9, cost_usd: null, unpriced: 12 })).costNote,
   'No price is known for any of these 12 operations.',
+)
+check(
+  'and says why for a single unpriced run without counting it against itself',
+  usageTotals(series({ runs: 1, prompt_tokens: 12028, cost_usd: null, unpriced: 1 })).costNote,
+  'No price is known for this operation.',
 )
 // The case this refusal exists for. `SUM` returns null only when every row is
 // null, so a `0.0` over a fully unpriced window means somebody coalesced the

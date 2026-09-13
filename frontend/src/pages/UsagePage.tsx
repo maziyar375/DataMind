@@ -381,12 +381,18 @@ function Line({ children }: { children: React.ReactNode }) {
 function Unattributed({ total }: { total: UsageTotal }) {
   if (total.unattributed <= 0) return null
   const tokens = total.unattributed_tokens
+  const spent = tokens > 0 ? `, ${formatTokens(tokens)} tokens in all,` : ''
+  // Singular where it is one, for the reason `usageTotals` writes a scope of
+  // one as one: "1 of these 5 operations were run by" is not a sentence, and
+  // one departed person's single run is the likeliest way this line is ever
+  // read for the first time.
   return (
     <Line>
-      {`${total.unattributed} of these ${total.runs} operations `}
-      {tokens > 0 ? `(${formatTokens(tokens)} tokens) ` : ''}
-      were run by somebody who has since been deleted. They are counted here
-      and not under People, which lists only people who still exist.
+      {total.unattributed === 1
+        ? `One of these ${total.runs} operations${spent} was run by somebody who has `
+        : `${total.unattributed} of these ${total.runs} operations${spent} were run by people who have `}
+      since been deleted. They are counted here and not under People, which
+      lists only people who still exist.
     </Line>
   )
 }

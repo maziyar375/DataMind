@@ -322,16 +322,25 @@ export function usageTotals(series: UsageSeries): UsageTotals {
     tokens: nothingMeasured ? null : formatTokens(totalTokens),
     costUsd,
     cost: costUsd == null ? null : formatCost(costUsd),
+    // A scope of one is written as one rather than as a ratio of itself.
+    // "1 of 1 operation reported no token count" and "no price is known for
+    // any of these 1 operation" are both arithmetically right and neither is
+    // a sentence — and a window holding a single run is the ordinary case on
+    // a quiet installation, not an edge.
     unmeasuredNote:
-      unmeasured > 0
-        ? `${unmeasured} of ${operations(runs)} reported no token count, ` +
-          'so every figure here understates.'
-        : null,
+      unmeasured <= 0
+        ? null
+        : runs === 1
+          ? 'This operation reported no token count, so the figures here understate.'
+          : `${unmeasured} of ${operations(runs)} reported no token count, `
+            + 'so every figure here understates.',
     costNote:
       unpriced <= 0
         ? null
         : wholesalePriceless
-          ? `No price is known for any of these ${operations(runs)}.`
+          ? runs === 1
+            ? 'No price is known for this operation.'
+            : `No price is known for any of these ${operations(runs)}.`
           : `Cost is known for ${runs - unpriced} of ${operations(runs)}.`,
   }
 }
