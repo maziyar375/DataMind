@@ -772,13 +772,43 @@ Tick each box **in the commit that lands it**, not afterwards.
 > `_TABLES` gained `report_runs` and `semantic_jobs`, without which a union
 > that silently dropped an arm would have passed.
 
-**Phase 3 — the read endpoints**
+**Phase 3 — the read endpoints** — built 2026-09-13
 
-- [ ] 11 · the DTOs
-- [ ] 12 · `/usage/me`
-- [ ] 13 · the two gated routes
-- [ ] 14 · the client
-- [ ] 15 · the tests
+- [x] 11 · the DTOs
+- [x] 12 · `/usage/me`
+- [x] 13 · the two gated routes
+- [x] 14 · the client
+- [x] 15 · the tests
+
+> **There is a third DTO, and §1.2 implies it without naming it.** The
+> installation total has to carry `unattributed` — §1.4 says the screen states
+> the departed-actor gap, and a gap the wire drops is one the screen cannot
+> state. So `UsageTotal` extends `UsageSeries` with the two counts rather than
+> putting nullable fields nobody else uses on the shared shape. The SPA has
+> three types for the same reason, where 3D says two.
+>
+> **The API tests run over an ASGI transport, not `TestClient`, and that is
+> load-bearing.** `TestClient` drives the app from a worker thread while the
+> unit fixture's SQLite connection belongs to the test's own, so on the first
+> run every route that reached the database failed with a thread error and
+> every route that refused before touching it passed — a permissions suite
+> that is green precisely on the cases it is not testing. Any later phase
+> adding an HTTP test against the `db` fixture inherits this.
+>
+> **Two mutations were run against commit 15 before it was made**, because
+> §3E's claims are the kind that pass by accident: removing `UsageReadDep`
+> from `/usage/users`, and widening `/usage/me` to read everybody. The first
+> failed three tests immediately. The second **passed** — the grouped query
+> orders by display name and the fixture had named the caller first, so a
+> handler returning "everybody, first row" returned the right person by luck.
+> The fixture now names the other person so they sort first. A scope test
+> whose fixture sorts the caller to the front is testing nothing.
+>
+> The three aggregations were also run against the **real Postgres** app
+> database read-only, since `date_trunc` and the `FILTER` clauses only ever
+> compile on SQLite in the suite. They work, and the installation's own data
+> already has an unpriced run in it — which is the case `unpriced` exists for,
+> arriving before the screen that reports it.
 
 **Phase 4 — tokens in the step chip**
 
