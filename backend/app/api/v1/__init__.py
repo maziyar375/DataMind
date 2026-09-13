@@ -15,6 +15,7 @@ from app.api.v1 import (
     semantic,
     service_users,
     teams,
+    usage,
     users,
 )
 
@@ -59,3 +60,9 @@ api_router.include_router(dashboards.router)
 # A peer of dashboards, sharing no table and no code path with it: deleting
 # either feature would leave the other working.
 api_router.include_router(reports.router)
+# The read side of the token accounting the three tables above already write.
+# A peer of `audit` rather than of any feature router: it answers a question
+# about *principals* — what everybody's use of the product cost — and holds
+# `usage.read` on two of its three routes for the same reason the log holds
+# `audit.read`.
+api_router.include_router(usage.router)
