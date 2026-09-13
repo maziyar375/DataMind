@@ -1,11 +1,19 @@
 # Token usage in the UI — the implementation plan
 
-> **Status: proposed, not built.** This is the build order for
+> **Status: built.** All seven phases landed, in twenty-eight commits — §3
+> plans twenty-nine, and commits 1 and 2 could not be two, for the reason §4's
+> Phase 1 note gives. This is the build order for
 > [llm-observability-v2.md](llm-observability-v2.md), which is the
 > specification and stays the authority on *what* and *why*. This document is
 > only *in what order*, *how it is verified*, and *where the commits land*.
 >
-> **Written:** 2026-09-13. Phase one —
+> **Read §4 first.** The ledger is where each phase records what the plan did
+> not predict, and that is the part worth reading after the fact — the
+> departed-actor gap being narrower than §1.4 implies, an API suite that was
+> green precisely on the cases it was not testing, a scope of one written as a
+> ratio of itself.
+>
+> **Written:** 2026-09-13. **Built:** 2026-09-13. Phase one —
 > [token-accounting.md](token-accounting.md) — is built and merged, and is why
 > there are numbers to show at all.
 
@@ -935,7 +943,32 @@ Tick each box **in the commit that lands it**, not afterwards.
 - [x] 26 · the two plans
 - [x] 27 · the map
 - [x] 28 · the reference docs
-- [ ] 29 · the front door
+- [x] 29 · the front door
+
+> **Two counts were checked rather than assumed, and one of them was already
+> right.** `status.md`'s *"five strands of mvp2 have been designed, built and
+> merged"* counts strands of `mvp2.md`, not rows of its own table — and this
+> is phase two of the token-accounting strand rather than a sixth, so the
+> number does not move. It was edited to six and put back. `CLAUDE.md` states
+> no capability count at all, which §7B predicted; the two files that do count
+> are `security.md` and `test_authz_vocabulary.py`, both moved in Phase 1.
+>
+> **`llm-calls.md` was read and left alone**, per §7C's own condition: it
+> describes call sites and says nothing about where token counts land, so
+> there was no claim to correct and an edit would have introduced the subject
+> to a document that is not about it.
+>
+> **This document's own banner was stale from the moment §7A flipped the
+> specification's**, and §7A does not mention it — it asks only for the
+> ledger. Fixed here, in the read-through the phase gate requires.
+>
+> **The phase gate, in full.** Backend: 2,600 passed, 14 skipped; ruff clean;
+> eight import-linter contracts kept; `make authz-check` clean. Frontend:
+> typecheck, build, sixteen suites. One environment note for whoever runs this
+> next — `docs/` is **not** mounted into `datamind-api-1`, so
+> `test_authz_conformance.py`'s four rulebook assertions fail there for want
+> of the file they read. Run the suite with the repository root mounted
+> instead; they pass, and they are the machine half of this phase.
 
 ---
 

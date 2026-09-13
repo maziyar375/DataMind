@@ -3,7 +3,8 @@
 **Where DataMind is right now.** One page, so that "what is built?" and "what
 is next?" do not require reading five ledgers.
 
-> **Verified against the tree on 2026-09-11**, at `main` / `00e034f`. Every
+> **Verified against the tree on 2026-09-11**, at `main` / `00e034f`, with
+> §2's newest row added 2026-09-13 as it landed. Every
 > "built" below was checked by reading the code or a migration, not by memory.
 > Each row names the document that owns the detail — this page is the index,
 > never the argument.
@@ -38,6 +39,7 @@ Newest first. Each row is complete unless the **Caveat** column says otherwise.
 
 | Strand | Landed | Caveat | Record |
 | --- | --- | --- | --- |
+| **Token usage in the UI** — a **Token usage** rail section over three read routes, tokens on the chat step chips, `usage.read` seeded to Administrator and Auditor | 2026-09-13, all 7 phases, migration `0030` | Counts only, and **input + output only** — see below | [plans/llm-observability-v2-implementation.md](plans/llm-observability-v2-implementation.md); the spec is [plans/llm-observability-v2.md](plans/llm-observability-v2.md) |
 | **User management and access control** — users, service users, roles, teams, grants on eight resource types, access review, audit of every authorization event | 2026-09-06 → 09-08, all 11 phases, 254/254 | — | [plans/user-management-and-access-control.md](plans/user-management-and-access-control.md); the rulebook is [reference/access-control.md](reference/access-control.md) |
 | **Token accounting** — usage travels by sink, per node, per operation, per user; one structured log line per provider call | 2026-09-05, all 6 phases, migration `0023` | — | [plans/token-accounting.md](plans/token-accounting.md) |
 | **UI/UX remediation** — routing, the Chat→Dashboard/Report bridge, responsive reflow | 2026-09-03, all 7 phases, 55/55 | — | [history/ui-improvement-plan.md](history/ui-improvement-plan.md); built state is [reference/frontend.md](reference/frontend.md) |
@@ -46,6 +48,25 @@ Newest first. Each row is complete unless the **Caveat** column says otherwise.
 | **LangGraph migration** — the chat pipeline and the report worker are compiled graphs; the repair region is one subgraph with two callers | Phases 0–3 and 6 | Phases 4 and 5 **declined on measurement** | [plans/langgraph-migration.md](plans/langgraph-migration.md) |
 | **Cross-replica** — claim-before-execute, cancel as a row, SSE over `LISTEN`/`NOTIFY` | as LangGraph Phase 6 | — | [reference/cross-replica.md](reference/cross-replica.md) |
 | **Semantic layer render fix** — the layer reached the model on no question at all before this | 2026-08-30 | — | [reference/semantic-layer.md](reference/semantic-layer.md) |
+
+**What the usage screen deliberately does not count, so the next reader does
+not assume it was forgotten.** Both are named in the specification and both are
+follow-ups with their own work, not oversights:
+
+- **Cache read and cache write tokens.** The schema has `prompt_tokens` and
+  `completion_tokens` and nothing else, and so does `Usage` in
+  `domain/ports/llm.py` — a port type, so widening it moves every sink and
+  every accumulation path with it. Including them would have turned a
+  read-and-render phase into a schema phase. The chart's stack is a *list* of
+  series for exactly this reason: a third and fourth segment costs a series,
+  not a rewrite.
+- **Embeddings.** `embed()` spends real tokens and is still uncounted — a
+  different unit at a different call site.
+
+Also absent on purpose, and each for a reason in the plan's §1.7: budgets or
+quotas (this measures, it does not enforce — a cap would have to fail *closed*,
+and everything here fails open), cross-model grouping, hourly buckets, CSV
+export, and any backfill of historical rows.
 
 ## 3. Built, and shipped **off**
 
