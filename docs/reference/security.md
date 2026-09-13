@@ -998,6 +998,18 @@ Two properties bound what it opens:
   one gate on an argument value is what keeps each route resolving to exactly
   one cell of the access-control rulebook.
 
+**Where it is read.** The **Token usage** rail section
+(`frontend/src/pages/UsagePage.tsx`) is the only screen over these three
+routes. It is in the rail for *everybody*, because the ungated scope is the
+one everybody has; `usage.read` adds two tabs inside it — every person, and
+the installation total — and hides them again when the capability is not held.
+**That hiding is an affordance and never the boundary**: an ordinary user who
+types `/usage/people`, or calls `GET /api/v1/usage/users` with their own token,
+is refused by the API with a 403 naming the capability. That refusal is
+verified end-to-end rather than asserted, because a tab strip proves nothing —
+[the usage plan](../plans/llm-observability-v2-implementation.md)'s Phase 6
+records the `curl`.
+
 It is deliberately **not** a `PRIVILEGED_CAPABILITY`. That set is the four a
 leaked API key must not reach because they can mint an administrator; reading
 token counts mints nothing, and a service account reporting installation spend

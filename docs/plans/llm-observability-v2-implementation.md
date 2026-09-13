@@ -934,7 +934,7 @@ Tick each box **in the commit that lands it**, not afterwards.
 
 - [x] 26 · the two plans
 - [x] 27 · the map
-- [ ] 28 · the reference docs
+- [x] 28 · the reference docs
 - [ ] 29 · the front door
 
 ---

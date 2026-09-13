@@ -77,8 +77,14 @@ The rail is **one flat list in the order the product is used**, not grouped:
 captions over seven items are furniture, and a split invites a "which half is
 this in?" decision on every glance. The order does the grouping instead, which
 only works if it never doubles back — Chat, Dashboards, Reports and Knowledge
-are today's work; Data sources, LLM providers and Users keep it running, in
-falling order of how often anyone opens them. Knowledge is the fourth rather
+are today's work; Data sources, LLM providers, Token usage and Administration
+keep it running, in falling order of how often anyone opens them. Token usage
+sits directly under LLM providers because that is the row deciding what a
+token costs, and directly above Administration because reading somebody else's
+spend is the first of the questions that section is full of — and it carries
+**no gate**, unlike the row below it: everybody has their own usage to look
+at, and what `usage.read` opens is two further tabs inside the section rather
+than the section itself. Knowledge is the fourth rather
 than the fifth row because Chat is where a wrong answer gets flagged and
 teaching one changes what Chat says next: it closes the loop the three above
 it open. It spent Phase 5 under Data sources, on the argument that a console
@@ -125,6 +131,7 @@ colours are chosen in JS, and the print stylesheet.
 | **Knowledge** | [`KnowledgePage.tsx`](../../frontend/src/pages/KnowledgePage.tsx) | The curation console, across every connection: flags raised, questions nothing answers, the maintenance sweep. |
 | **Data sources** | [`DataSourcesPage.tsx`](../../frontend/src/pages/DataSourcesPage.tsx) | The connections DataMind may read, and everything known about each one. |
 | **LLM providers** | [`LlmProvidersPage.tsx`](../../frontend/src/pages/LlmProvidersPage.tsx) | The models it may call, and the keys it calls them with. Two groups: *Models* answer questions, the *Embedder* makes vectors — a row is one or the other, and the form shows that kind's fields only. |
+| **Token usage** | [`UsagePage.tsx`](../../frontend/src/pages/UsagePage.tsx) | `/usage`: what the models were asked to do and what it cost, in a 7/30/90-day window. Three scopes as `useMatch` sub-routes — **Yours** (`/usage`, no capability: the scope *is* the caller and no control widens it), and behind `usage.read` **People** (`/usage/people`, everyone ranked by tokens) and **Installation** (`/usage/total`). With one scope it renders as a plain index rather than a tab strip of one. Counts only: no question, no answer and no SQL is on the page, which is what makes it a capability an Auditor may hold rather than a disclosure of somebody's work. |
 | **Administration** | [`AdminPage.tsx`](../../frontend/src/pages/AdminPage.tsx) | `/admin`: a tabbed section over **People** ([`UsersPage.tsx`](../../frontend/src/pages/UsersPage.tsx)), **Roles** ([`RolesTab.tsx`](../../frontend/src/pages/RolesTab.tsx)), **Teams** ([`TeamsTab.tsx`](../../frontend/src/pages/TeamsTab.tsx)), **Service accounts** ([`ServiceAccountsTab.tsx`](../../frontend/src/pages/ServiceAccountsTab.tsx)), **Access review** ([`AccessReviewTab.tsx`](../../frontend/src/pages/AccessReviewTab.tsx) — two lenses over one set of facts: what one principal can reach, and everyone who can reach one thing) and the **Audit log** ([`AuditTab.tsx`](../../frontend/src/pages/AuditTab.tsx)). The rail row appears when the viewer holds **any** administration capability, and each tab appears when its own capability is held — so an Auditor sees People and changes nothing, and a DataMind Maintainer sees the section without seeing People at all. `/users` permanently redirects to `/admin/people`. |
 | **Your account** | [`AccountPage.tsx`](../../frontend/src/pages/AccountPage.tsx) | `/settings`: your display name and your password. Reached from the user block in the rail, not from `NAV`. |
 | **Creators** | [`AboutPage.tsx`](../../frontend/src/pages/AboutPage.tsx) | Who built it. A colophon, not a destination; the one page on both sides of the sign-in wall. |
@@ -247,6 +254,13 @@ Data sources    master → detail, 4 tabs and a door:
                   semantic detail: Meaning │ Columns │ Metrics
 
 LLM providers   master → detail, one form
+
+Token usage     one window picker over every figure on the page
+                  Yours (always) │ People │ Installation — the last two behind
+                  usage.read, and with only the first it is a plain index
+                  rather than a tab strip of one
+                  People: a table ranked by tokens; opening a name draws that
+                  person's days from rows already in hand
 
 Users           rows, inline detail, one-time password panel
 
@@ -497,12 +511,20 @@ each Vega plot at page width in the light palette — are
 
 ## 7. What is tested, and what is not
 
-Fourteen modules are deliberately **DOM-free** and carry their own suites,
+Fifteen modules are deliberately **DOM-free** and carry their own suites,
 because every way they can be wrong is quiet: `dashboard-schedule.ts`,
 `table-format.ts`, `dashboard-document.ts`, `palette.ts`, `chat-format.ts`,
 `report-document.ts`, `report-readiness.ts`, `report-print.ts`,
 `semantic-drift.ts`, `semantic-metrics.ts`, `knowledge-template.ts`,
-`thinking.ts`, `knowledge-queue.ts`, `provider-params.ts`.
+`thinking.ts`, `knowledge-queue.ts`, `provider-params.ts`, `usage-chart.ts`.
+
+`usage-chart.ts` is the newest and the clearest case for the rule: it holds
+the usage chart's Vega-Lite spec — **written rather than planned**, because
+that chart's shape was decided with the screen and `app/charts/` exists for
+the question nobody can answer in advance — and the arithmetic that decides
+whether a total may be printed at all. A chart drawn from a wrong reshape is
+still a chart, and a total that has quietly stopped saying how partial it is
+looks exactly like a whole one.
 
 There is no test runner — each suite is a plain `node
 --experimental-strip-types` script, run by `npm test`. Keeping these modules
