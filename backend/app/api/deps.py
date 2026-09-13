@@ -288,3 +288,7 @@ ServiceUserManageDep = Annotated[
 AccessReviewDep = Annotated[
     RequestContext, Depends(needs(Capability.ACCESS_REVIEW))
 ]
+#: Everybody else's token spend, and the installation's. Reading your **own**
+#: usage carries no dependency at all — the scope there is the caller, and a
+#: route that cannot be widened by any parameter has nothing to gate.
+UsageReadDep = Annotated[RequestContext, Depends(needs(Capability.USAGE_READ))]
