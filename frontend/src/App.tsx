@@ -16,6 +16,7 @@ import DataSourcesPage from './pages/DataSourcesPage'
 import LlmProvidersPage from './pages/LlmProvidersPage'
 import LoginPage from './pages/LoginPage'
 import ReportsPage from './pages/ReportsPage'
+import UsagePage from './pages/UsagePage'
 import { badge, queueTone, totalWaiting } from './components/knowledge-queue'
 import {
   ADMIN_SECTION, PermissionsProvider, usePermissions, type Capability,
@@ -64,6 +65,18 @@ const NAV = [
   // admin-only and rarer still.
   { path: '/sources', label: 'Data sources', icon: <Icon.Database /> },
   { path: '/providers', label: 'LLM providers', icon: <Icon.Sparkle /> },
+  // Below the providers and above Administration, and **no `needsAny`**:
+  // everybody has their own usage to look at, and a row that appeared only
+  // for the people who can see everyone's would make the common case — "what
+  // have I spent" — the one nobody can reach. What `usage.read` opens is two
+  // further tabs *inside* the section, not the section itself.
+  //
+  // It sits here rather than up with the four you work in because it is not
+  // work: it is a thing you check about work already done. Directly under
+  // LLM providers because that is the row that decides what a token costs,
+  // and directly above Administration because reading somebody else's spend
+  // is the first of the questions that section is full of.
+  { path: '/usage', label: 'Token usage', icon: <Icon.Bars /> },
   // Was **Users**, gated on a role string (authz-ok: prose). It is now a section rather
   // than a page, and its gate is *holding any administration capability* —
   // which is what lets an Auditor reach it and change nothing, and a DataMind
@@ -402,6 +415,11 @@ export default function App() {
               <Route path="/sources/*" element={<DataSourcesPage />} />
               <Route path="/knowledge/*" element={<KnowledgePage />} />
               <Route path="/providers/*" element={<LlmProvidersPage />} />
+              {/* Registered for everyone, unlike `/admin`: the section's own
+                  scope needs no capability, and the two that do are tabs
+                  inside it that it declines to render rather than routes
+                  somebody can fall off. */}
+              <Route path="/usage/*" element={<UsagePage />} />
               {/* Not a hidden rail item: somebody who types the path with no
                   administration capability lands on Chat like any other
                   unknown address. The section itself decides which of its tabs
