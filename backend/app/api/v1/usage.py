@@ -25,8 +25,8 @@ from datetime import datetime
 
 from fastapi import APIRouter
 
-from app.api.deps import CtxDep, DbDep
-from app.api.schemas import UsageBucket, UsageSeries
+from app.api.deps import CtxDep, DbDep, UsageReadDep
+from app.api.schemas import UsageBucket, UsageSeries, UsageTotal
 from app.services import usage_service as usage
 
 router = APIRouter(prefix="/usage", tags=["usage"])
@@ -84,3 +84,58 @@ async def my_usage(
     """
     window = usage.clamp_window(since, until)
     return _series(await usage.for_actor(db, ctx.user_id, window=window))
+
+
+@router.get("/users", response_model=list[UsageSeries])
+async def usage_by_person(
+    ctx: UsageReadDep,
+    db: DbDep,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> list[UsageSeries]:
+    """Everybody's usage, one series each, in **one** response.
+
+    Not a per-person endpoint the screen loops over: the screen renders a list
+    of people with a chart each, and a loop of authorized reads is the
+    pagination bug §4 of the rulebook names. One grouped query, one answer.
+
+    **Inner joined to `users`**, so a deleted person is not in this list. Their
+    spend is not lost — it stays in `/usage/total`, which joins nothing — and
+    the gap between the two is reported there rather than closed here. An outer
+    join would attribute a departed person's spend to whoever remains, which is
+    the one answer that is wrong.
+
+    Every row carries a display name and no address. A usage screen answers
+    *"who spent this"* with something a person recognises, and an email is a
+    personal identifier it has no need of.
+    """
+    window = usage.clamp_window(since, until)
+    return [_series(row) for row in await usage.per_actor(db, window=window)]
+
+
+@router.get("/total", response_model=UsageTotal)
+async def installation_usage(
+    ctx: UsageReadDep,
+    db: DbDep,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> UsageTotal:
+    """What the whole installation spent, and how much of it has no owner.
+
+    The one structural difference from the route above: this joins `users` not
+    at all, so a run whose actor has since been deleted is still counted. It is
+    a true record of tokens somebody spent, and leaving it out of *both* views
+    would quietly shrink the installation's own total.
+
+    So this total is legitimately larger than the sum of `/usage/users`, and
+    `unattributed` is the size of that difference — carried on the wire so the
+    screen can state it in a sentence instead of leaving a reader to add the
+    people up and wonder where the rest went.
+    """
+    window = usage.clamp_window(since, until)
+    total = await usage.installation(db, window=window)
+    return UsageTotal(
+        **_series(total).model_dump(),
+        unattributed=total.unattributed,
+        unattributed_tokens=total.unattributed_tokens,
+    )
