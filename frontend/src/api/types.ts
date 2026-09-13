@@ -847,6 +847,26 @@ export interface RunStep {
   status: 'PENDING' | 'RUNNING' | 'DONE' | 'SKIPPED' | 'FAILED'
   detail: string | null
   duration_ms: number | null
+  /**
+   * What this node spent at the provider. **Optional, and never zero when
+   * nothing is known**: `validate` and `execute` call no model, and a row of
+   * zeroes beside `generate` would read as a measurement of nothing rather
+   * than as the absence of one.
+   *
+   * Absent on a live step too — these arrive with the persisted run, not on
+   * the SSE stream — so the chip is unchanged for the length of the run and
+   * gains its number when the turn lands.
+   */
+  prompt_tokens?: number | null
+  completion_tokens?: number | null
+  /**
+   * How many provider calls this step made. What the chip keys on: null or
+   * zero means no model was called and the chip renders exactly as before.
+   *
+   * Not derivable from the step existing — `generate` repairs, and a repaired
+   * call is two calls that were both paid for.
+   */
+  llm_calls?: number | null
 }
 
 export interface TableArtifactSpec {
@@ -1063,6 +1083,17 @@ export interface RunDetail {
   model_snapshot: Record<string, unknown>
   /** The database this turn was asked against; null once it is deleted. */
   connection_id: string | null
+  /**
+   * What the whole turn cost, as the run row recorded it — and it equals the
+   * sum over `steps`, because both are written from the same calls.
+   *
+   * Null on a turn from before the counting existed and on one whose provider
+   * reported no usage. Nothing may render that as `0`: the header prints a
+   * total only where there is one, since `0 tokens` reads as a measurement
+   * and is the absence of one.
+   */
+  prompt_tokens?: number | null
+  completion_tokens?: number | null
   steps: RunStep[]
   artifacts: Artifact[]
   queries: GeneratedQuery[]

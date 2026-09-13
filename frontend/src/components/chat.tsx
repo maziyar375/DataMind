@@ -131,6 +131,45 @@ function stepTime(ms: number): string {
 }
 
 /**
+ * A token count in the width a chip has: `940`, `4.2k`, `130k`, `1.4M`.
+ *
+ * The boundaries are on the **rounded** figure, not the raw one, or the unit
+ * jumps before the number does: 9,999 formatted by its raw magnitude reads
+ * `10.0k` and 10,000 reads `10k`, two spellings of the same quantity one
+ * token apart, and 999,999 reads `1000k` — a scale the reader was about to
+ * be shown a better word for.
+ */
+function tokenCount(n: number): string {
+  if (n < 1000) return String(n)
+  if (n < 999_500) {
+    const k = n / 1000
+    return `${k < 9.95 ? k.toFixed(1) : Math.round(k)}k`
+  }
+  return `${(n / 1_000_000).toFixed(1)}M`
+}
+
+/**
+ * What this step spent, or null where that is not a question about it.
+ *
+ * Two different silences, and both render as nothing. A node that called no
+ * model — `validate`, `execute` — has `llm_calls` null or zero and is a chip
+ * that is complete without a number. A node that called one and got no usage
+ * block back has the calls and no counts, and `0` would be a claim the
+ * provider never made. Neither gets a number; only a real measurement does.
+ */
+function stepTokens(step: RunStep): number | null {
+  if (step.llm_calls == null || step.llm_calls <= 0) return null
+  const total = (step.prompt_tokens ?? 0) + (step.completion_tokens ?? 0)
+  return total > 0 ? total : null
+}
+
+/** The run's own total, on the same terms. Null is not zero. */
+function runTokens(run: RunDetail | null | undefined): number | null {
+  const total = (run?.prompt_tokens ?? 0) + (run?.completion_tokens ?? 0)
+  return total > 0 ? total : null
+}
+
+/**
  * How long the step that is running now has been running.
  *
  * The trail shows a duration on every step **except** the one you are waiting
@@ -198,6 +237,7 @@ export function StepTrail({
     >
       {steps.map((step) => {
         const meta = NODE_META[step.name] ?? { label: step.name, detail: '' }
+        const tokens = stepTokens(step)
         const running = step.status === 'RUNNING' && !interrupted
         const stopped = step.status === 'RUNNING' && interrupted
         const failed = step.status === 'FAILED'
@@ -214,7 +254,17 @@ export function StepTrail({
         return (
           <span
             key={step.seq}
-            title={step.detail ?? meta.detail}
+            /* The breakdown goes in the tooltip the chip already has rather
+               than on the chip: in and out are the interesting split once
+               somebody is asking why a node was expensive, and nobody is
+               asking that at a glance across six chips. */
+            title={
+              tokens == null
+                ? (step.detail ?? meta.detail)
+                : `${step.detail ?? meta.detail}\n` +
+                  `${step.prompt_tokens ?? 0} in · ${step.completion_tokens ?? 0} out` +
+                  ` · ${step.llm_calls} call${step.llm_calls === 1 ? '' : 's'}`
+            }
             className="rm-chip-in"
             style={{
               display: 'inline-flex',
@@ -245,6 +295,23 @@ export function StepTrail({
             {step.duration_ms != null && !running && (
               <span style={{ color: 'var(--text-faint)' }}>
                 {stepTime(step.duration_ms)}
+              </span>
+            )}
+            {/*
+              Only where a model was actually called and actually reported.
+              `validate` and `execute` are unchanged, pixel for pixel, and so
+              is every step of a run from before the counting existed — which
+              is most of the transcript in an installation that has been
+              running a while.
+            */}
+            {tokens != null && !running && (
+              <span
+                style={{
+                  color: 'var(--text-faint)',
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              >
+                {tokenCount(tokens)} tok
               </span>
             )}
             {running && elapsed >= SLOW_STEP_MS && (
@@ -280,13 +347,19 @@ export function StepTrail({
  * the same element throughout — fed by live events, then by the persisted run.
  */
 function StepPanel({
-  steps, streaming, totalMs,
+  steps, streaming, totalMs, tokens,
 }: {
   steps: RunStep[]
   /** The run is still in flight, so the header names what it is doing now. */
   streaming?: boolean
   /** The run's own measured latency, once it has one. */
   totalMs?: number | null
+  /**
+   * The run's own token total, once it has one — and **null, never zero**,
+   * when it does not. It arrives with the persisted turn, so the header gains
+   * it at the same moment the trail stops being live.
+   */
+  tokens?: number | null
 }) {
   const [open, setOpen] = useState(true)
   if (steps.length === 0) return null
@@ -298,13 +371,18 @@ function StepPanel({
 
   /** One line of truth for what the run is doing, so the visible label and the
    *  spoken announcement below cannot drift apart. */
+  /* Appended rather than interpolated into both arms, so a run with no
+     measured total reads exactly as it did before this line existed. Never
+     `0 tokens`: that is a measurement, and the absence of one is what a null
+     means here. */
+  const spent = tokens != null ? ` · ${tokenCount(tokens)} tokens` : ''
   const status = streaming
     ? active
       ? (NODE_META[active.name]?.detail ?? 'Working…')
       : 'Starting…'
     : failed
-      ? `Stopped after ${steps.length} steps · ${seconds}s`
-      : `All ${steps.length} steps passed · ${seconds}s`
+      ? `Stopped after ${steps.length} steps · ${seconds}s${spent}`
+      : `All ${steps.length} steps passed · ${seconds}s${spent}`
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1554,6 +1632,7 @@ export const AssistantTurn = memo(function AssistantTurn({
         steps={trail}
         streaming={streaming}
         totalMs={run?.total_latency_ms}
+        tokens={runTokens(run)}
       />
 
       {/* Under the trail and above the answer, which is where it happens: the
