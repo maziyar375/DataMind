@@ -930,9 +930,9 @@ Tick each box **in the commit that lands it**, not afterwards.
 > element allowed to be wider than the screen and scrolls in its own box, and
 > there is no second fixed column at any width.
 
-**Phase 7 — documentation**
+**Phase 7 — documentation** — built 2026-09-13
 
-- [ ] 26 · the two plans
+- [x] 26 · the two plans
 - [ ] 27 · the map
 - [ ] 28 · the reference docs
 - [ ] 29 · the front door

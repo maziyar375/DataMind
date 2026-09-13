@@ -1,12 +1,48 @@
 # Token usage in the UI — LLM observability, phase two
 
-> **Status: proposed, not built.** This is the specification agreed before any
-> code; nothing here exists yet.
+> **Status: built.** All seven phases landed —
+> `Capability.USAGE_READ` and migration `0030`, `services/usage_service.py`,
+> the three `GET /usage/*` routes, tokens in the chat step chip,
+> `components/usage-chart.ts` and the **Token usage** rail section. The line
+> that used to stand here said *"proposed, not built"*, which was true the day
+> it was written. The build order, every commit, and what each phase found is
+> [llm-observability-v2-implementation.md](llm-observability-v2-implementation.md).
 >
-> **Written:** 2026-09-13. Phase one is
+> Read this now as the record of **why** the screen is shaped this way —
+> *"Who sees what"* and *"Two things to settle"* are the parts that stay
+> useful. *"What this phase does not do"* is still open work, unchanged.
+>
+> **Written:** 2026-09-13. **Built:** 2026-09-13. Phase one is
 > [token-accounting.md](token-accounting.md) — built and merged, and the reason
 > there are numbers to show at all. The argument behind both is
 > [research/llm-observability.md](../research/llm-observability.md).
+
+---
+
+## What shipped differently
+
+Two places this document left a choice open, and what the build settled. Both
+are narrowings, and neither changes the argument above.
+
+**Daily buckets only.** *"How it is bucketed"* offers hour *"where the range is
+short enough to warrant it"*. Only `date_trunc('day', …)` is built. An hourly
+arm is a second query, a second aggregation and a second axis format, for a
+window nobody has asked for; the day is the smallest bucket this document
+actually argues for, and the window picker offers 7, 30 and 90 of them.
+
+**Three endpoints rather than one.** This document describes *who sees what*
+and leaves the HTTP shape open. It is `GET /usage/me`, `/usage/users` and
+`/usage/total`, not one route taking a `user_id`. The parameterised version
+has to decide its gate *inside* the handler — *"needs `usage.read` unless the
+id is your own"* — and the access-control rulebook's §4 checklist has one
+right answer per route, not one per argument value. Three routes, three
+unambiguous gates, all three visible to `make authz-check`.
+
+One thing the build **added**, because the wire could not carry the argument
+without it: `unmeasured` and `unpriced` counts on every series, and
+`unattributed` on the total. This document says a partial figure must say it
+is partial and that the departed-actor gap is real and stated; a screen cannot
+state either from a number alone, and a boolean could not say *how* partial.
 
 ---
 
