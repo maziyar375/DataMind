@@ -36,9 +36,19 @@ Ali asked", and only the first one is available through this module.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 from uuid import UUID
+
+import sqlalchemy as sa
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.sql.expression import ColumnElement, FunctionElement
+from sqlalchemy.types import Date
+
+from app.infra.db.models import ReportRun, Run, SemanticJobRow, User
 
 #: The widest window a caller may ask for. A year and a day — wide enough for
 #: "last year" plus the leap day, narrow enough that the union stays bounded.
@@ -178,3 +188,233 @@ class NodeUsage:
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
+
+
+# ── the day a row belongs to ─────────────────────────────────────────────
+class day_of(FunctionElement[date]):  # noqa: N801 — a SQL function, named like one
+    """`date_trunc('day', …)` on Postgres, `date(…)` on SQLite.
+
+    The bucketing is UTC and the grouping key is a **date**, not a timestamp:
+    two rows an hour apart either side of midnight belong to different days and
+    that is the whole of the arithmetic.
+
+    Compiled per dialect rather than written as a literal because the unit
+    tests run against SQLite, which has no `date_trunc`, and a query that only
+    exists in production is a query nothing tests. The alternative — grouping
+    in Python over every row in the window — is the unbounded read this module
+    exists to avoid.
+    """
+
+    type = Date()
+    inherit_cache = True
+
+
+@compiles(day_of)
+def _day_of_default(element: Any, compiler: Any, **kw: Any) -> str:
+    """Postgres, and anything else that speaks `date_trunc`."""
+    (column,) = element.clauses
+    return f"date_trunc('day', {compiler.process(column, **kw)})"
+
+
+@compiles(day_of, "sqlite")
+def _day_of_sqlite(element: Any, compiler: Any, **kw: Any) -> str:
+    (column,) = element.clauses
+    return f"date({compiler.process(column, **kw)})"
+
+
+def _as_date(value: Any) -> date:
+    """One day key, however the driver handed it back.
+
+    Postgres returns a `datetime` from `date_trunc`; SQLite returns a string
+    from `date()`. Neither is the dataclass's `date`, and a screen grouping on
+    two different types would silently draw two bars for one day.
+    """
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value)[:10])
+
+
+# ── the union the three aggregations read ────────────────────────────────
+#: The three tables that record what a model call cost, and nothing else reads
+#: as usage. Each contributes the same five columns, so the union is one shape
+#: and a fourth source is a row here rather than a rewrite.
+#:
+#: `runs` is a chat question, `report_runs` one generated document, and
+#: `semantic_jobs` one layer generation. They are counted together because the
+#: question is *"what did this person's use of the product cost?"*, and a
+#: screen that answered it for chat alone would understate every person who
+#: writes reports.
+_SOURCES = (Run, ReportRun, SemanticJobRow)
+
+
+def _arm(model: type) -> sa.Select[Any]:
+    """One table's contribution to the union, as the five columns it shares."""
+    return sa.select(
+        model.actor_id.label("actor_id"),
+        day_of(model.created_at).label("day"),
+        model.prompt_tokens.label("prompt_tokens"),
+        model.completion_tokens.label("completion_tokens"),
+        model.cost_usd.label("cost_usd"),
+    )
+
+
+def _operations(window: Window) -> sa.Subquery:
+    """Every priced-or-unpriced operation in the window, from all three tables.
+
+    `UNION ALL`, never `UNION`: two runs that happened to cost the same on the
+    same day are two operations, and deduplicating them would silently halve a
+    busy day.
+    """
+    arms = [
+        _arm(model).where(
+            model.created_at >= window.since,
+            model.created_at < window.until,
+        )
+        for model in _SOURCES
+    ]
+    return sa.union_all(*arms).subquery("operations")
+
+
+#: The four aggregates every scope computes, over whichever subquery it reads.
+#:
+#: `SUM` ignores nulls in SQL, which is exactly what both carried-over rules
+#: want — an unmeasured row contributes nothing rather than zero. What cannot
+#: be left to `SUM` is *noticing*, so the two counts below count the rows that
+#: contributed nothing, and the screen turns them into the sentence that says
+#: how partial the total is.
+def _aggregates(source: Any) -> list[ColumnElement[Any]]:
+    return [
+        sa.func.coalesce(sa.func.sum(source.c.prompt_tokens), 0).label(
+            "prompt_tokens"
+        ),
+        sa.func.coalesce(sa.func.sum(source.c.completion_tokens), 0).label(
+            "completion_tokens"
+        ),
+        # **Not** coalesced. A scope where nothing was priced reports `None`,
+        # which is "no price is knowable", and `0.0`, which is "it was free",
+        # is a different and false claim.
+        sa.func.sum(source.c.cost_usd).label("cost_usd"),
+        sa.func.count().label("runs"),
+        # Measured by the absence of *both* counts: a row reporting prompt
+        # tokens and no completion tokens is measured, just oddly.
+        sa.func.count()
+        .filter(
+            source.c.prompt_tokens.is_(None), source.c.completion_tokens.is_(None)
+        )
+        .label("unmeasured"),
+        # Contributed tokens but no price. A row that measured nothing is
+        # already counted above and is not counted twice here.
+        sa.func.count()
+        .filter(
+            source.c.cost_usd.is_(None),
+            sa.or_(
+                source.c.prompt_tokens.is_not(None),
+                source.c.completion_tokens.is_not(None),
+            ),
+        )
+        .label("unpriced"),
+    ]
+
+
+def _bucket(row: Any) -> Bucket:
+    return Bucket(
+        day=_as_date(row.day),
+        prompt_tokens=int(row.prompt_tokens or 0),
+        completion_tokens=int(row.completion_tokens or 0),
+        cost_usd=float(row.cost_usd) if row.cost_usd is not None else None,
+        runs=int(row.runs or 0),
+    )
+
+
+def _fold(buckets: Sequence[Bucket], rows: Sequence[Any]) -> tuple[float | None, int]:
+    """The scope's cost and how much of it is unpriced, from the day rows.
+
+    Returned rather than recomputed from `buckets`, because a day whose cost is
+    `None` and a day that cost nothing are the same `Bucket` and the total has
+    to tell them apart: a scope is unpriced only when **every** day in it is.
+    """
+    priced = [b.cost_usd for b in buckets if b.cost_usd is not None]
+    unpriced = sum(int(row.unpriced or 0) for row in rows)
+    return (sum(priced) if priced else None), unpriced
+
+
+async def for_actor(
+    db: AsyncSession, actor_id: UUID, *, window: Window
+) -> Series:
+    """One person's usage, by day.
+
+    **Inner joins `users`**, like `per_actor` and unlike `installation`: this is
+    the per-person view, and a person who has been deleted is not in it. See the
+    module docstring's second rule.
+    """
+    series = await per_actor(db, window=window, only=actor_id)
+    if series:
+        return series[0]
+    # Nothing in the window. Still name the person, so a quiet month reads as
+    # "you, zero" rather than as an empty response the screen has to guess at.
+    name = await db.scalar(sa.select(User.display_name).where(User.id == actor_id))
+    return Series(actor_id=actor_id, actor=name or "")
+
+
+async def per_actor(
+    db: AsyncSession, *, window: Window, only: UUID | None = None
+) -> list[Series]:
+    """Everybody's usage, by day, one `Series` each.
+
+    One grouped query rather than a query per person: the screen renders a list
+    of people with a chart each, and a loop of per-person reads is the
+    pagination problem the access-control rulebook names.
+
+    The join to `users` is **inner** — a deleted actor's rows leave this view
+    and stay in `installation`. An outer join would attribute a departed
+    person's spend to whoever remains, which is the one answer that is wrong.
+    """
+    operations = _operations(window)
+    conditions = [operations.c.actor_id.is_not(None)]
+    if only is not None:
+        conditions.append(operations.c.actor_id == only)
+
+    daily = (
+        sa.select(
+            operations.c.actor_id,
+            User.display_name.label("actor"),
+            operations.c.day,
+            *_aggregates(operations),
+        )
+        .join(User, User.id == operations.c.actor_id)
+        .where(*conditions)
+        .group_by(operations.c.actor_id, User.display_name, operations.c.day)
+        .order_by(User.display_name, operations.c.day)
+    )
+
+    grouped: dict[UUID, list[Any]] = {}
+    names: dict[UUID, str] = {}
+    for row in (await db.execute(daily)).all():
+        grouped.setdefault(row.actor_id, []).append(row)
+        names[row.actor_id] = row.actor or ""
+
+    return [_series(actor_id, names[actor_id], rows) for actor_id, rows in grouped.items()]
+
+
+def _series(actor_id: UUID | None, actor: str, rows: Sequence[Any]) -> Series:
+    """Fold a scope's day rows into its total.
+
+    The total is summed from the same rows the buckets are built from, so the
+    invariant the screen rests on — **the total equals the sum of the buckets**
+    — holds by construction rather than by two additions agreeing.
+    """
+    buckets = [_bucket(row) for row in rows]
+    cost, unpriced = _fold(buckets, rows)
+    return Series(
+        actor_id=actor_id,
+        actor=actor,
+        prompt_tokens=sum(b.prompt_tokens for b in buckets),
+        completion_tokens=sum(b.completion_tokens for b in buckets),
+        cost_usd=cost,
+        runs=sum(b.runs for b in buckets),
+        unmeasured=sum(int(row.unmeasured or 0) for row in rows),
+        unpriced=unpriced,
+        buckets=buckets,
+    )
