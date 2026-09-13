@@ -418,3 +418,62 @@ def _series(actor_id: UUID | None, actor: str, rows: Sequence[Any]) -> Series:
         unpriced=unpriced,
         buckets=buckets,
     )
+
+
+async def installation(db: AsyncSession, *, window: Window) -> InstallationSeries:
+    """What the whole installation spent, by day.
+
+    **No join to `users` at all** — the one structural difference from
+    `per_actor`, and the one most likely to be "fixed" by a well-meaning later
+    change. A run whose actor has since been deleted carries `actor_id IS NULL`
+    and is still a true record of tokens somebody spent, so it is counted here.
+
+    The gap between this and the sum of the per-person series is therefore real,
+    and `unattributed` is its size. The screen states it. An outer join in
+    `per_actor` would close the gap by attributing a departed person's spend to
+    whoever remains, which is the one answer that is wrong; leaving those rows
+    out of *both* views would quietly shrink the installation's own total,
+    which is the other.
+    """
+    operations = _operations(window)
+    daily = (
+        sa.select(operations.c.day, *_aggregates(operations))
+        .group_by(operations.c.day)
+        .order_by(operations.c.day)
+    )
+    rows = (await db.execute(daily)).all()
+    base = _series(None, "", rows)
+
+    # A second, deliberately separate read: the shape of the gap. Folded into
+    # the grouped query above it would need a `FILTER` per aggregate and would
+    # still not answer "how many tokens", which is the half a reader cares
+    # about — "11 operations" and "11 operations worth 400k tokens" are
+    # different sentences and only the second one is actionable.
+    orphaned = (
+        await db.execute(
+            sa.select(
+                sa.func.count().label("runs"),
+                sa.func.coalesce(
+                    sa.func.sum(
+                        sa.func.coalesce(operations.c.prompt_tokens, 0)
+                        + sa.func.coalesce(operations.c.completion_tokens, 0)
+                    ),
+                    0,
+                ).label("tokens"),
+            ).where(operations.c.actor_id.is_(None))
+        )
+    ).one()
+
+    return InstallationSeries(
+        actor_id=None,
+        actor="",
+        prompt_tokens=base.prompt_tokens,
+        completion_tokens=base.completion_tokens,
+        cost_usd=base.cost_usd,
+        runs=base.runs,
+        unmeasured=base.unmeasured,
+        unpriced=base.unpriced,
+        buckets=base.buckets,
+        unattributed=int(orphaned.runs or 0),
+        unattributed_tokens=int(orphaned.tokens or 0),
+    )
