@@ -48,7 +48,7 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql.expression import ColumnElement, FunctionElement
 from sqlalchemy.types import Date
 
-from app.infra.db.models import ReportRun, Run, SemanticJobRow, User
+from app.infra.db.models import ReportRun, Run, RunStep, SemanticJobRow, User
 
 #: The widest window a caller may ask for. A year and a day — wide enough for
 #: "last year" plus the leap day, narrow enough that the union stays bounded.
@@ -477,3 +477,56 @@ async def installation(db: AsyncSession, *, window: Window) -> InstallationSerie
         unattributed=int(orphaned.runs or 0),
         unattributed_tokens=int(orphaned.tokens or 0),
     )
+
+
+async def by_node(db: AsyncSession, run_id: UUID) -> list[NodeUsage]:
+    """One run's spend, attributed to the nodes that caused it.
+
+    `run_steps` grouped by name, in the order the steps ran. Phase 4's step
+    chips are the only caller; it lives here because it is the same kind of
+    query as its three siblings and splitting it across two modules would be
+    the second place somebody looks for "where is usage read?".
+
+    **Only the nodes that called a model.** `validate` and `execute` call none,
+    and a row of zeroes beside `generate` would read as a measurement of
+    nothing rather than as the absence of one — which is the same rule the
+    nullable columns on `run_steps` already state. A node whose `llm_calls` is
+    NULL or zero is left out entirely.
+
+    A repaired `generate` is one row here, not two: the repair loop re-enters
+    the same node, and `llm_calls` is why the column is not derivable from the
+    step existing.
+    """
+    grouped = (
+        sa.select(
+            RunStep.name,
+            sa.func.coalesce(sa.func.sum(RunStep.prompt_tokens), 0).label(
+                "prompt_tokens"
+            ),
+            sa.func.coalesce(sa.func.sum(RunStep.completion_tokens), 0).label(
+                "completion_tokens"
+            ),
+            sa.func.coalesce(sa.func.sum(RunStep.llm_calls), 0).label("llm_calls"),
+            sa.func.coalesce(sa.func.sum(RunStep.llm_latency_ms), 0).label(
+                "llm_latency_ms"
+            ),
+            sa.func.min(RunStep.seq).label("first_seq"),
+        )
+        .where(RunStep.run_id == run_id)
+        .group_by(RunStep.name)
+        # The order the nodes ran in, not alphabetical: a breakdown is read
+        # against the chain it came from.
+        .order_by(sa.func.min(RunStep.seq))
+    )
+
+    return [
+        NodeUsage(
+            name=row.name,
+            prompt_tokens=int(row.prompt_tokens or 0),
+            completion_tokens=int(row.completion_tokens or 0),
+            llm_calls=int(row.llm_calls or 0),
+            llm_latency_ms=int(row.llm_latency_ms or 0),
+        )
+        for row in (await db.execute(grouped)).all()
+        if row.llm_calls
+    ]
