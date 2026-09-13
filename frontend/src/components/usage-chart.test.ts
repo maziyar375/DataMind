@@ -12,6 +12,7 @@
  */
 import {
   formatCost, formatTokens, TOKEN_SERIES, usageSpec, usageTotals,
+  WINDOW_DAYS, windowSince,
 } from './usage-chart.ts'
 import { PALETTES } from './palette.ts'
 import type { UsageBucket, UsageSeries } from '../api/types.ts'
@@ -241,6 +242,29 @@ check('under a thousand, as it is', formatTokens(999), '999')
 check('at a thousand, grouped', formatTokens(1000), '1,000')
 check('and every group after it', formatTokens(1_284_301), '1,284,301')
 check('zero is zero', formatTokens(0), '0')
+
+console.log('\n— the window —')
+check(
+  'a week is seven whole buckets, today and the six before it',
+  windowSince(7, new Date('2026-09-13T09:40:00Z')),
+  '2026-09-07T00:00:00.000Z',
+)
+check(
+  'a day is today, from its own midnight',
+  windowSince(1, new Date('2026-09-13T23:59:59Z')),
+  '2026-09-13T00:00:00.000Z',
+)
+check(
+  'the hour it is asked at does not move the boundary',
+  windowSince(30, new Date('2026-09-13T00:00:01Z')),
+  windowSince(30, new Date('2026-09-13T23:59:59Z')),
+)
+check(
+  'and it steps back over a month end',
+  windowSince(30, new Date('2026-09-13T09:40:00Z')),
+  '2026-08-15T00:00:00.000Z',
+)
+check('the windows the screen offers', [...WINDOW_DAYS], [7, 30, 90])
 
 console.log(failures === 0 ? '\nall passed' : `\n${failures} failed`)
 // `throw`, not `process.exit`: `@types/node` is not a dependency here, and

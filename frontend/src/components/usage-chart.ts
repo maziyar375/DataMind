@@ -335,3 +335,28 @@ export function usageTotals(series: UsageSeries): UsageTotals {
           : `Cost is known for ${runs - unpriced} of ${operations(runs)}.`,
   }
 }
+
+// ── the window ────────────────────────────────────────────────────────────
+/** The windows the screen offers. Days, because the buckets are days. */
+export const WINDOW_DAYS = [7, 30, 90] as const
+export type WindowDays = (typeof WINDOW_DAYS)[number]
+
+/**
+ * When a window of `days` starts, as the ISO instant the API takes.
+ *
+ * **UTC midnight, `days - 1` days back**, and both halves of that are the
+ * reason this is here rather than inlined in the page. Midnight, because the
+ * backend buckets on `date_trunc('day', …)` at UTC: asking from 09:40 leaves
+ * the oldest bucket holding two thirds of a day and drawn beside whole ones,
+ * which is a bar that is short for a reason nothing on the screen explains.
+ * And `days - 1`, because a seven-day window ending today is seven buckets —
+ * today and the six before it — where a naive `now - 7 days` spans eight.
+ *
+ * Off-by-one in a window boundary is the quiet kind: the chart still draws,
+ * the total is still a total, and the only symptom is a figure that disagrees
+ * with the same figure somewhere else.
+ */
+export function windowSince(days: number, now: Date = new Date()): string {
+  const midnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+  return new Date(midnight - (days - 1) * 86_400_000).toISOString()
+}
