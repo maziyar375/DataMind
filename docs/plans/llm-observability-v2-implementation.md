@@ -1,8 +1,10 @@
 # Token usage in the UI — the implementation plan
 
-> **Status: built.** All seven phases landed, in twenty-eight commits — §3
-> plans twenty-nine, and commits 1 and 2 could not be two, for the reason §4's
-> Phase 1 note gives. This is the build order for
+> **Status: built.** All seven phases landed, in twenty-nine commits — which
+> is §3's count and is *not* §3's list. Commits 1 and 2 could not be two, for
+> the reason §4's Phase 1 note gives, and Phase 1 then ticked its own ledger
+> in a commit of its own. Twenty-eight of the numbered points, plus that one.
+> This is the build order for
 > [llm-observability-v2.md](llm-observability-v2.md), which is the
 > specification and stays the authority on *what* and *why*. This document is
 > only *in what order*, *how it is verified*, and *where the commits land*.
