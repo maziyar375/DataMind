@@ -4146,6 +4146,27 @@ code, pre, .mono {
   .rm-chats, .rm-master { transition: none; }
 }
 
+/* The person's name in the usage table, which is also the control that opens
+   their days below. A button rather than a clickable <tr>: a row is not in the
+   tab order, and giving one `tabIndex` and a key handler is a button with the
+   accessibility written out by hand. It inherits the cell's type so the column
+   still reads as a column, and the hover tint is here because a style
+   attribute cannot express `:hover`. Focus comes from the global
+   `button:focus-visible` rule. */
+.rm-usage-who {
+  font: inherit;
+  font-weight: 600;
+  color: var(--text-strong);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  padding: 2px 6px;
+  margin: -2px -6px;
+  cursor: pointer;
+  text-align: start;
+}
+.rm-usage-who:hover { background: var(--panel-hover); }
+
 /* On paper there is no viewport, so there is no off-canvas either. */
 @media print {
   .rm-list-toggle, .rm-list-scrim { display: none !important; }
