@@ -933,7 +933,7 @@ Tick each box **in the commit that lands it**, not afterwards.
 **Phase 7 — documentation** — built 2026-09-13
 
 - [x] 26 · the two plans
-- [ ] 27 · the map
+- [x] 27 · the map
 - [ ] 28 · the reference docs
 - [ ] 29 · the front door
 
