@@ -260,6 +260,13 @@ This is not deferred to Phase 7: `test_authz_conformance.py` asserts every
 `Capability` member is named in the rulebook, so the enum and the document move
 together or the suite is red.
 
+> **Built, with one correction to the sentence above.** That assertion is
+> `str(capability) in text or "capability" in text`, and the rulebook contains
+> the word "capability" — so it passes for a capability nobody has documented.
+> The rulebook edit is required by this plan and was made, but it is **not**
+> machine-enforced, and a later capability can be added without it. Worth
+> tightening when somebody is in that file; out of scope here.
+
 > **Commit 4** — `docs(authz): the rulebook names usage.read, and counts nineteen`
 
 ### 1E · The tests
@@ -717,13 +724,28 @@ from their own terminal, at whatever point they choose.
 
 Tick each box **in the commit that lands it**, not afterwards.
 
-**Phase 1 — the capability**
+**Phase 1 — the capability** — built 2026-09-13
 
-- [ ] 1 · the enum member
-- [ ] 2 · migration `0030`
-- [ ] 3 · route dependency + SPA vocabulary
-- [ ] 4 · the rulebook
-- [ ] 5 · the tests
+- [x] 1 · the enum member — **landed with 2**, see the note below
+- [x] 2 · migration `0030`
+- [x] 3 · route dependency + SPA vocabulary
+- [x] 4 · the rulebook
+- [x] 5 · the tests
+
+> **Commits 1 and 2 are one commit**, and could not be two. `test_roles.py`
+> asserts Administrator's seeded set equals every `Capability` member, so the
+> enum without the seed is a red tree and the seed without the enum names a
+> word the build does not know. §2's rule — *a commit point whose checks do not
+> pass is not a commit point* — outranks §3's count. **Phase 1 is four
+> commits.** That assertion now spans the whole migration chain rather than
+> `0024` alone, so the next capability added this way reads as the reviewed
+> line it is rather than as a regression in the seed.
+>
+> Two things the plan did not predict, both cheap: `api/v1/roles.py` serves the
+> capability catalog from two exhaustive dicts (`_GROUPS`, `_LABELS`) that
+> `KeyError` on a member they do not name, so the nineteenth word had to be
+> added there too; and `test_authz_vocabulary.py` asserts `len(Capability) ==
+> 18`, which is a deliberate count and moved to 19.
 
 **Phase 2 — the usage query**
 
