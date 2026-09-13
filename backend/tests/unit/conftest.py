@@ -120,6 +120,13 @@ _TABLES = (
     # that silently dropped an arm pass — which is the whole failure the
     # "all three tables contribute" test exists to catch.
     "report_runs", "semantic_jobs",
+    # What `_hydrate_run` reads beside the run itself. Present so a test can
+    # serialise a turn through the **real** read path rather than through the
+    # withheld branch, which is the only one that touches none of them — and
+    # which is exactly the branch that would hide a field the serialiser drops.
+    # `knowledge_templates` is here only as the target of two foreign keys.
+    "artifacts", "generated_queries", "knowledge_templates",
+    "knowledge_template_hits", "answer_feedback",
 )
 
 

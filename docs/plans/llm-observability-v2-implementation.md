@@ -810,11 +810,35 @@ Tick each box **in the commit that lands it**, not afterwards.
 > already has an unpriced run in it — which is the case `unpriced` exists for,
 > arriving before the screen that reports it.
 
-**Phase 4 — tokens in the step chip**
+**Phase 4 — tokens in the step chip** — built 2026-09-13
 
-- [ ] 16 · the wire
-- [ ] 17 · the chip
-- [ ] 18 · the tests
+- [x] 16 · the wire
+- [x] 17 · the chip
+- [x] 18 · the tests
+
+> **`RunRead` grew two fields, which 4A does not mention and 4C requires.**
+> The run's own total has to be on the wire for 4B's header line, and for
+> 4C's *"the run's total equals the sum of its steps"* — with only the steps
+> serialised there is nothing to compare them against. So `prompt_tokens` and
+> `completion_tokens` join `RunStepRead`'s three. Still no `cost_usd`
+> anywhere on this path, per §1.7.
+>
+> **There is no run-detail suite to extend.** The closest thing is one
+> `_hydrate_run` case inside `test_intersection.py`, whose subject is what a
+> *shared* turn withholds. So Phase 4's tests are a new file,
+> `test_run_detail_tokens.py`, and the fifth test in it is the intersection
+> case restated for this phase: a withheld turn keeps its trail, and the
+> counts are part of the trail — they are counts, not content.
+>
+> **`conftest.py`'s `_TABLES` gained five tables**, the ones `_hydrate_run`
+> reads beside the run. Without them only the *withheld* branch could be
+> serialised — the one branch that touches none of them, and so the one that
+> would hide a dropped field. Two mutations were run: defaulting the step
+> counts to `0` fails all seven, dropping `llm_calls` fails four.
+>
+> **`tokenCount` decides its unit on the rounded figure.** The obvious
+> version branches on the raw one and spells 9,999 as `10.0k` and 10,000 as
+> `10k` — two spellings one token apart — and 999,999 as `1000k`.
 
 **Phase 5 — the chart spec**
 
