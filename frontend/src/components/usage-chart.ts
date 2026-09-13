@@ -1,5 +1,5 @@
 /**
- * The usage chart's spec — a stacked bar of tokens per day.
+ * The usage chart's spec, and the sentences that keep a total honest.
  *
  * **This is not a planned chart, and the distinction is the reason this file
  * exists.** `app/charts/` answers "what picture does this *result* want?", a
@@ -20,7 +20,7 @@
  *
  * `npm run test:usage`.
  */
-import type { UsageBucket } from '../api/types.ts'
+import type { UsageBucket, UsageSeries } from '../api/types.ts'
 import type { Palette } from './palette.ts'
 
 /**
@@ -182,4 +182,156 @@ export function usageSpec(
   if (opts.title) spec.title = opts.title
 
   return spec
+}
+
+// ── the summary beside the chart ──────────────────────────────────────────
+/**
+ * What a scope spent, and — where it matters — how much of that is unknown.
+ *
+ * The two counts on the wire exist because a partial total that does not say
+ * it is partial is the failure both carried-over rules name. `unmeasured` is
+ * operations that reported no token count at all, so every token figure
+ * understates; `unpriced` is operations that reported tokens and no price, so
+ * the cost covers only part of the work. Two counts and not one flag, because
+ * *how* partial a number is decides whether anybody should act on it — three
+ * unpriced calls out of four hundred is noise, and three out of four is not a
+ * cost figure at all.
+ *
+ * Both are therefore rendered as **sentences**, next to the number, in the
+ * reader's own language rather than as an asterisk. A footnote is a thing a
+ * reader finds after they have already believed the number.
+ */
+export interface UsageTotals {
+  /** Nothing at all happened in this window. Distinct from "nothing cost". */
+  empty: boolean
+  runs: number
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  /**
+   * The headline figure, grouped — or `null` where nothing reported a count.
+   *
+   * Null and not `"0"`: a scope whose every operation is unmeasured has a
+   * token total of zero in arithmetic and no measurement in fact, and the
+   * screen must not spell the second as the first. The same rule the step
+   * chip follows one layer down.
+   */
+  tokens: string | null
+  /** The figure, or `null` where there is not one to report. */
+  costUsd: number | null
+  /** `$12.34`, `$0.0042`, `< $0.0001` — or `null`, on the same terms. */
+  cost: string | null
+  /** Why every token figure above understates. `null` when none does. */
+  unmeasuredNote: string | null
+  /** How partial the cost is. `null` when it is whole, or absent entirely. */
+  costNote: string | null
+}
+
+/**
+ * Digits in groups of three: `1,284,301`.
+ *
+ * Not `toLocaleString`, whose output depends on the runtime's locale — which
+ * would make this module's suite pass or fail by environment, and a tested
+ * module whose test means something different on another machine is one of
+ * the quiet failures this file is here to avoid.
+ *
+ * Not the chip's `tokenCount` either, and the difference is the box: a chip
+ * has room for `4.2k` and a summary line has room for the number, where the
+ * digits are what somebody is going to put in a spreadsheet.
+ */
+export function formatTokens(n: number): string {
+  const [whole, fraction] = String(n).split('.')
+  return fraction ? `${group(whole)}.${fraction}` : group(whole)
+}
+
+/** Thousands separators into a run of digits. */
+function group(digits: string): string {
+  return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+}
+
+/**
+ * A cost, at the precision the figure deserves.
+ *
+ * Two places above a cent, four below it, and **`< $0.0001` rather than
+ * `$0.0000`** for real spend too small to write: rounding a measurement down
+ * to a zero is the same lie as summing a null as one, and this is the only
+ * place on this screen where it could happen silently.
+ *
+ * The dollars keep both decimal places whatever the figure is — `$4.20`, not
+ * `$4.2`, which reads as a truncation rather than a price.
+ */
+export function formatCost(value: number): string {
+  if (value >= 1) {
+    const [whole, fraction] = value.toFixed(2).split('.')
+    return `$${group(whole)}.${fraction}`
+  }
+  if (value >= 0.01) return `$${value.toFixed(2)}`
+  if (value >= 0.0001) return `$${value.toFixed(4)}`
+  return value > 0 ? '< $0.0001' : '$0.00'
+}
+
+/** `1 operation`, `12 operations`. */
+function operations(n: number): string {
+  return n === 1 ? '1 operation' : `${n} operations`
+}
+
+export function usageTotals(series: UsageSeries): UsageTotals {
+  const runs = series.runs
+  const promptTokens = series.prompt_tokens
+  const completionTokens = series.completion_tokens
+  const totalTokens = promptTokens + completionTokens
+
+  // Nothing happened. Every note would be a sentence about an absence, which
+  // reads as a warning about a problem the reader does not have.
+  if (runs <= 0) {
+    return {
+      empty: true,
+      runs: 0,
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      tokens: totalTokens > 0 ? formatTokens(totalTokens) : null,
+      costUsd: null,
+      cost: null,
+      unmeasuredNote: null,
+      costNote: null,
+    }
+  }
+
+  const unmeasured = Math.max(0, series.unmeasured)
+  const unpriced = Math.max(0, series.unpriced)
+
+  // Every operation in the scope reported nothing, so the zero below is
+  // arithmetic over an empty set rather than a measurement of free work.
+  const nothingMeasured = unmeasured >= runs && totalTokens <= 0
+
+  // The refusal, and it is not defensive politeness about a case that cannot
+  // happen: `cost_usd` is summed with `SUM`, which returns null only when
+  // *every* row is null, so a backend that ever coalesced it to zero would
+  // arrive here as a `0.0` covering a fully unpriced scope. This is the line
+  // that refuses to print it.
+  const wholesalePriceless = unpriced >= runs
+  const costUsd = wholesalePriceless ? null : series.cost_usd
+
+  return {
+    empty: false,
+    runs,
+    promptTokens,
+    completionTokens,
+    totalTokens,
+    tokens: nothingMeasured ? null : formatTokens(totalTokens),
+    costUsd,
+    cost: costUsd == null ? null : formatCost(costUsd),
+    unmeasuredNote:
+      unmeasured > 0
+        ? `${unmeasured} of ${operations(runs)} reported no token count, ` +
+          'so every figure here understates.'
+        : null,
+    costNote:
+      unpriced <= 0
+        ? null
+        : wholesalePriceless
+          ? `No price is known for any of these ${operations(runs)}.`
+          : `Cost is known for ${runs - unpriced} of ${operations(runs)}.`,
+  }
 }
