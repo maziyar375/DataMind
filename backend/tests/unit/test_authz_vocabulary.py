@@ -64,7 +64,7 @@ def test_the_enums_are_closed_and_the_right_size() -> None:
     silent addition is how a vocabulary stops being one."""
     assert len(Privilege) == 5
     assert len(ResourceType) == 8
-    assert len(Capability) == 18
+    assert len(Capability) == 19
     assert len(PrincipalKind) == 2
 
 

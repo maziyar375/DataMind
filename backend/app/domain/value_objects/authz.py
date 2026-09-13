@@ -8,7 +8,7 @@ the API that renders them, and by a test that asserts the whole matrix is
 filled in.
 
 The reason it exists *before* anything reads it: this design has eight resource
-types, five privileges and eighteen capabilities. Introducing them alongside
+types, five privileges and nineteen capabilities. Introducing them alongside
 the first feature that needs each one is how a vocabulary ends up half-invented
 in three places, with `"dashboard"` in one module, `ResourceKind.DASHBOARDS` in
 another and a bare string in the third.
@@ -108,7 +108,7 @@ class Capability(StrEnum):
     capability.* "May Ali create dashboards?" is a capability; "may Ali open
     *this* dashboard?" is a privilege.
 
-    Eighteen of them, in four groups (plan §12.1). This is one half of the two
+    Nineteen of them, in four groups (plan §12.1). This is one half of the two
     axes every product in this space converged on — Metabase calls it
     *application permissions*, Looker calls it a *permission set*.
     """
@@ -125,6 +125,14 @@ class Capability(StrEnum):
     # ── oversight ────────────────────────────────────────────────────────
     AUDIT_READ = "audit.read"
     ACCESS_REVIEW = "access.review"
+    #: Read what the models cost — token counts and spend, for everybody or for
+    #: the installation. Oversight beside `audit.read` because it answers the
+    #: same kind of question about the same kind of subject: a record *about
+    #: people*, read by somebody who changes nothing. It is counts, never
+    #: content — no prompt, no question and no SQL reaches a usage figure.
+    #: Reading your own usage needs no capability at all; the scope there is
+    #: the caller and no parameter can widen it.
+    USAGE_READ = "usage.read"
 
     # ── creation ─────────────────────────────────────────────────────────
     CONNECTION_CREATE = "connection.create"

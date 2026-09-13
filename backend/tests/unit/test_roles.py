@@ -61,6 +61,14 @@ MIGRATION = importlib.import_module("app.infra.db.migrations.versions.0024_roles
 TEAMS_MIGRATION = importlib.import_module(
     "app.infra.db.migrations.versions.0025_teams"
 )
+#: `0024` seeds the eight roles; every later migration that grants a capability
+#: to one of them is a second place the seeded set is decided. They are listed
+#: here so "what does Administrator carry?" is answered by the whole chain
+#: rather than by its first link — a capability added in `0030` and asserted
+#: against `0024` alone would look like a regression in the seed.
+USAGE_MIGRATION = importlib.import_module(
+    "app.infra.db.migrations.versions.0030_usage_capability"
+)
 
 
 # ── the specification, restated ──────────────────────────────────────────
@@ -114,6 +122,14 @@ SPEC: dict[str, tuple[set[str], set[tuple[str, str]]]] = {
 }
 
 
+def _granted_later(role: str) -> set[str]:
+    """What the migrations after `0024` add to one seeded role's capabilities."""
+    later = set()
+    if role in USAGE_MIGRATION.ROLES:
+        later.add(USAGE_MIGRATION.CAPABILITY)
+    return later
+
+
 def _seeded() -> dict[str, tuple[set[str], set[tuple[str, str]]]]:
     return {
         name: (set(capabilities), set(scoped))
@@ -152,10 +168,20 @@ def test_the_knowledge_manager_costs_two_rows_and_edits_no_credential() -> None:
 
 
 def test_administrator_enumerates_every_capability_rather_than_wildcarding() -> None:
-    """A nineteenth capability must be a deliberate line in a reviewed diff,
-    not something Administrator silently acquires."""
+    """A twentieth capability must be a deliberate line in a reviewed diff,
+    not something Administrator silently acquires.
+
+    Asserted over the **whole migration chain**, not over `0024` alone: the
+    enumeration is the point, and a later migration granting the next word is
+    exactly the reviewed line this test exists to require. What would be a real
+    regression is a capability that reaches Administrator through no line at
+    all — a wildcard — or one that reaches it through none, which is what this
+    fails on.
+    """
     capabilities, _scoped = _seeded()["Administrator"]
-    assert capabilities == {str(c) for c in Capability}
+    assert capabilities | _granted_later("Administrator") == {
+        str(c) for c in Capability
+    }
 
 
 def test_every_seeded_word_is_one_this_build_knows() -> None:
