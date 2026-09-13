@@ -115,6 +115,11 @@ _TABLES = (
     # `messages` comes with it — `runs.user_message_id` is a foreign key, and
     # a metadata copy missing the target table cannot be created at all.
     "messages", "runs", "run_steps",
+    # The other two tables that record what a model call cost. `usage_service`
+    # unions all three, and a fixture holding only `runs` would let a union
+    # that silently dropped an arm pass — which is the whole failure the
+    # "all three tables contribute" test exists to catch.
+    "report_runs", "semantic_jobs",
 )
 
 
@@ -162,6 +167,10 @@ class AsyncSessionShim:
     async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
         self.statements.append(statement)
         return self._session.execute(statement, *args, **kwargs)
+
+    async def scalar(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
+        self.statements.append(statement)
+        return self._session.scalar(statement, *args, **kwargs)
 
     async def get(self, model: type, primary_key: Any) -> Any:
         return self._session.get(model, primary_key)

@@ -747,13 +747,30 @@ Tick each box **in the commit that lands it**, not afterwards.
 > added there too; and `test_authz_vocabulary.py` asserts `len(Capability) ==
 > 18`, which is a deliberate count and moved to 19.
 
-**Phase 2 — the usage query**
+**Phase 2 — the usage query** — built 2026-09-13
 
-- [ ] 6 · the clamped window and the return shape
-- [ ] 7 · the per-actor aggregation
-- [ ] 8 · the installation total
-- [ ] 9 · the per-run rollup
-- [ ] 10 · the tests
+- [x] 6 · the clamped window and the return shape
+- [x] 7 · the per-actor aggregation
+- [x] 8 · the installation total
+- [x] 9 · the per-run rollup
+- [x] 10 · the tests
+
+> **The departed-actor gap is narrower than §1.4 implies, and the test says so.**
+> `actor_id` is `SET NULL` on all three tables, but `runs.owner_id` cascades
+> through `conversations` and `report_runs.owner_id` cascades directly — so
+> deleting somebody who *owned* what they asked deletes the rows outright and
+> there is no spend left to orphan. The gap opens only where actor and owner
+> differ, which is exactly what `actor_id` was added for: somebody asking
+> through a thread or connection belonging to someone else. The rule and the
+> query are unchanged; what changed is that the test models the case that can
+> actually happen, and a production `unattributed` figure should be read with
+> this in mind.
+>
+> Two smaller things: `day_of` compiles to `date_trunc` on Postgres and
+> `date()` on SQLite, because the unit suite runs against SQLite and a query
+> that exists only in production is a query nothing tests; and `conftest.py`'s
+> `_TABLES` gained `report_runs` and `semantic_jobs`, without which a union
+> that silently dropped an arm would have passed.
 
 **Phase 3 — the read endpoints**
 
