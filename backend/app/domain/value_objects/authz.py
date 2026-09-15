@@ -125,7 +125,7 @@ class Capability(StrEnum):
     # ── oversight ────────────────────────────────────────────────────────
     AUDIT_READ = "audit.read"
     ACCESS_REVIEW = "access.review"
-    #: Read what the models cost — token counts and spend, for everybody or for
+    #: Read how many tokens the models used — for everybody, per model, or for
     #: the installation. Oversight beside `audit.read` because it answers the
     #: same kind of question about the same kind of subject: a record *about
     #: people*, read by somebody who changes nothing. It is counts, never

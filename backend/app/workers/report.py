@@ -78,7 +78,7 @@ from app.infra.db.models import (
     ReportSection,
     ReportSectionResult,
 )
-from app.infra.llm.litellm_gateway import LiteLLMGateway, estimate_cost_usd
+from app.infra.llm.litellm_gateway import LiteLLMGateway
 from app.pipeline.disclosure import disclose
 from app.pipeline.state import ExecutionResult
 from app.reports import checks, facts, narrate
@@ -1132,11 +1132,6 @@ async def _record_usage(
     as zero here and only here: the column means *not measured* until the first
     call is recorded, and this is the thing that records it.
 
-    `cost_usd` is recomputed from the new totals rather than summed per call,
-    because per-call rounding accumulates and litellm's price map is linear. A
-    model it cannot price leaves NULL, the normal state of a self-hosted
-    deployment, which no reader may treat as free.
-
     Failing to record never fails the document (§1.4 of the plan, and
     `services/audit.py`'s posture): the paragraphs are already committed, and
     losing a count is not worth losing them.
@@ -1150,14 +1145,12 @@ async def _record_usage(
             u.completion_tokens for u in spent
         )
         latency = (run.llm_latency_ms or 0) + sum(u.latency_ms for u in spent)
-        model = next((u.model for u in spent if u.model), "")
         await _touch(
             db,
             run,
             prompt_tokens=prompt,
             completion_tokens=completion,
             llm_latency_ms=latency,
-            cost_usd=estimate_cost_usd(model, prompt, completion),
         )
     except Exception:  # pragma: no cover - defensive
         log.warning("report_usage_not_recorded", run_id=str(run.id), exc_info=True)

@@ -1,22 +1,20 @@
-"""What the models cost, read back out of the three tables that record it.
+"""How many tokens the models used, read back out of the three tables that record it.
 
-Migration `0023` put `prompt_tokens`, `completion_tokens` and `cost_usd` on
-`runs`, `report_runs` and `semantic_jobs`, and `run_steps` carries the same per
-node. **Nothing has read them since.** This module is the read side, and it is
-the whole of it: three aggregations over a union, and one rollup for a single
-run. No route, no DTO, no screen — those are the phases above this one.
+Migration `0023` put `prompt_tokens` and `completion_tokens` on `runs`,
+`report_runs` and `semantic_jobs`, and `run_steps` carries the same per node.
+This module is the read side, and it is the whole of it: three aggregations
+over a union, each with its per-model split, and one rollup for a single run.
 
 Three rules govern every figure below, and each is a way a usage screen lies:
 
-* **A null is never summed as zero.** `cost_usd IS NULL` means *litellm could
-  not price this model*, which is every self-hosted deployment; `prompt_tokens
-  IS NULL` means *nothing measured this*, which is every row written before
-  `0023` and every streamed reply whose provider sent no usage block. SQL's
-  `SUM` already ignores nulls, so the arithmetic is right by default — what
-  this module adds is `unmeasured` and `unpriced`, which count the rows that
-  contributed nothing so the screen can say *how* partial a total is. A
-  partial total that does not announce itself is the failure both rules name,
-  and a boolean would not say how partial.
+* **A null is never summed as zero.** `prompt_tokens IS NULL` means *nothing
+  measured this*, which is every row written before `0023` and every streamed
+  reply whose provider sent no usage block. SQL's `SUM` already ignores nulls,
+  so the arithmetic is right by default — what this module adds is
+  `unmeasured`, which counts the rows that contributed nothing so the screen
+  can say *how* partial a total is. A partial total that does not announce
+  itself is the failure this rule names, and a boolean would not say how
+  partial.
 
 * **The per-person view inner joins `users`; the installation total does not
   join at all.** A deleted actor leaves the first and stays in the second, and
@@ -30,9 +28,9 @@ Three rules govern every figure below, and each is a way a usage screen lies:
   busy installation.
 
 **Counts, never content.** No question, no prompt, no generated SQL and no
-result value is read here — only integers, a price and a timestamp. "Ali asked
-40 questions costing 180k tokens" is a different disclosure from "here is what
-Ali asked", and only the first one is available through this module.
+result value is read here — only integers, a model name and a timestamp. "Ali
+asked 40 questions using 180k tokens" is a different disclosure from "here is
+what Ali asked", and only the first one is available through this module.
 """
 from __future__ import annotations
 
@@ -108,28 +106,48 @@ def clamp_window(
 
 @dataclass(frozen=True, slots=True)
 class Bucket:
-    """One day's spend, for one scope.
-
-    `cost_usd` is `None` — not `0.0` — when nothing in the day was priced.
-    Zero is a measurement and this is the absence of one.
-    """
+    """One day's tokens, for one scope."""
 
     day: date
     prompt_tokens: int = 0
     completion_tokens: int = 0
-    cost_usd: float | None = None
     #: How many operations are behind the figures above. A day with 400 runs
     #: and one with 4 are different facts about the same token count.
     runs: int = 0
 
 
 @dataclass(frozen=True, slots=True)
+class ModelUsage:
+    """One model's share of a scope, over the whole window.
+
+    `model` is the name as the run recorded it in `model_snapshot` — what the
+    provider was configured to call, not the display name of the config — so
+    two configs pointing at the same model are one row. `""` where a row
+    recorded no model at all, which the screen names rather than drops: those
+    tokens are in the scope's total, and a breakdown that silently omitted
+    them would not add up to it.
+    """
+
+    model: str = ""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    runs: int = 0
+    #: As on `Series`: operations on this model that reported no token count.
+    unmeasured: int = 0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
+
+
+@dataclass(frozen=True, slots=True)
 class Series:
-    """One scope's usage: a total, and the days it is made of.
+    """One scope's usage: a total, the days it is made of, and the models.
 
     The invariant the whole screen rests on: **the total equals the sum of the
     buckets.** It is computed from the same rows in the same query rather than
-    added up twice, so the two cannot drift.
+    added up twice, so the two cannot drift. `models` is a second grouping of
+    the same rows, so it sums to the same total too.
     """
 
     actor_id: UUID | None = None
@@ -140,15 +158,13 @@ class Series:
     actor: str = ""
     prompt_tokens: int = 0
     completion_tokens: int = 0
-    cost_usd: float | None = None
     runs: int = 0
     #: How many of those operations reported no token count at all. Non-zero
     #: means every figure above understates, and the screen says so.
     unmeasured: int = 0
-    #: How many contributed tokens but no price. Non-zero means `cost_usd` is
-    #: partial, and the screen says *that* — it never prints a bare total.
-    unpriced: int = 0
     buckets: list[Bucket] = field(default_factory=list)
+    #: The same total split by model, busiest first.
+    models: list[ModelUsage] = field(default_factory=list)
 
     @property
     def total_tokens(self) -> int:
@@ -174,7 +190,7 @@ class InstallationSeries(Series):
 class NodeUsage:
     """One node's share of one run. `run_steps`, grouped by name.
 
-    A run saying a question cost 12k tokens is not the same as knowing the
+    A run saying a question used 12k tokens is not the same as knowing the
     schema block was 9k of it, which is the question this answers and the run's
     own totals cannot.
     """
@@ -237,35 +253,43 @@ def _as_date(value: Any) -> date:
 
 
 # ── the union the three aggregations read ────────────────────────────────
-#: The three tables that record what a model call cost, and nothing else reads
+#: The three tables that record what a model call used, and nothing else reads
 #: as usage. Each contributes the same five columns, so the union is one shape
 #: and a fourth source is a row here rather than a rewrite.
 #:
 #: `runs` is a chat question, `report_runs` one generated document, and
 #: `semantic_jobs` one layer generation. They are counted together because the
-#: question is *"what did this person's use of the product cost?"*, and a
+#: question is *"how much did this person's use of the product consume?"*, and a
 #: screen that answered it for chat alone would understate every person who
 #: writes reports.
 _SOURCES = (Run, ReportRun, SemanticJobRow)
 
 
 def _arm(model: type) -> sa.Select[Any]:
-    """One table's contribution to the union, as the five columns it shares."""
+    """One table's contribution to the union, as the five columns it shares.
+
+    The model is read out of `model_snapshot` — the frozen copy of the config
+    each row was run with — rather than joined through `llm_config_id`, which
+    is `SET NULL` when a config is deleted and would move a finished run's
+    tokens under whatever the config is renamed or repointed to later.
+    Coalesced to `""` so a row without one groups with the others that lack it
+    instead of splitting into a NULL group and an empty-string group.
+    """
     return sa.select(
         model.actor_id.label("actor_id"),
         day_of(model.created_at).label("day"),
+        sa.func.coalesce(model.model_snapshot["model"].as_string(), "").label("model"),
         model.prompt_tokens.label("prompt_tokens"),
         model.completion_tokens.label("completion_tokens"),
-        model.cost_usd.label("cost_usd"),
     )
 
 
 def _operations(window: Window) -> sa.Subquery:
-    """Every priced-or-unpriced operation in the window, from all three tables.
+    """Every operation in the window, from all three tables.
 
-    `UNION ALL`, never `UNION`: two runs that happened to cost the same on the
-    same day are two operations, and deduplicating them would silently halve a
-    busy day.
+    `UNION ALL`, never `UNION`: two runs that happened to use the same tokens
+    on the same day are two operations, and deduplicating them would silently
+    halve a busy day.
     """
     arms = [
         _arm(model).where(
@@ -279,10 +303,10 @@ def _operations(window: Window) -> sa.Subquery:
 
 #: The four aggregates every scope computes, over whichever subquery it reads.
 #:
-#: `SUM` ignores nulls in SQL, which is exactly what both carried-over rules
-#: want — an unmeasured row contributes nothing rather than zero. What cannot
-#: be left to `SUM` is *noticing*, so the two counts below count the rows that
-#: contributed nothing, and the screen turns them into the sentence that says
+#: `SUM` ignores nulls in SQL, which is exactly what the carried-over rule
+#: wants — an unmeasured row contributes nothing rather than zero. What cannot
+#: be left to `SUM` is *noticing*, so the count below counts the rows that
+#: contributed nothing, and the screen turns it into the sentence that says
 #: how partial the total is.
 def _aggregates(source: Any) -> list[ColumnElement[Any]]:
     return [
@@ -292,10 +316,6 @@ def _aggregates(source: Any) -> list[ColumnElement[Any]]:
         sa.func.coalesce(sa.func.sum(source.c.completion_tokens), 0).label(
             "completion_tokens"
         ),
-        # **Not** coalesced. A scope where nothing was priced reports `None`,
-        # which is "no price is knowable", and `0.0`, which is "it was free",
-        # is a different and false claim.
-        sa.func.sum(source.c.cost_usd).label("cost_usd"),
         sa.func.count().label("runs"),
         # Measured by the absence of *both* counts: a row reporting prompt
         # tokens and no completion tokens is measured, just oddly.
@@ -304,17 +324,6 @@ def _aggregates(source: Any) -> list[ColumnElement[Any]]:
             source.c.prompt_tokens.is_(None), source.c.completion_tokens.is_(None)
         )
         .label("unmeasured"),
-        # Contributed tokens but no price. A row that measured nothing is
-        # already counted above and is not counted twice here.
-        sa.func.count()
-        .filter(
-            source.c.cost_usd.is_(None),
-            sa.or_(
-                source.c.prompt_tokens.is_not(None),
-                source.c.completion_tokens.is_not(None),
-            ),
-        )
-        .label("unpriced"),
     ]
 
 
@@ -323,27 +332,35 @@ def _bucket(row: Any) -> Bucket:
         day=_as_date(row.day),
         prompt_tokens=int(row.prompt_tokens or 0),
         completion_tokens=int(row.completion_tokens or 0),
-        cost_usd=float(row.cost_usd) if row.cost_usd is not None else None,
         runs=int(row.runs or 0),
     )
 
 
-def _fold(buckets: Sequence[Bucket], rows: Sequence[Any]) -> tuple[float | None, int]:
-    """The scope's cost and how much of it is unpriced, from the day rows.
+def _model_usage(rows: Sequence[Any]) -> list[ModelUsage]:
+    """One scope's model rows, busiest first.
 
-    Returned rather than recomputed from `buckets`, because a day whose cost is
-    `None` and a day that cost nothing are the same `Bucket` and the total has
-    to tell them apart: a scope is unpriced only when **every** day in it is.
+    Ranked here rather than by the screen so every caller of the API gets the
+    same order. Ties fall back to operations and then to the name, so the list
+    is stable between reads of the same window.
     """
-    priced = [b.cost_usd for b in buckets if b.cost_usd is not None]
-    unpriced = sum(int(row.unpriced or 0) for row in rows)
-    return (sum(priced) if priced else None), unpriced
+    models = [
+        ModelUsage(
+            model=row.model or "",
+            prompt_tokens=int(row.prompt_tokens or 0),
+            completion_tokens=int(row.completion_tokens or 0),
+            runs=int(row.runs or 0),
+            unmeasured=int(row.unmeasured or 0),
+        )
+        for row in rows
+    ]
+    models.sort(key=lambda m: (-m.total_tokens, -m.runs, m.model))
+    return models
 
 
 async def for_actor(
     db: AsyncSession, actor_id: UUID, *, window: Window
 ) -> Series:
-    """One person's usage, by day.
+    """One person's usage, by day and by model.
 
     **Inner joins `users`**, like `per_actor` and unlike `installation`: this is
     the per-person view, and a person who has been deleted is not in it. See the
@@ -361,11 +378,12 @@ async def for_actor(
 async def per_actor(
     db: AsyncSession, *, window: Window, only: UUID | None = None
 ) -> list[Series]:
-    """Everybody's usage, by day, one `Series` each.
+    """Everybody's usage, by day and by model, one `Series` each.
 
-    One grouped query rather than a query per person: the screen renders a list
-    of people with a chart each, and a loop of per-person reads is the
-    pagination problem the access-control rulebook names.
+    Two grouped queries — days, then models — rather than a query per person:
+    the screen renders a list of people with a chart each, and a loop of
+    per-person reads is the pagination problem the access-control rulebook
+    names.
 
     The join to `users` is **inner** — a deleted actor's rows leave this view
     and stay in `installation`. An outer join would attribute a departed
@@ -389,39 +407,56 @@ async def per_actor(
         .order_by(User.display_name, operations.c.day)
     )
 
+    by_model = (
+        sa.select(operations.c.actor_id, operations.c.model, *_aggregates(operations))
+        .join(User, User.id == operations.c.actor_id)
+        .where(*conditions)
+        .group_by(operations.c.actor_id, operations.c.model)
+    )
+
     grouped: dict[UUID, list[Any]] = {}
     names: dict[UUID, str] = {}
     for row in (await db.execute(daily)).all():
         grouped.setdefault(row.actor_id, []).append(row)
         names[row.actor_id] = row.actor or ""
 
-    return [_series(actor_id, names[actor_id], rows) for actor_id, rows in grouped.items()]
+    model_rows: dict[UUID, list[Any]] = {}
+    for row in (await db.execute(by_model)).all():
+        model_rows.setdefault(row.actor_id, []).append(row)
+
+    return [
+        _series(actor_id, names[actor_id], rows, model_rows.get(actor_id, []))
+        for actor_id, rows in grouped.items()
+    ]
 
 
-def _series(actor_id: UUID | None, actor: str, rows: Sequence[Any]) -> Series:
-    """Fold a scope's day rows into its total.
+def _series(
+    actor_id: UUID | None,
+    actor: str,
+    rows: Sequence[Any],
+    model_rows: Sequence[Any] = (),
+) -> Series:
+    """Fold a scope's day rows into its total, and attach its model rows.
 
     The total is summed from the same rows the buckets are built from, so the
     invariant the screen rests on — **the total equals the sum of the buckets**
     — holds by construction rather than by two additions agreeing.
     """
     buckets = [_bucket(row) for row in rows]
-    cost, unpriced = _fold(buckets, rows)
     return Series(
         actor_id=actor_id,
         actor=actor,
         prompt_tokens=sum(b.prompt_tokens for b in buckets),
         completion_tokens=sum(b.completion_tokens for b in buckets),
-        cost_usd=cost,
         runs=sum(b.runs for b in buckets),
         unmeasured=sum(int(row.unmeasured or 0) for row in rows),
-        unpriced=unpriced,
         buckets=buckets,
+        models=_model_usage(model_rows),
     )
 
 
 async def installation(db: AsyncSession, *, window: Window) -> InstallationSeries:
-    """What the whole installation spent, by day.
+    """What the whole installation used, by day and by model.
 
     **No join to `users` at all** — the one structural difference from
     `per_actor`, and the one most likely to be "fixed" by a well-meaning later
@@ -441,8 +476,11 @@ async def installation(db: AsyncSession, *, window: Window) -> InstallationSerie
         .group_by(operations.c.day)
         .order_by(operations.c.day)
     )
+    by_model = sa.select(operations.c.model, *_aggregates(operations)).group_by(
+        operations.c.model
+    )
     rows = (await db.execute(daily)).all()
-    base = _series(None, "", rows)
+    base = _series(None, "", rows, (await db.execute(by_model)).all())
 
     # A second, deliberately separate read: the shape of the gap. Folded into
     # the grouped query above it would need a `FILTER` per aggregate and would
@@ -469,11 +507,10 @@ async def installation(db: AsyncSession, *, window: Window) -> InstallationSerie
         actor="",
         prompt_tokens=base.prompt_tokens,
         completion_tokens=base.completion_tokens,
-        cost_usd=base.cost_usd,
         runs=base.runs,
         unmeasured=base.unmeasured,
-        unpriced=base.unpriced,
         buckets=base.buckets,
+        models=base.models,
         unattributed=int(orphaned.runs or 0),
         unattributed_tokens=int(orphaned.tokens or 0),
     )

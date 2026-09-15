@@ -135,7 +135,7 @@ async def _eval(
     return await runner.evaluate_record(
         record, gateway=gateway, llm=LLM, connector=env["connector"],
         snapshot=env["snapshot"], policy=env["policy"], settings=SETTINGS,
-        model_name="fake-model", with_cost=False, semantic=semantic,
+        model_name="fake-model", semantic=semantic,
     )
 
 
@@ -149,7 +149,7 @@ async def test_perfect_model_matches_across_slices() -> None:
         outcomes = await runner.run_suite(
             records, gateway=gateway, llm=LLM, connector=env["connector"],
             snapshot=env["snapshot"], policy=env["policy"], settings=SETTINGS,
-            model_name="fake-model", with_cost=False,
+            model_name="fake-model",
         )
     report = metrics.aggregate(outcomes)
     assert report.execution_accuracy == 1.0, [

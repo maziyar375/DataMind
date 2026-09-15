@@ -104,13 +104,13 @@ class StreamChunk:
 
 @dataclass(frozen=True, slots=True)
 class Usage:
-    """What one provider call cost, as the provider reported it.
+    """What one provider call spent, as the provider reported it.
 
     It travels back from calls that have nowhere to put it: `structured`
     returns a validated model and `stream` yields text, so neither can return
-    a number. `model` rides along because costing needs the *resolved* name
-    (post-prefix) and a sink's receiver — a node, a worker — should not have to
-    reach back into the `ResolvedLLM` to price a call it only observed.
+    a number. `model` rides along so the log line names the *resolved* model
+    (post-prefix), and a sink's receiver — a node, a worker — does not have to
+    reach back into the `ResolvedLLM` for a call it only observed.
 
     A zero is not always "no tokens": a provider that sends no usage on a
     streamed reply reports nothing, and that is recorded as it stands rather
@@ -145,7 +145,7 @@ class Completion:
         `stream` caller feeds, and there is one accumulation path rather than
         two that can drift. The model name is the caller's to supply: the
         completion was built by the gateway, which knows the resolved name, but
-        `Completion` predates costing and widening it would touch every caller.
+        `Completion` predates usage reporting and widening it would touch every caller.
         """
         return Usage(
             prompt_tokens=self.prompt_tokens,
@@ -178,7 +178,7 @@ class EmbeddingCapability:
 #: nothing here keeps them.
 ReasoningSink = Callable[[str], Awaitable[None]]
 
-#: Where a call reports what it cost. Fired once per provider *attempt*, by the
+#: Where a call reports what it spent. Fired once per provider *attempt*, by the
 #: coroutine that made it — so concurrent callers never share a bucket, which a
 #: counter on the gateway instance could not promise (one gateway serves the
 #: report worker's whole narration wave). Synchronous on purpose: a sink is an

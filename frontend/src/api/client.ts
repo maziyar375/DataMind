@@ -354,7 +354,7 @@ export const audit = {
 
 // ── token usage ───────────────────────────────────────────────────────────
 /**
- * What the models cost, in the three scopes the backend serves.
+ * How many tokens the models used, in the three scopes the backend serves.
  *
  * **Three calls rather than one taking a user id**, because that is how the
  * gate is drawn: `mine` is the caller and needs no capability, and the other

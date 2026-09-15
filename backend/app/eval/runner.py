@@ -59,7 +59,7 @@ from app.infra.connectors.factory import build_connector
 from app.infra.crypto.aesgcm_box import AesGcmSecretBox
 from app.infra.db.models import EvalResult, EvalRun, LlmConfig
 from app.infra.db.session import dispose_engine, get_sessionmaker
-from app.infra.llm.litellm_gateway import LiteLLMGateway, estimate_cost_usd
+from app.infra.llm.litellm_gateway import LiteLLMGateway
 from app.pipeline import nodes
 from app.pipeline.nodes import NodeDeps
 from app.pipeline.pipeline import AnalyticsPipeline
@@ -154,7 +154,6 @@ async def evaluate_record(
     policy: GuardPolicy,
     settings: Settings,
     model_name: str,
-    with_cost: bool = True,
     include_db_comments: bool = False,
     semantic: dict[str, Any] | None = None,
     templates: list[Any] | None = None,
@@ -236,8 +235,6 @@ async def evaluate_record(
     o.validate_ms = validate_ms
     o.prompt_tokens = state.prompt_tokens
     o.completion_tokens = state.completion_tokens
-    if with_cost and (state.prompt_tokens or state.completion_tokens):
-        o.cost_usd = estimate_cost_usd(model_name, state.prompt_tokens, state.completion_tokens)
 
     ctx_tables = state.context.tables if state.context else []
     retrieved = [f"{t['schema']}.{t['name']}" for t in ctx_tables]
@@ -340,7 +337,6 @@ async def run_suite(
     policy: GuardPolicy,
     settings: Settings,
     model_name: str,
-    with_cost: bool = True,
     progress: bool = False,
     include_db_comments: bool = False,
     semantic: dict[str, Any] | None = None,
@@ -352,7 +348,7 @@ async def run_suite(
     for i, record in enumerate(records, 1):
         outcome = await evaluate_record(
             record, gateway=gateway, llm=llm, connector=connector, snapshot=snapshot,
-            policy=policy, settings=settings, model_name=model_name, with_cost=with_cost,
+            policy=policy, settings=settings, model_name=model_name,
             include_db_comments=include_db_comments, semantic=semantic,
             templates=templates, held_out=held_out, vectors=vectors,
         )
@@ -835,7 +831,6 @@ async def persist(
                     total_ms=o.total_ms,
                     prompt_tokens=o.prompt_tokens,
                     completion_tokens=o.completion_tokens,
-                    cost_usd=o.cost_usd,
                     failure_reason=o.failure_reason,
                 )
             )

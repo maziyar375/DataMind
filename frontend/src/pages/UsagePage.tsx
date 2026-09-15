@@ -1,12 +1,12 @@
 /**
- * What the models have been asked to do, and what it cost.
+ * How many tokens the models have used, and on which models.
  *
  * Every figure on this screen already existed as a column — `0023` landed
  * per-call accounting on `runs`, `report_runs` and `semantic_jobs`, and
  * nothing read it back. A number nobody can see answers *"what are we
  * spending"* exactly as badly as a number nobody records.
  *
- * **Counts, never content.** An integer, a price and a day. No question, no
+ * **Counts, never content.** An integer, a model name and a day. No question, no
  * SQL, no prose ever reaches this page — which is what makes reading somebody
  * else's usage a capability an Auditor may hold rather than a disclosure of
  * their work.
@@ -19,11 +19,11 @@
  * boundary, which is what the `curl` in the phase's verification proves.
  *
  * **The partiality is the feature, not a caveat.** A provider that reports no
- * usage block and a model litellm cannot price are both ordinary, and a total
- * that quietly absorbs them reports a deployment as free. `usageTotals` turns
- * the two counts on the wire into sentences, and they are rendered **beside**
- * the number rather than under it: a footnote is a thing a reader finds after
- * they have already believed the figure.
+ * usage block is ordinary, and a total that quietly absorbs it reports less
+ * work than was done. `usageTotals` turns the count on the wire into a
+ * sentence, and it is rendered **beside** the number rather than under it: a
+ * footnote is a thing a reader finds after they have already believed the
+ * figure.
  */
 import { useEffect, useMemo, useState } from 'react'
 import { Navigate, useMatch, useNavigate } from 'react-router-dom'
@@ -36,7 +36,7 @@ import { Tabs } from '../components/settings'
 import { VegaChart } from '../components/VegaChart'
 import { useCan, type Capability } from '../permissions'
 import {
-  formatTokens, usageSpec, usageTotals, windowSince, WINDOW_DAYS,
+  formatTokens, modelRows, usageSpec, usageTotals, windowSince, WINDOW_DAYS,
   type UsageTotals, type WindowDays,
 } from '../components/usage-chart'
 
@@ -50,7 +50,7 @@ import {
 const SCOPES: { value: string; label: string; needs?: Capability }[] = [
   { value: 'me', label: 'Yours' },
   { value: 'people', label: 'People', needs: 'usage.read' },
-  { value: 'total', label: 'Installation', needs: 'usage.read' },
+  { value: 'total', label: 'All users', needs: 'usage.read' },
 ]
 
 export default function UsagePage() {
@@ -77,7 +77,7 @@ export default function UsagePage() {
   const header = (
     <PageHeader
       title="Token usage"
-      subtitle="What the models were asked to do, and what it cost. Counts only — no question, no answer and no SQL is on this page."
+      subtitle="How many tokens the models used, and on which models. Counts only — no question, no answer and no SQL is on this page."
       // One control, above everything it scopes. Every figure and every bar
       // below reads the same window, whichever tab is open, so there is
       // nothing per-chart to set and nothing that can end up scoped
@@ -204,10 +204,11 @@ function Scope({ scope, days }: { scope: string; days: WindowDays }) {
 }
 
 /**
- * One scope, rendered: the figures, what qualifies them, and the shape.
+ * One scope, rendered: the figures, what qualifies them, the shape, and the
+ * models.
  *
  * Shared rather than written per scope — your own usage, one other person's
- * and the installation total are the same answer about different rows, and
+ * and the all-users total are the same answer about different rows, and
  * three renderings of it would be three places for the partiality sentences
  * to be dropped from.
  */
@@ -255,6 +256,7 @@ function UsageBody({
           <Figures totals={totals} />
           <Qualifiers totals={totals}>{children}</Qualifiers>
           {spec && <VegaChart spec={spec} />}
+          <ByModel series={series} />
         </>
       )}
     </div>
@@ -294,7 +296,6 @@ function Figures({ totals }: { totals: UsageTotals }) {
           under an em dash would contradict the tile beside them. */}
       <Figure label="Input" value={totals.tokens && formatTokens(totals.promptTokens)} />
       <Figure label="Output" value={totals.tokens && formatTokens(totals.completionTokens)} />
-      <Figure label="Cost" value={totals.cost} />
       <Figure label="Operations" value={String(totals.runs)} />
     </div>
   )
@@ -347,7 +348,7 @@ function Qualifiers({
   totals: UsageTotals
   children?: React.ReactNode
 }) {
-  const lines = [totals.unmeasuredNote, totals.costNote].filter(Boolean) as string[]
+  const lines = [totals.unmeasuredNote].filter(Boolean) as string[]
   if (lines.length === 0 && !children) return null
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
@@ -368,7 +369,78 @@ function Line({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * The gap between the installation total and the sum of the people.
+ * One scope's tokens, split by the model that used them.
+ *
+ * A table under the chart rather than a colour per model inside it: the chart
+ * answers *"when"*, and stacking it by model as well would make the input and
+ * output split — the thing it already draws — unreadable past two models.
+ * This answers *"on what"*, which is a ranking, and a ranking reads as rows.
+ *
+ * Every scope renders it through `UsageBody`, so your own tab, one person's
+ * row under People and the all-users total all split the same way.
+ */
+function ByModel({ series }: { series: UsageSeries }) {
+  const rows = useMemo(() => modelRows(series), [series])
+  if (rows.length === 0) return null
+
+  return (
+    <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <h3
+        style={{
+          margin: 0,
+          fontSize: 13,
+          fontWeight: 650,
+          color: 'var(--text-strong)',
+        }}
+      >
+        By model
+      </h3>
+      <div style={{ overflowX: 'auto' }}>
+        <table
+          style={{
+            width: '100%',
+            minWidth: 520,
+            borderCollapse: 'collapse',
+            fontSize: 13,
+          }}
+        >
+          <thead>
+            <tr>
+              <Th align="start">Model</Th>
+              <Th>Tokens</Th>
+              <Th>Share</Th>
+              <Th>Input</Th>
+              <Th>Output</Th>
+              <Th>Operations</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.key}>
+                <Td align="start">
+                  <span
+                    dir={dirOf(row.label)}
+                    style={{ color: row.recorded ? 'var(--text-strong)' : 'var(--text-dim)' }}
+                  >
+                    {row.label}
+                  </span>
+                </Td>
+                <Td>{row.tokens ?? '—'}</Td>
+                <Td>{row.share ?? '—'}</Td>
+                <Td>{row.input ?? '—'}</Td>
+                <Td>{row.output ?? '—'}</Td>
+                <Td>{row.runs}</Td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
+/**
+ * The gap between the all-users total and the sum of the people.
  *
  * `/usage/users` inner joins `users` and `/usage/total` joins nothing, so a
  * deleted person's spend leaves the first and stays in the second. That is
@@ -437,7 +509,7 @@ function People({ rows, loading }: { rows: UsageSeries[] | null; loading: boolea
     return (
       <EmptyState
         icon={<Icon.Bars size={20} />}
-        title="Nobody has spent anything in this window"
+        title="Nobody has used any tokens in this window"
         body="No questions, reports or layer generations ran in these days. Try a longer window."
       />
     )
@@ -459,7 +531,7 @@ function People({ rows, loading }: { rows: UsageSeries[] | null; loading: boolea
         <table
           style={{
             width: '100%',
-            minWidth: 560,
+            minWidth: 480,
             borderCollapse: 'collapse',
             fontSize: 13,
           }}
@@ -470,7 +542,6 @@ function People({ rows, loading }: { rows: UsageSeries[] | null; loading: boolea
               <Th>Tokens</Th>
               <Th>Input</Th>
               <Th>Output</Th>
-              <Th>Cost</Th>
               <Th>Operations</Th>
             </tr>
           </thead>
@@ -503,7 +574,6 @@ function People({ rows, loading }: { rows: UsageSeries[] | null; loading: boolea
                   <Td>{totals.tokens ?? '—'}</Td>
                   <Td>{totals.tokens ? formatTokens(totals.promptTokens) : '—'}</Td>
                   <Td>{totals.tokens ? formatTokens(totals.completionTokens) : '—'}</Td>
-                  <Td>{totals.cost ?? '—'}</Td>
                   <Td>{totals.runs}</Td>
                 </tr>
               )
@@ -546,7 +616,7 @@ function People({ rows, loading }: { rows: UsageSeries[] | null; loading: boolea
 
 /**
  * A column of numbers that must line up, which is where `tabular-nums`
- * belongs and the only place on this page it appears.
+ * belongs and the only kind of place on this page it appears.
  */
 function Th({ children, align = 'end' }: { children: React.ReactNode; align?: 'start' | 'end' }) {
   return (

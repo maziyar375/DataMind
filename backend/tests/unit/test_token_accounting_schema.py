@@ -11,8 +11,6 @@ that are easy to "tidy" into a bug, and every one of them is about a **null**:
 
 * a token column defaulted to `0` cannot be asked whether a node made no call
   or made one the provider did not report on;
-* a `cost_usd` of `0.0` where litellm cannot price the model reports a real
-  spend as free — the normal state for a self-hosted deployment;
 * an `actor_id` backfilled to `owner_id` is correct today and only today, which
   is precisely why it is written now rather than invented later;
 * and no historical row is given a token count it never had, because that is
@@ -59,6 +57,12 @@ ADDED = {
 }
 
 RUN_TABLES = ("runs", "report_runs", "semantic_jobs")
+
+#: What `0023` added and `0031` later took away again. DataMind stopped pricing
+#: model calls, so the ORM no longer carries these — the comparison below skips
+#: them rather than pretending `0023` never added them.
+DROP_COST = importlib.import_module("app.infra.db.migrations.versions.0031_drop_cost")
+DROPPED_LATER = {"cost_usd"}
 
 
 class OpRecorder:
@@ -150,10 +154,13 @@ def test_the_migration_adds_exactly_these_columns() -> None:
 def test_every_added_column_exists_in_the_orm_with_the_same_type() -> None:
     """Two definitions of one column is one definition too many unless they are
     checked; a `Float` in the ORM against an `Integer` in the database is a
-    cost silently rounded to whole dollars."""
+    token count that overflows or a latency silently truncated."""
     for table, columns in _replay().added.items():
         orm = Base.metadata.tables[table]
         for column in columns:
+            if column.name in DROPPED_LATER:
+                assert column.name not in orm.c, f"{table}.{column.name}"
+                continue
             assert column.name in orm.c, f"{table}.{column.name}"
             assert type(orm.c[column.name].type) is type(column.type), (
                 f"{table}.{column.name}"
@@ -231,7 +238,7 @@ def test_no_token_column_is_defaulted_to_zero() -> None:
     nothing are different facts, and `0` in both places cannot say which."""
     for table, names in ADDED.items():
         orm = Base.metadata.tables[table]
-        for name in names - {"actor_id"}:
+        for name in names - {"actor_id"} - DROPPED_LATER:
             column = orm.c[name]
             assert column.nullable, f"{table}.{name}"
             assert column.default is None, f"{table}.{name}"
@@ -262,11 +269,36 @@ def test_a_step_counts_its_calls_because_generate_repairs() -> None:
     assert "llm_calls" in Base.metadata.tables["run_steps"].c
 
 
-def test_cost_is_a_float_on_every_run_table() -> None:
-    for table in RUN_TABLES:
-        column = Base.metadata.tables[table].c.cost_usd
-        assert isinstance(column.type, sa.Float), table
+def test_no_table_carries_a_cost_any_more() -> None:
+    """`0031` dropped the column everywhere it lived, `eval_results` included."""
+    assert DROP_COST.revision == "0031"
+    assert DROP_COST.down_revision == "0030"
+    for table in (*RUN_TABLES, "eval_results"):
+        assert "cost_usd" not in Base.metadata.tables[table].c, table
+
+
+def test_dropping_the_cost_touches_nothing_but_the_cost() -> None:
+    """Token counts are the measurement and stay; only the price goes. The
+    downgrade puts the column back nullable and empty."""
+    up, down = OpRecorder(), OpRecorder()
+    original = DROP_COST.op
+    try:
+        DROP_COST.op = up
+        DROP_COST.upgrade()
+        DROP_COST.op = down
+        DROP_COST.downgrade()
+    finally:
+        DROP_COST.op = original
+
+    tables = {*RUN_TABLES, "eval_results"}
+    assert set(up.dropped_columns) == {(table, "cost_usd") for table in tables}
+    assert not up.added and not up.statements
+    assert set(down.added) == tables
+    for table, columns in down.added.items():
+        [column] = columns
+        assert column.name == "cost_usd", table
         assert column.nullable, table
+        assert column.server_default is None, table
 
 
 # ── §1.5: the actor ──────────────────────────────────────────────────────

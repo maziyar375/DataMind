@@ -670,14 +670,12 @@ class SemanticJobRow(Base):
     progress_total: Mapped[int] = mapped_column(Integer, default=0)
     stats: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     error_message: Mapped[str | None] = mapped_column(Text)
-    # What this generation cost, added in 0023. Nullable throughout: a NULL is
+    # What this generation spent, added in 0023. Nullable throughout: a NULL is
     # "not measured" — a historical row, or a streamed reply whose provider
-    # sent no usage — and never "no tokens". `cost_usd` is null wherever
-    # litellm cannot price the model, which is every self-hosted deployment.
+    # sent no usage — and never "no tokens".
     prompt_tokens: Mapped[int | None] = mapped_column(Integer)
     completion_tokens: Mapped[int | None] = mapped_column(Integer)
     llm_latency_ms: Mapped[int | None] = mapped_column(Integer)
-    cost_usd: Mapped[float | None] = mapped_column(Float)
     # Who asked for it, as against who owns it. Identical to `owner_id` in
     # every row that exists — which is why it is added now rather than
     # backfilled by guesswork once a shared connection makes the two differ.
@@ -793,11 +791,6 @@ class Run(Base, TimestampMixin):
     total_latency_ms: Mapped[int | None] = mapped_column(Integer)
     prompt_tokens: Mapped[int | None] = mapped_column(Integer)
     completion_tokens: Mapped[int | None] = mapped_column(Integer)
-    # Best-effort, and null is the normal state for a self-hosted deployment:
-    # `estimate_cost_usd` prices what litellm's map knows and returns None for
-    # a local model, which prices as *nothing knowable*, not as free. Nothing
-    # reading this column may sum a null as zero.
-    cost_usd: Mapped[float | None] = mapped_column(Float)
     worker_id: Mapped[str | None] = mapped_column(String(100))
     fencing_token: Mapped[int | None] = mapped_column(BigInteger)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -1315,14 +1308,12 @@ class ReportRun(Base):
     cancel_requested: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false()
     )
-    # What this document cost, added in 0023. Nullable throughout: a NULL is
+    # What this document spent, added in 0023. Nullable throughout: a NULL is
     # "not measured" — a historical row, or a streamed reply whose provider
-    # sent no usage — and never "no tokens". `cost_usd` is null wherever
-    # litellm cannot price the model, which is every self-hosted deployment.
+    # sent no usage — and never "no tokens".
     prompt_tokens: Mapped[int | None] = mapped_column(Integer)
     completion_tokens: Mapped[int | None] = mapped_column(Integer)
     llm_latency_ms: Mapped[int | None] = mapped_column(Integer)
-    cost_usd: Mapped[float | None] = mapped_column(Float)
     # Who asked for it, as against who owns it. Identical to `owner_id` in
     # every row that exists — which is why it is added now rather than
     # backfilled by guesswork once a shared connection makes the two differ.
@@ -1781,7 +1772,6 @@ class EvalResult(Base):
     total_ms: Mapped[int | None] = mapped_column(Integer)
     prompt_tokens: Mapped[int | None] = mapped_column(Integer)
     completion_tokens: Mapped[int | None] = mapped_column(Integer)
-    cost_usd: Mapped[float | None] = mapped_column()
 
     failure_reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(

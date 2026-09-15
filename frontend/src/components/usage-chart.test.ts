@@ -7,15 +7,15 @@
  * is still a chart and nobody can tell by looking; a total that has quietly
  * stopped saying how partial it is looks exactly like a whole one. So the
  * cases below are the ones where being nearly right is worse than being
- * absent — a zero printed for a measurement nobody took, a cost printed for a
- * window nothing was priced in, a stack that reorders between renders.
+ * absent — a zero printed for a measurement nobody took, a model breakdown that
+ * does not add up to its total, a stack that reorders between renders.
  */
 import {
-  formatCost, formatTokens, TOKEN_SERIES, usageSpec, usageTotals,
+  formatTokens, modelRows, TOKEN_SERIES, UNRECORDED_MODEL, usageSpec, usageTotals,
   WINDOW_DAYS, windowSince,
 } from './usage-chart.ts'
 import { PALETTES } from './palette.ts'
-import type { UsageBucket, UsageSeries } from '../api/types.ts'
+import type { UsageBucket, UsageModel, UsageSeries } from '../api/types.ts'
 
 let failures = 0
 function check(name: string, actual: unknown, expected: unknown): void {
@@ -29,7 +29,11 @@ function check(name: string, actual: unknown, expected: unknown): void {
 }
 
 function bucket(over: Partial<UsageBucket> = {}): UsageBucket {
-  return { day: '2026-09-01', prompt_tokens: 0, completion_tokens: 0, cost_usd: null, runs: 1, ...over }
+  return { day: '2026-09-01', prompt_tokens: 0, completion_tokens: 0, runs: 1, ...over }
+}
+
+function model(over: Partial<UsageModel> = {}): UsageModel {
+  return { model: 'gpt-4o-mini', prompt_tokens: 0, completion_tokens: 0, runs: 1, unmeasured: 0, ...over }
 }
 
 function series(over: Partial<UsageSeries> = {}): UsageSeries {
@@ -38,11 +42,10 @@ function series(over: Partial<UsageSeries> = {}): UsageSeries {
     actor: 'Ali Rahimi',
     prompt_tokens: 0,
     completion_tokens: 0,
-    cost_usd: null,
     runs: 0,
     unmeasured: 0,
-    unpriced: 0,
     buckets: [],
+    models: [],
     ...over,
   }
 }
@@ -157,26 +160,22 @@ check(
 
 console.log('\n— a total nobody has to qualify —')
 const whole = usageTotals(series({
-  runs: 12, prompt_tokens: 1_000_000, completion_tokens: 284_301, cost_usd: 4.2,
+  runs: 12, prompt_tokens: 1_000_000, completion_tokens: 284_301,
 }))
 check('the tokens add up', whole.totalTokens, 1_284_301)
 check('and are grouped for reading', whole.tokens, '1,284,301')
-check('the cost keeps both decimal places', whole.cost, '$4.20')
 check('nothing is unmeasured, so nothing is said about it', whole.unmeasuredNote, null)
-check('nothing is unpriced, so nothing is said about that either', whole.costNote, null)
 check('and it is not the empty window', whole.empty, false)
+check('no price is anywhere in the summary', Object.keys(whole).some((key) => /cost/i.test(key)), false)
 
 console.log('\n— an empty window says so —')
 const nothing = usageTotals(series())
 check('no operations is empty', nothing.empty, true)
-check('with no cost', nothing.cost, null)
-check('and no warning about an absence nobody asked about', [
-  nothing.unmeasuredNote, nothing.costNote,
-], [null, null])
+check('and no warning about an absence nobody asked about', nothing.unmeasuredNote, null)
 
 console.log('\n— what is unmeasured —')
 const partly = usageTotals(series({
-  runs: 12, prompt_tokens: 900, completion_tokens: 100, cost_usd: 0.5, unmeasured: 3,
+  runs: 12, prompt_tokens: 900, completion_tokens: 100, unmeasured: 3,
 }))
 check(
   'the count is stated, not a flag',
@@ -201,49 +200,42 @@ check(
   '0',
 )
 
-console.log('\n— what is unpriced —')
+console.log('\n— by model —')
+const split = modelRows(series({
+  runs: 5, prompt_tokens: 9_000, completion_tokens: 1_000,
+  models: [
+    model({ model: 'large', prompt_tokens: 6_000, completion_tokens: 200, runs: 2 }),
+    model({ model: 'small', prompt_tokens: 2_990, completion_tokens: 750, runs: 2 }),
+    model({ model: '', prompt_tokens: 10, completion_tokens: 50, runs: 1 }),
+  ],
+}))
+check('one row per model, in the order the server ranked them', split.map((row) => row.key), [
+  'large', 'small', '',
+])
+check('each row is written for reading', split[0], {
+  key: 'large', label: 'large', recorded: true, totalTokens: 6_200,
+  tokens: '6,200', input: '6,000', output: '200', share: '62%', runs: 2,
+})
 check(
-  'a partly priced window says how partly',
-  usageTotals(series({ runs: 12, prompt_tokens: 9, cost_usd: 1.5, unpriced: 3 })).costNote,
-  'Cost is known for 9 of 12 operations.',
+  'the rows add up to the scope, which is what makes the split trustworthy',
+  split.reduce((sum, row) => sum + row.totalTokens, 0),
+  10_000,
 )
+check('a run with no recorded model is named, not dropped', [split[2].label, split[2].recorded], [
+  UNRECORDED_MODEL, false,
+])
+check('a share too small to round up is not written as nothing', split[2].share, '< 1%')
 check(
-  'a wholly unpriced window reports no cost at all',
-  usageTotals(series({ runs: 12, prompt_tokens: 9, cost_usd: null, unpriced: 12 })).cost,
+  'a model whose every run went unmeasured shows no figure, and never a zero',
+  modelRows(series({ runs: 2, unmeasured: 2, models: [model({ runs: 2, unmeasured: 2 })] }))[0].tokens,
   null,
 )
 check(
-  'and says why',
-  usageTotals(series({ runs: 12, prompt_tokens: 9, cost_usd: null, unpriced: 12 })).costNote,
-  'No price is known for any of these 12 operations.',
-)
-check(
-  'and says why for a single unpriced run without counting it against itself',
-  usageTotals(series({ runs: 1, prompt_tokens: 12028, cost_usd: null, unpriced: 1 })).costNote,
-  'No price is known for this operation.',
-)
-// The case this refusal exists for. `SUM` returns null only when every row is
-// null, so a `0.0` over a fully unpriced window means somebody coalesced the
-// column — and a deployment reported as free is the failure both carried-over
-// rules name. The module refuses the number rather than trusting its source.
-check(
-  'a zero cost over a wholly unpriced window is refused, not printed',
-  usageTotals(series({ runs: 12, prompt_tokens: 9, cost_usd: 0, unpriced: 12 })).cost,
+  'a scope that measured nothing has no whole to take a share of',
+  modelRows(series({ runs: 2, unmeasured: 2, models: [model({ runs: 2, unmeasured: 2 })] }))[0].share,
   null,
 )
-check(
-  'a real zero cost, with nothing unpriced, is a measurement and prints',
-  usageTotals(series({ runs: 12, prompt_tokens: 9, cost_usd: 0 })).cost,
-  '$0.00',
-)
-
-console.log('\n— how a cost is written —')
-check('above a dollar, two places and grouped', formatCost(1234.5), '$1,234.50')
-check('at a dollar', formatCost(1), '$1.00')
-check('above a cent, two places', formatCost(0.42), '$0.42')
-check('below a cent, four', formatCost(0.0042), '$0.0042')
-check('too small to write is not written as nothing', formatCost(0.00001), '< $0.0001')
-check('and an actual zero is', formatCost(0), '$0.00')
+check('no models is no rows', modelRows(series()), [])
 
 console.log('\n— how a count is written —')
 check('under a thousand, as it is', formatTokens(999), '999')

@@ -1,7 +1,7 @@
 """One structured line per provider call, carrying counts and no content.
 
-`runs` says what a question cost and `run_steps` says what each node cost.
-Neither can say what one *call* cost, and the difference is not academic: a
+`runs` says what a question used and `run_steps` says what each node used.
+Neither can say what one *call* used, and the difference is not academic: a
 `generate` that repaired is one step row and two provider requests, and only
 this log says what each of them spent. Phase 6 of
 [docs/plans/token-accounting.md](../../../docs/plans/token-accounting.md) buys
@@ -12,7 +12,7 @@ Two properties, and the second is the one worth a test file of its own:
 
 * **the line is joinable and complete** — the correlation id `core/logging.py`
   already attaches to every event ties it back to the request that caused it,
-  and the counts, latency, model, provider and cost are all on the one line so
+  and the counts, latency, model and provider are all on the one line so
   reading it needs no second lookup;
 * **the line carries no prompt, no completion, no question and no schema
   content.** `services/audit.py`'s rule 3, applied here for the reason it
@@ -63,7 +63,7 @@ _MSG = [ChatMessage(role="user", content="what did we sell last March")]
 ALLOWED = {
     "event", "log_level", "correlation_id",
     "operation", "provider", "model",
-    "prompt_tokens", "completion_tokens", "latency_ms", "cost_usd",
+    "prompt_tokens", "completion_tokens", "latency_ms",
 }
 
 #: The question, the answer and the system prompt, all of which pass through
@@ -154,10 +154,8 @@ async def test_a_completion_leaves_one_line_with_its_counts(
 async def test_the_line_names_the_model_litellm_was_actually_asked_for(
     captured: list[dict[str, Any]],
 ) -> None:
-    """The resolved name, post-prefix — the same one the sink reports and the
-    same one a cost is keyed on. A line naming the unprefixed model would not
-    join to a price, and its null cost would read as "unpriced model" rather
-    than as "looked it up wrong"."""
+    """The resolved name, post-prefix — the same one the sink reports, so a
+    line and the usage it contributed to name the model the same way."""
 
     async def once(**_: Any) -> Any:
         return _reply("x", usage=_usage(1, 1))
@@ -171,23 +169,17 @@ async def test_the_line_names_the_model_litellm_was_actually_asked_for(
 
 
 @pytest.mark.asyncio
-async def test_a_priced_model_carries_its_cost_and_an_unpriced_one_carries_none(
-    captured: list[dict[str, Any]],
-) -> None:
-    """Null is the normal state for a self-hosted deployment, and it must stay
-    null: §6's rule is that a null `cost_usd` is never coerced to zero, and a
-    line claiming `0.0` for a real spend is where that coercion starts."""
+async def test_the_line_carries_no_price(captured: list[dict[str, Any]]) -> None:
+    """DataMind does not price model calls, and the log does not either."""
 
     async def once(**_: Any) -> Any:
         return _reply("x", usage=_usage(1000, 500))
 
     with patch("litellm.acompletion", side_effect=once):
         await _gateway().complete(_llm(), _MSG)
-        await _gateway().complete(_llm(model="a-model-nobody-prices"), _MSG)
 
-    priced, unpriced = _lines(captured)
-    assert priced["cost_usd"] > 0
-    assert unpriced["cost_usd"] is None
+    [line] = _lines(captured)
+    assert "cost_usd" not in line
 
 
 @pytest.mark.asyncio
@@ -223,8 +215,8 @@ async def test_a_stream_leaves_one_line_with_the_trailing_usage_chunk(
 ) -> None:
     """And a provider that sends no usage chunk still leaves a line, of zeros.
 
-    That is the honest record of §1.3's gap: the call happened and its cost is
-    unknown. A missing line would be indistinguishable from a call that was
+    That is the honest record of §1.3's gap: the call happened and its usage
+    is unknown. A missing line would be indistinguishable from a call that was
     never made.
     """
 
@@ -244,7 +236,6 @@ async def test_a_stream_leaves_one_line_with_the_trailing_usage_chunk(
     reported, quiet = _lines(captured)
     assert (reported["prompt_tokens"], reported["completion_tokens"]) == (70, 4)
     assert (quiet["prompt_tokens"], quiet["completion_tokens"]) == (0, 0)
-    assert quiet["cost_usd"] is None, "zero tokens are unpriced, never free"
 
 
 @pytest.mark.asyncio

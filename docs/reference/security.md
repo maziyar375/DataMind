@@ -978,8 +978,8 @@ weaker version:
   neither can any role somebody still holds.
 
 **`usage.read`, and why reading a number is a capability.** The nineteenth verb
-(migration `0030`) opens `GET /usage/users` and `GET /usage/total` — what
-everybody's questions cost in tokens, and what the installation has spent. It
+(migration `0030`) opens `GET /usage/users` and `GET /usage/total` — how many
+tokens everybody's questions used, and on which models. It
 sits in the oversight group beside `audit.read` and makes the same argument: a
 usage log is a record **about people**, and reading one is an act worth naming
 even though it changes nothing. Administrator and **Auditor** hold it, the
@@ -989,9 +989,9 @@ Two properties bound what it opens:
 
 * **Counts, never content.** No prompt text, no question, no generated SQL and
   no result value reaches a usage figure — the three tables it reads carry token
-  counts and a price, and the endpoint aggregates them. "Ali asked 40 questions
-  costing 180k tokens" is a different disclosure from "here is what Ali asked",
-  and only the first one is available here.
+  counts and the model name, and the endpoint aggregates them. "Ali asked 40
+  questions using 180k tokens" is a different disclosure from "here is what Ali
+  asked", and only the first one is available here.
 * **Your own usage needs no capability.** `GET /usage/me` scopes to the caller
   and takes no parameter that could widen it, so there is nothing to gate: the
   figure is already the caller's. Splitting the routes rather than conditioning
@@ -1001,8 +1001,8 @@ Two properties bound what it opens:
 **Where it is read.** The **Token usage** rail section
 (`frontend/src/pages/UsagePage.tsx`) is the only screen over these three
 routes. It is in the rail for *everybody*, because the ungated scope is the
-one everybody has; `usage.read` adds two tabs inside it — every person, and
-the installation total — and hides them again when the capability is not held.
+one everybody has; `usage.read` adds two tabs inside it — **People**, and the
+**All users** total — and hides them again when the capability is not held.
 **That hiding is an affordance and never the boundary**: an ordinary user who
 types `/usage/people`, or calls `GET /api/v1/usage/users` with their own token,
 is refused by the API with a 403 naming the capability. That refusal is
@@ -1012,7 +1012,7 @@ records the `curl`.
 
 It is deliberately **not** a `PRIVILEGED_CAPABILITY`. That set is the four a
 leaked API key must not reach because they can mint an administrator; reading
-token counts mints nothing, and a service account reporting installation spend
+token counts mints nothing, and a service account reporting installation usage
 to a finance system is a legitimate thing to want.
 
 **Teams.** A role reaches a principal directly *or* through a team they are

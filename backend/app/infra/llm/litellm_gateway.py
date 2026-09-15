@@ -763,27 +763,6 @@ def _vectors(response: Any, expected: int) -> list[list[float]]:
     return out
 
 
-def estimate_cost_usd(
-    model: str, prompt_tokens: int, completion_tokens: int
-) -> float | None:
-    """Best-effort USD cost for a completion, from litellm's price map.
-
-    Lives here because litellm may only be imported under infra/llm. Returns
-    None for a model litellm does not price (e.g. a local Ollama model), so the
-    eval reports cost where it is known and stays silent where it is not.
-    """
-    try:
-        prompt_cost, completion_cost = litellm.cost_per_token(
-            model=model,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-        )
-    except Exception:
-        return None
-    total = (prompt_cost or 0.0) + (completion_cost or 0.0)
-    return total or None
-
-
 def _supports_response_schema(model: str) -> bool:
     """Whether litellm's model map says this model accepts a `json_schema`.
 
@@ -891,10 +870,8 @@ def _stream_usage_options(llm: ResolvedLLM) -> dict[str, Any]:
 def _resolved_model(llm: ResolvedLLM) -> str:
     """The model name as litellm will see it, prefix and all.
 
-    Shared by the request builder and by usage reporting, because a cost
-    lookup keyed on the *unprefixed* name is a lookup litellm's price map
-    cannot answer — and a null cost that reads as "this model is unpriced"
-    would be a wrong answer rather than a missing one.
+    Shared by the request builder and by usage reporting, so a usage record
+    names the model exactly as the provider was asked for it.
 
     "Custom" is no longer offered when creating a config, but a row stored
     before it was removed still resolves through here and still needs the
@@ -931,7 +908,7 @@ def _log_call(usage: Usage, *, provider: str, operation: str) -> None:
     Per-call granularity, on the logging pipeline that already exists. It is
     the grain neither `runs` nor `run_steps` can hold — a step that repaired
     reports one row and made two calls, and only this says what each of them
-    cost. The correlation id that ties it back to the request is attached by
+    spent. The correlation id that ties it back to the request is attached by
     `core/logging.py`'s own processor, so it is never passed in and never at
     risk of being passed wrong.
 
@@ -941,11 +918,6 @@ def _log_call(usage: Usage, *, provider: str, operation: str) -> None:
     to secure, and the one place somebody would forget to. `test_llm_call_log`
     asserts that on the emitted keys rather than trusting it, because the
     tempting debugging addition is exactly a `reply_head`.
-
-    `cost_usd` is best-effort and null where litellm cannot price the model,
-    which is the normal state for a self-hosted deployment. It is computed here
-    rather than by the reader so that every line carries the price that was
-    current when the call was made.
 
     Failing to log never fails the call, for the reason `_fire_usage` gives
     just below: this observes, it does not authorise.
@@ -959,16 +931,13 @@ def _log_call(usage: Usage, *, provider: str, operation: str) -> None:
             prompt_tokens=usage.prompt_tokens,
             completion_tokens=usage.completion_tokens,
             latency_ms=usage.latency_ms,
-            cost_usd=estimate_cost_usd(
-                usage.model, usage.prompt_tokens, usage.completion_tokens
-            ),
         )
     except Exception as err:  # pragma: no cover - defensive
         log.warning("llm_call_log_failed", error=type(err).__name__)
 
 
 def _fire_usage(sink: UsageSink | None, usage: Usage) -> None:
-    """Hand one call's cost to the sink, and never let that fail the call.
+    """Hand one call's usage to the sink, and never let that fail the call.
 
     The posture is `services/audit.py`'s and for its stated reason: this
     observes, it does not authorise. A recorder that raises must not lose a

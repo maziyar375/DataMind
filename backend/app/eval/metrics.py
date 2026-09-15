@@ -7,7 +7,7 @@ tested without a database or a model:
 2. retrieval recall @ k  — did retrieval surface every expected table
 3. parse / policy / execution rates
 4. repair distribution   — succeeded at attempt 1 vs 2 vs 3
-5. latency p50/p95 (llm/validate/db), tokens, cost per question
+5. latency p50/p95 (llm/validate/db), tokens per question
 
 `exact_match` is computed as a diagnostic only and is never a gate.
 
@@ -147,7 +147,6 @@ class RecordOutcome:
     total_ms: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
-    cost_usd: float | None = None
 
     failure_reason: str | None = None
 
@@ -204,11 +203,9 @@ class SuiteReport:
     repair_violations_by_rule: dict[str, int]
     # 4. repair distribution
     repair_distribution: dict[str, int]
-    # 5. latency / tokens / cost
+    # 5. latency / tokens
     latency_ms: dict[str, dict[str, float]]     # {"llm": {"p50":..,"p95":..}, ...}
     tokens_per_question: dict[str, float]
-    cost_per_question: float | None
-    cost_by_model: dict[str, float]
     # diagnostic, never a gate
     exact_match_rate: float
     # 6. the templates arm (Phase 5). All zero on every other arm, so a
@@ -248,18 +245,6 @@ def aggregate(outcomes: list[RecordOutcome]) -> SuiteReport:
     def _pcts(field_name: str) -> dict[str, float]:
         vals = [float(getattr(o, field_name)) for o in outcomes]
         return {"p50": round(percentile(vals, 50), 1), "p95": round(percentile(vals, 95), 1)}
-
-    # cost
-    costed = [o.cost_usd for o in outcomes if o.cost_usd is not None]
-    cost_by_model: dict[str, float] = {}
-    model_sums: dict[str, float] = {}
-    model_counts: dict[str, int] = {}
-    for o in outcomes:
-        if o.cost_usd is not None and o.model:
-            model_sums[o.model] = model_sums.get(o.model, 0.0) + o.cost_usd
-            model_counts[o.model] = model_counts.get(o.model, 0) + 1
-    for m, total in model_sums.items():
-        cost_by_model[m] = round(total / model_counts[m], 6)
 
     # per-tag breakdown
     tags = sorted({t for o in outcomes for t in o.tags})
@@ -307,8 +292,6 @@ def aggregate(outcomes: list[RecordOutcome]) -> SuiteReport:
                 sum(o.completion_tokens for o in outcomes) / n if n else 0.0, 1
             ),
         },
-        cost_per_question=round(sum(costed) / len(costed), 6) if costed else None,
-        cost_by_model=cost_by_model,
         exact_match_rate=round(_rate(sum(o.exact_match for o in outcomes), n), 4),
         examples_offered_rate=round(
             _rate(sum(1 for o in outcomes if o.examples_offered), n), 4
@@ -373,14 +356,9 @@ def format_report(report: SuiteReport, *, title: str = "") -> str:
         f"total {lat['total']['p50']:.0f}/{lat['total']['p95']:.0f}"
     )
     tok = report.tokens_per_question
-    cost = "n/a" if report.cost_per_question is None else f"${report.cost_per_question:.5f}"
     lines.append(
         f"   tokens/q prompt {tok['prompt']:.0f} completion {tok['completion']:.0f}"
-        f"   cost/q {cost}"
     )
-    if report.cost_by_model:
-        by = "  ".join(f"{m}=${c:.5f}" for m, c in report.cost_by_model.items())
-        lines.append(f"   cost/q by model: {by}")
     lines.append(f"   exact_match (diagnostic, not a gate): {pct(report.exact_match_rate)}")
     if report.examples_offered_rate or report.short_circuit_rate:
         # Only on the templates arm. Printed beside the headline because an

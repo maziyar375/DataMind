@@ -39,7 +39,7 @@ from app.infra.db.models import (
     SemanticLayerRow,
 )
 from app.infra.db.session import get_sessionmaker
-from app.infra.llm.litellm_gateway import LiteLLMGateway, estimate_cost_usd
+from app.infra.llm.litellm_gateway import LiteLLMGateway
 from app.semantic import (
     SEMANTIC_PROMPT_VERSION,
     Progress,
@@ -456,11 +456,6 @@ class SemanticService:
                 fields["prompt_tokens"] = stats.get("prompt_tokens", 0)
                 fields["completion_tokens"] = stats.get("completion_tokens", 0)
                 fields["llm_latency_ms"] = stats.get("llm_latency_ms", 0)
-                fields["cost_usd"] = estimate_cost_usd(
-                    str(stats.get("model") or ""),
-                    stats.get("prompt_tokens", 0),
-                    stats.get("completion_tokens", 0),
-                )
         await self._touch_job(job_id, **fields)
 
     async def _touch_job(self, job_id: UUID, **fields: Any) -> None:

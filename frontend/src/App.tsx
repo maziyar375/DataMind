@@ -73,8 +73,8 @@ const NAV = [
   //
   // It sits here rather than up with the four you work in because it is not
   // work: it is a thing you check about work already done. Directly under
-  // LLM providers because that is the row that decides what a token costs,
-  // and directly above Administration because reading somebody else's spend
+  // LLM providers because that is the row that decides which model a token is
+  // spent on, and directly above Administration because reading somebody else's spend
   // is the first of the questions that section is full of.
   { path: '/usage', label: 'Token usage', icon: <Icon.Bars /> },
   // Was **Users**, gated on a role string (authz-ok: prose). It is now a section rather

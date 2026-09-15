@@ -137,11 +137,12 @@ backend/app/
                   statement is hostile input like any other),
                   query_service (execute_saved_sql — the tile/report entry point
                   into guarded execution), sql_draft_service,
-                  usage_service (what the models cost: one union over runs,
-                  report_runs and semantic_jobs, bucketed by day. Nulls are
+                  usage_service (how many tokens the models used: one union
+                  over runs, report_runs and semantic_jobs, bucketed by day
+                  and split by model (`model_snapshot->>'model'`). Nulls are
                   never summed as zero — they are counted into `unmeasured`
-                  and `unpriced` instead — and the per-person view inner joins
-                  `users` while the installation total joins nothing, so a
+                  instead — and the per-person view inner joins
+                  `users` while the all-users total joins nothing, so a
                   departed actor's spend leaves the first and stays in the
                   second. That gap is deliberate: an outer join would attribute
                   it to whoever remains), bootstrap, policy
@@ -307,12 +308,14 @@ frontend/src/
                             `npm run test:print`)
   pages/                    Login, Chat, DataSources, LlmProviders,
                             Dashboards, Reports,
-                            Usage (`/usage` — what the models cost, in three
-                            scopes: your own, which needs no capability
-                            because the scope IS you, and — behind
-                            `usage.read` — every person and the installation
+                            Usage (`/usage` — tokens used, per day and per
+                            model, in three scopes: your own, which needs no
+                            capability because the scope IS you, and — behind
+                            `usage.read` — every person and the all-users
                             total, as `useMatch` sub-routes. Counts only: no
-                            question, no answer and no SQL is on it),
+                            question, no answer and no SQL is on it. DataMind
+                            does not price model calls — `0031` dropped
+                            `cost_usd` everywhere),
                             Knowledge (`/knowledge` — the
                             curation console promoted out of a connection's
                             fourth tab; `KnowledgeTab` behind a connection

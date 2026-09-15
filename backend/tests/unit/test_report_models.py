@@ -59,13 +59,16 @@ MIGRATIONS = [
     # Touches `runs` as well as `report_runs`; the recorder ignores tables
     # these revisions never created, so only the report half is checked here.
     importlib.import_module("app.infra.db.migrations.versions.0011_cross_replica"),
-    # Same again: `0023` puts tokens, cost and an actor on all three run
+    # Same again: `0023` puts tokens, a cost and an actor on all three run
     # tables, and only `report_runs` was created here. Listed because leaving
     # a revision out is how this check quietly stops covering the newest
     # column — which is exactly what it did until this line was added.
     importlib.import_module(
         "app.infra.db.migrations.versions.0023_token_accounting"
     ),
+    # And `0031` takes the cost back off `report_runs` (and the other run
+    # tables, which the recorder ignores here for the same reason).
+    importlib.import_module("app.infra.db.migrations.versions.0031_drop_cost"),
 ]
 
 TABLES = (
@@ -115,6 +118,12 @@ class OpRecorder:
 
     def drop_column(self, table: str, name: str, **_kw: Any) -> None:
         self.dropped_columns.append((table, name))
+        # An upgrade that drops a column (`0031`) must take it off the recorded
+        # table too, or the comparison with the ORM keeps a column the database
+        # no longer has. A downgrade replay has created no tables, so this is a
+        # no-op there and the list above stays a full account of the DDL.
+        if table in self.tables and name in self.tables[table].c:
+            self.tables[table]._columns.remove(self.tables[table].c[name])
 
     # `0023` alters tables rather than creating them, so it reaches for three
     # operations the report revisions never used.

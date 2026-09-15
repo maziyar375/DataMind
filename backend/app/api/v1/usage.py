@@ -1,4 +1,4 @@
-"""What the models cost, read back out.
+"""How many tokens the models used, read back out.
 
 Phase 3 of [the usage plan](../../../../docs/plans/llm-observability-v2-implementation.md).
 The aggregation is `services/usage_service.py` and this is the HTTP shape over
@@ -13,8 +13,8 @@ the path: `/usage/me` is the caller and carries no capability because nothing
 can widen it, and the two that read about *other people* carry `usage.read`.
 `make authz-check` and the conformance walk can both see all three.
 
-**Counts, never content.** Every figure here is an integer, a price or a day.
-"Ali asked 40 questions costing 180k tokens" is a different disclosure from
+**Counts, never content.** Every figure here is an integer, a model name or a
+day. "Ali asked 40 questions using 180k tokens" is a different disclosure from
 "here is what Ali asked", and only the first one is reachable through this
 module — which is also why `usage.read` is a capability an Auditor holds and
 a connection's owner does not.
@@ -26,7 +26,7 @@ from datetime import datetime
 from fastapi import APIRouter
 
 from app.api.deps import CtxDep, DbDep, UsageReadDep
-from app.api.schemas import UsageBucket, UsageSeries, UsageTotal
+from app.api.schemas import UsageBucket, UsageModel, UsageSeries, UsageTotal
 from app.services import usage_service as usage
 
 router = APIRouter(prefix="/usage", tags=["usage"])
@@ -45,19 +45,26 @@ def _series(series: usage.Series) -> UsageSeries:
         actor=series.actor,
         prompt_tokens=series.prompt_tokens,
         completion_tokens=series.completion_tokens,
-        cost_usd=series.cost_usd,
         runs=series.runs,
         unmeasured=series.unmeasured,
-        unpriced=series.unpriced,
         buckets=[
             UsageBucket(
                 day=bucket.day,
                 prompt_tokens=bucket.prompt_tokens,
                 completion_tokens=bucket.completion_tokens,
-                cost_usd=bucket.cost_usd,
                 runs=bucket.runs,
             )
             for bucket in series.buckets
+        ],
+        models=[
+            UsageModel(
+                model=model.model,
+                prompt_tokens=model.prompt_tokens,
+                completion_tokens=model.completion_tokens,
+                runs=model.runs,
+                unmeasured=model.unmeasured,
+            )
+            for model in series.models
         ],
     )
 
@@ -69,7 +76,7 @@ async def my_usage(
     since: datetime | None = None,
     until: datetime | None = None,
 ) -> UsageSeries:
-    """What the caller's own questions, reports and layer generations cost.
+    """How many tokens the caller's own questions, reports and layer generations used.
 
     **No capability, and that is not an oversight.** The scope is `ctx.user_id`
     and there is no parameter that could change it — the route has two, both
@@ -120,7 +127,7 @@ async def installation_usage(
     since: datetime | None = None,
     until: datetime | None = None,
 ) -> UsageTotal:
-    """What the whole installation spent, and how much of it has no owner.
+    """What the whole installation used, and how much of it has no owner.
 
     The one structural difference from the route above: this joins `users` not
     at all, so a run whose actor has since been deleted is still counted. It is

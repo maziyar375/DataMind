@@ -39,6 +39,7 @@ Newest first. Each row is complete unless the **Caveat** column says otherwise.
 
 | Strand | Landed | Caveat | Record |
 | --- | --- | --- | --- |
+| **Usage without cost, and by model** — `cost_usd` dropped from `runs`, `report_runs`, `semantic_jobs` and `eval_results`, and nothing prices a call any more (the gateway log line, the eval report and the usage screen included); every usage scope gains a per-model split; the **Installation** tab is renamed **All users** | 2026-09-15, migration `0031` | — | this row; the screen is [reference/frontend.md](reference/frontend.md) |
 | **Token usage in the UI** — a **Token usage** rail section over three read routes, tokens on the chat step chips, `usage.read` seeded to Administrator and Auditor | 2026-09-13, all 7 phases, migration `0030` | Counts only, and **input + output only** — see below | [plans/llm-observability-v2-implementation.md](plans/llm-observability-v2-implementation.md); the spec is [plans/llm-observability-v2.md](plans/llm-observability-v2.md) |
 | **User management and access control** — users, service users, roles, teams, grants on eight resource types, access review, audit of every authorization event | 2026-09-06 → 09-08, all 11 phases, 254/254 | — | [plans/user-management-and-access-control.md](plans/user-management-and-access-control.md); the rulebook is [reference/access-control.md](reference/access-control.md) |
 | **Token accounting** — usage travels by sink, per node, per operation, per user; one structured log line per provider call | 2026-09-05, all 6 phases, migration `0023` | — | [plans/token-accounting.md](plans/token-accounting.md) |
@@ -65,8 +66,9 @@ follow-ups with their own work, not oversights:
 
 Also absent on purpose, and each for a reason in the plan's §1.7: budgets or
 quotas (this measures, it does not enforce — a cap would have to fail *closed*,
-and everything here fails open), cross-model grouping, hourly buckets, CSV
-export, and any backfill of historical rows.
+and everything here fails open), hourly buckets, CSV export, and any backfill
+of historical rows. Grouping by model, absent at first, landed on 2026-09-15;
+prices were removed the same day.
 
 ## 3. Built, and shipped **off**
 

@@ -1,12 +1,12 @@
-"""What the models cost, and the three ways a usage screen lies about it.
+"""How many tokens the models used, and the three ways a usage screen lies about it.
 
 Every test here is one of the failure modes `usage_service`'s docstring names.
 Two of them are worth stating up front because they are what the file is
 really for:
 
-* **A null summed as zero** makes a real spend read as free and an average read
-  as low, and it is the single most likely mistake in an aggregation over
-  columns that are nullable on purpose.
+* **A null summed as zero** makes an unmeasured run read as no work and an
+  average read as low, and it is the single most likely mistake in an
+  aggregation over columns that are nullable on purpose.
 * **An outer join "fixing" the departed-actor gap** attributes a former
   employee's spend to whoever remains. So the gap is asserted as *present* —
   a test that only checked the totals added up would pass with the wrong join.
@@ -72,7 +72,7 @@ async def _chat(
     *,
     prompt: int | None = 100,
     completion: int | None = 10,
-    cost: float | None = 0.5,
+    model: str | None = "gpt-4o-mini",
     day: datetime | None = None,
     owner: UUID | None = None,
 ) -> UUID:
@@ -101,7 +101,8 @@ async def _chat(
             # departed-actor test needs: `runs.owner_id` cascades through
             # `conversations`, while `actor_id` is SET NULL.
             owner_id=owner or actor, actor_id=actor, status="SUCCEEDED",
-            prompt_tokens=prompt, completion_tokens=completion, cost_usd=cost,
+            prompt_tokens=prompt, completion_tokens=completion,
+            model_snapshot={} if model is None else {"model": model},
             created_at=day or NOW,
         )
     )
@@ -110,7 +111,7 @@ async def _chat(
 
 
 async def _report_run(
-    db: AsyncSessionShim, actor: UUID, *, prompt: int = 700, cost: float | None = 2.0
+    db: AsyncSessionShim, actor: UUID, *, prompt: int = 700, model: str = "gpt-4o-mini"
 ) -> None:
     report = uuid4()
     db.add(Report(id=report, owner_id=actor, name=f"r-{report.hex[:8]}"))
@@ -119,14 +120,14 @@ async def _report_run(
         ReportRun(
             id=uuid4(), report_id=report, owner_id=actor, actor_id=actor,
             status="SUCCEEDED", prompt_tokens=prompt, completion_tokens=70,
-            cost_usd=cost, created_at=NOW,
+            model_snapshot={"model": model}, created_at=NOW,
         )
     )
     await db.flush()
 
 
 async def _semantic_job(
-    db: AsyncSessionShim, actor: UUID, *, prompt: int = 300, cost: float | None = 1.0
+    db: AsyncSessionShim, actor: UUID, *, prompt: int = 300, model: str = "gpt-4o-mini"
 ) -> None:
     connection = uuid4()
     db.add(
@@ -141,7 +142,7 @@ async def _semantic_job(
         SemanticJobRow(
             id=uuid4(), connection_id=connection, owner_id=actor, actor_id=actor,
             status="SUCCEEDED", prompt_tokens=prompt, completion_tokens=30,
-            cost_usd=cost, created_at=NOW,
+            model_snapshot={"model": model}, created_at=NOW,
         )
     )
     await db.flush()
@@ -191,12 +192,12 @@ async def test_an_unmeasured_run_adds_nothing_and_is_counted(
 ) -> None:
     """`prompt_tokens IS NULL` is *not measured*, never *no tokens*.
 
-    Summed as zero it would make an average read low and a real spend read as
-    free — and, worse, silently: the total would still look like a number.
+    Summed as zero it would make an average read low and real work read as
+    none — and, worse, silently: the total would still look like a number.
     """
     ali = await _person(db, "Ali")
-    await _chat(db, ali, prompt=100, completion=10, cost=0.5)
-    await _chat(db, ali, prompt=None, completion=None, cost=None)
+    await _chat(db, ali, prompt=100, completion=10)
+    await _chat(db, ali, prompt=None, completion=None)
 
     series = await usage.for_actor(db, ali, window=WINDOW)
 
@@ -206,59 +207,109 @@ async def test_an_unmeasured_run_adds_nothing_and_is_counted(
     assert series.unmeasured == 1
 
 
+# ── by model ─────────────────────────────────────────────────────────────
 @pytest.mark.asyncio
-async def test_an_unpriced_run_adds_nothing_to_cost_and_is_counted(
+async def test_a_scope_is_split_by_model_and_the_split_sums_to_the_total(
     db: AsyncSessionShim,
 ) -> None:
-    """Tokens but no price: every self-hosted model, on every row."""
-    ali = await _person(db, "Ali")
-    await _chat(db, ali, prompt=100, completion=10, cost=0.25)
-    await _chat(db, ali, prompt=400, completion=40, cost=None)
+    """A second grouping of the same rows, so it adds up to the same figure.
 
-    series = await usage.for_actor(db, ali, window=WINDOW)
-
-    assert series.prompt_tokens == 500
-    assert series.cost_usd == pytest.approx(0.25)
-    assert series.unpriced == 1
-    assert series.unmeasured == 0
-
-
-@pytest.mark.asyncio
-async def test_a_wholly_unpriced_scope_reports_no_cost_rather_than_zero(
-    db: AsyncSessionShim,
-) -> None:
-    """`None` and `0.0` are different claims.
-
-    The first is *no price is knowable*; the second is *it was free*. A screen
-    printing "$0.00" for a self-hosted installation would be stating the second.
+    Busiest first, which is the order a reader scans a breakdown in.
     """
     ali = await _person(db, "Ali")
-    await _chat(db, ali, prompt=100, completion=10, cost=None)
-    await _chat(db, ali, prompt=200, completion=20, cost=None)
+    await _chat(db, ali, prompt=100, completion=10, model="small")
+    await _chat(db, ali, prompt=900, completion=90, model="large")
+    await _chat(db, ali, prompt=500, completion=50, model="large")
 
     series = await usage.for_actor(db, ali, window=WINDOW)
 
-    assert series.cost_usd is None
-    assert series.unpriced == 2
-    assert series.prompt_tokens == 300
+    assert [m.model for m in series.models] == ["large", "small"]
+    assert series.models[0].prompt_tokens == 1400
+    assert series.models[0].runs == 2
+    assert sum(m.total_tokens for m in series.models) == (
+        series.prompt_tokens + series.completion_tokens
+    )
+    assert sum(m.runs for m in series.models) == series.runs
 
 
 @pytest.mark.asyncio
-async def test_an_unmeasured_row_is_not_also_counted_as_unpriced(
+async def test_the_same_model_is_one_row_across_all_three_tables(
     db: AsyncSessionShim,
 ) -> None:
-    """The two counts name different rows, so a screen can add them up.
-
-    A row that measured nothing has no price *because* it measured nothing;
-    counting it twice would overstate how much of the cost is missing.
-    """
+    """Chat, reports and layer generations on one model are one line, not three."""
     ali = await _person(db, "Ali")
-    await _chat(db, ali, prompt=None, completion=None, cost=None)
+    await _chat(db, ali, prompt=100, completion=10, model="shared")
+    await _report_run(db, ali, prompt=700, model="shared")
+    await _semantic_job(db, ali, prompt=300, model="other")
 
     series = await usage.for_actor(db, ali, window=WINDOW)
 
-    assert series.unmeasured == 1
-    assert series.unpriced == 0
+    by_name = {m.model: m for m in series.models}
+    assert set(by_name) == {"shared", "other"}
+    assert by_name["shared"].prompt_tokens == 800
+    assert by_name["shared"].runs == 2
+
+
+@pytest.mark.asyncio
+async def test_a_run_with_no_recorded_model_is_kept_under_an_empty_name(
+    db: AsyncSessionShim,
+) -> None:
+    """Dropped, it would leave a breakdown that does not add up to its total."""
+    ali = await _person(db, "Ali")
+    await _chat(db, ali, prompt=100, completion=10, model=None)
+    await _chat(db, ali, prompt=50, completion=5, model="named")
+
+    series = await usage.for_actor(db, ali, window=WINDOW)
+
+    assert {m.model for m in series.models} == {"", "named"}
+    assert sum(m.prompt_tokens for m in series.models) == 150
+
+
+@pytest.mark.asyncio
+async def test_an_unmeasured_run_is_counted_against_its_model(
+    db: AsyncSessionShim,
+) -> None:
+    ali = await _person(db, "Ali")
+    await _chat(db, ali, prompt=None, completion=None, model="quiet")
+    await _chat(db, ali, prompt=100, completion=10, model="quiet")
+
+    (model,) = (await usage.for_actor(db, ali, window=WINDOW)).models
+
+    assert model.runs == 2
+    assert model.unmeasured == 1
+    assert model.prompt_tokens == 100
+
+
+@pytest.mark.asyncio
+async def test_per_actor_splits_each_person_by_their_own_models(
+    db: AsyncSessionShim,
+) -> None:
+    ali = await _person(db, "Ali")
+    reza = await _person(db, "Reza")
+    await _chat(db, ali, prompt=100, completion=10, model="small")
+    await _chat(db, reza, prompt=300, completion=30, model="large")
+
+    people = {s.actor: s for s in await usage.per_actor(db, window=WINDOW)}
+
+    assert [m.model for m in people["Ali"].models] == ["small"]
+    assert [m.model for m in people["Reza"].models] == ["large"]
+
+
+@pytest.mark.asyncio
+async def test_the_installation_is_split_by_model_including_departed_actors(
+    db: AsyncSessionShim,
+) -> None:
+    """The total joins nothing, and neither does its model split."""
+    ali = await _person(db, "Ali")
+    await _chat(db, ali, prompt=100, completion=10, model="small")
+    await _chat(db, ali, prompt=300, completion=30, model="large")
+    await db.execute(sa.update(Run).where(Run.prompt_tokens == 300).values(actor_id=None))
+    await db.flush()
+
+    total = await usage.installation(db, window=WINDOW)
+
+    assert [m.model for m in total.models] == ["large", "small"]
+    assert sum(m.prompt_tokens for m in total.models) == total.prompt_tokens == 400
 
 
 # ── the departed actor, asserted as a gap rather than trusted to a comment ─
@@ -284,12 +335,12 @@ async def test_deleting_an_actor_drops_them_from_per_actor_and_keeps_the_total(
     """
     ali = await _person(db, "Ali")
     leaving = await _person(db, "Leaving")
-    await _chat(db, ali, prompt=100, completion=10, cost=0.5)
+    await _chat(db, ali, prompt=100, completion=10)
     # Asked through a thread **Ali** owns, which is what a shared connection
     # looks like and the reason `actor_id` exists as a separate column. A run
     # the leaver also owned would be deleted outright by the cascade through
     # `conversations`, and there would be no spend left to attribute.
-    await _chat(db, leaving, prompt=700, completion=70, cost=3.5, owner=ali)
+    await _chat(db, leaving, prompt=700, completion=70, owner=ali)
 
     before = await usage.installation(db, window=WINDOW)
     assert before.prompt_tokens == 800
@@ -325,15 +376,14 @@ async def test_chat_reports_and_semantic_jobs_land_in_one_series(
     fixture writes all three rather than trusting the `select` reads right.
     """
     ali = await _person(db, "Ali")
-    await _chat(db, ali, prompt=100, completion=10, cost=0.5)
-    await _report_run(db, ali, prompt=700, cost=2.0)
-    await _semantic_job(db, ali, prompt=300, cost=1.0)
+    await _chat(db, ali, prompt=100, completion=10)
+    await _report_run(db, ali, prompt=700)
+    await _semantic_job(db, ali, prompt=300)
 
     series = await usage.for_actor(db, ali, window=WINDOW)
 
     assert series.prompt_tokens == 1100
     assert series.completion_tokens == 110
-    assert series.cost_usd == pytest.approx(3.5)
     assert series.runs == 3
 
 
@@ -390,8 +440,8 @@ async def test_an_empty_scope_is_a_zero_series_and_never_a_failure(
     assert series.actor == "Ali"
     assert series.actor_id == ali
     assert series.prompt_tokens == 0
-    assert series.cost_usd is None
     assert series.buckets == []
+    assert series.models == []
     assert series.runs == 0
 
 
@@ -402,7 +452,7 @@ async def test_an_empty_installation_is_a_zero_series(db: AsyncSessionShim) -> N
     total = await usage.installation(db, window=WINDOW)
 
     assert total.prompt_tokens == 0
-    assert total.cost_usd is None
+    assert total.models == []
     assert total.unattributed == 0
     assert total.buckets == []
 
@@ -414,7 +464,7 @@ async def test_by_node_attributes_a_runs_spend_to_the_nodes_that_caused_it(
 ) -> None:
     """And omits the nodes that called no model.
 
-    A run costing 12k tokens is not the same fact as the schema block being 9k
+    A run using 12k tokens is not the same fact as the schema block being 9k
     of it, and a zero beside `validate` would read as a measurement rather than
     the absence of one.
     """

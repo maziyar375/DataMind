@@ -163,5 +163,5 @@ def test_report_dict_is_json_serialisable() -> None:
     import json
 
     r = aggregate([_outcome(outcome=OUTCOME_MATCH, execution_match=True, execution_ok=True,
-                            succeeded_on_attempt=1, cost_usd=0.0001, model="gpt-x")])
+                            succeeded_on_attempt=1, model="gpt-x")])
     json.dumps(metrics.report_to_dict(r))  # must not raise

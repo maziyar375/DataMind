@@ -68,7 +68,7 @@ _LABELS: dict[Capability, str] = {
     Capability.ROLE_MANAGE: "Create roles and assign them to people.",
     Capability.AUDIT_READ: "Read the audit log.",
     Capability.ACCESS_REVIEW: "Ask who can reach a resource, and why.",
-    Capability.USAGE_READ: "Read what everybody's questions cost in tokens.",
+    Capability.USAGE_READ: "Read how many tokens everybody's questions used.",
     Capability.CONNECTION_CREATE: "Add database connections.",
     Capability.LLM_CONFIG_CREATE: "Add model providers.",
     Capability.DASHBOARD_CREATE: "Create dashboards.",

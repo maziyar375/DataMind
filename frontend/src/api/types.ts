@@ -225,39 +225,47 @@ export interface AuditEntry {
 }
 
 // ── token usage ────────────────────────────────────────────────────────────
-// `GET /usage/*`. Counts, never content: an integer, a price and a day. "Ali
-// asked 40 questions costing 180k tokens" is a different disclosure from
+// `GET /usage/*`. Counts, never content: an integer, a model name and a day.
+// "Ali asked 40 questions using 180k tokens" is a different disclosure from
 // "here is what Ali asked", and only the first one is on this wire.
 
-/**
- * One day's spend, for one scope.
- *
- * `cost_usd` is `null` — not `0` — when nothing in the day was priced, which
- * is every self-hosted model litellm cannot look up a price for. Zero is a
- * measurement and this is the absence of one; a chart drawing them the same
- * way would report a deployment as free.
- */
+/** One day's tokens, for one scope. */
 export interface UsageBucket {
   /** `YYYY-MM-DD`, bucketed at UTC. */
   day: string
   prompt_tokens: number
   completion_tokens: number
-  cost_usd: number | null
   /** How many operations are behind the figures above. */
   runs: number
 }
 
 /**
- * One scope's usage: a total, and the days it is made of.
+ * One model's share of a scope, over the whole window.
  *
- * The total equals the sum of the buckets — both come from the same rows in
- * the same query, so the two cannot drift, and a screen may render either.
+ * `model` is the name the run recorded — what the provider was asked for, so
+ * two configs pointing at the same model are one row — or `''` where a row
+ * recorded none. Those rows are kept rather than dropped, so the models add
+ * up to the scope's total.
+ */
+export interface UsageModel {
+  model: string
+  prompt_tokens: number
+  completion_tokens: number
+  runs: number
+  unmeasured: number
+}
+
+/**
+ * One scope's usage: a total, the days it is made of, and the models.
  *
- * `unmeasured` and `unpriced` are why a total may not be printed bare.
- * Non-zero `unmeasured` means operations reported no token count at all and
- * every figure here understates; non-zero `unpriced` means `cost_usd` covers
- * only part of the work. Two counts rather than one flag, because *how*
- * partial a number is decides whether anybody should act on it.
+ * The total equals the sum of the buckets and the sum of the models — all
+ * three come from the same rows, so they cannot drift, and a screen may
+ * render any of them.
+ *
+ * `unmeasured` is why a total may not be printed bare: non-zero means
+ * operations reported no token count at all and every figure here
+ * understates. A count rather than a flag, because *how* partial a number is
+ * decides whether anybody should act on it.
  */
 export interface UsageSeries {
   /** `null` on the installation total, which is nobody's. */
@@ -266,11 +274,11 @@ export interface UsageSeries {
   actor: string
   prompt_tokens: number
   completion_tokens: number
-  cost_usd: number | null
   runs: number
   unmeasured: number
-  unpriced: number
   buckets: UsageBucket[]
+  /** Busiest first, as the server ranks them. */
+  models: UsageModel[]
 }
 
 /**

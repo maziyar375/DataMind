@@ -63,14 +63,13 @@ ROLLUP = sa.text(
     """
     SELECT u.email,
            SUM(x.prompt_tokens)     AS prompt_tokens,
-           SUM(x.completion_tokens) AS completion_tokens,
-           SUM(x.cost_usd)          AS cost_usd
+           SUM(x.completion_tokens) AS completion_tokens
     FROM (
-        SELECT actor_id, prompt_tokens, completion_tokens, cost_usd FROM runs
+        SELECT actor_id, prompt_tokens, completion_tokens FROM runs
         UNION ALL
-        SELECT actor_id, prompt_tokens, completion_tokens, cost_usd FROM report_runs
+        SELECT actor_id, prompt_tokens, completion_tokens FROM report_runs
         UNION ALL
-        SELECT actor_id, prompt_tokens, completion_tokens, cost_usd FROM semantic_jobs
+        SELECT actor_id, prompt_tokens, completion_tokens FROM semantic_jobs
     ) AS x
     JOIN users u ON u.id = x.actor_id
     GROUP BY u.email
@@ -205,15 +204,15 @@ async def test_a_semantic_job_records_who_asked() -> None:
 def test_deleting_a_user_leaves_their_usage_rows_intact(session: Any) -> None:
     """`SET NULL`, not `CASCADE`.
 
-    A row saying 12,000 tokens were spent is a true record of a real cost, and
+    A row saying 12,000 tokens were spent is a true record of real work, and
     it stays true after the person who caused it leaves. Under `CASCADE` a
     departing employee's spend would disappear from every historical total that
     ever included it, silently and retroactively — the same trade CLAUDE.md
     refuses for `runs.connection_id` and `runs.llm_config_id`.
     """
     world = _world(session)
-    _spend(session, world, run=(100, 10, 0.5), report=(1000, 200, 2.0),
-           semantic=(50, 5, None))
+    _spend(session, world, run=(100, 10), report=(1000, 200),
+           semantic=(50, 5))
 
     _delete_user(session, world["asker"])
 
@@ -240,8 +239,8 @@ def test_an_orphaned_row_leaves_the_per_user_rollup_rather_than_skewing_it(
     honest answer to a question the row can no longer support.
     """
     world = _world(session)
-    _spend(session, world, run=(100, 10, 0.5))
-    assert session.execute(ROLLUP).all() == [("asker@example.test", 100, 10, 0.5)]
+    _spend(session, world, run=(100, 10))
+    assert session.execute(ROLLUP).all() == [("asker@example.test", 100, 10)]
 
     _delete_user(session, world["asker"])
 
@@ -260,11 +259,11 @@ def test_a_users_total_sums_all_three_kinds_of_work(session: Any) -> None:
     all three carry the same four columns under the same names.
     """
     world = _world(session)
-    _spend(session, world, run=(100, 10, 0.5), report=(1000, 200, 2.0),
-           semantic=(50, 5, 0.25))
+    _spend(session, world, run=(100, 10), report=(1000, 200),
+           semantic=(50, 5))
 
     assert session.execute(ROLLUP).all() == [
-        ("asker@example.test", 1150, 215, 2.75)
+        ("asker@example.test", 1150, 215)
     ]
 
 
@@ -277,30 +276,12 @@ def test_two_people_are_not_summed_together(session: Any) -> None:
     that grouped by owner would bill one person for both.
     """
     world = _world(session)
-    _spend(session, world, run=(100, 10, 0.5))
-    _spend(session, world, actor=world["other"], run=(7, 3, 0.01))
+    _spend(session, world, run=(100, 10))
+    _spend(session, world, actor=world["other"], run=(7, 3))
 
     assert {
-        email: prompt for email, prompt, _c, _cost in session.execute(ROLLUP)
+        email: prompt for email, prompt, _c in session.execute(ROLLUP)
     } == {"asker@example.test": 100, "other@example.test": 7}
-
-
-def test_an_unpriced_model_does_not_report_a_real_spend_as_free(
-    session: Any,
-) -> None:
-    """`SUM` skips nulls; it must never be helped to treat one as zero.
-
-    A self-hosted deployment prices as null on every row, and the honest read
-    of that total is "unknown", not "$0.00". The tokens are still summed, which
-    is what makes the null visible rather than absolute: non-zero tokens beside
-    a null cost is the shape that says *measured, but unpriceable*.
-    """
-    world = _world(session)
-    _spend(session, world, run=(100, 10, None), semantic=(50, 5, None))
-
-    [(_email, prompt, completion, cost)] = session.execute(ROLLUP).all()
-    assert (prompt, completion) == (150, 15)
-    assert cost is None, "an unpriced model stays unpriced, never zero"
 
 
 def test_a_row_that_measured_nothing_does_not_drag_a_total_down(
@@ -314,9 +295,9 @@ def test_a_row_that_measured_nothing_does_not_drag_a_total_down(
     mean, which is why the plan's second rule says a null is never "no tokens".
     """
     world = _world(session)
-    _spend(session, world, run=(100, 10, 0.5), report=(None, None, None))
+    _spend(session, world, run=(100, 10), report=(None, None))
 
-    [(_email, prompt, completion, _cost)] = session.execute(ROLLUP).all()
+    [(_email, prompt, completion)] = session.execute(ROLLUP).all()
     assert (prompt, completion) == (100, 10)
 
     measured = session.execute(
@@ -394,21 +375,20 @@ def _spend(
     world: dict[str, Any],
     *,
     actor: uuid.UUID | None = None,
-    run: tuple[int | None, int | None, float | None] | None = None,
-    report: tuple[int | None, int | None, float | None] | None = None,
-    semantic: tuple[int | None, int | None, float | None] | None = None,
+    run: tuple[int | None, int | None] | None = None,
+    report: tuple[int | None, int | None] | None = None,
+    semantic: tuple[int | None, int | None] | None = None,
 ) -> None:
     """Record one unit of each kind of work: owned by `owner`, caused by
     `actor`, and each carrying the four columns the rollup reads."""
     tables = session.info["metadata"].tables
     actor_id = actor or world["asker"]
 
-    def _usage(spend: tuple[int | None, int | None, float | None]) -> dict[str, Any]:
-        prompt, completion, cost = spend
+    def _usage(spend: tuple[int | None, int | None]) -> dict[str, Any]:
+        prompt, completion = spend
         return {
             "owner_id": world["owner"], "actor_id": actor_id,
             "prompt_tokens": prompt, "completion_tokens": completion,
-            "cost_usd": cost,
         }
 
     if run is not None:

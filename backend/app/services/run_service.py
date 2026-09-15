@@ -65,7 +65,7 @@ from app.infra.db.models import (
 )
 from app.infra.events.bus import event_bus
 from app.infra.events.listener import notify_run_event
-from app.infra.llm.litellm_gateway import LiteLLMGateway, estimate_cost_usd
+from app.infra.llm.litellm_gateway import LiteLLMGateway
 from app.pipeline.nodes import NodeDeps, _describe_schema, _render_history
 from app.pipeline.pipeline import AnalyticsPipeline
 from app.pipeline.prompts import PROMPT_VERSION
@@ -133,23 +133,6 @@ def _model_snapshot(llm_config: LlmConfig, connection: DatabaseConnection) -> di
     if llm_config.params:
         snapshot["params"] = dict(llm_config.params)
     return snapshot
-
-
-def _priced_model(state: RunState, run: Run) -> str:
-    """The name to price this run under — measured first, configured second.
-
-    A node's bucket carries the **resolved** name, which is what the gateway
-    actually sent (an `openai/` prefix and all) and therefore what litellm's
-    price map is keyed on. `model_snapshot` holds the name as the row spells
-    it, which is the right thing to *show* a reader and the wrong thing to look
-    up. Falling back to it keeps a run costed when every call was streamed and
-    no usage came back — `estimate_cost_usd` returns None over zero tokens
-    anyway, so the fallback costs nothing and never invents a price.
-    """
-    for bucket in state.node_usage.values():
-        if bucket.model:
-            return bucket.model
-    return str((run.model_snapshot or {}).get("model", "") or "")
 
 
 class RunService:
@@ -809,12 +792,6 @@ class RunService:
         run.db_latency_ms = state.db_latency_ms
         run.prompt_tokens = state.prompt_tokens
         run.completion_tokens = state.completion_tokens
-        # Best-effort, and null is the expected state for a self-hosted model
-        # litellm's price map does not know. Deliberately not coerced to 0.0:
-        # a real spend reported as free is worse than one reported as unknown.
-        run.cost_usd = estimate_cost_usd(
-            _priced_model(state, run), state.prompt_tokens, state.completion_tokens
-        )
         if run.started_at:
             run.total_latency_ms = int(
                 (run.finished_at - run.started_at).total_seconds() * 1000
@@ -1463,9 +1440,6 @@ class RunService:
                 row.completion_tokens or 0
             ) + completion.completion_tokens
             row.llm_latency_ms = (row.llm_latency_ms or 0) + completion.latency_ms
-            row.cost_usd = estimate_cost_usd(
-                llm_config.model, row.prompt_tokens, row.completion_tokens
-            )
             await self._db.commit()
         except Exception:  # pragma: no cover - defensive
             log.warning(

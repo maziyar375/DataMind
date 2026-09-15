@@ -125,8 +125,8 @@ async def test_my_usage_returns_only_the_callers_rows(db: AsyncSessionShim) -> N
     """
     other = await _person(db, "Aaron First")
     mine = await _person(db, "Zoe Last")
-    await _chat(db, other, prompt=9000, completion=900, cost=40.0)
-    await _chat(db, mine, prompt=100, completion=10, cost=0.5)
+    await _chat(db, other, prompt=9000, completion=900, model="theirs")
+    await _chat(db, mine, prompt=100, completion=10, model="mine")
 
     async with _client(db, caller=mine) as client:
         response = await client.get(
@@ -139,6 +139,17 @@ async def test_my_usage_returns_only_the_callers_rows(db: AsyncSessionShim) -> N
     assert body["prompt_tokens"] == 100
     assert body["completion_tokens"] == 10
     assert body["runs"] == 1
+    # The model split is scoped the same way: the other person's model is not
+    # in it, and the one row that is carries only the caller's tokens.
+    assert body["models"] == [
+        {
+            "model": "mine", "prompt_tokens": 100, "completion_tokens": 10,
+            "runs": 1, "unmeasured": 0,
+        }
+    ]
+    # No price anywhere on the wire.
+    assert "cost_usd" not in body
+    assert all("cost_usd" not in bucket for bucket in body["buckets"])
 
 
 async def test_my_usage_needs_no_capability_and_is_never_403(
@@ -320,7 +331,7 @@ async def test_the_installation_total_carries_the_size_of_the_gap(
     """
     admin = await _person(db, "Admin Ada")
     departed = await _person(db, "Departed Dana")
-    await _chat(db, departed, prompt=300, completion=30, cost=1.0)
+    await _chat(db, departed, prompt=300, completion=30)
     await db.execute(_orphan(departed))
 
     async with _client(

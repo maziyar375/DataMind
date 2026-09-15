@@ -186,23 +186,21 @@ export function usageSpec(
 
 // ── the summary beside the chart ──────────────────────────────────────────
 /**
- * What a scope spent, and — where it matters — how much of that is unknown.
+ * What a scope used, and — where it matters — how much of that is unknown.
  *
- * The two counts on the wire exist because a partial total that does not say
- * it is partial is the failure both carried-over rules name. `unmeasured` is
- * operations that reported no token count at all, so every token figure
- * understates; `unpriced` is operations that reported tokens and no price, so
- * the cost covers only part of the work. Two counts and not one flag, because
- * *how* partial a number is decides whether anybody should act on it — three
- * unpriced calls out of four hundred is noise, and three out of four is not a
- * cost figure at all.
+ * `unmeasured` on the wire exists because a partial total that does not say it
+ * is partial is the failure the carried-over rule names: it counts operations
+ * that reported no token count at all, so every token figure understates. A
+ * count and not a flag, because *how* partial a number is decides whether
+ * anybody should act on it — three unmeasured calls out of four hundred is
+ * noise, and three out of four is not a usage figure at all.
  *
- * Both are therefore rendered as **sentences**, next to the number, in the
+ * It is therefore rendered as a **sentence**, next to the number, in the
  * reader's own language rather than as an asterisk. A footnote is a thing a
  * reader finds after they have already believed the number.
  */
 export interface UsageTotals {
-  /** Nothing at all happened in this window. Distinct from "nothing cost". */
+  /** Nothing at all happened in this window. Distinct from "used nothing". */
   empty: boolean
   runs: number
   promptTokens: number
@@ -217,14 +215,8 @@ export interface UsageTotals {
    * chip follows one layer down.
    */
   tokens: string | null
-  /** The figure, or `null` where there is not one to report. */
-  costUsd: number | null
-  /** `$12.34`, `$0.0042`, `< $0.0001` — or `null`, on the same terms. */
-  cost: string | null
   /** Why every token figure above understates. `null` when none does. */
   unmeasuredNote: string | null
-  /** How partial the cost is. `null` when it is whole, or absent entirely. */
-  costNote: string | null
 }
 
 /**
@@ -249,27 +241,6 @@ function group(digits: string): string {
   return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
 }
 
-/**
- * A cost, at the precision the figure deserves.
- *
- * Two places above a cent, four below it, and **`< $0.0001` rather than
- * `$0.0000`** for real spend too small to write: rounding a measurement down
- * to a zero is the same lie as summing a null as one, and this is the only
- * place on this screen where it could happen silently.
- *
- * The dollars keep both decimal places whatever the figure is — `$4.20`, not
- * `$4.2`, which reads as a truncation rather than a price.
- */
-export function formatCost(value: number): string {
-  if (value >= 1) {
-    const [whole, fraction] = value.toFixed(2).split('.')
-    return `$${group(whole)}.${fraction}`
-  }
-  if (value >= 0.01) return `$${value.toFixed(2)}`
-  if (value >= 0.0001) return `$${value.toFixed(4)}`
-  return value > 0 ? '< $0.0001' : '$0.00'
-}
-
 /** `1 operation`, `12 operations`. */
 function operations(n: number): string {
   return n === 1 ? '1 operation' : `${n} operations`
@@ -291,27 +262,15 @@ export function usageTotals(series: UsageSeries): UsageTotals {
       completionTokens,
       totalTokens,
       tokens: totalTokens > 0 ? formatTokens(totalTokens) : null,
-      costUsd: null,
-      cost: null,
       unmeasuredNote: null,
-      costNote: null,
     }
   }
 
   const unmeasured = Math.max(0, series.unmeasured)
-  const unpriced = Math.max(0, series.unpriced)
 
   // Every operation in the scope reported nothing, so the zero below is
-  // arithmetic over an empty set rather than a measurement of free work.
+  // arithmetic over an empty set rather than a measurement of no work.
   const nothingMeasured = unmeasured >= runs && totalTokens <= 0
-
-  // The refusal, and it is not defensive politeness about a case that cannot
-  // happen: `cost_usd` is summed with `SUM`, which returns null only when
-  // *every* row is null, so a backend that ever coalesced it to zero would
-  // arrive here as a `0.0` covering a fully unpriced scope. This is the line
-  // that refuses to print it.
-  const wholesalePriceless = unpriced >= runs
-  const costUsd = wholesalePriceless ? null : series.cost_usd
 
   return {
     empty: false,
@@ -320,13 +279,10 @@ export function usageTotals(series: UsageSeries): UsageTotals {
     completionTokens,
     totalTokens,
     tokens: nothingMeasured ? null : formatTokens(totalTokens),
-    costUsd,
-    cost: costUsd == null ? null : formatCost(costUsd),
     // A scope of one is written as one rather than as a ratio of itself.
-    // "1 of 1 operation reported no token count" and "no price is known for
-    // any of these 1 operation" are both arithmetically right and neither is
-    // a sentence — and a window holding a single run is the ordinary case on
-    // a quiet installation, not an edge.
+    // "1 of 1 operation reported no token count" is arithmetically right and
+    // not a sentence — and a window holding a single run is the ordinary case
+    // on a quiet installation, not an edge.
     unmeasuredNote:
       unmeasured <= 0
         ? null
@@ -334,15 +290,62 @@ export function usageTotals(series: UsageSeries): UsageTotals {
           ? 'This operation reported no token count, so the figures here understate.'
           : `${unmeasured} of ${operations(runs)} reported no token count, `
             + 'so every figure here understates.',
-    costNote:
-      unpriced <= 0
-        ? null
-        : wholesalePriceless
-          ? runs === 1
-            ? 'No price is known for this operation.'
-            : `No price is known for any of these ${operations(runs)}.`
-          : `Cost is known for ${runs - unpriced} of ${operations(runs)}.`,
   }
+}
+
+// ── by model ──────────────────────────────────────────────────────────────
+/** What a run that recorded no model name is listed as. */
+export const UNRECORDED_MODEL = 'Model not recorded'
+
+/** One line of the by-model table, already written for reading. */
+export interface ModelRow {
+  /** The server's key for the row — the recorded name, `''` for none. */
+  key: string
+  /** The name to show: the model, or `UNRECORDED_MODEL`. */
+  label: string
+  /** Whether a model was recorded at all, so the page can set it apart. */
+  recorded: boolean
+  totalTokens: number
+  /** Grouped figures, or `null` where nothing on this model reported a count. */
+  tokens: string | null
+  input: string | null
+  output: string | null
+  /**
+   * This model's part of the scope's measured tokens: `62%`, `< 1%` — or
+   * `null` when the scope measured nothing, so there is no whole to be part of.
+   */
+  share: string | null
+  runs: number
+}
+
+/**
+ * The by-model table's rows, in the order the server ranked them.
+ *
+ * A share that rounds to zero is written `< 1%` rather than `0%`, for the
+ * reason the token tiles refuse a zero nobody measured: a model that did real
+ * work is not a model that did none.
+ */
+export function modelRows(series: UsageSeries): ModelRow[] {
+  const whole = series.prompt_tokens + series.completion_tokens
+  return series.models.map((model) => {
+    const totalTokens = model.prompt_tokens + model.completion_tokens
+    const nothingMeasured = model.unmeasured >= model.runs && totalTokens <= 0
+    const percent = whole > 0 ? (totalTokens / whole) * 100 : null
+    return {
+      key: model.model,
+      label: model.model || UNRECORDED_MODEL,
+      recorded: model.model !== '',
+      totalTokens,
+      tokens: nothingMeasured ? null : formatTokens(totalTokens),
+      input: nothingMeasured ? null : formatTokens(model.prompt_tokens),
+      output: nothingMeasured ? null : formatTokens(model.completion_tokens),
+      share:
+        percent === null ? null
+        : percent > 0 && percent < 1 ? '< 1%'
+        : `${Math.round(percent)}%`,
+      runs: model.runs,
+    }
+  })
 }
 
 // ── the window ────────────────────────────────────────────────────────────

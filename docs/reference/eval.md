@@ -278,8 +278,9 @@ are listed in the order of importance the design fixed:
    schema but none of the mandatory rules, so that is where a regression there
    would surface).
 4. **Repair distribution** — succeeded on attempt 1 vs 2 vs 3 vs failed.
-5. **Latency p50/p95** split by llm / validate / db, tokens per question, and
-   cost per question and per model.
+5. **Latency p50/p95** split by llm / validate / db, and tokens per question.
+   The harness no longer reports a cost — DataMind does not price model calls
+   (migration `0031` dropped `eval_results.cost_usd`).
 
 Plus a per-tag breakdown, so "joins got worse" is visible rather than averaged
 away.
