@@ -15,6 +15,12 @@ export interface ProblemDetail {
    * than once per surface that can be refused.
    */
   reason?: DenialReason
+  /** `E_SEMANTIC_CONFLICT`: who wrote the layer after this editor read it. */
+  revision?: number
+  published_version?: number | null
+  updated_by?: string | null
+  updated_by_name?: string
+  updated_at?: string | null
 }
 
 /** The shape `services/policy.require` attaches to every 403 it raises. */
@@ -675,6 +681,69 @@ export interface SemanticLayer {
   generated_at: string | null
   edited_at: string | null
   job: SemanticJob | null
+  /** The concurrency token. Sent back as `base_revision` on the next write. */
+  revision: number
+  /** Which version `document` is — `null` before anything was written. */
+  published_version: number | null
+  published_by_name: string
+  published_at: string | null
+  published_note: string
+  published_origin: Record<string, unknown>
+}
+
+/** One entry that changed, in the server's vocabulary (`app/semantic/diff.py`). */
+export interface SemanticChange {
+  kind: string
+  entity_key: string
+  item_key: string
+  affects_sql: boolean
+  fields: string[]
+  before: Record<string, unknown>
+  after: Record<string, unknown>
+}
+
+export interface SemanticVersionSummary {
+  version: number
+  parent_version: number | null
+  published_by: string | null
+  published_by_name: string
+  note: string
+  /** `generated_job_ids`, `restored_from`, `deleted`, `migrated`. */
+  origin: Record<string, unknown>
+  schema_version: number
+  entity_count: number
+  metric_count: number
+  reviewed_count: number
+  issue_count: number
+  created_at: string
+  /** Change counts by kind. */
+  changes: Record<string, number>
+  affects_sql: boolean
+}
+
+export interface SemanticVersionList {
+  versions: SemanticVersionSummary[]
+  revision: number
+  published_version: number | null
+  next_before: number | null
+}
+
+export interface SemanticChangeList {
+  version: number
+  against: number | null
+  changes: SemanticChange[]
+}
+
+export interface SemanticHistoryEntry {
+  version: number
+  kind: string
+  entity_key: string
+  item_key: string
+  affects_sql: boolean
+  published_by_name: string
+  note: string
+  origin: Record<string, unknown>
+  created_at: string
 }
 
 /** One declared slot in a template. */
@@ -1107,6 +1176,8 @@ export interface RunDetail {
   model_snapshot: Record<string, unknown>
   /** The database this turn was asked against; null once it is deleted. */
   connection_id: string | null
+  /** Which semantic layer version answered — 0 for none, null before versions. */
+  semantic_layer_version?: number | null
   /**
    * What the whole turn cost, as the run row recorded it — and it equals the
    * sum over `steps`, because both are written from the same calls.

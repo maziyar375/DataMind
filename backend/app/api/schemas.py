@@ -970,6 +970,15 @@ class SemanticLayerRead(BaseModel):
     generated_at: datetime | None = None
     edited_at: datetime | None = None
     job: SemanticJobRead | None = None
+    #: The concurrency token. Send it back as `base_revision` on the next write.
+    revision: int = 0
+    #: Which version `document` is, and who published it when, with what note —
+    #: the editor's status line. `None` when nothing has ever been written.
+    published_version: int | None = None
+    published_by_name: str = ""
+    published_at: datetime | None = None
+    published_note: str = ""
+    published_origin: dict[str, Any] = Field(default_factory=dict)
 
 
 class SemanticGenerateRequest(BaseModel):
@@ -983,6 +992,101 @@ class SemanticGenerateRequest(BaseModel):
 
 class SemanticSaveRequest(BaseModel):
     document: dict[str, Any]
+    #: The `revision` the document was edited from. Optional in the schema only
+    #: so that leaving it out is refused with its own code
+    #: (`E_SEMANTIC_BASE_REVISION_REQUIRED`) rather than a generic 422 — a
+    #: client that omits it has not been updated, and silently overwriting on
+    #: its behalf is the lost update the revision exists to stop.
+    base_revision: int | None = None
+    #: Why. Optional; the change list is the what.
+    note: str = Field(default="", max_length=2_000)
+
+
+class SemanticRestoreRequest(BaseModel):
+    base_revision: int | None = None
+    note: str = Field(default="", max_length=2_000)
+
+
+class SemanticDiffRequest(BaseModel):
+    """Two documents to compare. Nothing is saved, as with `/check`."""
+
+    before: dict[str, Any]
+    after: dict[str, Any]
+
+
+class SemanticChangeRead(BaseModel):
+    """One entry that changed, in `app/semantic/diff.py`'s vocabulary.
+
+    `before` and `after` hold only the fields named in `fields` (or, for an
+    added or removed entry, what names it) — enough to write a sentence, and
+    no more of the document than that.
+    """
+
+    kind: str
+    entity_key: str = ""
+    item_key: str = ""
+    affects_sql: bool = False
+    fields: list[str] = Field(default_factory=list)
+    before: dict[str, Any] = Field(default_factory=dict)
+    after: dict[str, Any] = Field(default_factory=dict)
+
+
+class SemanticVersionSummary(BaseModel):
+    """One row of the History list."""
+
+    version: int
+    parent_version: int | None = None
+    published_by: UUID | None = None
+    #: Empty for a version with no author: the one recorded at migration, or a
+    #: generation whose requester has since been deleted.
+    published_by_name: str = ""
+    note: str = ""
+    #: `generated_job_ids`, `restored_from`, `deleted`, `migrated`.
+    origin: dict[str, Any] = Field(default_factory=dict)
+    schema_version: int = 0
+    entity_count: int = 0
+    metric_count: int = 0
+    reviewed_count: int = 0
+    issue_count: int = 0
+    created_at: datetime
+    #: Change counts by kind.
+    changes: dict[str, int] = Field(default_factory=dict)
+    #: True when any change alters numbers rather than wording.
+    affects_sql: bool = False
+
+
+class SemanticVersionList(BaseModel):
+    versions: list[SemanticVersionSummary] = Field(default_factory=list)
+    revision: int = 0
+    published_version: int | None = None
+    #: Pass as `before` for the next page; `None` on the last one.
+    next_before: int | None = None
+
+
+class SemanticVersionRead(SemanticVersionSummary):
+    document: dict[str, Any] = Field(default_factory=dict)
+
+
+class SemanticChangeList(BaseModel):
+    version: int
+    #: What the changes are measured against: the parent by default. `None`
+    #: means the empty document (version 1, or no parent).
+    against: int | None = None
+    changes: list[SemanticChangeRead] = Field(default_factory=list)
+
+
+class SemanticHistoryEntry(BaseModel):
+    """One change to one entry, with the version it landed in."""
+
+    version: int
+    kind: str
+    entity_key: str = ""
+    item_key: str = ""
+    affects_sql: bool = False
+    published_by_name: str = ""
+    note: str = ""
+    origin: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
 
 
 class SemanticExpressionCheck(BaseModel):
@@ -2541,6 +2645,9 @@ class RunRead(BaseModel):
     #: in `model_snapshot`, since a past answer has to stay explainable after
     #: its source is deleted. Null when that has happened.
     connection_id: UUID | None = None
+    #: Which semantic layer version answered: `0` when none reached the prompt,
+    #: `None` on a run from before versions were recorded (migration `0032`).
+    semantic_layer_version: int | None = None
     steps: list[RunStepRead] = Field(default_factory=list)
     artifacts: list[ArtifactRead] = Field(default_factory=list)
     queries: list[GeneratedQueryRead] = Field(default_factory=list)

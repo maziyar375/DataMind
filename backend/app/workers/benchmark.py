@@ -90,7 +90,7 @@ from app.services.query_service import (
     resolve_llm,
     secret_box,
 )
-from app.services.semantic_service import load_document
+from app.services.semantic_service import load_layer
 
 log = get_logger(__name__)
 
@@ -166,7 +166,10 @@ async def execute_benchmark_run(
     # bound to this snapshot, and absent when the switch is off. Loaded once per
     # run, as the ask path loads it once per question — the snapshot does not
     # move between members, so neither does the layer.
-    semantic = await load_document(db, connection, snapshot=snapshot)
+    layer = await load_layer(db, connection, snapshot=snapshot)
+    semantic = layer.document
+    # Which version was scored, with the same meaning it has on `runs`.
+    run.semantic_layer_version = layer.version
 
     gateway = LiteLLMGateway.from_settings(settings)
     connector = bind_connector(connection, box)

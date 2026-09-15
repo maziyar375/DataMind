@@ -64,6 +64,8 @@ REVIEW = "answer_feedback"
 BENCHMARK_SET = "benchmark_set"
 BENCHMARK_RUN = "benchmark_run"
 CONNECTION = "database_connection"
+#: The layer's resource id is its connection's id, as it is for authorization.
+SEMANTIC_LAYER = "semantic_layer"
 
 #: Every curation action, in one place. `action` is `String(60)` on the row and
 #: these are the whole vocabulary — an admin reading the log should be able to
@@ -119,6 +121,10 @@ ASK_RECORDED = "ask.recorded"
 #: api/v1/llm_configs.py            llm_config.endpoint.changed
 #:                                  llm_config.deleted
 #: api/v1/connections.py            semantic.switch.changed
+#: services/semantic_service.py     semantic.saved · semantic.restored
+#:                                  semantic.deleted · semantic.conflict
+#:                                  semantic.generation.queued
+#:                                  semantic.generation.saved
 #: ```
 #:
 #: Phase 7 added `access.denied` — the producer `DENIED` had been waiting for

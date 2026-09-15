@@ -139,7 +139,10 @@ export default function DataSourcesPage() {
   const navigate = useNavigate()
   // Below 700px the index is an overlay; above it this does nothing.
   const listDrawer = useListDrawer()
-  const withTab = useMatch('/sources/:id/:tab')
+  // A trailing splat, because a tab may own addresses below it: the semantic
+  // layer's History is `/sources/:id/semantic/history/:version`, and without
+  // it that address matched neither pattern and read as no connection at all.
+  const withTab = useMatch('/sources/:id/:tab/*')
   const plain = useMatch('/sources/:id')
   const routeId = withTab?.params.id ?? plain?.params.id ?? null
   const creating = routeId === 'new'

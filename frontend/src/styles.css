@@ -414,6 +414,15 @@ code, pre, .mono {
   .rm-subcard .rm-row-actions { opacity: 1; }
 }
 
+/* A whole-row button in a list — a semantic layer's versions. The row is the
+   target, so it answers the pointer and shows the keyboard where it is. */
+.rm-history-row { transition: background .12s ease; }
+.rm-history-row:hover { background: var(--panel-hover) !important; }
+.rm-history-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 /* ── the grid motif ────────────────────────────────────────────────────────
    One thin-line grid, defined here and drawn by everything that draws it: the
    signed-out screen, the empty chat, the empty rooms below, and the

@@ -8,6 +8,7 @@ against a dict snapshot and a fake gateway.
     bind_layer                        the one binder every reader goes through
     build_index / validate_document   bind a document to a schema snapshot
     derive_joins                      cardinality + fan-out, read off the catalog
+    diff_documents                    what changed between two documents, per entry
     generate_document                 build one with a model, table by table
     render_semantic                   the block the generator prompt receives
     covered_keys                      which tables/columns that block speaks about
@@ -17,6 +18,7 @@ against a dict snapshot and a fake gateway.
 from __future__ import annotations
 
 from app.semantic.bind import bind_layer
+from app.semantic.diff import AFFECTS_SQL, KINDS, Change, diff_documents
 from app.semantic.generator import (
     GenerationStats,
     Progress,
@@ -53,9 +55,12 @@ from app.semantic.validate import (
 )
 
 __all__ = [
+    "AFFECTS_SQL",
     "DEFAULT_MAX_CHARS",
     "DOCUMENT_VERSION",
     "SEMANTIC_PROMPT_VERSION",
+    "KINDS",
+    "Change",
     "GenerationStats",
     "GlossaryTerm",
     "Progress",
@@ -73,6 +78,7 @@ __all__ = [
     "check_expression",
     "covered_keys",
     "derive_joins",
+    "diff_documents",
     "entity_stub",
     "generate_document",
     "merge_documents",

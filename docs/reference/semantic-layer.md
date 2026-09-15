@@ -61,6 +61,31 @@ shapes. That is the class this addresses.
   `sales` and 11 ms on `aurora`'s 34 metrics, so it is not cached.
   `PROMPT_VERSION` moved v9 → v10 for it; a layer that had not drifted renders
   the same bytes (`test_semantic_bind.py`).
+- **Every save is a version** (migration `0032`, Phase 1 of the plan). A save,
+  a generation, a restore and a delete each lock the head row and, in one
+  transaction, write an immutable `semantic_layer_versions` row, its typed
+  changes (`semantic_layer_changes` — keys only, in `app/semantic/diff.py`'s
+  vocabulary), and a copy into `semantic_layers.document`, which keeps meaning
+  *what the model reads*, so no reader changed. A test holds every write path to
+  `sha256(document) == versions[published_version].document_sha256`.
+  - **A write names the revision it read.** `PUT` requires `base_revision`
+    (`E_SEMANTIC_BASE_REVISION_REQUIRED` without it) and a stale one is a 409
+    `E_SEMANTIC_CONFLICT` naming who saved — returned rather than raised, so
+    its `semantic.conflict` audit row commits. An empty change list is
+    `E_SEMANTIC_NO_CHANGES`, not an identical version. Nothing is merged on the
+    server; the editor lists the displaced edits so they can be made again.
+  - **A generation merges into the layer as it is when it lands**, under the
+    lock, not into the document it read minutes earlier — so a save made while
+    it ran survives. Before this the job silently overwrote it.
+  - **Restore** publishes an old version again as a new one, bound to today's
+    snapshot (an entry whose table is gone comes back flagged, not missing).
+    **Delete** publishes an empty tombstone version; history is kept.
+  - **Runs and benchmark runs record `semantic_layer_version`** (`0` for no
+    layer, NULL before `0032`), and *Grounded* reads that version: an answer is
+    no longer grounded after the fact by a table described next week.
+  - The editor shows `v12 · saved by … · 2 days ago · History`; History is
+    `/sources/:id/semantic/history[/:version]`, and `?entity=&item=` filters
+    it to one table or metric, reached from the card.
 - **The benchmark is scored with the layer.** Before v10 `workers/benchmark.py`
   never passed it, so every `benchmark_runs` row at v9 or earlier was taken
   layer-off whatever the switch said.

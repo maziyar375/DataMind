@@ -1,7 +1,11 @@
 # The semantic layer as a model — build plan
 
-> **Status: Phase 0 landed 2026-09-15.** Written 2026-09-15 against `main` at
-> `d7cba6f`; the §14 ledger is the record of what is in the tree since.
+> **Status: Phases 0 and 1 landed 2026-09-15.** Written 2026-09-15 against
+> `main` at `d7cba6f`; the §14 ledger is the record of what is in the tree
+> since. **Migration numbers moved:** `0030` and `0031` went to the usage screen
+> while this was being written, so the plan's `0030_semantic_versions` shipped
+> as **`0032`**, and Phase 2's and Phase 3's migrations will be `0033` and
+> `0034`.
 >
 > **Answers** [mvp2.md §1.3](mvp2.md#13-the-semantic-layer-is-a-blob-not-a-model)
 > — *"The semantic layer is a blob, not a model"*, ranked **High**. The render
@@ -1189,21 +1193,21 @@ predate. The demo `aurora` layer stores `total_revenue` on both `orders` and
 `_refuse_ambiguous_metrics`; the run path rendered both definitions until this
 phase, and now renders neither.
 
-### 14.2 Phase 1: Versions · **0 / 13**
+### 14.2 Phase 1: Versions · **13 / 13**
 
-- [ ] Migration `0030`: `revision`, `published_version`, `semantic_layer_versions`, `semantic_layer_changes`, version columns on `runs` and `benchmark_runs`; v1 backfilled with a NULL author
-- [ ] `app/semantic/diff.py`: the §4.2 vocabulary, entry keys, `affects_sql`
-- [ ] `save`: lock, `base_revision`, empty-diff refusal, and version + changes + copy + revision in one transaction
-- [ ] `_persist_generated`: lock, merge over the current document, version with `origin.generated_job_ids`
-- [ ] Restore (flagged, not dropped), delete as a tombstone, the history query
-- [ ] Runs and benchmark runs record their version; the `ASK_RECORDED` detail carries it
-- [ ] *Grounded* computed against the recorded version; NULL keeps Phase 0's rule
-- [ ] Routes: `versions`, `versions/{n}`, `changes`, `restore`, `history`, `diff`; `PUT` requires `base_revision`
-- [ ] Audit actions, and the index in `services/audit.py`
-- [ ] Frontend: types and client; History sub-routes; per-entry history; conflict note; note popover
-- [ ] `semantic-changes.ts` with its test, wired into `npm test`
-- [ ] Tests: diff, versions, concurrency (including save during generation), hash equality, authz conformance
-- [ ] Gate: a readable change list on `sales` after a filter edit
+- [x] Migration **`0032`** (not `0030`, see the status note): `revision`, `published_version`, `semantic_layer_versions`, `semantic_layer_changes`, version columns on `runs` and `benchmark_runs`; v1 backfilled with a NULL author. Rehearsed on a Postgres 16 clone of the demo database (one layer → v1, revision 1, hash equal to the service's), including downgrade and re-upgrade
+- [x] `app/semantic/diff.py`: the §4.2 vocabulary, entry keys, `affects_sql`. **One refinement:** a metric is keyed by its table *and* name, because a stored document can hold one name on two tables (both flagged by `_refuse_ambiguous_metrics`) and a keyed comparison needs a key unique in every stored document. Adding or removing an entity also adds or removes its columns and metrics, so each entry's history starts where it did
+- [x] `save`: lock, `base_revision`, empty-diff refusal, and version + changes + copy + revision in one transaction (`_publish`, the one writer)
+- [x] `_persist_generated`: lock, merge over the current document, version with `origin.generated_job_ids`. A generation that changes nothing writes no version and moves no revision
+- [x] Restore (flagged, not dropped), delete as a tombstone, the history query. A tombstone stores `{}`, which every loader already reads as no layer
+- [x] Runs and benchmark runs record their version; the `ASK_RECORDED` detail carries it; `RunRead` exposes it (`load_layer` returns the document and the version off the same row; `load_document` stays for readers that need no version)
+- [x] *Grounded* computed against the recorded version; NULL keeps Phase 0's rule
+- [x] Routes: `versions`, `versions/{n}`, `changes`, `restore`, `history`, `diff`; `PUT` requires `base_revision`. The 409 is *returned* from the route rather than raised, so the `semantic.conflict` audit row commits instead of rolling back with the request
+- [x] Audit actions, and the index in `services/audit.py`
+- [x] Frontend: types and client; History sub-routes; per-entry history; conflict note; note popover. History is a single column with a back link rather than a list beside a detail, so it needs no drawer below 700px (checked at 390px: no horizontal scroll)
+- [x] `semantic-changes.ts` with its test, wired into `npm test`
+- [x] Tests: diff, versions, concurrency (including save during generation), hash equality, authz conformance
+- [x] Gate: a readable change list on `sales` after a filter edit — driven in the browser against a migrated clone: edit `revenue`'s filter, the note prompt lists the change, Save, and History → v3 reads *"`revenue` now also filters on `orders.status <> 'refunded'` — changes numbers"*. A conflict, reload with the displaced edits listed, per-entry history and a restore were driven the same way
 
 ### 14.3 Phase 2: Draft and publish · **0 / 11**
 
@@ -1248,7 +1252,13 @@ phase, and now renders neither.
 - [ ] The needs-attention filter with its six reasons
 - [ ] Tests: `fill_gaps` never overwrites; drift detection; filter counts
 
-### 14.7 Documentation · **0 / 10**
+### 14.7 Documentation · **1 / 10**
+
+The other nine documents span phases, so each is ticked when the last phase it
+describes lands. What Phases 0 and 1 changed is already in each of them:
+reference/semantic-layer.md, CLAUDE.md, status.md, decisions.md §5,
+reference/security.md §2.2, reference/eval.md §6 and
+reference/knowledge-templates.md §6.
 
 - [ ] reference/semantic-layer.md
 - [ ] CLAUDE.md
@@ -1259,17 +1269,17 @@ phase, and now renders neither.
 - [ ] reference/knowledge-templates.md §6
 - [ ] reference/access-control.md
 - [ ] mvp2.md §1.3 and research/semantic-layer.md banners
-- [ ] docs/README.md index row
+- [x] docs/README.md index row
 
 ### 14.8 Totals
 
 | Phase | Done | Items |
 |---|:--:|:--:|
 | 0 · One reader | 9 | 9 |
-| 1 · Versions | 0 | 13 |
+| 1 · Versions | 13 | 13 |
 | 2 · Draft and publish | 0 | 11 |
 | 3 · Metric attribution | 0 | 9 |
 | 4 · Portable document | 0 | 6 |
 | 5 · Upkeep | 0 | 5 |
-| Documentation | 0 | 10 |
-| **Total** | **9** | **63** |
+| Documentation | 1 | 10 |
+| **Total** | **23** | **63** |

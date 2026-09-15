@@ -22,12 +22,20 @@
  *
  * Validation is never guessed at locally: metric expressions are checked by
  * the same backend parser that will reject them at save time.
+ *
+ * **Every save is a version.** A save names the revision it was edited from
+ * and is refused — not merged — when somebody wrote in between; the refusal
+ * says who, beside the button, and keeps the edits in the tab. What changed is
+ * always the server's answer (`POST …/semantic/diff`), so asking for a note on
+ * a number-changing edit and listing the edits a conflict displaced use the
+ * same differ the History tab reads (`semantic-history.tsx`).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { llmConfigs as llmApi, semantic as api } from '../api/client'
+import { useMatch, useNavigate, useSearchParams } from 'react-router-dom'
+import { ApiError, llmConfigs as llmApi, semantic as api } from '../api/client'
 import type {
-  Connection, GlossaryTerm, LlmConfig, SemanticColumn, SemanticDocument,
-  SemanticEntity, SemanticJob, SemanticLayer, SemanticMetric,
+  Connection, GlossaryTerm, LlmConfig, ProblemDetail, SemanticChange, SemanticColumn,
+  SemanticDocument, SemanticEntity, SemanticJob, SemanticLayer, SemanticMetric,
 } from '../api/types'
 import {
   Chip, DangerButton, ErrorNote, Field, GhostButton, Icon, Modal,
@@ -39,6 +47,8 @@ import { AccessPopover } from './access'
 import { DetailBody, FieldRow } from './settings'
 import { useBackgroundWatch } from '../shell'
 import { explainRekey, rekeyDrift } from './semantic-drift'
+import { ChangeWords, NumbersChip, SemanticHistory } from './semantic-history'
+import { authorship, groupChanges, historyPath } from './semantic-changes'
 import {
   collectMetrics, matchesMetric, metricSummary,
 } from './semantic-metrics'
@@ -103,47 +113,79 @@ export function SemanticLayerTab({
 }) {
   const [layer, setLayer] = useState<SemanticLayer | null>(null)
   const [doc, setDoc] = useState<SemanticDocument | null>(null)
-  const [baseline, setBaseline] = useState('')
+  // The server document the edits in this tab were made from, and its
+  // revision. Moved only when a server document is *adopted* — never by a
+  // reload that kept local edits — because the revision a save presents has
+  // to be the one those edits were made against, or a generation that landed
+  // mid-edit would be overwritten by the next Save without a word.
+  const [base, setBase] = useState<{ json: string; revision: number }>({ json: '', revision: 0 })
   const [job, setJob] = useState<SemanticJob | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [conflict, setConflict] = useState<ProblemDetail | null>(null)
+  // Number-changing edits waiting on a note, and the edits a conflict reload
+  // displaced — both the server's change lists, never a local comparison.
+  const [pendingNote, setPendingNote] = useState<SemanticChange[] | null>(null)
+  const [displaced, setDisplaced] = useState<SemanticChange[] | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [askGenerate, setAskGenerate] = useState(false)
   const [askDelete, setAskDelete] = useState(false)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
   const [open, setOpen] = useState<Record<string, boolean>>({})
   const watch = useBackgroundWatch()
+  const navigate = useNavigate()
 
-  const dirty = doc !== null && JSON.stringify(doc) !== baseline
+  // History is three sub-routes of this tab, read here rather than nested, so
+  // the editor — and anything unsaved in it — stays mounted while somebody
+  // looks back.
+  const historyVersion = useMatch('/sources/:id/semantic/history/:version')
+  const historyList = useMatch('/sources/:id/semantic/history')
+  const [query] = useSearchParams()
+  const inHistory = historyVersion !== null || historyList !== null
+  const shownVersion = historyVersion ? Number(historyVersion.params.version) : null
 
-  // Read inside `load` without making it depend on `baseline`, which would
-  // rebuild the callback on every keystroke.
-  const baselineRef = useRef('')
+  const dirty = doc !== null && JSON.stringify(doc) !== base.json
+
+  // Read inside `load` without making it depend on `base` or `doc`, which
+  // would rebuild the callback on every keystroke.
+  const baseRef = useRef(base)
+  const docRef = useRef(doc)
   useEffect(() => {
-    baselineRef.current = baseline
-  }, [baseline])
+    baseRef.current = base
+    docRef.current = doc
+  }, [base, doc])
+
+  const adopt = useCallback((next: SemanticLayer) => {
+    setLayer(next)
+    setDoc(next.document)
+    setBase({ json: JSON.stringify(next.document), revision: next.revision })
+  }, [])
 
   const load = useCallback(async () => {
     const next = await api.get(connection.id)
-    setLayer(next)
     setJob(next.job)
+    setLayer(next)
     // A reload mid-edit would silently discard what the user has typed, so
-    // the document is only adopted when there is nothing unsaved to lose.
-    setDoc((current) =>
-      current !== null && JSON.stringify(current) !== baselineRef.current
-        ? current
-        : next.document,
-    )
-    setBaseline(JSON.stringify(next.document))
+    // the document is only adopted when there is nothing unsaved to lose —
+    // and the base revision stays where those edits were made.
+    const current = docRef.current
+    if (current !== null && JSON.stringify(current) !== baseRef.current.json) return next
+    const adopted = { json: JSON.stringify(next.document), revision: next.revision }
+    baseRef.current = adopted
+    docRef.current = next.document
+    setBase(adopted)
+    setDoc(next.document)
     return next
   }, [connection.id])
 
   useEffect(() => {
     setLoading(true)
     setDoc(null)
-    setBaseline('')
-    baselineRef.current = ''
+    setBase({ json: '', revision: 0 })
+    baseRef.current = { json: '', revision: 0 }
+    docRef.current = null
     load()
       .catch(() => setError('Could not load the semantic layer.'))
       .finally(() => setLoading(false))
@@ -194,17 +236,78 @@ export function SemanticLayerTab({
     })
   }
 
-  async function save() {
+  /** Save, asking for a note first when the edits change numbers.
+   *
+   *  The server says what the edits are, so the question is asked about the
+   *  same change list the version will carry. An edit that changes nothing
+   *  the model reads — a flag flipped back, a field typed and restored — is
+   *  not a version, and the bar simply stands down. */
+  async function requestSave() {
+    if (!doc) return
+    setSaving(true)
+    setError(null)
+    setNotice(null)
+    try {
+      const before = base.json ? (JSON.parse(base.json) as SemanticDocument) : doc
+      const changes = await api.diff(connection.id, before, doc)
+      if (changes.length === 0) {
+        setBase({ json: JSON.stringify(doc), revision: base.revision })
+        setNotice('Nothing the model reads has changed, so there was nothing to save.')
+        return
+      }
+      if (changes.some((c) => c.affects_sql)) {
+        setPendingNote(changes)
+        return
+      }
+      await commitSave('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not save this layer.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function commitSave(note: string) {
     if (!doc) return
     setSaving(true)
     setError(null)
     try {
-      const next = await api.save(connection.id, doc)
-      setLayer(next)
-      setDoc(next.document)
-      setBaseline(JSON.stringify(next.document))
+      adopt(await api.save(connection.id, doc, { baseRevision: base.revision, note }))
+      setPendingNote(null)
+      setConflict(null)
+      setDisplaced(null)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not save this layer.')
+      setPendingNote(null)
+      if (err instanceof ApiError && err.code === 'E_SEMANTIC_CONFLICT') {
+        setConflict(err.detail ?? {})
+      } else if (err instanceof ApiError && err.code === 'E_SEMANTIC_NO_CHANGES') {
+        setBase({ json: JSON.stringify(doc), revision: base.revision })
+        setNotice('Nothing the model reads has changed, so there was nothing to save.')
+      } else {
+        setError(err instanceof Error ? err.message : 'Could not save this layer.')
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  /** Take the version somebody else wrote, and list what this tab had.
+   *
+   *  No automatic re-apply (D6): the list is the server's reading of the
+   *  edits against the document they were made from, so they can be made
+   *  again by hand on top of what is there now. */
+  async function reloadAfterConflict() {
+    if (!doc) return
+    setSaving(true)
+    try {
+      const lost = base.json
+        ? await api.diff(connection.id, JSON.parse(base.json) as SemanticDocument, doc)
+        : []
+      adopt(await api.get(connection.id))
+      setDisplaced(lost.length ? lost : null)
+      setConflict(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not reload this layer.')
     } finally {
       setSaving(false)
     }
@@ -265,7 +368,7 @@ export function SemanticLayerTab({
   async function discardLayer() {
     setAskDelete(false)
     await api.remove(connection.id)
-    await load()
+    adopt(await api.get(connection.id))
   }
 
   const entities = useMemo(() => {
@@ -348,11 +451,37 @@ export function SemanticLayerTab({
   const running = job !== null && ACTIVE.includes(job.status)
   const empty = !doc || doc.entities.length === 0
 
+  /** Open one table's card in the editor, from a line in the history. */
+  const openEntity = (table: string) => {
+    navigate(`/sources/${connection.id}/semantic`)
+    setFilter('all')
+    setSearch('')
+    setOpen((prev) => ({ ...prev, [table]: true }))
+    setFocus({ table, at: Date.now() })
+  }
+
   return (
     <>
       <Shell padBottom={dirty}>
         {error && <ErrorNote>{error}</ErrorNote>}
 
+        {inHistory ? (
+          <SemanticHistory
+            connectionId={connection.id}
+            layer={layer}
+            version={shownVersion !== null && Number.isFinite(shownVersion) ? shownVersion : null}
+            entity={query.get('entity')}
+            item={query.get('item')}
+            dirty={dirty}
+            onRestored={(next) => {
+              adopt(next)
+              setDisplaced(null)
+              navigate(`/sources/${connection.id}/semantic`)
+            }}
+            onOpenEntity={openEntity}
+          />
+        ) : (
+        <>
         <Hero
           layer={layer}
           connection={connection}
@@ -366,7 +495,12 @@ export function SemanticLayerTab({
             setFilter(next)
             setSearch('')
           }}
+          onHistory={() => navigate(historyPath(connection.id))}
         />
+
+        {displaced && (
+          <Displaced changes={displaced} onDismiss={() => setDisplaced(null)} />
+        )}
 
         {/* The re-key note replaces the stale one rather than joining it: it
             says everything the stale note says and then names the cause, and
@@ -434,6 +568,9 @@ export function SemanticLayerTab({
                     setOpen((prev) => ({ ...prev, [entity.table]: !prev[entity.table] }))
                   }
                   onChange={(change) => updateEntity(entity.table, change)}
+                  onHistory={(item) =>
+                    navigate(historyPath(connection.id, { entity: entity.table.toLowerCase(), item }))
+                  }
                 />
               ))}
               {entities.length === 0 && (
@@ -453,14 +590,42 @@ export function SemanticLayerTab({
             </div>
           </>
         )}
+        </>
+        )}
       </Shell>
 
-
-      {dirty && (
+      {(dirty || notice) && (
         <SaveBar
+          dirty={dirty}
           saving={saving}
-          onSave={save}
-          onDiscard={() => setDoc(JSON.parse(baseline) as SemanticDocument)}
+          notice={notice}
+          conflict={conflict}
+          pendingNote={pendingNote}
+          onSave={requestSave}
+          onSaveWithNote={commitSave}
+          onCancelNote={() => setPendingNote(null)}
+          onSeeConflict={() => {
+            if (conflict?.published_version) {
+              navigate(historyPath(connection.id, { version: conflict.published_version }))
+            }
+          }}
+          onReload={reloadAfterConflict}
+          onDismissNotice={() => setNotice(null)}
+          onDiscard={async () => {
+            // Back to what the server holds now — which after a conflict is not
+            // the document these edits started from, so it is asked for again.
+            setPendingNote(null)
+            if (conflict) {
+              setConflict(null)
+              try {
+                adopt(await api.get(connection.id))
+                return
+              } catch {
+                /* fall back to the last layer this tab read */
+              }
+            }
+            if (layer) adopt(layer)
+          }}
         />
       )}
 
@@ -507,7 +672,7 @@ function Shell({
 // ── hero ───────────────────────────────────────────────────────────────────
 function Hero({
   layer, connection, running, job, onGenerate, onDelete, onCancel, onToggle,
-  onFocusFilter,
+  onFocusFilter, onHistory,
 }: {
   layer: SemanticLayer | null
   connection: Connection
@@ -518,9 +683,11 @@ function Hero({
   onCancel: () => void
   onToggle: (value: boolean) => void
   onFocusFilter: (next: Filter) => void
+  onHistory: () => void
 }) {
   const exists = !!layer?.exists
   const model = layer?.model_snapshot?.model as string | undefined
+  const version = layer?.published_version ?? null
   const described = layer?.entity_count ?? 0
   const total = layer?.tables.length ?? 0
 
@@ -765,24 +932,157 @@ function Hero({
               }
               hint="Turn off to write SQL from the bare schema — the way to check whether this layer is helping."
             />
-            <span
-              style={{
-                marginLeft: 'auto',
-                fontSize: 11.5,
-                color: 'var(--text-faint)',
-                textAlign: 'right',
-              }}
-            >
-              {layer!.generated_at
-                ? `generated ${relativeTime(layer!.generated_at)}`
-                : 'written by hand'}
-              {model ? ` · ${model}` : ''}
-              {layer!.edited_at ? ` · edited ${relativeTime(layer!.edited_at)}` : ''}
-            </span>
+            <VersionLine layer={layer!} model={model} onHistory={onHistory} />
           </div>
         </>
       )}
+
+      {/* A deleted layer still has a history, and restoring it is the undo —
+          so the way back is offered where the stats would have been. */}
+      {!exists && !running && version !== null && (
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: 10, padding: '11px 20px',
+            borderTop: '1px solid var(--border)', background: 'var(--panel-alt)',
+            fontSize: 12, color: 'var(--text-dim)',
+          }}
+        >
+          <span style={{ flex: 1 }}>
+            v{version} · {authorship(layer!.published_origin, layer!.published_by_name)}
+            {layer!.published_at ? ` · ${relativeTime(layer!.published_at)}` : ''}
+          </span>
+          <GhostButton onClick={onHistory} style={{ padding: '5px 10px', fontSize: 12 }}>
+            <Icon.History size={13} />
+            History
+          </GhostButton>
+        </div>
+      )}
     </section>
+  )
+}
+
+/**
+ * `v12 · saved by Sara Karimi · 2 days ago · History` — which version the model
+ * reads, who put it there, and the way to every version before it.
+ *
+ * A layer written before versions existed reads `v1 · recorded at migration`,
+ * which is true and says nothing earlier was kept.
+ */
+function VersionLine({
+  layer, model, onHistory,
+}: {
+  layer: SemanticLayer
+  model: string | undefined
+  onHistory: () => void
+}) {
+  const version = layer.published_version
+  const how = authorship(layer.published_origin, layer.published_by_name)
+  return (
+    <span
+      style={{
+        marginLeft: 'auto',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap',
+        justifyContent: 'flex-end',
+        fontSize: 11.5,
+        color: 'var(--text-faint)',
+        textAlign: 'right',
+      }}
+    >
+      <span>
+        {version !== null ? (
+          <>
+            <span className="mono" style={{ color: 'var(--text-dim)', fontWeight: 600 }}>
+              v{version}
+            </span>
+            {` · ${how}`}
+            {layer.published_at ? ` · ${relativeTime(layer.published_at)}` : ''}
+          </>
+        ) : layer.generated_at ? (
+          `generated ${relativeTime(layer.generated_at)}`
+        ) : (
+          'written by hand'
+        )}
+        {model ? ` · ${model}` : ''}
+      </span>
+      {version !== null && (
+        <GhostButton onClick={onHistory} style={{ padding: '4px 9px', fontSize: 12 }}>
+          <Icon.History size={13} />
+          History
+        </GhostButton>
+      )}
+    </span>
+  )
+}
+
+/** The edits a conflict reload took out of the tab, as the server words them.
+ *  Listed so they can be made again by hand; nothing re-applies them (D6). */
+function Displaced({
+  changes, onDismiss,
+}: {
+  changes: SemanticChange[]
+  onDismiss: () => void
+}) {
+  const groups = groupChanges(changes)
+  return (
+    <section
+      style={{
+        border: '1px solid var(--amber-border)',
+        background: 'var(--amber-bg)',
+        borderRadius: 12,
+        padding: '12px 16px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ color: 'var(--amber)', display: 'flex' }}><Icon.Alert /></span>
+        <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600, color: 'var(--text-strong)' }}>
+          Your unsaved edits — make them again on top of the version below
+        </span>
+        <GhostButton onClick={onDismiss} style={{ padding: '4px 9px', fontSize: 12 }}>
+          Done
+        </GhostButton>
+      </div>
+      <ChangeList groups={groups} />
+    </section>
+  )
+}
+
+/** A grouped change list, compact — for the save bar and the displaced note. */
+function ChangeList({ groups }: { groups: ReturnType<typeof groupChanges> }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {groups.map((group) => (
+        <div key={group.key} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <span
+            className={group.titleIsCode ? 'mono' : undefined}
+            style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-dim)' }}
+          >
+            {group.title}
+          </span>
+          {group.lines.map((line, index) => (
+            <span
+              key={`${line.kind}:${line.itemKey}:${index}`}
+              style={{ display: 'flex', gap: 7, fontSize: 12.5, lineHeight: 1.5, color: 'var(--text-strong)' }}
+            >
+              <span aria-hidden style={{ color: line.affectsSql ? 'var(--amber)' : 'var(--text-faint)' }}>
+                {line.affectsSql ? '◆' : '·'}
+              </span>
+              <span style={{ minWidth: 0 }}>
+                <ChangeWords segments={line.segments} />
+                {line.affectsSql && (
+                  <span style={{ color: 'var(--amber)', fontSize: 11 }}> — changes numbers</span>
+                )}
+              </span>
+            </span>
+          ))}
+        </div>
+      ))}
+    </div>
   )
 }
 
@@ -1101,14 +1401,36 @@ function Note({ tone, children }: { tone: 'amber' | 'red'; children: React.React
 }
 
 /** Floats clear of the content instead of eating a strip of the pane, so the
- *  last card is never half-hidden behind it. */
+ *  last card is never half-hidden behind it.
+ *
+ *  Everything a save can answer lands here, beside the button that was
+ *  pressed — not in a toast: the note a number-changing edit asks for, the
+ *  conflict when somebody saved first, and the quiet "nothing to save". */
 function SaveBar({
-  saving, onSave, onDiscard,
+  dirty, saving, notice, conflict, pendingNote, onSave, onSaveWithNote, onCancelNote,
+  onSeeConflict, onReload, onDismissNotice, onDiscard,
 }: {
+  dirty: boolean
   saving: boolean
+  notice: string | null
+  conflict: ProblemDetail | null
+  pendingNote: SemanticChange[] | null
   onSave: () => void
+  onSaveWithNote: (note: string) => void
+  onCancelNote: () => void
+  onSeeConflict: () => void
+  onReload: () => void
+  onDismissNotice: () => void
   onDiscard: () => void
 }) {
+  const [note, setNote] = useState('')
+  // A fresh prompt starts empty; the last one's words were for other edits.
+  useEffect(() => {
+    if (pendingNote) setNote('')
+  }, [pendingNote])
+
+  const numbers = pendingNote ? groupChanges(pendingNote.filter((c) => c.affects_sql)) : []
+  const who = conflict?.updated_by_name || 'Someone'
   return (
     <div
       style={{
@@ -1124,30 +1446,115 @@ function SaveBar({
     >
       <div
         className="rm-enter"
+        role={conflict ? 'alert' : undefined}
         style={{
           pointerEvents: 'auto',
           display: 'flex',
-          alignItems: 'center',
-          gap: 14,
+          flexDirection: 'column',
+          gap: 10,
+          width: pendingNote || conflict ? 'min(560px, calc(100% - 32px))' : undefined,
           padding: '10px 12px 10px 18px',
           borderRadius: 12,
           background: 'var(--panel)',
-          border: '1px solid var(--border-strong)',
+          border: `1px solid ${conflict ? 'var(--red-border)' : 'var(--border-strong)'}`,
           boxShadow: 'inset 0 1px 0 0 var(--sheen), var(--elev-3)',
         }}
       >
-        <span style={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
-          Unsaved changes
-        </span>
-        <span style={{ display: 'flex', gap: 8 }}>
-          <GhostButton onClick={onDiscard} disabled={saving} style={{ padding: '7px 12px' }}>
-            Discard
-          </GhostButton>
-          <PrimaryButton onClick={onSave} disabled={saving} style={{ padding: '7px 14px' }}>
-            {saving && <Spinner />}
-            Save changes
-          </PrimaryButton>
-        </span>
+        {pendingNote && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 4 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <NumbersChip />
+              <span style={{ fontSize: 12.5, color: 'var(--text-strong)', fontWeight: 600 }}>
+                These edits change what numbers mean
+              </span>
+            </div>
+            <div style={{ maxHeight: 150, overflowY: 'auto' }}>
+              <ChangeList groups={numbers} />
+            </div>
+            <TextArea
+              autoFocus
+              value={note}
+              maxLength={2000}
+              aria-label="Why these numbers change"
+              placeholder="Why? A dashboard's SQL will not show this change — the note is the only record of the reason."
+              onChange={(e) => setNote(e.target.value)}
+              style={{ minHeight: 56 }}
+            />
+          </div>
+        )}
+
+        {conflict && (
+          <div
+            style={{
+              display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12.5,
+              lineHeight: 1.55, color: 'var(--red)', paddingTop: 4,
+            }}
+          >
+            <span style={{ marginTop: 2, flexShrink: 0 }}><Icon.Alert /></span>
+            <span style={{ flex: 1 }}>
+              <strong>{who}</strong> saved
+              {conflict.published_version ? ` v${conflict.published_version}` : ' a new version'} while
+              you were editing. Your edits are still in this tab.
+            </span>
+          </div>
+        )}
+
+        {notice && !conflict && !pendingNote && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--text-dim)' }}>
+            <span style={{ color: 'var(--green)', display: 'flex' }}><Icon.Check /></span>
+            <span style={{ flex: 1 }}>{notice}</span>
+            {!dirty && (
+              <GhostButton onClick={onDismissNotice} style={{ padding: '4px 9px', fontSize: 12 }}>
+                OK
+              </GhostButton>
+            )}
+          </div>
+        )}
+
+        {(dirty || pendingNote || conflict) && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
+              {conflict ? 'Not saved' : 'Unsaved changes'}
+            </span>
+            <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              {conflict ? (
+                <>
+                  <GhostButton onClick={onSeeConflict} disabled={saving} style={{ padding: '7px 12px' }}>
+                    See what changed
+                  </GhostButton>
+                  <PrimaryButton onClick={onReload} disabled={saving} style={{ padding: '7px 14px' }}>
+                    {saving && <Spinner />}
+                    Reload
+                  </PrimaryButton>
+                </>
+              ) : pendingNote ? (
+                <>
+                  <GhostButton onClick={onCancelNote} disabled={saving} style={{ padding: '7px 12px' }}>
+                    Back
+                  </GhostButton>
+                  <PrimaryButton
+                    onClick={() => onSaveWithNote(note.trim())}
+                    disabled={saving}
+                    style={{ padding: '7px 14px' }}
+                  >
+                    {saving && <Spinner />}
+                    Save
+                  </PrimaryButton>
+                </>
+              ) : (
+                <>
+                  <GhostButton onClick={onDiscard} disabled={saving} style={{ padding: '7px 12px' }}>
+                    Discard
+                  </GhostButton>
+                  <PrimaryButton onClick={onSave} disabled={saving} style={{ padding: '7px 14px' }}>
+                    {saving && <Spinner />}
+                    Save changes
+                  </PrimaryButton>
+                </>
+              )}
+            </span>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -1480,7 +1887,7 @@ function FilterBar({
 type Section = 'meaning' | 'columns' | 'metrics'
 
 function EntityCard({
-  connectionId, entity, open, focusedAt = 0, onToggle, onChange,
+  connectionId, entity, open, focusedAt = 0, onToggle, onChange, onHistory,
 }: {
   connectionId: string
   entity: SemanticEntity
@@ -1491,6 +1898,8 @@ function EntityCard({
   focusedAt?: number
   onToggle: () => void
   onChange: (change: Partial<SemanticEntity>) => void
+  /** This table's history, or one metric's on it. */
+  onHistory: (item?: string) => void
 }) {
   const broken = hasIssue(entity)
   const role = ROLE_META[entity.role] ?? ROLE_META.unknown
@@ -1625,7 +2034,15 @@ function EntityCard({
         </button>
 
         {open && (
-          <div style={{ padding: '0 14px 12px 38px' }}>
+          <div
+            style={{
+              padding: '0 14px 12px 38px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              flexWrap: 'wrap',
+            }}
+          >
             <PillTabs
               value={section}
               onChange={setSection}
@@ -1650,6 +2067,14 @@ function EntityCard({
                 },
               ]}
             />
+            <GhostButton
+              onClick={() => onHistory()}
+              title={`Every saved change to ${entity.table}`}
+              style={{ marginLeft: 'auto', padding: '4px 9px', fontSize: 12 }}
+            >
+              <Icon.History size={13} />
+              History
+            </GhostButton>
           </div>
         )}
       </div>
@@ -1771,6 +2196,7 @@ function EntityCard({
               connectionId={connectionId}
               entity={entity}
               onChange={(metrics) => onChange({ metrics })}
+              onHistory={(name) => onHistory(name)}
             />
           )}
         </div>
@@ -2043,11 +2469,12 @@ function Columns({
 
 // ── metrics ────────────────────────────────────────────────────────────────
 function Metrics({
-  connectionId, entity, onChange,
+  connectionId, entity, onChange, onHistory,
 }: {
   connectionId: string
   entity: SemanticEntity
   onChange: (metrics: SemanticMetric[]) => void
+  onHistory: (name: string) => void
 }) {
   const [open, setOpen] = useState<Set<number>>(new Set())
 
@@ -2109,6 +2536,7 @@ function Metrics({
           onToggle={() => toggle(index)}
           onChange={(change) => update(index, change)}
           onRemove={() => onChange(entity.metrics.filter((_, i) => i !== index))}
+          onHistory={metric.name.trim() ? () => onHistory(metric.name.trim().toLowerCase()) : undefined}
         />
       ))}
     </Group>
@@ -2116,7 +2544,7 @@ function Metrics({
 }
 
 function MetricCard({
-  connectionId, table, metric, open, onToggle, onChange, onRemove,
+  connectionId, table, metric, open, onToggle, onChange, onRemove, onHistory,
 }: {
   connectionId: string
   table: string
@@ -2125,6 +2553,8 @@ function MetricCard({
   onToggle: () => void
   onChange: (change: Partial<SemanticMetric>) => void
   onRemove: () => void
+  /** Absent for a metric with no name yet: there is no entry to look up. */
+  onHistory?: () => void
 }) {
   // Server-side validation, debounced: the browser cannot know the dialect or
   // the schema, and a second opinion here would only be wrong differently.
@@ -2180,6 +2610,8 @@ function MetricCard({
         }
         onRemove={onRemove}
         removeLabel="Remove metric"
+        onHistory={onHistory}
+        historyLabel={`History of ${metric.name}`}
       />
 
       {!open ? null : (
@@ -3072,7 +3504,8 @@ function SubCard({
  *  and whatever it means — and the form appears only for the one being
  *  edited. Same disclosure the table list above already uses, one level down. */
 function SubCardHead({
-  title, mono, badge, summary, open, onToggle, onRemove, removeLabel,
+  title, mono, badge, summary, open, onToggle, onRemove, removeLabel, onHistory,
+  historyLabel = 'History',
 }: {
   title: string
   mono?: boolean
@@ -3082,6 +3515,8 @@ function SubCardHead({
   onToggle: () => void
   onRemove: () => void
   removeLabel: string
+  onHistory?: () => void
+  historyLabel?: string
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -3136,7 +3571,12 @@ function SubCardHead({
           buttons down one card, which made *remove* the most repeated thing on
           a screen whose job is describing. It waits for the row now — and
           stays for a row that is open, or focused from the keyboard. */}
-      <span className="rm-row-actions" style={{ flexShrink: 0 }}>
+      <span className="rm-row-actions" style={{ flexShrink: 0, display: 'flex', gap: 6 }}>
+        {onHistory && (
+          <IconButton label={historyLabel} onClick={onHistory} tone="neutral">
+            <Icon.History size={13} />
+          </IconButton>
+        )}
         <IconButton label={removeLabel} onClick={onRemove}>
           <Icon.Trash />
         </IconButton>
@@ -3150,14 +3590,19 @@ function SubCardHead({
  *  lives — a red panel parked in the page reads as a warning about the
  *  content, not about the button. */
 function IconButton({
-  label, onClick, children, size = 28,
+  label, onClick, children, size = 28, tone = 'danger',
 }: {
   label: string
   onClick: () => void
   children: React.ReactNode
   size?: number
+  /** `neutral` for a control that goes somewhere rather than removes something. */
+  tone?: 'danger' | 'neutral'
 }) {
   const [hover, setHover] = useState(false)
+  const hot = tone === 'danger'
+    ? { border: 'var(--red-border)', background: 'var(--red-bg)', color: 'var(--red)' }
+    : { border: 'var(--accent-border)', background: 'var(--accent-bg)', color: 'var(--accent)' }
   return (
     <button
       aria-label={label}
@@ -3172,9 +3617,9 @@ function IconButton({
         width: size,
         height: size,
         borderRadius: size > 30 ? 8 : 7,
-        border: `1px solid ${hover ? 'var(--red-border)' : 'var(--border-strong)'}`,
-        background: hover ? 'var(--red-bg)' : 'transparent',
-        color: hover ? 'var(--red)' : 'var(--text-faint)',
+        border: `1px solid ${hover ? hot.border : 'var(--border-strong)'}`,
+        background: hover ? hot.background : 'transparent',
+        color: hover ? hot.color : 'var(--text-faint)',
         cursor: 'pointer',
         flexShrink: 0,
       }}

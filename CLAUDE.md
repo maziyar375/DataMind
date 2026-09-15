@@ -90,7 +90,7 @@ make authz-check  # prove no module decides access for itself
 make up / down / logs / secrets / migrate / fixtures / db-repair
 ```
 
-From `frontend/`: `npm run typecheck`, `npm run build`, `npm test` (sixteen
+From `frontend/`: `npm run typecheck`, `npm run build`, `npm test` (seventeen
 suites). **`npm run lint` is a dead script** — eslint is neither a devDependency
 nor configured.
 
@@ -181,7 +181,9 @@ backend/app/
                   (bind it to a snapshot, parse metric SQL), bind.py (the one
                   binder every reader goes through — stored `valid` flags are
                   never trusted), terms.py (the words it speaks, for the
-                  backlog), generator.py (build one with a model, one call per
+                  backlog), diff.py (the one differ: typed changes keyed by
+                  entry, which versions store and the UI only words),
+                  generator.py (build one with a model, one call per
                   table), render.py (the prompt block), prompts.py —
                   self-contained like sqlguard
   reports/        the written document: outline.py (the proposed structure,
@@ -275,7 +277,11 @@ frontend/src/
                             bullets — read at display time into spans, never
                             into markup; `npm run test:chat`),
                             settings.tsx, semantic.tsx (the layer
-                            editor), semantic-drift.ts (an all-or-nothing
+                            editor), semantic-history.tsx (its versions, one
+                            version's changes, restore — `useMatch`
+                            sub-routes of the tab), semantic-changes.ts (a
+                            change list grouped and worded, never computed —
+                            `npm run test:changes`), semantic-drift.ts (an all-or-nothing
                             re-key told apart from ordinary drift —
                             engine-neutral detection, Oracle-specific
                             explanation; `npm run test:drift`),
@@ -599,7 +605,7 @@ described here — each has its own reference:
 
 | | What it is | Reference |
 |---|---|---|
-| **The semantic layer** | What the schema *means* — business names, grain, metrics bound to exact SQL, time conventions, fan-out cautions. One document per connection | [docs/reference/semantic-layer.md](docs/reference/semantic-layer.md) |
+| **The semantic layer** | What the schema *means* — business names, grain, metrics bound to exact SQL, time conventions, fan-out cautions. One document per connection, and every save a numbered version; a write names the revision it read and a stale one is a 409, not an overwrite | [docs/reference/semantic-layer.md](docs/reference/semantic-layer.md) |
 | **Knowledge templates** | A question somebody already answered correctly, stored as a parameterized question→SQL template so the system answers it the same way next time | [docs/reference/knowledge-templates.md](docs/reference/knowledge-templates.md) |
 
 Both are **off-by-absence**: with neither present, the prompt is byte-identical
@@ -759,14 +765,14 @@ at commit time and shows up as drift a release later. Full tour:
   A literal hex or `oklch()` in a component is a bug in both themes — one of
   them just has not been looked at yet. Chart colours are the one exception and
   they live in `components/palette.ts`, tested apart from React.
-- **The fifteen DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
+- **The sixteen DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
   `table-format.ts`, `dashboard-document.ts`, `palette.ts`, `chat-format.ts`,
   `report-document.ts`, `report-readiness.ts`, `report-print.ts`,
-  `semantic-drift.ts`, `semantic-metrics.ts`, `knowledge-template.ts`,
-  `thinking.ts`, `knowledge-queue.ts`, `provider-params.ts`, `usage-chart.ts`
-  — they hold the
+  `semantic-drift.ts`, `semantic-metrics.ts`, `semantic-changes.ts`,
+  `knowledge-template.ts`, `thinking.ts`, `knowledge-queue.ts`,
+  `provider-params.ts`, `usage-chart.ts` — they hold the
   logic whose failures are quiet, they are (with `scripts/permissions.test.ts`,
-  the sixteenth suite) the *only* tested code in the frontend, and their suites
+  the seventeenth suite) the *only* tested code in the frontend, and their suites
   are plain `node --experimental-strip-types` scripts. **One React import turns
   a suite into a thing that cannot run.**
 - **Text a person wrote gets `dir={dirOf(value)}`.** The product ships Persian.

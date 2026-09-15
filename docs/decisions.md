@@ -96,6 +96,10 @@ load-bearing ones:
 | **A metric is defined on its entity and browsed in a list** — one editor, two ways in, no second copy | Standing | [reference/semantic-layer.md](reference/semantic-layer.md) |
 | **Joins are derived from the catalog, never asked of the model** | Standing | [reference/semantic-layer.md](reference/semantic-layer.md) |
 | **One binder, and every reader goes through it.** Validity is derived at read time against the reader's snapshot; the stored `valid`/`issue` flags are for the editor and no consumer trusts them (D4) | Standing (2026-09-15) | [plans/semantic-layer-model.md](plans/semantic-layer-model.md) §2.2 |
+| **A version is a document that reached the model**: immutable, numbered, linear, never pruned while runs point at it; delete is a tombstone version (D2, D10) | Standing (2026-09-15) | [plans/semantic-layer-model.md](plans/semantic-layer-model.md) §2.2 |
+| **`semantic_layers.document` stays "what the model reads"**, a copy of the published version written in the same transaction, so no reader changed (D3) | Standing (2026-09-15) | [plans/semantic-layer-model.md](plans/semantic-layer-model.md) §2.2 |
+| **One differ, in the backend.** The frontend groups and words typed changes and never compares documents (D5) | Standing (2026-09-15) | [plans/semantic-layer-model.md](plans/semantic-layer-model.md) §2.2 |
+| **Concurrency is one integer and a conflict is a refusal** — no server-side merge of two people's edits; a generation, not being a person, merges into the current row under a lock (D6) | Standing (2026-09-15) | [plans/semantic-layer-model.md](plans/semantic-layer-model.md) §2.2 |
 | **Binding on load moved `PROMPT_VERSION` v9 → v10**, though no wording changed: it changes what survives of a drifted layer, and it put the layer into benchmark prompts that never had one (D11) | Standing (2026-09-15) | [plans/semantic-layer-model.md](plans/semantic-layer-model.md) §2.2 |
 
 ## 6. Pipelines, charts and the three surfaces

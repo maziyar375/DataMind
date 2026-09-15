@@ -79,7 +79,7 @@ from app.services.query_service import (
     policy_from_snapshot,
     resolve_llm,
 )
-from app.services.semantic_service import load_document
+from app.services.semantic_service import load_layer
 
 log = get_logger(__name__)
 
@@ -493,7 +493,12 @@ class RunService:
         snapshot = await latest_snapshot(self._db, connection.id)
         # Loaded once per run, not per attempt: a repair regenerates against
         # the same schema block, and the layer is part of that block.
-        semantic = await load_document(self._db, connection, snapshot=snapshot)
+        layer = await load_layer(self._db, connection, snapshot=snapshot)
+        semantic = layer.document
+        # Which version answers this question — `0` when none reached the
+        # prompt. Recorded on the run because the layer moves after it, and an
+        # answer's *Grounded* claim is about the layer it was written with.
+        run.semantic_layer_version = layer.version
         # One lookup, two consequences: this run may not ask again, and its
         # question is the reply *plus* the question that reply answers.
         pending = await self._pending_clarification(run)
@@ -543,6 +548,7 @@ class RunService:
                 "disclosure_policy": connection.disclosure_policy,
                 "clarify_enabled": connection.clarify_enabled,
                 "semantic_layer": semantic is not None,
+                "semantic_layer_version": layer.version,
                 "model": run.model_snapshot.get("model", ""),
             },
         )

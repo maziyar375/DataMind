@@ -601,13 +601,19 @@ class SchemaSnapshotRow(Base):
 
 
 class SemanticLayerRow(Base, TimestampMixin):
-    """What the schema *means*, for one connection.
+    """What the schema *means*, for one connection — the head of its history.
 
     One live row per connection, not a version chain like `schema_snapshots`:
     this document is edited by hand, and a user who fixes a grain statement
     expects to have fixed it, not to have forked it. `schema_version` records
     which snapshot it was written against, so the UI can say when the schema
     has moved on underneath it.
+
+    Since `0032` every document written here is also a numbered, immutable
+    `SemanticLayerVersionRow`, and `document` is a **copy** of the version
+    `published_version` names, written in the same transaction (D3 of
+    `docs/plans/semantic-layer-model.md`). The copy is what keeps every reader
+    of the layer unchanged; the version is what makes it attributable.
     """
 
     __tablename__ = "semantic_layers"
@@ -639,6 +645,91 @@ class SemanticLayerRow(Base, TimestampMixin):
     prompt_version: Mapped[str] = mapped_column(String(20), default="s1")
     generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: Increases on every write to this row. The concurrency token: a writer
+    #: presents the revision it read, and a mismatch is a 409 rather than a
+    #: silent overwrite of whoever wrote in between (D6).
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    #: Which version `document` is. NULL until anything has been written.
+    published_version: Mapped[int | None] = mapped_column(Integer)
+
+
+class SemanticLayerVersionRow(Base):
+    """A document that reached the model. Immutable, numbered, linear (D2).
+
+    Never updated and never pruned: runs point at versions, and pruning one
+    would break what an old answer's *Grounded* chip can say about itself. It
+    goes only with its connection.
+
+    `document` is stored as it was bound when it was published, so a version's
+    `valid` flags describe that moment's schema (`schema_version`) — which is
+    exactly the reading an old answer's tier needs.
+    """
+
+    __tablename__ = "semantic_layer_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "connection_id", "version", name="uq_semantic_layer_versions_number"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("database_connections.id", ondelete="CASCADE"), nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    parent_version: Mapped[int | None] = mapped_column(Integer)
+    document: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    #: sha256 of the canonical JSON — `semantic_service.document_sha256`.
+    document_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    published_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    #: `generated_job_ids`, `restored_from`, `deleted`, `migrated` — how this
+    #: version came to be, as words the history list can say.
+    origin: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    entity_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    metric_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    reviewed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    issue_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class SemanticLayerChangeRow(Base):
+    """Which entry a version changed, as keys. The content is recomputed.
+
+    One row per entry per version, in `app/semantic/diff.py`'s vocabulary. The
+    before and after of an entry are two immutable versions away, so storing
+    them here would be a second copy of every definition for a query that only
+    needs the index.
+    """
+
+    __tablename__ = "semantic_layer_changes"
+    __table_args__ = (
+        Index(
+            "ix_semantic_changes_entry", "connection_id", "entity_key", "item_key"
+        ),
+        Index("ix_semantic_changes_version", "version_id"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    version_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("semantic_layer_versions.id", ondelete="CASCADE"), nullable=False
+    )
+    connection_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), nullable=False)
+    kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    entity_key: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    item_key: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    affects_sql: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
 
 
 class SemanticJobRow(Base):
@@ -781,6 +872,9 @@ class Run(Base, TimestampMixin):
     )
     model_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     prompt_version: Mapped[str] = mapped_column(String(20), default="v1")
+    #: Which semantic layer version answered: `0` when no layer reached the
+    #: prompt, NULL on a run from before `0032`, which recorded nothing.
+    semantic_layer_version: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="QUEUED")
     attempt_count: Mapped[int] = mapped_column(Integer, default=0)
     repair_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -1874,6 +1968,9 @@ class BenchmarkRun(Base):
     held_out_matched: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     taught_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     taught_matched: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: Which semantic layer version was scored — `0` when none reached the
+    #: prompt, NULL before `0032`. The same meaning as on `runs`.
+    semantic_layer_version: Mapped[int | None] = mapped_column(Integer)
 
     error_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

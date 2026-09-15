@@ -22,7 +22,8 @@ import type {
   ReportSectionResult,
   ReportSummary, Review, Role, RunDetail, RunEvent, RunKnowledge, SchemaSnapshot,
   Reach, ScopedPrivilege, ServiceAccount, ServiceKey, ShareCheck, Team,
-  SemanticDocument, SemanticJob, Suggestion,
+  SemanticChange, SemanticChangeList, SemanticDocument, SemanticHistoryEntry,
+  SemanticJob, SemanticVersionList, Suggestion,
   SemanticLayer, SqlDraft, TemplateCheckResult, TemplateParam,
   TilePosition, TileResult, TileType, TestResult, UsageSeries, UsageTotal, User,
 } from './types'
@@ -550,11 +551,54 @@ export const connections = {
 export const semantic = {
   get: (connectionId: string) =>
     get<SemanticLayer>(`/connections/${connectionId}/semantic`),
-  save: (connectionId: string, document: SemanticDocument) =>
+  // Every write names the revision it was made against, and a stale one is a
+  // 409 (`E_SEMANTIC_CONFLICT`) rather than an overwrite of whoever wrote in
+  // between. `note` is why; the change list is the what.
+  save: (
+    connectionId: string,
+    document: SemanticDocument,
+    { baseRevision, note = '' }: { baseRevision: number; note?: string },
+  ) =>
     request<SemanticLayer>(`/connections/${connectionId}/semantic`, {
       method: 'PUT',
-      body: JSON.stringify({ document }),
+      body: JSON.stringify({ document, base_revision: baseRevision, note }),
     }),
+  // The server's one differ. Saves nothing — how the editor learns whether its
+  // edits change numbers, and what to list after a conflict.
+  diff: (connectionId: string, before: SemanticDocument, after: SemanticDocument) =>
+    post<SemanticChange[]>(`/connections/${connectionId}/semantic/diff`, { before, after }),
+  versions: (connectionId: string, { before, limit }: { before?: number; limit?: number } = {}) => {
+    const params = new URLSearchParams()
+    if (before !== undefined) params.set('before', String(before))
+    if (limit !== undefined) params.set('limit', String(limit))
+    const query = params.toString()
+    return get<SemanticVersionList>(
+      `/connections/${connectionId}/semantic/versions${query ? `?${query}` : ''}`,
+    )
+  },
+  changes: (connectionId: string, version: number, against?: number) =>
+    get<SemanticChangeList>(
+      `/connections/${connectionId}/semantic/versions/${version}/changes${
+        against !== undefined ? `?against=${against}` : ''
+      }`,
+    ),
+  restore: (
+    connectionId: string,
+    version: number,
+    { baseRevision, note = '' }: { baseRevision: number; note?: string },
+  ) =>
+    post<SemanticLayer>(
+      `/connections/${connectionId}/semantic/versions/${version}/restore`,
+      { base_revision: baseRevision, note },
+    ),
+  history: (connectionId: string, { entity, item }: { entity?: string; item?: string }) => {
+    const params = new URLSearchParams()
+    if (entity) params.set('entity', entity)
+    if (item) params.set('item', item)
+    return get<SemanticHistoryEntry[]>(
+      `/connections/${connectionId}/semantic/history?${params.toString()}`,
+    )
+  },
   remove: (connectionId: string) => del(`/connections/${connectionId}/semantic`),
   generate: (
     connectionId: string,

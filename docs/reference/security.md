@@ -248,6 +248,23 @@ reads, under the same budget. On the way back, `_known_values()` filters the
 model's proposed `value_meanings` down to values already present in the
 snapshot, so a model cannot invent a key and have it stored as fact.
 
+**Versions are the same content class as the document.** Since migration `0032`
+every save of the layer is kept as an immutable version
+([plans/semantic-layer-model.md](../plans/semantic-layer-model.md) §7.2):
+
+- History exposes old versions — including `value_meanings` since removed from
+  the live document — to anyone with `select` on the layer. That is the person
+  who could read them while they were live, and revoking a grant revokes the
+  history with it, because every history route asks for the same `select`.
+- `value_meanings` in any version still reach a prompt only through
+  `HintBudget.value_lists`, at render time; nothing about versions changes a
+  render-time gate, and no run reads anything but the published copy.
+- Nothing in the layer is executed, so no version, restore or diff is a guard
+  entry point. The audit rows (`semantic.saved`, `.restored`, `.deleted`,
+  `.conflict`, `.generation.*`) carry versions and counts only; the names of
+  the entries that changed live in `semantic_layer_changes`, behind the
+  layer's own `select`.
+
 ### 2.3 Reports (#10–#12) in detail
 
 A report is the only feature that **refuses to run under a narrow policy**

@@ -14,27 +14,41 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Query, Request, status
 from sqlalchemy import select
 
 from app.api.deps import AuthzDep, CtxDep, DbDep, SettingsDep
+from app.api.errors import problem_response
 from app.api.schemas import (
+    SemanticChangeList,
+    SemanticChangeRead,
+    SemanticDiffRequest,
     SemanticExpressionCheck,
     SemanticExpressionResult,
     SemanticGenerateRequest,
+    SemanticHistoryEntry,
     SemanticJobRead,
     SemanticLayerRead,
+    SemanticRestoreRequest,
     SemanticSaveRequest,
     SemanticTableFact,
+    SemanticVersionList,
+    SemanticVersionRead,
+    SemanticVersionSummary,
 )
 from app.api.v1.access import attach_access_routes
-from app.core.errors import NotFoundError, ValidationError
+from app.core.errors import (
+    NotFoundError,
+    SemanticBaseRevisionRequiredError,
+    SemanticConflictError,
+    ValidationError,
+)
 from app.domain.ports.authz import ResourceRef
 from app.domain.value_objects.authz import Privilege, ResourceType
-from app.infra.db.models import DatabaseConnection, SemanticJobRow
-from app.semantic import SemanticDocument, check_expression
+from app.infra.db.models import DatabaseConnection, SemanticJobRow, SemanticLayerVersionRow
+from app.semantic import AFFECTS_SQL, Change, SemanticDocument, check_expression
 from app.services.policy import require
-from app.services.semantic_service import SemanticService
+from app.services.semantic_service import SemanticService, VersionSummary
 
 router = APIRouter(prefix="/connections/{connection_id}/semantic", tags=["semantic"])
 
@@ -87,9 +101,12 @@ async def _read_payload(
 ) -> SemanticLayerRead:
     doc, row, facts = await service.read(connection)
     job = await service.latest_job(connection.id)
+    published = facts["published"]
     return SemanticLayerRead(
         document=doc.model_dump(mode="json"),
-        exists=row is not None,
+        # A row holding the empty document is a deleted layer, and the editor
+        # offers it exactly what it offers a connection that never had one.
+        exists=row is not None and bool(row.document),
         enabled=connection.semantic_layer_enabled,
         entity_count=len(doc.entities),
         metric_count=doc.metric_count,
@@ -104,7 +121,42 @@ async def _read_payload(
         generated_at=(row.generated_at if row else None),
         edited_at=(row.edited_at if row else None),
         job=_job_read(job),
+        revision=(row.revision if row else 0),
+        published_version=(row.published_version if row else None),
+        published_by_name=facts["published_by_name"],
+        published_at=(published.created_at if published else None),
+        published_note=(published.note if published else ""),
+        published_origin=(published.origin if published else {}),
     )
+
+
+def _change_read(change: Change) -> SemanticChangeRead:
+    return SemanticChangeRead(**change.as_dict())
+
+
+def _summary(
+    row: SemanticLayerVersionRow, author: str, kinds: dict[str, int]
+) -> dict[str, Any]:
+    return {
+        "version": row.version,
+        "parent_version": row.parent_version,
+        "published_by": row.published_by,
+        "published_by_name": author,
+        "note": row.note,
+        "origin": row.origin or {},
+        "schema_version": row.schema_version,
+        "entity_count": row.entity_count,
+        "metric_count": row.metric_count,
+        "reviewed_count": row.reviewed_count,
+        "issue_count": row.issue_count,
+        "created_at": row.created_at,
+        "changes": kinds,
+        "affects_sql": any(kind in AFFECTS_SQL for kind in kinds),
+    }
+
+
+def _version_summary(item: VersionSummary) -> SemanticVersionSummary:
+    return SemanticVersionSummary(**_summary(item.row, item.author, item.kinds))
 
 
 @router.get("", response_model=SemanticLayerRead)
@@ -130,21 +182,34 @@ async def save_semantic_layer(
     settings: SettingsDep,
     authz: AuthzDep,
 ) -> SemanticLayerRead:
-    """Replace the document wholesale.
+    """Replace the document wholesale, as the next version.
 
     The whole document rather than a patch per entity: an edit routinely moves
     a definition between entities (a metric belongs on the fact table, not the
     dimension the user opened), and a partial update cannot express that
     atomically.
+
+    `base_revision` is required, and a stale one is a 409 naming who wrote in
+    the meantime. That 409 is *returned* rather than raised so its audit row
+    commits — the refusal is what happened.
     """
     connection = await _authorized(db, authz, connection_id, ctx, Privilege.MODIFY)
+    if payload.base_revision is None:
+        raise SemanticBaseRevisionRequiredError(
+            "Say which revision this document was edited from (`base_revision`)."
+        )
     try:
         doc = SemanticDocument.model_validate(payload.document)
     except Exception as err:
         raise ValidationError("This semantic layer document is malformed.") from err
 
     service = SemanticService(db, settings, authz)
-    await service.save(connection, doc)
+    try:
+        await service.save(
+            connection, doc, base_revision=payload.base_revision, note=payload.note, ctx=ctx
+        )
+    except SemanticConflictError as err:
+        return problem_response(err)  # type: ignore[return-value]
     return await _read_payload(service, connection)
 
 
@@ -152,8 +217,169 @@ async def save_semantic_layer(
 async def delete_semantic_layer(
     connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep, authz: AuthzDep
 ) -> None:
+    """Publish an empty document as a tombstone version. History is kept (D10)."""
     connection = await _authorized(db, authz, connection_id, ctx, Privilege.DELETE)
-    await SemanticService(db, settings, authz).delete(connection.id)
+    await SemanticService(db, settings, authz).delete(connection, ctx=ctx)
+    await db.flush()
+
+
+@router.post("/diff", response_model=list[SemanticChangeRead])
+async def diff_semantic_documents(
+    connection_id: UUID,
+    payload: SemanticDiffRequest,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    authz: AuthzDep,
+) -> list[SemanticChangeRead]:
+    """What changed between two documents, in the server's one vocabulary.
+
+    `select`, and it saves nothing: it is how the editor learns whether its
+    pending edits change numbers (and so ask for a note), and how a conflict
+    lists the edits a person has to make again. The frontend never compares two
+    documents itself.
+    """
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.SELECT)
+    changes = await SemanticService(db, settings, authz).diff(
+        connection, payload.before, payload.after
+    )
+    return [_change_read(c) for c in changes]
+
+
+@router.get("/versions", response_model=SemanticVersionList)
+async def list_semantic_versions(
+    connection_id: UUID,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    authz: AuthzDep,
+    limit: int = Query(default=50, ge=1, le=200),
+    before: int | None = Query(default=None, ge=1),
+) -> SemanticVersionList:
+    """Every version of this layer, newest first, paged by version number."""
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.SELECT)
+    service = SemanticService(db, settings, authz)
+    items = await service.versions(connection.id, limit=limit, before=before)
+    head = await service.layer_row(connection.id)
+    return SemanticVersionList(
+        versions=[_version_summary(item) for item in items],
+        revision=head.revision if head else 0,
+        published_version=head.published_version if head else None,
+        next_before=(
+            items[-1].row.version
+            if len(items) == limit and items[-1].row.version > 1 else None
+        ),
+    )
+
+
+@router.get("/versions/{number}", response_model=SemanticVersionRead)
+async def get_semantic_version(
+    connection_id: UUID,
+    number: int,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    authz: AuthzDep,
+) -> SemanticVersionRead:
+    """One version's document, as it was bound when it was published."""
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.SELECT)
+    service = SemanticService(db, settings, authz)
+    row = await service.version(connection.id, number)
+    _, _, changes = await service.changes(connection.id, number)
+    kinds: dict[str, int] = {}
+    for change in changes:
+        kinds[change.kind] = kinds.get(change.kind, 0) + 1
+    return SemanticVersionRead(
+        **_summary(row, await service.version_author(row), kinds),
+        document=row.document or {},
+    )
+
+
+@router.get("/versions/{number}/changes", response_model=SemanticChangeList)
+async def get_semantic_version_changes(
+    connection_id: UUID,
+    number: int,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    authz: AuthzDep,
+    against: int | None = Query(default=None, ge=1),
+) -> SemanticChangeList:
+    """A version's changes against its parent, or against `against`."""
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.SELECT)
+    _, base, changes = await SemanticService(db, settings, authz).changes(
+        connection.id, number, against=against
+    )
+    return SemanticChangeList(
+        version=number, against=base, changes=[_change_read(c) for c in changes]
+    )
+
+
+@router.post("/versions/{number}/restore", response_model=SemanticLayerRead)
+async def restore_semantic_version(
+    connection_id: UUID,
+    number: int,
+    payload: SemanticRestoreRequest,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    authz: AuthzDep,
+) -> SemanticLayerRead:
+    """Publish an old version again, as a new one — `modify`, like a save.
+
+    Bound to the current snapshot: an entry whose table has gone since comes
+    back flagged rather than missing.
+    """
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.MODIFY)
+    if payload.base_revision is None:
+        raise SemanticBaseRevisionRequiredError(
+            "Say which revision you are restoring over (`base_revision`)."
+        )
+    service = SemanticService(db, settings, authz)
+    try:
+        await service.restore(
+            connection, number,
+            base_revision=payload.base_revision, note=payload.note, ctx=ctx,
+        )
+    except SemanticConflictError as err:
+        return problem_response(err)  # type: ignore[return-value]
+    return await _read_payload(service, connection)
+
+
+@router.get("/history", response_model=list[SemanticHistoryEntry])
+async def get_semantic_history(
+    connection_id: UUID,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    authz: AuthzDep,
+    entity: str | None = Query(default=None, max_length=512),
+    item: str | None = Query(default=None, max_length=512),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> list[SemanticHistoryEntry]:
+    """Every change to one entry, newest first.
+
+    `entity` alone is a table and everything on it; `entity` and `item` are one
+    column or metric; `item` with an empty `entity` is a glossary term.
+    """
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.SELECT)
+    entries = await SemanticService(db, settings, authz).history(
+        connection.id, entity_key=entity, item_key=item, limit=limit
+    )
+    return [
+        SemanticHistoryEntry(
+            version=e.version.version,
+            kind=e.change.kind,
+            entity_key=e.change.entity_key,
+            item_key=e.change.item_key,
+            affects_sql=e.change.affects_sql,
+            published_by_name=e.author,
+            note=e.version.note,
+            origin=e.version.origin or {},
+            created_at=e.version.created_at,
+        )
+        for e in entries
+    ]
 
 
 @router.post("/check", response_model=SemanticExpressionResult)

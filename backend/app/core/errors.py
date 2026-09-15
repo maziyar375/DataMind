@@ -62,6 +62,39 @@ class ConflictError(AppError):
     title = "Conflicting state"
 
 
+class SemanticConflictError(ConflictError):
+    """Somebody wrote the semantic layer after this writer read it.
+
+    Carries `revision`, `published_version`, `updated_by`, `updated_by_name` and
+    `updated_at`, so the editor can say who and offer to show what changed
+    rather than printing a status code. A refusal, never a merge: two people's
+    edits are not reconciled on the server (D6 of
+    `docs/plans/semantic-layer-model.md`).
+    """
+
+    code = "E_SEMANTIC_CONFLICT"
+    title = "The semantic layer changed while you were editing"
+
+
+class SemanticNoChangesError(ValidationError):
+    """A write whose document is the published one. No version is written."""
+
+    code = "E_SEMANTIC_NO_CHANGES"
+    title = "Nothing changed"
+
+
+class SemanticBaseRevisionRequiredError(ValidationError):
+    """A write that did not say which revision it was made against.
+
+    Refused rather than treated as *overwrite anyway*: a client that omits it
+    has not been updated, and the lost update is exactly what the column exists
+    to stop.
+    """
+
+    code = "E_SEMANTIC_BASE_REVISION_REQUIRED"
+    title = "Base revision required"
+
+
 class SqlRejectedError(AppError):
     """The SQL guard refused to let a statement through. Never reaches a driver."""
 
