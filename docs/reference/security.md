@@ -950,7 +950,7 @@ service kept true so a rollback stayed a config flip — and **Phase 10 dropped
 the column** (migration `0029`), because a cache of a fact nobody consults is a
 field that can only be wrong. A CI grep (`make authz-check`) and
 `test_authz_conformance.py` both fail the build on anything that reads a role
-string to decide something. What decides is a **capability**: one of eighteen
+string to decide something. What decides is a **capability**: one of nineteen
 app-wide verbs,
 carried by roles, held by principals, and checked in a route dependency —
 `deps.needs(Capability.ROLE_MANAGE)` — which runs *before* the handler body and
@@ -976,6 +976,44 @@ weaker version:
   reverts local edits every restart, is the failure mode being avoided. A
   system role's name and description are editable; it cannot be deleted, and
   neither can any role somebody still holds.
+
+**`usage.read`, and why reading a number is a capability.** The nineteenth verb
+(migration `0030`) opens `GET /usage/users` and `GET /usage/total` — what
+everybody's questions cost in tokens, and what the installation has spent. It
+sits in the oversight group beside `audit.read` and makes the same argument: a
+usage log is a record **about people**, and reading one is an act worth naming
+even though it changes nothing. Administrator and **Auditor** hold it, the
+latter being precisely the role that reads such records and writes none.
+
+Two properties bound what it opens:
+
+* **Counts, never content.** No prompt text, no question, no generated SQL and
+  no result value reaches a usage figure — the three tables it reads carry token
+  counts and a price, and the endpoint aggregates them. "Ali asked 40 questions
+  costing 180k tokens" is a different disclosure from "here is what Ali asked",
+  and only the first one is available here.
+* **Your own usage needs no capability.** `GET /usage/me` scopes to the caller
+  and takes no parameter that could widen it, so there is nothing to gate: the
+  figure is already the caller's. Splitting the routes rather than conditioning
+  one gate on an argument value is what keeps each route resolving to exactly
+  one cell of the access-control rulebook.
+
+**Where it is read.** The **Token usage** rail section
+(`frontend/src/pages/UsagePage.tsx`) is the only screen over these three
+routes. It is in the rail for *everybody*, because the ungated scope is the
+one everybody has; `usage.read` adds two tabs inside it — every person, and
+the installation total — and hides them again when the capability is not held.
+**That hiding is an affordance and never the boundary**: an ordinary user who
+types `/usage/people`, or calls `GET /api/v1/usage/users` with their own token,
+is refused by the API with a 403 naming the capability. That refusal is
+verified end-to-end rather than asserted, because a tab strip proves nothing —
+[the usage plan](../plans/llm-observability-v2-implementation.md)'s Phase 6
+records the `curl`.
+
+It is deliberately **not** a `PRIVILEGED_CAPABILITY`. That set is the four a
+leaked API key must not reach because they can mint an administrator; reading
+token counts mints nothing, and a service account reporting installation spend
+to a finance system is a legitimate thing to want.
 
 **Teams.** A role reaches a principal directly *or* through a team they are
 in, and the two are one `WHERE` with two arms rather than two round trips — so

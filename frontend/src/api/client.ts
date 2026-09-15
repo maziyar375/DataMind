@@ -24,7 +24,7 @@ import type {
   Reach, ScopedPrivilege, ServiceAccount, ServiceKey, ShareCheck, Team,
   SemanticDocument, SemanticJob, Suggestion,
   SemanticLayer, SqlDraft, TemplateCheckResult, TemplateParam,
-  TilePosition, TileResult, TileType, TestResult, User,
+  TilePosition, TileResult, TileType, TestResult, UsageSeries, UsageTotal, User,
 } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? '/api/v1'
@@ -350,6 +350,45 @@ export const audit = {
    *  served rather than hardcoded, so the filter never offers a word that
    *  matches nothing and never misses one that does. */
   actions: () => get<string[]>('/audit/actions'),
+}
+
+// ── token usage ───────────────────────────────────────────────────────────
+/**
+ * What the models cost, in the three scopes the backend serves.
+ *
+ * **Three calls rather than one taking a user id**, because that is how the
+ * gate is drawn: `mine` is the caller and needs no capability, and the other
+ * two need `usage.read`. A screen renders `mine` for everybody and the other
+ * two only where `usage.read` is held — and the backend refuses either way,
+ * so the check here is an affordance and never the boundary.
+ *
+ * `from`/`to` are ISO instants and both are optional: the server defaults to
+ * the last thirty days and clamps anything wider than a year, so a caller
+ * cannot ask for an unbounded read of three growing tables.
+ */
+export const usage = {
+  /** Your own. No capability — the scope is you, and no argument widens it. */
+  mine: (params: { since?: string; until?: string } = {}) =>
+    get<UsageSeries>(`/usage/me${dayRange(params)}`),
+  /** Everybody, one series each, in one response. `usage.read`. */
+  byPerson: (params: { since?: string; until?: string } = {}) =>
+    get<UsageSeries[]>(`/usage/users${dayRange(params)}`),
+  /** The installation, including spend whose actor has been deleted, which is
+   *  what `unattributed` measures. `usage.read`. */
+  total: (params: { since?: string; until?: string } = {}) =>
+    get<UsageTotal>(`/usage/total${dayRange(params)}`),
+}
+
+/** The two optional date parameters, as a query string. Not named
+ *  `window` — that is the global, and shadowing it in a module that may
+ *  later want `window.location` is a bug waiting for the person who does. */
+function dayRange(params: { since?: string; until?: string }): string {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== '') query.set(key, value)
+  }
+  const suffix = query.toString()
+  return suffix ? `?${suffix}` : ''
 }
 
 // ── access ────────────────────────────────────────────────────────────────

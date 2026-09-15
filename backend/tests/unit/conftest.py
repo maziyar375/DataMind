@@ -115,6 +115,18 @@ _TABLES = (
     # `messages` comes with it — `runs.user_message_id` is a foreign key, and
     # a metadata copy missing the target table cannot be created at all.
     "messages", "runs", "run_steps",
+    # The other two tables that record what a model call cost. `usage_service`
+    # unions all three, and a fixture holding only `runs` would let a union
+    # that silently dropped an arm pass — which is the whole failure the
+    # "all three tables contribute" test exists to catch.
+    "report_runs", "semantic_jobs",
+    # What `_hydrate_run` reads beside the run itself. Present so a test can
+    # serialise a turn through the **real** read path rather than through the
+    # withheld branch, which is the only one that touches none of them — and
+    # which is exactly the branch that would hide a field the serialiser drops.
+    # `knowledge_templates` is here only as the target of two foreign keys.
+    "artifacts", "generated_queries", "knowledge_templates",
+    "knowledge_template_hits", "answer_feedback",
 )
 
 
@@ -162,6 +174,10 @@ class AsyncSessionShim:
     async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
         self.statements.append(statement)
         return self._session.execute(statement, *args, **kwargs)
+
+    async def scalar(self, statement: Any, *args: Any, **kwargs: Any) -> Any:
+        self.statements.append(statement)
+        return self._session.scalar(statement, *args, **kwargs)
 
     async def get(self, model: type, primary_key: Any) -> Any:
         return self._session.get(model, primary_key)

@@ -90,7 +90,7 @@ make authz-check  # prove no module decides access for itself
 make up / down / logs / secrets / migrate / fixtures / db-repair
 ```
 
-From `frontend/`: `npm run typecheck`, `npm run build`, `npm test` (fifteen
+From `frontend/`: `npm run typecheck`, `npm run build`, `npm test` (sixteen
 suites). **`npm run lint` is a dead script** — eslint is neither a devDependency
 nor configured.
 
@@ -116,7 +116,9 @@ backend/app/
                   start reconciler), CORS, correlation-id middleware, health.
   api/            HTTP shape ONLY — no business logic.
     v1/           auth, users, connections, llm_configs, semantic, knowledge,
-                  conversations, dashboards, drafts (SQL), reports
+                  conversations, dashboards, drafts (SQL), reports, usage
+                  (three read routes: your own needs no capability because the
+                  scope IS the caller; the other two need `usage.read`)
     deps.py       FastAPI dependencies (current user, session, settings)
     schemas.py    Pydantic request/response DTOs (no secrets ever in reads)
     errors.py     RFC 7807 problem+json mapping
@@ -134,7 +136,15 @@ backend/app/
                   no results, no connection internals — and an imported
                   statement is hostile input like any other),
                   query_service (execute_saved_sql — the tile/report entry point
-                  into guarded execution), sql_draft_service, bootstrap, policy
+                  into guarded execution), sql_draft_service,
+                  usage_service (what the models cost: one union over runs,
+                  report_runs and semantic_jobs, bucketed by day. Nulls are
+                  never summed as zero — they are counted into `unmeasured`
+                  and `unpriced` instead — and the per-person view inner joins
+                  `users` while the installation total joins nothing, so a
+                  departed actor's spend leaves the first and stays in the
+                  second. That gap is deliberate: an outer join would attribute
+                  it to whoever remains), bootstrap, policy
   pipeline/       the AI run: state.py (typed RunState), graph.py (the compiled
                   LangGraph + the node adapter), pipeline.py (the
                   AnalyticsPipeline facade over it),
@@ -277,7 +287,11 @@ frontend/src/
                             (ask or write the SQL; one guard check for both),
                             knowledge-queue.ts (how much curation work is
                             waiting, per connection and in total — DOM-free,
-                            `npm run test:queue`), provider-params.ts (the
+                            `npm run test:queue`), usage-chart.ts (the token
+                            chart's Vega-Lite spec, written rather than
+                            planned, plus the sentences that stop a partial
+                            total being printed as a whole one — DOM-free,
+                            `npm run test:usage`), provider-params.ts (the
                             translation between a generated form field and the
                             JSON value a provider's API takes — DOM-free,
                             `npm run test:params`), notifications.tsx (the
@@ -292,7 +306,14 @@ frontend/src/
                             redrawing charts at page width —
                             `npm run test:print`)
   pages/                    Login, Chat, DataSources, LlmProviders,
-                            Dashboards, Reports, Knowledge (`/knowledge` — the
+                            Dashboards, Reports,
+                            Usage (`/usage` — what the models cost, in three
+                            scopes: your own, which needs no capability
+                            because the scope IS you, and — behind
+                            `usage.read` — every person and the installation
+                            total, as `useMatch` sub-routes. Counts only: no
+                            question, no answer and no SQL is on it),
+                            Knowledge (`/knowledge` — the
                             curation console promoted out of a connection's
                             fourth tab; `KnowledgeTab` behind a connection
                             picker, reached from the rail or from the Data
@@ -724,13 +745,14 @@ at commit time and shows up as drift a release later. Full tour:
   A literal hex or `oklch()` in a component is a bug in both themes — one of
   them just has not been looked at yet. Chart colours are the one exception and
   they live in `components/palette.ts`, tested apart from React.
-- **The fourteen DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
+- **The fifteen DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
   `table-format.ts`, `dashboard-document.ts`, `palette.ts`, `chat-format.ts`,
   `report-document.ts`, `report-readiness.ts`, `report-print.ts`,
   `semantic-drift.ts`, `semantic-metrics.ts`, `knowledge-template.ts`,
-  `thinking.ts`, `knowledge-queue.ts`, `provider-params.ts` — they hold the
+  `thinking.ts`, `knowledge-queue.ts`, `provider-params.ts`, `usage-chart.ts`
+  — they hold the
   logic whose failures are quiet, they are (with `scripts/permissions.test.ts`,
-  the fifteenth suite) the *only* tested code in the frontend, and their suites
+  the sixteenth suite) the *only* tested code in the frontend, and their suites
   are plain `node --experimental-strip-types` scripts. **One React import turns
   a suite into a thing that cannot run.**
 - **Text a person wrote gets `dir={dirOf(value)}`.** The product ships Persian.

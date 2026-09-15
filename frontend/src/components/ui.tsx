@@ -480,6 +480,18 @@ export const Icon = {
       <path d="M20.5 14.3A8.5 8.5 0 1 1 9.7 3.5a6.8 6.8 0 0 0 10.8 10.8z" />
     </svg>
   ),
+  // Token usage. Bars standing on a baseline, which is the picture the page
+  // itself draws — `Zap` was the near miss, and it is already the *verb* on
+  // "Test connection" in two places, so a rail row wearing it would be a
+  // section named after a button.
+  Bars: ({ size = 17, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <path d="M3 21h18" />
+      <path d="M6.5 21v-7" />
+      <path d="M12 21V6" />
+      <path d="M17.5 21v-11" />
+    </svg>
+  ),
 }
 
 // ── hoverable button ──────────────────────────────────────────────────────

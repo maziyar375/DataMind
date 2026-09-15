@@ -7,7 +7,7 @@ OpenAPI schema to prove it.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import date, datetime
 from types import MappingProxyType
 from typing import Any, Literal
 from uuid import UUID
@@ -1127,6 +1127,80 @@ class AuditEntry(BaseModel):
     #: Identifiers and counts. Never SQL, question text or result rows — see
     #: `services/audit.py`, which enforces that rather than trusting it.
     detail: dict[str, Any] = Field(default_factory=dict)
+
+
+# ── token usage ──────────────────────────────────────────────────────────
+# The read side of migration `0023`'s per-call accounting. One shape, three
+# uses: your own usage, everybody's, and the installation's.
+#
+# **Counts, never content.** No question, no prompt, no generated SQL and no
+# result value is carried here — only integers, a price and a day. "Ali asked
+# 40 questions costing 180k tokens" is a different disclosure from "here is
+# what Ali asked", and only the first one is available through these DTOs.
+class UsageBucket(BaseModel):
+    """One day's spend, for one scope.
+
+    `cost_usd` is `None` — not `0.0` — when nothing in the day was priced.
+    Zero is a measurement and this is the absence of one, and a chart that
+    drew them the same way would report a self-hosted deployment as free.
+    """
+
+    day: date
+    #: Measured tokens only. A run that reported no count contributes nothing
+    #: here and is counted into `UsageSeries.unmeasured` instead — it is never
+    #: summed as zero.
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float | None = None
+    #: How many operations are behind the figures above. A day with 400 runs
+    #: and one with 4 are different facts about the same token count.
+    runs: int = 0
+
+
+class UsageSeries(BaseModel):
+    """One scope's usage: a total, and the days it is made of.
+
+    The invariant the screen rests on: **the total equals the sum of the
+    buckets.** Both come from the same rows in the same query, so the two
+    cannot drift.
+    """
+
+    #: `None` on the installation total, which is nobody's.
+    actor_id: UUID | None = None
+    #: A **display name, never an address** — the rule `AuditEntry` already
+    #: states, for the same reason: a usage screen answers *"who spent this"*
+    #: with something a person recognises, and an email is a personal
+    #: identifier the screen has no need of.
+    actor: str = ""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float | None = None
+    runs: int = 0
+    #: How many of those operations reported no token count at all. Non-zero
+    #: means every figure above understates, and the screen says so.
+    unmeasured: int = 0
+    #: How many contributed tokens but no price. Non-zero means `cost_usd` is
+    #: partial, and the screen says *that* — it never prints a bare total.
+    #: Two counts rather than one flag, because a reader needs to know *how*
+    #: partial a total is before deciding whether to act on it.
+    unpriced: int = 0
+    buckets: list[UsageBucket] = Field(default_factory=list)
+
+
+class UsageTotal(UsageSeries):
+    """The installation's own usage, and the size of the departed-actor gap.
+
+    The per-person views inner join `users`; this one does not join at all, so
+    a deleted person's spend leaves the first and stays here. The gap between
+    them is real and correct — an outer join "fixing" it would attribute a
+    departed person's spend to whoever remains — and `unattributed` is its
+    size, carried on the wire so the screen states the difference rather than
+    letting a reader discover it by adding the people up and finding a
+    shortfall.
+    """
+
+    unattributed: int = 0
+    unattributed_tokens: int = 0
 
 
 # ── the embedding matcher (Phase 7) ──────────────────────────────────────
@@ -2344,12 +2418,28 @@ class MessageCreate(BaseModel):
 
 
 class RunStepRead(BaseModel):
+    """One node's row in the trail, and what that node cost.
+
+    The three token fields are **`None` by default and never `0`**, which is
+    the whole of the rule the columns were added under: `validate` and
+    `execute` call no model, and a row of zeroes beside `generate` would read
+    as a measurement of nothing rather than as the absence of one. The chip
+    renders them only where `llm_calls` is set and above zero, so a node that
+    called nothing is unchanged.
+
+    `llm_calls` is not derivable from the step existing: `generate` repairs,
+    and a repaired call is two calls that were both paid for.
+    """
+
     model_config = ConfigDict(from_attributes=True)
     seq: int
     name: str
     status: str
     detail: str | None = None
     duration_ms: int | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    llm_calls: int | None = None
 
 
 class ArtifactRead(BaseModel):
@@ -2413,6 +2503,18 @@ class RunRead(BaseModel):
     repair_count: int = 0
     total_latency_ms: int | None = None
     db_latency_ms: int | None = None
+    #: What the whole turn cost, as the run row recorded it — and it equals the
+    #: sum of `steps` below, because both are written from the same calls. Null
+    #: on a run written before the counting existed, and on one whose provider
+    #: reported no usage; the trail's header prints a total only when there is
+    #: one, never `0 tokens`, which reads as a measurement and is not one.
+    #:
+    #: **No `cost_usd` here.** A price on a chat turn is a different screen's
+    #: question — the usage screen answers it, over a window, where a partial
+    #: total can say it is partial. Beside one answer it is a number nobody
+    #: can act on.
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
     model_snapshot: dict[str, Any] = Field(default_factory=dict)
     #: The database this turn was asked against, so a withheld turn's
     #: explainer can name the resource the reader needs access to. An

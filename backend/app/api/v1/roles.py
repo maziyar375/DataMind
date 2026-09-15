@@ -5,9 +5,9 @@ both arrive through `deps.needs(...)` so the check runs before the handler body
 and cannot be forgotten by whoever adds the next route. That is the answer to
 OWASP API1:2023, and it is the reason there is no `if ctx.…` anywhere below.
 
-**The capability catalog is served, not hardcoded in the SPA.** The eighteen
+**The capability catalog is served, not hardcoded in the SPA.** The nineteen
 words are a closed enum in the backend; a checklist that shipped its own copy
-would, on the day a nineteenth arrived, be a permission nobody could grant and
+would, on the day a twentieth arrived, be a permission nobody could grant and
 nobody could see was missing.
 """
 from __future__ import annotations
@@ -44,6 +44,7 @@ _GROUPS: dict[Capability, str] = {
     Capability.ROLE_MANAGE: "People",
     Capability.AUDIT_READ: "Oversight",
     Capability.ACCESS_REVIEW: "Oversight",
+    Capability.USAGE_READ: "Oversight",
     Capability.CONNECTION_CREATE: "Creation",
     Capability.LLM_CONFIG_CREATE: "Creation",
     Capability.DASHBOARD_CREATE: "Creation",
@@ -67,6 +68,7 @@ _LABELS: dict[Capability, str] = {
     Capability.ROLE_MANAGE: "Create roles and assign them to people.",
     Capability.AUDIT_READ: "Read the audit log.",
     Capability.ACCESS_REVIEW: "Ask who can reach a resource, and why.",
+    Capability.USAGE_READ: "Read what everybody's questions cost in tokens.",
     Capability.CONNECTION_CREATE: "Add database connections.",
     Capability.LLM_CONFIG_CREATE: "Add model providers.",
     Capability.DASHBOARD_CREATE: "Create dashboards.",
@@ -102,7 +104,7 @@ def _read(role: Role, holders: int = 0) -> RoleRead:
 
 @router.get("/capabilities", response_model=list[CapabilityCatalogEntry])
 async def capability_catalog(ctx: RoleReadDep) -> list[CapabilityCatalogEntry]:
-    """The eighteen words a role can carry, grouped and explained.
+    """The nineteen words a role can carry, grouped and explained.
 
     Declared above `/{role_id}` so the literal path wins the match.
     """

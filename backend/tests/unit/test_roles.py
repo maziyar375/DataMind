@@ -33,6 +33,7 @@ import sqlalchemy as sa
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.domain.value_objects.authz import (
     ADMINISTRATOR,
+    PRIVILEGED_CAPABILITIES,
     Capability,
     Privilege,
     ResourceType,
@@ -60,6 +61,14 @@ if "alembic" not in sys.modules:  # a revision module imports `alembic.op` only
 MIGRATION = importlib.import_module("app.infra.db.migrations.versions.0024_roles")
 TEAMS_MIGRATION = importlib.import_module(
     "app.infra.db.migrations.versions.0025_teams"
+)
+#: `0024` seeds the eight roles; every later migration that grants a capability
+#: to one of them is a second place the seeded set is decided. They are listed
+#: here so "what does Administrator carry?" is answered by the whole chain
+#: rather than by its first link — a capability added in `0030` and asserted
+#: against `0024` alone would look like a regression in the seed.
+USAGE_MIGRATION = importlib.import_module(
+    "app.infra.db.migrations.versions.0030_usage_capability"
 )
 
 
@@ -114,6 +123,28 @@ SPEC: dict[str, tuple[set[str], set[tuple[str, str]]]] = {
 }
 
 
+#: What the migrations *after* `0024` grant, transcribed the same way `SPEC`
+#: is: by reading the plan rather than by importing the migration. `0030` adds
+#: the nineteenth capability to two roles and to no others.
+#:
+#: The pairing matters as much as the set. `usage.read` answers "what did
+#: everybody's questions cost?", which is a record about people — so it belongs
+#: to the two roles whose job is reading such records, and to neither of the
+#: four roles below that build things or ask questions.
+LATER: dict[str, set[str]] = {
+    "Administrator": {"usage.read"},
+    "Auditor": {"usage.read"},
+}
+
+
+def _granted_later(role: str) -> set[str]:
+    """What the migrations after `0024` add to one seeded role's capabilities."""
+    later = set()
+    if role in USAGE_MIGRATION.ROLES:
+        later.add(USAGE_MIGRATION.CAPABILITY)
+    return later
+
+
 def _seeded() -> dict[str, tuple[set[str], set[tuple[str, str]]]]:
     return {
         name: (set(capabilities), set(scoped))
@@ -152,10 +183,57 @@ def test_the_knowledge_manager_costs_two_rows_and_edits_no_credential() -> None:
 
 
 def test_administrator_enumerates_every_capability_rather_than_wildcarding() -> None:
-    """A nineteenth capability must be a deliberate line in a reviewed diff,
-    not something Administrator silently acquires."""
+    """A twentieth capability must be a deliberate line in a reviewed diff,
+    not something Administrator silently acquires.
+
+    Asserted over the **whole migration chain**, not over `0024` alone: the
+    enumeration is the point, and a later migration granting the next word is
+    exactly the reviewed line this test exists to require. What would be a real
+    regression is a capability that reaches Administrator through no line at
+    all — a wildcard — or one that reaches it through none, which is what this
+    fails on.
+    """
     capabilities, _scoped = _seeded()["Administrator"]
-    assert capabilities == {str(c) for c in Capability}
+    assert capabilities | _granted_later("Administrator") == {
+        str(c) for c in Capability
+    }
+
+
+def test_the_usage_migration_grants_exactly_the_two_roles_the_plan_names() -> None:
+    """`0030`, against a literal written apart from it.
+
+    The same trick `SPEC` plays on `0024`, for the same reason: a test that
+    read its expectation out of the migration would agree with any mistake in
+    it, including granting the word to everybody.
+    """
+    assert set(USAGE_MIGRATION.ROLES) == set(LATER)
+    assert str(Capability.USAGE_READ) == USAGE_MIGRATION.CAPABILITY
+
+
+@pytest.mark.parametrize(
+    "name", ["Normal User", "Viewer", "Knowledge Manager", "BI Engineer"]
+)
+def test_usage_read_reaches_no_role_that_only_builds_or_asks(name: str) -> None:
+    """The four roles the plan names as not holding it, one case each.
+
+    A Knowledge Manager curates every connection and a BI Engineer builds on
+    all of them; neither is a reason to read what everybody else spent. The
+    figure they are entitled to without any capability is their own, and
+    `/usage/me` is where it is.
+    """
+    capabilities, _scoped = _seeded()[name]
+    assert str(Capability.USAGE_READ) not in capabilities | _granted_later(name)
+
+
+def test_usage_read_is_not_privileged_and_so_a_service_account_may_hold_it() -> None:
+    """Reading token counts mints no administrator.
+
+    The four in `PRIVILEGED_CAPABILITIES` are the ones a leaked API key must
+    not reach. A service account that reports installation spend to a finance
+    system is a legitimate thing to want, so this one is deliberately outside
+    that set — asserted rather than left to the enum's declaration order.
+    """
+    assert Capability.USAGE_READ not in PRIVILEGED_CAPABILITIES
 
 
 def test_every_seeded_word_is_one_this_build_knows() -> None:

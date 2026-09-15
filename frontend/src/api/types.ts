@@ -224,6 +224,69 @@ export interface AuditEntry {
   detail: Record<string, unknown>
 }
 
+// ── token usage ────────────────────────────────────────────────────────────
+// `GET /usage/*`. Counts, never content: an integer, a price and a day. "Ali
+// asked 40 questions costing 180k tokens" is a different disclosure from
+// "here is what Ali asked", and only the first one is on this wire.
+
+/**
+ * One day's spend, for one scope.
+ *
+ * `cost_usd` is `null` — not `0` — when nothing in the day was priced, which
+ * is every self-hosted model litellm cannot look up a price for. Zero is a
+ * measurement and this is the absence of one; a chart drawing them the same
+ * way would report a deployment as free.
+ */
+export interface UsageBucket {
+  /** `YYYY-MM-DD`, bucketed at UTC. */
+  day: string
+  prompt_tokens: number
+  completion_tokens: number
+  cost_usd: number | null
+  /** How many operations are behind the figures above. */
+  runs: number
+}
+
+/**
+ * One scope's usage: a total, and the days it is made of.
+ *
+ * The total equals the sum of the buckets — both come from the same rows in
+ * the same query, so the two cannot drift, and a screen may render either.
+ *
+ * `unmeasured` and `unpriced` are why a total may not be printed bare.
+ * Non-zero `unmeasured` means operations reported no token count at all and
+ * every figure here understates; non-zero `unpriced` means `cost_usd` covers
+ * only part of the work. Two counts rather than one flag, because *how*
+ * partial a number is decides whether anybody should act on it.
+ */
+export interface UsageSeries {
+  /** `null` on the installation total, which is nobody's. */
+  actor_id: string | null
+  /** A display name, never an address — the rule `AuditEntry` follows. */
+  actor: string
+  prompt_tokens: number
+  completion_tokens: number
+  cost_usd: number | null
+  runs: number
+  unmeasured: number
+  unpriced: number
+  buckets: UsageBucket[]
+}
+
+/**
+ * The installation's own usage, plus the size of the departed-actor gap.
+ *
+ * `GET /usage/users` inner joins `users` and `GET /usage/total` joins nothing,
+ * so a deleted person's spend leaves the first and stays in the second. This
+ * total is therefore legitimately larger than the sum of the people, and
+ * `unattributed` is the difference — on the wire so the screen states it
+ * rather than leaving a reader to add the list up and find a shortfall.
+ */
+export interface UsageTotal extends UsageSeries {
+  unattributed: number
+  unattributed_tokens: number
+}
+
 /** `GET /auth/me/permissions`. What every affordance is rendered from. */
 export interface Permissions {
   capabilities: string[]
@@ -784,6 +847,26 @@ export interface RunStep {
   status: 'PENDING' | 'RUNNING' | 'DONE' | 'SKIPPED' | 'FAILED'
   detail: string | null
   duration_ms: number | null
+  /**
+   * What this node spent at the provider. **Optional, and never zero when
+   * nothing is known**: `validate` and `execute` call no model, and a row of
+   * zeroes beside `generate` would read as a measurement of nothing rather
+   * than as the absence of one.
+   *
+   * Absent on a live step too — these arrive with the persisted run, not on
+   * the SSE stream — so the chip is unchanged for the length of the run and
+   * gains its number when the turn lands.
+   */
+  prompt_tokens?: number | null
+  completion_tokens?: number | null
+  /**
+   * How many provider calls this step made. What the chip keys on: null or
+   * zero means no model was called and the chip renders exactly as before.
+   *
+   * Not derivable from the step existing — `generate` repairs, and a repaired
+   * call is two calls that were both paid for.
+   */
+  llm_calls?: number | null
 }
 
 export interface TableArtifactSpec {
@@ -1000,6 +1083,17 @@ export interface RunDetail {
   model_snapshot: Record<string, unknown>
   /** The database this turn was asked against; null once it is deleted. */
   connection_id: string | null
+  /**
+   * What the whole turn cost, as the run row recorded it — and it equals the
+   * sum over `steps`, because both are written from the same calls.
+   *
+   * Null on a turn from before the counting existed and on one whose provider
+   * reported no usage. Nothing may render that as `0`: the header prints a
+   * total only where there is one, since `0 tokens` reads as a measurement
+   * and is the absence of one.
+   */
+  prompt_tokens?: number | null
+  completion_tokens?: number | null
   steps: RunStep[]
   artifacts: Artifact[]
   queries: GeneratedQuery[]
