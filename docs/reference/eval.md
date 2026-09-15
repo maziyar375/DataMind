@@ -430,9 +430,18 @@ the runs, not from memory, and record the `eval_run` UUID beside each.
 
 | # | Arm | Command | Execution accuracy | Retrieval recall | `eval_run` |
 |---|---|---|---|---|---|
-| 1 | v8, layer **off** | `--suite sales_v1` | *not yet run* | 1.0 by construction | — |
-| 2 | v8, layer **on** | `--suite sales_v1 --semantic on` | *not yet run* | 1.0 by construction | — |
+| 1 | v10, layer **off** | `--suite sales_v1` | *not yet run* | 1.0 by construction | — |
+| 2 | v10, layer **on** | `--suite sales_v1 --semantic on` | *not yet run* | 1.0 by construction | — |
 | 3 | recall at a budget that can miss | `--suite sales_v1 --retrieve-budget 12000` | *not yet run* | *not yet run* | — |
+
+**Relabelled v8 → v10 on 2026-09-15, before any of them was run.** v10 changed
+no wording and no byte of what this harness renders: it moved because the
+product's loaders started binding the layer to the snapshot (the eval's
+`load_semantic` always had) and because the in-product benchmark started
+reading the layer at all
+([plans/semantic-layer-model.md](../plans/semantic-layer-model.md) D11). No
+measurement was invalidated, because none had been taken. The same holds for
+rows 4 and 5 in §6.1.
 
 Three rules for whoever runs them:
 
@@ -472,8 +481,8 @@ has numbers in it and they say it should.
 
 | # | Arm | Command | Execution accuracy (all) | …on `held_out` | …on `taught` | `eval_run` |
 |---|---|---|---|---|---|---|
-| 4 | v9, templates **off** (= v8 bytes) | `--suite sales_v1 --templates off` | *not yet run* | n/a | n/a | — |
-| 5 | v9, templates **on** | `--suite sales_v1 --templates on` | *not yet run* | *not yet run* | *not yet run* | — |
+| 4 | v10, templates **off** (= v8 bytes) | `--suite sales_v1 --templates off` | *not yet run* | n/a | n/a | — |
+| 5 | v10, templates **on** | `--suite sales_v1 --templates on` | *not yet run* | *not yet run* | *not yet run* | — |
 
 Four rules for whoever runs them, and the first two are the ones that decide
 whether the pair means anything:

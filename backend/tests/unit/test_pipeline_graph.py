@@ -149,18 +149,21 @@ async def test_a_miss_produces_the_prompt_it_produced_before_this_node_existed()
     assert before.attempts == after.attempts == []
 
 
-def test_the_prompt_version_moved_exactly_once_and_for_few_shot() -> None:
-    """v9, and Phase 5 is the only phase allowed to have moved it.
+def test_the_prompt_version_moved_for_few_shot_and_then_for_the_bound_layer() -> None:
+    """v10. The learning loop moved it once, and the semantic layer once.
 
     The short-circuit is a *branch around* the generator, not a change to it —
     Phase 2 had to leave this at v8, and did. Phase 5 adds the `{examples}`
-    slot, so it moves, on the same reasoning as v4 and v6: two runs either side
-    are otherwise indistinguishable from the outside, and the difference is
+    slot, so it moved to v9, on the same reasoning as v4 and v6: two runs either
+    side are otherwise indistinguishable from the outside, and the difference is
     whether the connection's taught questions were in the prompt.
+
+    v10 changed no wording: the layer is bound on load, and the benchmark reads
+    it (`docs/plans/semantic-layer-model.md` Phase 0, D11).
     """
     from app.pipeline import prompts
 
-    assert prompts.PROMPT_VERSION == "v9"
+    assert prompts.PROMPT_VERSION == "v10"
 
 
 def test_an_empty_examples_slot_renders_the_v8_prompt_byte_for_byte() -> None:

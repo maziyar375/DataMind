@@ -178,9 +178,12 @@ backend/app/
                   self-contained like sqlguard,
                   and allowed to call the guard because that is what it is for
   semantic/       what the schema *means*: models.py (the document), validate.py
-                  (bind it to a snapshot, parse metric SQL), generator.py (build
-                  one with a model, one call per table), render.py (the prompt
-                  block), prompts.py — self-contained like sqlguard
+                  (bind it to a snapshot, parse metric SQL), bind.py (the one
+                  binder every reader goes through — stored `valid` flags are
+                  never trusted), terms.py (the words it speaks, for the
+                  backlog), generator.py (build one with a model, one call per
+                  table), render.py (the prompt block), prompts.py —
+                  self-contained like sqlguard
   reports/        the written document: outline.py (the proposed structure,
                   and how many sections to ask for), language.py (which
                   language the request is in — derived, never asked),
@@ -884,7 +887,7 @@ at commit time and shows up as drift a release later. Full tour:
   the pipeline — the pipeline reads a layer, a report reads a node, and
   neither a layer nor a node knows anything about the thing above it.
 
-  **The three constants as they stand: `PROMPT_VERSION` = `"v9"`,
+  **The three constants as they stand: `PROMPT_VERSION` = `"v10"`,
   `SEMANTIC_PROMPT_VERSION` = `"s4"`, `REPORT_PROMPT_VERSION` = `"r4"`.** Move
   the one whose prompts you changed — and note that "prompts" means everything
   the model ends up reading, not only wording: a change to how much of the

@@ -48,16 +48,20 @@ from app.infra.db.models import (
     Run,
     RunEventRow,
     RunStep,
-    SemanticLayerRow,
     User,
 )
 from app.infra.events.bus import event_bus
 from app.services import audit, restricted
 from app.services.knowledge_service import FeedbackService, record_hit
 from app.services.policy import require
+from app.services.query_service import latest_snapshot
 from app.services.run_service import RunService
+from app.services.semantic_service import load_document
 
 router = APIRouter(tags=["conversations"])
+
+#: The tables a connection's semantic layer describes, memoised for one request.
+_Described = dict[UUID, frozenset[str]]
 
 # **A conversation is not shareable, and has no access routes.** Phase 8 gave
 # every artifact `/grants`, `/actions` and `/transfer`, a thread included, on
@@ -248,9 +252,13 @@ async def list_messages(
     by_user = {r.user_message_id: r for r in runs}
 
     reachable = await _reachable_data(db, ctx, authz, runs)
+    # One bound layer per connection for the whole transcript, not one per
+    # turn: a thread is pinned to one connection, and binding is a parse per
+    # metric that forty turns would otherwise repeat forty times.
+    described: _Described = {}
     hydrated = {
         r.id: await _hydrate_run(
-            db, r, may_read_data=r.connection_id in reachable
+            db, r, may_read_data=r.connection_id in reachable, described=described
         )
         for r in runs
     }
@@ -402,7 +410,9 @@ async def _require_run_data(db, ctx, authz, run: Run) -> None:
     )
 
 
-async def _hydrate_run(db, run: Run, *, may_read_data: bool = True) -> RunRead:
+async def _hydrate_run(
+    db, run: Run, *, may_read_data: bool = True, described: _Described | None = None
+) -> RunRead:
     steps = await db.execute(
         select(RunStep).where(RunStep.run_id == run.id).order_by(RunStep.seq)
     )
@@ -431,16 +441,25 @@ async def _hydrate_run(db, run: Run, *, may_read_data: bool = True) -> RunRead:
     )
     data.artifacts = [ArtifactRead.model_validate(a) for a in artifacts.scalars()]
     data.queries = [GeneratedQueryRead.model_validate(q) for q in queries.scalars()]
-    data.knowledge = await _knowledge(db, run, data.queries)
+    data.knowledge = await _knowledge(db, run, data.queries, described=described)
     return data
 
 
-async def _knowledge(db, run: Run, queries: list[GeneratedQueryRead]) -> RunKnowledge:
+async def _knowledge(
+    db,
+    run: Run,
+    queries: list[GeneratedQueryRead],
+    *,
+    described: _Described | None = None,
+) -> RunKnowledge:
     """Which of the three tiers this answer earned, and the evidence for it.
 
     Computed on read rather than stamped on the run row, for the reason every
     other derived thing in this codebase is: the semantic layer moves, and an
     answer's *Grounded* claim is a statement about what is described now.
+    (Interim. Once runs record the layer version they were written against,
+    "described in the layer this answer was written with" is derivable, and it
+    is the honest reading — `docs/plans/semantic-layer-model.md` Phase 1.)
 
     The order matters. **Verified** is a fact about this run — it was answered
     from a template — and outranks everything. **Grounded** is a fact about the
@@ -483,31 +502,46 @@ async def _knowledge(db, run: Run, queries: list[GeneratedQueryRead]) -> RunKnow
 
     touched = {t.lower() for q in queries for t in (q.referenced_tables or [])}
     if touched and run.connection_id is not None and await _all_described(
-        db, run.connection_id, touched
+        db, run.connection_id, touched, described if described is not None else {}
     ):
         return RunKnowledge(tier="GROUNDED", overridden=overridden, feedback=given)
     return RunKnowledge(tier="GENERATED", overridden=overridden, feedback=given)
 
 
-async def _all_described(db, connection_id: UUID, tables: set[str]) -> bool:
+async def _all_described(
+    db, connection_id: UUID, tables: set[str], memo: _Described
+) -> bool:
     """Whether the semantic layer has an entry for every table the SQL touched.
 
     All of them, not most: *"every table it used is described in your semantic
     layer"* is what the chip says, and a chip that is true four times out of
     five is worse than no chip.
+
+    The layer is read through `load_document`, the loader a run uses, so the
+    chip cannot claim a layer the answer could not have seen: a switched-off
+    layer describes nothing, and an entity is described only while it binds to
+    the current snapshot and is not excluded from the prompt. The stored
+    `valid` flag is not trusted — it is as old as the last save.
     """
-    result = await db.execute(
-        select(SemanticLayerRow).where(SemanticLayerRow.connection_id == connection_id)
-    )
-    layer = result.scalar_one_or_none()
-    if layer is None or not layer.document:
-        return False
-    described = {
-        str(entity.get("table", "")).lower()
-        for entity in (layer.document.get("entities") or [])
-        if entity.get("valid", True)
-    }
+    if connection_id not in memo:
+        memo[connection_id] = await _described_tables(db, connection_id)
+    described = memo[connection_id]
     return bool(described) and tables <= described
+
+
+async def _described_tables(db, connection_id: UUID) -> frozenset[str]:
+    connection = await db.get(DatabaseConnection, connection_id)
+    if connection is None:
+        return frozenset()
+    snapshot = await latest_snapshot(db, connection_id)
+    layer = await load_document(db, connection, snapshot=snapshot)
+    if layer is None:
+        return frozenset()
+    return frozenset(
+        entity.table.lower()
+        for entity in layer.entities
+        if entity.valid and not entity.exclude
+    )
 
 
 @router.get("/runs/{run_id}", response_model=RunRead)

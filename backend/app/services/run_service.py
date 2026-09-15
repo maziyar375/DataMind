@@ -493,7 +493,7 @@ class RunService:
         snapshot = await latest_snapshot(self._db, connection.id)
         # Loaded once per run, not per attempt: a repair regenerates against
         # the same schema block, and the layer is part of that block.
-        semantic = await load_document(self._db, connection)
+        semantic = await load_document(self._db, connection, snapshot=snapshot)
         # One lookup, two consequences: this run may not ask again, and its
         # question is the reply *plus* the question that reply answers.
         pending = await self._pending_clarification(run)

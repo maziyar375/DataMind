@@ -4,8 +4,11 @@ Phase 6 of `docs/plans/learning-loop.md`. This is where a customer gets a number
 of their own, and the whole design is about that number being honest.
 
 **It runs the real pipeline.** The same `AnalyticsPipeline`, the same guard, the
-same connector the ask path uses — because a benchmark that measured a
-simplified path would be measuring something the customer never experiences.
+same connector and the same semantic layer the ask path uses — because a
+benchmark that measured a simplified path would be measuring something the
+customer never experiences. (The layer was the exception until
+`docs/plans/semantic-layer-model.md` Phase 0: every score before `PROMPT_VERSION`
+v10 was taken without it.)
 The only thing this does that a chat run does not is execute the *gold*
 statement afterwards and compare.
 
@@ -65,6 +68,7 @@ from app.pipeline.nodes import NodeDeps
 from app.pipeline.pipeline import AnalyticsPipeline
 from app.pipeline.prompts import PROMPT_VERSION
 from app.pipeline.state import RunState
+from app.semantic import SemanticDocument
 from app.services.benchmark_service import (
     FAILED,
     OUTCOME_ERROR,
@@ -86,6 +90,7 @@ from app.services.query_service import (
     resolve_llm,
     secret_box,
 )
+from app.services.semantic_service import load_document
 
 log = get_logger(__name__)
 
@@ -157,6 +162,12 @@ async def execute_benchmark_run(
             "against it.",
         )
 
+    # The connection's layer, through the loader every other surface uses:
+    # bound to this snapshot, and absent when the switch is off. Loaded once per
+    # run, as the ask path loads it once per question — the snapshot does not
+    # move between members, so neither does the layer.
+    semantic = await load_document(db, connection, snapshot=snapshot)
+
     gateway = LiteLLMGateway.from_settings(settings)
     connector = bind_connector(connection, box)
     now = utcnow()
@@ -165,7 +176,7 @@ async def execute_benchmark_run(
             result = await _run_one(
                 db, settings, run, connection, template,
                 gateway=gateway, llm=llm, connector=connector,
-                snapshot=snapshot, now=now,
+                snapshot=snapshot, semantic=semantic, now=now,
             )
             db.add(result)
             await db.flush()
@@ -209,6 +220,7 @@ async def _run_one(
     llm: Any,
     connector: Any,
     snapshot: dict[str, Any],
+    semantic: SemanticDocument | None,
     now: Any,
 ) -> BenchmarkResult:
     """One question, end to end: ask, execute the gold, compare.
@@ -258,7 +270,7 @@ async def _run_one(
     state = await _ask(
         settings, connection, question,
         gateway=gateway, llm=llm, connector=connector, snapshot=snapshot,
-        db=db,
+        semantic=semantic, db=db,
     )
     row.duration_ms = int((utcnow() - started).total_seconds() * 1000)
     row.from_template = state.match_outcome == "SHORT_CIRCUIT"
@@ -324,6 +336,7 @@ async def _ask(
     llm: Any,
     connector: Any,
     snapshot: dict[str, Any],
+    semantic: SemanticDocument | None,
     db: AsyncSession,
 ) -> RunState:
     """One question through the real pipeline, with no conversation behind it.
@@ -359,9 +372,16 @@ async def _ask(
     deps = NodeDeps(
         llm_gateway=gateway, llm=llm, connector=connector, snapshot=snapshot,
         history=[], policy=policy_from_snapshot(snapshot, connection), emit=emit,
+        # The semantic layer, on the ask path's terms. Before this was passed
+        # the field defaulted to None, so a connection with a layer was scored
+        # on a prompt without one while chat answered with it — the number on
+        # `/knowledge/:id` was not the product's number, and toggling
+        # `semantic_layer_enabled` changed nothing a benchmark rendered.
+        semantic=semantic.model_dump(mode="json") if semantic else None,
         # `clarify` is off: a benchmark cannot answer a clarifying question, and
         # a run that stopped to ask would be scored as a failure it did not
-        # commit. Everything else is exactly the ask path.
+        # commit. Everything else — the layer included — is exactly the ask
+        # path.
         clarify_enabled=False,
         include_db_comments=connection.include_db_comments,
         matcher=build_matcher(db, connection=connection, settings=settings),

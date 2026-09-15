@@ -5,8 +5,12 @@ rules that keep it from lying to the generator.
 
 Code: [`backend/app/semantic/`](../../backend/app/semantic/) — `generator.py`
 (one model call per table), `render.py` (the tiered fit), `validate.py` (what
-is refused), `merge.py` (what survives a regeneration). The editor is
+is refused, and `merge_documents`: what survives a regeneration), `bind.py`
+(the one binder every reader goes through), `terms.py` (the words the layer
+speaks, for the knowledge backlog). The editor is
 [`frontend/src/components/semantic.tsx`](../../frontend/src/components/semantic.tsx).
+The plan that is turning the document into a versioned model is
+[plans/semantic-layer-model.md](../plans/semantic-layer-model.md).
 
 Companion to [pipeline-chat.md](pipeline-chat.md) (the `retrieve` node that
 renders it), [catalog-metadata.md](catalog-metadata.md) (DDL comments, which
@@ -42,6 +46,27 @@ shapes. That is the class this addresses.
   metric is dropped (and counted in the job's stats), while an invalid
   *human-written* one is flagged and kept, because deleting a person's work to
   hide drift is worse than showing it. Flagged entries never reach the prompt.
+- **Every reader binds the layer, every time** (`bind_layer`). Validity is
+  derived at read time against the snapshot the reader already holds; the
+  stored `valid`/`issue` flags stay in the JSON for the editor, and no consumer
+  trusts them. `load_document(db, connection, snapshot=…)` is the loader for a
+  chat run, a SQL draft, a report outline, a report's time conventions, the
+  in-product benchmark, the knowledge backlog's vocabulary and the *Grounded*
+  tier; the editor's `GET`, `save`, a generation and the eval's `load_semantic`
+  call `bind_layer` directly. *Until 2026-09-15 the run path trusted the flags
+  from the last save*, so a column a re-sync dropped still reached the model
+  while the editor showed it red, and a metric name claimed twice before
+  `_refuse_ambiguous_metrics` existed (the demo `aurora` layer's
+  `total_revenue`) rendered both definitions. Binding costs about 6 ms on
+  `sales` and 11 ms on `aurora`'s 34 metrics, so it is not cached.
+  `PROMPT_VERSION` moved v9 → v10 for it; a layer that had not drifted renders
+  the same bytes (`test_semantic_bind.py`).
+- **The benchmark is scored with the layer.** Before v10 `workers/benchmark.py`
+  never passed it, so every `benchmark_runs` row at v9 or earlier was taken
+  layer-off whatever the switch said.
+- ***Grounded* respects the switch.** An answer's tier reads the layer through
+  the same loader, so a switched-off layer describes nothing and an entity
+  counts only while it binds and is not excluded.
 - **Regeneration is safe.** Any field a user edits sets `provenance.edited`, and
   `merge_documents` keeps those entities; `REPLACE` is the explicit "start
   over" the UI makes you choose.
@@ -51,6 +76,8 @@ shapes. That is the class this addresses.
   That switch is how you A/B a layer against the bare schema on the eval suite
   without deleting it. `PROMPT_VERSION` moved when it shipped, because two runs
   either side of it are otherwise indistinguishable from the outside.
+  Flipping the switch is audited as `semantic.switch.changed` `{from, to}`; it
+  is set under `connection modify`, as part of the connection's policy.
 - **It widens no disclosure.** Generation reads the same schema block a run
   reads, under the same `HintBudget`, and column `value_meanings` are filtered
   to values already in the snapshot — the model cannot invent a key to leak.

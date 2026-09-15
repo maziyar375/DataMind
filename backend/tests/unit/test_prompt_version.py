@@ -191,3 +191,18 @@ async def test_the_run_row_is_stamped_before_the_pipeline_renders() -> None:
     )
     run.prompt_version = service._prompt_version()
     assert run.prompt_version == PROMPT_VERSION
+
+
+def test_the_benchmark_worker_records_the_same_constant_at_v10() -> None:
+    """v10 is the first version whose benchmark prompts carried the layer.
+
+    `benchmark_runs.prompt_version` is the only column that separates a score
+    taken without the connection's semantic layer (v9 and earlier, whatever the
+    switch said) from one taken with it — so the worker must stamp this module's
+    constant, and the constant must have moved when the layer started reaching
+    the benchmark (`docs/plans/semantic-layer-model.md` D11).
+    """
+    from app.workers import benchmark
+
+    assert benchmark.PROMPT_VERSION is PROMPT_VERSION
+    assert PROMPT_VERSION == "v10"

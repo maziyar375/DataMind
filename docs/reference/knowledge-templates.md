@@ -294,6 +294,12 @@ Where a connection owner gets a number about *their* data, without a developer.
   measure something nobody experiences. A run stranded by a restart is **failed,
   not resumed**: half of it was scored against a store, a schema and a model
   that may all have moved.
+- **A score is a score *with* the connection's semantic layer**, bound to the
+  snapshot and honouring `semantic_layer_enabled`, exactly as chat reads it.
+  That was not true before `PROMPT_VERSION` v10: the worker never passed the
+  layer, so every `benchmark_runs` row at v9 or earlier was scored layer-off.
+  Compare scores only within one `prompt_version`
+  ([plans/semantic-layer-model.md](../plans/semantic-layer-model.md) §1.2.2).
 
 ## 7. Searching the store by meaning — the embedding matcher
 

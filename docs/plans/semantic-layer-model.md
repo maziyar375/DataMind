@@ -1,7 +1,7 @@
 # The semantic layer as a model — build plan
 
-> **Status: proposed, not built.** Written 2026-09-15 against `main` at
-> `d7cba6f`. Nothing below is in the tree; every box in the §14 ledger is open.
+> **Status: Phase 0 landed 2026-09-15.** Written 2026-09-15 against `main` at
+> `d7cba6f`; the §14 ledger is the record of what is in the tree since.
 >
 > **Answers** [mvp2.md §1.3](mvp2.md#13-the-semantic-layer-is-a-blob-not-a-model)
 > — *"The semantic layer is a blob, not a model"*, ranked **High**. The render
@@ -1171,17 +1171,23 @@ to extend: the backlog vocabulary tests, the run-knowledge tier tests,
 
 Tick each box in the commit that lands the work.
 
-### 14.1 Phase 0: One reader · **0 / 9**
+### 14.1 Phase 0: One reader · **9 / 9**
 
-- [ ] `app/semantic/bind.py` `bind_layer`; `save`, `_persist_generated` and `eval.runner.load_semantic` use it
-- [ ] `load_document(db, connection, *, snapshot)` binds; `run_service`, `sql_draft_service` and `report_service` (both call sites) pass a snapshot
-- [ ] Binder cost measured on `sales`; the cache added only if it exceeds 20 ms
-- [ ] `workers/benchmark.py` passes `semantic=`; its docstring corrected
-- [ ] `app/semantic/terms.py` `vocabulary_terms`; `build_vocabulary` takes words; `_vocabulary` passes them
-- [ ] `_all_described` loads through `load_document`
-- [ ] `semantic.switch.changed` audited in the connection `PATCH`
-- [ ] `PROMPT_VERSION` v10; `test_prompt_version.py`; the eval.md §6 rows relabelled
-- [ ] Tests: bind (drift, and byte-identity when undrifted), benchmark prompt, backlog vocabulary, tier
+- [x] `app/semantic/bind.py` `bind_layer`; `save`, `_persist_generated` and `eval.runner.load_semantic` use it (and the editor's `read`, so the joins it shows are derived too)
+- [x] `load_document(db, connection, *, snapshot)` binds; `run_service`, `sql_draft_service` and `report_service` (both call sites) pass a snapshot
+- [x] Binder cost measured on `sales`; the cache added only if it exceeds 20 ms — **median 6.5 ms on `sales` (21 entities, 14 metrics), 10.9 ms on `aurora` (34 metrics); no cache.** The *Grounded* tier memoises per request instead, since a transcript would otherwise bind once per turn
+- [x] `workers/benchmark.py` passes `semantic=`; its docstring corrected
+- [x] `app/semantic/terms.py` `vocabulary_terms`; `build_vocabulary` takes words; `_vocabulary` passes them. Flagged entries contribute nothing, as well as excluded ones: neither renders
+- [x] `_all_described` loads through `load_document`
+- [x] `semantic.switch.changed` audited in the connection `PATCH`
+- [x] `PROMPT_VERSION` v10; `test_prompt_version.py`; the eval.md §6 rows relabelled
+- [x] Tests: bind (drift, and byte-identity when undrifted), benchmark prompt, backlog vocabulary, tier
+
+Found while measuring: binding also applies validator rules the stored flags
+predate. The demo `aurora` layer stores `total_revenue` on both `orders` and
+`order_items` with no issue, because it was saved before
+`_refuse_ambiguous_metrics`; the run path rendered both definitions until this
+phase, and now renders neither.
 
 ### 14.2 Phase 1: Versions · **0 / 13**
 
@@ -1259,11 +1265,11 @@ Tick each box in the commit that lands the work.
 
 | Phase | Done | Items |
 |---|:--:|:--:|
-| 0 · One reader | 0 | 9 |
+| 0 · One reader | 9 | 9 |
 | 1 · Versions | 0 | 13 |
 | 2 · Draft and publish | 0 | 11 |
 | 3 · Metric attribution | 0 | 9 |
 | 4 · Portable document | 0 | 6 |
 | 5 · Upkeep | 0 | 5 |
 | Documentation | 0 | 10 |
-| **Total** | **0** | **63** |
+| **Total** | **9** | **63** |

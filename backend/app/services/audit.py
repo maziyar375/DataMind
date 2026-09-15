@@ -118,6 +118,7 @@ ASK_RECORDED = "ask.recorded"
 #: services/policy.py               access.denied
 #: api/v1/llm_configs.py            llm_config.endpoint.changed
 #:                                  llm_config.deleted
+#: api/v1/connections.py            semantic.switch.changed
 #: ```
 #:
 #: Phase 7 added `access.denied` — the producer `DENIED` had been waiting for

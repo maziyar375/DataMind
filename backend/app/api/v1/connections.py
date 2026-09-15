@@ -33,6 +33,18 @@ from app.services.policy import require
 
 router = APIRouter(prefix="/connections", tags=["connections"])
 
+#: **The semantic layer's switch was turned on or off.** It changes what the
+#: model reads on every question asked through this connection, which is the
+#: same class of decision as the disclosure policy, and `disclosure.changed` is
+#: the precedent. Defined in the router, like `llm_config.endpoint.changed`,
+#: because the before-and-after comparison that decides it lives in the PATCH
+#: handler below.
+#:
+#: The switch is set under `connection modify`, not `semantic_layer modify`: it
+#: is part of the connection's policy set in the UI, and moving it is a
+#: separate access-control question.
+SEMANTIC_SWITCH_CHANGED = "semantic.switch.changed"
+
 # `/grants`, `/actions` and `/transfer`, written once in `access.py`. Declared
 # here rather than at the bottom so the literal-path routes below (`/test`)
 # still win the match against `/{connection_id}`.
@@ -255,6 +267,7 @@ async def update_connection(
 ) -> DatabaseConnection:
     connection = await _authorized(db, authz, connection_id, ctx, Privilege.MODIFY)
     data = payload.model_dump(exclude_unset=True, exclude={"password"})
+    semantic_was = connection.semantic_layer_enabled
 
     for field, value in data.items():
         if value is not None:
@@ -269,6 +282,13 @@ async def update_connection(
         connection.readonly_confirmed = False
 
     await db.flush()
+    if connection.semantic_layer_enabled != semantic_was:
+        await audit.record(
+            db, ctx,
+            action=SEMANTIC_SWITCH_CHANGED,
+            resource_type=audit.CONNECTION, resource_id=connection.id,
+            detail={"from": semantic_was, "to": connection.semantic_layer_enabled},
+        )
     return connection
 
 

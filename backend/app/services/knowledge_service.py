@@ -45,7 +45,6 @@ from app.infra.db.models import (
     ReportSection,
     Run,
     SchemaSnapshotRow,
-    SemanticLayerRow,
 )
 from app.knowledge import (
     KnowledgeTemplate,
@@ -1655,18 +1654,21 @@ class FeedbackService:
         return {run_id for (run_id,) in result.all()}
 
     async def _vocabulary(self, connection: DatabaseConnection) -> set[str]:
-        """What this connection can be said to know — schema plus the layer."""
-        snapshot = await KnowledgeService(self._db, self._settings)._snapshot(
-            connection.id
-        )
-        layer = await self._db.execute(
-            select(SemanticLayerRow).where(
-                SemanticLayerRow.connection_id == connection.id
-            )
-        )
-        row = layer.scalar_one_or_none()
+        """What this connection can be said to know — schema plus the layer.
+
+        The layer through `load_document`, the same reader a run uses: bound
+        to the snapshot the schema words come from, and absent when the switch
+        is off. A word the model is never shown is a word retrieval cannot
+        resolve, whoever wrote it into the layer.
+        """
+        from app.semantic import vocabulary_terms
+        from app.services.query_service import latest_snapshot
+        from app.services.semantic_service import load_document
+
+        snapshot = await latest_snapshot(self._db, connection.id)
+        layer = await load_document(self._db, connection, snapshot=snapshot)
         return build_vocabulary(
-            snapshot["tables"], row.document if row and row.document else None
+            snapshot["tables"], vocabulary_terms(layer) if layer else ()
         )
 
     async def _asked(self, run: Any) -> tuple[str, str]:

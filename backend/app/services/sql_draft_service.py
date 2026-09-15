@@ -261,7 +261,7 @@ async def draft_sql(
             history=[],
             policy=policy_from_snapshot(snapshot, connection),
             emit=_no_emit,
-            semantic=await _semantic(db, connection),
+            semantic=await _semantic(db, connection, snapshot),
             extra_rules=_sql_rules_for(extra_rules, tile_type),
         )
 
@@ -608,14 +608,15 @@ async def _snapshot_or_refuse(
 
 
 async def _semantic(
-    db: AsyncSession, connection: DatabaseConnection
+    db: AsyncSession, connection: DatabaseConnection, snapshot: dict[str, Any]
 ) -> dict[str, Any] | None:
     """The connection's semantic layer, on exactly the run path's terms.
 
     A draft is not a loophole around the layer's switch, nor around the
-    disclosure budget `retrieve` renders it under.
+    disclosure budget `retrieve` renders it under — and it is bound to the same
+    snapshot the draft's schema block is rendered from.
     """
-    document = await load_document(db, connection)
+    document = await load_document(db, connection, snapshot=snapshot)
     return document.model_dump(mode="json") if document else None
 
 

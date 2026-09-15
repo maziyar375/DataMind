@@ -467,33 +467,32 @@ def aggregate_negatives(outcomes: list[RecordOutcome]) -> dict[str, Any]:
 def load_semantic(spec: FixtureSpec, snapshot: dict[str, Any]) -> dict[str, Any]:
     """The fixture's checked-in semantic layer, bound to the snapshot in hand.
 
-    The same three steps `semantic_service` performs for a real connection, in
-    the same order, so the arm measures the layer the product would render and
-    not a hand-shaped variant of it: validate every entry against the schema,
-    derive the joins off the catalog, hand the pipeline a plain dict.
+    Through `bind_layer`, the one binder every product reader uses, so the arm
+    measures the layer the product would render and not a hand-shaped variant
+    of it: derive the joins off the catalog, validate every entry against the
+    schema, hand the pipeline a plain dict.
 
     **A layer with a broken entry aborts the run.** An entity that no longer
     resolves is silently dropped by the renderer, so a drifted document would
     quietly produce a layer-on arm that is layer-on for some questions and
     layer-off for others — a number nobody could interpret and everybody would
-    quote. Better to refuse and say which entry.
+    quote. Better to refuse and say which entry. That is an eval policy, not a
+    difference in binding: the product drops the same entries and answers.
     """
-    from app.semantic import (
-        SemanticDocument,
-        build_index,
-        derive_joins,
-        validate_document,
-    )
+    from app.semantic import bind_layer
 
     if spec.semantic_path is None:
         raise ValueError(f"fixture {spec.name} has no semantic layer to load")
 
     raw = json.loads(spec.semantic_path.read_text())
-    index = build_index(snapshot["tables"], snapshot["dialect"])
-    doc = validate_document(SemanticDocument.model_validate(raw), index)
-    # Empty in the file, derived here — cardinality and fan-out are read off the
-    # catalog, which is where the product reads them from too.
-    doc.joins = derive_joins(snapshot.get("relationships", []), index)
+    # The file carries no joins; `bind_layer` derives them off the catalog,
+    # which is where the product reads cardinality and fan-out from too.
+    doc = bind_layer(
+        raw,
+        tables=snapshot["tables"],
+        relationships=snapshot.get("relationships", []),
+        dialect=snapshot["dialect"],
+    )
 
     broken = [
         f"{e.table}: {e.issue}" for e in doc.entities if not e.valid
@@ -1038,6 +1037,7 @@ async def _amain(args: argparse.Namespace) -> int:
             # arm renders the v8 bytes. Stated on the card so a reader of two
             # scorecards is not left to work out whether v8 and v9 numbers are
             # comparable — they are, on this arm, and that is the point of it.
+            # v10 moved no bytes here: this runner already bound its layer.
             report_dict["prompt_bytes_equal_v8"] = templates is None
             # Which matcher retrieved. Recorded because Phase 7's whole claim is
             # a *delta* between two runs that differ only in this, and two

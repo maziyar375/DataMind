@@ -39,6 +39,7 @@ Newest first. Each row is complete unless the **Caveat** column says otherwise.
 
 | Strand | Landed | Caveat | Record |
 | --- | --- | --- | --- |
+| **Semantic layer: one reader** — every loader binds the layer to the snapshot it renders from (a column a re-sync dropped no longer reaches the model); the in-product benchmark reads the layer; the backlog's vocabulary reads the typed model; *Grounded* respects the switch; the switch is audited. `PROMPT_VERSION` v9 → v10 | 2026-09-15, Phase 0 | Benchmark scores at v9 and earlier were taken **without** the layer | [plans/semantic-layer-model.md](plans/semantic-layer-model.md) §4.1 |
 | **Usage over any period, filtered by model** — `GET /usage/*` takes `tz_offset` and returns sub-day buckets (5 min → 1 day, chosen by the server from the window) aligned to the reader's clock, with `since`/`until`/`bucket_seconds` and per-model buckets; the page gains a period row (1h–90d and custom), a model filter, a timeline that runs to now, and ranked By model rows | 2026-09-15 | — | the screen is [reference/frontend.md](reference/frontend.md) |
 | **Usage without cost, and by model** — `cost_usd` dropped from `runs`, `report_runs`, `semantic_jobs` and `eval_results`, and nothing prices a call any more (the gateway log line, the eval report and the usage screen included); every usage scope gains a per-model split; the **Installation** tab is renamed **All users** | 2026-09-15, migration `0031` | — | this row; the screen is [reference/frontend.md](reference/frontend.md) |
 | **Token usage in the UI** — a **Token usage** rail section over three read routes, tokens on the chat step chips, `usage.read` seeded to Administrator and Auditor | 2026-09-13, all 7 phases, migration `0030` | Counts only, and **input + output only** — see below | [plans/llm-observability-v2-implementation.md](plans/llm-observability-v2-implementation.md); the spec is [plans/llm-observability-v2.md](plans/llm-observability-v2.md) |
@@ -78,7 +79,7 @@ provider key this environment does not have.** None of them is blocked on code.
 
 | Off | Switch | What unblocks it |
 | --- | --- | --- |
-| **Few-shot injection** — taught examples in the generator prompt | `knowledge_examples_enabled`, default false | Held-out accuracy measured not-worse. `PROMPT_VERSION` is v9 and the empty slot renders v8's bytes exactly, so off is not a half-state |
+| **Few-shot injection** — taught examples in the generator prompt | `knowledge_examples_enabled`, default false | Held-out accuracy measured not-worse. `PROMPT_VERSION` is v10 (v9 added the slot; v10 changed no wording) and the empty slot renders v8's bytes exactly, so off is not a half-state |
 | **The embedding matcher** — searching the knowledge store by meaning | `embedding_model`, default empty | A measured recall delta against `pg_trgm`, which needs no provider and is the default |
 | **Phase 0's three eval baselines** — accuracy layer-off, layer-on, recall at a budget that can miss | — | Three runs against a real provider. The table is in [reference/eval.md](reference/eval.md) §6 with the commands and empty cells |
 
