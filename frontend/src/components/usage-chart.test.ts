@@ -15,8 +15,8 @@
 import {
   bucketLabel, denseSlots, formatCompact, formatInstant, formatShare, formatSlot,
   formatTokens, fromLocalInput, isPeriodKey, localOffsetMinutes, modelRows, presetRange,
-  PRESETS, rankedRow, scopeView, splitModelName, timeTicks, toLocalInput, UNRECORDED_MODEL,
-  usageTotals, valueTicks,
+  PRESETS, rankedRow, scopeView, selectionLabel, splitModelName, timeTicks, toggleModel,
+  toLocalInput, UNRECORDED_MODEL, usageTotals, valueTicks,
 } from './usage-chart.ts'
 import type { UsageBucket, UsageModel, UsageSeries } from '../api/types.ts'
 
@@ -135,17 +135,46 @@ const scoped = series({
     model({ model: '', prompt_tokens: 10, completion_tokens: 50, runs: 1 }),
   ],
 })
-check('all models is the whole scope', scopeView(scoped, null).figures.prompt_tokens, 9_000)
+check('no selection is the whole scope', scopeView(scoped, []).figures.prompt_tokens, 9_000)
 check('one model is that model, figures and buckets', [
-  scopeView(scoped, 'large').figures.prompt_tokens,
-  scopeView(scoped, 'large').buckets.length,
+  scopeView(scoped, ['large']).figures.prompt_tokens,
+  scopeView(scoped, ['large']).buckets.length,
 ], [6_000, 1])
-check('the unrecorded row is a model the filter can choose', scopeView(scoped, '').figures.runs, 1)
+check('the unrecorded row is a model the filter can choose', scopeView(scoped, ['']).figures.runs, 1)
 check(
   'a model the window does not hold is a zero view, not a throw',
-  scopeView(scoped, 'gone'),
+  scopeView(scoped, ['gone']),
   { figures: { prompt_tokens: 0, completion_tokens: 0, runs: 0, unmeasured: 0 }, buckets: [] },
 )
+const pair = series({
+  models: [
+    model({ model: 'a', prompt_tokens: 100, completion_tokens: 10, runs: 2, unmeasured: 1, buckets: [
+      bucket({ start: '2026-09-13T01:00:00Z', prompt_tokens: 60, completion_tokens: 6, runs: 1 }),
+      bucket({ start: '2026-09-13T02:00:00Z', prompt_tokens: 40, completion_tokens: 4, runs: 1 }),
+    ] }),
+    model({ model: 'b', prompt_tokens: 50, completion_tokens: 5, runs: 1, buckets: [
+      bucket({ start: '2026-09-13T01:00:00.000Z', prompt_tokens: 50, completion_tokens: 5, runs: 1 }),
+    ] }),
+    model({ model: 'c', prompt_tokens: 999, completion_tokens: 9, runs: 9 }),
+  ],
+})
+const both = scopeView(pair, ['b', 'a'])
+check('several models sum their figures, and leave the rest out', both.figures, {
+  prompt_tokens: 150, completion_tokens: 15, runs: 3, unmeasured: 1,
+})
+check(
+  'and merge their buckets by instant, however the start was spelled',
+  both.buckets.map((b) => [b.prompt_tokens, b.runs]),
+  [[110, 2], [40, 1]],
+)
+check('merged buckets run in time order', both.buckets.map((b) => Date.parse(b.start)), [
+  Date.parse('2026-09-13T01:00:00Z'), Date.parse('2026-09-13T02:00:00Z'),
+])
+check('a selection is named for a caption', [
+  selectionLabel([]), selectionLabel(['openai/deepseek/deepseek-v4-flash']), selectionLabel(['a', 'b', 'c']),
+], [null, 'deepseek-v4-flash', '3 models'])
+check('toggling adds a model', toggleModel(['a'], 'b'), ['a', 'b'])
+check('and toggling it again takes it out', toggleModel(['a', 'b'], 'a'), ['b'])
 
 console.log('\n— ranked rows —')
 const split = modelRows(scoped)
@@ -167,6 +196,11 @@ check('a share too small to round up is not written as nothing', split[2].share,
 check(
   'a row whose every run went unmeasured shows no figure, and never a zero',
   rankedRow('quiet', { prompt_tokens: 0, completion_tokens: 0, runs: 2, unmeasured: 2 }, 100).tokens,
+  null,
+)
+check(
+  'nor a share, which would read as a measured zero',
+  rankedRow('quiet', { prompt_tokens: 0, completion_tokens: 0, runs: 2, unmeasured: 2 }, 100).share,
   null,
 )
 check(

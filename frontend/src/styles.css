@@ -4173,8 +4173,74 @@ code, pre, .mono {
 .rm-usage-filters select,
 .rm-usage-filters input { height: 34px; }
 .rm-usage-filters .rm-seg { max-width: 100%; flex-wrap: wrap; }
-.rm-usage-model-filter select { width: auto; max-width: min(320px, 100%); }
 .rm-usage-model-filter { max-width: 100%; }
+
+/* The model picker: a trigger the height of the row, and a checklist that
+   stays open while models are ticked. Same sheet as the chat pickers. */
+.rm-usage-picker { position: relative; max-width: 100%; }
+.rm-usage-picker-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  min-width: 190px;
+  max-width: min(320px, 100%);
+  padding: 0 10px 0 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--input-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: start;
+  cursor: pointer;
+  transition: border-color .12s ease;
+}
+.rm-usage-picker-trigger:hover { border-color: var(--text-faint); }
+.rm-usage-picker-trigger[aria-expanded='true'] { border-color: var(--accent); }
+.rm-usage-picker-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  color: var(--text-strong);
+}
+.rm-usage-picker-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 50;
+  width: max-content;
+  min-width: 100%;
+  max-width: min(380px, calc(100vw - 96px));
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: inset 0 1px 0 0 var(--sheen), var(--elev-2);
+}
+.rm-usage-option {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: start;
+  cursor: pointer;
+}
+.rm-usage-option .rm-usage-name { min-width: 0; }
+.rm-usage-option-label { font-weight: 600; color: var(--text-strong); }
+.rm-usage-picker-rule { height: 1px; margin: 4px 6px; background: var(--border); }
 .rm-usage-range-error {
   flex-basis: 100%;
   display: flex;
@@ -4389,7 +4455,8 @@ code, pre, .mono {
   background: var(--input-bg);
   color: var(--on-accent);
 }
-.rm-usage-row[aria-pressed='true'] .rm-usage-check { background: var(--accent); border-color: var(--accent); }
+.rm-usage-row[aria-pressed='true'] .rm-usage-check,
+.rm-usage-option[aria-selected='true'] .rm-usage-check { background: var(--accent); border-color: var(--accent); }
 .rm-usage-name {
   display: flex;
   align-items: baseline;

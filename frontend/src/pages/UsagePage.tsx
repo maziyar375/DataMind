@@ -20,27 +20,29 @@
  * **One filter row scopes everything under it.** The period and the model sit
  * above the summary, the timeline and the breakdowns, and every one of those
  * re-renders against the same slice, so no two numbers on the page disagree.
- * Both live in the address (`?period=24h&model=…`), so a view is a link and
- * survives a tab change.
+ * Both live in the address (`?period=24h&model=a&model=b`), so a view is a
+ * link and survives a tab change. The model filter is a *set*: none chosen is
+ * all models, and any number may be chosen together.
  *
  * **The partiality is the feature, not a caveat.** A provider that reports no
  * usage block is ordinary, and a total that quietly absorbs it reports less
  * work than was done. `usageTotals` turns the count on the wire into a
  * sentence, rendered beside the number rather than under it.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Navigate, useLocation, useMatch, useNavigate, useSearchParams } from 'react-router-dom'
 import { usage as api, type UsageRange } from '../api/client'
 import type { UsageSeries, UsageTotal } from '../api/types'
 import {
-  EmptyState, ErrorNote, Icon, PageHeader, Segmented, Select, Spinner, dirOf, inputStyle,
+  EmptyState, ErrorNote, Icon, PageHeader, Segmented, Spinner, dirOf, inputStyle,
 } from '../components/ui'
 import { Tabs } from '../components/settings'
 import { useCan, type Capability } from '../permissions'
 import {
   DEFAULT_PERIOD, PRESETS, UNRECORDED_MODEL, bucketLabel, denseSlots, formatInstant,
   formatShare, formatTokens, fromLocalInput, isPeriodKey, localOffsetMinutes, modelRows,
-  presetRange, rankedRow, scopeView, splitModelName, toLocalInput, usageTotals,
+  presetRange, rankedRow, scopeView, selectionLabel, splitModelName, toLocalInput, toggleModel,
+  usageTotals,
   type PeriodKey, type RankedRow, type Slot, type UsageTotals,
 } from '../components/usage-chart'
 import {
@@ -134,8 +136,8 @@ interface Slice {
   /** `datetime-local` values, on the reader's clock. Only for `custom`. */
   from: string
   to: string
-  /** `null` for all models; `''` is the model-not-recorded row. */
-  model: string | null
+  /** The models chosen — empty for all. `''` is the model-not-recorded row. */
+  models: string[]
 }
 
 function useSlice(): [Slice, (patch: Partial<Slice>) => void] {
@@ -145,7 +147,7 @@ function useSlice(): [Slice, (patch: Partial<Slice>) => void] {
     period: isPeriodKey(raw) ? raw : DEFAULT_PERIOD,
     from: params.get('from') ?? '',
     to: params.get('to') ?? '',
-    model: params.has('model') ? params.get('model') : null,
+    models: [...new Set(params.getAll('model'))],
   }
   const update = (patch: Partial<Slice>) => {
     const next = { ...slice, ...patch }
@@ -155,7 +157,7 @@ function useSlice(): [Slice, (patch: Partial<Slice>) => void] {
       if (next.from) out.set('from', next.from)
       if (next.to) out.set('to', next.to)
     }
-    if (next.model !== null) out.set('model', next.model)
+    for (const model of next.models) out.append('model', model)
     setParams(out, { replace: true })
   }
   return [slice, update]
@@ -259,8 +261,8 @@ function Scope({ scope }: { scope: string }) {
   }, [scope, resolved])
 
   // The models the picker offers: whatever this scope used in the window,
-  // busiest first, plus the selected one if the window no longer holds it —
-  // so changing the period never silently drops a selection.
+  // busiest first, plus any chosen one the window no longer holds — so
+  // changing the period never silently drops part of a selection.
   const models = useMemo(() => {
     const tokens = new Map<string, number>()
     const scopes = scope === 'people' ? people ?? [] : [scope === 'total' ? total : mine]
@@ -270,11 +272,11 @@ function Scope({ scope }: { scope: string }) {
       }
     }
     const ranked = [...tokens.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => name)
-    if (slice.model !== null && !tokens.has(slice.model)) ranked.push(slice.model)
+    for (const chosen of slice.models) if (!tokens.has(chosen)) ranked.push(chosen)
     return ranked
-  }, [scope, people, total, mine, slice.model])
+  }, [scope, people, total, mine, slice.models])
 
-  const chooseModel = (model: string | null) => setSlice({ model })
+  const chooseModels = (models: string[]) => setSlice({ models })
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -290,21 +292,21 @@ function Scope({ scope }: { scope: string }) {
         <People
           rows={people}
           loading={loading}
-          model={slice.model}
+          models={slice.models}
           endsNow={endsNow}
           offset={offset}
-          onModel={chooseModel}
+          onModels={chooseModels}
         />
       ) : (
         <UsageBody
           series={scope === 'total' ? total : mine}
           loading={loading}
-          model={slice.model}
+          models={slice.models}
           endsNow={endsNow}
           offset={offset}
-          onModel={chooseModel}
+          onModels={chooseModels}
         >
-          {scope === 'total' && total && slice.model === null && total.unattributed > 0 && (
+          {scope === 'total' && total && slice.models.length === 0 && total.unattributed > 0 && (
             <Unattributed total={total} />
           )}
         </UsageBody>
@@ -314,9 +316,6 @@ function Scope({ scope }: { scope: string }) {
 }
 
 // ── the filter row ────────────────────────────────────────────────────────
-/** What the model `<select>` holds for "all models" — no model name can be it. */
-const ALL_MODELS = ' all'
-
 function Filters({
   slice, onChange, models, offset, error,
 }: {
@@ -383,27 +382,122 @@ function Filters({
         </div>
       )}
 
-      <label className="rm-usage-filter rm-usage-model-filter">
-        <span className="rm-usage-filter-label">Model</span>
-        <Select
-          value={slice.model === null ? ALL_MODELS : slice.model}
-          onChange={(event) => onChange({
-            model: event.target.value === ALL_MODELS ? null : event.target.value,
-          })}
-          style={{ padding: '4px 9px', fontSize: 12.5 }}
-        >
-          <option value={ALL_MODELS}>All models</option>
-          {models.map((model) => (
-            <option key={model} value={model}>{model || UNRECORDED_MODEL}</option>
-          ))}
-        </Select>
-      </label>
+      <div className="rm-usage-filter rm-usage-model-filter">
+        <span className="rm-usage-filter-label" id="usage-models-label">Models</span>
+        <ModelPicker
+          options={models}
+          selected={slice.models}
+          onChange={(next) => onChange({ models: next })}
+        />
+      </div>
 
       {error && (
         <p className="rm-usage-range-error" role="alert">
           <Icon.Alert size={13} />
           <span>{error}</span>
         </p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The model filter in the filter row: a button that opens a checklist.
+ *
+ * A native `<select multiple>` is a scrolling box that needs a modifier key
+ * to pick a second item, which is the opposite of what a filter wants. So the
+ * list is a popover of checkboxes that stays open while models are ticked, and
+ * "All models" at its head clears the set. It edits the same selection the By
+ * model rows toggle — two doors onto one filter.
+ */
+function ModelPicker({
+  options, selected, onChange,
+}: {
+  options: string[]
+  selected: string[]
+  onChange: (next: string[]) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  const trigger = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false)
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setOpen(false)
+      trigger.current?.focus()
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const label = selected.length === 0
+    ? 'All models'
+    : selected.length === 1
+      ? splitModelName(selected[0]).name
+      : `${selected.length} models`
+
+  return (
+    <div ref={ref} className="rm-usage-picker">
+      <button
+        ref={trigger}
+        type="button"
+        className="rm-usage-picker-trigger"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-labelledby="usage-models-label usage-models-value"
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span id="usage-models-value" className="rm-usage-picker-value">{label}</span>
+        <Icon.Chevron open={open} size={13} stroke="var(--text-faint)" />
+      </button>
+
+      {open && (
+        <div className="rm-usage-picker-panel" role="listbox" aria-multiselectable="true" aria-label="Models">
+          <button
+            type="button"
+            role="option"
+            aria-selected={selected.length === 0}
+            className="rm-usage-option rm-menu-item"
+            onClick={() => onChange([])}
+          >
+            <span className="rm-usage-check" aria-hidden="true">
+              {selected.length === 0 && <Icon.Check size={11} strokeWidth={3} />}
+            </span>
+            <span className="rm-usage-option-label">All models</span>
+          </button>
+          {options.length > 0 && <div className="rm-usage-picker-rule" role="presentation" />}
+          {options.map((model) => {
+            const on = selected.includes(model)
+            return (
+              <button
+                key={model}
+                type="button"
+                role="option"
+                aria-selected={on}
+                className="rm-usage-option rm-menu-item"
+                onClick={() => onChange(toggleModel(selected, model))}
+                title={model || UNRECORDED_MODEL}
+              >
+                <span className="rm-usage-check" aria-hidden="true">
+                  {on && <Icon.Check size={11} strokeWidth={3} />}
+                </span>
+                <ModelName model={model} />
+              </button>
+            )
+          })}
+          {options.length === 0 && (
+            <p className="rm-usage-quiet" style={{ padding: '6px 10px' }}>No models in this period.</p>
+          )}
+        </div>
       )}
     </div>
   )
@@ -419,18 +513,18 @@ function Filters({
  * dropped from.
  */
 function UsageBody({
-  series, loading, model, endsNow, offset, onModel, children,
+  series, loading, models, endsNow, offset, onModels, children,
 }: {
   series: UsageSeries | null
   loading: boolean
-  model: string | null
+  models: string[]
   endsNow: boolean
   offset: number
-  onModel: (model: string | null) => void
+  onModels: (models: string[]) => void
   /** Anything the scope adds to the summary — the total's own gap, say. */
   children?: React.ReactNode
 }) {
-  const view = useMemo(() => (series ? scopeView(series, model) : null), [series, model])
+  const view = useMemo(() => (series ? scopeView(series, models) : null), [series, models])
   const totals = useMemo(() => (view ? usageTotals(view.figures) : null), [view])
   const slots = useMemo(
     () => (series && view
@@ -444,7 +538,12 @@ function UsageBody({
   const start = formatInstant(Date.parse(series.since), offset)
   const end = endsNow ? 'now' : formatInstant(Date.parse(series.until), offset)
   const span = `${start} – ${end}`
-  const modelName = model === null ? null : splitModelName(model).name
+  const modelName = selectionLabel(models)
+  const emptyTitle = models.length === 0
+    ? 'No usage in this period'
+    : models.length === 1
+      ? `${modelName} was not used in this period`
+      : `None of the ${models.length} chosen models was used in this period`
 
   return (
     // A refetch holds the previous render at reduced opacity rather than
@@ -455,7 +554,7 @@ function UsageBody({
         <>
           <EmptyState
             icon={<Icon.Bars size={20} />}
-            title={modelName ? `${modelName} was not used in this period` : 'No usage in this period'}
+            title={emptyTitle}
             body={`Nothing ran between ${start} and ${end}. Try a longer period${modelName ? ', or all models' : ''}.`}
           />
           {children}
@@ -475,7 +574,7 @@ function UsageBody({
           />
         </>
       )}
-      <ByModel series={series} selected={model} onSelect={onModel} />
+      <ByModel series={series} selected={models} onSelect={onModels} />
     </div>
   )
 }
@@ -656,17 +755,18 @@ function Timeline({
  * timeline's colours, so a model that is mostly prompt reads differently from
  * one that writes long answers.
  *
- * **Selecting a row is the model filter.** The rows stay the whole scope while
- * one is chosen — the breakdown is how models are compared, and filtering it
- * to a single row would leave nothing to compare — so the chosen row is marked
- * rather than the others hidden. Choosing it again shows all models.
+ * **Each row toggles a model in the filter**, and any number may be on at once.
+ * The rows stay the whole scope while some are chosen — the breakdown is how
+ * models are compared, and filtering it down to the chosen ones would leave
+ * nothing to compare them against — so chosen rows are ticked rather than the
+ * others hidden. Taking the last one out shows all models again.
  */
 function ByModel({
   series, selected, onSelect,
 }: {
   series: UsageSeries
-  selected: string | null
-  onSelect: (model: string | null) => void
+  selected: string[]
+  onSelect: (models: string[]) => void
 }) {
   const rows = useMemo(() => modelRows(series), [series])
   if (rows.length === 0) return null
@@ -677,11 +777,14 @@ function ByModel({
         <div className="rm-usage-panel-titles">
           <h2 id="usage-models-title" className="rm-usage-h2">By model</h2>
           <span className="rm-usage-caption">
-            {rows.length === 1 ? 'One model' : `${rows.length} models`} in this period · select one to filter the page
+            {rows.length === 1 ? 'One model' : `${rows.length} models`} in this period ·{' '}
+            {selected.length === 0
+              ? 'select any to filter the page'
+              : `${selected.length} chosen · select again to take one out`}
           </span>
         </div>
-        {selected !== null && (
-          <button type="button" className="rm-usage-clear" onClick={() => onSelect(null)}>
+        {selected.length > 0 && (
+          <button type="button" className="rm-usage-clear" onClick={() => onSelect([])}>
             <Icon.Close size={12} />
             All models
           </button>
@@ -691,9 +794,9 @@ function ByModel({
         head="Model"
         rows={rows}
         render={(row) => <ModelName model={row.key} />}
-        isOn={(row) => row.key === selected}
+        isOn={(row) => selected.includes(row.key)}
         mode="filter"
-        onToggle={(row) => onSelect(row.key === selected ? null : row.key)}
+        onToggle={(row) => onSelect(toggleModel(selected, row.key))}
       />
     </section>
   )
@@ -817,24 +920,24 @@ function Unattributed({ total }: { total: UsageTotal }) {
  *
  * Selecting a person draws their own summary, timeline and models below, from
  * the rows already in hand: `/usage/users` returns every series whole, so
- * opening somebody costs no request. With a model chosen, each person is
- * ranked by that model alone, and people who did not use it are left out.
+ * opening somebody costs no request. With models chosen, each person is
+ * ranked by those models alone, and people who used none of them are left out.
  */
 function People({
-  rows, loading, model, endsNow, offset, onModel,
+  rows, loading, models, endsNow, offset, onModels,
 }: {
   rows: UsageSeries[] | null
   loading: boolean
-  model: string | null
+  models: string[]
   endsNow: boolean
   offset: number
-  onModel: (model: string | null) => void
+  onModels: (models: string[]) => void
 }) {
   const [openId, setOpenId] = useState<string | null>(null)
 
   const ranked = useMemo(() => {
     const views = (rows ?? [])
-      .map((series) => ({ series, figures: scopeView(series, model).figures }))
+      .map((series) => ({ series, figures: scopeView(series, models).figures }))
       .filter(({ figures }) => figures.runs > 0)
     const whole = views.reduce(
       (sum, { figures }) => sum + figures.prompt_tokens + figures.completion_tokens,
@@ -848,20 +951,24 @@ function People({
       // Busiest first — the backend orders by display name, which is right
       // for a picker and wrong for a ranking. Ties fall back to the name.
       .sort((a, b) => b.totalTokens - a.totalTokens || a.series.actor.localeCompare(b.series.actor))
-  }, [rows, model])
+  }, [rows, models])
 
   const open = ranked.find((row) => row.key === openId) ?? null
 
   if (!rows) return loading ? <Loading /> : null
 
-  const modelName = model === null ? null : splitModelName(model).name
+  const modelName = selectionLabel(models)
 
   if (ranked.length === 0) {
     return (
       <div className="rm-usage-body" data-loading={loading || undefined}>
         <EmptyState
           icon={<Icon.Bars size={20} />}
-          title={modelName ? `Nobody used ${modelName} in this period` : 'Nobody used any tokens in this period'}
+          title={models.length === 0
+            ? 'Nobody used any tokens in this period'
+            : models.length === 1
+              ? `Nobody used ${modelName} in this period`
+              : `Nobody used the ${models.length} chosen models in this period`}
           body={`No questions, reports or layer generations ran in this period. Try a longer one${modelName ? ', or all models' : ''}.`}
         />
       </div>
@@ -906,10 +1013,10 @@ function People({
             key={open.key}
             series={open.series}
             loading={false}
-            model={model}
+            models={models}
             endsNow={endsNow}
             offset={offset}
-            onModel={onModel}
+            onModels={onModels}
           />
         </section>
       )}

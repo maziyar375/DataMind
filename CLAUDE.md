@@ -316,7 +316,7 @@ frontend/src/
                             Dashboards, Reports,
                             Usage (`/usage` — tokens used over a period
                             (1h to 90d, or a custom range) and per model, with
-                            the period and model filter in the URL, in three
+                            the period and a multi-model filter in the URL, in three
                             scopes: your own, which needs no
                             capability because the scope IS you, and — behind
                             `usage.read` — every person and the all-users

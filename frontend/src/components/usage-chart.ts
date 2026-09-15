@@ -175,26 +175,60 @@ export function splitModelName(model: string): { path: string; name: string } {
 }
 
 /**
- * One scope as the filter sees it: the whole scope, or one model of it.
+ * One scope as the filter sees it: the whole scope, or the models chosen.
  *
- * `model` is `null` for all models. A model the window holds no rows for is a
- * zero view rather than a throw — the filter may name a model from a wider
- * period than the one now selected, and "nothing on this model here" is an
- * answer.
+ * `models` empty is all models. With a selection, the figures are the chosen
+ * models' sums and the buckets are theirs merged by start — the same rows the
+ * scope's own buckets were folded from, so a selection of every model reads
+ * exactly as all models does. A chosen model the window holds no rows for
+ * contributes nothing rather than throwing: the filter may name a model from
+ * a wider period than the one now selected, and "nothing on these models
+ * here" is an answer.
  */
 export function scopeView(
   series: UsageSeries,
-  model: string | null,
+  models: readonly string[],
 ): { figures: UsageFigures; buckets: UsageBucket[] } {
-  if (model === null) return { figures: series, buckets: series.buckets }
-  const match = series.models.find((entry) => entry.model === model)
-  if (!match) {
-    return {
-      figures: { prompt_tokens: 0, completion_tokens: 0, runs: 0, unmeasured: 0 },
-      buckets: [],
+  if (models.length === 0) return { figures: series, buckets: series.buckets }
+  const chosen = new Set(models)
+  const figures: UsageFigures = { prompt_tokens: 0, completion_tokens: 0, runs: 0, unmeasured: 0 }
+  const merged = new Map<string, UsageBucket>()
+  for (const model of series.models) {
+    if (!chosen.has(model.model)) continue
+    figures.prompt_tokens += model.prompt_tokens
+    figures.completion_tokens += model.completion_tokens
+    figures.runs += model.runs
+    figures.unmeasured += model.unmeasured
+    for (const bucket of model.buckets) {
+      const key = String(Date.parse(bucket.start))
+      const into = merged.get(key)
+      merged.set(key, into
+        ? {
+          start: into.start,
+          prompt_tokens: into.prompt_tokens + bucket.prompt_tokens,
+          completion_tokens: into.completion_tokens + bucket.completion_tokens,
+          runs: into.runs + bucket.runs,
+        }
+        : { ...bucket })
     }
   }
-  return { figures: match, buckets: match.buckets }
+  const buckets = [...merged.values()].sort((a, b) => Date.parse(a.start) - Date.parse(b.start))
+  return { figures, buckets }
+}
+
+/**
+ * How a selection is named in a caption: `null` for all models, the model's
+ * own name for one, and a count for several.
+ */
+export function selectionLabel(models: readonly string[]): string | null {
+  if (models.length === 0) return null
+  if (models.length === 1) return splitModelName(models[0]).name
+  return `${models.length} models`
+}
+
+/** A selection with `model` added, or taken out if it was already in it. */
+export function toggleModel(models: readonly string[], model: string): string[] {
+  return models.includes(model) ? models.filter((m) => m !== model) : [...models, model]
 }
 
 /** One line of a ranked breakdown — a model, or a person — already written. */
@@ -223,7 +257,9 @@ export function rankedRow(key: string, figures: UsageFigures, whole: number): Ra
     tokens: nothingMeasured ? null : formatTokens(totalTokens),
     input: nothingMeasured ? null : formatTokens(figures.prompt_tokens),
     output: nothingMeasured ? null : formatTokens(figures.completion_tokens),
-    share: whole > 0 ? formatShare(totalTokens / whole) : null,
+    // A row that measured nothing has no share to state — `0%` would read as a
+    // measurement of none, the same lie the em dash in `tokens` refuses.
+    share: whole > 0 && !nothingMeasured ? formatShare(totalTokens / whole) : null,
     inputFraction: whole > 0 ? figures.prompt_tokens / whole : 0,
     outputFraction: whole > 0 ? figures.completion_tokens / whole : 0,
     runs: figures.runs,
