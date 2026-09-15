@@ -229,10 +229,14 @@ export interface AuditEntry {
 // "Ali asked 40 questions using 180k tokens" is a different disclosure from
 // "here is what Ali asked", and only the first one is on this wire.
 
-/** One day's tokens, for one scope. */
+/**
+ * One bucket's tokens, for one scope.
+ *
+ * `start` is the bucket's first instant (ISO, UTC); it runs for the series'
+ * `bucket_seconds`, aligned to the `tz_offset` the page asked with.
+ */
 export interface UsageBucket {
-  /** `YYYY-MM-DD`, bucketed at UTC. */
-  day: string
+  start: string
   prompt_tokens: number
   completion_tokens: number
   /** How many operations are behind the figures above. */
@@ -253,6 +257,8 @@ export interface UsageModel {
   completion_tokens: number
   runs: number
   unmeasured: number
+  /** This model's own buckets — sparse, like `UsageSeries.buckets`. */
+  buckets: UsageBucket[]
 }
 
 /**
@@ -261,6 +267,10 @@ export interface UsageModel {
  * The total equals the sum of the buckets and the sum of the models — all
  * three come from the same rows, so they cannot drift, and a screen may
  * render any of them.
+ *
+ * `buckets` is **sparse**: a bucket nothing ran in is absent. `since`, `until`
+ * and `bucket_seconds` describe the whole window, so a chart can lay the empty
+ * buckets and run its axis to the window's real end.
  *
  * `unmeasured` is why a total may not be printed bare: non-zero means
  * operations reported no token count at all and every figure here
@@ -276,6 +286,12 @@ export interface UsageSeries {
   completion_tokens: number
   runs: number
   unmeasured: number
+  /** The first bucket's start — aligned, so a little before what was asked. */
+  since: string
+  /** The window's exclusive end: now, for a period that ends now. */
+  until: string
+  /** Chosen by the server from the window's length. */
+  bucket_seconds: number
   buckets: UsageBucket[]
   /** Busiest first, as the server ranks them. */
   models: UsageModel[]

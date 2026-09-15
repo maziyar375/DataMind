@@ -1,203 +1,79 @@
 /**
- * The usage chart's spec, and the sentences that keep a total honest.
+ * The token usage screen's arithmetic: periods, slots, ticks, labels and the
+ * sentences that keep a total honest.
  *
- * **This is not a planned chart, and the distinction is the reason this file
- * exists.** `app/charts/` answers "what picture does this *result* want?", a
- * question nobody knows the answer to in advance: a model proposes a shape and
- * the platform vetoes it. A usage chart has no such question. There is one
- * shape — days along the bottom, tokens up the side, split into input and
- * output — and it was decided when the screen was, so routing it through a
- * planner would be asking a model to rediscover a constant.
+ * **No React, no DOM.** One React import turns this suite into a thing that
+ * cannot run, and `npm test` is not in CI, so nothing would say so. The chart
+ * itself is `usage-timeline.tsx`, which draws what this module computes.
  *
- * So the spec is arithmetic, it is written here, and it is DOM-free and tested
- * for the reason every module in this list is: its failures are quiet. A chart
- * drawn from a wrong reshape is still a chart, and a reader has no way to tell
- * one from a right one by looking at it.
- *
- * **No React, no DOM, no vega import.** One React import turns this suite into
- * a thing that cannot run, and `npm test` is not in CI, so nothing would say
- * so. The spec is a plain object; `VegaChart.tsx` is what paints it.
+ * **Every clock here is explicit.** Times are epoch milliseconds, and every
+ * label is written for a UTC offset passed in — the same offset the page sent
+ * the server, which aligned its buckets to it. Nothing reads the machine's own
+ * zone, so a label cannot disagree with the bucket it names, and this suite
+ * means the same thing on every machine that runs it.
  *
  * `npm run test:usage`.
  */
-import type { UsageBucket, UsageSeries } from '../api/types.ts'
-import type { Palette } from './palette.ts'
+import type { UsageBucket, UsageModel, UsageSeries } from '../api/types.ts'
 
-/**
- * A Vega-Lite spec, as `VegaChart` takes one.
- *
- * `Record<string, unknown>` rather than vega-embed's `VisualizationSpec`:
- * that type is a union of interfaces, which TypeScript will not hand to the
- * index-signature prop `VegaChart` declares, and importing it would put a
- * node_modules specifier in a file whose whole point is that it needs none.
- */
-export type UsageSpec = Record<string, unknown>
+const MINUTE = 60_000
+const HOUR = 60 * MINUTE
+const DAY = 24 * HOUR
 
+// ── numbers ───────────────────────────────────────────────────────────────
 /**
- * One stacked segment: the word the legend uses, and the figure it draws.
+ * Digits in groups of three: `1,284,301`.
  *
- * A list rather than two hardcoded encodings, because there are two more
- * segments already named and deliberately not built — cache reads and cache
- * writes, deferred in the specification precisely so this stayed a
- * read-and-render phase. When those columns land, they are an entry here and
- * a colour slot, not a rewrite of this function.
+ * Not `toLocaleString`, whose output depends on the runtime's locale — which
+ * would make this module's suite pass or fail by environment.
  */
-export interface TokenSeries {
-  /** The legend's word for it. Also the colour scale's domain value. */
-  label: string
-  /** The `UsageBucket` field it reads. */
-  field: 'prompt_tokens' | 'completion_tokens'
+export function formatTokens(n: number): string {
+  const [whole, fraction] = String(n).split('.')
+  return fraction ? `${group(whole)}.${fraction}` : group(whole)
 }
 
-/** What a usage chart draws today. Order is the stack order, bottom first. */
-export const TOKEN_SERIES: readonly TokenSeries[] = [
-  { label: 'Input', field: 'prompt_tokens' },
-  { label: 'Output', field: 'completion_tokens' },
-]
-
-export interface UsageSpecOptions {
-  /** A heading drawn above the plot. Omitted entirely when absent. */
-  title?: string
-  /** Override the segments. Defaults to `TOKEN_SERIES`. */
-  series?: readonly TokenSeries[]
-}
-
-/** One row of the long-form data a stacked bar is drawn from. */
-interface UsageDatum {
-  day: string
-  series: string
-  tokens: number
-  /** The segment's index, so the stack cannot reorder between renders. */
-  order: number
+/** Thousands separators into a run of digits. */
+function group(digits: string): string {
+  return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
 }
 
 /**
- * The spec for one scope's buckets.
+ * An axis figure: `950`, `1.2k`, `40k`, `1.5M`.
  *
- * `palette` is the theme's colours, or **`null` to inherit the renderer's**.
- * Null is what a screen passes and it is not laziness: `VegaChart` sets
- * `config.range.category` from `palette.ts` for whichever theme is in force
- * *and re-embeds when the reader flips it*, so a spec that names no range is
- * repainted correctly for free, while one that pins a range is frozen in the
- * theme it was built in. A palette is passed where the theme is fixed rather
- * than followed — print, a pinned board — and by the suite, which needs the
- * range to be somewhere it can read it.
- *
- * Either way the colours are `palette.ts`'s first two categorical slots, in
- * series order, and no literal enters this file.
+ * Only for ticks, where the shape is the message and the exact number is one
+ * hover away. One decimal below ten of a unit, none above, and a trailing
+ * `.0` is dropped so `2k` never reads as `2.0k`.
  */
-export function usageSpec(
-  buckets: readonly UsageBucket[],
-  palette: Palette | null = null,
-  opts: UsageSpecOptions = {},
-): UsageSpec {
-  const series = opts.series ?? TOKEN_SERIES
-
-  // Long form: one row per day per segment. Every segment is emitted for every
-  // day, including the ones that drew nothing, so the colour domain and the
-  // legend are the same on a quiet Sunday as on a busy Tuesday.
-  //
-  // Nothing is coalesced here. A bucket's token counts are measured integers —
-  // the operations that reported no count at all are in the series' own
-  // `unmeasured`, contributing to nothing — so a zero on this chart is a day
-  // that spent nothing, which is a fact, and never a day nobody measured.
-  const values: UsageDatum[] = []
-  for (const bucket of buckets) {
-    series.forEach((segment, index) => {
-      values.push({
-        day: bucket.day,
-        series: segment.label,
-        tokens: bucket[segment.field],
-        order: index,
-      })
-    })
-  }
-
-  const domain = series.map((segment) => segment.label)
-  const scale: Record<string, unknown> = { domain }
-  if (palette) {
-    scale.range = series.map(
-      (_, index) => palette.category[index % palette.category.length],
-    )
-  }
-
-  const spec: UsageSpec = {
-    $schema: 'https://vega.github.io/schema/vega-lite/v5.json',
-    data: { values },
-    mark: { type: 'bar', tooltip: true },
-    encoding: {
-      // `utcyearmonthdate`, not a bare temporal field. The backend buckets on
-      // `date_trunc('day', …)` at UTC and sends `YYYY-MM-DD`, which Vega parses
-      // as midnight UTC and would then *label* in the reader's own zone —
-      // west of Greenwich that draws every bar under the previous day's tick.
-      // Binning and formatting in UTC keeps the axis saying what the query
-      // grouped by.
-      x: {
-        field: 'day',
-        type: 'temporal',
-        timeUnit: 'utcyearmonthdate',
-        title: null,
-        // `labelOverlap` rather than a tick count: ninety days is a legitimate
-        // window and Vega drops labels far better than a guessed stride does.
-        axis: { format: '%b %d', labelOverlap: true, labelAngle: 0 },
-      },
-      y: {
-        field: 'tokens',
-        type: 'quantitative',
-        title: 'Tokens',
-        stack: 'zero',
-        // `12,400,000` is four characters of axis and no more information than
-        // `12M` — the shape is the message on this chart, and the exact figure
-        // is in the summary beside it and in the tooltip.
-        axis: { format: '~s' },
-      },
-      color: {
-        field: 'series',
-        type: 'nominal',
-        title: null,
-        scale,
-        legend: { orient: 'top', direction: 'horizontal', offset: 4 },
-      },
-      // The stack's order stated rather than inherited from row order. Without
-      // it the segments are stacked in whatever order the data arrived, and a
-      // day whose first row happened to be output would draw its stack upside
-      // down against the day beside it.
-      order: { field: 'order', type: 'quantitative', sort: 'ascending' },
-    },
-    // What `VegaChart` needs that the encoding does not say — the same slot
-    // the backend compiler fills, read the same way. Stating it keeps this
-    // chart out of the `mark === 'bar'` sniffing branch that exists only for
-    // specs compiled before `usermeta` did.
-    usermeta: {
-      datamind: {
-        chart_type: 'bar',
-        orientation: 'vertical',
-        stack: 'stacked',
-        categories: buckets.length,
-      },
-    },
-  }
-
-  // Only when there is one: an empty title draws an empty line above the plot.
-  if (opts.title) spec.title = opts.title
-
-  return spec
+export function formatCompact(n: number): string {
+  const abs = Math.abs(n)
+  const unit = abs >= 1e6 ? { d: 1e6, s: 'M' } : abs >= 1e3 ? { d: 1e3, s: 'k' } : null
+  if (!unit) return String(Math.round(n))
+  const scaled = n / unit.d
+  const text = Math.abs(scaled) < 10 ? scaled.toFixed(1) : String(Math.round(scaled))
+  return `${text.replace(/\.0$/, '')}${unit.s}`
 }
 
-// ── the summary beside the chart ──────────────────────────────────────────
+/** `1 operation`, `12 operations`. */
+function operations(n: number): string {
+  return n === 1 ? '1 operation' : `${n} operations`
+}
+
+// ── the figures a scope reports ───────────────────────────────────────────
+/** What `usageTotals` reads — a series, or one model of it. */
+export interface UsageFigures {
+  prompt_tokens: number
+  completion_tokens: number
+  runs: number
+  unmeasured: number
+}
+
 /**
  * What a scope used, and — where it matters — how much of that is unknown.
  *
- * `unmeasured` on the wire exists because a partial total that does not say it
- * is partial is the failure the carried-over rule names: it counts operations
- * that reported no token count at all, so every token figure understates. A
- * count and not a flag, because *how* partial a number is decides whether
- * anybody should act on it — three unmeasured calls out of four hundred is
- * noise, and three out of four is not a usage figure at all.
- *
- * It is therefore rendered as a **sentence**, next to the number, in the
- * reader's own language rather than as an asterisk. A footnote is a thing a
- * reader finds after they have already believed the number.
+ * `unmeasured` exists because a partial total that does not say it is partial
+ * is the failure the carried-over rule names: it counts operations that
+ * reported no token count at all, so every token figure understates. It is
+ * rendered as a **sentence**, next to the number, rather than as an asterisk.
  */
 export interface UsageTotals {
   /** Nothing at all happened in this window. Distinct from "used nothing". */
@@ -211,49 +87,25 @@ export interface UsageTotals {
    *
    * Null and not `"0"`: a scope whose every operation is unmeasured has a
    * token total of zero in arithmetic and no measurement in fact, and the
-   * screen must not spell the second as the first. The same rule the step
-   * chip follows one layer down.
+   * screen must not spell the second as the first.
    */
   tokens: string | null
+  /** Input's part of the measured tokens, 0–1. `null` when there are none. */
+  inputShare: number | null
+  /** Tokens per measured operation, rounded. `null` when nothing was measured. */
+  perOperation: number | null
   /** Why every token figure above understates. `null` when none does. */
   unmeasuredNote: string | null
 }
 
-/**
- * Digits in groups of three: `1,284,301`.
- *
- * Not `toLocaleString`, whose output depends on the runtime's locale — which
- * would make this module's suite pass or fail by environment, and a tested
- * module whose test means something different on another machine is one of
- * the quiet failures this file is here to avoid.
- *
- * Not the chip's `tokenCount` either, and the difference is the box: a chip
- * has room for `4.2k` and a summary line has room for the number, where the
- * digits are what somebody is going to put in a spreadsheet.
- */
-export function formatTokens(n: number): string {
-  const [whole, fraction] = String(n).split('.')
-  return fraction ? `${group(whole)}.${fraction}` : group(whole)
-}
-
-/** Thousands separators into a run of digits. */
-function group(digits: string): string {
-  return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
-}
-
-/** `1 operation`, `12 operations`. */
-function operations(n: number): string {
-  return n === 1 ? '1 operation' : `${n} operations`
-}
-
-export function usageTotals(series: UsageSeries): UsageTotals {
-  const runs = series.runs
-  const promptTokens = series.prompt_tokens
-  const completionTokens = series.completion_tokens
+export function usageTotals(figures: UsageFigures): UsageTotals {
+  const runs = figures.runs
+  const promptTokens = figures.prompt_tokens
+  const completionTokens = figures.completion_tokens
   const totalTokens = promptTokens + completionTokens
+  const unmeasured = Math.max(0, figures.unmeasured)
+  const measuredRuns = Math.max(0, runs - unmeasured)
 
-  // Nothing happened. Every note would be a sentence about an absence, which
-  // reads as a warning about a problem the reader does not have.
   if (runs <= 0) {
     return {
       empty: true,
@@ -262,14 +114,14 @@ export function usageTotals(series: UsageSeries): UsageTotals {
       completionTokens,
       totalTokens,
       tokens: totalTokens > 0 ? formatTokens(totalTokens) : null,
+      inputShare: null,
+      perOperation: null,
       unmeasuredNote: null,
     }
   }
 
-  const unmeasured = Math.max(0, series.unmeasured)
-
-  // Every operation in the scope reported nothing, so the zero below is
-  // arithmetic over an empty set rather than a measurement of no work.
+  // Every operation in the scope reported nothing, so the zero is arithmetic
+  // over an empty set rather than a measurement of no work.
   const nothingMeasured = unmeasured >= runs && totalTokens <= 0
 
   return {
@@ -279,10 +131,12 @@ export function usageTotals(series: UsageSeries): UsageTotals {
     completionTokens,
     totalTokens,
     tokens: nothingMeasured ? null : formatTokens(totalTokens),
-    // A scope of one is written as one rather than as a ratio of itself.
-    // "1 of 1 operation reported no token count" is arithmetically right and
-    // not a sentence — and a window holding a single run is the ordinary case
-    // on a quiet installation, not an edge.
+    inputShare: totalTokens > 0 ? promptTokens / totalTokens : null,
+    perOperation: measuredRuns > 0 && !nothingMeasured
+      ? Math.round(totalTokens / measuredRuns)
+      : null,
+    // A scope of one is written as one rather than as a ratio of itself:
+    // "1 of 1 operation reported no token count" is not a sentence.
     unmeasuredNote:
       unmeasured <= 0
         ? null
@@ -293,82 +147,304 @@ export function usageTotals(series: UsageSeries): UsageTotals {
   }
 }
 
-// ── by model ──────────────────────────────────────────────────────────────
+/**
+ * A percentage for reading: `62%`, and `< 1%` rather than `0%` for a real
+ * share too small to round up — a model that did real work is not a model
+ * that did none.
+ */
+export function formatShare(fraction: number): string {
+  const percent = fraction * 100
+  if (percent > 0 && percent < 1) return '< 1%'
+  return `${Math.round(percent)}%`
+}
+
+// ── models ────────────────────────────────────────────────────────────────
 /** What a run that recorded no model name is listed as. */
 export const UNRECORDED_MODEL = 'Model not recorded'
 
-/** One line of the by-model table, already written for reading. */
-export interface ModelRow {
-  /** The server's key for the row — the recorded name, `''` for none. */
+/**
+ * A model name split for reading: the provider path, which is quiet, and the
+ * model itself, which is the part a reader scans for.
+ * `openai/deepseek/deepseek-v4-flash` → `openai/deepseek/` + `deepseek-v4-flash`.
+ */
+export function splitModelName(model: string): { path: string; name: string } {
+  if (!model) return { path: '', name: UNRECORDED_MODEL }
+  const cut = model.lastIndexOf('/')
+  if (cut <= 0 || cut === model.length - 1) return { path: '', name: model }
+  return { path: model.slice(0, cut + 1), name: model.slice(cut + 1) }
+}
+
+/**
+ * One scope as the filter sees it: the whole scope, or one model of it.
+ *
+ * `model` is `null` for all models. A model the window holds no rows for is a
+ * zero view rather than a throw — the filter may name a model from a wider
+ * period than the one now selected, and "nothing on this model here" is an
+ * answer.
+ */
+export function scopeView(
+  series: UsageSeries,
+  model: string | null,
+): { figures: UsageFigures; buckets: UsageBucket[] } {
+  if (model === null) return { figures: series, buckets: series.buckets }
+  const match = series.models.find((entry) => entry.model === model)
+  if (!match) {
+    return {
+      figures: { prompt_tokens: 0, completion_tokens: 0, runs: 0, unmeasured: 0 },
+      buckets: [],
+    }
+  }
+  return { figures: match, buckets: match.buckets }
+}
+
+/** One line of a ranked breakdown — a model, or a person — already written. */
+export interface RankedRow {
   key: string
-  /** The name to show: the model, or `UNRECORDED_MODEL`. */
-  label: string
-  /** Whether a model was recorded at all, so the page can set it apart. */
-  recorded: boolean
   totalTokens: number
-  /** Grouped figures, or `null` where nothing on this model reported a count. */
+  /** Grouped figures, or `null` where nothing on this row reported a count. */
   tokens: string | null
   input: string | null
   output: string | null
-  /**
-   * This model's part of the scope's measured tokens: `62%`, `< 1%` — or
-   * `null` when the scope measured nothing, so there is no whole to be part of.
-   */
+  /** This row's part of the whole: `62%`, `< 1%`, or `null` with no whole. */
   share: string | null
+  /** The two bar segments, as fractions of the whole (so the bar *is* the share). */
+  inputFraction: number
+  outputFraction: number
+  runs: number
+}
+
+/** A row's figures against a whole, for `RankedRow`. */
+export function rankedRow(key: string, figures: UsageFigures, whole: number): RankedRow {
+  const totalTokens = figures.prompt_tokens + figures.completion_tokens
+  const nothingMeasured = figures.unmeasured >= figures.runs && totalTokens <= 0
+  return {
+    key,
+    totalTokens,
+    tokens: nothingMeasured ? null : formatTokens(totalTokens),
+    input: nothingMeasured ? null : formatTokens(figures.prompt_tokens),
+    output: nothingMeasured ? null : formatTokens(figures.completion_tokens),
+    share: whole > 0 ? formatShare(totalTokens / whole) : null,
+    inputFraction: whole > 0 ? figures.prompt_tokens / whole : 0,
+    outputFraction: whole > 0 ? figures.completion_tokens / whole : 0,
+    runs: figures.runs,
+  }
+}
+
+/** The by-model breakdown's rows, in the order the server ranked them. */
+export function modelRows(series: UsageSeries): (RankedRow & { model: UsageModel })[] {
+  const whole = series.prompt_tokens + series.completion_tokens
+  return series.models.map((model) => ({ ...rankedRow(model.model, model, whole), model }))
+}
+
+// ── periods ───────────────────────────────────────────────────────────────
+export type PresetKey = '1h' | '6h' | '24h' | '7d' | '30d' | '90d'
+export type PeriodKey = PresetKey | 'custom'
+
+/** The periods the screen offers, shortest first. The server picks the bars. */
+export const PRESETS: readonly { key: PresetKey; label: string; title: string; ms: number }[] = [
+  { key: '1h', label: '1h', title: 'Last hour', ms: HOUR },
+  { key: '6h', label: '6h', title: 'Last 6 hours', ms: 6 * HOUR },
+  { key: '24h', label: '24h', title: 'Last 24 hours', ms: DAY },
+  { key: '7d', label: '7d', title: 'Last 7 days', ms: 7 * DAY },
+  { key: '30d', label: '30d', title: 'Last 30 days', ms: 30 * DAY },
+  { key: '90d', label: '90d', title: 'Last 90 days', ms: 90 * DAY },
+]
+
+export const DEFAULT_PERIOD: PresetKey = '30d'
+
+export function isPeriodKey(value: string | null): value is PeriodKey {
+  return value === 'custom' || PRESETS.some((preset) => preset.key === value)
+}
+
+/**
+ * The instants a preset asks the server for: the period, ending now.
+ *
+ * The server aligns `since` to its bucket grid and returns the aligned value,
+ * so the page draws from the response rather than from this.
+ */
+export function presetRange(key: PresetKey, now: number): { since: string; until: string } {
+  const preset = PRESETS.find((entry) => entry.key === key) ?? PRESETS[4]
+  return {
+    since: new Date(now - preset.ms).toISOString(),
+    until: new Date(now).toISOString(),
+  }
+}
+
+/** The offset the page sends and every label is written in: minutes east of UTC. */
+export function localOffsetMinutes(at: Date = new Date()): number {
+  // `getTimezoneOffset` is minutes *behind* UTC, so Tehran is -210. The API
+  // takes the ISO sign, east positive — and `-0` is not a query value.
+  return -at.getTimezoneOffset() || 0
+}
+
+// ── a local wall clock, for a given offset ───────────────────────────────
+/**
+ * `YYYY-MM-DDTHH:MM` for an instant on the reader's clock — the value a
+ * `datetime-local` input holds.
+ */
+export function toLocalInput(ms: number, offsetMinutes: number): string {
+  return new Date(ms + offsetMinutes * MINUTE).toISOString().slice(0, 16)
+}
+
+/** The inverse of `toLocalInput`. `null` for a value that is not a time. */
+export function fromLocalInput(value: string, offsetMinutes: number): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return null
+  const ms = Date.parse(`${value}:00Z`)
+  return Number.isNaN(ms) ? null : ms - offsetMinutes * MINUTE
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+function wall(ms: number, offsetMinutes: number): Date {
+  return new Date(ms + offsetMinutes * MINUTE)
+}
+
+function hhmm(date: Date): string {
+  return `${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}`
+}
+
+function monthDay(date: Date): string {
+  return `${MONTHS[date.getUTCMonth()]} ${date.getUTCDate()}`
+}
+
+/** `Sep 14, 10:02` on the reader's clock. */
+export function formatInstant(ms: number, offsetMinutes: number): string {
+  const date = wall(ms, offsetMinutes)
+  return `${monthDay(date)}, ${hhmm(date)}`
+}
+
+/**
+ * What one bar covers, for its tooltip and its table row.
+ *
+ * A day bar is its date (`Mon, Sep 14`); anything narrower is a range on one
+ * date (`Sep 14, 10:00–10:15`), with the end written `24:00` rather than
+ * `00:00` when a bar closes at midnight, so a range never reads backwards.
+ */
+export function formatSlot(startMs: number, bucketSeconds: number, offsetMinutes: number): string {
+  const start = wall(startMs, offsetMinutes)
+  if (bucketSeconds >= DAY / 1000) {
+    return `${WEEKDAYS[start.getUTCDay()]}, ${monthDay(start)}`
+  }
+  const end = wall(startMs + bucketSeconds * 1000, offsetMinutes)
+  const endText = end.getUTCHours() === 0 && end.getUTCMinutes() === 0 ? '24:00' : hhmm(end)
+  return `${monthDay(start)}, ${hhmm(start)}–${endText}`
+}
+
+/** How wide the bars are, as the chart's caption says it. */
+export function bucketLabel(bucketSeconds: number): string {
+  switch (bucketSeconds) {
+    case 300: return '5-minute bars'
+    case 900: return '15-minute bars'
+    case 3600: return 'Hourly bars'
+    case 21_600: return '6-hour bars'
+    case 86_400: return 'Daily bars'
+    default: return bucketSeconds < 3600
+      ? `${Math.round(bucketSeconds / 60)}-minute bars`
+      : `${Math.round(bucketSeconds / 3600)}-hour bars`
+  }
+}
+
+// ── the chart's slots ─────────────────────────────────────────────────────
+/** One bar's place on the timeline, filled or empty. */
+export interface Slot {
+  start: number
+  end: number
+  input: number
+  output: number
   runs: number
 }
 
 /**
- * The by-model table's rows, in the order the server ranked them.
+ * Every bucket in the window, including the ones nothing ran in.
  *
- * A share that rounds to zero is written `< 1%` rather than `0%`, for the
- * reason the token tiles refuse a zero nobody measured: a model that did real
- * work is not a model that did none.
+ * The response is sparse, and a chart drawn from it alone ends at the last
+ * bucket anything happened in — which is the axis that stops at the latest
+ * token instead of at now. So the slots are laid from the window's own
+ * `since` to its `until`, and a bucket the server did not send is a zero:
+ * nothing ran in it, which is a fact, not a gap in the measurement (those are
+ * counted in `unmeasured`).
  */
-export function modelRows(series: UsageSeries): ModelRow[] {
-  const whole = series.prompt_tokens + series.completion_tokens
-  return series.models.map((model) => {
-    const totalTokens = model.prompt_tokens + model.completion_tokens
-    const nothingMeasured = model.unmeasured >= model.runs && totalTokens <= 0
-    const percent = whole > 0 ? (totalTokens / whole) * 100 : null
-    return {
-      key: model.model,
-      label: model.model || UNRECORDED_MODEL,
-      recorded: model.model !== '',
-      totalTokens,
-      tokens: nothingMeasured ? null : formatTokens(totalTokens),
-      input: nothingMeasured ? null : formatTokens(model.prompt_tokens),
-      output: nothingMeasured ? null : formatTokens(model.completion_tokens),
-      share:
-        percent === null ? null
-        : percent > 0 && percent < 1 ? '< 1%'
-        : `${Math.round(percent)}%`,
-      runs: model.runs,
-    }
-  })
+export function denseSlots(
+  buckets: readonly UsageBucket[],
+  since: string,
+  until: string,
+  bucketSeconds: number,
+): Slot[] {
+  const width = bucketSeconds * 1000
+  const first = Date.parse(since)
+  const end = Date.parse(until)
+  if (!(width > 0) || Number.isNaN(first) || Number.isNaN(end) || end <= first) return []
+
+  const count = Math.min(2000, Math.ceil((end - first) / width))
+  const byStart = new Map<number, UsageBucket>()
+  for (const bucket of buckets) byStart.set(Date.parse(bucket.start), bucket)
+
+  const slots: Slot[] = []
+  for (let index = 0; index < count; index += 1) {
+    const start = first + index * width
+    const bucket = byStart.get(start)
+    slots.push({
+      start,
+      end: start + width,
+      input: bucket?.prompt_tokens ?? 0,
+      output: bucket?.completion_tokens ?? 0,
+      runs: bucket?.runs ?? 0,
+    })
+  }
+  return slots
 }
 
-// ── the window ────────────────────────────────────────────────────────────
-/** The windows the screen offers. Days, because the buckets are days. */
-export const WINDOW_DAYS = [7, 30, 90] as const
-export type WindowDays = (typeof WINDOW_DAYS)[number]
+/**
+ * The value axis: a round maximum and the ticks up to it.
+ *
+ * Steps of 1, 2, 2.5 or 5 times a power of ten, so every label is a number a
+ * person would write. An empty chart still gets an axis — `0` and one step —
+ * rather than a scale that divides by zero.
+ */
+export function valueTicks(max: number, count = 4): { max: number; ticks: number[] } {
+  if (!(max > 0)) return { max: 1, ticks: [0] }
+  const raw = max / count
+  const power = 10 ** Math.floor(Math.log10(raw))
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * power).find((s) => s >= raw) ?? 10 * power
+  const top = Math.ceil(max / step) * step
+  const ticks: number[] = []
+  for (let value = 0; value <= top + step / 2; value += step) ticks.push(Math.round(value))
+  return { max: top, ticks }
+}
+
+/** The steps the time axis may use, narrowest first. */
+const TIME_STEPS = [
+  5 * MINUTE, 10 * MINUTE, 15 * MINUTE, 30 * MINUTE,
+  HOUR, 2 * HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR,
+  DAY, 2 * DAY, 7 * DAY, 14 * DAY,
+]
 
 /**
- * When a window of `days` starts, as the ISO instant the API takes.
+ * Labelled instants along the time axis, at round times on the reader's clock.
  *
- * **UTC midnight, `days - 1` days back**, and both halves of that are the
- * reason this is here rather than inlined in the page. Midnight, because the
- * backend buckets on `date_trunc('day', …)` at UTC: asking from 09:40 leaves
- * the oldest bucket holding two thirds of a day and drawn beside whole ones,
- * which is a bar that is short for a reason nothing on the screen explains.
- * And `days - 1`, because a seven-day window ending today is seven buckets —
- * today and the six before it — where a naive `now - 7 days` spans eight.
- *
- * Off-by-one in a window boundary is the quiet kind: the chart still draws,
- * the total is still a total, and the only symptom is a figure that disagrees
- * with the same figure somewhere else.
+ * The narrowest step that yields no more than `maxTicks` labels, so a wide
+ * chart says more and a phone says less. Below a day the label is the time,
+ * except at midnight, where it is the date — the one place a run of times
+ * needs telling which day it has moved into.
  */
-export function windowSince(days: number, now: Date = new Date()): string {
-  const midnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-  return new Date(midnight - (days - 1) * 86_400_000).toISOString()
+export function timeTicks(
+  startMs: number,
+  endMs: number,
+  offsetMinutes: number,
+  maxTicks: number,
+): { at: number; label: string }[] {
+  const span = endMs - startMs
+  if (!(span > 0) || maxTicks < 1) return []
+  const step = TIME_STEPS.find((s) => span / s <= maxTicks) ?? 28 * DAY
+  const offset = offsetMinutes * MINUTE
+  const first = Math.ceil((startMs + offset) / step) * step - offset
+
+  const ticks: { at: number; label: string }[] = []
+  for (let at = first; at < endMs; at += step) {
+    const date = wall(at, offsetMinutes)
+    const midnight = date.getUTCHours() === 0 && date.getUTCMinutes() === 0
+    ticks.push({ at, label: step >= DAY || midnight ? monthDay(date) : hhmm(date) })
+  }
+  return ticks
 }

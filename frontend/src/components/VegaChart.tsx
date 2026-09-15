@@ -18,6 +18,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import embed, { type VisualizationSpec } from 'vega-embed'
 import { CATEGORY_INK, PALETTES, type ThemeName } from './palette.ts'
 import { registerPrintableChart, type DrawTarget } from './report-print.ts'
+import { useThemeName } from './theme-name.ts'
 
 /**
  * Widen a printed chart's `viewBox` to whatever it actually drew.
@@ -66,20 +67,6 @@ function makeScalable(el: HTMLElement): void {
   svg.setAttribute('preserveAspectRatio', 'xMinYMin meet')
 }
 
-function currentTheme(): ThemeName {
-  return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'
-}
-
-function useThemeName(): ThemeName {
-  const [name, setName] = useState<ThemeName>(currentTheme)
-  useEffect(() => {
-    const root = document.documentElement
-    const observer = new MutationObserver(() => setName(currentTheme()))
-    observer.observe(root, { attributes: true, attributeFilter: ['data-theme'] })
-    return () => observer.disconnect()
-  }, [])
-  return name
-}
 
 export function VegaChart({ spec, frameless = false, fill = false }: {
   spec: Record<string, unknown>

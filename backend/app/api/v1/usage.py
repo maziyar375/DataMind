@@ -22,14 +22,32 @@ a connection's owner does not.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Annotated
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from app.api.deps import CtxDep, DbDep, UsageReadDep
 from app.api.schemas import UsageBucket, UsageModel, UsageSeries, UsageTotal
 from app.services import usage_service as usage
 
 router = APIRouter(prefix="/usage", tags=["usage"])
+
+#: The reader's UTC offset in minutes east of Greenwich — what
+#: `-new Date().getTimezoneOffset()` returns in a browser. Buckets are aligned
+#: to it, so a day bar starts at the reader's midnight. Bounded to the widest
+#: offset any zone uses; a value outside it is a 422, not a guess.
+TzOffset = Annotated[
+    int, Query(ge=-usage.MAX_OFFSET_MINUTES, le=usage.MAX_OFFSET_MINUTES)
+]
+
+
+def _bucket(bucket: usage.Bucket) -> UsageBucket:
+    return UsageBucket(
+        start=bucket.start,
+        prompt_tokens=bucket.prompt_tokens,
+        completion_tokens=bucket.completion_tokens,
+        runs=bucket.runs,
+    )
 
 
 def _series(series: usage.Series) -> UsageSeries:
@@ -47,15 +65,10 @@ def _series(series: usage.Series) -> UsageSeries:
         completion_tokens=series.completion_tokens,
         runs=series.runs,
         unmeasured=series.unmeasured,
-        buckets=[
-            UsageBucket(
-                day=bucket.day,
-                prompt_tokens=bucket.prompt_tokens,
-                completion_tokens=bucket.completion_tokens,
-                runs=bucket.runs,
-            )
-            for bucket in series.buckets
-        ],
+        since=series.since,
+        until=series.until,
+        bucket_seconds=series.bucket_seconds,
+        buckets=[_bucket(bucket) for bucket in series.buckets],
         models=[
             UsageModel(
                 model=model.model,
@@ -63,6 +76,7 @@ def _series(series: usage.Series) -> UsageSeries:
                 completion_tokens=model.completion_tokens,
                 runs=model.runs,
                 unmeasured=model.unmeasured,
+                buckets=[_bucket(bucket) for bucket in model.buckets],
             )
             for model in series.models
         ],
@@ -75,6 +89,7 @@ async def my_usage(
     db: DbDep,
     since: datetime | None = None,
     until: datetime | None = None,
+    tz_offset: TzOffset = 0,
 ) -> UsageSeries:
     """How many tokens the caller's own questions, reports and layer generations used.
 
@@ -85,11 +100,13 @@ async def my_usage(
     about *other people* are next door and carry `usage.read`.
 
     The window is clamped server-side (`MAX_WINDOW_DAYS`); a caller that names
-    neither end gets the last thirty days. A person with no runs in the window
+    neither end gets the last thirty days. The bucket width is chosen from the
+    window's length — five minutes for an hour, a day for a month — and never
+    taken from the caller. A person with no runs in the window
     gets a zero series carrying their own name, rather than an empty body the
     screen would have to guess at — "you, nothing this month" is an answer.
     """
-    window = usage.clamp_window(since, until)
+    window = usage.clamp_window(since, until, tz_offset_minutes=tz_offset)
     return _series(await usage.for_actor(db, ctx.user_id, window=window))
 
 
@@ -99,6 +116,7 @@ async def usage_by_person(
     db: DbDep,
     since: datetime | None = None,
     until: datetime | None = None,
+    tz_offset: TzOffset = 0,
 ) -> list[UsageSeries]:
     """Everybody's usage, one series each, in **one** response.
 
@@ -116,7 +134,7 @@ async def usage_by_person(
     *"who spent this"* with something a person recognises, and an email is a
     personal identifier it has no need of.
     """
-    window = usage.clamp_window(since, until)
+    window = usage.clamp_window(since, until, tz_offset_minutes=tz_offset)
     return [_series(row) for row in await usage.per_actor(db, window=window)]
 
 
@@ -126,6 +144,7 @@ async def installation_usage(
     db: DbDep,
     since: datetime | None = None,
     until: datetime | None = None,
+    tz_offset: TzOffset = 0,
 ) -> UsageTotal:
     """What the whole installation used, and how much of it has no owner.
 
@@ -139,7 +158,7 @@ async def installation_usage(
     screen can state it in a sentence instead of leaving a reader to add the
     people up and wonder where the rest went.
     """
-    window = usage.clamp_window(since, until)
+    window = usage.clamp_window(since, until, tz_offset_minutes=tz_offset)
     total = await usage.installation(db, window=window)
     return UsageTotal(
         **_series(total).model_dump(),

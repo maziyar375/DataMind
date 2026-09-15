@@ -49,8 +49,10 @@ NOW = datetime(2026, 9, 13, 12, 0, tzinfo=UTC)
 #: `until` is an hour **past** `NOW` because the range is half-open: a row
 #: written at exactly `until` is outside it, by design, and a fixture that put
 #: its rows on that boundary would be testing the boundary in every test rather
-#: than the thing each one is about.
-WINDOW = usage.clamp_window(since=NOW - timedelta(days=7), until=NOW + timedelta(hours=1))
+#: than the thing each one is about. A week and an hour is six-hour buckets.
+WINDOW = usage.clamp_window(
+    since=NOW - timedelta(days=7), until=NOW + timedelta(hours=1), now=NOW
+)
 
 
 async def _person(db: AsyncSessionShim, name: str) -> UUID:
@@ -167,22 +169,83 @@ async def test_a_total_equals_the_sum_of_its_buckets(db: AsyncSessionShim) -> No
     assert series.completion_tokens == sum(b.completion_tokens for b in series.buckets)
     assert series.runs == sum(b.runs for b in series.buckets)
     assert series.prompt_tokens == 390
-    # Two days, not three rows: the middle day carries two of them.
+    # Two buckets, not three rows: the one two days back carries two of them.
     assert len(series.buckets) == 2
 
 
 @pytest.mark.asyncio
-async def test_a_days_rows_land_in_one_bucket(db: AsyncSessionShim) -> None:
-    """Bucketing is by day, so two questions an hour apart are one bar."""
+async def test_a_buckets_rows_land_in_one_bar(db: AsyncSessionShim) -> None:
+    """A week is six-hour buckets, so two questions two hours apart are one bar."""
     ali = await _person(db, "Ali")
     await _chat(db, ali, prompt=10, completion=1, day=NOW - timedelta(hours=1))
     await _chat(db, ali, prompt=20, completion=2, day=NOW - timedelta(hours=3))
 
     series = await usage.for_actor(db, ali, window=WINDOW)
 
+    assert series.bucket_seconds == 6 * 3600
     assert len(series.buckets) == 1
     assert series.buckets[0].runs == 2
     assert series.buckets[0].prompt_tokens == 30
+    assert series.buckets[0].start == datetime(2026, 9, 13, 6, 0, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_an_hour_is_twelve_five_minute_buckets_and_rows_land_in_theirs(
+    db: AsyncSessionShim,
+) -> None:
+    ali = await _person(db, "Ali")
+    until = NOW + timedelta(minutes=1)
+    window = usage.clamp_window(since=until - timedelta(hours=1), until=until, now=until)
+    await _chat(db, ali, prompt=10, completion=1, day=NOW - timedelta(minutes=2))
+    await _chat(db, ali, prompt=20, completion=2, day=NOW - timedelta(minutes=31))
+    await _chat(db, ali, prompt=40, completion=4, day=NOW - timedelta(minutes=90))
+
+    series = await usage.for_actor(db, ali, window=window)
+
+    assert window.bucket_seconds == 300
+    assert series.prompt_tokens == 30, "the row from ninety minutes ago is outside"
+    assert [(b.start.hour, b.start.minute) for b in series.buckets] == [(11, 25), (11, 55)]
+
+
+@pytest.mark.asyncio
+async def test_a_day_bucket_starts_at_the_readers_midnight_not_greenwichs(
+    db: AsyncSessionShim,
+) -> None:
+    """Tehran is +03:30. A question asked at 22:00 UTC is the next day there."""
+    ali = await _person(db, "Ali")
+    late = datetime(2026, 9, 12, 22, 0, tzinfo=UTC)
+    await _chat(db, ali, prompt=10, completion=1, day=late)
+    window = usage.clamp_window(
+        since=NOW - timedelta(days=30), until=NOW, now=NOW, tz_offset_minutes=210
+    )
+
+    (bucket,) = (await usage.for_actor(db, ali, window=window)).buckets
+
+    assert window.bucket_seconds == usage.DAY_SECONDS
+    # Local midnight of 13 September, which is 20:30 UTC on the 12th.
+    assert bucket.start == datetime(2026, 9, 12, 20, 30, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_each_model_carries_its_own_buckets_summing_to_its_total(
+    db: AsyncSessionShim,
+) -> None:
+    """What lets a chart show one model on its own without another request."""
+    ali = await _person(db, "Ali")
+    await _chat(db, ali, prompt=100, completion=10, model="a", day=NOW)
+    await _chat(db, ali, prompt=200, completion=20, model="a", day=NOW - timedelta(days=2))
+    await _chat(db, ali, prompt=50, completion=5, model="b", day=NOW)
+
+    series = await usage.for_actor(db, ali, window=WINDOW)
+    by_name = {m.model: m for m in series.models}
+
+    assert len(by_name["a"].buckets) == 2
+    assert sum(b.prompt_tokens for b in by_name["a"].buckets) == by_name["a"].prompt_tokens
+    assert [b.prompt_tokens for b in by_name["b"].buckets] == [50]
+    # And the models' buckets add back up to the scope's.
+    assert sum(b.prompt_tokens for m in series.models for b in m.buckets) == sum(
+        b.prompt_tokens for b in series.buckets
+    )
 
 
 # ── a null is never a zero ───────────────────────────────────────────────
@@ -392,22 +455,60 @@ def test_a_window_wider_than_the_maximum_is_clamped_not_served() -> None:
     """The union has no LIMIT; the window is what bounds the read."""
     window = usage.clamp_window(since=NOW - timedelta(days=5000), until=NOW, now=NOW)
 
-    assert window.days == usage.MAX_WINDOW_DAYS
+    assert window.span <= timedelta(days=usage.MAX_WINDOW_DAYS)
+    assert window.span > timedelta(days=usage.MAX_WINDOW_DAYS - 1)
+    assert window.bucket_seconds == usage.DAY_SECONDS
     assert window.until == NOW
 
 
-def test_the_default_window_is_thirty_days() -> None:
+def test_the_default_window_is_thirty_days_of_day_buckets() -> None:
     window = usage.clamp_window(now=NOW)
 
-    assert window.days == usage.DEFAULT_WINDOW_DAYS
+    assert window.bucket_seconds == usage.DAY_SECONDS
     assert window.until == NOW
+    # Thirty buckets, the last of them today.
+    assert window.since == datetime(2026, 8, 15, tzinfo=UTC)
 
 
 def test_a_reversed_window_collapses_rather_than_inverting() -> None:
-    """A caller's mistake reads as "no usage", which is true of no days."""
+    """A caller's mistake reads as "no usage", which is true of no time."""
     window = usage.clamp_window(since=NOW, until=NOW - timedelta(days=5), now=NOW)
 
-    assert window.days == 0
+    assert window.span == timedelta(0)
+
+
+@pytest.mark.parametrize(
+    ("span", "seconds", "buckets"),
+    [
+        (timedelta(hours=1), 5 * 60, 12),
+        (timedelta(hours=6), 15 * 60, 24),
+        (timedelta(hours=24), 60 * 60, 24),
+        (timedelta(days=7), 6 * 3600, 28),
+        (timedelta(days=30), 86_400, 30),
+        (timedelta(days=90), 86_400, 90),
+    ],
+)
+def test_every_preset_is_a_whole_number_of_buckets_ending_now(
+    span: timedelta, seconds: int, buckets: int
+) -> None:
+    """The resolution is the server's to choose, and it is chosen from the span.
+
+    And the window ends with the bucket that holds `until`, so the last bar on
+    the chart is the one in progress rather than one that ended a while ago.
+    """
+    until = datetime(2026, 9, 13, 10, 2, tzinfo=UTC)
+    window = usage.clamp_window(since=until - span, until=until, now=until)
+
+    assert window.bucket_seconds == seconds
+    assert window.until == until
+    last_start = window.since + timedelta(seconds=seconds * (buckets - 1))
+    assert last_start <= until < last_start + timedelta(seconds=seconds)
+
+
+def test_the_offset_is_clamped_to_what_a_zone_can_be() -> None:
+    window = usage.clamp_window(now=NOW, tz_offset_minutes=10_000)
+
+    assert window.offset_seconds == usage.MAX_OFFSET_MINUTES * 60
 
 
 @pytest.mark.asyncio

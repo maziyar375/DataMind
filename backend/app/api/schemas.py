@@ -7,7 +7,7 @@ OpenAPI schema to prove it.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import date, datetime
+from datetime import datetime
 from types import MappingProxyType
 from typing import Any, Literal
 from uuid import UUID
@@ -1138,21 +1138,26 @@ class AuditEntry(BaseModel):
 # asked 40 questions using 180k tokens" is a different disclosure from "here
 # is what Ali asked", and only the first one is available through these DTOs.
 class UsageBucket(BaseModel):
-    """One day's tokens, for one scope."""
+    """One bucket's tokens, for one scope.
 
-    day: date
+    `start` is the bucket's first instant, in UTC; the bucket runs for the
+    series' `bucket_seconds`. Buckets are aligned to the reader's clock (the
+    `tz_offset` they asked with), so a day bucket starts at *their* midnight.
+    """
+
+    start: datetime
     #: Measured tokens only. A run that reported no count contributes nothing
     #: here and is counted into `UsageSeries.unmeasured` instead — it is never
     #: summed as zero.
     prompt_tokens: int = 0
     completion_tokens: int = 0
-    #: How many operations are behind the figures above. A day with 400 runs
+    #: How many operations are behind the figures above. An hour with 400 runs
     #: and one with 4 are different facts about the same token count.
     runs: int = 0
 
 
 class UsageModel(BaseModel):
-    """One model's share of a scope, over the whole window."""
+    """One model's share of a scope: its total over the window, and its buckets."""
 
     #: The model as the run recorded it — `""` where a row recorded none.
     model: str = ""
@@ -1161,14 +1166,22 @@ class UsageModel(BaseModel):
     runs: int = 0
     #: Operations on this model that reported no token count at all.
     unmeasured: int = 0
+    #: Sparse, like `UsageSeries.buckets`: a bucket this model did not run in
+    #: is absent.
+    buckets: list[UsageBucket] = Field(default_factory=list)
 
 
 class UsageSeries(BaseModel):
-    """One scope's usage: a total, the days it is made of, and the models.
+    """One scope's usage: a total, the buckets it is made of, and the models.
 
     The invariant the screen rests on: **the total equals the sum of the
     buckets**, and equally the sum of `models`. All three come from the same
     rows, so they cannot drift.
+
+    `buckets` is **sparse** — a bucket nothing ran in is absent. `since`,
+    `until` and `bucket_seconds` describe the whole window, so a chart can
+    draw the empty buckets and run its axis to the window's real end rather
+    than to the last bucket anything happened in.
     """
 
     #: `None` on the installation total, which is nobody's.
@@ -1186,6 +1199,13 @@ class UsageSeries(BaseModel):
     #: rather than a flag, because a reader needs to know *how* partial a total
     #: is before deciding whether to act on it.
     unmeasured: int = 0
+    #: The start of the first bucket. Aligned, so it may be a little earlier
+    #: than the `since` that was asked for — see `usage_service.clamp_window`.
+    since: datetime | None = None
+    #: The end of the window, exclusive: *now*, unless the caller named one.
+    until: datetime | None = None
+    #: How wide every bucket is, chosen by the server from the window's length.
+    bucket_seconds: int = 86_400
     buckets: list[UsageBucket] = Field(default_factory=list)
     #: The same total split by model, busiest first.
     models: list[UsageModel] = Field(default_factory=list)

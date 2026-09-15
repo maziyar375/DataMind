@@ -1,20 +1,23 @@
 /**
- * The usage chart's spec, and the sentences beside it.
+ * The token usage screen's arithmetic: slots, ticks, labels, and the
+ * sentences beside the figures.
  *
  * `npm run test:usage` — Node runs this file directly.
  *
- * Both halves of that module fail quietly. A chart drawn from a wrong reshape
- * is still a chart and nobody can tell by looking; a total that has quietly
- * stopped saying how partial it is looks exactly like a whole one. So the
- * cases below are the ones where being nearly right is worse than being
- * absent — a zero printed for a measurement nobody took, a model breakdown that
- * does not add up to its total, a stack that reorders between renders.
+ * Everything here fails quietly. A timeline laid from the sparse buckets
+ * alone still draws, and ends at the last token instead of now; a label
+ * written in the machine's zone still reads, and names the wrong hour; a
+ * total that has stopped saying how partial it is looks exactly like a whole
+ * one. So the cases below are the ones where being nearly right is worse than
+ * being absent. Every clock in them is explicit — no case depends on the zone
+ * of the machine running it.
  */
 import {
-  formatTokens, modelRows, TOKEN_SERIES, UNRECORDED_MODEL, usageSpec, usageTotals,
-  WINDOW_DAYS, windowSince,
+  bucketLabel, denseSlots, formatCompact, formatInstant, formatShare, formatSlot,
+  formatTokens, fromLocalInput, isPeriodKey, localOffsetMinutes, modelRows, presetRange,
+  PRESETS, rankedRow, scopeView, splitModelName, timeTicks, toLocalInput, UNRECORDED_MODEL,
+  usageTotals, valueTicks,
 } from './usage-chart.ts'
-import { PALETTES } from './palette.ts'
 import type { UsageBucket, UsageModel, UsageSeries } from '../api/types.ts'
 
 let failures = 0
@@ -28,12 +31,19 @@ function check(name: string, actual: unknown, expected: unknown): void {
   )
 }
 
+const TEHRAN = 210
+const HOUR = 3_600_000
+const DAY = 24 * HOUR
+
 function bucket(over: Partial<UsageBucket> = {}): UsageBucket {
-  return { day: '2026-09-01', prompt_tokens: 0, completion_tokens: 0, runs: 1, ...over }
+  return { start: '2026-09-13T00:00:00Z', prompt_tokens: 0, completion_tokens: 0, runs: 1, ...over }
 }
 
 function model(over: Partial<UsageModel> = {}): UsageModel {
-  return { model: 'gpt-4o-mini', prompt_tokens: 0, completion_tokens: 0, runs: 1, unmeasured: 0, ...over }
+  return {
+    model: 'gpt-4o-mini', prompt_tokens: 0, completion_tokens: 0, runs: 1, unmeasured: 0,
+    buckets: [], ...over,
+  }
 }
 
 function series(over: Partial<UsageSeries> = {}): UsageSeries {
@@ -44,148 +54,40 @@ function series(over: Partial<UsageSeries> = {}): UsageSeries {
     completion_tokens: 0,
     runs: 0,
     unmeasured: 0,
+    since: '2026-09-13T00:00:00Z',
+    until: '2026-09-13T06:00:00Z',
+    bucket_seconds: 3600,
     buckets: [],
     models: [],
     ...over,
   }
 }
 
-/** The spec's long-form rows, which is what every reshape claim is about. */
-function rows(spec: Record<string, unknown>): unknown[] {
-  return (spec.data as { values: unknown[] }).values
-}
-
-function encoding(spec: Record<string, unknown>): Record<string, Record<string, unknown>> {
-  return spec.encoding as Record<string, Record<string, unknown>>
-}
-
-console.log('\n— an empty window —')
-const empty = usageSpec([])
-check('an empty bucket list is a spec, not a throw', rows(empty), [])
-check('and still declares its encoding', Object.keys(encoding(empty)).sort(), [
-  'color', 'order', 'x', 'y',
-])
-check(
-  'and still declares the segments, so the legend does not appear on the first bar',
-  (encoding(empty).color.scale as { domain: string[] }).domain,
-  ['Input', 'Output'],
-)
-check('an empty window has no categories', (empty.usermeta as {
-  datamind: { categories: number }
-}).datamind.categories, 0)
-
-console.log('\n— the reshape —')
-const twoDays = usageSpec([
-  bucket({ day: '2026-09-01', prompt_tokens: 900, completion_tokens: 100 }),
-  bucket({ day: '2026-09-02', prompt_tokens: 40, completion_tokens: 0 }),
-])
-check('one row per day per segment', rows(twoDays).length, 4)
-check('every field the encoding names is on every row', rows(twoDays), [
-  { day: '2026-09-01', series: 'Input', tokens: 900, order: 0 },
-  { day: '2026-09-01', series: 'Output', tokens: 100, order: 1 },
-  { day: '2026-09-02', series: 'Input', tokens: 40, order: 0 },
-  { day: '2026-09-02', series: 'Output', tokens: 0, order: 1 },
-])
-check(
-  'a day with no output still draws its input',
-  rows(usageSpec([bucket({ prompt_tokens: 40, completion_tokens: 0 })])),
-  [
-    { day: '2026-09-01', series: 'Input', tokens: 40, order: 0 },
-    { day: '2026-09-01', series: 'Output', tokens: 0, order: 1 },
-  ],
-)
-check(
-  'a quiet day keeps both segments, so the legend does not flicker',
-  rows(usageSpec([bucket()])).length,
-  2,
-)
-check('the categories are the days, not the rows', (twoDays.usermeta as {
-  datamind: { categories: number }
-}).datamind.categories, 2)
-
-console.log('\n— the order of the stack —')
-check(
-  'the colour domain is stated rather than read off the data',
-  (encoding(twoDays).color.scale as { domain: string[] }).domain,
-  ['Input', 'Output'],
-)
-check('and an order channel fixes the segments', encoding(twoDays).order, {
-  field: 'order', type: 'quantitative', sort: 'ascending',
-})
-check(
-  'the same buckets build the same spec twice',
-  JSON.stringify(usageSpec([bucket({ prompt_tokens: 5, completion_tokens: 6 })])),
-  JSON.stringify(usageSpec([bucket({ prompt_tokens: 5, completion_tokens: 6 })])),
-)
-check('input is the first segment and stays there', TOKEN_SERIES.map((s) => s.label), [
-  'Input', 'Output',
-])
-
-console.log('\n— the colours —')
-check(
-  'no palette leaves the range to the renderer, which knows the theme',
-  'range' in (encoding(usageSpec([bucket()])).color.scale as object),
-  false,
-)
-check(
-  'a palette pins the first two categorical slots, in series order',
-  (encoding(usageSpec([bucket()], PALETTES.dark)).color.scale as { range: string[] }).range,
-  [PALETTES.dark.category[0], PALETTES.dark.category[1]],
-)
-check(
-  'and the light theme pins its own two, not the dark ones',
-  (encoding(usageSpec([bucket()], PALETTES.light)).color.scale as { range: string[] }).range,
-  [PALETTES.light.category[0], PALETTES.light.category[1]],
-)
-check(
-  'no literal colour is in the module',
-  (encoding(usageSpec([bucket()], PALETTES.dark)).color.scale as { range: string[] })
-    .range.every((hex) => PALETTES.dark.category.includes(hex)),
-  true,
-)
-
-console.log('\n— the axes —')
-check(
-  'the day axis is bucketed in UTC, the way the query grouped it',
-  encoding(twoDays).x.timeUnit,
-  'utcyearmonthdate',
-)
-check('tokens stack from zero', encoding(twoDays).y.stack, 'zero')
-check('a title is omitted rather than drawn empty', 'title' in twoDays, false)
-check(
-  'and drawn when there is one',
-  usageSpec([], null, { title: 'Last 30 days' }).title,
-  'Last 30 days',
-)
-
 console.log('\n— a total nobody has to qualify —')
-const whole = usageTotals(series({
-  runs: 12, prompt_tokens: 1_000_000, completion_tokens: 284_301,
-}))
+const whole = usageTotals(series({ runs: 12, prompt_tokens: 1_000_000, completion_tokens: 284_301 }))
 check('the tokens add up', whole.totalTokens, 1_284_301)
 check('and are grouped for reading', whole.tokens, '1,284,301')
 check('nothing is unmeasured, so nothing is said about it', whole.unmeasuredNote, null)
+check('input is its share of the whole', whole.inputShare?.toFixed(4), '0.7786')
+check('tokens per operation are over every measured run', whole.perOperation, 107_025)
 check('and it is not the empty window', whole.empty, false)
-check('no price is anywhere in the summary', Object.keys(whole).some((key) => /cost/i.test(key)), false)
+check('no price is anywhere in the summary', Object.keys(whole).some((key) => /cost|price/i.test(key)), false)
 
 console.log('\n— an empty window says so —')
 const nothing = usageTotals(series())
 check('no operations is empty', nothing.empty, true)
-check('and no warning about an absence nobody asked about', nothing.unmeasuredNote, null)
+check('with no warning about an absence nobody asked about', nothing.unmeasuredNote, null)
+check('and no split of nothing', [nothing.inputShare, nothing.perOperation], [null, null])
 
 console.log('\n— what is unmeasured —')
-const partly = usageTotals(series({
-  runs: 12, prompt_tokens: 900, completion_tokens: 100, unmeasured: 3,
-}))
+const partly = usageTotals(series({ runs: 12, prompt_tokens: 900, completion_tokens: 100, unmeasured: 3 }))
 check(
   'the count is stated, not a flag',
   partly.unmeasuredNote,
   '3 of 12 operations reported no token count, so every figure here understates.',
 )
 check('the figure it understates is still shown', partly.tokens, '1,000')
-// A window holding one run is the ordinary case on a quiet installation, and
-// the real one this was first pointed at held exactly that. "1 of 1 operation
-// reported no token count" is arithmetically right and is not a sentence.
+check('and the average is over the nine that were measured', partly.perOperation, 111)
 check('a scope of one is written as one, not as a ratio of itself', usageTotals(series({
   runs: 1, prompt_tokens: 5, unmeasured: 1,
 })).unmeasuredNote, 'This operation reported no token count, so the figures here understate.')
@@ -195,76 +97,149 @@ check(
   null,
 )
 check(
-  'but genuinely free work is a measurement, and reads as one',
-  usageTotals(series({ runs: 4 })).tokens,
-  '0',
+  'nor an average of nothing',
+  usageTotals(series({ runs: 4, unmeasured: 4 })).perOperation,
+  null,
 )
+check('but genuinely free work is a measurement, and reads as one', usageTotals(series({ runs: 4 })).tokens, '0')
 
-console.log('\n— by model —')
-const split = modelRows(series({
+console.log('\n— numbers —')
+check('under a thousand, as it is', formatTokens(999), '999')
+check('at a thousand, grouped', formatTokens(1000), '1,000')
+check('and every group after it', formatTokens(1_284_301), '1,284,301')
+check('an axis figure below a thousand is whole', formatCompact(950), '950')
+check('one decimal below ten of a unit', formatCompact(1_250), '1.3k')
+check('and none where it is round', formatCompact(2_000), '2k')
+check('none above ten', formatCompact(40_000), '40k')
+check('and millions', formatCompact(1_500_000), '1.5M')
+check('a share rounds', formatShare(0.936), '94%')
+check('a real share too small to round is not written as nothing', formatShare(0.004), '< 1%')
+check('an actual zero is', formatShare(0), '0%')
+
+console.log('\n— model names —')
+check('the provider path is split from the model', splitModelName('openai/deepseek/deepseek-v4-flash'), {
+  path: 'openai/deepseek/', name: 'deepseek-v4-flash',
+})
+check('a bare name has no path', splitModelName('gpt-4o-mini'), { path: '', name: 'gpt-4o-mini' })
+check('a trailing slash is not an empty model', splitModelName('odd/'), { path: '', name: 'odd/' })
+check('no recorded model is named, not blank', splitModelName(''), { path: '', name: UNRECORDED_MODEL })
+
+console.log('\n— the model filter —')
+const scoped = series({
   runs: 5, prompt_tokens: 9_000, completion_tokens: 1_000,
+  buckets: [bucket({ prompt_tokens: 9_000, completion_tokens: 1_000, runs: 5 })],
   models: [
-    model({ model: 'large', prompt_tokens: 6_000, completion_tokens: 200, runs: 2 }),
+    model({ model: 'large', prompt_tokens: 6_000, completion_tokens: 200, runs: 2,
+      buckets: [bucket({ prompt_tokens: 6_000, completion_tokens: 200, runs: 2 })] }),
     model({ model: 'small', prompt_tokens: 2_990, completion_tokens: 750, runs: 2 }),
     model({ model: '', prompt_tokens: 10, completion_tokens: 50, runs: 1 }),
   ],
-}))
-check('one row per model, in the order the server ranked them', split.map((row) => row.key), [
-  'large', 'small', '',
-])
-check('each row is written for reading', split[0], {
-  key: 'large', label: 'large', recorded: true, totalTokens: 6_200,
-  tokens: '6,200', input: '6,000', output: '200', share: '62%', runs: 2,
 })
+check('all models is the whole scope', scopeView(scoped, null).figures.prompt_tokens, 9_000)
+check('one model is that model, figures and buckets', [
+  scopeView(scoped, 'large').figures.prompt_tokens,
+  scopeView(scoped, 'large').buckets.length,
+], [6_000, 1])
+check('the unrecorded row is a model the filter can choose', scopeView(scoped, '').figures.runs, 1)
+check(
+  'a model the window does not hold is a zero view, not a throw',
+  scopeView(scoped, 'gone'),
+  { figures: { prompt_tokens: 0, completion_tokens: 0, runs: 0, unmeasured: 0 }, buckets: [] },
+)
+
+console.log('\n— ranked rows —')
+const split = modelRows(scoped)
+check('one row per model, in the order the server ranked them', split.map((row) => row.key), ['large', 'small', ''])
+check('each row is written for reading', {
+  tokens: split[0].tokens, input: split[0].input, output: split[0].output, share: split[0].share, runs: split[0].runs,
+}, { tokens: '6,200', input: '6,000', output: '200', share: '62%', runs: 2 })
+check(
+  'the bar is the share, split input and output',
+  [split[0].inputFraction, split[0].outputFraction],
+  [0.6, 0.02],
+)
 check(
   'the rows add up to the scope, which is what makes the split trustworthy',
   split.reduce((sum, row) => sum + row.totalTokens, 0),
   10_000,
 )
-check('a run with no recorded model is named, not dropped', [split[2].label, split[2].recorded], [
-  UNRECORDED_MODEL, false,
-])
 check('a share too small to round up is not written as nothing', split[2].share, '< 1%')
 check(
-  'a model whose every run went unmeasured shows no figure, and never a zero',
-  modelRows(series({ runs: 2, unmeasured: 2, models: [model({ runs: 2, unmeasured: 2 })] }))[0].tokens,
+  'a row whose every run went unmeasured shows no figure, and never a zero',
+  rankedRow('quiet', { prompt_tokens: 0, completion_tokens: 0, runs: 2, unmeasured: 2 }, 100).tokens,
   null,
 )
 check(
-  'a scope that measured nothing has no whole to take a share of',
-  modelRows(series({ runs: 2, unmeasured: 2, models: [model({ runs: 2, unmeasured: 2 })] }))[0].share,
+  'with no whole there is no share to take',
+  rankedRow('x', { prompt_tokens: 0, completion_tokens: 0, runs: 2, unmeasured: 2 }, 0).share,
   null,
 )
-check('no models is no rows', modelRows(series()), [])
 
-console.log('\n— how a count is written —')
-check('under a thousand, as it is', formatTokens(999), '999')
-check('at a thousand, grouped', formatTokens(1000), '1,000')
-check('and every group after it', formatTokens(1_284_301), '1,284,301')
-check('zero is zero', formatTokens(0), '0')
+console.log('\n— periods —')
+check('the presets, shortest first', PRESETS.map((p) => p.key), ['1h', '6h', '24h', '7d', '30d', '90d'])
+check('a preset is the period ending now', presetRange('6h', Date.parse('2026-09-13T10:02:00Z')), {
+  since: '2026-09-13T04:02:00.000Z', until: '2026-09-13T10:02:00.000Z',
+})
+check('custom is a period', isPeriodKey('custom'), true)
+check('and anything else in the address is not', [isPeriodKey('2w'), isPeriodKey(null)], [false, false])
+check(
+  'the offset sent is east-positive, the opposite of getTimezoneOffset',
+  localOffsetMinutes({ getTimezoneOffset: () => -210 } as Date),
+  210,
+)
+check('and Greenwich is zero, not minus zero', Object.is(localOffsetMinutes({ getTimezoneOffset: () => 0 } as Date), 0), true)
 
-console.log('\n— the window —')
+console.log('\n— the reader\'s clock —')
+const late = Date.parse('2026-09-12T22:10:00Z')
+check('a local input is written on the reader\'s clock', toLocalInput(late, TEHRAN), '2026-09-13T01:40')
+check('and read back to the same instant', fromLocalInput('2026-09-13T01:40', TEHRAN), late)
+check('a value that is not a time is refused', fromLocalInput('tomorrow', TEHRAN), null)
+check('an instant is written on that clock too', formatInstant(late, TEHRAN), 'Sep 13, 01:40')
+check('a day bar is its date', formatSlot(Date.parse('2026-09-12T20:30:00Z'), 86_400, TEHRAN), 'Sun, Sep 13')
+check('a narrower bar is a range', formatSlot(Date.parse('2026-09-13T06:30:00Z'), 900, TEHRAN), 'Sep 13, 10:00–10:15')
 check(
-  'a week is seven whole buckets, today and the six before it',
-  windowSince(7, new Date('2026-09-13T09:40:00Z')),
-  '2026-09-07T00:00:00.000Z',
+  'a range that closes at midnight ends at 24:00, never reading backwards',
+  formatSlot(Date.parse('2026-09-13T14:30:00Z'), 21_600, TEHRAN),
+  'Sep 13, 18:00–24:00',
 )
+check('the bar width, in words', [300, 900, 3600, 21_600, 86_400].map(bucketLabel), [
+  '5-minute bars', '15-minute bars', 'Hourly bars', '6-hour bars', 'Daily bars',
+])
+
+console.log('\n— the timeline runs to its end, not to its last token —')
+const slots = denseSlots(
+  [bucket({ start: '2026-09-13T01:00:00Z', prompt_tokens: 40, completion_tokens: 4, runs: 2 })],
+  '2026-09-13T00:00:00Z',
+  '2026-09-13T05:20:00Z',
+  3600,
+)
+check('every bucket of the window is a slot, the one in progress included', slots.length, 6)
+check('the last slot holds the window\'s end', [
+  slots[5].start <= Date.parse('2026-09-13T05:20:00Z'),
+  slots[5].end > Date.parse('2026-09-13T05:20:00Z'),
+], [true, true])
+check('a bucket the server sent lands in its own slot', [slots[1].input, slots[1].output, slots[1].runs], [40, 4, 2])
+check('and one it did not is a zero, which is a fact', [slots[4].input, slots[4].runs], [0, 0])
+check('an empty or reversed window has no slots', denseSlots([], '2026-09-13T05:00:00Z', '2026-09-13T05:00:00Z', 300), [])
+
+console.log('\n— the value axis —')
+check('ticks are round numbers a person would write', valueTicks(55_830), { max: 60_000, ticks: [0, 20_000, 40_000, 60_000] })
+check('and steps of 2.5 where they fit better', valueTicks(9_000), { max: 10_000, ticks: [0, 2_500, 5_000, 7_500, 10_000] })
+check('an empty chart still has an axis, and no division by zero', valueTicks(0), { max: 1, ticks: [0] })
+
+console.log('\n— the time axis —')
+const dayStart = Date.parse('2026-09-12T11:30:00Z')
+const dayTicks = timeTicks(dayStart, dayStart + DAY, TEHRAN, 8)
+check('no more labels than asked for', dayTicks.length <= 8, true)
+check('at round hours on the reader\'s clock', dayTicks.slice(0, 3).map((t) => t.label), ['15:00', '18:00', '21:00'])
+check('and midnight is the date it moves into', dayTicks.find((t) => t.label.startsWith('Sep'))?.label, 'Sep 13')
 check(
-  'a day is today, from its own midnight',
-  windowSince(1, new Date('2026-09-13T23:59:59Z')),
-  '2026-09-13T00:00:00.000Z',
+  'a month is labelled in dates',
+  timeTicks(Date.parse('2026-08-15T20:30:00Z'), Date.parse('2026-09-14T20:30:00Z'), TEHRAN, 6).every((t) => /^[A-Z][a-z]{2} \d+$/.test(t.label)),
+  true,
 )
-check(
-  'the hour it is asked at does not move the boundary',
-  windowSince(30, new Date('2026-09-13T00:00:01Z')),
-  windowSince(30, new Date('2026-09-13T23:59:59Z')),
-)
-check(
-  'and it steps back over a month end',
-  windowSince(30, new Date('2026-09-13T09:40:00Z')),
-  '2026-08-15T00:00:00.000Z',
-)
-check('the windows the screen offers', [...WINDOW_DAYS], [7, 30, 90])
+check('a narrow chart says less', timeTicks(dayStart, dayStart + DAY, TEHRAN, 3).length <= 3, true)
+check('an empty span has no ticks', timeTicks(dayStart, dayStart, TEHRAN, 6), [])
 
 console.log(failures === 0 ? '\nall passed' : `\n${failures} failed`)
 // `throw`, not `process.exit`: `@types/node` is not a dependency here, and

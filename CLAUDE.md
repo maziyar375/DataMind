@@ -138,8 +138,12 @@ backend/app/
                   query_service (execute_saved_sql — the tile/report entry point
                   into guarded execution), sql_draft_service,
                   usage_service (how many tokens the models used: one union
-                  over runs, report_runs and semantic_jobs, bucketed by day
-                  and split by model (`model_snapshot->>'model'`). Nulls are
+                  over runs, report_runs and semantic_jobs, bucketed in time —
+                  the server picks the width from the window, 5 minutes for an
+                  hour up to a day for a month, aligned to the reader's
+                  `tz_offset` — and split by model
+                  (`model_snapshot->>'model'`), each model with its own
+                  buckets. Nulls are
                   never summed as zero — they are counted into `unmeasured`
                   instead — and the per-person view inner joins
                   `users` while the all-users total joins nothing, so a
@@ -289,10 +293,12 @@ frontend/src/
                             knowledge-queue.ts (how much curation work is
                             waiting, per connection and in total — DOM-free,
                             `npm run test:queue`), usage-chart.ts (the token
-                            chart's Vega-Lite spec, written rather than
-                            planned, plus the sentences that stop a partial
-                            total being printed as a whole one — DOM-free,
-                            `npm run test:usage`), provider-params.ts (the
+                            usage screen's arithmetic: periods, the dense slots
+                            that run a timeline to *now*, ticks and labels on
+                            an explicit UTC offset, and the sentences that stop
+                            a partial total being printed as a whole one —
+                            DOM-free, `npm run test:usage`; usage-timeline.tsx
+                            draws it as SVG), provider-params.ts (the
                             translation between a generated form field and the
                             JSON value a provider's API takes — DOM-free,
                             `npm run test:params`), notifications.tsx (the
@@ -308,8 +314,10 @@ frontend/src/
                             `npm run test:print`)
   pages/                    Login, Chat, DataSources, LlmProviders,
                             Dashboards, Reports,
-                            Usage (`/usage` — tokens used, per day and per
-                            model, in three scopes: your own, which needs no
+                            Usage (`/usage` — tokens used over a period
+                            (1h to 90d, or a custom range) and per model, with
+                            the period and model filter in the URL, in three
+                            scopes: your own, which needs no
                             capability because the scope IS you, and — behind
                             `usage.read` — every person and the all-users
                             total, as `useMatch` sub-routes. Counts only: no

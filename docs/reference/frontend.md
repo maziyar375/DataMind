@@ -131,7 +131,7 @@ colours are chosen in JS, and the print stylesheet.
 | **Knowledge** | [`KnowledgePage.tsx`](../../frontend/src/pages/KnowledgePage.tsx) | The curation console, across every connection: flags raised, questions nothing answers, the maintenance sweep. |
 | **Data sources** | [`DataSourcesPage.tsx`](../../frontend/src/pages/DataSourcesPage.tsx) | The connections DataMind may read, and everything known about each one. |
 | **LLM providers** | [`LlmProvidersPage.tsx`](../../frontend/src/pages/LlmProvidersPage.tsx) | The models it may call, and the keys it calls them with. Two groups: *Models* answer questions, the *Embedder* makes vectors — a row is one or the other, and the form shows that kind's fields only. |
-| **Token usage** | [`UsagePage.tsx`](../../frontend/src/pages/UsagePage.tsx) | `/usage`: how many tokens the models used, per day and per model, in a 7/30/90-day window. Three scopes as `useMatch` sub-routes — **Yours** (`/usage`, no capability: the scope *is* the caller and no control widens it), and behind `usage.read` **People** (`/usage/people`, everyone ranked by tokens) and **All users** (`/usage/total`). Every scope ends in a **By model** table — tokens, share, input, output and operations per model, busiest first. There is no cost anywhere: DataMind does not price model calls. With one scope it renders as a plain index rather than a tab strip of one. Counts only: no question, no answer and no SQL is on the page, which is what makes it a capability an Auditor may hold rather than a disclosure of somebody's work. |
+| **Token usage** | [`UsagePage.tsx`](../../frontend/src/pages/UsagePage.tsx) | `/usage`: how many tokens the models used, and on which models. One filter row scopes everything below it — **Period** (1h · 6h · 24h · 7d · 30d · 90d, or a custom range; the server picks the bar width) and **Model** (all models by default) — and both live in the URL (`?period=24h&model=…`), so a view is a link and survives a tab change. Each scope renders a summary panel (total, input/output split bar, operations, tokens per operation), a **Tokens over time** timeline drawn as SVG by `usage-timeline.tsx` that always runs to *now* with the bucket in progress marked (hover or arrow keys read a bar; a table view is one toggle away), and a **By model** ranked list with share bars whose rows are the model filter. A preset period re-reads itself every minute. Three scopes as `useMatch` sub-routes — **Yours** (`/usage`, no capability: the scope *is* the caller and no control widens it), and behind `usage.read` **People** (`/usage/people`, everyone ranked by tokens) and **All users** (`/usage/total`). There is no cost anywhere: DataMind does not price model calls. With one scope it renders as a plain index rather than a tab strip of one. Counts only: no question, no answer and no SQL is on the page, which is what makes it a capability an Auditor may hold rather than a disclosure of somebody's work. |
 | **Administration** | [`AdminPage.tsx`](../../frontend/src/pages/AdminPage.tsx) | `/admin`: a tabbed section over **People** ([`UsersPage.tsx`](../../frontend/src/pages/UsersPage.tsx)), **Roles** ([`RolesTab.tsx`](../../frontend/src/pages/RolesTab.tsx)), **Teams** ([`TeamsTab.tsx`](../../frontend/src/pages/TeamsTab.tsx)), **Service accounts** ([`ServiceAccountsTab.tsx`](../../frontend/src/pages/ServiceAccountsTab.tsx)), **Access review** ([`AccessReviewTab.tsx`](../../frontend/src/pages/AccessReviewTab.tsx) — two lenses over one set of facts: what one principal can reach, and everyone who can reach one thing) and the **Audit log** ([`AuditTab.tsx`](../../frontend/src/pages/AuditTab.tsx)). The rail row appears when the viewer holds **any** administration capability, and each tab appears when its own capability is held — so an Auditor sees People and changes nothing, and a DataMind Maintainer sees the section without seeing People at all. `/users` permanently redirects to `/admin/people`. |
 | **Your account** | [`AccountPage.tsx`](../../frontend/src/pages/AccountPage.tsx) | `/settings`: your display name and your password. Reached from the user block in the rail, not from `NAV`. |
 | **Creators** | [`AboutPage.tsx`](../../frontend/src/pages/AboutPage.tsx) | Who built it. A colophon, not a destination; the one page on both sides of the sign-in wall. |
@@ -255,13 +255,15 @@ Data sources    master → detail, 4 tabs and a door:
 
 LLM providers   master → detail, one form
 
-Token usage     one window picker over every figure on the page
+Token usage     one filter row (period · model, both in the URL) over every
+                  figure on the page
                   Yours (always) │ People │ All users — the last two behind
                   usage.read, and with only the first it is a plain index
                   rather than a tab strip of one
-                  People: a table ranked by tokens; opening a name draws that
-                  person's days from rows already in hand
-                  every scope: tiles, chart, then a By model table
+                  every scope: summary panel, timeline to now (chart │ table),
+                  By model ranked rows — selecting a row is the model filter
+                  People: ranked rows under the same filter; opening a name
+                  draws that person's usage from rows already in hand
 
 Users           rows, inline detail, one-time password panel
 

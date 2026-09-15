@@ -4146,26 +4146,374 @@ code, pre, .mono {
   .rm-chats, .rm-master { transition: none; }
 }
 
-/* The person's name in the usage table, which is also the control that opens
-   their days below. A button rather than a clickable <tr>: a row is not in the
-   tab order, and giving one `tabIndex` and a key handler is a button with the
-   accessibility written out by hand. It inherits the cell's type so the column
-   still reads as a column, and the hover tint is here because a style
-   attribute cannot express `:hover`. Focus comes from the global
-   `button:focus-visible` rule. */
-.rm-usage-who {
+/* ── Token usage ─────────────────────────────────────────────────────────
+   One filter row, then sheets: the summary, the timeline, the ranked
+   breakdowns. Everything a style attribute cannot say lives here — hover and
+   pressed rows, focus on the chart, the refetch dim, and the reflow that folds
+   a breakdown's four columns into two on a phone. */
+.rm-usage-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 18px;
+}
+.rm-usage-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.rm-usage-filter-label {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.rm-usage-range { display: flex; flex-wrap: wrap; gap: 8px; }
+/* One height for the whole row, so every label sits on one line above it. */
+.rm-usage-filters select,
+.rm-usage-filters input { height: 34px; }
+.rm-usage-filters .rm-seg { max-width: 100%; flex-wrap: wrap; }
+.rm-usage-model-filter select { width: auto; max-width: min(320px, 100%); }
+.rm-usage-model-filter { max-width: 100%; }
+.rm-usage-range-error {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -2px 0 0;
+  font-size: 12.5px;
+  color: var(--red);
+}
+
+.rm-usage-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  transition: opacity .18s ease;
+}
+.rm-usage-body[data-loading] { opacity: .55; }
+
+.rm-usage-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: inset 0 1px 0 0 var(--sheen);
+  padding: 16px 18px;
+  min-width: 0;
+}
+.rm-usage-panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px 16px;
+  margin-bottom: 14px;
+}
+.rm-usage-panel-titles { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.rm-usage-panel-tools { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.rm-usage-h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+}
+.rm-usage-h2-aside { font-weight: 500; color: var(--text-dim); }
+.rm-usage-caption { font-size: 12px; color: var(--text-dim); }
+.rm-usage-quiet { margin: 0; font-size: 12.5px; color: var(--text-dim); }
+
+/* The summary: the answer on the left, its context on the right, and the
+   qualifying sentences across the foot. */
+.rm-usage-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px 40px;
+  padding: 18px 20px;
+}
+.rm-usage-summary-main { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.rm-usage-summary-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.rm-usage-label { font-size: 12px; font-weight: 600; color: var(--text2); }
+.rm-usage-hero {
+  font-size: 40px;
+  font-weight: 650;
+  line-height: 1.05;
+  letter-spacing: -0.03em;
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+.rm-usage-summary-side {
+  display: flex;
+  gap: 32px;
+  margin: 0;
+  align-self: center;
+}
+.rm-usage-summary-side div { display: flex; flex-direction: column; gap: 4px; }
+.rm-usage-summary-side dt { font-size: 12px; color: var(--text-dim); }
+.rm-usage-summary-side dd {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text-strong);
+}
+.rm-usage-notes {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.rm-usage-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+.rm-usage-note svg { flex-shrink: 0; margin-top: 3px; }
+
+/* Keys and swatches. The swatch mirrors the mark it names — a rounded bar
+   end — and the text beside it stays in text ink, never the series colour. */
+.rm-usage-keys, .rm-usage-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+.rm-usage-key {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.rm-usage-key strong { font-weight: 600; color: var(--text-strong); font-variant-numeric: tabular-nums; }
+.rm-usage-key-label { color: var(--text2); }
+.rm-usage-key-share { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.rm-usage-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  align-self: center;
+  flex-shrink: 0;
+}
+
+/* A share bar. The track is the whole; the fill is one rounded box whose
+   segments are separated by a 2px surface gap, not a stroke. */
+.rm-usage-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--panel-alt);
+  box-shadow: var(--well);
+  overflow: hidden;
+}
+.rm-usage-bar.is-thin { height: 6px; border-radius: 3px; }
+.rm-usage-bar-fill {
+  display: flex;
+  gap: 2px;
+  height: 100%;
+  min-width: 3px;
+  border-radius: inherit;
+  overflow: hidden;
+}
+.rm-usage-bar-fill span { flex-basis: 0; min-width: 2px; }
+
+/* Ranked rows: name · tokens · share · operations, then the bar across. The
+   same template on the header row, so every column lines up. */
+.rm-usage-rows { margin: 0 -8px; }
+.rm-usage-row-list { list-style: none; margin: 0; padding: 0; }
+.rm-usage-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 6.5rem 3.75rem 6rem;
+  align-items: center;
+  column-gap: 16px;
+  row-gap: 7px;
+  width: 100%;
+  padding: 10px 8px 11px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text);
   font: inherit;
+  font-size: 13px;
+  text-align: start;
+  cursor: pointer;
+  transition: background .12s ease;
+}
+.rm-usage-row-list li + li .rm-usage-row { box-shadow: 0 -1px 0 0 var(--border); }
+.rm-usage-row:hover { background: var(--panel-hover); }
+.rm-usage-row[aria-pressed='true'],
+.rm-usage-row[aria-expanded='true'] {
+  background: var(--accent-bg);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+.rm-usage-row-list li + li .rm-usage-row[aria-pressed='true'],
+.rm-usage-row-list li + li .rm-usage-row[aria-expanded='true'] {
+  box-shadow: inset 0 0 0 1px var(--accent-border);
+}
+.rm-usage-row.is-head {
+  cursor: default;
+  padding-top: 0;
+  padding-bottom: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.rm-usage-row.is-head:hover { background: transparent; }
+.rm-usage-row-name { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.rm-usage-num { text-align: end; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text2); }
+.rm-usage-strong { font-weight: 600; color: var(--text-strong); }
+.rm-usage-row-bar {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+.rm-usage-row-bar .rm-usage-bar { flex: 1; min-width: 60px; }
+.rm-usage-row-detail {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.rm-usage-detail-narrow { display: none; }
+.rm-usage-check {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: 5px;
+  border: 1px solid var(--border-strong);
+  background: var(--input-bg);
+  color: var(--on-accent);
+}
+.rm-usage-row[aria-pressed='true'] .rm-usage-check { background: var(--accent); border-color: var(--accent); }
+.rm-usage-name {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.rm-usage-name-path {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-dim);
+}
+.rm-usage-name-main {
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
   color: var(--text-strong);
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  padding: 2px 6px;
-  margin: -2px -6px;
-  cursor: pointer;
-  text-align: start;
 }
-.rm-usage-who:hover { background: var(--panel-hover); }
+.rm-usage-name-main.is-unrecorded { font-weight: 500; font-style: italic; color: var(--text-dim); }
+.rm-usage-clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-alt);
+  color: var(--text2);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.rm-usage-clear:hover { color: var(--text-strong); border-color: var(--border-strong); }
+
+.rm-usage-person { display: flex; flex-direction: column; gap: 12px; padding-top: 4px; }
+.rm-usage-person-name {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-strong);
+}
+
+/* The timeline. Focusable as one control — arrow keys walk the bars — so it
+   draws its own ring, a little outside the plot. */
+.rm-usage-timeline { outline: none; border-radius: 8px; }
+.rm-usage-timeline:focus-visible { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--accent); }
+.rm-usage-tip {
+  position: absolute;
+  z-index: 2;
+  min-width: 176px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: var(--elev-2);
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.rm-usage-tip-when { font-size: 11.5px; color: var(--text-dim); white-space: nowrap; }
+.rm-usage-tip-total {
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 2px;
+}
+.rm-usage-tip-total span { font-size: 12px; font-weight: 500; color: var(--text-dim); letter-spacing: 0; }
+.rm-usage-tip-row { display: flex; align-items: center; gap: 8px; }
+.rm-usage-tip-row strong {
+  margin-left: auto;
+  font-weight: 600;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+}
+.rm-usage-tip-key { width: 10px; height: 2px; border-radius: 1px; flex-shrink: 0; }
+.rm-usage-tip-key.is-blank { background: transparent; }
+.rm-usage-tip-empty { color: var(--text2); }
+
+.rm-usage-table { width: 100%; min-width: 460px; border-collapse: collapse; font-size: 13px; }
+.rm-usage-table th {
+  padding: 0 10px 8px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-dim);
+  text-align: end;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.rm-usage-table td {
+  padding: 8px 10px;
+  text-align: end;
+  color: var(--text2);
+  border-bottom: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .rm-usage-filters .rm-seg button { padding: 5px 8px; }
+  .rm-usage-panel { padding: 14px; }
+  .rm-usage-summary { grid-template-columns: minmax(0, 1fr); padding: 16px; }
+  .rm-usage-summary-side { align-self: stretch; gap: 28px; }
+  .rm-usage-hero { font-size: 34px; }
+  .rm-usage-row { grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; }
+  .rm-usage-col-share, .rm-usage-col-ops { display: none; }
+  .rm-usage-row-bar { flex-wrap: wrap; row-gap: 5px; }
+  .rm-usage-row-bar .rm-usage-bar { flex-basis: 100%; }
+  .rm-usage-detail-narrow { display: inline; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rm-usage-body, .rm-usage-row { transition: none; }
+}
 
 /* On paper there is no viewport, so there is no off-canvas either. */
 @media print {

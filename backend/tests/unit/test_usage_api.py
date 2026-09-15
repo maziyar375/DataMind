@@ -141,12 +141,9 @@ async def test_my_usage_returns_only_the_callers_rows(db: AsyncSessionShim) -> N
     assert body["runs"] == 1
     # The model split is scoped the same way: the other person's model is not
     # in it, and the one row that is carries only the caller's tokens.
-    assert body["models"] == [
-        {
-            "model": "mine", "prompt_tokens": 100, "completion_tokens": 10,
-            "runs": 1, "unmeasured": 0,
-        }
-    ]
+    [model] = body["models"]
+    assert (model["model"], model["prompt_tokens"], model["runs"]) == ("mine", 100, 1)
+    assert sum(b["prompt_tokens"] for b in model["buckets"]) == 100
     # No price anywhere on the wire.
     assert "cost_usd" not in body
     assert all("cost_usd" not in bucket for bucket in body["buckets"])
@@ -177,13 +174,15 @@ def test_my_usage_cannot_be_widened_by_any_parameter() -> None:
     ignored — would go on passing on the day somebody adds the parameter and
     forgets that removing the gate's premise means adding a gate.
 
-    So: the handler takes the caller, a session and two dates. Anything else
-    is a widening, and a `UUID` parameter is one however it is spelled.
+    So: the handler takes the caller, a session, two dates and the reader's
+    clock offset — an integer of minutes, which aligns buckets and names
+    nobody. Anything else is a widening, and a `UUID` parameter is one however
+    it is spelled.
     """
     hints = get_type_hints(routes.my_usage, include_extras=True)
     hints.pop("return", None)
 
-    assert set(hints) == {"ctx", "db", "since", "until"}
+    assert set(hints) == {"ctx", "db", "since", "until", "tz_offset"}
     widening = [
         name
         for name, annotation in hints.items()
@@ -357,3 +356,43 @@ def _orphan(actor: UUID) -> sa.Update:
     and this test is about the run that survives its actor.
     """
     return sa.update(Run).where(Run.actor_id == actor).values(actor_id=None)
+
+
+# ── the window on the wire ───────────────────────────────────────────────
+async def test_the_response_describes_its_window_so_a_chart_can_run_to_its_end(
+    db: AsyncSessionShim,
+) -> None:
+    """`buckets` is sparse, so the window's bounds and width travel with it.
+
+    Without them a chart can only draw from the first bucket anything ran in to
+    the last one — which is the axis that stops at the latest token instead of
+    at now.
+    """
+    person = await _person(db, "Windowed")
+    await _chat(db, person, prompt=10, completion=1)
+    until = NOW + timedelta(minutes=2)
+
+    async with _client(db, caller=person) as client:
+        body = (
+            await client.get(
+                "/api/v1/usage/me",
+                params={
+                    "since": (until - timedelta(hours=6)).isoformat(),
+                    "until": until.isoformat(),
+                },
+            )
+        ).json()
+
+    assert body["bucket_seconds"] == 15 * 60
+    assert body["until"] == until.isoformat().replace("+00:00", "Z")
+    assert body["since"] == "2026-09-13T06:15:00Z"
+    assert [b["start"] for b in body["buckets"]] == ["2026-09-13T12:00:00Z"]
+
+
+async def test_an_offset_no_zone_uses_is_refused(db: AsyncSessionShim) -> None:
+    person = await _person(db, "Offset")
+
+    async with _client(db, caller=person) as client:
+        response = await client.get("/api/v1/usage/me", params={"tz_offset": 15 * 60})
+
+    assert response.status_code == 422

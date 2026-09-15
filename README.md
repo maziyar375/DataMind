@@ -388,7 +388,8 @@ generation reads the same schema block a run reads, under the same budget.
   a local gateway) and **Anthropic**
 - In-process run executor with heartbeats and a stale-run reconciler, so no run
   is left stuck when a process dies
-- **Token usage** — how many tokens the models used, per day and per model,
+- **Token usage** — how many tokens the models used, over any period from the
+  last hour to ninety days (or a custom range) and per model,
   over questions, reports and layer generations alike. Your own needs no
   permission; `usage.read` opens everybody's and the all-users total. Counts
   only: no question, no answer and no SQL is on the screen

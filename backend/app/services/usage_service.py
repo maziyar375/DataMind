@@ -3,7 +3,8 @@
 Migration `0023` put `prompt_tokens` and `completion_tokens` on `runs`,
 `report_runs` and `semantic_jobs`, and `run_steps` carries the same per node.
 This module is the read side, and it is the whole of it: three aggregations
-over a union, each with its per-model split, and one rollup for a single run.
+over a union — each bucketed in time and split by model — and one rollup for a
+single run.
 
 Three rules govern every figure below, and each is a way a usage screen lies:
 
@@ -23,9 +24,11 @@ Three rules govern every figure below, and each is a way a usage screen lies:
   answer that is wrong. The total reports the size of that gap rather than
   hiding it.
 
-* **The window is clamped server-side.** The union carries no `LIMIT`, and an
-  unbounded range over three growing tables is an outage waiting for its first
-  busy installation.
+* **The window is clamped server-side, and so is its resolution.** The union
+  carries no `LIMIT`, and an unbounded range over three growing tables is an
+  outage waiting for its first busy installation. The bucket width is chosen
+  here from the window's length rather than taken from the caller, so no
+  request can ask for a year in five-minute buckets.
 
 **Counts, never content.** No question, no prompt, no generated SQL and no
 result value is read here — only integers, a model name and a timestamp. "Ali
@@ -36,7 +39,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -44,7 +47,7 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql.expression import ColumnElement, FunctionElement
-from sqlalchemy.types import Date
+from sqlalchemy.types import BigInteger
 
 from app.infra.db.models import ReportRun, Run, RunStep, SemanticJobRow, User
 
@@ -55,22 +58,73 @@ MAX_WINDOW_DAYS = 366
 #: What `since` defaults to when a caller names neither end.
 DEFAULT_WINDOW_DAYS = 30
 
+#: The widest UTC offset any zone uses (Line Islands, +14:00). A caller's
+#: offset is clamped to it rather than refused.
+MAX_OFFSET_MINUTES = 14 * 60
+
+DAY_SECONDS = 86_400
+
+#: How wide a bucket is, by how long the window is — the longest window each
+#: width serves, narrowest first. Past the last row a bucket is a day.
+#:
+#: Chosen so every preset the screen offers draws between a dozen and ninety
+#: bars: an hour is twelve five-minute buckets, six hours twenty-four quarter
+#: hours, a day twenty-four hours, a week twenty-eight six-hour blocks, and a
+#: month or a quarter one bar a day. A year is 366 bars, which is the ceiling.
+GRANULARITY: tuple[tuple[timedelta, int], ...] = (
+    (timedelta(hours=2), 5 * 60),
+    (timedelta(hours=12), 15 * 60),
+    (timedelta(days=2), 60 * 60),
+    (timedelta(days=14), 6 * 60 * 60),
+)
+
+
+def bucket_seconds_for(span: timedelta) -> int:
+    """The bucket width for a window this long."""
+    for longest, seconds in GRANULARITY:
+        if span <= longest:
+            return seconds
+    return DAY_SECONDS
+
 
 @dataclass(frozen=True, slots=True)
 class Window:
-    """A half-open `[since, until)` range of days, already clamped.
+    """A half-open `[since, until)` range, already clamped and aligned.
 
-    Half-open because the alternative is an off-by-one nobody catches: a
-    closed range over `date_trunc('day', …)` either double-counts the boundary
-    day or drops it, depending on which comparison somebody wrote.
+    `since` is the start of the first bucket, not necessarily the instant the
+    caller asked for: it is moved so the window holds a whole number of
+    buckets **ending with the one that contains `until`**. A "last 24 hours"
+    asked at 10:02 is therefore twenty-four hourly buckets from 11:00 yesterday
+    to the hour in progress — every bar but the last one whole, and the last
+    one the hour that is happening now.
+
+    Half-open because the alternative is an off-by-one nobody catches: a closed
+    range either double-counts the boundary or drops it, depending on which
+    comparison somebody wrote.
+
+    `offset_seconds` is the reader's UTC offset. Buckets are aligned to *their*
+    clock, so a day bar in Tehran starts at local midnight rather than at
+    03:30. A fixed offset, not a zone: a window that spans a daylight-saving
+    change keeps the offset it was asked with, and its bars on the far side of
+    the change are an hour off local midnight. That is the trade for not
+    needing a zone database in two SQL dialects.
     """
 
     since: datetime
     until: datetime
+    bucket_seconds: int = DAY_SECONDS
+    offset_seconds: int = 0
 
     @property
-    def days(self) -> int:
-        return (self.until - self.since).days
+    def span(self) -> timedelta:
+        return self.until - self.since
+
+
+def _floor(instant: datetime, seconds: int, offset: int) -> datetime:
+    """The start of the bucket `instant` falls in, on the reader's clock."""
+    epoch = int(instant.timestamp())
+    start = (epoch + offset) // seconds * seconds - offset
+    return datetime.fromtimestamp(start, UTC)
 
 
 def clamp_window(
@@ -78,8 +132,9 @@ def clamp_window(
     until: datetime | None = None,
     *,
     now: datetime | None = None,
+    tz_offset_minutes: int = 0,
 ) -> Window:
-    """Resolve and bound what the caller asked for.
+    """Resolve, bound and align what the caller asked for.
 
     Missing ends default rather than fail: `until` is now, `since` is
     `DEFAULT_WINDOW_DAYS` before it. A range wider than `MAX_WINDOW_DAYS` is
@@ -87,38 +142,50 @@ def clamp_window(
     a 400 on a window a caller could not know was too wide teaches nothing,
     and the recent end is the half anybody asking a usage question wants.
 
-    A reversed range collapses to an empty one. That is a caller's mistake and
-    it reads as "no usage", which is true of a window with no days in it.
+    A reversed or empty range collapses to an empty one at `until`. That is a
+    caller's mistake and it reads as "no usage", which is true of a window with
+    no time in it.
     """
     right_now = now or datetime.now(UTC)
     end = until or right_now
     start = since if since is not None else end - timedelta(days=DEFAULT_WINDOW_DAYS)
 
-    if start > end:
-        start = end
-
     widest = end - timedelta(days=MAX_WINDOW_DAYS)
     if start < widest:
         start = widest
 
-    return Window(since=start, until=end)
+    minutes = max(-MAX_OFFSET_MINUTES, min(MAX_OFFSET_MINUTES, tz_offset_minutes))
+    offset = minutes * 60
+
+    if start >= end:
+        return Window(since=end, until=end, bucket_seconds=300, offset_seconds=offset)
+
+    span = end - start
+    seconds = bucket_seconds_for(span)
+    count = -(-int(span.total_seconds()) // seconds)  # ceiling division
+    # The bucket holding the last instant *inside* the window. `until` itself
+    # is excluded, so a window ending exactly on a boundary does not grow an
+    # empty bucket past its own end.
+    last = _floor(end - timedelta(microseconds=1), seconds, offset)
+    first = last - timedelta(seconds=seconds * (count - 1))
+    return Window(since=first, until=end, bucket_seconds=seconds, offset_seconds=offset)
 
 
 @dataclass(frozen=True, slots=True)
 class Bucket:
-    """One day's tokens, for one scope."""
+    """One bucket's tokens, for one scope. `start` is the bucket's first instant."""
 
-    day: date
+    start: datetime
     prompt_tokens: int = 0
     completion_tokens: int = 0
-    #: How many operations are behind the figures above. A day with 400 runs
+    #: How many operations are behind the figures above. An hour with 400 runs
     #: and one with 4 are different facts about the same token count.
     runs: int = 0
 
 
 @dataclass(frozen=True, slots=True)
 class ModelUsage:
-    """One model's share of a scope, over the whole window.
+    """One model's share of a scope: its total, and its buckets.
 
     `model` is the name as the run recorded it in `model_snapshot` — what the
     provider was configured to call, not the display name of the config — so
@@ -134,6 +201,9 @@ class ModelUsage:
     runs: int = 0
     #: As on `Series`: operations on this model that reported no token count.
     unmeasured: int = 0
+    #: This model's own buckets, so a screen can chart one model on its own
+    #: without a second request. Sparse, like `Series.buckets`.
+    buckets: list[Bucket] = field(default_factory=list)
 
     @property
     def total_tokens(self) -> int:
@@ -142,12 +212,15 @@ class ModelUsage:
 
 @dataclass(frozen=True, slots=True)
 class Series:
-    """One scope's usage: a total, the days it is made of, and the models.
+    """One scope's usage: a total, the buckets it is made of, and the models.
 
     The invariant the whole screen rests on: **the total equals the sum of the
-    buckets.** It is computed from the same rows in the same query rather than
-    added up twice, so the two cannot drift. `models` is a second grouping of
-    the same rows, so it sums to the same total too.
+    buckets, and the sum of the models.** All three are folded from the same
+    grouped rows rather than queried separately, so they cannot drift.
+
+    `buckets` is **sparse** — a bucket nothing ran in is absent, not a row of
+    zeros. `since`, `until` and `bucket_seconds` are what a screen needs to
+    draw the empty ones, and the axis to the window's real end.
     """
 
     actor_id: UUID | None = None
@@ -162,6 +235,9 @@ class Series:
     #: How many of those operations reported no token count at all. Non-zero
     #: means every figure above understates, and the screen says so.
     unmeasured: int = 0
+    since: datetime | None = None
+    until: datetime | None = None
+    bucket_seconds: int = DAY_SECONDS
     buckets: list[Bucket] = field(default_factory=list)
     #: The same total split by model, busiest first.
     models: list[ModelUsage] = field(default_factory=list)
@@ -206,50 +282,47 @@ class NodeUsage:
         return self.prompt_tokens + self.completion_tokens
 
 
-# ── the day a row belongs to ─────────────────────────────────────────────
-class day_of(FunctionElement[date]):  # noqa: N801 — a SQL function, named like one
-    """`date_trunc('day', …)` on Postgres, `date(…)` on SQLite.
+# ── the bucket a row belongs to ──────────────────────────────────────────
+class bucket_of(FunctionElement[int]):  # noqa: N801 — a SQL function, named like one
+    """The epoch second a row's bucket starts at, on the reader's clock.
 
-    The bucketing is UTC and the grouping key is a **date**, not a timestamp:
-    two rows an hour apart either side of midnight belong to different days and
-    that is the whole of the arithmetic.
+    `floor((epoch + offset) / width) * width - offset`, compiled per dialect
+    because the unit tests run against SQLite, which has no `EXTRACT(EPOCH …)`,
+    and a query that only exists in production is a query nothing tests. The
+    alternative — bucketing in Python over every row in the window — is the
+    unbounded read this module exists to avoid.
 
-    Compiled per dialect rather than written as a literal because the unit
-    tests run against SQLite, which has no `date_trunc`, and a query that only
-    exists in production is a query nothing tests. The alternative — grouping
-    in Python over every row in the window — is the unbounded read this module
-    exists to avoid.
+    Width and offset arrive as `literal_column`s of integers this module
+    computed itself, never caller text: they are part of the statement's cache
+    key that way, so a five-minute query never reuses an hourly one's SQL.
     """
 
-    type = Date()
+    type = BigInteger()
     inherit_cache = True
 
 
-@compiles(day_of)
-def _day_of_default(element: Any, compiler: Any, **kw: Any) -> str:
-    """Postgres, and anything else that speaks `date_trunc`."""
-    (column,) = element.clauses
-    return f"date_trunc('day', {compiler.process(column, **kw)})"
+@compiles(bucket_of)
+def _bucket_of_default(element: Any, compiler: Any, **kw: Any) -> str:
+    """Postgres, and anything else that speaks `EXTRACT(EPOCH FROM …)`."""
+    column, width, offset = (compiler.process(c, **kw) for c in element.clauses)
+    return (
+        f"CAST(FLOOR((EXTRACT(EPOCH FROM {column}) + {offset}) / {width})"
+        f" * {width} - {offset} AS BIGINT)"
+    )
 
 
-@compiles(day_of, "sqlite")
-def _day_of_sqlite(element: Any, compiler: Any, **kw: Any) -> str:
-    (column,) = element.clauses
-    return f"date({compiler.process(column, **kw)})"
+@compiles(bucket_of, "sqlite")
+def _bucket_of_sqlite(element: Any, compiler: Any, **kw: Any) -> str:
+    column, width, offset = (compiler.process(c, **kw) for c in element.clauses)
+    return (
+        f"((CAST(strftime('%s', {column}) AS INTEGER) + {offset}) / {width})"
+        f" * {width} - {offset}"
+    )
 
 
-def _as_date(value: Any) -> date:
-    """One day key, however the driver handed it back.
-
-    Postgres returns a `datetime` from `date_trunc`; SQLite returns a string
-    from `date()`. Neither is the dataclass's `date`, and a screen grouping on
-    two different types would silently draw two bars for one day.
-    """
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    return date.fromisoformat(str(value)[:10])
+def _as_instant(value: Any) -> datetime:
+    """One bucket key, however the driver handed it back, as a UTC instant."""
+    return datetime.fromtimestamp(int(value), UTC)
 
 
 # ── the union the three aggregations read ────────────────────────────────
@@ -265,7 +338,7 @@ def _as_date(value: Any) -> date:
 _SOURCES = (Run, ReportRun, SemanticJobRow)
 
 
-def _arm(model: type) -> sa.Select[Any]:
+def _arm(model: Any, window: Window) -> sa.Select[Any]:
     """One table's contribution to the union, as the five columns it shares.
 
     The model is read out of `model_snapshot` — the frozen copy of the config
@@ -277,10 +350,17 @@ def _arm(model: type) -> sa.Select[Any]:
     """
     return sa.select(
         model.actor_id.label("actor_id"),
-        day_of(model.created_at).label("day"),
+        bucket_of(
+            model.created_at,
+            sa.literal_column(str(int(window.bucket_seconds))),
+            sa.literal_column(str(int(window.offset_seconds))),
+        ).label("bucket"),
         sa.func.coalesce(model.model_snapshot["model"].as_string(), "").label("model"),
         model.prompt_tokens.label("prompt_tokens"),
         model.completion_tokens.label("completion_tokens"),
+    ).where(
+        model.created_at >= window.since,
+        model.created_at < window.until,
     )
 
 
@@ -288,17 +368,12 @@ def _operations(window: Window) -> sa.Subquery:
     """Every operation in the window, from all three tables.
 
     `UNION ALL`, never `UNION`: two runs that happened to use the same tokens
-    on the same day are two operations, and deduplicating them would silently
-    halve a busy day.
+    in the same bucket are two operations, and deduplicating them would
+    silently halve a busy hour.
     """
-    arms = [
-        _arm(model).where(
-            model.created_at >= window.since,
-            model.created_at < window.until,
-        )
-        for model in _SOURCES
-    ]
-    return sa.union_all(*arms).subquery("operations")
+    return sa.union_all(*(_arm(model, window) for model in _SOURCES)).subquery(
+        "operations"
+    )
 
 
 #: The four aggregates every scope computes, over whichever subquery it reads.
@@ -327,40 +402,92 @@ def _aggregates(source: Any) -> list[ColumnElement[Any]]:
     ]
 
 
-def _bucket(row: Any) -> Bucket:
-    return Bucket(
-        day=_as_date(row.day),
-        prompt_tokens=int(row.prompt_tokens or 0),
-        completion_tokens=int(row.completion_tokens or 0),
-        runs=int(row.runs or 0),
-    )
+class _Tally:
+    """A running sum of one group's four aggregates."""
+
+    __slots__ = ("completion", "prompt", "runs", "unmeasured")
+
+    def __init__(self) -> None:
+        self.prompt = 0
+        self.completion = 0
+        self.runs = 0
+        self.unmeasured = 0
+
+    def add(self, row: Any) -> None:
+        self.prompt += int(row.prompt_tokens or 0)
+        self.completion += int(row.completion_tokens or 0)
+        self.runs += int(row.runs or 0)
+        self.unmeasured += int(row.unmeasured or 0)
+
+    def bucket(self, start: datetime) -> Bucket:
+        return Bucket(
+            start=start,
+            prompt_tokens=self.prompt,
+            completion_tokens=self.completion,
+            runs=self.runs,
+        )
 
 
-def _model_usage(rows: Sequence[Any]) -> list[ModelUsage]:
-    """One scope's model rows, busiest first.
+def _series(
+    actor_id: UUID | None, actor: str, rows: Sequence[Any], window: Window
+) -> Series:
+    """Fold one scope's `(bucket, model)` rows into its total, buckets and models.
 
-    Ranked here rather than by the screen so every caller of the API gets the
-    same order. Ties fall back to operations and then to the name, so the list
-    is stable between reads of the same window.
+    Every figure is summed from the same rows, so the invariant the screen
+    rests on — **the total equals the sum of the buckets, and of the models** —
+    holds by construction rather than by three additions agreeing.
     """
+    total = _Tally()
+    by_bucket: dict[int, _Tally] = {}
+    by_model: dict[str, _Tally] = {}
+    model_buckets: dict[str, dict[int, _Tally]] = {}
+
+    for row in rows:
+        key = int(row.bucket)
+        name = row.model or ""
+        total.add(row)
+        by_bucket.setdefault(key, _Tally()).add(row)
+        by_model.setdefault(name, _Tally()).add(row)
+        model_buckets.setdefault(name, {}).setdefault(key, _Tally()).add(row)
+
+    def buckets(tallies: dict[int, _Tally]) -> list[Bucket]:
+        return [tallies[key].bucket(_as_instant(key)) for key in sorted(tallies)]
+
     models = [
         ModelUsage(
-            model=row.model or "",
-            prompt_tokens=int(row.prompt_tokens or 0),
-            completion_tokens=int(row.completion_tokens or 0),
-            runs=int(row.runs or 0),
-            unmeasured=int(row.unmeasured or 0),
+            model=name,
+            prompt_tokens=tally.prompt,
+            completion_tokens=tally.completion,
+            runs=tally.runs,
+            unmeasured=tally.unmeasured,
+            buckets=buckets(model_buckets[name]),
         )
-        for row in rows
+        for name, tally in by_model.items()
     ]
+    # Busiest first, ranked here rather than by the screen so every caller of
+    # the API gets the same order. Ties fall back to operations and then to
+    # the name, so the list is stable between reads of the same window.
     models.sort(key=lambda m: (-m.total_tokens, -m.runs, m.model))
-    return models
+
+    return Series(
+        actor_id=actor_id,
+        actor=actor,
+        prompt_tokens=total.prompt,
+        completion_tokens=total.completion,
+        runs=total.runs,
+        unmeasured=total.unmeasured,
+        since=window.since,
+        until=window.until,
+        bucket_seconds=window.bucket_seconds,
+        buckets=buckets(by_bucket),
+        models=models,
+    )
 
 
 async def for_actor(
     db: AsyncSession, actor_id: UUID, *, window: Window
 ) -> Series:
-    """One person's usage, by day and by model.
+    """One person's usage, by bucket and by model.
 
     **Inner joins `users`**, like `per_actor` and unlike `installation`: this is
     the per-person view, and a person who has been deleted is not in it. See the
@@ -372,91 +499,60 @@ async def for_actor(
     # Nothing in the window. Still name the person, so a quiet month reads as
     # "you, zero" rather than as an empty response the screen has to guess at.
     name = await db.scalar(sa.select(User.display_name).where(User.id == actor_id))
-    return Series(actor_id=actor_id, actor=name or "")
+    return _series(actor_id, name or "", [], window)
 
 
 async def per_actor(
     db: AsyncSession, *, window: Window, only: UUID | None = None
 ) -> list[Series]:
-    """Everybody's usage, by day and by model, one `Series` each.
+    """Everybody's usage, by bucket and by model, one `Series` each.
 
-    Two grouped queries — days, then models — rather than a query per person:
-    the screen renders a list of people with a chart each, and a loop of
-    per-person reads is the pagination problem the access-control rulebook
-    names.
+    One grouped query rather than a query per person: the screen renders a list
+    of people with a chart each, and a loop of per-person reads is the
+    pagination problem the access-control rulebook names.
 
     The join to `users` is **inner** — a deleted actor's rows leave this view
     and stay in `installation`. An outer join would attribute a departed
     person's spend to whoever remains, which is the one answer that is wrong.
     """
     operations = _operations(window)
-    conditions = [operations.c.actor_id.is_not(None)]
+    conditions: list[ColumnElement[bool]] = [operations.c.actor_id.is_not(None)]
     if only is not None:
         conditions.append(operations.c.actor_id == only)
 
-    daily = (
+    grouped = (
         sa.select(
             operations.c.actor_id,
             User.display_name.label("actor"),
-            operations.c.day,
+            operations.c.bucket,
+            operations.c.model,
             *_aggregates(operations),
         )
         .join(User, User.id == operations.c.actor_id)
         .where(*conditions)
-        .group_by(operations.c.actor_id, User.display_name, operations.c.day)
-        .order_by(User.display_name, operations.c.day)
+        .group_by(
+            operations.c.actor_id,
+            User.display_name,
+            operations.c.bucket,
+            operations.c.model,
+        )
+        .order_by(User.display_name)
     )
 
-    by_model = (
-        sa.select(operations.c.actor_id, operations.c.model, *_aggregates(operations))
-        .join(User, User.id == operations.c.actor_id)
-        .where(*conditions)
-        .group_by(operations.c.actor_id, operations.c.model)
-    )
-
-    grouped: dict[UUID, list[Any]] = {}
+    rows: dict[UUID, list[Any]] = {}
     names: dict[UUID, str] = {}
-    for row in (await db.execute(daily)).all():
-        grouped.setdefault(row.actor_id, []).append(row)
+    for row in (await db.execute(grouped)).all():
+        rows.setdefault(row.actor_id, []).append(row)
         names[row.actor_id] = row.actor or ""
 
-    model_rows: dict[UUID, list[Any]] = {}
-    for row in (await db.execute(by_model)).all():
-        model_rows.setdefault(row.actor_id, []).append(row)
-
     return [
-        _series(actor_id, names[actor_id], rows, model_rows.get(actor_id, []))
-        for actor_id, rows in grouped.items()
+        _series(actor_id, names[actor_id], actor_rows, window)
+        for actor_id, actor_rows in rows.items()
     ]
 
 
-def _series(
-    actor_id: UUID | None,
-    actor: str,
-    rows: Sequence[Any],
-    model_rows: Sequence[Any] = (),
-) -> Series:
-    """Fold a scope's day rows into its total, and attach its model rows.
-
-    The total is summed from the same rows the buckets are built from, so the
-    invariant the screen rests on — **the total equals the sum of the buckets**
-    — holds by construction rather than by two additions agreeing.
-    """
-    buckets = [_bucket(row) for row in rows]
-    return Series(
-        actor_id=actor_id,
-        actor=actor,
-        prompt_tokens=sum(b.prompt_tokens for b in buckets),
-        completion_tokens=sum(b.completion_tokens for b in buckets),
-        runs=sum(b.runs for b in buckets),
-        unmeasured=sum(int(row.unmeasured or 0) for row in rows),
-        buckets=buckets,
-        models=_model_usage(model_rows),
-    )
-
-
 async def installation(db: AsyncSession, *, window: Window) -> InstallationSeries:
-    """What the whole installation used, by day and by model.
+    """What the whole installation used, by bucket and by model.
 
     **No join to `users` at all** — the one structural difference from
     `per_actor`, and the one most likely to be "fixed" by a well-meaning later
@@ -471,16 +567,10 @@ async def installation(db: AsyncSession, *, window: Window) -> InstallationSerie
     which is the other.
     """
     operations = _operations(window)
-    daily = (
-        sa.select(operations.c.day, *_aggregates(operations))
-        .group_by(operations.c.day)
-        .order_by(operations.c.day)
-    )
-    by_model = sa.select(operations.c.model, *_aggregates(operations)).group_by(
-        operations.c.model
-    )
-    rows = (await db.execute(daily)).all()
-    base = _series(None, "", rows, (await db.execute(by_model)).all())
+    grouped = sa.select(
+        operations.c.bucket, operations.c.model, *_aggregates(operations)
+    ).group_by(operations.c.bucket, operations.c.model)
+    base = _series(None, "", (await db.execute(grouped)).all(), window)
 
     # A second, deliberately separate read: the shape of the gap. Folded into
     # the grouped query above it would need a `FILTER` per aggregate and would
@@ -509,6 +599,9 @@ async def installation(db: AsyncSession, *, window: Window) -> InstallationSerie
         completion_tokens=base.completion_tokens,
         runs=base.runs,
         unmeasured=base.unmeasured,
+        since=base.since,
+        until=base.until,
+        bucket_seconds=base.bucket_seconds,
         buckets=base.buckets,
         models=base.models,
         unattributed=int(orphaned.runs or 0),

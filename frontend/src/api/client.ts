@@ -362,30 +362,38 @@ export const audit = {
  * two only where `usage.read` is held — and the backend refuses either way,
  * so the check here is an affordance and never the boundary.
  *
- * `from`/`to` are ISO instants and both are optional: the server defaults to
- * the last thirty days and clamps anything wider than a year, so a caller
- * cannot ask for an unbounded read of three growing tables.
+ * `since`/`until` are ISO instants and both are optional: the server defaults
+ * to the last thirty days and clamps anything wider than a year, so a caller
+ * cannot ask for an unbounded read of three growing tables. `tz_offset` is the
+ * reader's UTC offset in minutes, east positive; the server aligns its buckets
+ * to it and picks their width from the window's length.
  */
-export const usage = {
-  /** Your own. No capability — the scope is you, and no argument widens it. */
-  mine: (params: { since?: string; until?: string } = {}) =>
-    get<UsageSeries>(`/usage/me${dayRange(params)}`),
-  /** Everybody, one series each, in one response. `usage.read`. */
-  byPerson: (params: { since?: string; until?: string } = {}) =>
-    get<UsageSeries[]>(`/usage/users${dayRange(params)}`),
-  /** The installation, including spend whose actor has been deleted, which is
-   *  what `unattributed` measures. `usage.read`. */
-  total: (params: { since?: string; until?: string } = {}) =>
-    get<UsageTotal>(`/usage/total${dayRange(params)}`),
+export interface UsageRange {
+  since?: string
+  until?: string
+  tz_offset?: number
 }
 
-/** The two optional date parameters, as a query string. Not named
+export const usage = {
+  /** Your own. No capability — the scope is you, and no argument widens it. */
+  mine: (params: UsageRange = {}) =>
+    get<UsageSeries>(`/usage/me${usageQuery(params)}`),
+  /** Everybody, one series each, in one response. `usage.read`. */
+  byPerson: (params: UsageRange = {}) =>
+    get<UsageSeries[]>(`/usage/users${usageQuery(params)}`),
+  /** The installation, including spend whose actor has been deleted, which is
+   *  what `unattributed` measures. `usage.read`. */
+  total: (params: UsageRange = {}) =>
+    get<UsageTotal>(`/usage/total${usageQuery(params)}`),
+}
+
+/** The optional range parameters, as a query string. Not named
  *  `window` — that is the global, and shadowing it in a module that may
  *  later want `window.location` is a bug waiting for the person who does. */
-function dayRange(params: { since?: string; until?: string }): string {
+function usageQuery(params: UsageRange): string {
   const query = new URLSearchParams()
   for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== '') query.set(key, value)
+    if (value !== undefined && value !== '') query.set(key, String(value))
   }
   const suffix = query.toString()
   return suffix ? `?${suffix}` : ''
