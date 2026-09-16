@@ -23,7 +23,7 @@ import type {
   ReportSummary, Review, Role, RunDetail, RunEvent, RunKnowledge, SchemaSnapshot,
   Reach, ScopedPrivilege, ServiceAccount, ServiceKey, ShareCheck, Team,
   SemanticChange, SemanticChangeList, SemanticDocument, SemanticHistoryEntry,
-  SemanticJob, SemanticVersionList, Suggestion,
+  SemanticJob, SemanticMetricUse, SemanticVersionList, Suggestion,
   SemanticLayer, SqlDraft, TemplateCheckResult, TemplateParam,
   TilePosition, TileResult, TileType, TestResult, UsageSeries, UsageTotal, User,
 } from './types'
@@ -634,6 +634,9 @@ export const semantic = {
     get<SemanticJob>(`/connections/${connectionId}/semantic/jobs/${jobId}`),
   cancelJob: (connectionId: string, jobId: string) =>
     post<SemanticJob>(`/connections/${connectionId}/semantic/jobs/${jobId}/cancel`),
+  // *Metrics in use*: counts over the last `days` of answers, per metric.
+  metricUse: (connectionId: string, days = 30) =>
+    get<SemanticMetricUse>(`/connections/${connectionId}/semantic/metric-use?days=${days}`),
   // Same parser the save path uses, so the metric editor cannot promise
   // something the backend will later reject.
   check: (

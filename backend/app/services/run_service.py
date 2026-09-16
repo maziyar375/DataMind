@@ -79,7 +79,7 @@ from app.services.query_service import (
     policy_from_snapshot,
     resolve_llm,
 )
-from app.services.semantic_service import load_layer
+from app.services.semantic_service import LoadedLayer, load_layer, metric_use_of
 
 log = get_logger(__name__)
 
@@ -614,11 +614,19 @@ class RunService:
         finally:
             await connector.close()
 
-        await self._finalise(run, state, fencing_token=fencing_token)
+        await self._finalise(
+            run, state, fencing_token=fencing_token, layer=layer, snapshot=snapshot
+        )
 
     # ── persistence of run output ────────────────────────────────────────
     async def _finalise(
-        self, run: Run, state: RunState, *, fencing_token: int | None = None
+        self,
+        run: Run,
+        state: RunState,
+        *,
+        fencing_token: int | None = None,
+        layer: LoadedLayer | None = None,
+        snapshot: dict[str, Any] | None = None,
     ) -> None:
         # What the *database* thinks, which is not what this session thinks:
         # sessions are `expire_on_commit=False`, so `run.status` here is the
@@ -660,6 +668,19 @@ class RunService:
                 bound_params=state.bound_params,
             )
 
+        # Which metric definitions the answer matched, read off the last
+        # statement the guard accepted (Phase 3). After the pipeline and not a
+        # node in it: it needs nothing the run row lacks, and a node would move
+        # the event sequence `test_pipeline_events.py` pins. Fail open — `None`
+        # is stored, never raised. A short-circuited (Verified) answer is
+        # attributed the same way; its statement is an attempt like any other.
+        attributed, metric_use = metric_use_of(
+            state.attempts,
+            document=layer.document if layer is not None else None,
+            version=layer.version if layer is not None else 0,
+            snapshot=snapshot,
+        )
+
         for attempt in state.attempts:
             gq = GeneratedQuery(
                 id=uuid.uuid4(),
@@ -672,6 +693,7 @@ class RunService:
                 validation_report=attempt.report.model_dump(),
                 referenced_tables=attempt.report.referenced_tables,
                 referenced_columns=attempt.report.referenced_columns,
+                metric_use=metric_use if attempt is attributed else None,
             )
             self._db.add(gq)
             await self._db.flush()

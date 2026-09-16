@@ -1,11 +1,11 @@
 # The semantic layer as a model — build plan
 
-> **Status: Phases 0 and 1 landed 2026-09-15; Phase 2 landed 2026-09-16.**
+> **Status: Phases 0 and 1 landed 2026-09-15; Phases 2 and 3 landed 2026-09-16.**
 > Written 2026-09-15 against `main` at `d7cba6f`; the §14 ledger is the record
 > of what is in the tree since. **Migration numbers moved:** `0030` and `0031`
 > went to the usage screen while this was being written, so the plan's
 > `0030_semantic_versions` shipped as **`0032`**, `0031_semantic_drafts` as
-> **`0033`**, and Phase 3's migration will be `0034`.
+> **`0033`**, and `0032_metric_attribution` as **`0034`**.
 >
 > **Answers** [mvp2.md §1.3](mvp2.md#13-the-semantic-layer-is-a-blob-not-a-model)
 > — *"The semantic layer is a blob, not a model"*, ranked **High**. The render
@@ -1223,17 +1223,17 @@ phase, and now renders neither.
 - [x] Tests: `test_semantic_draft.py` (no loader reads the draft, by source, by the modules that may name the column, and by behaviour; generation → draft; publish refusals; a DRAFT run pinned and privileged; the strip keeps draft runs out), DRAFT and PUBLISHED benchmark prompts in `test_benchmark_semantic.py`, exclusions and context surviving a merge in `test_semantic_validate.py`; Phase 1's restore, delete and generation tests rewritten to the draft rather than deleted
 - [x] Gate — driven on a migrated clone. Through the API: `total_tips` gained a filter in the draft; a question asked before publishing recorded `semantic_layer_version = 1`; a publish without a note was refused 422; with a note it wrote v2; the same question afterwards recorded `semantic_layer_version = 2`, and the published prompt carries the new filter. In the browser: edit, Save draft, leave, come back to the same draft, publish with the required note, restore an older version into the draft, discard it. **Caveat:** DeepSeek V4 Flash wrote `SUM(tips) FROM orders` in both runs, a column that does not exist, although the rendered prompt names `tip_amount` and the metric. Which definition an answer used could not be read from that SQL; the run row's version is what shows it
 
-### 14.4 Phase 3: Metric attribution · **0 / 9**
+### 14.4 Phase 3: Metric attribution · **7 / 9**
 
-- [ ] Migration `0032`: `generated_queries.metric_use`
-- [ ] `app/semantic/attribute.py` with the four rules of §4.4
-- [ ] Labelled and adversarial corpus; zero false `used`
-- [ ] Attribution at run finalisation (fail open); the benchmark worker reports the rate
-- [ ] `RunKnowledge.metrics_used` and the chip
-- [ ] The *Metrics in use* table
-- [ ] On-arm minus off-arm definition-use rate, **needs a provider key**
-- [ ] `ignored` precision measured at 0.95 or above, then the SQL panel line, **needs real runs**
-- [ ] Tests: fail open, version 0, VERIFIED answers attributed
+- [x] Migration **`0034`** (the plan's `0032`): `generated_queries.metric_use`. **Added beside it:** `benchmark_results.metric_use` (one question's verdicts) and `benchmark_runs.metric_use` (their counts), which is where "each benchmark run reports a metric-use rate" is stored. Rehearsed on the Postgres 16 clone: upgrade, downgrade, upgrade
+- [x] `app/semantic/attribute.py` with the four rules of §4.4. Choices the rules left open, all toward `unknown`: an exact normalised match of the whole expression is required for both `used` and `ignored` (so `COUNT(x)` against `COUNT(DISTINCT x)` is `unknown`); filters count from `WHERE`, `HAVING` and **inner**-join `ON` only; a metric's table (or a required join) read twice anywhere feeding the aggregate is `unknown`; `COUNT(*)` matches only over the metric's own table alone; `FILTER (WHERE …)` is `unknown`; and `ignored` also needs every conjunct, grouping and join condition feeding **or enclosing** the aggregate to be readable and not to name the missing filter's column (so `GROUP BY status` or an outer `WHERE t.status = …` is `unknown`, not an accusation). Unqualified columns across a join resolve through the snapshot
+- [x] Labelled and adversarial corpus; zero false `used` — `test_semantic_attribute.py`: 26 labelled statements (12 `used`, 5 `ignored`, 9 `unknown`) against `sales_semantic.json`, 20 adversarial ones, T-SQL and MySQL readings; no false `used`, and every `ignored` in the corpus is right
+- [x] Attribution at run finalisation (fail open); the benchmark worker reports the rate — `metric_use_of` picks the last accepted attempt for both; any exception is logged and stores `NULL`. Driven on the clone: *"How many orders are there in total?"* → `SELECT COUNT(*) … FROM orders`, stored `order_count: used` against v3
+- [x] `RunKnowledge.metrics_used` (`used` only, definitions read from the recorded version) and the chip: `✓ Matches the order_count definition` beside the tier, with the definition and `semantic layer v3` on hover **and on keyboard focus**. When the tier is Generated and a definition matched, the sentence says *Generated with your semantic layer* rather than *against the bare schema*
+- [x] The *Metrics in use* table — `GET …/semantic/metric-use?days=30` (`select`, counts only), in the Metrics panel, most-left-out first, eight rows then *Show all*
+- [ ] On-arm minus off-arm definition-use rate, **needs a provider key**. The instrument is built: the eval attributes on both arms and writes `definition_use` to each scorecard (eval.md, the semantic-layer arm); rows 1 and 2 of eval.md §6 give the pair when they are run
+- [ ] `ignored` precision measured at 0.95 or above, then the SQL panel line, **needs real runs**. Tried on what exists: the 17 statements the demo `aurora` connection's past chat runs produced gave 2 `used` (both right) and **no** `ignored`, so there is nothing yet to measure; `ignored` is stored, counted in *Metrics in use*, and shown on no answer
+- [x] Tests: fail open (unparseable statement, an exception inside the matcher), version 0 and no layer store nothing, a Verified answer is attributed, `ignored` never reaches an answer, the definitions come from the version rather than today's layer, *Metrics in use* over a real schema with a window and another connection's runs, the benchmark's counts through the real pipeline, and the eval's per-arm count — `test_metric_use.py`, `test_benchmark_semantic.py`
 
 ### 14.5 Phase 4: The portable document · **0 / 6**
 
@@ -1255,7 +1255,7 @@ phase, and now renders neither.
 ### 14.7 Documentation · **1 / 10**
 
 The other nine documents span phases, so each is ticked when the last phase it
-describes lands. What Phases 0, 1 and 2 changed is already in each of them:
+describes lands. What Phases 0 to 3 changed is already in each of them:
 reference/semantic-layer.md, CLAUDE.md, status.md, decisions.md §5,
 reference/security.md §2.2, reference/eval.md §6,
 reference/knowledge-templates.md §6, and (Phase 2) the privilege matrix quoted
@@ -1280,8 +1280,8 @@ quotes no wording to change.
 | 0 · One reader | 9 | 9 |
 | 1 · Versions | 13 | 13 |
 | 2 · Draft and publish | 11 | 11 |
-| 3 · Metric attribution | 0 | 9 |
+| 3 · Metric attribution | 7 | 9 |
 | 4 · Portable document | 0 | 6 |
 | 5 · Upkeep | 0 | 5 |
 | Documentation | 1 | 10 |
-| **Total** | **34** | **63** |
+| **Total** | **41** | **63** |

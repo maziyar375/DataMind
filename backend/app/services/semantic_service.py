@@ -32,7 +32,9 @@ import asyncio
 import hashlib
 import json
 import uuid
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 from uuid import UUID
 
@@ -58,7 +60,9 @@ from app.infra.crypto.aesgcm_box import AesGcmSecretBox
 from app.infra.db.models import (
     BenchmarkRun,
     DatabaseConnection,
+    GeneratedQuery,
     LlmConfig,
+    Run,
     SchemaSnapshotRow,
     SemanticJobRow,
     SemanticLayerChangeRow,
@@ -69,11 +73,14 @@ from app.infra.db.models import (
 from app.infra.db.session import get_sessionmaker
 from app.infra.llm.litellm_gateway import LiteLLMGateway
 from app.semantic import (
+    IGNORED,
     SEMANTIC_PROMPT_VERSION,
+    USED,
     Change,
     Progress,
     SchemaIndex,
     SemanticDocument,
+    attribute,
     bind_layer,
     build_index,
     diff_documents,
@@ -99,6 +106,9 @@ SEMANTIC_GENERATION_SAVED = "semantic.generation.saved"
 SEMANTIC_DRAFT_SAVED = "semantic.draft.saved"
 SEMANTIC_DRAFT_DISCARDED = "semantic.draft.discarded"
 SEMANTIC_PUBLISHED = "semantic.published"
+
+#: The window the *Metrics in use* table counts over.
+METRIC_USE_DAYS = 30
 
 #: How long a version note may be. A sentence or a paragraph about *why*; the
 #: what is already the change list.
@@ -554,6 +564,29 @@ class SemanticService:
             for change, version, name in result.all()
         ]
 
+    async def metric_use(
+        self, connection_id: UUID, *, days: int = METRIC_USE_DAYS
+    ) -> list[MetricUse]:
+        """How often each metric's definition was used by the answers that could.
+
+        Over the last `days` of chat runs on this connection, from the verdicts
+        stored at finalisation. **Counts only** — no question, no answer, no SQL:
+        a reader of the layer sees how its definitions fare, not who asked what.
+        A statement counts toward a metric when the metric was in scope, which
+        means the statement touched its table.
+        """
+        since = utcnow() - timedelta(days=days)
+        result = await self._db.execute(
+            select(GeneratedQuery.metric_use)
+            .join(Run, Run.id == GeneratedQuery.run_id)
+            .where(
+                Run.connection_id == connection_id,
+                Run.created_at >= since,
+                GeneratedQuery.metric_use.is_not(None),
+            )
+        )
+        return summarise_metric_use(result.scalars().all())
+
     async def diff(
         self, connection: DatabaseConnection, before: dict[str, Any], after: dict[str, Any]
     ) -> list[Change]:
@@ -950,6 +983,44 @@ class Published:
 
 
 @dataclass(slots=True)
+class MetricUse:
+    """One metric's row in *Metrics in use*."""
+
+    metric: str
+    entity: str
+    #: Answers whose statement touched the metric's table and was attributed.
+    questions: int = 0
+    used: int = 0
+    ignored: int = 0
+
+    @property
+    def gap(self) -> int:
+        return self.ignored - self.used
+
+
+def summarise_metric_use(stored: Iterable[dict[str, Any] | None]) -> list[MetricUse]:
+    """Count stored verdicts per metric, the metrics most often ignored first.
+
+    Sorted by the gap — `ignored` minus `used` — because that is the curation
+    signal: a definition the answers keep leaving out is the one to look at.
+    Ties go to the metric more questions touched, then to the name.
+    """
+    rows: dict[tuple[str, str], MetricUse] = {}
+    for record in stored:
+        for verdict in (record or {}).get("verdicts") or []:
+            metric, entity = str(verdict.get("metric", "")), str(verdict.get("entity", ""))
+            if not metric:
+                continue
+            row = rows.setdefault((entity, metric), MetricUse(metric=metric, entity=entity))
+            row.questions += 1
+            if verdict.get("verdict") == USED:
+                row.used += 1
+            elif verdict.get("verdict") == IGNORED:
+                row.ignored += 1
+    return sorted(rows.values(), key=lambda r: (-r.gap, -r.questions, r.metric, r.entity))
+
+
+@dataclass(slots=True)
 class DraftWritten:
     """What one draft write produced: the head row, and the draft's changes
     against the published document (empty when the draft was cleared)."""
@@ -1308,6 +1379,64 @@ async def load_layer(
         log.warning("semantic_document_unreadable", connection_id=str(connection.id))
         return LoadedLayer(None)
     return LoadedLayer(document, row.published_version or 0)
+
+
+def metric_use_of(
+    attempts: Sequence[Any],
+    *,
+    document: SemanticDocument | None,
+    version: int,
+    snapshot: dict[str, Any] | None,
+) -> tuple[Any | None, dict[str, Any] | None]:
+    """The attempt to attribute, and its verdicts — for a run and a benchmark alike.
+
+    The attempt is the **last one the guard accepted**: attribution reads a
+    statement the guard already validated, never a refused one. A short-circuited
+    (Verified) answer's statement is an attempt like any other, so it is
+    attributed the same way. `(None, None)` when nothing was accepted.
+    """
+    accepted = next(
+        (a for a in reversed(attempts) if getattr(a.report, "status", "") == "VALID"), None
+    )
+    if accepted is None or snapshot is None:
+        return accepted, None
+    return accepted, attribute_statement(
+        accepted.rewritten_sql or accepted.raw_sql,
+        document=document, version=version,
+        tables=list(accepted.report.referenced_tables or []), snapshot=snapshot,
+    )
+
+
+def attribute_statement(
+    sql: str,
+    *,
+    document: SemanticDocument | None,
+    version: int,
+    tables: list[str],
+    snapshot: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Which metric definitions `sql` matched, as `generated_queries.metric_use`.
+
+    **Fail open, and observing only** (D8 of the plan). `None` — store nothing —
+    when no layer reached the prompt, when the statement touched no metric's
+    table, and when the statement cannot be read; an exception here is logged
+    and never reaches the run. The version is the one the run recorded, so a
+    verdict is always read against the definition it was judged by.
+    """
+    if document is None or not sql:
+        return None
+    dialect = snapshot.get("dialect") or "postgres"
+    try:
+        verdicts = attribute(
+            sql, dialect, document, tables,
+            schema=build_index(snapshot.get("tables") or [], dialect),
+        )
+    except Exception as err:  # noqa: BLE001 — attribution may never fail a run
+        log.warning("metric_attribution_failed", reason=type(err).__name__)
+        return None
+    if not verdicts:
+        return None
+    return {"version": version, "verdicts": [v.as_dict() for v in verdicts]}
 
 
 class DraftMovedError(Exception):

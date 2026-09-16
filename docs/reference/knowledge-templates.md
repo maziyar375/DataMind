@@ -307,6 +307,11 @@ Where a connection owner gets a number about *their* data, without a developer.
   it was queued, and it is **kept out of the score strip** — `BenchmarkSet.runs`
   is published runs only, and the newest draft run is `draft_run` beside it. The
   strip stays the published product's number.
+- **A run reports how often its answers used a metric definition.** Each
+  question's last accepted statement is attributed the way a chat answer is
+  (`benchmark_results.metric_use`), and the run carries the counts
+  (`metric_use: {in_scope, used, ignored, unknown}`, `null` when nothing was
+  attributed — no layer is *not measured*, not zero).
 
 ## 7. Searching the store by meaning — the embedding matcher
 

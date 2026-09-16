@@ -7,7 +7,8 @@ Code: [`backend/app/semantic/`](../../backend/app/semantic/) — `generator.py`
 (one model call per table), `render.py` (the tiered fit), `validate.py` (what
 is refused, and `merge_documents`: what survives a regeneration), `bind.py`
 (the one binder every reader goes through), `terms.py` (the words the layer
-speaks, for the knowledge backlog). The editor is
+speaks, for the knowledge backlog), `diff.py` (the one differ), `attribute.py`
+(which definitions an answer's SQL matched). The editor is
 [`frontend/src/components/semantic.tsx`](../../frontend/src/components/semantic.tsx).
 The plan that is turning the document into a versioned model is
 [plans/semantic-layer-model.md](../plans/semantic-layer-model.md).
@@ -137,6 +138,51 @@ shapes. That is the class this addresses.
     `semantic.draft.discarded {revision}`, `semantic.published {version,
     changes, affects_sql, scored_run_id}`; `semantic.restored` and
     `semantic.generation.saved` now carry the draft's `revision`.
+- **Whether an answer used a definition is observed after the run** (migration
+  `0034`, Phase 3). `app/semantic/attribute.py` reads the last statement the
+  guard accepted and gives each valid metric on a touched table one verdict:
+  **`used`** — the metric's expression, after normalising both sides (columns
+  qualified to `schema.table.column` through aliases, CTEs and derived tables;
+  identifiers lower-cased; parentheses dropped; conditions simplified, so
+  `!=`, `<>` and `NOT … =` agree), in a `SELECT` whose `WHERE`, `HAVING` or
+  inner-join `ON` — its own or a feeding CTE's or derived table's — carries
+  **every** filter of the definition; **`ignored`** — that expression with at
+  least one filter *demonstrably* absent, meaning nothing feeding or enclosing
+  the aggregate mentions the filter's column and all of it could be read;
+  **`unknown`** — the default, including window functions, `FILTER`, set
+  operations, a self-join of the metric's table, `IN (…)` where the definition
+  says `<>`, and any subquery a filter could hide in. It observes and never
+  enforces (D8): it runs in `run_service` at finalisation, not as a node, so
+  the SSE sequence is untouched; it stores
+  `generated_queries.metric_use = {version, verdicts}` on the attributed
+  attempt, and `NULL` when no layer reached the prompt, nothing was accepted
+  or the statement cannot be read — a run never fails for it. A Verified
+  answer is attributed like any other.
+  - **The chip.** `RunKnowledge.metrics_used` carries only `used` verdicts, with
+    the expression and filters read from the version the run recorded; the chat
+    answer shows `✓ Matches the revenue definition` beside its tier, and hovering
+    or focusing it shows the definition and `semantic layer v12`. There is no
+    fourth tier. **`ignored` is stored and counted and shown on no answer**: the
+    SQL-panel line waits for its precision to be measured at 0.95 or above on
+    real runs.
+  - **Metrics in use** (`GET …/semantic/metric-use?days=30`, `select`) counts,
+    per metric, the answers whose statement touched its table and how many used
+    or left out its definition, most-left-out first — in the Metrics panel.
+    Counts only: no question, answer, SQL or asker.
+  - **The benchmark** stores each question's verdicts
+    (`benchmark_results.metric_use`) and their counts on the run
+    (`benchmark_runs.metric_use`); **the eval** measures a definition-use rate on
+    both arms (`definition_use` on the scorecard), because a filterless metric
+    is matched by coincidence and only the layer-off arm can say how often.
+  - Measured so far: zero false `used` on a 20-statement adversarial set and a
+    26-statement labelled corpus against `sales_semantic.json`
+    (`test_semantic_attribute.py`). On the 17 statements the demo `aurora`
+    connection's past chat runs had produced, 2 were `used` (both correct on
+    reading), 131 metric-and-statement pairs were `unknown` — mostly metrics the
+    statement never computed — and none `ignored`, so `ignored` precision is
+    **not measured yet**. A matching aggregate over a join that fans rows out is
+    still `used`: the chip speaks of the definition, and fan-out is the join
+    cautions' subject.
 - **The benchmark is scored with the layer.** Before v10 `workers/benchmark.py`
   never passed it, so every `benchmark_runs` row at v9 or earlier was taken
   layer-off whatever the switch said.

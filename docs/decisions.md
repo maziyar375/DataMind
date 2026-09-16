@@ -103,6 +103,8 @@ load-bearing ones:
 | **An edit lands in a draft; only a publish is a version.** Save, generation and restore write `draft_document`, which no loader reads; publishing needs `modify`, with no approval step (D2, D7) | Standing (2026-09-16) | [plans/semantic-layer-model.md](plans/semantic-layer-model.md) §4.3 |
 | **A first generation does not publish itself**, and a number-changing publish needs a note (§12 questions 1 and 2) | Standing (2026-09-16) | [plans/semantic-layer-model.md](plans/semantic-layer-model.md) §12 |
 | **A draft's benchmark run is advisory and stays out of the score strip**; a delta is shown only between runs with the same prompt version and model (§12 question 4) | Standing (2026-09-16) | [plans/semantic-layer-model.md](plans/semantic-layer-model.md) §4.3 |
+| **Attribution observes and never enforces.** `used` / `ignored` / `unknown`, `unknown` by default and `ignored` only when a filter is demonstrably absent; computed after the run over stored SQL, never a graph node, never a failure; the layer stays fail open (D8) | Standing (2026-09-16) | [plans/semantic-layer-model.md](plans/semantic-layer-model.md) §4.4 |
+| **`ignored` is shown on no answer until its precision is measured at 0.95 or above on real runs**, and a matched definition is evidence beside the tier, not a fourth tier | Standing (2026-09-16) | [plans/semantic-layer-model.md](plans/semantic-layer-model.md) §4.4 |
 | **Binding on load moved `PROMPT_VERSION` v9 → v10**, though no wording changed: it changes what survives of a drifted layer, and it put the layer into benchmark prompts that never had one (D11) | Standing (2026-09-15) | [plans/semantic-layer-model.md](plans/semantic-layer-model.md) §2.2 |
 
 ## 6. Pipelines, charts and the three surfaces

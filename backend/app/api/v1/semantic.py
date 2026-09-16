@@ -30,6 +30,8 @@ from app.api.schemas import (
     SemanticHistoryEntry,
     SemanticJobRead,
     SemanticLayerRead,
+    SemanticMetricUse,
+    SemanticMetricUseRow,
     SemanticPublishRequest,
     SemanticRestoreRequest,
     SemanticSaveRequest,
@@ -487,6 +489,32 @@ async def get_semantic_history(
         )
         for e in entries
     ]
+
+
+@router.get("/metric-use", response_model=SemanticMetricUse)
+async def get_semantic_metric_use(
+    connection_id: UUID,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    authz: AuthzDep,
+    days: int = Query(default=30, ge=1, le=365),
+) -> SemanticMetricUse:
+    """*Metrics in use*: per metric, how many answers touched its table, and how
+    many of them used or left out its definition. `select`, because it is a
+    reading of the layer — counts only, so it names no question and no asker."""
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.SELECT)
+    rows = await SemanticService(db, settings, authz).metric_use(connection.id, days=days)
+    return SemanticMetricUse(
+        days=days,
+        rows=[
+            SemanticMetricUseRow(
+                metric=r.metric, entity=r.entity, questions=r.questions,
+                used=r.used, ignored=r.ignored,
+            )
+            for r in rows
+        ],
+    )
 
 
 @router.post("/check", response_model=SemanticExpressionResult)

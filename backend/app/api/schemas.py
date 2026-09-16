@@ -1119,6 +1119,23 @@ class SemanticHistoryEntry(BaseModel):
     created_at: datetime
 
 
+class SemanticMetricUseRow(BaseModel):
+    metric: str
+    entity: str
+    #: Answers whose statement touched the metric's table and was attributed.
+    questions: int = 0
+    used: int = 0
+    ignored: int = 0
+
+
+class SemanticMetricUse(BaseModel):
+    """*Metrics in use*: counts over the last `days` of answers. No questions,
+    no answers, no SQL — how a definition fares, not who asked what."""
+
+    days: int
+    rows: list[SemanticMetricUseRow] = Field(default_factory=list)
+
+
 class SemanticExpressionCheck(BaseModel):
     """Live validation for the metric editor, so a bad expression is caught
     while it is being typed rather than when a question depends on it."""
@@ -1485,6 +1502,9 @@ class BenchmarkRunRead(BaseModel):
     #: The published version scored, or on a draft run the one it was edited
     #: over. `0`: no layer; `null`: before versions were recorded.
     semantic_layer_version: int | None = None
+    #: How often the run's answers matched a metric definition:
+    #: `{in_scope, used, ignored, unknown}`, or null when nothing was attributed.
+    metric_use: dict[str, int] | None = None
     error_message: str = ""
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -2632,6 +2652,16 @@ class GeneratedQueryRead(BaseModel):
     referenced_tables: list[str]
 
 
+class MetricUsedRead(BaseModel):
+    """One definition an answer matched, as the chip's hover shows it."""
+
+    metric: str
+    entity: str
+    label: str = ""
+    expression: str = ""
+    filters: list[str] = Field(default_factory=list)
+
+
 class RunKnowledge(BaseModel):
     """What the answer's badge says, and the evidence behind it.
 
@@ -2660,6 +2690,12 @@ class RunKnowledge(BaseModel):
     #: not anyone else's: the footer shows what *you* said, and showing a
     #: colleague's verdict there would be an opinion presented as a fact.
     feedback: AnswerFeedbackRead | None = None
+    #: The semantic layer metrics whose definitions this answer's SQL matched —
+    #: `used` verdicts only (Phase 3 of the semantic layer plan). Not a fourth
+    #: tier: evidence beside the chip. Empty when no layer reached the prompt.
+    metrics_used: list[MetricUsedRead] = Field(default_factory=list)
+    #: The layer version those definitions were read from.
+    metrics_version: int | None = None
 
 
 class RunRead(BaseModel):

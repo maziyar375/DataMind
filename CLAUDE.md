@@ -183,6 +183,8 @@ backend/app/
                   never trusted), terms.py (the words it speaks, for the
                   backlog), diff.py (the one differ: typed changes keyed by
                   entry, which versions store and the UI only words),
+                  attribute.py (whether an answer's SQL used a metric's
+                  definition — observed after the run, never enforced),
                   generator.py (build one with a model, one call per
                   table), render.py (the prompt block), prompts.py —
                   self-contained like sqlguard
@@ -611,7 +613,7 @@ described here — each has its own reference:
 
 | | What it is | Reference |
 |---|---|---|
-| **The semantic layer** | What the schema *means* — business names, grain, metrics bound to exact SQL, time conventions, fan-out cautions. One document per connection. An edit, a generation and a restore land in a **draft no question reads**; publishing it writes a numbered version. A write names the revision it read and a stale one is a 409, not an overwrite | [docs/reference/semantic-layer.md](docs/reference/semantic-layer.md) |
+| **The semantic layer** | What the schema *means* — business names, grain, metrics bound to exact SQL, time conventions, fan-out cautions. One document per connection. An edit, a generation and a restore land in a **draft no question reads**; publishing it writes a numbered version. A write names the revision it read and a stale one is a 409, not an overwrite. After a run, whether its SQL used each metric's definition is observed and stored, never enforced | [docs/reference/semantic-layer.md](docs/reference/semantic-layer.md) |
 | **Knowledge templates** | A question somebody already answered correctly, stored as a parameterized question→SQL template so the system answers it the same way next time | [docs/reference/knowledge-templates.md](docs/reference/knowledge-templates.md) |
 
 Both are **off-by-absence**: with neither present, the prompt is byte-identical

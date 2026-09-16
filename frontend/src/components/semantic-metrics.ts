@@ -152,3 +152,35 @@ export function metricSummary(rows: MetricRow[]): string {
     ? head
     : `${head} — ${named.slice(0, 6).join(', ')}${named.length > 6 ? '…' : ''}`
 }
+
+// ── which definitions an answer matched (Phase 3) ──────────────────────────
+/** A definition an answer matched — `MetricUsed` from the API. */
+export interface MatchedLike {
+  metric: string
+  expression: string
+  filters: string[]
+}
+
+/**
+ * The chip beside an answer's tier: `Matches the revenue definition`.
+ *
+ * Only `used` verdicts reach the browser, so this never words an accusation.
+ * Two names are listed; three or more are counted, because a chip that grows
+ * with the query stops being a chip.
+ */
+export function matchedLabel(metrics: MatchedLike[]): string {
+  const names = metrics.map((m) => m.metric)
+  if (names.length === 0) return ''
+  if (names.length === 1) return `Matches the ${names[0]} definition`
+  if (names.length === 2) return `Matches the ${names[0]} and ${names[1]} definitions`
+  return `Matches ${names.length} metric definitions`
+}
+
+/** `SUM(orders.total_amount) WHERE orders.status <> 'cancelled'` — the
+ *  definition as the prompt stated it, filters joined as the conjuncts they are. */
+export function definitionLine(metric: MatchedLike): string {
+  const filters = metric.filters.map((f) => f.trim()).filter(Boolean)
+  return filters.length
+    ? `${metric.expression.trim()} WHERE ${filters.join(' AND ')}`
+    : metric.expression.trim()
+}

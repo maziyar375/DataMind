@@ -271,6 +271,13 @@ every save of the layer is kept as an immutable version
   needs `modify` on the layer on top of the benchmark's own privilege.
   Publishing is `modify` as well — no approval step, so the separation this
   buys is between an edit and its effect, not between two people.
+- **Attribution adds no guard entry point** (migration `0034`). It parses the
+  statement the guard already validated and stores a verdict; it cannot change
+  what runs, and it fails open. `metric_use` holds metric and table names and a
+  verdict — schema vocabulary, no values and no SQL. *Metrics in use* aggregates
+  those verdicts across every asker's runs on the connection for a reader with
+  `select` on the layer, and returns counts only: no question, answer,
+  statement or asker.
 
 ### 2.3 Reports (#10–#12) in detail
 

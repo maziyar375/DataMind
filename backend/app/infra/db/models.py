@@ -982,6 +982,11 @@ class GeneratedQuery(Base):
     validation_report: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     referenced_tables: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
     referenced_columns: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    #: Which metric definitions this statement matched (`0034`):
+    #: `{"version": n, "verdicts": [{"metric", "entity", "verdict"}]}`, on the
+    #: attempt that was attributed. NULL: not attributed — no layer reached the
+    #: prompt, the statement was refused, or it could not be read (fail open).
+    metric_use: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -2002,6 +2007,10 @@ class BenchmarkRun(Base):
     #: The head revision a `DRAFT` run was pinned to when it was queued. The
     #: worker refuses to score a draft that has moved since.
     semantic_revision: Mapped[int | None] = mapped_column(Integer)
+    #: How often the run's answers matched a metric definition (`0034`):
+    #: `{"in_scope", "used", "ignored", "unknown"}` counted over every question's
+    #: attributed verdicts. NULL when nothing was attributed.
+    metric_use: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     error_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -2051,6 +2060,8 @@ class BenchmarkResult(Base):
     candidate_row_count: Mapped[int | None] = mapped_column(Integer)
     duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failure_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: The metric verdicts for this question's statement (`0034`), or NULL.
+    metric_use: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

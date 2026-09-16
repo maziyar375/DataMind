@@ -1054,6 +1054,33 @@ export interface RunKnowledge {
   overridden: boolean
   /** This reader's own verdict on this answer, and what became of it. */
   feedback: AnswerFeedback | null
+  /** The semantic layer metrics whose definitions this answer's SQL matched —
+   *  `used` verdicts only. Evidence beside the tier, not a tier. */
+  metrics_used: MetricUsed[]
+  /** The layer version those definitions come from. */
+  metrics_version: number | null
+}
+
+/** One definition an answer matched, as the chip's card shows it. */
+export interface MetricUsed {
+  metric: string
+  entity: string
+  label: string
+  expression: string
+  filters: string[]
+}
+
+/** *Metrics in use*: per metric, over the last `days` of answers. Counts only. */
+export interface SemanticMetricUse {
+  days: number
+  rows: {
+    metric: string
+    entity: string
+    /** Answers whose statement touched the metric's table and was read. */
+    questions: number
+    used: number
+    ignored: number
+  }[]
 }
 
 /** One verdict on an answer, and what became of it. */
@@ -1118,6 +1145,9 @@ export interface BenchmarkRun {
   /** The layer revision a `DRAFT` run was pinned to. */
   semantic_revision: number | null
   semantic_layer_version: number | null
+  /** How often the run's answers matched a metric definition, or null when
+   *  nothing was attributed. */
+  metric_use: { in_scope: number; used: number; ignored: number; unknown: number } | null
   error_message: string
   started_at: string | null
   finished_at: string | null

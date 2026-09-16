@@ -6,6 +6,7 @@ no fastapi, no sqlalchemy, no litellm — so it can be exercised end to end
 against a dict snapshot and a fake gateway.
 
     bind_layer                        the one binder every reader goes through
+    attribute                         which metric definitions a statement matched
     build_index / validate_document   bind a document to a schema snapshot
     derive_joins                      cardinality + fan-out, read off the catalog
     diff_documents                    what changed between two documents, per entry
@@ -17,6 +18,14 @@ against a dict snapshot and a fake gateway.
 """
 from __future__ import annotations
 
+from app.semantic.attribute import (
+    IGNORED,
+    UNKNOWN,
+    USED,
+    AttributionError,
+    Verdict,
+    attribute,
+)
 from app.semantic.bind import bind_layer
 from app.semantic.diff import AFFECTS_SQL, KINDS, Change, diff_documents
 from app.semantic.generator import (
@@ -56,6 +65,12 @@ from app.semantic.validate import (
 
 __all__ = [
     "AFFECTS_SQL",
+    "IGNORED",
+    "UNKNOWN",
+    "USED",
+    "AttributionError",
+    "Verdict",
+    "attribute",
     "DEFAULT_MAX_CHARS",
     "DOCUMENT_VERSION",
     "SEMANTIC_PROMPT_VERSION",

@@ -227,6 +227,22 @@ async def test_a_benchmark_question_is_asked_with_the_connections_layer(
 
 
 @pytest.mark.asyncio
+async def test_a_benchmark_run_reports_how_often_its_answers_used_a_definition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase 3: the same attribution a chat run gets, per question and per run.
+
+    The scripted answer sums `total_amount` and leaves out the definition's
+    `status <> 'cancelled'` — an `ignored` verdict, counted, never shown."""
+    _, run = await _benchmark(monkeypatch, enabled=True, layer=_layer())
+    assert run.status == "SUCCEEDED", run.error_message
+    assert run.metric_use == {"in_scope": 1, "used": 0, "ignored": 1, "unknown": 0}
+
+    _, off = await _benchmark(monkeypatch, enabled=False, layer=_layer())
+    assert off.metric_use is None, "no layer reached the prompt: not measured, not zero"
+
+
+@pytest.mark.asyncio
 async def test_switching_the_layer_off_takes_it_out_of_the_benchmark_prompt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

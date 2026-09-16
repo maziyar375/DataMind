@@ -91,7 +91,12 @@ from app.services.query_service import (
     resolve_llm,
     secret_box,
 )
-from app.services.semantic_service import DraftMovedError, load_draft, load_layer
+from app.services.semantic_service import (
+    DraftMovedError,
+    load_draft,
+    load_layer,
+    metric_use_of,
+)
 
 log = get_logger(__name__)
 
@@ -192,6 +197,7 @@ async def execute_benchmark_run(
                 db, settings, run, connection, template,
                 gateway=gateway, llm=llm, connector=connector,
                 snapshot=snapshot, semantic=semantic, now=now,
+                layer_version=layer.version,
             )
             db.add(result)
             await db.flush()
@@ -211,6 +217,7 @@ async def execute_benchmark_run(
     run.held_out_matched = score.held_out_matched
     run.taught_total = score.taught_total
     run.taught_matched = score.taught_matched
+    run.metric_use = metric_use_summary(results)
     run.status = SUCCEEDED
     run.finished_at = utcnow()
     await db.commit()
@@ -237,6 +244,7 @@ async def _run_one(
     snapshot: dict[str, Any],
     semantic: SemanticDocument | None,
     now: Any,
+    layer_version: int = 0,
 ) -> BenchmarkResult:
     """One question, end to end: ask, execute the gold, compare.
 
@@ -290,6 +298,12 @@ async def _run_one(
     row.duration_ms = int((utcnow() - started).total_seconds() * 1000)
     row.from_template = state.match_outcome == "SHORT_CIRCUIT"
     row.candidate_sql = state.attempts[-1].raw_sql if state.attempts else ""
+    # The same attribution a chat run gets, on the same statement: the last one
+    # the guard accepted. Fail open — a question is scored whether or not its
+    # statement could be read.
+    _, row.metric_use = metric_use_of(
+        state.attempts, document=semantic, version=layer_version, snapshot=snapshot
+    )
 
     if state.intent in _NON_ANALYTICAL:
         row.outcome = OUTCOME_NO_SQL
@@ -340,6 +354,28 @@ async def _run_one(
             f"{state.execution.row_count} rows"
         )
     return row
+
+
+def metric_use_summary(results: list[BenchmarkResult]) -> dict[str, int] | None:
+    """How often the run's answers matched a metric definition.
+
+    Counted over every verdict of every attributed question: `in_scope` is how
+    many metric-and-question pairs there were, and `used`, `ignored` and
+    `unknown` split them. `None` when no question was attributed, so a run with
+    no layer reads *not measured* rather than *never used*.
+    """
+    counts = {"in_scope": 0, "used": 0, "ignored": 0, "unknown": 0}
+    attributed = False
+    for result in results:
+        verdicts = (result.metric_use or {}).get("verdicts") or []
+        if result.metric_use is not None:
+            attributed = True
+        for verdict in verdicts:
+            counts["in_scope"] += 1
+            key = verdict.get("verdict")
+            if key in counts:
+                counts[key] += 1
+    return counts if attributed else None
 
 
 async def _ask(

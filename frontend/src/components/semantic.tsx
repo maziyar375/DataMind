@@ -39,6 +39,7 @@ import { ApiError, llmConfigs as llmApi, semantic as api } from '../api/client'
 import type {
   Connection, GlossaryTerm, LlmConfig, ProblemDetail, SemanticChange, SemanticColumn,
   SemanticDocument, SemanticEntity, SemanticJob, SemanticLayer, SemanticMetric,
+  SemanticMetricUse,
 } from '../api/types'
 import {
   Chip, DangerButton, ErrorNote, Field, GhostButton, Icon, Modal,
@@ -546,6 +547,7 @@ export function SemanticLayerTab({
                 *measures*, then the words people use for both. Metrics sit
                 above the glossary because a term routinely maps to one. */}
             <MetricsPanel
+              connectionId={connection.id}
               doc={doc!}
               onOpen={revealMetrics}
               onAdd={(table) => {
@@ -2978,8 +2980,9 @@ function entityDomId(table: string): string {
  *   them on save, and this says it while it is still being typed.
  */
 function MetricsPanel({
-  doc, onOpen, onAdd,
+  connectionId, doc, onOpen, onAdd,
 }: {
+  connectionId: string
   doc: SemanticDocument
   /** Reveal a metric where it is edited: its table's card, on its metrics
    *  section, scrolled to. */
@@ -3048,6 +3051,8 @@ function MetricsPanel({
         />
       ))}
 
+      {rows.length > 0 && <MetricsInUse connectionId={connectionId} />}
+
       {tables.length > 0 && (
         <div
           style={{
@@ -3079,6 +3084,122 @@ function MetricsPanel({
         </div>
       )}
     </Panel>
+  )
+}
+
+/** Rows *Metrics in use* shows before *Show all*. */
+const IN_USE_ROWS = 8
+
+/**
+ * *Metrics in use*: how the answers of the last 30 days fared against each
+ * definition — how many touched the metric's table, how many used the
+ * definition, how many left part of it out. Most-left-out first, which is the
+ * order a curator should look in.
+ *
+ * Counts only: the server names no question and no asker. `left out` here is a
+ * count over many answers and accuses no single one; on an answer it is not
+ * shown at all until its precision has been measured.
+ */
+function MetricsInUse({ connectionId }: { connectionId: string }) {
+  const [use, setUse] = useState<SemanticMetricUse | null>(null)
+  const [failed, setFailed] = useState(false)
+  const [all, setAll] = useState(false)
+  useEffect(() => {
+    let live = true
+    setUse(null)
+    setFailed(false)
+    api.metricUse(connectionId)
+      .then((next) => live && setUse(next))
+      .catch(() => live && setFailed(true))
+    return () => {
+      live = false
+    }
+  }, [connectionId])
+
+  if (failed) return null
+  const head = (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-strong)' }}>In use</span>
+      <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
+        the last {use?.days ?? 30} days of answers, counted per metric over those
+        whose SQL touched its table — most left out first
+      </span>
+    </div>
+  )
+  if (use === null) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 4 }}>
+        {head}
+        <span style={{ display: 'flex', gap: 7, alignItems: 'center', fontSize: 12, color: 'var(--text-faint)' }}>
+          <Spinner size={12} /> Counting…
+        </span>
+      </div>
+    )
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 4 }}>
+      {head}
+      {use.rows.length === 0 ? (
+        <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+          No answer in that time touched a table with a metric.
+        </span>
+      ) : (
+        <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 9 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ color: 'var(--text-faint)', textAlign: 'start' }}>
+                {['Metric', 'Answers on its table', 'Used it', 'Left part out'].map((label, index) => (
+                  <th
+                    key={label}
+                    scope="col"
+                    style={{
+                      padding: '7px 10px', fontWeight: 600, fontSize: 11,
+                      textAlign: index === 0 ? 'start' : 'end',
+                      borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {(all ? use.rows : use.rows.slice(0, IN_USE_ROWS)).map((row) => (
+                <tr key={`${row.entity}.${row.metric}`} style={{ borderTop: '1px solid var(--border)' }}>
+                  <td style={{ padding: '7px 10px' }}>
+                    <span className="mono" style={{ fontWeight: 600, color: 'var(--text-strong)' }}>{row.metric}</span>
+                    <span className="mono" style={{ display: 'block', fontSize: 11, color: 'var(--text-faint)' }}>{row.entity}</span>
+                  </td>
+                  <td style={{ padding: '7px 10px', textAlign: 'end', fontVariantNumeric: 'tabular-nums' }}>{row.questions}</td>
+                  <td style={{ padding: '7px 10px', textAlign: 'end', fontVariantNumeric: 'tabular-nums', color: 'var(--text-strong)' }}>{row.used}</td>
+                  <td
+                    style={{
+                      padding: '7px 10px', textAlign: 'end', fontVariantNumeric: 'tabular-nums',
+                      color: row.ignored > row.used ? 'var(--amber)' : 'var(--text-dim)',
+                      fontWeight: row.ignored > row.used ? 700 : 400,
+                    }}
+                  >
+                    {row.ignored > row.used ? `◆ ${row.ignored}` : row.ignored}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {use.rows.length > IN_USE_ROWS && (
+        <GhostButton
+          onClick={() => setAll((v) => !v)}
+          style={{ alignSelf: 'flex-start', padding: '4px 9px', fontSize: 12 }}
+        >
+          {all ? 'Show fewer' : `Show all ${use.rows.length}`}
+        </GhostButton>
+      )}
+      <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+        The rest of each row’s answers either did not compute the metric or wrote
+        it in a form that could not be compared — neither is counted against it.
+      </span>
+    </div>
   )
 }
 

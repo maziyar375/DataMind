@@ -26,6 +26,7 @@ from app.api.schemas import (
     MessageAccepted,
     MessageCreate,
     MessageRead,
+    MetricUsedRead,
     RunKnowledge,
     RunRead,
     RunStepRead,
@@ -65,6 +66,9 @@ router = APIRouter(tags=["conversations"])
 #: The tables a layer describes, memoised for one request, keyed by connection
 #: and by the version a run recorded (`None` for a run from before `0032`).
 _Described = dict[tuple[UUID, int | None], frozenset[str]]
+#: Published version documents, memoised the same way, for the definitions an
+#: answer's *Matches the definition* chip shows.
+_Versions = dict[tuple[UUID, int], SemanticDocument | None]
 
 # **A conversation is not shareable, and has no access routes.** Phase 8 gave
 # every artifact `/grants`, `/actions` and `/transfer`, a thread included, on
@@ -259,9 +263,11 @@ async def list_messages(
     # turn: a thread is pinned to one connection, and binding is a parse per
     # metric that forty turns would otherwise repeat forty times.
     described: _Described = {}
+    versions: _Versions = {}
     hydrated = {
         r.id: await _hydrate_run(
-            db, r, may_read_data=r.connection_id in reachable, described=described
+            db, r, may_read_data=r.connection_id in reachable, described=described,
+            versions=versions,
         )
         for r in runs
     }
@@ -414,7 +420,12 @@ async def _require_run_data(db, ctx, authz, run: Run) -> None:
 
 
 async def _hydrate_run(
-    db, run: Run, *, may_read_data: bool = True, described: _Described | None = None
+    db,
+    run: Run,
+    *,
+    may_read_data: bool = True,
+    described: _Described | None = None,
+    versions: _Versions | None = None,
 ) -> RunRead:
     steps = await db.execute(
         select(RunStep).where(RunStep.run_id == run.id).order_by(RunStep.seq)
@@ -443,8 +454,13 @@ async def _hydrate_run(
         .order_by(GeneratedQuery.attempt_no)
     )
     data.artifacts = [ArtifactRead.model_validate(a) for a in artifacts.scalars()]
-    data.queries = [GeneratedQueryRead.model_validate(q) for q in queries.scalars()]
-    data.knowledge = await _knowledge(db, run, data.queries, described=described)
+    rows = list(queries.scalars())
+    data.queries = [GeneratedQueryRead.model_validate(q) for q in rows]
+    data.knowledge = await _knowledge(
+        db, run, data.queries, described=described,
+        metric_use=next((q.metric_use for q in reversed(rows) if q.metric_use), None),
+        versions=versions if versions is not None else {},
+    )
     return data
 
 
@@ -454,6 +470,8 @@ async def _knowledge(
     queries: list[GeneratedQueryRead],
     *,
     described: _Described | None = None,
+    metric_use: dict[str, Any] | None = None,
+    versions: _Versions | None = None,
 ) -> RunKnowledge:
     """Which of the three tiers this answer earned, and the evidence for it.
 
@@ -484,6 +502,9 @@ async def _knowledge(
     rows = list(hits.scalars())
     short_circuit = next((h for h in rows if h.outcome == "SHORT_CIRCUIT"), None)
     overridden = any(h.outcome == "OVERRIDDEN_BY_USER" for h in rows)
+    matched, matched_version = await _metrics_used(
+        db, run, metric_use, versions if versions is not None else {}
+    )
 
     if short_circuit is not None:
         question = ""
@@ -501,14 +522,71 @@ async def _knowledge(
             matcher=short_circuit.matcher,
             overridden=overridden,
             feedback=given,
+            metrics_used=matched,
+            metrics_version=matched_version,
         )
 
     touched = {t.lower() for q in queries for t in (q.referenced_tables or [])}
     if touched and run.connection_id is not None and await _all_described(
         db, run, touched, described if described is not None else {}
     ):
-        return RunKnowledge(tier="GROUNDED", overridden=overridden, feedback=given)
-    return RunKnowledge(tier="GENERATED", overridden=overridden, feedback=given)
+        return RunKnowledge(
+            tier="GROUNDED", overridden=overridden, feedback=given,
+            metrics_used=matched, metrics_version=matched_version,
+        )
+    return RunKnowledge(
+        tier="GENERATED", overridden=overridden, feedback=given,
+        metrics_used=matched, metrics_version=matched_version,
+    )
+
+
+async def _metrics_used(
+    db, run: Run, metric_use: dict[str, Any] | None, memo: _Versions
+) -> tuple[list[MetricUsedRead], int | None]:
+    """The definitions this answer matched, and the version they come from.
+
+    **`used` only.** `ignored` is stored and counted, and is shown nowhere on an
+    answer until its precision has been measured on real runs (§4.4 of the
+    plan); `unknown` is the default and says nothing. The expression and filters
+    are read from the version the verdict was judged against, which is
+    immutable, so the chip on an old answer keeps saying what it matched.
+    """
+    if not metric_use or run.connection_id is None:
+        return [], None
+    version = metric_use.get("version") or 0
+    used = [v for v in metric_use.get("verdicts") or [] if v.get("verdict") == "used"]
+    if not version or not used:
+        return [], None
+    key = (run.connection_id, version)
+    if key not in memo:
+        result = await db.execute(
+            select(SemanticLayerVersionRow.document).where(
+                SemanticLayerVersionRow.connection_id == run.connection_id,
+                SemanticLayerVersionRow.version == version,
+            )
+        )
+        document = result.scalar_one_or_none()
+        try:
+            memo[key] = SemanticDocument.model_validate(document) if document else None
+        except ValueError:
+            memo[key] = None
+    layer = memo[key]
+    if layer is None:
+        return [], None
+    out: list[MetricUsedRead] = []
+    for verdict in used:
+        entity = layer.entity(str(verdict.get("entity", "")))
+        metric = next(
+            (m for m in (entity.metrics if entity else []) if m.name == verdict.get("metric")),
+            None,
+        )
+        if entity is None or metric is None:
+            continue
+        out.append(MetricUsedRead(
+            metric=metric.name, entity=entity.table.lower(), label=metric.label,
+            expression=metric.expression, filters=list(metric.filters),
+        ))
+    return out, (version if out else None)
 
 
 async def _all_described(db, run: Run, tables: set[str], memo: _Described) -> bool:
