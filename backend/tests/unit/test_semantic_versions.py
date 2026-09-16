@@ -4,6 +4,11 @@ Phase 1 of `docs/plans/semantic-layer-model.md`. Before it, `PUT /semantic`
 overwrote one row in place: no version, no author, no note, no restore, and no
 audit row — a `REPLACE` generation or a wrong save could not be undone.
 
+Since Phase 2 a restore lands in the draft and publishing it writes the version;
+the one-step `save` (`PUT /semantic`) still publishes directly, and these tests
+use it wherever the draft is not the subject. `test_semantic_draft.py` owns the
+draft.
+
 Run against a real schema on SQLite (`semantic_world.py`), because the claims
 are about what lands in three tables in one transaction.
 """
@@ -153,20 +158,24 @@ async def test_restoring_a_version_whose_table_was_dropped_brings_it_back_flagge
     without.entities.pop(1)
     await svc.save(conn, without, base_revision=1, ctx=ctx())
 
-    # `customers` is dropped by a re-sync; then somebody restores v1.
+    # `customers` is dropped by a re-sync; then somebody restores v1 — into the
+    # draft, which no question reads — and publishes it.
     sync(db, conn, orders("id", "amount", "status"))
-    await svc.restore(conn, 1, base_revision=2, ctx=ctx(OTHER), note="Undo.")
+    await svc.restore(conn, 1, base_revision=2, ctx=ctx(OTHER))
+    assert len(versions(db, conn)) == 2, "a restore is a draft until it is published"
+    assert [r.detail for r in audit_rows(db, SEMANTIC_RESTORED)] == [
+        {"revision": 3, "restored_from": 1}
+    ]
+    await svc.publish(conn, base_revision=3, ctx=ctx(OTHER), note="Undo.")
 
     v3 = versions(db, conn)[-1]
     assert (v3.version, v3.parent_version, v3.origin) == (3, 2, {"restored_from": 1})
+    assert (v3.published_by, v3.note) == (OTHER, "Undo.")
     restored = SemanticDocument.model_validate(v3.document)
     customers_entity = restored.entity("public.customers")
     assert customers_entity is not None, "flag, don't drop"
     assert not customers_entity.valid
     assert "not in the current schema snapshot" in customers_entity.issue
-    assert [r.detail for r in audit_rows(db, SEMANTIC_RESTORED)] == [
-        {"version": 3, "restored_from": 1}
-    ]
     assert_head_is_its_published_version(db, conn)
 
 
@@ -203,8 +212,11 @@ async def test_delete_publishes_an_empty_version_and_keeps_history(db) -> None: 
     snapshot = await svc._snapshot(conn.id)
     assert await load_document(db, conn, snapshot=snapshot) is None
     assert (await load_layer(db, conn, snapshot=snapshot)).version == 0
-    # …and it can be undone.
+    # …and it can be undone: restored into the draft, which still reaches no
+    # run, and then published.
     await svc.restore(conn, 1, base_revision=2, ctx=ctx())
+    assert await load_document(db, conn, snapshot=snapshot) is None
+    await svc.publish(conn, base_revision=3, ctx=ctx(), note="Deleted by mistake.")
     assert await load_document(db, conn, snapshot=snapshot) is not None
 
 
@@ -296,6 +308,8 @@ async def test_the_head_matches_its_published_version_after_every_write_path(
     await svc.save(conn, edited, base_revision=1, ctx=ctx())
     assert_head_is_its_published_version(db, conn)
     await svc.restore(conn, 1, base_revision=2, ctx=ctx())
+    assert_head_is_its_published_version(db, conn)
+    await svc.publish(conn, base_revision=3, ctx=ctx())
     assert_head_is_its_published_version(db, conn)
     await svc.delete(conn, ctx=ctx())
     assert_head_is_its_published_version(db, conn)

@@ -23,12 +23,14 @@ from app.api.schemas import (
     SemanticChangeList,
     SemanticChangeRead,
     SemanticDiffRequest,
+    SemanticDraftRequest,
     SemanticExpressionCheck,
     SemanticExpressionResult,
     SemanticGenerateRequest,
     SemanticHistoryEntry,
     SemanticJobRead,
     SemanticLayerRead,
+    SemanticPublishRequest,
     SemanticRestoreRequest,
     SemanticSaveRequest,
     SemanticTableFact,
@@ -105,8 +107,12 @@ async def _read_payload(
     return SemanticLayerRead(
         document=doc.model_dump(mode="json"),
         # A row holding the empty document is a deleted layer, and the editor
-        # offers it exactly what it offers a connection that never had one.
-        exists=row is not None and bool(row.document),
+        # offers it exactly what it offers a connection that never had one. The
+        # document meant is the one shown: a generated draft over nothing
+        # published is a layer to review, not an empty state.
+        exists=row is not None and bool(
+            row.draft_document if facts["has_draft"] else row.document
+        ),
         enabled=connection.semantic_layer_enabled,
         entity_count=len(doc.entities),
         metric_count=doc.metric_count,
@@ -127,6 +133,13 @@ async def _read_payload(
         published_at=(published.created_at if published else None),
         published_note=(published.note if published else ""),
         published_origin=(published.origin if published else {}),
+        published_exists=facts["published_exists"],
+        has_draft=facts["has_draft"],
+        draft_updated_by_name=facts["draft_updated_by_name"],
+        draft_updated_at=(
+            row.draft_updated_at if row is not None and facts["has_draft"] else None
+        ),
+        unpublished_changes=[_change_read(c) for c in facts["unpublished_changes"]],
     )
 
 
@@ -163,7 +176,8 @@ def _version_summary(item: VersionSummary) -> SemanticVersionSummary:
 async def get_semantic_layer(
     connection_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep, authz: AuthzDep
 ) -> SemanticLayerRead:
-    """The stored document, re-bound to the newest schema snapshot.
+    """The document the editor edits — the draft when there is one — re-bound
+    to the newest schema snapshot, with its unpublished changes.
 
     Returns a 200 with an empty document rather than a 404 when nothing has
     been generated: "you have no semantic layer yet" is a state the editor
@@ -182,7 +196,10 @@ async def save_semantic_layer(
     settings: SettingsDep,
     authz: AuthzDep,
 ) -> SemanticLayerRead:
-    """Replace the document wholesale, as the next version.
+    """Save a document and publish it as the next version, in one step.
+
+    For API clients and scripts; the editor saves a draft (`PUT …/draft`) and
+    publishes it (`POST …/publish`) as two acts. Any draft is replaced.
 
     The whole document rather than a patch per entity: an edit routinely moves
     a definition between entities (a metric belongs on the fact table, not the
@@ -221,6 +238,95 @@ async def delete_semantic_layer(
     connection = await _authorized(db, authz, connection_id, ctx, Privilege.DELETE)
     await SemanticService(db, settings, authz).delete(connection, ctx=ctx)
     await db.flush()
+
+
+@router.put("/draft", response_model=SemanticLayerRead)
+async def save_semantic_draft(
+    connection_id: UUID,
+    payload: SemanticDraftRequest,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    authz: AuthzDep,
+) -> SemanticLayerRead:
+    """Save the editor's document to the draft. **No question reads a draft.**
+
+    `modify`. The same revision rule as every write: a stale `base_revision` is
+    a 409, returned so its audit row commits.
+    """
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.MODIFY)
+    if payload.base_revision is None:
+        raise SemanticBaseRevisionRequiredError(
+            "Say which revision this draft was edited from (`base_revision`)."
+        )
+    try:
+        doc = SemanticDocument.model_validate(payload.document)
+    except Exception as err:
+        raise ValidationError("This semantic layer document is malformed.") from err
+
+    service = SemanticService(db, settings, authz)
+    try:
+        await service.save_draft(connection, doc, base_revision=payload.base_revision, ctx=ctx)
+    except SemanticConflictError as err:
+        return problem_response(err)  # type: ignore[return-value]
+    return await _read_payload(service, connection)
+
+
+@router.delete("/draft", response_model=SemanticLayerRead)
+async def discard_semantic_draft(
+    connection_id: UUID,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    authz: AuthzDep,
+    base_revision: int | None = Query(default=None, ge=0),
+) -> SemanticLayerRead:
+    """Throw the draft away; the published document is untouched. `modify`.
+
+    Returns the layer rather than 204, because what the editor needs next is
+    the published document it now shows and the revision to write against.
+    """
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.MODIFY)
+    if base_revision is None:
+        raise SemanticBaseRevisionRequiredError(
+            "Say which revision you are discarding (`base_revision`)."
+        )
+    service = SemanticService(db, settings, authz)
+    try:
+        await service.discard_draft(connection, base_revision=base_revision, ctx=ctx)
+    except SemanticConflictError as err:
+        return problem_response(err)  # type: ignore[return-value]
+    return await _read_payload(service, connection)
+
+
+@router.post("/publish", response_model=SemanticLayerRead)
+async def publish_semantic_draft(
+    connection_id: UUID,
+    payload: SemanticPublishRequest,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    authz: AuthzDep,
+) -> SemanticLayerRead:
+    """Publish the draft as the next version — `modify`, the privilege editing
+    already needs (D7). No approval step.
+
+    Refused when there is nothing to publish (`E_SEMANTIC_NO_CHANGES`), and when
+    a change alters numbers and the note is blank (`E_SEMANTIC_NOTE_REQUIRED`).
+    """
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.MODIFY)
+    if payload.base_revision is None:
+        raise SemanticBaseRevisionRequiredError(
+            "Say which revision of the draft you are publishing (`base_revision`)."
+        )
+    service = SemanticService(db, settings, authz)
+    try:
+        await service.publish(
+            connection, base_revision=payload.base_revision, note=payload.note, ctx=ctx
+        )
+    except SemanticConflictError as err:
+        return problem_response(err)  # type: ignore[return-value]
+    return await _read_payload(service, connection)
 
 
 @router.post("/diff", response_model=list[SemanticChangeRead])
@@ -325,10 +431,11 @@ async def restore_semantic_version(
     settings: SettingsDep,
     authz: AuthzDep,
 ) -> SemanticLayerRead:
-    """Publish an old version again, as a new one — `modify`, like a save.
+    """Put an old version back into the draft — `modify`, like a save.
 
-    Bound to the current snapshot: an entry whose table has gone since comes
-    back flagged rather than missing.
+    Into the draft, not the published document: publishing it is what writes
+    the next version. Bound to the current snapshot: an entry whose table has
+    gone since comes back flagged rather than missing.
     """
     connection = await _authorized(db, authz, connection_id, ctx, Privilege.MODIFY)
     if payload.base_revision is None:

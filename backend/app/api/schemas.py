@@ -950,9 +950,14 @@ class SemanticJobRead(BaseModel):
 
 
 class SemanticLayerRead(BaseModel):
-    """The document plus everything the UI needs to frame it."""
+    """The document plus everything the UI needs to frame it.
+
+    `document` is what the editor edits: the **draft** when one exists, and the
+    published document otherwise. The counts describe that same document.
+    """
 
     document: dict[str, Any] = Field(default_factory=dict)
+    #: True when `document` has anything in it — draft or published.
     exists: bool = False
     enabled: bool = True
     entity_count: int = 0
@@ -979,6 +984,16 @@ class SemanticLayerRead(BaseModel):
     published_at: datetime | None = None
     published_note: str = ""
     published_origin: dict[str, Any] = Field(default_factory=dict)
+    #: True when the published document has anything in it — what a question
+    #: reads right now, whatever the draft holds.
+    published_exists: bool = False
+    #: Unpublished edits exist. `document` is then the draft, and no run reads it.
+    has_draft: bool = False
+    draft_updated_by_name: str = ""
+    draft_updated_at: datetime | None = None
+    #: The draft against the published document, in the server's one vocabulary
+    #: — what the status chip counts and the publish dialog lists.
+    unpublished_changes: list[SemanticChangeRead] = Field(default_factory=list)
 
 
 class SemanticGenerateRequest(BaseModel):
@@ -1004,6 +1019,21 @@ class SemanticSaveRequest(BaseModel):
 
 class SemanticRestoreRequest(BaseModel):
     base_revision: int | None = None
+    note: str = Field(default="", max_length=2_000)
+
+
+class SemanticDraftRequest(BaseModel):
+    """The editor's document, saved to the draft. No note: a note belongs to the
+    version the draft becomes, and is asked for when it is published."""
+
+    document: dict[str, Any]
+    base_revision: int | None = None
+
+
+class SemanticPublishRequest(BaseModel):
+    base_revision: int | None = None
+    #: Required when the draft's changes alter numbers
+    #: (`E_SEMANTIC_NOTE_REQUIRED`); optional otherwise.
     note: str = Field(default="", max_length=2_000)
 
 
@@ -1448,6 +1478,13 @@ class BenchmarkRunRead(BaseModel):
     held_out_matched: int = 0
     taught_total: int = 0
     taught_matched: int = 0
+    #: `PUBLISHED` or `DRAFT` — which semantic layer document was scored.
+    semantic_source: str = "PUBLISHED"
+    #: The head revision a `DRAFT` run was pinned to.
+    semantic_revision: int | None = None
+    #: The published version scored, or on a draft run the one it was edited
+    #: over. `0`: no layer; `null`: before versions were recorded.
+    semantic_layer_version: int | None = None
     error_message: str = ""
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -1502,6 +1539,10 @@ class BenchmarkSetRead(BaseModel):
     #: Newest first. The score strip draws a sparkline from these, so it is
     #: capped at a handful — a sparkline of sixty points is a smudge.
     runs: list[BenchmarkRunRead] = Field(default_factory=list)
+    #: The newest run that scored a semantic layer **draft**, kept out of `runs`
+    #: so the strip stays the published product's number. The publish dialog
+    #: reads it beside `runs`.
+    draft_run: BenchmarkRunRead | None = None
     #: How the split fell at creation, so the strip can say "on 25 held-out
     #: questions" before a single run exists.
     held_out_count: int = 0

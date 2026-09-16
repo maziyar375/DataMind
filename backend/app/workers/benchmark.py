@@ -79,6 +79,7 @@ from app.services.benchmark_service import (
     OUTCOME_NOT_PROBED,
     OUTCOME_VALIDATION_FAILED,
     RUNNING,
+    SEMANTIC_DRAFT,
     SUCCEEDED,
     BenchmarkService,
 )
@@ -90,7 +91,7 @@ from app.services.query_service import (
     resolve_llm,
     secret_box,
 )
-from app.services.semantic_service import load_layer
+from app.services.semantic_service import DraftMovedError, load_draft, load_layer
 
 log = get_logger(__name__)
 
@@ -166,7 +167,18 @@ async def execute_benchmark_run(
     # bound to this snapshot, and absent when the switch is off. Loaded once per
     # run, as the ask path loads it once per question — the snapshot does not
     # move between members, so neither does the layer.
-    layer = await load_layer(db, connection, snapshot=snapshot)
+    #
+    # A DRAFT run is the one exception, and the only place outside the editor a
+    # draft is read: somebody asked what publishing it would do to this number.
+    if run.semantic_source == SEMANTIC_DRAFT:
+        try:
+            layer = await load_draft(
+                db, connection, snapshot=snapshot, revision=run.semantic_revision
+            )
+        except DraftMovedError as moved:
+            return await _fail(db, run, str(moved))
+    else:
+        layer = await load_layer(db, connection, snapshot=snapshot)
     semantic = layer.document
     # Which version was scored, with the same meaning it has on `runs`.
     run.semantic_layer_version = layer.version

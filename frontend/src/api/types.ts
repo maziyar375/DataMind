@@ -625,6 +625,11 @@ export interface SemanticDocument {
   business_context: string
   /** Rows that should not count unless the question asks for them. */
   default_exclusions: string
+  /** Who wrote each of the two texts above. Set by the editor when a person
+   *  types into one, so a regeneration keeps it on its own flag. Optional
+   *  because a document written before the flags existed has neither. */
+  context_provenance?: Provenance
+  exclusions_provenance?: Provenance
   time: TimeSemantics
   entities: SemanticEntity[]
   joins: SemanticJoin[]
@@ -665,7 +670,10 @@ export interface SemanticTableFact {
 }
 
 export interface SemanticLayer {
+  /** What the editor edits: the **draft** when `has_draft`, else the published
+   *  document. No question reads a draft. */
   document: SemanticDocument
+  /** `document` has anything in it — draft or published. */
   exists: boolean
   enabled: boolean
   entity_count: number
@@ -689,6 +697,14 @@ export interface SemanticLayer {
   published_at: string | null
   published_note: string
   published_origin: Record<string, unknown>
+  /** The published document has anything in it: what a question reads now. */
+  published_exists: boolean
+  has_draft: boolean
+  draft_updated_by_name: string
+  draft_updated_at: string | null
+  /** The draft against the published document — what the status chip counts
+   *  and the publish dialog lists. Empty when there is no draft. */
+  unpublished_changes: SemanticChange[]
 }
 
 /** One entry that changed, in the server's vocabulary (`app/semantic/diff.py`). */
@@ -1096,6 +1112,12 @@ export interface BenchmarkRun {
   held_out_matched: number
   taught_total: number
   taught_matched: number
+  /** Which semantic layer document was scored. A `DRAFT` run is asked for from
+   *  the layer's publish dialog and never appears in `BenchmarkSet.runs`. */
+  semantic_source: 'PUBLISHED' | 'DRAFT'
+  /** The layer revision a `DRAFT` run was pinned to. */
+  semantic_revision: number | null
+  semantic_layer_version: number | null
   error_message: string
   started_at: string | null
   finished_at: string | null
@@ -1111,8 +1133,10 @@ export interface BenchmarkSet {
   held_out_fraction: number
   created_at: string
   updated_at: string
-  /** Newest first, capped — the sparkline's points. */
+  /** Newest first, capped — the sparkline's points. Published runs only. */
   runs: BenchmarkRun[]
+  /** The newest run that scored a semantic layer draft, kept apart. */
+  draft_run: BenchmarkRun | null
   held_out_count: number
 }
 

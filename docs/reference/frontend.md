@@ -515,18 +515,26 @@ each Vega plot at page width in the light palette — are
 
 ## 7. What is tested, and what is not
 
-Sixteen modules are deliberately **DOM-free** and carry their own suites,
+Seventeen modules are deliberately **DOM-free** and carry their own suites,
 because every way they can be wrong is quiet: `dashboard-schedule.ts`,
 `table-format.ts`, `dashboard-document.ts`, `palette.ts`, `chat-format.ts`,
 `report-document.ts`, `report-readiness.ts`, `report-print.ts`,
 `semantic-drift.ts`, `semantic-metrics.ts`, `semantic-changes.ts`,
-`knowledge-template.ts`, `thinking.ts`, `knowledge-queue.ts`,
-`provider-params.ts`, `usage-chart.ts`.
+`semantic-score.ts`, `knowledge-template.ts`, `thinking.ts`,
+`knowledge-queue.ts`, `provider-params.ts`, `usage-chart.ts`.
 
 `semantic-changes.ts` groups, orders and words a semantic layer's change list
-for the History screens, the note prompt and the conflict note. It never
-compares two documents: the server's `app/semantic/diff.py` is the only differ,
-because two differs in two languages would have to agree forever.
+for the History screens, the publish dialog, the draft chip and the conflict
+note. It never compares two documents: the server's `app/semantic/diff.py` is
+the only differ, because two differs in two languages would have to agree
+forever.
+
+`semantic-score.ts` reads a benchmark run of a layer **draft** beside the
+newest run of the published layer and says whether the two are the same
+measurement — same prompt version, same model, held-out questions on both. Only
+then does the publish dialog (`semantic-publish.tsx`) print a delta; otherwise
+it prints the reason there is none. A delta between runs that used different
+prompts looks exactly like evidence, which is why this is tested apart.
 
 `usage-chart.ts` is the newest and the clearest case for the rule: it holds
 the usage chart's Vega-Lite spec — **written rather than planned**, because

@@ -47,7 +47,7 @@ from tests.unit.conftest import AsyncSessionShim, _refuse_lazy_loads, _UtcDateTi
 TABLES = (
     "users", "llm_configs", "database_connections", "schema_snapshots",
     "semantic_layers", "semantic_layer_versions", "semantic_layer_changes",
-    "semantic_jobs", "audit_logs",
+    "semantic_jobs", "audit_logs", "benchmark_sets", "benchmark_runs",
 )
 
 AUTHOR = uuid4()

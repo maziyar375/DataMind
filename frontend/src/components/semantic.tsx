@@ -23,12 +23,15 @@
  * Validation is never guessed at locally: metric expressions are checked by
  * the same backend parser that will reject them at save time.
  *
- * **Every save is a version.** A save names the revision it was edited from
- * and is refused — not merged — when somebody wrote in between; the refusal
- * says who, beside the button, and keeps the edits in the tab. What changed is
- * always the server's answer (`POST …/semantic/diff`), so asking for a note on
- * a number-changing edit and listing the edits a conflict displaced use the
- * same differ the History tab reads (`semantic-history.tsx`).
+ * **A save is a draft; a publish is a version.** Save writes the draft, which
+ * no question reads, and *Review and publish* (`semantic-publish.tsx`) is the
+ * act that makes it what the model reads — with a note when a change moves a
+ * number. A generation and a restore land in the same draft. Every write names
+ * the revision it was edited from and is refused — not merged — when somebody
+ * wrote in between; the refusal says who, beside the button, and keeps the
+ * edits in the tab. What changed is always the server's answer (the layer's
+ * `unpublished_changes`, and `POST …/semantic/diff` for the edits a conflict
+ * displaced), the same differ the History tab reads (`semantic-history.tsx`).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMatch, useNavigate, useSearchParams } from 'react-router-dom'
@@ -47,8 +50,9 @@ import { AccessPopover } from './access'
 import { DetailBody, FieldRow } from './settings'
 import { useBackgroundWatch } from '../shell'
 import { explainRekey, rekeyDrift } from './semantic-drift'
-import { ChangeWords, NumbersChip, SemanticHistory } from './semantic-history'
-import { authorship, groupChanges, historyPath } from './semantic-changes'
+import { SemanticHistory } from './semantic-history'
+import { ChangeList, PublishDialog } from './semantic-publish'
+import { authorship, historyPath, unpublishedWords } from './semantic-changes'
 import {
   collectMetrics, matchesMetric, metricSummary,
 } from './semantic-metrics'
@@ -124,10 +128,11 @@ export function SemanticLayerTab({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [conflict, setConflict] = useState<ProblemDetail | null>(null)
-  // Number-changing edits waiting on a note, and the edits a conflict reload
-  // displaced — both the server's change lists, never a local comparison.
-  const [pendingNote, setPendingNote] = useState<SemanticChange[] | null>(null)
+  // The edits a conflict reload displaced — the server's change list, never a
+  // local comparison.
   const [displaced, setDisplaced] = useState<SemanticChange[] | null>(null)
+  const [publishing, setPublishing] = useState(false)
+  const [askDiscardDraft, setAskDiscardDraft] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [askGenerate, setAskGenerate] = useState(false)
   const [askDelete, setAskDelete] = useState(false)
@@ -142,7 +147,7 @@ export function SemanticLayerTab({
   // looks back.
   const historyVersion = useMatch('/sources/:id/semantic/history/:version')
   const historyList = useMatch('/sources/:id/semantic/history')
-  const [query] = useSearchParams()
+  const [query, setQuery] = useSearchParams()
   const inHistory = historyVersion !== null || historyList !== null
   const shownVersion = historyVersion ? Number(historyVersion.params.version) : null
 
@@ -191,6 +196,17 @@ export function SemanticLayerTab({
       .finally(() => setLoading(false))
   }, [connection.id])
 
+  // `?publish=1` — the generation notice's link — opens the publish dialog once
+  // there is a draft to publish, and is then taken out of the address so a
+  // reload does not open it again.
+  useEffect(() => {
+    if (query.get('publish') !== '1' || !layer) return
+    if (layer.has_draft) setPublishing(true)
+    const next = new URLSearchParams(query)
+    next.delete('publish')
+    setQuery(next, { replace: true })
+  }, [query, layer, setQuery])
+
   // Poll while a generation is in flight; reload the document when it ends.
   useEffect(() => {
     if (!job || !ACTIVE.includes(job.status)) return
@@ -236,55 +252,48 @@ export function SemanticLayerTab({
     })
   }
 
-  /** Save, asking for a note first when the edits change numbers.
+  /** Save the edits to the draft. Nothing a question reads moves.
    *
-   *  The server says what the edits are, so the question is asked about the
-   *  same change list the version will carry. An edit that changes nothing
-   *  the model reads — a flag flipped back, a field typed and restored — is
-   *  not a version, and the bar simply stands down. */
-  async function requestSave() {
+   *  No note here: a note belongs to the version the draft becomes, and the
+   *  publish dialog asks for it when a change moves a number. An edit that
+   *  changes nothing the model reads — a flag flipped back, a field typed and
+   *  restored — is not a draft, and the bar simply stands down. */
+  async function saveDraft() {
     if (!doc) return
     setSaving(true)
     setError(null)
     setNotice(null)
     try {
-      const before = base.json ? (JSON.parse(base.json) as SemanticDocument) : doc
-      const changes = await api.diff(connection.id, before, doc)
-      if (changes.length === 0) {
-        setBase({ json: JSON.stringify(doc), revision: base.revision })
-        setNotice('Nothing the model reads has changed, so there was nothing to save.')
-        return
-      }
-      if (changes.some((c) => c.affects_sql)) {
-        setPendingNote(changes)
-        return
-      }
-      await commitSave('')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not save this layer.')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  async function commitSave(note: string) {
-    if (!doc) return
-    setSaving(true)
-    setError(null)
-    try {
-      adopt(await api.save(connection.id, doc, { baseRevision: base.revision, note }))
-      setPendingNote(null)
+      adopt(await api.saveDraft(connection.id, doc, { baseRevision: base.revision }))
       setConflict(null)
       setDisplaced(null)
     } catch (err) {
-      setPendingNote(null)
       if (err instanceof ApiError && err.code === 'E_SEMANTIC_CONFLICT') {
         setConflict(err.detail ?? {})
       } else if (err instanceof ApiError && err.code === 'E_SEMANTIC_NO_CHANGES') {
         setBase({ json: JSON.stringify(doc), revision: base.revision })
         setNotice('Nothing the model reads has changed, so there was nothing to save.')
       } else {
-        setError(err instanceof Error ? err.message : 'Could not save this layer.')
+        setError(err instanceof Error ? err.message : 'Could not save this draft.')
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  /** Throw the saved draft away; the published version is untouched. */
+  async function discardDraft() {
+    setAskDiscardDraft(false)
+    setSaving(true)
+    setError(null)
+    try {
+      adopt(await api.discardDraft(connection.id, { baseRevision: base.revision }))
+      setConflict(null)
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'E_SEMANTIC_CONFLICT') {
+        setConflict(err.detail ?? {})
+      } else {
+        setError(err instanceof Error ? err.message : 'Could not discard this draft.')
       }
     } finally {
       setSaving(false)
@@ -333,12 +342,14 @@ export function SemanticLayerTab({
           const next = await api.job(connection.id, started.id)
           if (ACTIVE.includes(next.status)) return null
           if (next.status === 'SUCCEEDED') {
+            // Written to the draft, not to what questions read — which is the
+            // one thing a person three screens away must not assume otherwise.
             return {
               tone: 'ok',
-              title: `Semantic layer written for ${connection.name}`,
-              body: describeOutcome(next),
-              to: `/sources/${connection.id}/semantic`,
-              toLabel: 'Review it',
+              title: `Semantic layer draft written for ${connection.name}`,
+              body: `${describeOutcome(next)} Nothing reaches an answer until you review and publish it.`,
+              to: `/sources/${connection.id}/semantic?publish=1`,
+              toLabel: 'Review and publish',
             }
           }
           if (next.status === 'CANCELLED') return null
@@ -450,6 +461,8 @@ export function SemanticLayerTab({
 
   const running = job !== null && ACTIVE.includes(job.status)
   const empty = !doc || doc.entities.length === 0
+  const hasDraft = !!layer?.has_draft
+  const barShown = dirty || !!notice || !!conflict || hasDraft
 
   /** Open one table's card in the editor, from a line in the history. */
   const openEntity = (table: string) => {
@@ -462,7 +475,7 @@ export function SemanticLayerTab({
 
   return (
     <>
-      <Shell padBottom={dirty}>
+      <Shell padBottom={barShown}>
         {error && <ErrorNote>{error}</ErrorNote>}
 
         {inHistory ? (
@@ -496,6 +509,8 @@ export function SemanticLayerTab({
             setSearch('')
           }}
           onHistory={() => navigate(historyPath(connection.id))}
+          onPublish={() => setPublishing(true)}
+          dirty={dirty}
         />
 
         {displaced && (
@@ -594,16 +609,16 @@ export function SemanticLayerTab({
         )}
       </Shell>
 
-      {(dirty || notice) && (
+      {barShown && (
         <SaveBar
           dirty={dirty}
           saving={saving}
           notice={notice}
           conflict={conflict}
-          pendingNote={pendingNote}
-          onSave={requestSave}
-          onSaveWithNote={commitSave}
-          onCancelNote={() => setPendingNote(null)}
+          unpublished={hasDraft ? layer!.unpublished_changes.length : 0}
+          onSave={saveDraft}
+          onPublish={() => setPublishing(true)}
+          onDiscardDraft={() => setAskDiscardDraft(true)}
           onSeeConflict={() => {
             if (conflict?.published_version) {
               navigate(historyPath(connection.id, { version: conflict.published_version }))
@@ -614,7 +629,6 @@ export function SemanticLayerTab({
           onDiscard={async () => {
             // Back to what the server holds now — which after a conflict is not
             // the document these edits started from, so it is asked for again.
-            setPendingNote(null)
             if (conflict) {
               setConflict(null)
               try {
@@ -626,6 +640,31 @@ export function SemanticLayerTab({
             }
             if (layer) adopt(layer)
           }}
+        />
+      )}
+
+      {publishing && layer && (
+        <PublishDialog
+          connectionId={connection.id}
+          layer={layer}
+          onClose={() => setPublishing(false)}
+          onPublished={(next) => {
+            setPublishing(false)
+            adopt(next)
+            setNotice(`Published v${next.published_version}. The next question reads it.`)
+          }}
+          onConflict={(detail) => {
+            setPublishing(false)
+            setConflict(detail)
+          }}
+        />
+      )}
+
+      {askDiscardDraft && layer && (
+        <ConfirmDiscardDraft
+          layer={layer}
+          onClose={() => setAskDiscardDraft(false)}
+          onConfirm={discardDraft}
         />
       )}
 
@@ -672,7 +711,7 @@ function Shell({
 // ── hero ───────────────────────────────────────────────────────────────────
 function Hero({
   layer, connection, running, job, onGenerate, onDelete, onCancel, onToggle,
-  onFocusFilter, onHistory,
+  onFocusFilter, onHistory, onPublish, dirty,
 }: {
   layer: SemanticLayer | null
   connection: Connection
@@ -684,6 +723,8 @@ function Hero({
   onToggle: (value: boolean) => void
   onFocusFilter: (next: Filter) => void
   onHistory: () => void
+  onPublish: () => void
+  dirty: boolean
 }) {
   const exists = !!layer?.exists
   const model = layer?.model_snapshot?.model as string | undefined
@@ -818,8 +859,8 @@ function Hero({
             label={job.phase || 'Preparing'}
           />
           <span style={{ fontSize: 11.5, color: 'var(--text-dim)' }}>
-            You can leave this page — generation carries on and the result is
-            saved when it finishes.
+            You can leave this page — generation carries on, and the result is
+            written to your draft for you to review and publish.
           </span>
         </div>
       )}
@@ -831,7 +872,7 @@ function Hero({
       )}
       {!running && job && job.status === 'CANCELLED' && (
         <div style={{ padding: '0 20px 16px' }}>
-          <Note tone="amber">Generation was stopped. Nothing was saved.</Note>
+          <Note tone="amber">Generation was stopped. Nothing was written.</Note>
         </div>
       )}
       {!running && job && job.status === 'SUCCEEDED' && (
@@ -932,7 +973,13 @@ function Hero({
               }
               hint="Turn off to write SQL from the bare schema — the way to check whether this layer is helping."
             />
-            <VersionLine layer={layer!} model={model} onHistory={onHistory} />
+            <VersionLine
+              layer={layer!}
+              model={model}
+              onHistory={onHistory}
+              onPublish={onPublish}
+              dirty={dirty}
+            />
           </div>
         </>
       )}
@@ -962,21 +1009,25 @@ function Hero({
 }
 
 /**
- * `v12 · saved by Sara Karimi · 2 days ago · History` — which version the model
- * reads, who put it there, and the way to every version before it.
+ * `Published v12 · by Sara Karimi · 2 days ago`, then whether anything is
+ * waiting: `No unpublished changes`, or an amber `◐ 3 unpublished changes` chip
+ * that opens the publish dialog. Every state has a glyph and a word.
  *
  * A layer written before versions existed reads `v1 · recorded at migration`,
  * which is true and says nothing earlier was kept.
  */
 function VersionLine({
-  layer, model, onHistory,
+  layer, model, onHistory, onPublish, dirty,
 }: {
   layer: SemanticLayer
   model: string | undefined
   onHistory: () => void
+  onPublish: () => void
+  dirty: boolean
 }) {
   const version = layer.published_version
   const how = authorship(layer.published_origin, layer.published_by_name)
+  const waiting = layer.has_draft ? layer.unpublished_changes.length : 0
   return (
     <span
       style={{
@@ -994,19 +1045,40 @@ function VersionLine({
       <span>
         {version !== null ? (
           <>
+            Published{' '}
             <span className="mono" style={{ color: 'var(--text-dim)', fontWeight: 600 }}>
               v{version}
             </span>
             {` · ${how}`}
             {layer.published_at ? ` · ${relativeTime(layer.published_at)}` : ''}
           </>
-        ) : layer.generated_at ? (
-          `generated ${relativeTime(layer.generated_at)}`
         ) : (
-          'written by hand'
+          'Not published yet'
         )}
         {model ? ` · ${model}` : ''}
       </span>
+      {layer.has_draft ? (
+        <button
+          onClick={onPublish}
+          disabled={dirty}
+          title={dirty ? 'Save your edits to the draft first' : 'Review and publish'}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 5,
+            padding: '3px 9px', borderRadius: 999, fontSize: 11.5, fontWeight: 600,
+            color: 'var(--amber)', background: 'var(--amber-bg)',
+            border: '1px solid var(--amber-border)',
+            cursor: dirty ? 'default' : 'pointer',
+          }}
+        >
+          <span aria-hidden>◐</span>
+          {unpublishedWords(waiting)}
+        </button>
+      ) : version !== null ? (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+          <span aria-hidden style={{ color: 'var(--green)' }}>●</span>
+          {unpublishedWords(0)}
+        </span>
+      ) : null}
       {version !== null && (
         <GhostButton onClick={onHistory} style={{ padding: '4px 9px', fontSize: 12 }}>
           <Icon.History size={13} />
@@ -1025,7 +1097,6 @@ function Displaced({
   changes: SemanticChange[]
   onDismiss: () => void
 }) {
-  const groups = groupChanges(changes)
   return (
     <section
       style={{
@@ -1047,42 +1118,8 @@ function Displaced({
           Done
         </GhostButton>
       </div>
-      <ChangeList groups={groups} />
+      <ChangeList changes={changes} />
     </section>
-  )
-}
-
-/** A grouped change list, compact — for the save bar and the displaced note. */
-function ChangeList({ groups }: { groups: ReturnType<typeof groupChanges> }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {groups.map((group) => (
-        <div key={group.key} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <span
-            className={group.titleIsCode ? 'mono' : undefined}
-            style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-dim)' }}
-          >
-            {group.title}
-          </span>
-          {group.lines.map((line, index) => (
-            <span
-              key={`${line.kind}:${line.itemKey}:${index}`}
-              style={{ display: 'flex', gap: 7, fontSize: 12.5, lineHeight: 1.5, color: 'var(--text-strong)' }}
-            >
-              <span aria-hidden style={{ color: line.affectsSql ? 'var(--amber)' : 'var(--text-faint)' }}>
-                {line.affectsSql ? '◆' : '·'}
-              </span>
-              <span style={{ minWidth: 0 }}>
-                <ChangeWords segments={line.segments} />
-                {line.affectsSql && (
-                  <span style={{ color: 'var(--amber)', fontSize: 11 }}> — changes numbers</span>
-                )}
-              </span>
-            </span>
-          ))}
-        </div>
-      ))}
-    </div>
   )
 }
 
@@ -1173,8 +1210,44 @@ function ConfirmDelete({
     >
       <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: 'var(--text-dim)' }}>
         Your schema, connection and conversations are untouched. Questions will
-        go back to being answered from the bare schema. You can generate a new
-        layer at any time.
+        go back to being answered from the bare schema, and any unpublished
+        draft is discarded. The history is kept, so a deleted layer can be
+        restored from it.
+      </p>
+    </Modal>
+  )
+}
+
+function ConfirmDiscardDraft({
+  layer, onClose, onConfirm,
+}: {
+  layer: SemanticLayer
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  const count = layer.unpublished_changes.length
+  const by = layer.draft_updated_by_name
+  return (
+    <Modal
+      title="Discard the draft?"
+      subtitle={`${unpublishedWords(count)}${by ? `, last saved by ${by}` : ''}.`}
+      onClose={onClose}
+      width={440}
+      footer={
+        <>
+          <GhostButton onClick={onClose}>Keep it</GhostButton>
+          <DangerButton onClick={onConfirm} style={{ padding: '9px 16px', fontSize: 13 }}>
+            <Icon.Trash />
+            Discard draft
+          </DangerButton>
+        </>
+      }
+    >
+      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: 'var(--text-dim)' }}>
+        {layer.published_version !== null
+          ? `The published v${layer.published_version} is untouched, and it is what questions keep reading.`
+          : 'Nothing has been published, so questions keep being answered from the bare schema.'}
+        {' '}A draft is not a version: once discarded, it cannot be restored.
       </p>
     </Modal>
   )
@@ -1403,34 +1476,35 @@ function Note({ tone, children }: { tone: 'amber' | 'red'; children: React.React
 /** Floats clear of the content instead of eating a strip of the pane, so the
  *  last card is never half-hidden behind it.
  *
- *  Everything a save can answer lands here, beside the button that was
- *  pressed — not in a toast: the note a number-changing edit asks for, the
- *  conflict when somebody saved first, and the quiet "nothing to save". */
+ *  Two states, never both, because they are two different acts:
+ *
+ *   - edits in this tab not saved yet — `Unsaved edits [Discard] [Save draft]`;
+ *   - a saved draft that differs from what is published —
+ *     `3 unpublished changes [Discard draft] [Review and publish]`.
+ *
+ *  Everything a write can answer lands here, beside the button that was
+ *  pressed — not in a toast: the conflict when somebody wrote first, and the
+ *  quiet "nothing to save". */
 function SaveBar({
-  dirty, saving, notice, conflict, pendingNote, onSave, onSaveWithNote, onCancelNote,
+  dirty, saving, notice, conflict, unpublished, onSave, onPublish, onDiscardDraft,
   onSeeConflict, onReload, onDismissNotice, onDiscard,
 }: {
   dirty: boolean
   saving: boolean
   notice: string | null
   conflict: ProblemDetail | null
-  pendingNote: SemanticChange[] | null
+  /** Changes in the saved draft against the published layer; 0 for no draft. */
+  unpublished: number
   onSave: () => void
-  onSaveWithNote: (note: string) => void
-  onCancelNote: () => void
+  onPublish: () => void
+  onDiscardDraft: () => void
   onSeeConflict: () => void
   onReload: () => void
   onDismissNotice: () => void
   onDiscard: () => void
 }) {
-  const [note, setNote] = useState('')
-  // A fresh prompt starts empty; the last one's words were for other edits.
-  useEffect(() => {
-    if (pendingNote) setNote('')
-  }, [pendingNote])
-
-  const numbers = pendingNote ? groupChanges(pendingNote.filter((c) => c.affects_sql)) : []
   const who = conflict?.updated_by_name || 'Someone'
+  const drafted = !dirty && !conflict && unpublished > 0
   return (
     <div
       style={{
@@ -1452,37 +1526,17 @@ function SaveBar({
           display: 'flex',
           flexDirection: 'column',
           gap: 10,
-          width: pendingNote || conflict ? 'min(560px, calc(100% - 32px))' : undefined,
+          width: conflict ? 'min(560px, calc(100% - 32px))' : undefined,
+          maxWidth: 'calc(100% - 32px)',
           padding: '10px 12px 10px 18px',
           borderRadius: 12,
           background: 'var(--panel)',
-          border: `1px solid ${conflict ? 'var(--red-border)' : 'var(--border-strong)'}`,
+          border: `1px solid ${
+            conflict ? 'var(--red-border)' : drafted ? 'var(--amber-border)' : 'var(--border-strong)'
+          }`,
           boxShadow: 'inset 0 1px 0 0 var(--sheen), var(--elev-3)',
         }}
       >
-        {pendingNote && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 4 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <NumbersChip />
-              <span style={{ fontSize: 12.5, color: 'var(--text-strong)', fontWeight: 600 }}>
-                These edits change what numbers mean
-              </span>
-            </div>
-            <div style={{ maxHeight: 150, overflowY: 'auto' }}>
-              <ChangeList groups={numbers} />
-            </div>
-            <TextArea
-              autoFocus
-              value={note}
-              maxLength={2000}
-              aria-label="Why these numbers change"
-              placeholder="Why? A dashboard's SQL will not show this change — the note is the only record of the reason."
-              onChange={(e) => setNote(e.target.value)}
-              style={{ minHeight: 56 }}
-            />
-          </div>
-        )}
-
         {conflict && (
           <div
             style={{
@@ -1492,18 +1546,18 @@ function SaveBar({
           >
             <span style={{ marginTop: 2, flexShrink: 0 }}><Icon.Alert /></span>
             <span style={{ flex: 1 }}>
-              <strong>{who}</strong> saved
-              {conflict.published_version ? ` v${conflict.published_version}` : ' a new version'} while
+              <strong>{who}</strong> changed this layer
+              {conflict.published_version ? ` (published v${conflict.published_version})` : ''} while
               you were editing. Your edits are still in this tab.
             </span>
           </div>
         )}
 
-        {notice && !conflict && !pendingNote && (
+        {notice && !conflict && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--text-dim)' }}>
             <span style={{ color: 'var(--green)', display: 'flex' }}><Icon.Check /></span>
             <span style={{ flex: 1 }}>{notice}</span>
-            {!dirty && (
+            {!dirty && !drafted && (
               <GhostButton onClick={onDismissNotice} style={{ padding: '4px 9px', fontSize: 12 }}>
                 OK
               </GhostButton>
@@ -1511,10 +1565,11 @@ function SaveBar({
           </div>
         )}
 
-        {(dirty || pendingNote || conflict) && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14, justifyContent: 'space-between' }}>
-            <span style={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
-              {conflict ? 'Not saved' : 'Unsaved changes'}
+        {(dirty || conflict || drafted) && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, justifyContent: 'space-between', flexWrap: 'wrap' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--text-dim)' }}>
+              {drafted && <span aria-hidden style={{ color: 'var(--amber)' }}>◐</span>}
+              {conflict ? 'Not saved' : dirty ? 'Unsaved edits' : unpublishedWords(unpublished)}
             </span>
             <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               {conflict ? (
@@ -1527,28 +1582,23 @@ function SaveBar({
                     Reload
                   </PrimaryButton>
                 </>
-              ) : pendingNote ? (
-                <>
-                  <GhostButton onClick={onCancelNote} disabled={saving} style={{ padding: '7px 12px' }}>
-                    Back
-                  </GhostButton>
-                  <PrimaryButton
-                    onClick={() => onSaveWithNote(note.trim())}
-                    disabled={saving}
-                    style={{ padding: '7px 14px' }}
-                  >
-                    {saving && <Spinner />}
-                    Save
-                  </PrimaryButton>
-                </>
-              ) : (
+              ) : dirty ? (
                 <>
                   <GhostButton onClick={onDiscard} disabled={saving} style={{ padding: '7px 12px' }}>
                     Discard
                   </GhostButton>
                   <PrimaryButton onClick={onSave} disabled={saving} style={{ padding: '7px 14px' }}>
                     {saving && <Spinner />}
-                    Save changes
+                    Save draft
+                  </PrimaryButton>
+                </>
+              ) : (
+                <>
+                  <GhostButton onClick={onDiscardDraft} disabled={saving} style={{ padding: '7px 12px' }}>
+                    Discard draft
+                  </GhostButton>
+                  <PrimaryButton onClick={onPublish} disabled={saving} style={{ padding: '7px 14px' }}>
+                    Review and publish
                   </PrimaryButton>
                 </>
               )}
@@ -1608,7 +1658,15 @@ function Overview({
           // makes `dim_cust_x` readable as customers.
           rows={6}
           placeholder="e.g. An online retailer's order book: customers place orders made of line items, fulfilled from warehouses…"
-          onChange={(e) => onChange({ ...doc, business_context: e.target.value })}
+          onChange={(e) =>
+            onChange({
+              ...doc,
+              business_context: e.target.value,
+              // Its own flag, so a regeneration keeps what a person wrote here
+              // even when nothing else in the layer was touched.
+              context_provenance: { source: 'human', reviewed: false, ...doc.context_provenance, edited: true },
+            })
+          }
           style={{ minHeight: 132 }}
         />
       </Field>
@@ -1624,7 +1682,13 @@ function Overview({
           value={doc.default_exclusions}
           rows={2}
           placeholder="e.g. Rows where is_archived is true. Customers whose email ends in @internal.example — these are test accounts."
-          onChange={(e) => onChange({ ...doc, default_exclusions: e.target.value })}
+          onChange={(e) =>
+            onChange({
+              ...doc,
+              default_exclusions: e.target.value,
+              exclusions_provenance: { source: 'human', reviewed: false, ...doc.exclusions_provenance, edited: true },
+            })
+          }
           style={{ minHeight: 58 }}
         />
       </Field>

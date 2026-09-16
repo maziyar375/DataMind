@@ -1,11 +1,11 @@
 # The semantic layer as a model — build plan
 
-> **Status: Phases 0 and 1 landed 2026-09-15.** Written 2026-09-15 against
-> `main` at `d7cba6f`; the §14 ledger is the record of what is in the tree
-> since. **Migration numbers moved:** `0030` and `0031` went to the usage screen
-> while this was being written, so the plan's `0030_semantic_versions` shipped
-> as **`0032`**, and Phase 2's and Phase 3's migrations will be `0033` and
-> `0034`.
+> **Status: Phases 0 and 1 landed 2026-09-15; Phase 2 landed 2026-09-16.**
+> Written 2026-09-15 against `main` at `d7cba6f`; the §14 ledger is the record
+> of what is in the tree since. **Migration numbers moved:** `0030` and `0031`
+> went to the usage screen while this was being written, so the plan's
+> `0030_semantic_versions` shipped as **`0032`**, `0031_semantic_drafts` as
+> **`0033`**, and Phase 3's migration will be `0034`.
 >
 > **Answers** [mvp2.md §1.3](mvp2.md#13-the-semantic-layer-is-a-blob-not-a-model)
 > — *"The semantic layer is a blob, not a model"*, ranked **High**. The render
@@ -1209,19 +1209,19 @@ phase, and now renders neither.
 - [x] Tests: diff, versions, concurrency (including save during generation), hash equality, authz conformance
 - [x] Gate: a readable change list on `sales` after a filter edit — driven in the browser against a migrated clone: edit `revenue`'s filter, the note prompt lists the change, Save, and History → v3 reads *"`revenue` now also filters on `orders.status <> 'refunded'` — changes numbers"*. A conflict, reload with the displaced edits listed, per-entry history and a restore were driven the same way
 
-### 14.3 Phase 2: Draft and publish · **0 / 11**
+### 14.3 Phase 2: Draft and publish · **11 / 11**
 
-- [ ] Migration `0031`: draft columns; `semantic_source` and `semantic_revision` on `benchmark_runs`
-- [ ] Service and routes: save draft, discard, publish
-- [ ] Generation, restore and import write to the draft
-- [ ] The one-step `PUT` means draft plus publish
-- [ ] A note required on `affects_sql` changes
-- [ ] `Provenance` on `business_context` and `default_exclusions`; the merge keeps each on its own flag
-- [ ] *Score this draft*: the worker reads the draft for DRAFT runs; the dialog shows a comparable delta or says why not
-- [ ] `PRIVILEGE_MEANINGS` wording
-- [ ] Frontend: status line, two-state bar, publish dialog
-- [ ] Tests: no loader reads the draft (four surfaces), generation → draft, publish refusals, DRAFT benchmark, exclusions survive a merge
-- [ ] Gate: a question asked between edit and publish is answered with the old definition, and the run names its version
+- [x] Migration **`0033`** (not `0031`, see the status note): draft columns on `semantic_layers` (`draft_document` stored with `none_as_null`, so a cleared draft is SQL NULL); `semantic_source` and `semantic_revision` on `benchmark_runs`. Rehearsed on a Postgres 16 clone of the demo database: upgrade, downgrade, upgrade
+- [x] Service and routes: save draft, discard, publish — `_write_draft` is the one draft writer beside `_publish`, and publishing clears the draft. A draft saved back to what is published leaves no draft. Conflicts name the newest writer, which is the draft's author when the draft is newer than the published version
+- [x] Generation, restore and import write to the draft. Import lands in Phase 4 through the same writer. A generation's job ids accumulate in `draft_origin` across generations into one draft, a restore replaces it, and a person's edit on top keeps it; publishing folds it into the version's `origin`. A layer that is only a draft is deleted by discarding the draft, and no version is written
+- [x] The one-step `PUT` means draft plus publish, and replaces any draft. **Decided here:** its note stays optional, as it was in Phase 1, so a script written against Phase 1 keeps working; the note rule is the publish route's
+- [x] A note required on `affects_sql` changes — `E_SEMANTIC_NOTE_REQUIRED` (422) on `POST …/publish`, and the dialog's Publish is disabled until one is written
+- [x] `context_provenance` and `exclusions_provenance` on the document; the merge keeps each text on its own flag. The old "anything else was edited" rule stays as a second reason to keep a text, for documents written before the flags: it can only keep a text, never lose one
+- [x] *Score this draft*: a DRAFT run is pinned to the layer's revision and fails if the draft moved before the worker read it (a draft is not versioned, so the one asked about is gone). The worker reads it through `load_draft`, the one reader of a draft outside the editor, **whether or not the switch is on**, because scoring the draft is what was asked. Queuing needs `(semantic_layer, modify)` on top of `(knowledge, modify)`. Draft runs stay out of `BenchmarkSet.runs` (§12 question 4) and come back as `draft_run`; `semantic-score.ts` gives a delta only for the same prompt version and model. `semantic.published` names the run that scored exactly the published revision, looked up on the server. **Not measured:** no real draft delta has been taken, because neither demo connection has a benchmark set; the dialog's states were driven with a patched API response
+- [x] `PRIVILEGE_MEANINGS` wording, and the matrix quoted in plans/user-management-and-access-control.md §13.3
+- [x] Frontend: status line (`Published v12 · published by …` and `● No unpublished changes` or `◐ 3 unpublished changes`), the two-state bar, `semantic-publish.tsx` (change list, note, score section), *Restore into draft*, a discard confirmation, and the generation notice's *Review and publish* link (`?publish=1`). `semantic-score.ts` is the seventeenth DOM-free module and `npm run test:score` the eighteenth suite. Checked at 390px: no horizontal scroll
+- [x] Tests: `test_semantic_draft.py` (no loader reads the draft, by source, by the modules that may name the column, and by behaviour; generation → draft; publish refusals; a DRAFT run pinned and privileged; the strip keeps draft runs out), DRAFT and PUBLISHED benchmark prompts in `test_benchmark_semantic.py`, exclusions and context surviving a merge in `test_semantic_validate.py`; Phase 1's restore, delete and generation tests rewritten to the draft rather than deleted
+- [x] Gate — driven on a migrated clone. Through the API: `total_tips` gained a filter in the draft; a question asked before publishing recorded `semantic_layer_version = 1`; a publish without a note was refused 422; with a note it wrote v2; the same question afterwards recorded `semantic_layer_version = 2`, and the published prompt carries the new filter. In the browser: edit, Save draft, leave, come back to the same draft, publish with the required note, restore an older version into the draft, discard it. **Caveat:** DeepSeek V4 Flash wrote `SUM(tips) FROM orders` in both runs, a column that does not exist, although the rendered prompt names `tip_amount` and the metric. Which definition an answer used could not be read from that SQL; the run row's version is what shows it
 
 ### 14.4 Phase 3: Metric attribution · **0 / 9**
 
@@ -1255,10 +1255,12 @@ phase, and now renders neither.
 ### 14.7 Documentation · **1 / 10**
 
 The other nine documents span phases, so each is ticked when the last phase it
-describes lands. What Phases 0 and 1 changed is already in each of them:
+describes lands. What Phases 0, 1 and 2 changed is already in each of them:
 reference/semantic-layer.md, CLAUDE.md, status.md, decisions.md §5,
-reference/security.md §2.2, reference/eval.md §6 and
-reference/knowledge-templates.md §6.
+reference/security.md §2.2, reference/eval.md §6,
+reference/knowledge-templates.md §6, and (Phase 2) the privilege matrix quoted
+in plans/user-management-and-access-control.md §13.3 — reference/access-control.md
+quotes no wording to change.
 
 - [ ] reference/semantic-layer.md
 - [ ] CLAUDE.md
@@ -1277,9 +1279,9 @@ reference/knowledge-templates.md §6.
 |---|:--:|:--:|
 | 0 · One reader | 9 | 9 |
 | 1 · Versions | 13 | 13 |
-| 2 · Draft and publish | 0 | 11 |
+| 2 · Draft and publish | 11 | 11 |
 | 3 · Metric attribution | 0 | 9 |
 | 4 · Portable document | 0 | 6 |
 | 5 · Upkeep | 0 | 5 |
 | Documentation | 1 | 10 |
-| **Total** | **23** | **63** |
+| **Total** | **34** | **63** |

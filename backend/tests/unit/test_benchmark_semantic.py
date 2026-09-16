@@ -113,6 +113,8 @@ class WorkerDb:
         connection: DatabaseConnection,
         template: KnowledgeTemplateRow,
         layer: dict[str, Any] | None,
+        draft: dict[str, Any] | None = None,
+        revision: int = 0,
     ) -> None:
         self._rows = {
             BenchmarkRun: run, BenchmarkSet: set_row,
@@ -120,7 +122,10 @@ class WorkerDb:
         }
         self._template = template
         self._layer = (
-            SemanticLayerRow(id=uuid4(), connection_id=CONNECTION_ID, document=layer)
+            SemanticLayerRow(
+                id=uuid4(), connection_id=CONNECTION_ID, document=layer,
+                draft_document=draft, revision=revision, published_version=1,
+            )
             if layer is not None else None
         )
         self.results: list[BenchmarkResult] = []
@@ -154,6 +159,10 @@ async def _benchmark(
     *,
     enabled: bool,
     layer: dict[str, Any] | None,
+    draft: dict[str, Any] | None = None,
+    source: str = "PUBLISHED",
+    pinned: int | None = None,
+    revision: int = 0,
 ) -> tuple[PromptCapturingGateway, BenchmarkRun]:
     """Run a one-question benchmark and hand back what the generator was sent."""
     gateway = PromptCapturingGateway()
@@ -190,6 +199,7 @@ async def _benchmark(
     run = BenchmarkRun(
         id=uuid4(), set_id=set_row.id, connection_id=CONNECTION_ID,
         llm_config_id=uuid4(), status="QUEUED",
+        semantic_source=source, semantic_revision=pinned,
     )
     connection = _connection()
     connection.semantic_layer_enabled = enabled
@@ -197,6 +207,7 @@ async def _benchmark(
 
     db = WorkerDb(
         run=run, set_row=set_row, connection=connection, template=template, layer=layer,
+        draft=draft, revision=revision,
     )
     await benchmark.execute_benchmark_run(db, Settings(), run.id)  # type: ignore[arg-type]
     return gateway, run
@@ -256,6 +267,58 @@ async def test_the_benchmark_binds_the_layer_to_the_snapshot_it_scores_against(
     prompt = gateway.generate_prompts[0]
     assert "Customer orders" in prompt
     assert "amount_cents" not in prompt
+
+
+def _draft() -> dict[str, Any]:
+    """The layer with a number-changing edit nobody has published."""
+    draft = _layer()
+    draft["entities"][0]["metrics"][0]["filters"].append("status <> 'refunded'")
+    return draft
+
+
+@pytest.mark.asyncio
+async def test_a_published_benchmark_reads_the_published_layer_while_a_draft_differs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fourth surface of Phase 2's rule: a draft reaches no run."""
+    gateway, run = await _benchmark(
+        monkeypatch, enabled=True, layer=_layer(), draft=_draft(), revision=4,
+    )
+    assert run.status == "SUCCEEDED", run.error_message
+    prompt = gateway.generate_prompts[0]
+    assert "metric revenue = SUM(total_amount) WHERE status <> 'cancelled'" in prompt
+    assert "refunded" not in prompt
+    assert (run.semantic_source, run.semantic_layer_version) == ("PUBLISHED", 1)
+
+
+@pytest.mark.asyncio
+async def test_a_draft_benchmark_scores_the_draft_it_was_pinned_to(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway, run = await _benchmark(
+        monkeypatch, enabled=True, layer=_layer(), draft=_draft(), revision=4,
+        source="DRAFT", pinned=4,
+    )
+    assert run.status == "SUCCEEDED", run.error_message
+    prompt = gateway.generate_prompts[0]
+    assert "status <> 'cancelled' AND status <> 'refunded'" in prompt
+    # What was scored, and over which published version the draft was edited.
+    assert (run.semantic_source, run.semantic_revision, run.semantic_layer_version) == (
+        "DRAFT", 4, 1,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_draft_that_moved_after_queuing_fails_the_run_and_asks_no_question(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway, run = await _benchmark(
+        monkeypatch, enabled=True, layer=_layer(), draft=_draft(), revision=5,
+        source="DRAFT", pinned=4,
+    )
+    assert run.status == "FAILED"
+    assert "draft changed after this run was queued" in run.error_message
+    assert gateway.generate_prompts == []
 
 
 def test_runs_either_side_of_the_fix_carry_different_prompt_versions() -> None:

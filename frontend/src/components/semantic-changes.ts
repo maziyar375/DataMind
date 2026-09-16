@@ -353,23 +353,32 @@ export function originWords(origin: Record<string, unknown> | null | undefined):
   return ''
 }
 
-/** Who and how, for a status line or a history row. */
+/** Who and how, for a status line or a history row.
+ *
+ *  A version is a document somebody **published** — since drafts, nothing
+ *  else writes one — so the person named is the publisher, and a generated or
+ *  restored version says so before naming them. */
 export function authorship(
   origin: Record<string, unknown> | null | undefined,
   author: string,
 ): string {
   const how = originWords(origin)
   if (how === 'recorded at migration') return how
-  if (how === 'generated') return author ? `generated for ${author}` : 'generated'
   if (how === 'deleted') return author ? `deleted by ${author}` : 'deleted'
-  if (how) return author ? `${how} by ${author}` : how
-  return author ? `saved by ${author}` : 'saved'
+  if (how) return author ? `${how}, published by ${author}` : how
+  return author ? `published by ${author}` : 'published'
 }
 
 /** "3 changes" — the count a history row carries. */
 export function changeCount(counts: Record<string, number>): string {
   const total = Object.values(counts).reduce((a, b) => a + b, 0)
   return `${total} ${total === 1 ? 'change' : 'changes'}`
+}
+
+/** "3 unpublished changes" / "No unpublished changes" — the draft's chip. */
+export function unpublishedWords(count: number): string {
+  if (count === 0) return 'No unpublished changes'
+  return `${count} unpublished ${count === 1 ? 'change' : 'changes'}`
 }
 
 /** The first line of a note, for a list row; the rest is on the version. */

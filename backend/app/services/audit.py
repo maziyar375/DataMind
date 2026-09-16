@@ -125,6 +125,9 @@ ASK_RECORDED = "ask.recorded"
 #:                                  semantic.deleted · semantic.conflict
 #:                                  semantic.generation.queued
 #:                                  semantic.generation.saved
+#:                                  semantic.draft.saved
+#:                                  semantic.draft.discarded
+#:                                  semantic.published
 #: ```
 #:
 #: Phase 7 added `access.denied` — the producer `DENIED` had been waiting for

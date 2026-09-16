@@ -38,6 +38,7 @@ from app.infra.db.models import (
     BenchmarkSet,
     DatabaseConnection,
     KnowledgeTemplateRow,
+    SemanticLayerRow,
 )
 from app.knowledge import TemplateRole, TemplateStatus
 
@@ -73,6 +74,12 @@ OUTCOME_NO_SQL = "NO_SQL"
 #: over a shrinking denominator.
 OUTCOME_NOT_PROBED = "NOT_PROBED"
 OUTCOME_ERROR = "ERROR"
+
+#: Which semantic layer document a run scores. `DRAFT` runs are asked for from
+#: the layer's publish dialog, and stay out of the score strip (`runs`): the
+#: strip is the published product's number, and a draft is not the product yet.
+SEMANTIC_PUBLISHED = "PUBLISHED"
+SEMANTIC_DRAFT = "DRAFT"
 
 
 def held_out_split(template_ids: list[UUID], fraction: float) -> set[UUID]:
@@ -144,15 +151,23 @@ class BenchmarkService:
             raise NotFoundError("Benchmark set not found.")
         return row
 
-    async def runs(self, set_row: BenchmarkSet, *, limit: int = 6) -> list[BenchmarkRun]:
+    async def runs(
+        self,
+        set_row: BenchmarkSet,
+        *,
+        limit: int = 6,
+        source: str = SEMANTIC_PUBLISHED,
+    ) -> list[BenchmarkRun]:
         """The history, newest first. Six by default — §4.8's sparkline.
 
         A sparkline of two points is a line, and a sparkline of sixty is a
-        smudge on a strip that is one line tall.
+        smudge on a strip that is one line tall. Published runs only unless
+        `source` says otherwise: a run that scored a semantic layer draft
+        measured something no question has been answered with.
         """
         result = await self._db.execute(
             select(BenchmarkRun)
-            .where(BenchmarkRun.set_id == set_row.id)
+            .where(BenchmarkRun.set_id == set_row.id, BenchmarkRun.semantic_source == source)
             .order_by(desc(BenchmarkRun.created_at))
             .limit(limit)
         )
@@ -299,15 +314,34 @@ class BenchmarkService:
         *,
         actor_id: UUID,
         llm_config_id: UUID | None,
+        semantic_source: str = SEMANTIC_PUBLISHED,
     ) -> BenchmarkRun:
         """Queue an execution. The worker is what runs it.
 
         A row first, then the worker — the same order `semantic_jobs` uses, and
         for the same reason: a process that dies mid-run leaves a `RUNNING` row
         somebody can see and retry, rather than a request that never came back.
+
+        A `DRAFT` run is pinned to the layer's current revision. A draft is not
+        versioned, so if it moves before the worker reads it, the run fails
+        rather than scoring a draft nobody asked about.
         """
         if await self._is_running(set_row):
             raise ConflictError("This benchmark is already running.")
+        revision: int | None = None
+        if semantic_source == SEMANTIC_DRAFT:
+            head = (
+                await self._db.execute(
+                    select(SemanticLayerRow).where(
+                        SemanticLayerRow.connection_id == connection.id
+                    )
+                )
+            ).scalar_one_or_none()
+            if head is None or head.draft_document is None:
+                raise ValidationError(
+                    "This semantic layer has no unpublished changes to score."
+                )
+            revision = head.revision
         run = BenchmarkRun(
             id=uuid.uuid4(),
             set_id=set_row.id,
@@ -316,6 +350,8 @@ class BenchmarkService:
             status=QUEUED,
             total=len(set_row.template_ids or []),
             created_by=actor_id,
+            semantic_source=semantic_source,
+            semantic_revision=revision,
         )
         self._db.add(run)
         await self._db.flush()

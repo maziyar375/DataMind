@@ -264,6 +264,13 @@ every save of the layer is kept as an immutable version
   `.conflict`, `.generation.*`) carry versions and counts only; the names of
   the entries that changed live in `semantic_layer_changes`, behind the
   layer's own `select`.
+- **A draft is the same content class too** (migration `0033`). It is read by
+  whoever may read the layer (`select`) and written by whoever may edit it
+  (`modify`). No loader a question goes through reads it; the one reader
+  outside the editor is a benchmark run that was asked to score it, and asking
+  needs `modify` on the layer on top of the benchmark's own privilege.
+  Publishing is `modify` as well — no approval step, so the separation this
+  buys is between an edit and its effect, not between two people.
 
 ### 2.3 Reports (#10–#12) in detail
 

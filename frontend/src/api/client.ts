@@ -551,9 +551,35 @@ export const connections = {
 export const semantic = {
   get: (connectionId: string) =>
     get<SemanticLayer>(`/connections/${connectionId}/semantic`),
-  // Every write names the revision it was made against, and a stale one is a
-  // 409 (`E_SEMANTIC_CONFLICT`) rather than an overwrite of whoever wrote in
-  // between. `note` is why; the change list is the what.
+  // The editor's writes land in the draft, which no question reads; publishing
+  // is its own act. Every write names the revision it was made against, and a
+  // stale one is a 409 (`E_SEMANTIC_CONFLICT`) rather than an overwrite of
+  // whoever wrote in between.
+  saveDraft: (
+    connectionId: string,
+    document: SemanticDocument,
+    { baseRevision }: { baseRevision: number },
+  ) =>
+    request<SemanticLayer>(`/connections/${connectionId}/semantic/draft`, {
+      method: 'PUT',
+      body: JSON.stringify({ document, base_revision: baseRevision }),
+    }),
+  discardDraft: (connectionId: string, { baseRevision }: { baseRevision: number }) =>
+    request<SemanticLayer>(
+      `/connections/${connectionId}/semantic/draft?base_revision=${baseRevision}`,
+      { method: 'DELETE' },
+    ),
+  // `note` is why. Required by the server (`E_SEMANTIC_NOTE_REQUIRED`) when a
+  // change alters numbers; the change list is the what.
+  publish: (
+    connectionId: string,
+    { baseRevision, note = '' }: { baseRevision: number; note?: string },
+  ) =>
+    post<SemanticLayer>(`/connections/${connectionId}/semantic/publish`, {
+      base_revision: baseRevision, note,
+    }),
+  // Save and publish in one step — the API's `PUT /semantic`, for scripts. The
+  // editor does not call it.
   save: (
     connectionId: string,
     document: SemanticDocument,
@@ -753,11 +779,25 @@ export const knowledge = {
   // questions it was built from come back RETRIEVABLE.
   deleteBenchmark: (connectionId: string, setId: string) =>
     del(`/connections/${connectionId}/knowledge/benchmarks/${setId}`),
-  runBenchmark: (connectionId: string, setId: string) =>
-    post<BenchmarkRun>(
-      `/connections/${connectionId}/knowledge/benchmarks/${setId}/run`,
+  // `semanticSource: 'DRAFT'` scores the semantic layer's unpublished draft,
+  // and also needs `modify` on the layer. Such a run stays out of `runs`.
+  runBenchmark: (
+    connectionId: string,
+    setId: string,
+    { semanticSource, llmConfigId }: {
+      semanticSource?: 'PUBLISHED' | 'DRAFT'
+      llmConfigId?: string
+    } = {},
+  ) => {
+    const params = new URLSearchParams()
+    if (semanticSource) params.set('semantic_source', semanticSource)
+    if (llmConfigId) params.set('llm_config_id', llmConfigId)
+    const query = params.toString()
+    return post<BenchmarkRun>(
+      `/connections/${connectionId}/knowledge/benchmarks/${setId}/run${query ? `?${query}` : ''}`,
       {},
-    ),
+    )
+  },
   benchmarkResults: (connectionId: string, runId: string) =>
     get<BenchmarkResult[]>(
       `/connections/${connectionId}/knowledge/benchmarks/runs/${runId}/results`,

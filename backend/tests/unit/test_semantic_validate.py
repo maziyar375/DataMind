@@ -284,6 +284,48 @@ def test_an_untouched_exclusion_rule_is_replaced_by_the_generation() -> None:
     assert merged.default_exclusions == "Rows where deleted_at is not null."
 
 
+def test_an_edited_exclusion_rule_survives_over_an_otherwise_untouched_document() -> None:
+    """The case the comment in `merge_documents` calls the sharpest, and which
+    the old rule lost: a curator who wrote **only** the exclusion rule. Nothing
+    else was edited, so "keep it if anything was edited" threw it away on the
+    first regeneration. Each field is kept on its own flag now (Phase 2)."""
+    existing = _doc()
+    existing.default_exclusions = "Customers whose email ends in @internal.example."
+    existing.exclusions_provenance = Provenance(source="human", edited=True)
+    assert not any(e.edited for e in existing.entities)
+
+    merged = merge_documents(
+        existing,
+        SemanticDocument(
+            business_context="An online retailer.",
+            default_exclusions="Rows where deleted_at is not null.",
+            entities=[SemanticEntity(table="sales.orders", grain="regenerated")],
+        ),
+    )
+    assert merged.default_exclusions == "Customers whose email ends in @internal.example."
+    assert merged.exclusions_provenance.edited
+    # The context was not written by a person, so the generation's replaces it:
+    # one flag keeps one field.
+    assert merged.business_context == "An online retailer."
+    assert merged.entities[0].grain == "regenerated"
+
+
+def test_an_edited_context_survives_on_its_own_flag_too() -> None:
+    existing = _doc()
+    existing.business_context = "The order book of a furniture maker."
+    existing.context_provenance = Provenance(source="human", edited=True)
+    merged = merge_documents(
+        existing,
+        SemanticDocument(
+            business_context="A retailer.",
+            default_exclusions="Rows where deleted_at is not null.",
+            entities=[SemanticEntity(table="sales.orders")],
+        ),
+    )
+    assert merged.business_context == "The order book of a furniture maker."
+    assert merged.default_exclusions == "Rows where deleted_at is not null."
+
+
 # ── Oracle identifier case ───────────────────────────────────────────────
 # These four assert **current behaviour, hazard included**, and are deliberately
 # not a fix (docs/reference/catalog-metadata.md §6.1.3). `build_index` lower-cases

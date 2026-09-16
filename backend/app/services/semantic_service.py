@@ -18,6 +18,13 @@ are worth knowing before changing this file:
   reads is always exactly one numbered version. A person's write carries the
   revision it was made against and is refused, not merged, when somebody wrote
   in between (`docs/plans/semantic-layer-model.md` Phase 1).
+* **An edit lands in the draft; only publishing makes a version** (Phase 2).
+  A save, a generation, a restore and an import each write
+  `semantic_layers.draft_document`, which **no loader reads** — `load_layer`
+  and `load_document` read `document`, the published copy. So an edit, and a
+  model's guess about the schema, reach no answer until a person publishes
+  them. The one reader of a draft outside the editor is `load_draft`, and its
+  one caller is a benchmark run somebody asked to score a draft with.
 """
 from __future__ import annotations
 
@@ -40,6 +47,7 @@ from app.core.errors import (
     NotFoundError,
     SemanticConflictError,
     SemanticNoChangesError,
+    SemanticNoteRequiredError,
     ValidationError,
 )
 from app.core.logging import get_logger
@@ -48,6 +56,7 @@ from app.domain.value_objects import HintBudget
 from app.domain.value_objects.authz import Privilege, ResourceType
 from app.infra.crypto.aesgcm_box import AesGcmSecretBox
 from app.infra.db.models import (
+    BenchmarkRun,
     DatabaseConnection,
     LlmConfig,
     SchemaSnapshotRow,
@@ -87,6 +96,9 @@ SEMANTIC_DELETED = "semantic.deleted"
 SEMANTIC_CONFLICT = "semantic.conflict"
 SEMANTIC_GENERATION_QUEUED = "semantic.generation.queued"
 SEMANTIC_GENERATION_SAVED = "semantic.generation.saved"
+SEMANTIC_DRAFT_SAVED = "semantic.draft.saved"
+SEMANTIC_DRAFT_DISCARDED = "semantic.draft.discarded"
+SEMANTIC_PUBLISHED = "semantic.published"
 
 #: How long a version note may be. A sentence or a paragraph about *why*; the
 #: what is already the change list.
@@ -140,16 +152,20 @@ class SemanticService:
     async def read(self, connection: DatabaseConnection) -> tuple[
         SemanticDocument, SemanticLayerRow | None, dict[str, Any]
     ]:
-        """The stored document, re-bound to the newest snapshot.
+        """What the editor edits, re-bound to the newest snapshot.
 
-        Returns the document, its row (None when nothing has been generated),
-        and the snapshot facts the UI needs to offer a sensible editor: the
-        table list, and whether the schema has moved since the layer was
-        written.
+        That is the **draft** when one exists and the published document
+        otherwise — a NULL draft *is* the published document. Returns the
+        document, its row (None when nothing has been generated), and the facts
+        the UI needs to frame it: the table list, whether the schema has moved
+        since the layer was written, which version is published and by whom,
+        and the draft's changes against it.
         """
         row = await self.layer_row(connection.id)
         snapshot = await self._snapshot(connection.id)
-        doc = _bind(row.document if row and row.document else {}, snapshot)
+        published_doc = _bind(row.document if row and row.document else {}, snapshot)
+        has_draft = row is not None and row.draft_document is not None
+        doc = _bind(row.draft_document or {}, snapshot) if has_draft else published_doc
         published, author = (
             await _version_with_author(self._db, connection.id, row.published_version)
             if row is not None and row.published_version else (None, "")
@@ -171,6 +187,16 @@ class SemanticService:
             "stale": bool(row and row.schema_version != snapshot["version"]),
             "published": published,
             "published_by_name": author,
+            "has_draft": has_draft,
+            "published_exists": not published_doc.is_empty,
+            # Both sides bound to the same snapshot, so the binder's own
+            # rewrites are not reported as edits somebody made.
+            "unpublished_changes": (
+                diff_documents(published_doc, doc) if has_draft else []
+            ),
+            "draft_updated_by_name": (
+                await _author_name(self._db, row.draft_updated_by) if has_draft else ""
+            ),
         }
         return doc, row, facts
 
@@ -184,7 +210,13 @@ class SemanticService:
         ctx: RequestContext,
         note: str = "",
     ) -> Published:
-        """Persist an edited document as the next version.
+        """Save `doc` and publish it as the next version, in one step.
+
+        The `PUT /semantic` of API clients and scripts. The editor saves a
+        draft and publishes it separately; this does both at once and discards
+        any draft somebody had, because the document it is given replaces
+        everything. The note stays optional here, as it was before drafts —
+        a script that worked against Phase 1 keeps working.
 
         Joins are re-derived rather than accepted from the client: they are a
         reading of the catalog, and letting a form overwrite them would let a
@@ -221,44 +253,61 @@ class SemanticService:
         base_revision: int,
         ctx: RequestContext,
         note: str = "",
-    ) -> Published:
-        """Publish version `number` again, as a new version.
+    ) -> DraftWritten:
+        """Put version `number` back into the draft.
+
+        Into the draft, not the published document: a restore is somebody's
+        decision about what the model should read, and it gets the same review
+        before it answers anything that any other edit gets. Publishing it
+        writes the next version, so history stays linear — restoring v9 over
+        v13 and publishing writes v14, and v10–v13 are still there.
 
         Bound against the **current** snapshot, so flag-don't-drop applies: an
         entry whose table has since been dropped comes back red, not missing.
-        History stays linear — restoring v9 over v13 writes v14, and v10–v13
-        are still there to be restored in turn.
+        `note` is accepted for the API's sake and not stored — a note belongs to
+        the version the draft becomes, and is asked for when it is published.
         """
+        del note
         head = await _lock_head(self._db, connection.id)
         await _require_revision(self._db, ctx, connection.id, head, base_revision)
         source = await self.version(connection.id, number)
 
         snapshot = await self._snapshot(connection.id)
         bound = _bind(source.document or {}, snapshot)
-        published = await _publish(
+        written = await _write_draft(
             self._db, connection_id=connection.id, head=head, document=bound,
-            schema_version=snapshot["version"], author=ctx.user_id, note=note,
-            origin={"restored_from": number},
+            author=ctx.user_id, origin={"restored_from": number},
         )
         await audit.record(
             self._db, ctx, action=SEMANTIC_RESTORED,
             resource_type=audit.SEMANTIC_LAYER, resource_id=connection.id,
-            detail={"version": published.version.version, "restored_from": number},
+            detail={"revision": written.head.revision, "restored_from": number},
         )
-        return published
+        return written
 
     async def delete(
         self, connection: DatabaseConnection, *, ctx: RequestContext
     ) -> Published | None:
-        """Publish an empty document as a tombstone version (D10).
+        """Publish an empty document as a tombstone version (D10), and drop the draft.
 
         The history is kept: a deleted layer can be restored, and the runs that
         point at its versions still say what they were answered with. Versions
-        go only when their connection does. Deleting a layer that is already
-        empty writes nothing.
+        go only when their connection does. A layer with nothing published and
+        only a draft loses the draft and writes no version; one that is empty
+        in both writes nothing.
         """
         head = await _lock_head(self._db, connection.id)
-        if head is None or not head.document:
+        if head is None or (not head.document and head.draft_document is None):
+            return None
+        if not head.document:
+            _clear_draft(head)
+            head.revision = (head.revision or 0) + 1
+            await self._db.flush()
+            await audit.record(
+                self._db, ctx, action=SEMANTIC_DRAFT_DISCARDED,
+                resource_type=audit.SEMANTIC_LAYER, resource_id=connection.id,
+                detail={"revision": head.revision},
+            )
             return None
         snapshot = await self._snapshot(connection.id)
         published = await _publish(
@@ -272,6 +321,130 @@ class SemanticService:
             detail={"version": published.version.version},
         )
         return published
+
+    # ── the draft ────────────────────────────────────────────────────────
+    async def save_draft(
+        self,
+        connection: DatabaseConnection,
+        doc: SemanticDocument,
+        *,
+        base_revision: int,
+        ctx: RequestContext,
+    ) -> DraftWritten:
+        """Write the editor's document to the draft. Nothing a run reads moves.
+
+        Refused with `E_SEMANTIC_CONFLICT` on a stale `base_revision`, and with
+        `E_SEMANTIC_NO_CHANGES` when the document is the draft already. A
+        document that equals the published one leaves no draft behind — there
+        is nothing unpublished to show.
+        """
+        head = await _lock_head(self._db, connection.id)
+        await _require_revision(self._db, ctx, connection.id, head, base_revision)
+        snapshot = await self._snapshot(connection.id)
+        written = await _write_draft(
+            self._db, connection_id=connection.id, head=head,
+            document=_bind(doc, snapshot), author=ctx.user_id, origin=None,
+        )
+        await audit.record(
+            self._db, ctx, action=SEMANTIC_DRAFT_SAVED,
+            resource_type=audit.SEMANTIC_LAYER, resource_id=connection.id,
+            detail={"revision": written.head.revision, "changes": len(written.changes)},
+        )
+        return written
+
+    async def discard_draft(
+        self, connection: DatabaseConnection, *, base_revision: int, ctx: RequestContext
+    ) -> SemanticLayerRow:
+        """Throw the draft away. The published document is untouched.
+
+        A revision like any other write: an editor that read the draft before
+        somebody else changed it cannot discard what it never saw.
+        """
+        head = await _lock_head(self._db, connection.id)
+        await _require_revision(self._db, ctx, connection.id, head, base_revision)
+        if head is None or head.draft_document is None:
+            raise SemanticNoChangesError("There is no draft to discard.")
+        _clear_draft(head)
+        head.revision = (head.revision or 0) + 1
+        await self._db.flush()
+        await audit.record(
+            self._db, ctx, action=SEMANTIC_DRAFT_DISCARDED,
+            resource_type=audit.SEMANTIC_LAYER, resource_id=connection.id,
+            detail={"revision": head.revision},
+        )
+        return head
+
+    async def publish(
+        self,
+        connection: DatabaseConnection,
+        *,
+        base_revision: int,
+        ctx: RequestContext,
+        note: str = "",
+    ) -> Published:
+        """Make the draft what the model reads, as the next version.
+
+        The draft is bound again against the **current** snapshot — it may have
+        been written before a re-sync — and diffed against the published
+        document. Refused with `E_SEMANTIC_NO_CHANGES` when that list is empty,
+        and with `E_SEMANTIC_NOTE_REQUIRED` when it holds a change that alters
+        numbers and `note` is blank: those change a figure on somebody's
+        dashboard without changing its SQL, and *why* is the one thing the
+        history cannot say for itself. The draft's origin — the generations and
+        the restore that wrote into it — becomes the version's.
+        """
+        head = await _lock_head(self._db, connection.id)
+        await _require_revision(self._db, ctx, connection.id, head, base_revision)
+        if head is None or head.draft_document is None:
+            raise SemanticNoChangesError("There are no unpublished changes.")
+
+        snapshot = await self._snapshot(connection.id)
+        bound = _bind(head.draft_document, snapshot)
+        changes = diff_documents(SemanticDocument.model_validate(head.document or {}), bound)
+        if not changes:
+            raise SemanticNoChangesError("Nothing changed.")
+        if any(c.affects_sql for c in changes) and not note.strip():
+            raise SemanticNoteRequiredError(
+                "These changes alter what numbers mean. Say why in a note — a "
+                "dashboard's SQL will not show that anything changed."
+            )
+
+        scored = await self._scored_draft_run(connection.id, head.revision)
+        published = await _publish(
+            self._db, connection_id=connection.id, head=head, document=bound,
+            schema_version=snapshot["version"], author=ctx.user_id, note=note,
+            origin=dict(head.draft_origin or {}), changes=changes,
+        )
+        await audit.record(
+            self._db, ctx, action=SEMANTIC_PUBLISHED,
+            resource_type=audit.SEMANTIC_LAYER, resource_id=connection.id,
+            detail={
+                "version": published.version.version,
+                "changes": len(published.changes),
+                "affects_sql": any(c.affects_sql for c in published.changes),
+                "scored_run_id": str(scored) if scored else None,
+            },
+        )
+        return published
+
+    async def _scored_draft_run(self, connection_id: UUID, revision: int) -> UUID | None:
+        """The benchmark run that scored exactly this draft, if one finished.
+
+        Looked up rather than taken from the client: the audit row says a
+        publish was scored only when a run of *this* revision actually was.
+        """
+        result = await self._db.execute(
+            select(BenchmarkRun.id)
+            .where(
+                BenchmarkRun.connection_id == connection_id,
+                BenchmarkRun.semantic_source == DRAFT_SOURCE,
+                BenchmarkRun.semantic_revision == revision,
+                BenchmarkRun.status == "SUCCEEDED",
+            )
+            .order_by(BenchmarkRun.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
 
     # ── history ──────────────────────────────────────────────────────────
     async def versions(
@@ -610,18 +783,21 @@ class SemanticService:
         llm_config_id: UUID,
         model_snapshot: dict[str, Any],
     ) -> None:
-        """Merge the generation into the layer **as it is now**, under the lock.
+        """Merge the generation into the draft **as it is now**, under the lock.
+
+        Into the draft, never the published document: a generated layer is a
+        model's guess about what a schema means, and until Phase 2 it reached
+        every answer the moment the job ended, unreviewed. The merge is over the
+        current draft, or the published document when there is none.
 
         The job read nothing when it started. A save made during the minutes it
-        spent at the provider is part of the current document by the time this
+        spent at the provider is part of the current draft by the time this
         runs, so the merge keeps it — before versions, the job merged into the
         document it had read at the start and silently overwrote that save.
         """
         async with get_sessionmaker()() as session:
             head = await _lock_head(session, connection_id)
-            current = SemanticDocument.model_validate(
-                head.document if head is not None and head.document else {}
-            )
+            current = SemanticDocument.model_validate(_working(head))
             merged = (
                 generated if mode == "REPLACE" else merge_documents(current, generated)
             )
@@ -635,14 +811,13 @@ class SemanticService:
                 )
             bound = _bind(merged, snapshot)
 
-            published: Published | None = None
+            written: DraftWritten | None = None
             if diff_documents(current, bound):
-                published = await _publish(
+                written = await _write_draft(
                     session, connection_id=connection_id, head=head, document=bound,
-                    schema_version=snapshot["version"], author=actor_id, note="",
-                    origin={"generated_job_ids": [str(job_id)]},
+                    author=actor_id, origin={"generated_job_ids": [str(job_id)]},
                 )
-                head = published.head
+                head = written.head
             if head is None:
                 # A generation that produced nothing on a connection that never
                 # had a layer: no version to write, and no row to record it on.
@@ -652,12 +827,12 @@ class SemanticService:
             head.model_snapshot = model_snapshot
             head.prompt_version = SEMANTIC_PROMPT_VERSION
             head.generated_at = utcnow()
-            if published is not None and actor_id is not None:
+            if written is not None and actor_id is not None:
                 await audit.record(
                     session, RequestContext.on_behalf_of(actor_id),
                     action=SEMANTIC_GENERATION_SAVED,
                     resource_type=audit.SEMANTIC_LAYER, resource_id=connection_id,
-                    detail={"job_id": str(job_id), "version": published.version.version},
+                    detail={"job_id": str(job_id), "revision": head.revision},
                 )
             await session.commit()
 
@@ -775,6 +950,20 @@ class Published:
 
 
 @dataclass(slots=True)
+class DraftWritten:
+    """What one draft write produced: the head row, and the draft's changes
+    against the published document (empty when the draft was cleared)."""
+
+    head: SemanticLayerRow
+    changes: list[Change]
+
+
+#: `benchmark_runs.semantic_source`: which document a run scored.
+PUBLISHED_SOURCE = "PUBLISHED"
+DRAFT_SOURCE = "DRAFT"
+
+
+@dataclass(slots=True)
 class VersionSummary:
     row: SemanticLayerVersionRow
     author: str
@@ -850,6 +1039,15 @@ async def _require_revision(
         await _version_with_author(db, connection_id, head.published_version)
         if head is not None and head.published_version else (None, "")
     )
+    updated_by = published.published_by if published else None
+    updated_at = published.created_at if published else None
+    # A draft written after the last publish is the newer write, and its
+    # author is the person who changed the layer under this editor.
+    if head is not None and head.draft_document is not None and head.draft_updated_at and (
+        updated_at is None or head.draft_updated_at >= updated_at
+    ):
+        updated_by, updated_at = head.draft_updated_by, head.draft_updated_at
+        author = await _author_name(db, updated_by)
     await audit.record(
         db, ctx, action=SEMANTIC_CONFLICT,
         resource_type=audit.SEMANTIC_LAYER, resource_id=connection_id,
@@ -864,13 +1062,9 @@ async def _require_revision(
         ),
         revision=current,
         published_version=version,
-        updated_by=(
-            str(published.published_by) if published and published.published_by else None
-        ),
+        updated_by=str(updated_by) if updated_by else None,
         updated_by_name=author,
-        updated_at=(
-            published.created_at.isoformat() if published and published.created_at else None
-        ),
+        updated_at=updated_at.isoformat() if updated_at else None,
     )
 
 
@@ -884,6 +1078,7 @@ async def _publish(
     author: UUID | None,
     note: str,
     origin: dict[str, Any],
+    changes: list[Change] | None = None,
 ) -> Published:
     """Write `document` as the next version and make it what the model reads.
 
@@ -894,23 +1089,21 @@ async def _publish(
     write path to it.
 
     `document` must already be bound; the change list is computed against the
-    published document, and an empty one is refused rather than written.
+    published document (or passed in, already computed against it), and an
+    empty one is refused rather than written. **Publishing clears the draft**:
+    whatever was unpublished either is this version or was replaced by it.
     """
-    previous = SemanticDocument.model_validate(
-        head.document if head is not None and head.document else {}
-    )
-    changes = diff_documents(previous, document)
+    if changes is None:
+        previous = SemanticDocument.model_validate(
+            head.document if head is not None and head.document else {}
+        )
+        changes = diff_documents(previous, document)
     if not changes:
         raise SemanticNoChangesError("Nothing changed.")
     if len(note) > MAX_NOTE_CHARS:
         raise ValidationError(f"A note can be at most {MAX_NOTE_CHARS} characters.")
 
-    if head is None:
-        head = SemanticLayerRow(
-            id=uuid.uuid4(), connection_id=connection_id, revision=0, document={},
-        )
-        db.add(head)
-        await db.flush()
+    head = await _ensure_head(db, connection_id, head)
 
     stored = _stored(document)
     number = (head.published_version or 0) + 1
@@ -953,8 +1146,92 @@ async def _publish(
     head.edited_at = version.created_at
     head.revision = (head.revision or 0) + 1
     head.published_version = number
+    _clear_draft(head)
     await db.flush()
     return Published(head=head, version=version, changes=changes)
+
+
+async def _write_draft(
+    db: AsyncSession,
+    *,
+    connection_id: UUID,
+    head: SemanticLayerRow | None,
+    document: SemanticDocument,
+    author: UUID | None,
+    origin: dict[str, Any] | None,
+) -> DraftWritten:
+    """Write `document` as the draft. **The one draft writer.**
+
+    `document` must already be bound. Refused with `E_SEMANTIC_NO_CHANGES` when
+    it is the working document already (the draft, or the published document
+    when there is no draft). Otherwise the revision moves, and:
+
+    * a document equal to the published one **clears** the draft — nothing is
+      unpublished, so nothing is shown as unpublished;
+    * any other document becomes the draft, attributed to `author`.
+
+    `origin` says how the draft came to be. `generated_job_ids` accumulate
+    across generations into one draft; `restored_from` replaces what was there,
+    because a restore replaces the whole document; `None` — a person's own
+    edit — keeps the draft's origin, since the edit was made on top of it.
+    """
+    working = SemanticDocument.model_validate(_working(head))
+    if not diff_documents(working, document):
+        raise SemanticNoChangesError("Nothing changed.")
+
+    head = await _ensure_head(db, connection_id, head)
+    published = SemanticDocument.model_validate(head.document or {})
+    changes = diff_documents(published, document)
+    if changes:
+        next_origin = dict(head.draft_origin or {}) if head.draft_document is not None else {}
+        if origin is not None and "restored_from" in origin:
+            next_origin = dict(origin)
+        elif origin is not None:
+            jobs = [
+                *next_origin.get("generated_job_ids", []),
+                *origin.get("generated_job_ids", []),
+            ]
+            next_origin = {**next_origin, **origin, "generated_job_ids": jobs}
+        head.draft_document = _stored(document)
+        head.draft_updated_by = author
+        head.draft_updated_at = utcnow()
+        head.draft_origin = next_origin
+    else:
+        _clear_draft(head)
+    head.revision = (head.revision or 0) + 1
+    await db.flush()
+    return DraftWritten(head=head, changes=changes)
+
+
+def _working(head: SemanticLayerRow | None) -> dict[str, Any]:
+    """The document an edit is made on: the draft, else the published one."""
+    if head is None:
+        return {}
+    if head.draft_document is not None:
+        return head.draft_document
+    return head.document or {}
+
+
+def _clear_draft(head: SemanticLayerRow) -> None:
+    head.draft_document = None
+    head.draft_updated_by = None
+    head.draft_updated_at = None
+    head.draft_origin = {}
+
+
+async def _ensure_head(
+    db: AsyncSession, connection_id: UUID, head: SemanticLayerRow | None
+) -> SemanticLayerRow:
+    """The head row, created empty (revision 0, nothing published) if absent."""
+    if head is not None:
+        return head
+    head = SemanticLayerRow(
+        id=uuid.uuid4(), connection_id=connection_id, revision=0, document={},
+        draft_origin={},
+    )
+    db.add(head)
+    await db.flush()
+    return head
 
 
 async def _author_name(db: AsyncSession, user_id: UUID | None) -> str:
@@ -1031,6 +1308,49 @@ async def load_layer(
         log.warning("semantic_document_unreadable", connection_id=str(connection.id))
         return LoadedLayer(None)
     return LoadedLayer(document, row.published_version or 0)
+
+
+class DraftMovedError(Exception):
+    """The draft a benchmark run was pinned to is not the draft there now."""
+
+
+async def load_draft(
+    db: AsyncSession,
+    connection: DatabaseConnection,
+    *,
+    snapshot: dict[str, Any],
+    revision: int | None,
+) -> LoadedLayer:
+    """The **draft**, bound to `snapshot` — for a benchmark run scoring it.
+
+    The one reader of `draft_document` outside the editor, and it is not a
+    loader any question goes through: `load_layer` and `load_document` never
+    read a draft, which is the whole of the rule that a draft reaches no run.
+
+    Raises `DraftMovedError` when the head's revision is not `revision` — somebody
+    saved, discarded or published after the run was queued, and a draft is not
+    versioned, so the one that was asked about cannot be read any more. A score
+    of a different draft under the first one's name would be a number about
+    nothing anybody chose.
+
+    Deliberately **not** gated on `semantic_layer_enabled`: scoring a draft is
+    an explicit request to see what it would do, and answering it with no layer
+    would score something else. `version` is the published version the draft
+    was edited over (`0` when nothing is published).
+    """
+    result = await db.execute(
+        select(SemanticLayerRow).where(SemanticLayerRow.connection_id == connection.id)
+    )
+    row = result.scalar_one_or_none()
+    if row is None or row.revision != revision or row.draft_document is None:
+        raise DraftMovedError(
+            "The draft changed after this run was queued, so the draft it was "
+            "asked to score is gone. Score the draft again."
+        )
+    document = _bind(row.draft_document, snapshot)
+    return LoadedLayer(
+        None if document.is_empty else document, row.published_version or 0
+    )
 
 
 async def load_document(

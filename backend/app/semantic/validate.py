@@ -365,13 +365,23 @@ def merge_documents(
 
     if existing.time.provenance.edited:
         merged.time = existing.time.model_copy(deep=True)
-    if existing.business_context and _edited(existing):
+    # Each of the two document-level texts is kept on its **own** flag, which
+    # the editor sets when a person types into it. `_edited(existing)` stays as
+    # a second reason to keep one, for documents written before the flags
+    # existed: it can only keep a text, never lose one.
+    if existing.business_context and (
+        existing.context_provenance.edited or _edited(existing)
+    ):
         merged.business_context = existing.business_context
+        merged.context_provenance = existing.context_provenance.model_copy()
     # Kept on the same terms as the context above, and for a sharper reason: a
     # regeneration that replaced a hand-written exclusion rule with the model's
     # guess would change every total on the dashboard without touching a query.
-    if existing.default_exclusions and _edited(existing):
+    if existing.default_exclusions and (
+        existing.exclusions_provenance.edited or _edited(existing)
+    ):
         merged.default_exclusions = existing.default_exclusions
+        merged.exclusions_provenance = existing.exclusions_provenance.model_copy()
 
     kept = {e.table.lower(): e for e in existing.entities if e.edited}
     merged.entities = [

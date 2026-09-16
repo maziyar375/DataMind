@@ -300,6 +300,13 @@ Where a connection owner gets a number about *their* data, without a developer.
   layer, so every `benchmark_runs` row at v9 or earlier was scored layer-off.
   Compare scores only within one `prompt_version`
   ([plans/semantic-layer-model.md](../plans/semantic-layer-model.md) §1.2.2).
+- **A run can score the layer's unpublished draft instead**
+  (`semantic_source = DRAFT`, pinned to the layer's revision, queued from the
+  semantic layer's publish dialog). It needs `(semantic_layer, modify)` as well
+  as `(knowledge, modify)`, it fails rather than score a draft that moved after
+  it was queued, and it is **kept out of the score strip** — `BenchmarkSet.runs`
+  is published runs only, and the newest draft run is `draft_run` beside it. The
+  strip stays the published product's number.
 
 ## 7. Searching the store by meaning — the embedding matcher
 

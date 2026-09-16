@@ -11,7 +11,7 @@
  */
 import {
   authorship, byVersion, changeCount, describeChange, firstLine, groupChanges, historyPath,
-  originWords, plain,
+  originWords, plain, unpublishedWords,
 } from './semantic-changes.ts'
 import type { ChangeLike } from './semantic-changes.ts'
 
@@ -168,8 +168,11 @@ check('authorship puts the person after what happened',
       [authorship({}, 'Sara Karimi'), authorship({ restored_from: 3 }, 'Ali'),
        authorship({ generated_job_ids: ['j'] }, 'Sara'), authorship({ migrated: true }, ''),
        authorship({}, '')],
-      ['saved by Sara Karimi', 'restored from v3 by Ali', 'generated for Sara',
-       'recorded at migration', 'saved'])
+      ['published by Sara Karimi', 'restored from v3, published by Ali',
+       'generated, published by Sara', 'recorded at migration', 'published'])
+check('the draft chip counts its changes, and says so when there are none',
+      [unpublishedWords(0), unpublishedWords(1), unpublishedWords(3)],
+      ['No unpublished changes', '1 unpublished change', '3 unpublished changes'])
 check('counts sum the kinds', changeCount({ metric_added: 2, column_added: 1 }), '3 changes')
 check('one change is singular', changeCount({ entity_described: 1 }), '1 change')
 check('a note row shows its first non-empty line',

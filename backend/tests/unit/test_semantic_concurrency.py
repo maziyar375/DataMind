@@ -13,6 +13,10 @@ Neither left a trace — and since access control a layer can be granted to a
 team, so two people in one layer is normal. Two fixes, one per direction: the
 job merges into the **current** row under a lock, and every person's write
 carries the revision it read and is refused (409) when that is not current.
+
+Since Phase 2 both the person and the job write the **draft**: "the current
+row" is the draft when there is one, and nothing either writes reaches a
+question until somebody publishes.
 """
 from __future__ import annotations
 
@@ -181,9 +185,10 @@ async def test_a_save_made_during_a_generation_survives_the_jobs_commit(
 ) -> None:
     """The first direction of §1.2.5, and the phase's sharpest test.
 
-    A curator edits `orders` while a generation is at the provider; the
-    generation then lands with a description of a table nobody had described.
-    Both must be in the layer afterwards.
+    A curator edits `orders` in the draft while a generation is at the
+    provider; the generation then lands with a description of a table nobody
+    had described. Both must be in the draft afterwards — and neither in what
+    a question reads until it is published.
     """
     conn = connection(db)
     svc = service(db)
@@ -200,30 +205,40 @@ async def test_a_save_made_during_a_generation_survives_the_jobs_commit(
     running = asyncio.create_task(svc.execute_job(job.id, asyncio.Event()))
     await asyncio.wait_for(generation.entered.wait(), timeout=5)
 
-    # Mid-generation: a person saves an edit to `orders`.
+    # Mid-generation: a person saves an edit to `orders` into the draft.
     edited = layer()
     edited.entities[0].grain = "one row per order line"
     edited.entities[0].provenance.edited = True
-    await service(db).save(conn, edited, base_revision=1, ctx=ctx())
+    await service(db).save_draft(conn, edited, base_revision=1, ctx=ctx())
 
     generation.release.set()
     await asyncio.wait_for(running, timeout=5)
 
-    final = SemanticDocument.model_validate(head(db, conn).document)  # type: ignore[union-attr]
-    orders_entity = final.entity("public.orders")
-    customers_entity = final.entity("public.customers")
+    row = head(db, conn)
+    assert row is not None and row.draft_document is not None
+    draft = SemanticDocument.model_validate(row.draft_document)
+    orders_entity = draft.entity("public.orders")
+    customers_entity = draft.entity("public.customers")
     assert orders_entity is not None and customers_entity is not None
     assert orders_entity.grain == "one row per order line", "the save survived the job"
     assert customers_entity.label == "Customers (generated)", "and the job landed"
-
-    v1, v2, v3 = versions(db, conn)
-    assert v3.origin == {"generated_job_ids": [str(job.id)]}
-    assert (v3.parent_version, v3.published_by) == (2, OTHER)
+    assert row.draft_origin == {"generated_job_ids": [str(job.id)]}
+    assert row.revision == 3
     assert [r.detail for r in audit_rows(db, SEMANTIC_GENERATION_SAVED)] == [
-        {"job_id": str(job.id), "version": 3, "delegated": True}
+        {"job_id": str(job.id), "revision": 3, "delegated": True}
     ]
-    row = head(db, conn)
-    assert row is not None and row.prompt_version and row.generated_at is not None
+    assert row.prompt_version and row.generated_at is not None
+
+    # Neither the save nor the job reached what a question reads…
+    [v1] = versions(db, conn)
+    assert_head_is_its_published_version(db, conn)
+    # …until it is published, when the version carries the job it came from.
+    await service(db).publish(conn, base_revision=3, ctx=ctx(), note="Reviewed.")
+    _, v2 = versions(db, conn)
+    assert v2.origin == {"generated_job_ids": [str(job.id)]}
+    assert (v2.parent_version, v2.published_by) == (1, AUTHOR)
+    final = SemanticDocument.model_validate(head(db, conn).document)  # type: ignore[union-attr]
+    assert final.entity("public.orders").grain == "one row per order line"  # type: ignore[union-attr]
     assert_head_is_its_published_version(db, conn)
 
 
@@ -231,7 +246,7 @@ async def test_an_editor_holding_the_pre_generation_revision_gets_a_conflict(
     db, monkeypatch: pytest.MonkeyPatch  # noqa: F811
 ) -> None:
     """The second direction: the job moved the revision, so an editor that read
-    the layer before it cannot save over what the job wrote."""
+    the layer before it cannot save over what the job wrote to the draft."""
     conn = connection(db)
     svc = service(db)
     await svc.save(conn, layer(), base_revision=0, ctx=ctx())
@@ -246,9 +261,11 @@ async def test_an_editor_holding_the_pre_generation_revision_gets_a_conflict(
     stale = layer()
     stale.entities[0].label = "My orders"
     with pytest.raises(SemanticConflictError):
+        await svc.save_draft(conn, stale, base_revision=1, ctx=ctx())
+    with pytest.raises(SemanticConflictError):
         await svc.save(conn, stale, base_revision=1, ctx=ctx())
     customers_entity = SemanticDocument.model_validate(
-        head(db, conn).document  # type: ignore[union-attr]
+        head(db, conn).draft_document  # type: ignore[union-attr]
     ).entity("public.customers")
     assert customers_entity is not None and customers_entity.label == "Customers (generated)"
 
@@ -276,9 +293,13 @@ async def test_a_generation_that_changes_nothing_writes_no_version(
     assert row is not None and row.revision == 1 and row.generated_at is not None
 
 
-async def test_the_first_generation_on_a_new_connection_is_version_one(
+async def test_the_first_generation_on_a_new_connection_is_a_draft_not_a_version(
     db, monkeypatch: pytest.MonkeyPatch  # noqa: F811
 ) -> None:
+    """§12 open question 1, decided: a first generation does not publish itself.
+
+    A model's guess about a schema is exactly what a draft puts in front of a
+    person. It is the one place the new flow is slower than the old one."""
     conn = connection(db)
     sync(db, conn, orders("id", "amount", "status"), customers())
     generation = BlockingGeneration(SemanticDocument(entities=[
@@ -288,6 +309,13 @@ async def test_the_first_generation_on_a_new_connection_is_version_one(
     _wire(monkeypatch, generation)
     await service(db).execute_job(_job(db, conn, llm_config(db)).id, asyncio.Event())
 
+    assert versions(db, conn) == []
+    row = head(db, conn)
+    assert row is not None
+    assert (row.revision, row.published_version, row.document) == (1, None, {})
+    assert row.draft_updated_by == OTHER
+
+    await service(db).publish(conn, base_revision=1, ctx=ctx())
     [v1] = versions(db, conn)
-    assert v1.version == 1 and v1.published_by == OTHER
+    assert v1.version == 1 and v1.published_by == AUTHOR
     assert_head_is_its_published_version(db, conn)

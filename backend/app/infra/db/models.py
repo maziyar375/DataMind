@@ -614,6 +614,10 @@ class SemanticLayerRow(Base, TimestampMixin):
     `published_version` names, written in the same transaction (D3 of
     `docs/plans/semantic-layer-model.md`). The copy is what keeps every reader
     of the layer unchanged; the version is what makes it attributable.
+
+    Since `0033` an edit lands in `draft_document` first, and only publishing
+    it writes a version — so a save, a generation, a restore or an import no
+    longer reaches the next question the moment it lands.
     """
 
     __tablename__ = "semantic_layers"
@@ -653,6 +657,24 @@ class SemanticLayerRow(Base, TimestampMixin):
     )
     #: Which version `document` is. NULL until anything has been written.
     published_version: Mapped[int | None] = mapped_column(Integer)
+    #: Unpublished edits, or NULL when there are none — a NULL draft *is* the
+    #: published document (`0033`). **No loader reads this column**: a run, a
+    #: SQL draft, a report and a published benchmark all read `document`, so an
+    #: edit reaches the model only when somebody publishes it.
+    #: `none_as_null`: clearing the draft writes SQL NULL rather than JSON
+    #: `null`, so `draft_document IS NULL` means what it says.
+    draft_document: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True)
+    )
+    draft_updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    draft_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: How the draft came to be — `generated_job_ids`, `restored_from` — folded
+    #: into the version's `origin` when it is published.
+    draft_origin: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
 
 
 class SemanticLayerVersionRow(Base):
@@ -1969,8 +1991,17 @@ class BenchmarkRun(Base):
     taught_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     taught_matched: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     #: Which semantic layer version was scored — `0` when none reached the
-    #: prompt, NULL before `0032`. The same meaning as on `runs`.
+    #: prompt, NULL before `0032`. The same meaning as on `runs`. On a `DRAFT`
+    #: run it is the published version the draft was edited over.
     semantic_layer_version: Mapped[int | None] = mapped_column(Integer)
+    #: `PUBLISHED` (what every question reads) or `DRAFT` (unpublished edits,
+    #: scored before anybody publishes them). `0033`.
+    semantic_source: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="PUBLISHED", server_default="PUBLISHED"
+    )
+    #: The head revision a `DRAFT` run was pinned to when it was queued. The
+    #: worker refuses to score a draft that has moved since.
+    semantic_revision: Mapped[int | None] = mapped_column(Integer)
 
     error_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

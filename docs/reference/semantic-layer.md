@@ -77,15 +77,66 @@ shapes. That is the class this addresses.
   - **A generation merges into the layer as it is when it lands**, under the
     lock, not into the document it read minutes earlier — so a save made while
     it ran survives. Before this the job silently overwrote it.
-  - **Restore** publishes an old version again as a new one, bound to today's
-    snapshot (an entry whose table is gone comes back flagged, not missing).
-    **Delete** publishes an empty tombstone version; history is kept.
+  - **Restore** puts an old version back — into the draft since Phase 2 —
+    bound to today's snapshot (an entry whose table is gone comes back flagged,
+    not missing). **Delete** publishes an empty tombstone version and drops any
+    draft; history is kept.
   - **Runs and benchmark runs record `semantic_layer_version`** (`0` for no
     layer, NULL before `0032`), and *Grounded* reads that version: an answer is
     no longer grounded after the fact by a table described next week.
-  - The editor shows `v12 · saved by … · 2 days ago · History`; History is
-    `/sources/:id/semantic/history[/:version]`, and `?entity=&item=` filters
-    it to one table or metric, reached from the card.
+  - History is `/sources/:id/semantic/history[/:version]`, and
+    `?entity=&item=` filters it to one table or metric, reached from the card.
+- **An edit lands in a draft; publishing makes the version** (migration `0033`,
+  Phase 2). The editor's Save writes `semantic_layers.draft_document`
+  (`PUT …/semantic/draft`), and so do a **generation** and a **restore**. **No
+  loader reads the draft**: `load_layer` and `load_document` read `document`,
+  the published copy, so a chat run, a SQL draft, a report and a published
+  benchmark all answer with the published version while a different draft
+  exists (`test_semantic_draft.py` checks the loaders' source, the modules that
+  may name the column, and the behaviour). A NULL draft *is* the published
+  document; a draft saved back to what is published leaves no draft.
+  - `POST …/semantic/publish {base_revision, note}` binds the draft against the
+    current snapshot, diffs it against the published document, and writes the
+    version through the one writer. Refused when the list is empty
+    (`E_SEMANTIC_NO_CHANGES`) and when a change **alters numbers** with a blank
+    note (`E_SEMANTIC_NOTE_REQUIRED`, 422) — the SQL of a dashboard does not show
+    that `revenue` now excludes refunds, and the note is the only record of
+    why. The draft's `draft_origin` (`generated_job_ids`, `restored_from`)
+    becomes the version's `origin`. `DELETE …/semantic/draft?base_revision=`
+    discards the draft. Both need `modify`, the privilege editing already
+    needs: there is no approval step (D7).
+  - **A first generation does not publish itself.** A model's guess about a
+    schema is exactly what a draft is for; the job's notice says *written to
+    your draft* and links to the publish dialog. This is the one place the flow
+    is slower than before.
+  - The one-step `PUT /semantic` stays for API clients and scripts — it saves
+    and publishes at once and replaces any draft, and its note stays optional
+    as it was in Phase 1.
+  - **Scoring a draft.** The publish dialog offers *Score this draft* when the
+    connection has a benchmark set: a `benchmark_runs` row with
+    `semantic_source = DRAFT`, pinned to the layer's `revision`. The worker reads
+    the draft through `load_draft` — the one reader of a draft outside the
+    editor — and fails the run if the draft moved after it was queued, rather
+    than scoring a draft nobody asked about. It needs `(semantic_layer, modify)`
+    on top of the route's own `(knowledge, modify)`, and it scores the draft
+    whether or not the switch is on, because that is what was asked. Draft runs
+    stay out of the score strip; the dialog shows a delta only when both runs
+    used the same prompt version and model (`semantic-score.ts`), and otherwise
+    says why there is none. `semantic.published` records the run that scored
+    exactly the published revision, found on the server, not sent by the client.
+  - **Regeneration keeps the two document texts on their own flags.**
+    `business_context` and `default_exclusions` gained `context_provenance` and
+    `exclusions_provenance`, set by the editor; before them a merge kept a
+    hand-written exclusion rule only when *something else* had been edited, so
+    a curator who wrote only that rule lost it to the first generation.
+  - The editor shows `Published v12 · published by … · 2 days ago` and either
+    `● No unpublished changes` or `◐ 3 unpublished changes`, which opens the
+    publish dialog. Its floating bar has two states: `Unsaved edits [Discard]
+    [Save draft]`, and `3 unpublished changes [Discard draft] [Review and
+    publish]`. Audit: `semantic.draft.saved {revision, changes}`,
+    `semantic.draft.discarded {revision}`, `semantic.published {version,
+    changes, affects_sql, scored_run_id}`; `semantic.restored` and
+    `semantic.generation.saved` now carry the draft's `revision`.
 - **The benchmark is scored with the layer.** Before v10 `workers/benchmark.py`
   never passed it, so every `benchmark_runs` row at v9 or earlier was taken
   layer-off whatever the switch said.
@@ -93,8 +144,9 @@ shapes. That is the class this addresses.
   the same loader, so a switched-off layer describes nothing and an entity
   counts only while it binds and is not excluded.
 - **Regeneration is safe.** Any field a user edits sets `provenance.edited`, and
-  `merge_documents` keeps those entities; `REPLACE` is the explicit "start
-  over" the UI makes you choose.
+  `merge_documents` keeps those entities — and the business context and
+  exclusion rule, each on its own flag; `REPLACE` is the explicit "start over"
+  the UI makes you choose. Either way the result is a draft.
 - **It is off-by-absence.** With no layer, or with
   `connections.semantic_layer_enabled` false, `RetrievedContext.render` emits
   **byte-identical** output to before the feature existed — verified by a test.

@@ -83,6 +83,18 @@ class SemanticNoChangesError(ValidationError):
     title = "Nothing changed"
 
 
+class SemanticNoteRequiredError(ValidationError):
+    """A publish whose changes alter numbers, with no note saying why.
+
+    A metric's filter or expression changes a figure on somebody's dashboard
+    without changing the text of its SQL, and *why* is the one thing a later
+    reader of the history cannot reconstruct from the change list.
+    """
+
+    code = "E_SEMANTIC_NOTE_REQUIRED"
+    title = "Say why these numbers change"
+
+
 class SemanticBaseRevisionRequiredError(ValidationError):
     """A write that did not say which revision it was made against.
 

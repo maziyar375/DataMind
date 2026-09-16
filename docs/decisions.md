@@ -100,6 +100,9 @@ load-bearing ones:
 | **`semantic_layers.document` stays "what the model reads"**, a copy of the published version written in the same transaction, so no reader changed (D3) | Standing (2026-09-15) | [plans/semantic-layer-model.md](plans/semantic-layer-model.md) §2.2 |
 | **One differ, in the backend.** The frontend groups and words typed changes and never compares documents (D5) | Standing (2026-09-15) | [plans/semantic-layer-model.md](plans/semantic-layer-model.md) §2.2 |
 | **Concurrency is one integer and a conflict is a refusal** — no server-side merge of two people's edits; a generation, not being a person, merges into the current row under a lock (D6) | Standing (2026-09-15) | [plans/semantic-layer-model.md](plans/semantic-layer-model.md) §2.2 |
+| **An edit lands in a draft; only a publish is a version.** Save, generation and restore write `draft_document`, which no loader reads; publishing needs `modify`, with no approval step (D2, D7) | Standing (2026-09-16) | [plans/semantic-layer-model.md](plans/semantic-layer-model.md) §4.3 |
+| **A first generation does not publish itself**, and a number-changing publish needs a note (§12 questions 1 and 2) | Standing (2026-09-16) | [plans/semantic-layer-model.md](plans/semantic-layer-model.md) §12 |
+| **A draft's benchmark run is advisory and stays out of the score strip**; a delta is shown only between runs with the same prompt version and model (§12 question 4) | Standing (2026-09-16) | [plans/semantic-layer-model.md](plans/semantic-layer-model.md) §4.3 |
 | **Binding on load moved `PROMPT_VERSION` v9 → v10**, though no wording changed: it changes what survives of a drifted layer, and it put the layer into benchmark prompts that never had one (D11) | Standing (2026-09-15) | [plans/semantic-layer-model.md](plans/semantic-layer-model.md) §2.2 |
 
 ## 6. Pipelines, charts and the three surfaces

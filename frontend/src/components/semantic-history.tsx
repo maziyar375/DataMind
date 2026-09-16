@@ -9,7 +9,8 @@
  *  - `/sources/:id/semantic/history?entity=&item=` — one table, column or
  *    metric's changes, from a card's History button;
  *  - `/sources/:id/semantic/history/:version` — what one version changed, and
- *    *Restore as v14*.
+ *    *Restore into draft*: the version goes back into the draft, and becomes
+ *    what the model reads only when somebody publishes it.
  *
  * Every sentence comes from `semantic-changes.ts`, which words the server's
  * change list and never computes one.
@@ -21,8 +22,8 @@ import type {
   SemanticChange, SemanticHistoryEntry, SemanticLayer, SemanticVersionSummary,
 } from '../api/types'
 import {
-  Chip, ErrorNote, Field, GhostButton, Icon, Modal, PrimaryButton, Select, Spinner,
-  TextArea, dirOf, relativeTime,
+  Chip, ErrorNote, GhostButton, Icon, Modal, PrimaryButton, Select, Spinner,
+  dirOf, relativeTime,
 } from './ui'
 import {
   authorship, byVersion, changeCount, firstLine, groupChanges, historyPath,
@@ -277,6 +278,7 @@ function VersionPage({
   const groups = useMemo(() => (changes ? groupChanges(changes) : []), [changes])
   const published = layer?.published_version ?? null
   const isLive = version === published
+  const hasDraft = !!layer?.has_draft
 
   return (
     <>
@@ -375,18 +377,20 @@ function VersionPage({
           }}
         >
           <span style={{ flex: 1, minWidth: 220, fontSize: 12.5, color: 'var(--text-dim)' }}>
-            {isLive
+            {isLive && !hasDraft
               ? 'This is the version the model reads now.'
               : dirty
                 ? 'You have unsaved edits in the editor. Save or discard them before restoring, so nothing is replaced without you seeing it.'
-                : `Restoring publishes this version again as v${(published ?? 0) + 1}. Nothing is deleted — every version stays here.`}
+                : isLive
+                  ? 'This is the version the model reads now. Restoring it into the draft throws away the unpublished changes.'
+                  : `Restoring puts this version into the draft${hasDraft ? ', replacing the unpublished changes there' : ''}. It reaches the model when the draft is published as v${(published ?? 0) + 1}. Nothing is deleted — every version stays here.`}
           </span>
           <PrimaryButton
             onClick={() => setRestoring(true)}
-            disabled={isLive || dirty || !layer}
+            disabled={(isLive && !hasDraft) || dirty || !layer}
           >
             <Icon.History size={13} />
-            Restore as v{(published ?? 0) + 1}
+            Restore into draft
           </PrimaryButton>
         </section>
       )}
@@ -477,7 +481,6 @@ function RestoreDialog({
   onClose: () => void
   onRestored: (next: SemanticLayer) => void
 }) {
-  const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const next = (layer.published_version ?? 0) + 1
@@ -486,13 +489,11 @@ function RestoreDialog({
     setBusy(true)
     setError(null)
     try {
-      onRestored(await api.restore(connectionId, version, {
-        baseRevision: layer.revision, note: note.trim(),
-      }))
+      onRestored(await api.restore(connectionId, version, { baseRevision: layer.revision }))
     } catch (err) {
       if (err instanceof ApiError && err.code === 'E_SEMANTIC_CONFLICT') {
         const who = err.detail?.updated_by_name || 'Someone'
-        setError(`${who} changed this layer (now v${err.detail?.published_version ?? '?'}) since this page loaded. Go back to the list and look before restoring.`)
+        setError(`${who} changed this layer since this page loaded. Go back to the list and look before restoring.`)
       } else {
         setError(err instanceof Error ? err.message : 'Could not restore this version.')
       }
@@ -503,8 +504,8 @@ function RestoreDialog({
 
   return (
     <Modal
-      title={`Restore version ${version}?`}
-      subtitle={`It will be published as v${next}, and it is what the model reads from the next question on.`}
+      title={`Restore version ${version} into the draft?`}
+      subtitle={`No question reads it until the draft is published as v${next}.`}
       onClose={onClose}
       width={480}
       footer={
@@ -512,7 +513,7 @@ function RestoreDialog({
           <GhostButton onClick={onClose} disabled={busy}>Cancel</GhostButton>
           <PrimaryButton onClick={restore} disabled={busy}>
             {busy && <Spinner />}
-            Restore as v{next}
+            Restore into draft
           </PrimaryButton>
         </>
       }
@@ -521,15 +522,9 @@ function RestoreDialog({
         <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: 'var(--text-dim)' }}>
           Anything that no longer matches the schema comes back flagged rather
           than missing, so you can see what the schema has moved past.
+          {layer.has_draft && ' The draft’s unpublished changes are replaced.'}
+          {' '}You will be asked why when you publish it.
         </p>
-        <Field label="Why" hint="Optional. The next person to read this history will want to know.">
-          <TextArea
-            value={note}
-            maxLength={2000}
-            placeholder="e.g. v12 double-counted refunds"
-            onChange={(e) => setNote(e.target.value)}
-          />
-        </Field>
         {error && <ErrorNote>{error}</ErrorNote>}
       </div>
     </Modal>
