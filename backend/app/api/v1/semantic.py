@@ -11,6 +11,7 @@ credential or a row. Every route here asks about `semantic_layer`, never about
 """
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Any
 from uuid import UUID
 
@@ -28,6 +29,9 @@ from app.api.schemas import (
     SemanticExpressionResult,
     SemanticGenerateRequest,
     SemanticHistoryEntry,
+    SemanticImportReport,
+    SemanticImportRequest,
+    SemanticImportResult,
     SemanticJobRead,
     SemanticLayerRead,
     SemanticMetricUse,
@@ -51,8 +55,10 @@ from app.domain.ports.authz import ResourceRef
 from app.domain.value_objects.authz import Privilege, ResourceType
 from app.infra.db.models import DatabaseConnection, SemanticJobRow, SemanticLayerVersionRow
 from app.semantic import AFFECTS_SQL, Change, SemanticDocument, check_expression
+from app.semantic import limits as semantic_limits
 from app.services.policy import require
 from app.services.semantic_service import SemanticService, VersionSummary
+from app.services.semantic_transfer import LayerFile
 
 router = APIRouter(prefix="/connections/{connection_id}/semantic", tags=["semantic"])
 
@@ -94,6 +100,24 @@ async def _authorized(
         db=db,
     )
     return connection
+
+
+def _document(raw: dict[str, Any]) -> SemanticDocument:
+    """A person's document, parsed and held to the limits every write is held to.
+
+    The editor and an import share these limits (`app/semantic/limits.py`):
+    every word of a layer is prompt text, and neither door may make it
+    unbounded. Checked here, on write — never on read, where an over-long stored
+    layer would otherwise silently leave every prompt.
+    """
+    try:
+        doc = SemanticDocument.model_validate(raw)
+    except Exception as err:
+        raise ValidationError("This semantic layer document is malformed.") from err
+    found = semantic_limits.problems(doc)
+    if found:
+        raise ValidationError(" ".join(found))
+    return doc
 
 
 def _job_read(job: SemanticJobRow | None) -> SemanticJobRead | None:
@@ -217,10 +241,7 @@ async def save_semantic_layer(
         raise SemanticBaseRevisionRequiredError(
             "Say which revision this document was edited from (`base_revision`)."
         )
-    try:
-        doc = SemanticDocument.model_validate(payload.document)
-    except Exception as err:
-        raise ValidationError("This semantic layer document is malformed.") from err
+    doc = _document(payload.document)
 
     service = SemanticService(db, settings, authz)
     try:
@@ -261,10 +282,7 @@ async def save_semantic_draft(
         raise SemanticBaseRevisionRequiredError(
             "Say which revision this draft was edited from (`base_revision`)."
         )
-    try:
-        doc = SemanticDocument.model_validate(payload.document)
-    except Exception as err:
-        raise ValidationError("This semantic layer document is malformed.") from err
+    doc = _document(payload.document)
 
     service = SemanticService(db, settings, authz)
     try:
@@ -329,6 +347,65 @@ async def publish_semantic_draft(
     except SemanticConflictError as err:
         return problem_response(err)  # type: ignore[return-value]
     return await _read_payload(service, connection)
+
+
+@router.get("/export", response_model=LayerFile)
+async def export_semantic_layer(
+    connection_id: UUID,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    authz: AuthzDep,
+    version: int | None = Query(default=None, ge=1),
+    value_meanings: bool = Query(default=False),
+) -> LayerFile:
+    """A published version as a portable file — JSON, not a download, because
+    the SPA sends a bearer token (the dashboards precedent).
+
+    `select`: it is the same bytes `GET /semantic/versions/{n}` already returns
+    to this reader, minus what is derived. No ids, hosts or credentials, and no
+    `value_meanings` unless `value_meanings=true` — those are values from the
+    data (D9). Audited as `semantic.exported`, with which choice was made.
+    """
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.SELECT)
+    return await SemanticService(db, settings, authz).export(
+        connection, version=version, value_meanings=value_meanings, ctx=ctx
+    )
+
+
+@router.post("/import", response_model=SemanticImportResult)
+async def import_semantic_layer(
+    connection_id: UUID,
+    payload: SemanticImportRequest,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    authz: AuthzDep,
+) -> SemanticImportResult:
+    """A semantic layer file into the **draft** — `modify`, like typing into the
+    editor, because that is what it is. Nothing reaches a question until the
+    draft is published.
+
+    Not a guard entry point: nothing executes a metric expression. The report
+    says what the file resolved to against this connection's snapshot — tables
+    it names that this schema lacks are kept and flagged, not dropped.
+    """
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.MODIFY)
+    if payload.base_revision is None:
+        raise SemanticBaseRevisionRequiredError(
+            "Say which revision you are importing over (`base_revision`)."
+        )
+    service = SemanticService(db, settings, authz)
+    try:
+        _, report = await service.import_file(
+            connection, payload.file, base_revision=payload.base_revision, ctx=ctx
+        )
+    except SemanticConflictError as err:
+        return problem_response(err)  # type: ignore[return-value]
+    return SemanticImportResult(
+        layer=await _read_payload(service, connection),
+        report=SemanticImportReport(**asdict(report)),
+    )
 
 
 @router.post("/diff", response_model=list[SemanticChangeRead])

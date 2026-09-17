@@ -162,8 +162,8 @@ check('a detail-less description change does not claim which field',
 check('origins as words',
       [originWords({ migrated: true }), originWords({ deleted: true }),
        originWords({ restored_from: 9 }), originWords({ generated_job_ids: ['j'] }),
-       originWords({}), originWords(null)],
-      ['recorded at migration', 'deleted', 'restored from v9', 'generated', '', ''])
+       originWords({ imported: true }), originWords({}), originWords(null)],
+      ['recorded at migration', 'deleted', 'restored from v9', 'generated', 'imported', '', ''])
 check('authorship puts the person after what happened',
       [authorship({}, 'Sara Karimi'), authorship({ restored_from: 3 }, 'Ali'),
        authorship({ generated_job_ids: ['j'] }, 'Sara'), authorship({ migrated: true }, ''),

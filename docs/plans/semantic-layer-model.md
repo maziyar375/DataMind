@@ -1,6 +1,7 @@
 # The semantic layer as a model — build plan
 
-> **Status: Phases 0 and 1 landed 2026-09-15; Phases 2 and 3 landed 2026-09-16.**
+> **Status: Phases 0 and 1 landed 2026-09-15, Phases 2 and 3 on 2026-09-16,
+> Phase 4 on 2026-09-17.**
 > Written 2026-09-15 against `main` at `d7cba6f`; the §14 ledger is the record
 > of what is in the tree since. **Migration numbers moved:** `0030` and `0031`
 > went to the usage screen while this was being written, so the plan's
@@ -1235,14 +1236,14 @@ phase, and now renders neither.
 - [ ] `ignored` precision measured at 0.95 or above, then the SQL panel line, **needs real runs**. Tried on what exists: the 17 statements the demo `aurora` connection's past chat runs produced gave 2 `used` (both right) and **no** `ignored`, so there is nothing yet to measure; `ignored` is stored, counted in *Metrics in use*, and shown on no answer
 - [x] Tests: fail open (unparseable statement, an exception inside the matcher), version 0 and no layer store nothing, a Verified answer is attributed, `ignored` never reaches an answer, the definitions come from the version rather than today's layer, *Metrics in use* over a real schema with a window and another connection's runs, the benchmark's counts through the real pipeline, and the eval's per-arm count — `test_metric_use.py`, `test_benchmark_semantic.py`
 
-### 14.5 Phase 4: The portable document · **0 / 6**
+### 14.5 Phase 4: The portable document · **6 / 6**
 
-- [ ] Export route and format; derived fields stripped; value meanings opt-in; audit
-- [ ] Import route into the draft; the bind report; the limits; audit
-- [ ] `max_length` on the model's text fields
-- [ ] Hostile corpus replayed through `check_expression`
-- [ ] Frontend: export and import dialogs
-- [ ] Tests: round trip, limits, a flagged import
+- [x] Export route and format; derived fields stripped; value meanings opt-in; audit — `GET …/semantic/export` exports a **published version** (the current one, or `?version=n`), never the draft, and refuses with 404 when nothing is published. The format is `app/services/semantic_transfer.py`, beside `dashboard_transfer.py`
+- [x] Import route into the draft; the bind report; the limits; audit — through the one draft writer with origin `{"imported": true}`, which a publish carries into the version and History words as *imported*. The report counts a metric on an unresolved table as invalid, since it cannot reach a prompt either
+- [x] Limits on the model's text fields. **Changed from `max_length` on the model to limits declared beside it (`app/semantic/limits.py`) and checked on write**: the editor's two saves and import are refused, a generation is clipped. A parse-time limit would have made an over-long stored layer unreadable, and the loaders fail open, so it would silently have left every prompt; it would also have dropped a whole generated table for one long sentence. A test fails when a text field exists without a limit
+- [x] Hostile corpus replayed through `check_expression` — **and it found something.** `sqlglot.parse_one` reads `1; DROP TABLE orders` as a `Block` whose columns resolve, so a chained statement passed as a valid *filter* and would have been rendered into prompts. `check_expression` now refuses anything but a single `SELECT` probe. No stored metric in the fixture or the demo database contained an inner `;`, so no prompt changed and `PROMPT_VERSION` stays v10
+- [x] Frontend: export and import dialogs (`semantic-transfer.tsx`), beside History and, on an empty layer, beside *Generate with AI*; `semantic-file.ts` reads a file before it is sent and is the eighteenth DOM-free module (`npm run test:layerfile`). Driven on a clone: download an export, import an edited file with a table the schema lacks, read the report, publish as v2 *imported*, refuse a dashboard file
+- [x] Tests: `test_semantic_transfer.py` — the round trip (empty change list with value meanings; only `value_meanings_changed` without), stripped fields and no connection internals, draft landing and origin, flagged not dropped, eight refusals of a hostile file, the limits on both doors and on a generation, the hostile replay, and the routes' privileges
 
 ### 14.6 Phase 5: Upkeep · **0 / 5**
 
@@ -1252,10 +1253,10 @@ phase, and now renders neither.
 - [ ] The needs-attention filter with its six reasons
 - [ ] Tests: `fill_gaps` never overwrites; drift detection; filter counts
 
-### 14.7 Documentation · **1 / 10**
+### 14.7 Documentation · **7 / 10**
 
 The other nine documents span phases, so each is ticked when the last phase it
-describes lands. What Phases 0 to 3 changed is already in each of them:
+describes lands. What Phases 0 to 4 changed is already in each of them:
 reference/semantic-layer.md, CLAUDE.md, status.md, decisions.md §5,
 reference/security.md §2.2, reference/eval.md §6,
 reference/knowledge-templates.md §6, and (Phase 2) the privilege matrix quoted
@@ -1265,12 +1266,12 @@ quotes no wording to change.
 - [ ] reference/semantic-layer.md
 - [ ] CLAUDE.md
 - [ ] status.md
-- [ ] decisions.md §5
-- [ ] reference/security.md
-- [ ] reference/eval.md
-- [ ] reference/knowledge-templates.md §6
-- [ ] reference/access-control.md
-- [ ] mvp2.md §1.3 and research/semantic-layer.md banners
+- [x] decisions.md §5 — D1–D11 are all recorded, with the decisions taken while building Phases 2–4
+- [x] reference/security.md — §7.1 and §7.2: versions, drafts, attribution and the portable file; Phase 5 adds no disclosure surface
+- [x] reference/eval.md — no later phase touches it: v10, the benchmark reading the layer, and the definition-use control arm
+- [x] reference/knowledge-templates.md §6 — a score with the layer, draft runs kept apart, the metric-use rate
+- [x] reference/access-control.md — it quotes no privilege wording; the matrix that does, in plans/user-management-and-access-control.md §13.3, was updated in Phase 2
+- [x] mvp2.md §1.3 and research/semantic-layer.md banners
 - [x] docs/README.md index row
 
 ### 14.8 Totals
@@ -1281,7 +1282,7 @@ quotes no wording to change.
 | 1 · Versions | 13 | 13 |
 | 2 · Draft and publish | 11 | 11 |
 | 3 · Metric attribution | 7 | 9 |
-| 4 · Portable document | 0 | 6 |
+| 4 · Portable document | 6 | 6 |
 | 5 · Upkeep | 0 | 5 |
-| Documentation | 1 | 10 |
-| **Total** | **41** | **63** |
+| Documentation | 7 | 10 |
+| **Total** | **53** | **63** |

@@ -483,3 +483,20 @@ def test_a_metric_already_broken_keeps_the_reason_it_is_broken() -> None:
     assert not broken.valid and "also defined on" not in broken.issue
     # And with only one *valid* claim on the name, the other one stands.
     assert checked.entities[1].metrics[0].valid
+
+
+# ── a chained statement is not an expression (found in Phase 4) ─────────
+def test_a_chained_statement_is_refused_as_a_metric_or_a_filter() -> None:
+    """`parse_one` reads `WHERE 1; DROP TABLE orders` as a *block* of two
+    statements whose columns all resolve, so the check used to pass it. Found by
+    replaying the hostile SQL corpus through `check_expression`
+    (`test_semantic_transfer.py`)."""
+    index = build_index(
+        [{"schema": "sales", "name": "orders", "columns": [{"name": "amount"}]}], "postgres"
+    )
+    for text, boolean in (("1; DROP TABLE orders", True), ("SUM(amount); DELETE FROM orders", False)):
+        valid, issue = check_expression(text, entity_table="sales.orders", index=index, boolean=boolean)
+        assert not valid, text
+        assert "not a statement" in issue or "not valid SQL" in issue
+    # A trailing semicolon is still just an expression.
+    assert check_expression("amount > 0;", entity_table="sales.orders", index=index, boolean=True)[0]

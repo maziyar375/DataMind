@@ -23,7 +23,8 @@ import type {
   ReportSummary, Review, Role, RunDetail, RunEvent, RunKnowledge, SchemaSnapshot,
   Reach, ScopedPrivilege, ServiceAccount, ServiceKey, ShareCheck, Team,
   SemanticChange, SemanticChangeList, SemanticDocument, SemanticHistoryEntry,
-  SemanticJob, SemanticMetricUse, SemanticVersionList, Suggestion,
+  SemanticImportResult, SemanticJob, SemanticLayerFile, SemanticMetricUse, SemanticVersionList,
+  SemanticVersionSummary, Suggestion,
   SemanticLayer, SqlDraft, TemplateCheckResult, TemplateParam,
   TilePosition, TileResult, TileType, TestResult, UsageSeries, UsageTotal, User,
 } from './types'
@@ -634,6 +635,28 @@ export const semantic = {
     get<SemanticJob>(`/connections/${connectionId}/semantic/jobs/${jobId}`),
   cancelJob: (connectionId: string, jobId: string) =>
     post<SemanticJob>(`/connections/${connectionId}/semantic/jobs/${jobId}/cancel`),
+  // One version, with its document as it was bound when it was published.
+  version: (connectionId: string, version: number) =>
+    get<SemanticVersionSummary & { document: SemanticDocument }>(
+      `/connections/${connectionId}/semantic/versions/${version}`,
+    ),
+  // A published version as a file — JSON, fetched with the bearer token rather
+  // than linked. `valueMeanings` opts in to values drawn from the data.
+  exportFile: (
+    connectionId: string,
+    { version, valueMeanings = false }: { version?: number; valueMeanings?: boolean } = {},
+  ) => {
+    const params = new URLSearchParams({ value_meanings: String(valueMeanings) })
+    if (version !== undefined) params.set('version', String(version))
+    return get<SemanticLayerFile>(
+      `/connections/${connectionId}/semantic/export?${params.toString()}`,
+    )
+  },
+  // A file into the draft. Nothing reaches a question until it is published.
+  importFile: (connectionId: string, file: unknown, { baseRevision }: { baseRevision: number }) =>
+    post<SemanticImportResult>(`/connections/${connectionId}/semantic/import`, {
+      file, base_revision: baseRevision,
+    }),
   // *Metrics in use*: counts over the last `days` of answers, per metric.
   metricUse: (connectionId: string, days = 30) =>
     get<SemanticMetricUse>(`/connections/${connectionId}/semantic/metric-use?days=${days}`),

@@ -1070,6 +1070,35 @@ export interface MetricUsed {
   filters: string[]
 }
 
+/** A semantic layer as a portable file (`GET …/semantic/export`). No ids, no
+ *  hosts, nothing derived, and `value_meanings` only when asked for. */
+export interface SemanticLayerFile {
+  format: 'datamind.semantic_layer'
+  format_version: number
+  exported_at: string | null
+  source: { connection: string; engine: string; version: number | null }
+  value_meanings_included: boolean
+  document: Record<string, unknown>
+}
+
+/** What an import resolved to against this connection's snapshot. */
+export interface SemanticImportReport {
+  entities: number
+  /** Tables the file names that this schema lacks — kept and flagged. */
+  unresolved: number
+  metrics: number
+  invalid_metrics: number
+  value_meanings_included: boolean
+  value_meaning_columns: number
+  source_connection: string
+  source_engine: string
+}
+
+export interface SemanticImportResult {
+  layer: SemanticLayer
+  report: SemanticImportReport
+}
+
 /** *Metrics in use*: per metric, over the last `days` of answers. Counts only. */
 export interface SemanticMetricUse {
   days: number

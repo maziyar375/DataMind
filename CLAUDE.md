@@ -90,7 +90,7 @@ make authz-check  # prove no module decides access for itself
 make up / down / logs / secrets / migrate / fixtures / db-repair
 ```
 
-From `frontend/`: `npm run typecheck`, `npm run build`, `npm test` (eighteen
+From `frontend/`: `npm run typecheck`, `npm run build`, `npm test` (nineteen
 suites). **`npm run lint` is a dead script** — eslint is neither a devDependency
 nor configured.
 
@@ -135,6 +135,9 @@ backend/app/
                   dashboard_transfer (a dashboard as a portable file: no ids,
                   no results, no connection internals — and an imported
                   statement is hostile input like any other),
+                  semantic_transfer (a semantic layer as a portable file: a
+                  published version out, value meanings only when asked; a
+                  file in, to the draft),
                   query_service (execute_saved_sql — the tile/report entry point
                   into guarded execution), sql_draft_service,
                   usage_service (how many tokens the models used: one union
@@ -185,6 +188,8 @@ backend/app/
                   entry, which versions store and the UI only words),
                   attribute.py (whether an answer's SQL used a metric's
                   definition — observed after the run, never enforced),
+                  limits.py (how long a text may be — checked on write,
+                  never on parse),
                   generator.py (build one with a model, one call per
                   table), render.py (the prompt block), prompts.py —
                   self-contained like sqlguard
@@ -289,6 +294,9 @@ frontend/src/
                             `npm run test:changes`), semantic-score.ts (whether
                             a draft's benchmark score may be compared with the
                             published one — `npm run test:score`),
+                            semantic-transfer.tsx (export and import
+                            dialogs), semantic-file.ts (reading a layer file
+                            before it is sent — `npm run test:layerfile`),
                             semantic-drift.ts (an all-or-nothing
                             re-key told apart from ordinary drift —
                             engine-neutral detection, Oracle-specific
@@ -773,14 +781,14 @@ at commit time and shows up as drift a release later. Full tour:
   A literal hex or `oklch()` in a component is a bug in both themes — one of
   them just has not been looked at yet. Chart colours are the one exception and
   they live in `components/palette.ts`, tested apart from React.
-- **The seventeen DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
+- **The eighteen DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
   `table-format.ts`, `dashboard-document.ts`, `palette.ts`, `chat-format.ts`,
   `report-document.ts`, `report-readiness.ts`, `report-print.ts`,
   `semantic-drift.ts`, `semantic-metrics.ts`, `semantic-changes.ts`,
-  `semantic-score.ts`, `knowledge-template.ts`, `thinking.ts`,
+  `semantic-score.ts`, `semantic-file.ts`, `knowledge-template.ts`, `thinking.ts`,
   `knowledge-queue.ts`, `provider-params.ts`, `usage-chart.ts` — they hold the
   logic whose failures are quiet, they are (with `scripts/permissions.test.ts`,
-  the eighteenth suite) the *only* tested code in the frontend, and their suites
+  the nineteenth suite) the *only* tested code in the frontend, and their suites
   are plain `node --experimental-strip-types` scripts. **One React import turns
   a suite into a thing that cannot run.**
 - **Text a person wrote gets `dir={dirOf(value)}`.** The product ships Persian.

@@ -13,6 +13,17 @@
 > product documentation, this document says so.
 > **Status:** research and options. Not a decision. §6 is an argument, §8 lists
 > the decisions that have to be made before any of it is built.
+>
+> **Decided since in [plans/semantic-layer-model.md](../plans/semantic-layer-model.md)**
+> (2026-09-15), against the tree as it then stood. Six points here no longer hold
+> and that plan's §1.3 says why: `audit_logs` has about forty writers, so versions
+> were not its first; a layer is a grantable resource, so concurrency is a
+> correctness issue and approval is deferred for a different reason; the
+> in-product benchmark exists, so draft/publish was built **before** attribution
+> (§6.9's order reversed); attribution runs after the run over stored SQL, not
+> as a step after `validate` (§7.2); import is not a new guard entry point
+> (§8.6); and every version is kept rather than the last 50 (§8.4). Phases 0–4
+> of that plan have landed.
 > **Siblings:** [learning-loop.md](learning-loop.md) (§1.1) ·
 > [retrieval-at-scale.md](retrieval-at-scale.md) (§1.2). The three overlap
 > deliberately and the overlaps are marked.

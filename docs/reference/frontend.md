@@ -515,13 +515,19 @@ each Vega plot at page width in the light palette — are
 
 ## 7. What is tested, and what is not
 
-Seventeen modules are deliberately **DOM-free** and carry their own suites,
+Eighteen modules are deliberately **DOM-free** and carry their own suites,
 because every way they can be wrong is quiet: `dashboard-schedule.ts`,
 `table-format.ts`, `dashboard-document.ts`, `palette.ts`, `chat-format.ts`,
 `report-document.ts`, `report-readiness.ts`, `report-print.ts`,
 `semantic-drift.ts`, `semantic-metrics.ts`, `semantic-changes.ts`,
-`semantic-score.ts`, `knowledge-template.ts`, `thinking.ts`,
+`semantic-score.ts`, `semantic-file.ts`, `knowledge-template.ts`, `thinking.ts`,
 `knowledge-queue.ts`, `provider-params.ts`, `usage-chart.ts`.
+
+`semantic-file.ts` reads a semantic layer export before it is sent — format,
+version, a document at all — counts what is in it for the import preview,
+names a downloaded file, and words an import's report with the tables that did
+not resolve first. `semantic-metrics.ts` also words an answer's *Matches the
+definition* chip.
 
 `semantic-changes.ts` groups, orders and words a semantic layer's change list
 for the History screens, the publish dialog, the draft chip and the conflict

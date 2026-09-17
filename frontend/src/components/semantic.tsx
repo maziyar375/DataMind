@@ -53,6 +53,7 @@ import { useBackgroundWatch } from '../shell'
 import { explainRekey, rekeyDrift } from './semantic-drift'
 import { SemanticHistory } from './semantic-history'
 import { ChangeList, PublishDialog } from './semantic-publish'
+import { ExportDialog, ImportDialog } from './semantic-transfer'
 import { authorship, historyPath, unpublishedWords } from './semantic-changes'
 import {
   collectMetrics, matchesMetric, metricSummary,
@@ -134,6 +135,8 @@ export function SemanticLayerTab({
   const [displaced, setDisplaced] = useState<SemanticChange[] | null>(null)
   const [publishing, setPublishing] = useState(false)
   const [askDiscardDraft, setAskDiscardDraft] = useState(false)
+  const [askExport, setAskExport] = useState(false)
+  const [askImport, setAskImport] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [askGenerate, setAskGenerate] = useState(false)
   const [askDelete, setAskDelete] = useState(false)
@@ -511,6 +514,8 @@ export function SemanticLayerTab({
           }}
           onHistory={() => navigate(historyPath(connection.id))}
           onPublish={() => setPublishing(true)}
+          onExport={() => setAskExport(true)}
+          onImport={() => setAskImport(true)}
           dirty={dirty}
         />
 
@@ -662,6 +667,33 @@ export function SemanticLayerTab({
         />
       )}
 
+      {askExport && layer && (
+        <ExportDialog
+          connectionId={connection.id}
+          connectionName={connection.name}
+          layer={layer}
+          onClose={() => setAskExport(false)}
+        />
+      )}
+
+      {askImport && (
+        <ImportDialog
+          connectionId={connection.id}
+          layer={layer}
+          dirty={dirty}
+          onClose={() => setAskImport(false)}
+          onImported={(next) => {
+            adopt(next)
+            setDisplaced(null)
+            setConflict(null)
+          }}
+          onPublish={() => {
+            setAskImport(false)
+            setPublishing(true)
+          }}
+        />
+      )}
+
       {askDiscardDraft && layer && (
         <ConfirmDiscardDraft
           layer={layer}
@@ -713,7 +745,7 @@ function Shell({
 // ── hero ───────────────────────────────────────────────────────────────────
 function Hero({
   layer, connection, running, job, onGenerate, onDelete, onCancel, onToggle,
-  onFocusFilter, onHistory, onPublish, dirty,
+  onFocusFilter, onHistory, onPublish, onExport, onImport, dirty,
 }: {
   layer: SemanticLayer | null
   connection: Connection
@@ -726,6 +758,8 @@ function Hero({
   onFocusFilter: (next: Filter) => void
   onHistory: () => void
   onPublish: () => void
+  onExport: () => void
+  onImport: () => void
   dirty: boolean
 }) {
   const exists = !!layer?.exists
@@ -809,10 +843,17 @@ function Hero({
               Regenerate
             </GhostButton>
           ) : (
-            <PrimaryButton onClick={onGenerate} disabled={running}>
-              <Icon.Sparkle size={14} />
-              Generate with AI
-            </PrimaryButton>
+            <>
+              {/* Nothing to describe yet, so the other way in sits beside the
+                  first one: a layer somebody already wrote, as a file. */}
+              <GhostButton onClick={onImport} disabled={running}>
+                Import a file
+              </GhostButton>
+              <PrimaryButton onClick={onGenerate} disabled={running}>
+                <Icon.Sparkle size={14} />
+                Generate with AI
+              </PrimaryButton>
+            </>
           )}
           {exists && (
             <IconButton
@@ -980,6 +1021,8 @@ function Hero({
               model={model}
               onHistory={onHistory}
               onPublish={onPublish}
+              onExport={onExport}
+              onImport={onImport}
               dirty={dirty}
             />
           </div>
@@ -1019,12 +1062,14 @@ function Hero({
  * which is true and says nothing earlier was kept.
  */
 function VersionLine({
-  layer, model, onHistory, onPublish, dirty,
+  layer, model, onHistory, onPublish, onExport, onImport, dirty,
 }: {
   layer: SemanticLayer
   model: string | undefined
   onHistory: () => void
   onPublish: () => void
+  onExport: () => void
+  onImport: () => void
   dirty: boolean
 }) {
   const version = layer.published_version
@@ -1087,6 +1132,17 @@ function VersionLine({
           History
         </GhostButton>
       )}
+      {/* A file is a published version, so Export waits for one; Import lands
+          in the draft and is always offered. */}
+      {version !== null && (
+        <GhostButton onClick={onExport} style={{ padding: '4px 9px', fontSize: 12 }}>
+          <Icon.ArrowDown size={12} />
+          Export
+        </GhostButton>
+      )}
+      <GhostButton onClick={onImport} style={{ padding: '4px 9px', fontSize: 12 }}>
+        Import
+      </GhostButton>
     </span>
   )
 }

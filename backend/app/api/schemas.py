@@ -1119,6 +1119,34 @@ class SemanticHistoryEntry(BaseModel):
     created_at: datetime
 
 
+class SemanticImportRequest(BaseModel):
+    """A semantic layer file, into the draft. The file is checked by the
+    service — format, version, size, shape, limits — not by this schema, so a
+    wrong file is refused with a sentence rather than a list of field errors."""
+
+    file: Any
+    base_revision: int | None = None
+
+
+class SemanticImportReport(BaseModel):
+    """What the file resolved to against *this* connection's snapshot."""
+
+    entities: int = 0
+    #: Tables the file names that this schema does not have — kept, flagged.
+    unresolved: int = 0
+    metrics: int = 0
+    invalid_metrics: int = 0
+    value_meanings_included: bool = False
+    value_meaning_columns: int = 0
+    source_connection: str = ""
+    source_engine: str = ""
+
+
+class SemanticImportResult(BaseModel):
+    layer: SemanticLayerRead
+    report: SemanticImportReport
+
+
 class SemanticMetricUseRow(BaseModel):
     metric: str
     entity: str

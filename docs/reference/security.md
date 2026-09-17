@@ -271,6 +271,18 @@ every save of the layer is kept as an immutable version
   needs `modify` on the layer on top of the benchmark's own privilege.
   Publishing is `modify` as well — no approval step, so the separation this
   buys is between an edit and its effect, not between two people.
+- **A layer file carries nothing from inside the connection** (Phase 4). An
+  export names the connection and its engine, never its host, database, user,
+  password or id; strips `joins`, `valid` and `issue`; and leaves
+  `value_meanings` — codes drawn from the data — out unless the exporter asks,
+  with the choice audited (`semantic.exported`). It needs `select`, the
+  privilege that already reads the same version. **Import is not a guard entry
+  point**: it lands in the draft through the binder, under `modify`, and nothing
+  executes a metric. The hostile SQL corpus is replayed through
+  `check_expression` regardless; that replay found chained statements
+  (`1; DROP TABLE orders`) passing as valid filters, now refused. Text limits
+  (`app/semantic/limits.py`) bound what the editor and an import may write into
+  prompt text.
 - **Attribution adds no guard entry point** (migration `0034`). It parses the
   statement the guard already validated and stores a verdict; it cannot change
   what runs, and it fails open. `metric_use` holds metric and table names and a

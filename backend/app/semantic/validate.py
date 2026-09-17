@@ -127,6 +127,13 @@ def check_expression(
         return False, "This is not valid SQL."
     if tree is None:
         return False, "This is not valid SQL."
+    # `1; DROP TABLE orders` as a filter parses — as a *block* of two
+    # statements, whose columns all resolve. Nothing executes a metric, but a
+    # chained statement is not an expression, and storing it as a valid one
+    # would put it in every prompt. Found replaying the hostile SQL corpus
+    # through this function (`test_semantic_transfer.py`, Phase 4).
+    if not isinstance(tree, exp.Select):
+        return False, "One expression, not a statement — remove the `;` and what follows it."
 
     # Aliases the expression itself introduces (a subquery, a lateral) are not
     # ours to resolve; only bare and table-qualified references are checked.

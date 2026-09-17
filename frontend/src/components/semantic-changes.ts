@@ -347,6 +347,7 @@ export function originWords(origin: Record<string, unknown> | null | undefined):
   if (origin.migrated) return 'recorded at migration'
   if (origin.deleted) return 'deleted'
   if (typeof origin.restored_from === 'number') return `restored from v${origin.restored_from}`
+  if (origin.imported) return 'imported'
   if (Array.isArray(origin.generated_job_ids) && origin.generated_job_ids.length) {
     return 'generated'
   }

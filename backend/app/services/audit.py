@@ -128,6 +128,7 @@ ASK_RECORDED = "ask.recorded"
 #:                                  semantic.draft.saved
 #:                                  semantic.draft.discarded
 #:                                  semantic.published
+#:                                  semantic.exported · semantic.imported
 #: ```
 #:
 #: Phase 7 added `access.denied` — the producer `DENIED` had been waiting for

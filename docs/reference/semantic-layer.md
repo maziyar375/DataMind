@@ -8,7 +8,8 @@ Code: [`backend/app/semantic/`](../../backend/app/semantic/) — `generator.py`
 is refused, and `merge_documents`: what survives a regeneration), `bind.py`
 (the one binder every reader goes through), `terms.py` (the words the layer
 speaks, for the knowledge backlog), `diff.py` (the one differ), `attribute.py`
-(which definitions an answer's SQL matched). The editor is
+(which definitions an answer's SQL matched), `limits.py` (how long a text may
+be). The portable file is `backend/app/services/semantic_transfer.py`. The editor is
 [`frontend/src/components/semantic.tsx`](../../frontend/src/components/semantic.tsx).
 The plan that is turning the document into a versioned model is
 [plans/semantic-layer-model.md](../plans/semantic-layer-model.md).
@@ -183,6 +184,43 @@ shapes. That is the class this addresses.
     **not measured yet**. A matching aggregate over a join that fans rows out is
     still `used`: the chip speaks of the definition, and fan-out is the join
     cautions' subject.
+- **A layer travels as a file** (Phase 4, no migration).
+  `GET …/semantic/export?version=&value_meanings=false` (`select`) returns a
+  **published version** — never the draft — as JSON with
+  `format: "datamind.semantic_layer"`, `format_version: 1`, a `source` naming
+  the connection and engine and nothing else about it, and the document with
+  `joins`, `valid` and `issue` stripped, because those are readings of this
+  snapshot. **`value_meanings` are stripped unless asked** — they are codes
+  drawn from the data (D9) — and `semantic.exported {version,
+  value_meanings_included}` records the choice. `POST …/semantic/import {file,
+  base_revision}` (`modify`) checks the format, the version, at most 2,000
+  tables and every text limit, then writes the file **into the draft** through
+  the binder with origin `{"imported": true}`, and reports what resolved: a
+  table this schema lacks comes in flagged, not dropped. Audited as
+  `semantic.imported {revision, entities, unresolved, invalid_metrics}`. The
+  editor offers both beside History; Import also sits beside *Generate with AI*
+  on an empty layer. An export → import round trip is an empty change list,
+  apart from value meanings when a plain export left them out.
+  - **Import is not a guard entry point.** Nothing executes a metric
+    expression. The hostile SQL corpus is replayed through `check_expression`
+    anyway (`test_semantic_transfer.py`), and it found a real gap:
+    `sqlglot.parse_one` reads `WHERE 1; DROP TABLE orders` as a *block* of two
+    statements whose columns resolve, so a chained statement passed as a valid
+    filter and would have been rendered into every prompt. `check_expression`
+    now refuses anything that is not one `SELECT` probe. No stored metric in
+    the fixture or the demo database contained an inner `;`, so no layer's
+    prompt changed and `PROMPT_VERSION` did not move.
+  - **Text limits hold both doors, on write** (`app/semantic/limits.py`): a
+    business context of 10,000 characters, descriptions of 4,000, expressions
+    of 4,000, filters of 2,000, and so on, plus item counts per list.
+    `PUT …/semantic`, `PUT …/semantic/draft` and import refuse the first five
+    problems in a sentence; a generation is clipped to the same limits instead.
+    They are **not** `Field(max_length=…)` on the model: a parse-time limit
+    would make an over-long stored layer fail to load — and the loaders fail
+    open, so it would silently leave every prompt — and would let one verbose
+    generated sentence sink a table. The real layers sit far inside them (the
+    longest text in `sales` and `aurora` is a 411-character context), and a
+    test fails when a text field exists without a limit.
 - **The benchmark is scored with the layer.** Before v10 `workers/benchmark.py`
   never passed it, so every `benchmark_runs` row at v9 or earlier was taken
   layer-off whatever the switch said.

@@ -87,8 +87,10 @@ from app.semantic import (
     generate_document,
     merge_documents,
 )
+from app.semantic import limits as semantic_limits
 from app.services import audit
 from app.services.query_service import resolve_llm
+from app.services.semantic_transfer import ImportReport, LayerFile, build_file, read_file
 
 log = get_logger(__name__)
 
@@ -106,6 +108,8 @@ SEMANTIC_GENERATION_SAVED = "semantic.generation.saved"
 SEMANTIC_DRAFT_SAVED = "semantic.draft.saved"
 SEMANTIC_DRAFT_DISCARDED = "semantic.draft.discarded"
 SEMANTIC_PUBLISHED = "semantic.published"
+SEMANTIC_EXPORTED = "semantic.exported"
+SEMANTIC_IMPORTED = "semantic.imported"
 
 #: The window the *Metrics in use* table counts over.
 METRIC_USE_DAYS = 30
@@ -436,6 +440,80 @@ class SemanticService:
             },
         )
         return published
+
+    # ── the portable document ────────────────────────────────────────────
+    async def export(
+        self,
+        connection: DatabaseConnection,
+        *,
+        version: int | None,
+        value_meanings: bool,
+        ctx: RequestContext,
+    ) -> LayerFile:
+        """A published version as a file — the published one unless `version` says.
+
+        A **version**, never the draft: a file is something another person will
+        read as this layer, and a draft is not this layer yet. Value meanings
+        only when asked (D9), and the audit row says which was chosen.
+        """
+        number = version
+        if number is None:
+            head = await self.layer_row(connection.id)
+            number = head.published_version if head is not None else None
+        if number is None:
+            raise NotFoundError("This semantic layer has no published version to export.")
+        row = await self.version(connection.id, number)
+        file = build_file(
+            SemanticDocument.model_validate(row.document or {}),
+            connection_name=connection.name,
+            engine=connection.database_type,
+            version=number,
+            value_meanings=value_meanings,
+        )
+        await audit.record(
+            self._db, ctx, action=SEMANTIC_EXPORTED,
+            resource_type=audit.SEMANTIC_LAYER, resource_id=connection.id,
+            detail={"version": number, "value_meanings_included": value_meanings},
+        )
+        return file
+
+    async def import_file(
+        self,
+        connection: DatabaseConnection,
+        raw: Any,
+        *,
+        base_revision: int,
+        ctx: RequestContext,
+    ) -> tuple[DraftWritten, ImportReport]:
+        """A file into the **draft**, bound to this connection's snapshot.
+
+        Typing by another route (D9): the same revision rule, the same binder,
+        the same limits, and the same review before it answers anything. Tables
+        the file names that this schema lacks come in flagged, not dropped. The
+        draft's origin becomes `{"imported": true}`, which the version it is
+        published as carries.
+        """
+        file, doc = read_file(raw)
+        head = await _lock_head(self._db, connection.id)
+        await _require_revision(self._db, ctx, connection.id, head, base_revision)
+        snapshot = await self._snapshot(connection.id)
+        bound = _bind(doc, snapshot)
+        written = await _write_draft(
+            self._db, connection_id=connection.id, head=head, document=bound,
+            author=ctx.user_id, origin={"imported": True},
+        )
+        report = ImportReport.of(file, bound)
+        await audit.record(
+            self._db, ctx, action=SEMANTIC_IMPORTED,
+            resource_type=audit.SEMANTIC_LAYER, resource_id=connection.id,
+            detail={
+                "revision": written.head.revision,
+                "entities": report.entities,
+                "unresolved": report.unresolved,
+                "invalid_metrics": report.invalid_metrics,
+            },
+        )
+        return written, report
 
     async def _scored_draft_run(self, connection_id: UUID, revision: int) -> UUID | None:
         """The benchmark run that scored exactly this draft, if one finished.
@@ -842,7 +920,10 @@ class SemanticService:
                     for e in current.entities
                     if e.table.lower() not in touched
                 )
-            bound = _bind(merged, snapshot)
+            # A model's text is cut to the limits a person's write is held to,
+            # so the next save of this layer is never refused for a sentence
+            # nobody here wrote.
+            bound = _bind(semantic_limits.clip(merged), snapshot)
 
             written: DraftWritten | None = None
             if diff_documents(current, bound):
@@ -1242,9 +1323,10 @@ async def _write_draft(
     * any other document becomes the draft, attributed to `author`.
 
     `origin` says how the draft came to be. `generated_job_ids` accumulate
-    across generations into one draft; `restored_from` replaces what was there,
-    because a restore replaces the whole document; `None` — a person's own
-    edit — keeps the draft's origin, since the edit was made on top of it.
+    across generations into one draft; `restored_from` and `imported` replace
+    what was there, because a restore or an import replaces the whole document;
+    `None` — a person's own edit — keeps the draft's origin, since the edit was
+    made on top of it.
     """
     working = SemanticDocument.model_validate(_working(head))
     if not diff_documents(working, document):
@@ -1255,7 +1337,7 @@ async def _write_draft(
     changes = diff_documents(published, document)
     if changes:
         next_origin = dict(head.draft_origin or {}) if head.draft_document is not None else {}
-        if origin is not None and "restored_from" in origin:
+        if origin is not None and ("restored_from" in origin or origin.get("imported")):
             next_origin = dict(origin)
         elif origin is not None:
             jobs = [
