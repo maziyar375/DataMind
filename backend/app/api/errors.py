@@ -30,12 +30,21 @@ def _problem(status: int, code: str, title: str, detail: str, **extra) -> JSONRe
     )
 
 
+def problem_response(err: AppError) -> JSONResponse:
+    """An `AppError` as the response a route returns instead of raising it.
+
+    For the rare refusal whose audit row must survive: raising rolls the
+    request's transaction back in `get_db`, taking the row with it, while
+    returning lets the transaction commit. The body is identical to the one the
+    handler below writes, so a client cannot tell which path produced it.
+    """
+    return _problem(err.http_status, err.code, err.title, err.message, **err.detail)
+
+
 def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def _app_error(_: Request, err: AppError) -> JSONResponse:
-        return _problem(
-            err.http_status, err.code, err.title, err.message, **err.detail
-        )
+        return problem_response(err)
 
     @app.exception_handler(RequestValidationError)
     async def _validation(_: Request, err: RequestValidationError) -> JSONResponse:

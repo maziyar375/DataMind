@@ -242,6 +242,17 @@ Three separable pieces, in order of value:
 > **Fixed 2026-08-30.** The render bug below is repaired — this is [A6](#a6-fix-the-semantic-layer-render--s--done-2026-08-30),
 > the one item of this plan that is built. The design ceilings under it are not,
 > and they are why this section still ranks.
+>
+> **Being answered by [semantic-layer-model.md](semantic-layer-model.md)**, whose
+> §14 ledger is the record. Phases 0–4 have landed (2026-09-15 to 09-17): one
+> binder for every reader, numbered versions with history and restore, drafts
+> that no question reads until published, metric attribution after each run,
+> and export/import. Phase 5 (regenerating chosen tables, a needs-attention
+> filter) has not. That plan also corrects six points of the research below it
+> in its §1.3 — audit writers now exist, the layer is a grantable resource,
+> draft/publish comes before attribution, attribution runs after the run rather
+> than as a graph step, import is not a guard entry point, and versions are kept
+> rather than pruned.
 
 ### The bug, and what it now does instead
 

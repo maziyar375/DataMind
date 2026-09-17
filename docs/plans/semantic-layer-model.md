@@ -1,7 +1,14 @@
 # The semantic layer as a model — build plan
 
-> **Status: proposed, not built.** Written 2026-09-15 against `main` at
-> `d7cba6f`. Nothing below is in the tree; every box in the §14 ledger is open.
+> **Status: built. Phases 0 and 1 landed 2026-09-15, Phases 2 and 3 on
+> 2026-09-16, Phases 4 and 5 on 2026-09-17** — 61 of the §14 ledger's 63 items.
+> The two left are Phase 3 measurements that need a provider key and real
+> runs, not code.
+> Written 2026-09-15 against `main` at `d7cba6f`; the §14 ledger is the record
+> of what is in the tree since. **Migration numbers moved:** `0030` and `0031`
+> went to the usage screen while this was being written, so the plan's
+> `0030_semantic_versions` shipped as **`0032`**, `0031_semantic_drafts` as
+> **`0033`**, and `0032_metric_attribution` as **`0034`**.
 >
 > **Answers** [mvp2.md §1.3](mvp2.md#13-the-semantic-layer-is-a-blob-not-a-model)
 > — *"The semantic layer is a blob, not a model"*, ranked **High**. The render
@@ -957,6 +964,8 @@ All paths are under `/connections/{connection_id}`. Every privilege is asked on
 | `POST /knowledge/benchmarks/{set_id}/run` | 2 | existing, plus `modify` on the layer when `semantic_source = DRAFT` | Adds `semantic_source` |
 | `GET /semantic/export` | 4 | select | `?version=&value_meanings=` |
 | `POST /semantic/import` | 4 | modify | Into the draft |
+| `GET /semantic/attention` | 5 | select | `?days=` — *Needs attention*: reasons with counts and schema names. Added while building Phase 5; §4.6 named the filter, not its route |
+| `POST /semantic/generate` | 5 | modify | `mode` gains `FILL_GAPS`; `only_tables` the schema lacks is a 422 |
 
 The new literal paths (`/diff`, `/versions`, `/history`, `/draft`, `/publish`,
 `/export`, `/import`) sit under `/semantic` beside `/check` and `/generate`, and
@@ -1171,99 +1180,113 @@ to extend: the backlog vocabulary tests, the run-knowledge tier tests,
 
 Tick each box in the commit that lands the work.
 
-### 14.1 Phase 0: One reader · **0 / 9**
+### 14.1 Phase 0: One reader · **9 / 9**
 
-- [ ] `app/semantic/bind.py` `bind_layer`; `save`, `_persist_generated` and `eval.runner.load_semantic` use it
-- [ ] `load_document(db, connection, *, snapshot)` binds; `run_service`, `sql_draft_service` and `report_service` (both call sites) pass a snapshot
-- [ ] Binder cost measured on `sales`; the cache added only if it exceeds 20 ms
-- [ ] `workers/benchmark.py` passes `semantic=`; its docstring corrected
-- [ ] `app/semantic/terms.py` `vocabulary_terms`; `build_vocabulary` takes words; `_vocabulary` passes them
-- [ ] `_all_described` loads through `load_document`
-- [ ] `semantic.switch.changed` audited in the connection `PATCH`
-- [ ] `PROMPT_VERSION` v10; `test_prompt_version.py`; the eval.md §6 rows relabelled
-- [ ] Tests: bind (drift, and byte-identity when undrifted), benchmark prompt, backlog vocabulary, tier
+- [x] `app/semantic/bind.py` `bind_layer`; `save`, `_persist_generated` and `eval.runner.load_semantic` use it (and the editor's `read`, so the joins it shows are derived too)
+- [x] `load_document(db, connection, *, snapshot)` binds; `run_service`, `sql_draft_service` and `report_service` (both call sites) pass a snapshot
+- [x] Binder cost measured on `sales`; the cache added only if it exceeds 20 ms — **median 6.5 ms on `sales` (21 entities, 14 metrics), 10.9 ms on `aurora` (34 metrics); no cache.** The *Grounded* tier memoises per request instead, since a transcript would otherwise bind once per turn
+- [x] `workers/benchmark.py` passes `semantic=`; its docstring corrected
+- [x] `app/semantic/terms.py` `vocabulary_terms`; `build_vocabulary` takes words; `_vocabulary` passes them. Flagged entries contribute nothing, as well as excluded ones: neither renders
+- [x] `_all_described` loads through `load_document`
+- [x] `semantic.switch.changed` audited in the connection `PATCH`
+- [x] `PROMPT_VERSION` v10; `test_prompt_version.py`; the eval.md §6 rows relabelled
+- [x] Tests: bind (drift, and byte-identity when undrifted), benchmark prompt, backlog vocabulary, tier
 
-### 14.2 Phase 1: Versions · **0 / 13**
+Found while measuring: binding also applies validator rules the stored flags
+predate. The demo `aurora` layer stores `total_revenue` on both `orders` and
+`order_items` with no issue, because it was saved before
+`_refuse_ambiguous_metrics`; the run path rendered both definitions until this
+phase, and now renders neither.
 
-- [ ] Migration `0030`: `revision`, `published_version`, `semantic_layer_versions`, `semantic_layer_changes`, version columns on `runs` and `benchmark_runs`; v1 backfilled with a NULL author
-- [ ] `app/semantic/diff.py`: the §4.2 vocabulary, entry keys, `affects_sql`
-- [ ] `save`: lock, `base_revision`, empty-diff refusal, and version + changes + copy + revision in one transaction
-- [ ] `_persist_generated`: lock, merge over the current document, version with `origin.generated_job_ids`
-- [ ] Restore (flagged, not dropped), delete as a tombstone, the history query
-- [ ] Runs and benchmark runs record their version; the `ASK_RECORDED` detail carries it
-- [ ] *Grounded* computed against the recorded version; NULL keeps Phase 0's rule
-- [ ] Routes: `versions`, `versions/{n}`, `changes`, `restore`, `history`, `diff`; `PUT` requires `base_revision`
-- [ ] Audit actions, and the index in `services/audit.py`
-- [ ] Frontend: types and client; History sub-routes; per-entry history; conflict note; note popover
-- [ ] `semantic-changes.ts` with its test, wired into `npm test`
-- [ ] Tests: diff, versions, concurrency (including save during generation), hash equality, authz conformance
-- [ ] Gate: a readable change list on `sales` after a filter edit
+### 14.2 Phase 1: Versions · **13 / 13**
 
-### 14.3 Phase 2: Draft and publish · **0 / 11**
+- [x] Migration **`0032`** (not `0030`, see the status note): `revision`, `published_version`, `semantic_layer_versions`, `semantic_layer_changes`, version columns on `runs` and `benchmark_runs`; v1 backfilled with a NULL author. Rehearsed on a Postgres 16 clone of the demo database (one layer → v1, revision 1, hash equal to the service's), including downgrade and re-upgrade
+- [x] `app/semantic/diff.py`: the §4.2 vocabulary, entry keys, `affects_sql`. **One refinement:** a metric is keyed by its table *and* name, because a stored document can hold one name on two tables (both flagged by `_refuse_ambiguous_metrics`) and a keyed comparison needs a key unique in every stored document. Adding or removing an entity also adds or removes its columns and metrics, so each entry's history starts where it did
+- [x] `save`: lock, `base_revision`, empty-diff refusal, and version + changes + copy + revision in one transaction (`_publish`, the one writer)
+- [x] `_persist_generated`: lock, merge over the current document, version with `origin.generated_job_ids`. A generation that changes nothing writes no version and moves no revision
+- [x] Restore (flagged, not dropped), delete as a tombstone, the history query. A tombstone stores `{}`, which every loader already reads as no layer
+- [x] Runs and benchmark runs record their version; the `ASK_RECORDED` detail carries it; `RunRead` exposes it (`load_layer` returns the document and the version off the same row; `load_document` stays for readers that need no version)
+- [x] *Grounded* computed against the recorded version; NULL keeps Phase 0's rule
+- [x] Routes: `versions`, `versions/{n}`, `changes`, `restore`, `history`, `diff`; `PUT` requires `base_revision`. The 409 is *returned* from the route rather than raised, so the `semantic.conflict` audit row commits instead of rolling back with the request
+- [x] Audit actions, and the index in `services/audit.py`
+- [x] Frontend: types and client; History sub-routes; per-entry history; conflict note; note popover. History is a single column with a back link rather than a list beside a detail, so it needs no drawer below 700px (checked at 390px: no horizontal scroll)
+- [x] `semantic-changes.ts` with its test, wired into `npm test`
+- [x] Tests: diff, versions, concurrency (including save during generation), hash equality, authz conformance
+- [x] Gate: a readable change list on `sales` after a filter edit — driven in the browser against a migrated clone: edit `revenue`'s filter, the note prompt lists the change, Save, and History → v3 reads *"`revenue` now also filters on `orders.status <> 'refunded'` — changes numbers"*. A conflict, reload with the displaced edits listed, per-entry history and a restore were driven the same way
 
-- [ ] Migration `0031`: draft columns; `semantic_source` and `semantic_revision` on `benchmark_runs`
-- [ ] Service and routes: save draft, discard, publish
-- [ ] Generation, restore and import write to the draft
-- [ ] The one-step `PUT` means draft plus publish
-- [ ] A note required on `affects_sql` changes
-- [ ] `Provenance` on `business_context` and `default_exclusions`; the merge keeps each on its own flag
-- [ ] *Score this draft*: the worker reads the draft for DRAFT runs; the dialog shows a comparable delta or says why not
-- [ ] `PRIVILEGE_MEANINGS` wording
-- [ ] Frontend: status line, two-state bar, publish dialog
-- [ ] Tests: no loader reads the draft (four surfaces), generation → draft, publish refusals, DRAFT benchmark, exclusions survive a merge
-- [ ] Gate: a question asked between edit and publish is answered with the old definition, and the run names its version
+### 14.3 Phase 2: Draft and publish · **11 / 11**
 
-### 14.4 Phase 3: Metric attribution · **0 / 9**
+- [x] Migration **`0033`** (not `0031`, see the status note): draft columns on `semantic_layers` (`draft_document` stored with `none_as_null`, so a cleared draft is SQL NULL); `semantic_source` and `semantic_revision` on `benchmark_runs`. Rehearsed on a Postgres 16 clone of the demo database: upgrade, downgrade, upgrade
+- [x] Service and routes: save draft, discard, publish — `_write_draft` is the one draft writer beside `_publish`, and publishing clears the draft. A draft saved back to what is published leaves no draft. Conflicts name the newest writer, which is the draft's author when the draft is newer than the published version
+- [x] Generation, restore and import write to the draft. Import lands in Phase 4 through the same writer. A generation's job ids accumulate in `draft_origin` across generations into one draft, a restore replaces it, and a person's edit on top keeps it; publishing folds it into the version's `origin`. A layer that is only a draft is deleted by discarding the draft, and no version is written
+- [x] The one-step `PUT` means draft plus publish, and replaces any draft. **Decided here:** its note stays optional, as it was in Phase 1, so a script written against Phase 1 keeps working; the note rule is the publish route's
+- [x] A note required on `affects_sql` changes — `E_SEMANTIC_NOTE_REQUIRED` (422) on `POST …/publish`, and the dialog's Publish is disabled until one is written
+- [x] `context_provenance` and `exclusions_provenance` on the document; the merge keeps each text on its own flag. The old "anything else was edited" rule stays as a second reason to keep a text, for documents written before the flags: it can only keep a text, never lose one
+- [x] *Score this draft*: a DRAFT run is pinned to the layer's revision and fails if the draft moved before the worker read it (a draft is not versioned, so the one asked about is gone). The worker reads it through `load_draft`, the one reader of a draft outside the editor, **whether or not the switch is on**, because scoring the draft is what was asked. Queuing needs `(semantic_layer, modify)` on top of `(knowledge, modify)`. Draft runs stay out of `BenchmarkSet.runs` (§12 question 4) and come back as `draft_run`; `semantic-score.ts` gives a delta only for the same prompt version and model. `semantic.published` names the run that scored exactly the published revision, looked up on the server. **Not measured:** no real draft delta has been taken, because neither demo connection has a benchmark set; the dialog's states were driven with a patched API response
+- [x] `PRIVILEGE_MEANINGS` wording, and the matrix quoted in plans/user-management-and-access-control.md §13.3
+- [x] Frontend: status line (`Published v12 · published by …` and `● No unpublished changes` or `◐ 3 unpublished changes`), the two-state bar, `semantic-publish.tsx` (change list, note, score section), *Restore into draft*, a discard confirmation, and the generation notice's *Review and publish* link (`?publish=1`). `semantic-score.ts` is the seventeenth DOM-free module and `npm run test:score` the eighteenth suite. Checked at 390px: no horizontal scroll
+- [x] Tests: `test_semantic_draft.py` (no loader reads the draft, by source, by the modules that may name the column, and by behaviour; generation → draft; publish refusals; a DRAFT run pinned and privileged; the strip keeps draft runs out), DRAFT and PUBLISHED benchmark prompts in `test_benchmark_semantic.py`, exclusions and context surviving a merge in `test_semantic_validate.py`; Phase 1's restore, delete and generation tests rewritten to the draft rather than deleted
+- [x] Gate — driven on a migrated clone. Through the API: `total_tips` gained a filter in the draft; a question asked before publishing recorded `semantic_layer_version = 1`; a publish without a note was refused 422; with a note it wrote v2; the same question afterwards recorded `semantic_layer_version = 2`, and the published prompt carries the new filter. In the browser: edit, Save draft, leave, come back to the same draft, publish with the required note, restore an older version into the draft, discard it. **Caveat:** DeepSeek V4 Flash wrote `SUM(tips) FROM orders` in both runs, a column that does not exist, although the rendered prompt names `tip_amount` and the metric. Which definition an answer used could not be read from that SQL; the run row's version is what shows it
 
-- [ ] Migration `0032`: `generated_queries.metric_use`
-- [ ] `app/semantic/attribute.py` with the four rules of §4.4
-- [ ] Labelled and adversarial corpus; zero false `used`
-- [ ] Attribution at run finalisation (fail open); the benchmark worker reports the rate
-- [ ] `RunKnowledge.metrics_used` and the chip
-- [ ] The *Metrics in use* table
-- [ ] On-arm minus off-arm definition-use rate, **needs a provider key**
-- [ ] `ignored` precision measured at 0.95 or above, then the SQL panel line, **needs real runs**
-- [ ] Tests: fail open, version 0, VERIFIED answers attributed
+### 14.4 Phase 3: Metric attribution · **7 / 9**
 
-### 14.5 Phase 4: The portable document · **0 / 6**
+- [x] Migration **`0034`** (the plan's `0032`): `generated_queries.metric_use`. **Added beside it:** `benchmark_results.metric_use` (one question's verdicts) and `benchmark_runs.metric_use` (their counts), which is where "each benchmark run reports a metric-use rate" is stored. Rehearsed on the Postgres 16 clone: upgrade, downgrade, upgrade
+- [x] `app/semantic/attribute.py` with the four rules of §4.4. Choices the rules left open, all toward `unknown`: an exact normalised match of the whole expression is required for both `used` and `ignored` (so `COUNT(x)` against `COUNT(DISTINCT x)` is `unknown`); filters count from `WHERE`, `HAVING` and **inner**-join `ON` only; a metric's table (or a required join) read twice anywhere feeding the aggregate is `unknown`; `COUNT(*)` matches only over the metric's own table alone; `FILTER (WHERE …)` is `unknown`; and `ignored` also needs every conjunct, grouping and join condition feeding **or enclosing** the aggregate to be readable and not to name the missing filter's column (so `GROUP BY status` or an outer `WHERE t.status = …` is `unknown`, not an accusation). Unqualified columns across a join resolve through the snapshot
+- [x] Labelled and adversarial corpus; zero false `used` — `test_semantic_attribute.py`: 26 labelled statements (12 `used`, 5 `ignored`, 9 `unknown`) against `sales_semantic.json`, 20 adversarial ones, T-SQL and MySQL readings; no false `used`, and every `ignored` in the corpus is right
+- [x] Attribution at run finalisation (fail open); the benchmark worker reports the rate — `metric_use_of` picks the last accepted attempt for both; any exception is logged and stores `NULL`. Driven on the clone: *"How many orders are there in total?"* → `SELECT COUNT(*) … FROM orders`, stored `order_count: used` against v3
+- [x] `RunKnowledge.metrics_used` (`used` only, definitions read from the recorded version) and the chip: `✓ Matches the order_count definition` beside the tier, with the definition and `semantic layer v3` on hover **and on keyboard focus**. When the tier is Generated and a definition matched, the sentence says *Generated with your semantic layer* rather than *against the bare schema*
+- [x] The *Metrics in use* table — `GET …/semantic/metric-use?days=30` (`select`, counts only), in the Metrics panel, most-left-out first, eight rows then *Show all*
+- [ ] On-arm minus off-arm definition-use rate, **needs a provider key**. The instrument is built: the eval attributes on both arms and writes `definition_use` to each scorecard (eval.md, the semantic-layer arm); rows 1 and 2 of eval.md §6 give the pair when they are run
+- [ ] `ignored` precision measured at 0.95 or above, then the SQL panel line, **needs real runs**. Tried on what exists: the 17 statements the demo `aurora` connection's past chat runs produced gave 2 `used` (both right) and **no** `ignored`, so there is nothing yet to measure; `ignored` is stored, counted in *Metrics in use*, and shown on no answer
+- [x] Tests: fail open (unparseable statement, an exception inside the matcher), version 0 and no layer store nothing, a Verified answer is attributed, `ignored` never reaches an answer, the definitions come from the version rather than today's layer, *Metrics in use* over a real schema with a window and another connection's runs, the benchmark's counts through the real pipeline, and the eval's per-arm count — `test_metric_use.py`, `test_benchmark_semantic.py`
 
-- [ ] Export route and format; derived fields stripped; value meanings opt-in; audit
-- [ ] Import route into the draft; the bind report; the limits; audit
-- [ ] `max_length` on the model's text fields
-- [ ] Hostile corpus replayed through `check_expression`
-- [ ] Frontend: export and import dialogs
-- [ ] Tests: round trip, limits, a flagged import
+### 14.5 Phase 4: The portable document · **6 / 6**
 
-### 14.6 Phase 5: Upkeep · **0 / 5**
+- [x] Export route and format; derived fields stripped; value meanings opt-in; audit — `GET …/semantic/export` exports a **published version** (the current one, or `?version=n`), never the draft, and refuses with 404 when nothing is published. The format is `app/services/semantic_transfer.py`, beside `dashboard_transfer.py`
+- [x] Import route into the draft; the bind report; the limits; audit — through the one draft writer with origin `{"imported": true}`, which a publish carries into the version and History words as *imported*. The report counts a metric on an unresolved table as invalid, since it cannot reach a prompt either
+- [x] Limits on the model's text fields. **Changed from `max_length` on the model to limits declared beside it (`app/semantic/limits.py`) and checked on write**: the editor's two saves and import are refused, a generation is clipped. A parse-time limit would have made an over-long stored layer unreadable, and the loaders fail open, so it would silently have left every prompt; it would also have dropped a whole generated table for one long sentence. A test fails when a text field exists without a limit
+- [x] Hostile corpus replayed through `check_expression` — **and it found something.** `sqlglot.parse_one` reads `1; DROP TABLE orders` as a `Block` whose columns resolve, so a chained statement passed as a valid *filter* and would have been rendered into prompts. `check_expression` now refuses anything but a single `SELECT` probe. No stored metric in the fixture or the demo database contained an inner `;`, so no prompt changed and `PROMPT_VERSION` stays v10
+- [x] Frontend: export and import dialogs (`semantic-transfer.tsx`), beside History and, on an empty layer, beside *Generate with AI*; `semantic-file.ts` reads a file before it is sent and is the eighteenth DOM-free module (`npm run test:layerfile`). Driven on a clone: download an export, import an edited file with a table the schema lacks, read the report, publish as v2 *imported*, refuse a dashboard file
+- [x] Tests: `test_semantic_transfer.py` — the round trip (empty change list with value meanings; only `value_meanings_changed` without), stripped fields and no connection internals, draft landing and origin, flagged not dropped, eight refusals of a hostile file, the limits on both doors and on a generation, the hostile replay, and the routes' privileges
 
-- [ ] Table picker for described tables, with fill-gaps and rewrite
-- [ ] `merge_documents(fill_gaps=True)`
-- [ ] Column-shape drift between a version's snapshot and the newest
-- [ ] The needs-attention filter with its six reasons
-- [ ] Tests: `fill_gaps` never overwrites; drift detection; filter counts
+### 14.6 Phase 5: Upkeep · **5 / 5**
 
-### 14.7 Documentation · **0 / 10**
+- [x] Table picker for described tables, with fill-gaps and rewrite — *What is missing*, *Tables I choose* (searchable, marking which are described) or *Every table*; *Fill the gaps* (`FILL_GAPS`, the default) and *Rewrite* (`REPLACE`), shown only when a table in scope is already described. `create_job` refuses a mode it does not know and tables the schema lacks. **Found and fixed here:** a run over chosen tables replaced an unedited business context with one written from those tables alone and dropped every glossary term they did not produce; `confine_to_tables` now makes a partial run change the chosen entities and nothing else, in every mode, filling document-level fields only where empty
+- [x] `merge_documents(fill_gaps=True)` — **the rules the plan left open, decided:** an edited entity takes a generated value only where its own is empty (a text, an empty list, a role still `unknown`) and gains missing columns and metrics; an existing column gains only its own empty texts; **an existing metric is never touched**, because empty `filters` are a definition rather than a blank; a generated metric whose name another table defines is not added, because `_refuse_ambiguous_metrics` would switch off both; and nothing is dropped — an entity or term the generation did not return stays, edited or not. Entities nobody edited are refreshed, as under `MERGE`, which stays the API's default for scripts
+- [x] Column-shape drift between a version's snapshot and the newest — `app/semantic/attention.py` `column_drift`: added, removed and retyped columns; nullability and comments are not shape. The baseline is the newest version whose change rows name the entity; one no row names dates from the first version (only a migrated v1 writes none); an entity a draft saved after the newest sync changed is not compared, nor one the draft adds. On the demo `aurora` layer it found four columns retyped `smallint` → `integer` since v1
+- [x] The needs-attention filter with its six reasons — `GET …/semantic/attention` (`select`, counts and schema names) and `needs_attention`, most urgent first; excluded entities are never a reason. **Decided here:** "a Grounded answer relied on" counts succeeded, non-Verified runs in the last 30 days that the tier's own rule (`is_grounded`, now shared by `conversations.py` and the service) calls Grounded, against each run's recorded version; "a draft older than 7 days" is measured from `draft_updated_at`, the last edit, since a draft has no creation time. The editor shows it as a filter beside *Has issues* (renamed from the old *Needs attention*, which counted only broken entries) and as the hero's *need attention* count; rows group per table (`semantic-attention.ts`, the nineteenth DOM-free module, `npm run test:attention`), *Open* lands on the tab the reason is about, and *Fill the gaps…* and *Describe…* open the generate dialog with those tables chosen. The filter pills now scroll sideways when they do not fit, instead of clipping — at 390px the new pill was otherwise out of reach. Checked in both themes and at 390px, on the real `aurora` layer, with a patched response for the states it lacks (an old draft, an ignored metric, added columns)
+- [x] Tests: `fill_gaps` never overwrites; drift detection; filter counts — `test_semantic_validate.py` (every written field of an entity, its columns and metrics survives a disagreeing generation; gaps filled; metrics untouched; no ambiguous name added; nothing dropped; chosen tables confined), `test_semantic_upkeep.py` (both modes through the real job path; the refusals; `column_drift`; all six reasons and their counts over a fixture; drift across two snapshots, the migrated baseline and the draft rule; broken and undescribed; the week-old draft; Grounded reliance with Verified, version 0, failed, out-of-window and pre-version runs; ignored metrics; the route's privilege), `semantic-attention.test.ts`. **Not run:** a generation against a real provider — the job path is exercised with a fake gateway
 
-- [ ] reference/semantic-layer.md
-- [ ] CLAUDE.md
-- [ ] status.md
-- [ ] decisions.md §5
-- [ ] reference/security.md
-- [ ] reference/eval.md
-- [ ] reference/knowledge-templates.md §6
-- [ ] reference/access-control.md
-- [ ] mvp2.md §1.3 and research/semantic-layer.md banners
-- [ ] docs/README.md index row
+### 14.7 Documentation · **10 / 10**
+
+The other nine documents span phases, so each is ticked when the last phase it
+describes lands. What Phases 0 to 5 changed is in each of them:
+reference/semantic-layer.md, CLAUDE.md, status.md, decisions.md §5,
+reference/security.md §2.2, reference/eval.md §6,
+reference/knowledge-templates.md §6, and (Phase 2) the privilege matrix quoted
+in plans/user-management-and-access-control.md §13.3 — reference/access-control.md
+quotes no wording to change.
+
+- [x] reference/semantic-layer.md — upkeep: the picker, both modes and their rules, chosen tables confined, *Needs attention* and its six reasons
+- [x] CLAUDE.md — the curated-documents row, `attention.py` in the code map, `semantic-attention.ts` as the nineteenth DOM-free module and the twentieth `npm test` suite
+- [x] status.md — a §2 row per phase, Phase 5's included
+- [x] decisions.md §5 — D1–D11 are all recorded, with the decisions taken while building Phases 2–5
+- [x] reference/security.md — §7.1 and §7.2: versions, drafts, attribution and the portable file; and a line saying why *Needs attention* adds no disclosure surface
+- [x] reference/eval.md — no later phase touches it: v10, the benchmark reading the layer, and the definition-use control arm
+- [x] reference/knowledge-templates.md §6 — a score with the layer, draft runs kept apart, the metric-use rate
+- [x] reference/access-control.md — it quotes no privilege wording; the matrix that does, in plans/user-management-and-access-control.md §13.3, was updated in Phase 2
+- [x] mvp2.md §1.3 and research/semantic-layer.md banners
+- [x] docs/README.md index row
 
 ### 14.8 Totals
 
 | Phase | Done | Items |
 |---|:--:|:--:|
-| 0 · One reader | 0 | 9 |
-| 1 · Versions | 0 | 13 |
-| 2 · Draft and publish | 0 | 11 |
-| 3 · Metric attribution | 0 | 9 |
-| 4 · Portable document | 0 | 6 |
-| 5 · Upkeep | 0 | 5 |
-| Documentation | 0 | 10 |
-| **Total** | **0** | **63** |
+| 0 · One reader | 9 | 9 |
+| 1 · Versions | 13 | 13 |
+| 2 · Draft and publish | 11 | 11 |
+| 3 · Metric attribution | 7 | 9 |
+| 4 · Portable document | 6 | 6 |
+| 5 · Upkeep | 5 | 5 |
+| Documentation | 10 | 10 |
+| **Total** | **61** | **63** |

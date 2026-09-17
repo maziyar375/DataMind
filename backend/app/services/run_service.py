@@ -79,7 +79,7 @@ from app.services.query_service import (
     policy_from_snapshot,
     resolve_llm,
 )
-from app.services.semantic_service import load_document
+from app.services.semantic_service import LoadedLayer, load_layer, metric_use_of
 
 log = get_logger(__name__)
 
@@ -493,7 +493,12 @@ class RunService:
         snapshot = await latest_snapshot(self._db, connection.id)
         # Loaded once per run, not per attempt: a repair regenerates against
         # the same schema block, and the layer is part of that block.
-        semantic = await load_document(self._db, connection)
+        layer = await load_layer(self._db, connection, snapshot=snapshot)
+        semantic = layer.document
+        # Which version answers this question — `0` when none reached the
+        # prompt. Recorded on the run because the layer moves after it, and an
+        # answer's *Grounded* claim is about the layer it was written with.
+        run.semantic_layer_version = layer.version
         # One lookup, two consequences: this run may not ask again, and its
         # question is the reply *plus* the question that reply answers.
         pending = await self._pending_clarification(run)
@@ -543,6 +548,7 @@ class RunService:
                 "disclosure_policy": connection.disclosure_policy,
                 "clarify_enabled": connection.clarify_enabled,
                 "semantic_layer": semantic is not None,
+                "semantic_layer_version": layer.version,
                 "model": run.model_snapshot.get("model", ""),
             },
         )
@@ -608,11 +614,19 @@ class RunService:
         finally:
             await connector.close()
 
-        await self._finalise(run, state, fencing_token=fencing_token)
+        await self._finalise(
+            run, state, fencing_token=fencing_token, layer=layer, snapshot=snapshot
+        )
 
     # ── persistence of run output ────────────────────────────────────────
     async def _finalise(
-        self, run: Run, state: RunState, *, fencing_token: int | None = None
+        self,
+        run: Run,
+        state: RunState,
+        *,
+        fencing_token: int | None = None,
+        layer: LoadedLayer | None = None,
+        snapshot: dict[str, Any] | None = None,
     ) -> None:
         # What the *database* thinks, which is not what this session thinks:
         # sessions are `expire_on_commit=False`, so `run.status` here is the
@@ -654,6 +668,19 @@ class RunService:
                 bound_params=state.bound_params,
             )
 
+        # Which metric definitions the answer matched, read off the last
+        # statement the guard accepted (Phase 3). After the pipeline and not a
+        # node in it: it needs nothing the run row lacks, and a node would move
+        # the event sequence `test_pipeline_events.py` pins. Fail open — `None`
+        # is stored, never raised. A short-circuited (Verified) answer is
+        # attributed the same way; its statement is an attempt like any other.
+        attributed, metric_use = metric_use_of(
+            state.attempts,
+            document=layer.document if layer is not None else None,
+            version=layer.version if layer is not None else 0,
+            snapshot=snapshot,
+        )
+
         for attempt in state.attempts:
             gq = GeneratedQuery(
                 id=uuid.uuid4(),
@@ -666,6 +693,7 @@ class RunService:
                 validation_report=attempt.report.model_dump(),
                 referenced_tables=attempt.report.referenced_tables,
                 referenced_columns=attempt.report.referenced_columns,
+                metric_use=metric_use if attempt is attributed else None,
             )
             self._db.add(gq)
             await self._db.flush()

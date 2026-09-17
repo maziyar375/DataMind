@@ -294,6 +294,24 @@ Where a connection owner gets a number about *their* data, without a developer.
   measure something nobody experiences. A run stranded by a restart is **failed,
   not resumed**: half of it was scored against a store, a schema and a model
   that may all have moved.
+- **A score is a score *with* the connection's semantic layer**, bound to the
+  snapshot and honouring `semantic_layer_enabled`, exactly as chat reads it.
+  That was not true before `PROMPT_VERSION` v10: the worker never passed the
+  layer, so every `benchmark_runs` row at v9 or earlier was scored layer-off.
+  Compare scores only within one `prompt_version`
+  ([plans/semantic-layer-model.md](../plans/semantic-layer-model.md) §1.2.2).
+- **A run can score the layer's unpublished draft instead**
+  (`semantic_source = DRAFT`, pinned to the layer's revision, queued from the
+  semantic layer's publish dialog). It needs `(semantic_layer, modify)` as well
+  as `(knowledge, modify)`, it fails rather than score a draft that moved after
+  it was queued, and it is **kept out of the score strip** — `BenchmarkSet.runs`
+  is published runs only, and the newest draft run is `draft_run` beside it. The
+  strip stays the published product's number.
+- **A run reports how often its answers used a metric definition.** Each
+  question's last accepted statement is attributed the way a chat answer is
+  (`benchmark_results.metric_use`), and the run carries the counts
+  (`metric_use: {in_scope, used, ignored, unknown}`, `null` when nothing was
+  attributed — no layer is *not measured*, not zero).
 
 ## 7. Searching the store by meaning — the embedding matcher
 

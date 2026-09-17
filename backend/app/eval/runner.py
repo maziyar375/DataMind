@@ -159,6 +159,7 @@ async def evaluate_record(
     templates: list[Any] | None = None,
     held_out: set[str] | None = None,
     vectors: dict[str, list[float]] | None = None,
+    attribution_layer: dict[str, Any] | None = None,
 ) -> RecordOutcome:
     # The arm's split rides on `tags`, so `aggregate`'s per-tag breakdown
     # reports it for free and `docs/reference/eval.md` §6.1 quotes one row of it.
@@ -268,6 +269,7 @@ async def evaluate_record(
         )
     o.execution_ok = state.execution is not None
     o.exact_match = metrics.exact_match(record.gold_sql, o.candidate_sql)
+    _attribute_outcome(o, state, snapshot=snapshot, policy=policy, layer=attribution_layer)
     # Recorded whatever the outcome. `examples_offered` is what makes the arm's
     # accuracy number interpretable — an arm where nothing matched is measuring
     # the same prompt as the off arm — and `short_circuited` must be near zero
@@ -343,6 +345,7 @@ async def run_suite(
     templates: list[Any] | None = None,
     held_out: set[str] | None = None,
     vectors: dict[str, list[float]] | None = None,
+    attribution_layer: dict[str, Any] | None = None,
 ) -> list[RecordOutcome]:
     outcomes: list[RecordOutcome] = []
     for i, record in enumerate(records, 1):
@@ -351,6 +354,7 @@ async def run_suite(
             policy=policy, settings=settings, model_name=model_name,
             include_db_comments=include_db_comments, semantic=semantic,
             templates=templates, held_out=held_out, vectors=vectors,
+            attribution_layer=attribution_layer,
         )
         outcomes.append(outcome)
         if progress:
@@ -461,39 +465,75 @@ def aggregate_negatives(outcomes: list[RecordOutcome]) -> dict[str, Any]:
     }
 
 
+def _attribute_outcome(
+    o: RecordOutcome,
+    state: RunState,
+    *,
+    snapshot: dict[str, Any],
+    policy: GuardPolicy,
+    layer: dict[str, Any] | None,
+) -> None:
+    """Which metric definitions the last accepted statement matched.
+
+    Against the fixture's layer on **both** arms — rendered or not — because the
+    layer-off arm is the control: a `used` there is a coincidence, and the
+    layer's effect on definition use is the difference between the two rates.
+    Fail open, as on the product path: an unreadable statement attributes
+    nothing and costs the question nothing.
+    """
+    from app.semantic import SemanticDocument, attribute, build_index
+
+    if layer is None:
+        return
+    accepted = next((a for a in reversed(state.attempts) if a.report.status == "VALID"), None)
+    if accepted is None:
+        return
+    try:
+        verdicts = attribute(
+            accepted.rewritten_sql or accepted.raw_sql,
+            policy.dialect,
+            SemanticDocument.model_validate(layer),
+            accepted.report.referenced_tables,
+            schema=build_index(snapshot.get("tables") or [], policy.dialect),
+        )
+    except Exception:  # noqa: BLE001 - attribution never fails a question
+        return
+    o.metric_attributed = True
+    o.metric_verdicts = [v.as_dict() for v in verdicts]
+
+
 # ── the semantic arm ─────────────────────────────────────────────────────────
 
 
 def load_semantic(spec: FixtureSpec, snapshot: dict[str, Any]) -> dict[str, Any]:
     """The fixture's checked-in semantic layer, bound to the snapshot in hand.
 
-    The same three steps `semantic_service` performs for a real connection, in
-    the same order, so the arm measures the layer the product would render and
-    not a hand-shaped variant of it: validate every entry against the schema,
-    derive the joins off the catalog, hand the pipeline a plain dict.
+    Through `bind_layer`, the one binder every product reader uses, so the arm
+    measures the layer the product would render and not a hand-shaped variant
+    of it: derive the joins off the catalog, validate every entry against the
+    schema, hand the pipeline a plain dict.
 
     **A layer with a broken entry aborts the run.** An entity that no longer
     resolves is silently dropped by the renderer, so a drifted document would
     quietly produce a layer-on arm that is layer-on for some questions and
     layer-off for others — a number nobody could interpret and everybody would
-    quote. Better to refuse and say which entry.
+    quote. Better to refuse and say which entry. That is an eval policy, not a
+    difference in binding: the product drops the same entries and answers.
     """
-    from app.semantic import (
-        SemanticDocument,
-        build_index,
-        derive_joins,
-        validate_document,
-    )
+    from app.semantic import bind_layer
 
     if spec.semantic_path is None:
         raise ValueError(f"fixture {spec.name} has no semantic layer to load")
 
     raw = json.loads(spec.semantic_path.read_text())
-    index = build_index(snapshot["tables"], snapshot["dialect"])
-    doc = validate_document(SemanticDocument.model_validate(raw), index)
-    # Empty in the file, derived here — cardinality and fan-out are read off the
-    # catalog, which is where the product reads them from too.
-    doc.joins = derive_joins(snapshot.get("relationships", []), index)
+    # The file carries no joins; `bind_layer` derives them off the catalog,
+    # which is where the product reads cardinality and fan-out from too.
+    doc = bind_layer(
+        raw,
+        tables=snapshot["tables"],
+        relationships=snapshot.get("relationships", []),
+        dialect=snapshot["dialect"],
+    )
 
     broken = [
         f"{e.table}: {e.issue}" for e in doc.entities if not e.valid
@@ -978,6 +1018,16 @@ async def _amain(args: argparse.Namespace) -> int:
             # it will be rendered against — the same order the request path
             # takes, and the only order in which drift is detectable.
             semantic = load_semantic(spec, snap) if args.semantic == "on" else None
+            # The layer attribution reads, on both arms. Off, it is never
+            # rendered: it is only the ruler a coincidental `used` is measured
+            # with. A fixture without a layer, or one that no longer binds on
+            # the off arm, attributes nothing rather than failing the arm.
+            attribution_layer = semantic
+            if attribution_layer is None and spec.semantic_path is not None:
+                try:
+                    attribution_layer = load_semantic(spec, snap)
+                except ValueError as err:
+                    print(f"Definition use not measured: {err}", file=sys.stderr)
 
             # The embedding arm. One provider call for the whole store, made
             # here because the masking needs the snapshot and the snapshot
@@ -1017,9 +1067,14 @@ async def _amain(args: argparse.Namespace) -> int:
                     policy=policy, settings=settings, model_name=model_name, progress=True,
                     include_db_comments=args.comments, semantic=semantic,
                     templates=templates, held_out=held_out, vectors=vectors,
+                    attribution_layer=attribution_layer,
                 )
                 report = metrics.aggregate(outcomes)
                 report_dict = metrics.report_to_dict(report)
+                # The layer-on rate minus the layer-off rate, taken from two
+                # scorecards of one suite and model, is the number §4.4 asks
+                # for; one card's rate alone includes coincidence.
+                report_dict["definition_use"] = metrics.definition_use(outcomes)
             # Which arm this was, recorded on the scorecard rather than only in
             # the shell that launched it. Two runs of one suite on one model
             # differing only in this are otherwise indistinguishable in
@@ -1038,6 +1093,7 @@ async def _amain(args: argparse.Namespace) -> int:
             # arm renders the v8 bytes. Stated on the card so a reader of two
             # scorecards is not left to work out whether v8 and v9 numbers are
             # comparable — they are, on this arm, and that is the point of it.
+            # v10 moved no bytes here: this runner already bound its layer.
             report_dict["prompt_bytes_equal_v8"] = templates is None
             # Which matcher retrieved. Recorded because Phase 7's whole claim is
             # a *delta* between two runs that differ only in this, and two

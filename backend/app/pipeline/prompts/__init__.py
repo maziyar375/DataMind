@@ -11,7 +11,27 @@ from app.charts import (
     MIN_HISTOGRAM_ROWS,
 )
 
-PROMPT_VERSION = "v9"
+PROMPT_VERSION = "v10"
+# v10: **no wording changed.** Two things changed about what the model reads,
+# and CLAUDE.md's rule is that a change to how much of the schema block survives
+# moves the version too (`docs/plans/semantic-layer-model.md` Phase 0, D11):
+#
+# * **The semantic layer is bound on load.** Every loader now validates the
+#   stored document against the snapshot the prompt is rendered from, instead
+#   of trusting `valid` flags computed at the last save. A layer that has not
+#   drifted renders the same bytes as at v9; a layer whose table or column was
+#   dropped by a re-sync, or whose metric name is claimed twice, loses those
+#   entries from the prompt — which is what the editor already showed.
+# * **The in-product benchmark reads the layer.** Before v10 a benchmark scored
+#   a prompt with no layer while chat answered with one, so every
+#   `benchmark_runs` row at v9 or earlier was taken layer-off whatever the
+#   connection's switch said. `benchmark_runs.prompt_version` is what tells the
+#   two populations apart.
+#
+# The eval harness already bound its layer arm (`load_semantic`), so its bytes
+# do not move: an eval scorecard at v9 and one at v10 on the same arm rendered
+# the same prompt.
+#
 # v9: the generate prompt has a slot for taught questions — the connection's
 # own knowledge templates, offered as few-shot examples after the schema and
 # the semantic layer.

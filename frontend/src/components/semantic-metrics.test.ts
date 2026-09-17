@@ -10,7 +10,7 @@
  * here worth calling a bug.
  */
 import {
-  ambiguousNames, collectMetrics, matchesMetric, metricSummary,
+  ambiguousNames, collectMetrics, definitionLine, matchedLabel, matchesMetric, metricSummary,
 } from './semantic-metrics.ts'
 import type { MetricHost } from './semantic-metrics.ts'
 
@@ -114,7 +114,20 @@ check('one problem reads as one',
       ])),
       '1 metric — 1 needs attention')
 
+// ── an answer's matched definitions ───────────────────────────────────────
+const revenue = { metric: 'revenue', expression: 'SUM(orders.total_amount)', filters: ["orders.status <> 'cancelled'"] }
+const units = { metric: 'units_sold', expression: 'SUM(order_items.quantity)', filters: [] }
+check('one matched definition is named', matchedLabel([revenue]), 'Matches the revenue definition')
+check('two are both named', matchedLabel([revenue, units]), 'Matches the revenue and units_sold definitions')
+check('three or more are counted', matchedLabel([revenue, units, revenue]), 'Matches 3 metric definitions')
+check('nothing matched says nothing', matchedLabel([]), '')
+check('a definition reads with its filters as conjuncts',
+      definitionLine({ ...revenue, filters: ["orders.status <> 'cancelled'", ' orders.test = false '] }),
+      "SUM(orders.total_amount) WHERE orders.status <> 'cancelled' AND orders.test = false")
+check('and without them as the expression alone', definitionLine(units), 'SUM(order_items.quantity)')
+
 console.log(failures === 0 ? '\nall metric checks passed' : `\n${failures} failed`)
+
 // A throw rather than `process.exit`: the same non-zero exit for npm, and no
 // `@types/node` for a file the app's own tsconfig type-checks.
 if (failures > 0) throw new Error(`${failures} test(s) failed`)

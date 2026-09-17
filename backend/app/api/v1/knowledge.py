@@ -22,6 +22,7 @@ policy they cannot widen, and whose data they cannot read.
 """
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Request, status
@@ -76,6 +77,8 @@ from app.knowledge import (
 from app.services import audit
 from app.services.benchmark_service import (
     MIN_SET_SIZE,
+    SEMANTIC_DRAFT,
+    SEMANTIC_PUBLISHED,
     BenchmarkService,
     held_out_split,
 )
@@ -747,16 +750,32 @@ async def run_benchmark(
     authz: AuthzDep,
     settings: SettingsDep,
     llm_config_id: UUID | None = None,
+    semantic_source: Literal["PUBLISHED", "DRAFT"] = SEMANTIC_PUBLISHED,
 ) -> BenchmarkRunRead:
     """Queue a run. **202, and a row** — this is minutes of model calls.
 
     The row first, then the worker, the order `semantic_jobs` uses: a process
     that dies mid-run leaves a `RUNNING` row somebody can see and retry, rather
     than a request that never came back.
+
+    `semantic_source=DRAFT` scores the semantic layer's unpublished draft
+    instead of the published document. That reads content no question has been
+    answered with, so it asks a **second** question — `(semantic_layer, modify)`,
+    the privilege that edits and publishes the draft — on top of this route's
+    own `(knowledge, modify)`.
     """
     connection = await _authorized(
         db, authz, connection_id, ctx, Privilege.MODIFY
     )
+    if semantic_source == SEMANTIC_DRAFT:
+        await require(
+            ctx, authz,
+            ResourceRef(
+                type=ResourceType.SEMANTIC_LAYER, id=connection.id, entity=connection
+            ),
+            Privilege.MODIFY,
+            db=db,
+        )
 
     service = BenchmarkService(db, settings)
     set_row = await service.get_set(connection, set_id)
@@ -764,13 +783,17 @@ async def run_benchmark(
         connection, set_row,
         actor_id=ctx.user_id,
         llm_config_id=llm_config_id or await _default_llm_config(db, ctx, authz),
+        semantic_source=semantic_source,
     )
     await audit.record(
         db, ctx,
         action=audit.BENCHMARK_RUN_QUEUED,
         resource_type=audit.BENCHMARK_RUN,
         resource_id=run.id,
-        detail={"connection_id": str(connection.id), "set_id": str(set_id)},
+        detail={
+            "connection_id": str(connection.id), "set_id": str(set_id),
+            "semantic_source": semantic_source,
+        },
     )
     await db.commit()
 
@@ -814,6 +837,8 @@ async def _read_set(
     out.runs = [
         BenchmarkRunRead.model_validate(r) for r in await service.runs(row)
     ]
+    drafts = await service.runs(row, limit=1, source=SEMANTIC_DRAFT)
+    out.draft_run = BenchmarkRunRead.model_validate(drafts[0]) if drafts else None
     out.held_out_count = len(
         held_out_split(list(row.template_ids or []), row.held_out_fraction)
     )

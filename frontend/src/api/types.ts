@@ -15,6 +15,12 @@ export interface ProblemDetail {
    * than once per surface that can be refused.
    */
   reason?: DenialReason
+  /** `E_SEMANTIC_CONFLICT`: who wrote the layer after this editor read it. */
+  revision?: number
+  published_version?: number | null
+  updated_by?: string | null
+  updated_by_name?: string
+  updated_at?: string | null
 }
 
 /** The shape `services/policy.require` attaches to every 403 it raises. */
@@ -619,6 +625,11 @@ export interface SemanticDocument {
   business_context: string
   /** Rows that should not count unless the question asks for them. */
   default_exclusions: string
+  /** Who wrote each of the two texts above. Set by the editor when a person
+   *  types into one, so a regeneration keeps it on its own flag. Optional
+   *  because a document written before the flags existed has neither. */
+  context_provenance?: Provenance
+  exclusions_provenance?: Provenance
   time: TimeSemantics
   entities: SemanticEntity[]
   joins: SemanticJoin[]
@@ -659,7 +670,10 @@ export interface SemanticTableFact {
 }
 
 export interface SemanticLayer {
+  /** What the editor edits: the **draft** when `has_draft`, else the published
+   *  document. No question reads a draft. */
   document: SemanticDocument
+  /** `document` has anything in it — draft or published. */
   exists: boolean
   enabled: boolean
   entity_count: number
@@ -675,6 +689,77 @@ export interface SemanticLayer {
   generated_at: string | null
   edited_at: string | null
   job: SemanticJob | null
+  /** The concurrency token. Sent back as `base_revision` on the next write. */
+  revision: number
+  /** Which version `document` is — `null` before anything was written. */
+  published_version: number | null
+  published_by_name: string
+  published_at: string | null
+  published_note: string
+  published_origin: Record<string, unknown>
+  /** The published document has anything in it: what a question reads now. */
+  published_exists: boolean
+  has_draft: boolean
+  draft_updated_by_name: string
+  draft_updated_at: string | null
+  /** The draft against the published document — what the status chip counts
+   *  and the publish dialog lists. Empty when there is no draft. */
+  unpublished_changes: SemanticChange[]
+}
+
+/** One entry that changed, in the server's vocabulary (`app/semantic/diff.py`). */
+export interface SemanticChange {
+  kind: string
+  entity_key: string
+  item_key: string
+  affects_sql: boolean
+  fields: string[]
+  before: Record<string, unknown>
+  after: Record<string, unknown>
+}
+
+export interface SemanticVersionSummary {
+  version: number
+  parent_version: number | null
+  published_by: string | null
+  published_by_name: string
+  note: string
+  /** `generated_job_ids`, `restored_from`, `deleted`, `migrated`. */
+  origin: Record<string, unknown>
+  schema_version: number
+  entity_count: number
+  metric_count: number
+  reviewed_count: number
+  issue_count: number
+  created_at: string
+  /** Change counts by kind. */
+  changes: Record<string, number>
+  affects_sql: boolean
+}
+
+export interface SemanticVersionList {
+  versions: SemanticVersionSummary[]
+  revision: number
+  published_version: number | null
+  next_before: number | null
+}
+
+export interface SemanticChangeList {
+  version: number
+  against: number | null
+  changes: SemanticChange[]
+}
+
+export interface SemanticHistoryEntry {
+  version: number
+  kind: string
+  entity_key: string
+  item_key: string
+  affects_sql: boolean
+  published_by_name: string
+  note: string
+  origin: Record<string, unknown>
+  created_at: string
 }
 
 /** One declared slot in a template. */
@@ -969,6 +1054,86 @@ export interface RunKnowledge {
   overridden: boolean
   /** This reader's own verdict on this answer, and what became of it. */
   feedback: AnswerFeedback | null
+  /** The semantic layer metrics whose definitions this answer's SQL matched —
+   *  `used` verdicts only. Evidence beside the tier, not a tier. */
+  metrics_used: MetricUsed[]
+  /** The layer version those definitions come from. */
+  metrics_version: number | null
+}
+
+/** One definition an answer matched, as the chip's card shows it. */
+export interface MetricUsed {
+  metric: string
+  entity: string
+  label: string
+  expression: string
+  filters: string[]
+}
+
+/** A semantic layer as a portable file (`GET …/semantic/export`). No ids, no
+ *  hosts, nothing derived, and `value_meanings` only when asked for. */
+export interface SemanticLayerFile {
+  format: 'datamind.semantic_layer'
+  format_version: number
+  exported_at: string | null
+  source: { connection: string; engine: string; version: number | null }
+  value_meanings_included: boolean
+  document: Record<string, unknown>
+}
+
+/** What an import resolved to against this connection's snapshot. */
+export interface SemanticImportReport {
+  entities: number
+  /** Tables the file names that this schema lacks — kept and flagged. */
+  unresolved: number
+  metrics: number
+  invalid_metrics: number
+  value_meanings_included: boolean
+  value_meaning_columns: number
+  source_connection: string
+  source_engine: string
+}
+
+export interface SemanticImportResult {
+  layer: SemanticLayer
+  report: SemanticImportReport
+}
+
+/** One thing in a layer that needs a person — decided on the server
+ *  (`app/semantic/attention.py`), worded by `semantic-attention.ts`. */
+export interface SemanticAttentionItem {
+  reason: string
+  /** Lower-cased `schema.table`, or empty for the document. */
+  table: string
+  /** The metric, for `METRIC_IGNORED`. */
+  item: string
+  /** Counts and schema names — never a question, an answer or a value. */
+  detail: Record<string, unknown>
+}
+
+/** *Needs attention*, most urgent first. */
+export interface SemanticAttention {
+  days: number
+  draft_days: number
+  items: SemanticAttentionItem[]
+}
+
+/** How a generation treats a table that already has an entity. `FILL_GAPS`
+ *  keeps what people wrote and adds what is missing; `REPLACE` rewrites;
+ *  `MERGE` (API only) keeps edits and refreshes the rest. */
+export type SemanticGenerationMode = 'MERGE' | 'FILL_GAPS' | 'REPLACE'
+
+/** *Metrics in use*: per metric, over the last `days` of answers. Counts only. */
+export interface SemanticMetricUse {
+  days: number
+  rows: {
+    metric: string
+    entity: string
+    /** Answers whose statement touched the metric's table and was read. */
+    questions: number
+    used: number
+    ignored: number
+  }[]
 }
 
 /** One verdict on an answer, and what became of it. */
@@ -1027,6 +1192,15 @@ export interface BenchmarkRun {
   held_out_matched: number
   taught_total: number
   taught_matched: number
+  /** Which semantic layer document was scored. A `DRAFT` run is asked for from
+   *  the layer's publish dialog and never appears in `BenchmarkSet.runs`. */
+  semantic_source: 'PUBLISHED' | 'DRAFT'
+  /** The layer revision a `DRAFT` run was pinned to. */
+  semantic_revision: number | null
+  semantic_layer_version: number | null
+  /** How often the run's answers matched a metric definition, or null when
+   *  nothing was attributed. */
+  metric_use: { in_scope: number; used: number; ignored: number; unknown: number } | null
   error_message: string
   started_at: string | null
   finished_at: string | null
@@ -1042,8 +1216,10 @@ export interface BenchmarkSet {
   held_out_fraction: number
   created_at: string
   updated_at: string
-  /** Newest first, capped — the sparkline's points. */
+  /** Newest first, capped — the sparkline's points. Published runs only. */
   runs: BenchmarkRun[]
+  /** The newest run that scored a semantic layer draft, kept apart. */
+  draft_run: BenchmarkRun | null
   held_out_count: number
 }
 
@@ -1107,6 +1283,8 @@ export interface RunDetail {
   model_snapshot: Record<string, unknown>
   /** The database this turn was asked against; null once it is deleted. */
   connection_id: string | null
+  /** Which semantic layer version answered — 0 for none, null before versions. */
+  semantic_layer_version?: number | null
   /**
    * What the whole turn cost, as the run row recorded it — and it equals the
    * sum over `steps`, because both are written from the same calls.

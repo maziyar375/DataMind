@@ -31,6 +31,14 @@ from app.knowledge.backlog import (
     traffic_reason,
     unknown_reason,
 )
+from app.semantic import (
+    GlossaryTerm,
+    SemanticColumn,
+    SemanticDocument,
+    SemanticEntity,
+    SemanticMetric,
+    vocabulary_terms,
+)
 
 TABLES = [
     {
@@ -51,21 +59,35 @@ TABLES = [
     },
 ]
 
-LAYER = {
-    "entities": [
-        {
-            "table": "sales.order_items",
-            "business_name": "Basket lines",
-            "synonyms": ["cart lines"],
-            "columns": [{"name": "unit_price", "business_name": "list price"}],
-            "metrics": [
-                {"name": "revenue", "business_name": "Net revenue",
-                 "synonyms": ["takings"]}
+#: A layer in the model's own fields. It used to be a dict with
+#: `business_name` on every entry and `synonyms` on a glossary term — keys the
+#: model has never had — and the tests passed against it while every real
+#: layer's labels were invisible to the backlog. Typed now, so a renamed field
+#: fails here.
+LAYER = SemanticDocument(
+    entities=[
+        SemanticEntity(
+            table="sales.order_items",
+            label="Basket lines",
+            synonyms=["cart lines"],
+            columns=[
+                SemanticColumn(
+                    name="unit_price", label="list price", synonyms=["sticker price"]
+                )
             ],
-        }
+            metrics=[
+                SemanticMetric(name="revenue", label="Net revenue", synonyms=["takings"])
+            ],
+        )
     ],
-    "glossary": [{"term": "churn", "synonyms": ["attrition"]}],
-}
+    glossary=[
+        GlossaryTerm(
+            term="churn", meaning="customers who stopped buying",
+            maps_to=["attrition_rate"],
+        )
+    ],
+)
+TERMS = vocabulary_terms(LAYER)
 
 
 def suggestion(kind: SuggestionKind, count: int = 1) -> Suggestion:
@@ -131,13 +153,51 @@ def test_catalog_comments_are_vocabulary_too() -> None:
 
 
 def test_the_semantic_layer_contributes_names_synonyms_and_the_glossary() -> None:
-    vocabulary = build_vocabulary(TABLES, LAYER)
+    vocabulary = build_vocabulary(TABLES, TERMS)
     for word in ("basket", "cart", "revenue", "takings", "churn", "attrition"):
         assert word in vocabulary, word
 
 
+@pytest.mark.parametrize(
+    ("question", "where"),
+    [
+        ("net takings by store", "a metric label and a metric synonym"),
+        ("sticker price of each item", "a column synonym"),
+        ("attrition rate last quarter", "a glossary term's maps_to"),
+        ("basket lines per customer", "an entity label"),
+    ],
+)
+def test_a_word_only_the_layer_speaks_is_not_unknown(question: str, where: str) -> None:
+    """Each of these was reported as a gap while the backlog read dict keys.
+
+    Every word below appears in exactly one place — the layer, as `where` says
+    — and nowhere in the physical names or the catalog comments.
+    """
+    assert unknown_words(question, build_vocabulary(TABLES)) != [], where
+    assert unknown_words(question, build_vocabulary(TABLES, TERMS)) == [], where
+
+
+def test_what_the_prompt_never_sees_teaches_the_vocabulary_nothing() -> None:
+    # An excluded entity renders nothing, and neither does an entry the binder
+    # flagged; a word only they carry is one retrieval cannot resolve.
+    doc = SemanticDocument(
+        entities=[
+            SemanticEntity(table="sales.staging", label="Scratchpad", exclude=True),
+            SemanticEntity(table="sales.gone", label="Warehouse", valid=False),
+            SemanticEntity(
+                table="sales.order_items",
+                columns=[SemanticColumn(name="dropped", label="Voucher", valid=False)],
+                metrics=[SemanticMetric(name="refunds", label="Chargebacks", valid=False)],
+            ),
+        ]
+    )
+    vocabulary = build_vocabulary(TABLES, vocabulary_terms(doc))
+    for word in ("scratchpad", "warehouse", "voucher", "chargebacks"):
+        assert word not in vocabulary, word
+
+
 def test_a_connection_with_nothing_synced_has_no_vocabulary() -> None:
-    assert build_vocabulary([], None) == set()
+    assert build_vocabulary([], ()) == set()
 
 
 # ── the gap, and what it must not flag ───────────────────────────────────
@@ -151,7 +211,7 @@ def test_the_glossary_closes_the_gap_it_was_written_to_close() -> None:
     # The whole point of the feature: a curator adds a glossary term and the
     # backlog row disappears. If it did not, the row would be an accusation
     # rather than a task.
-    assert unknown_words("how many customers churned", build_vocabulary(TABLES, LAYER)) == []
+    assert unknown_words("how many customers churned", build_vocabulary(TABLES, TERMS)) == []
 
 
 @pytest.mark.parametrize(
@@ -171,7 +231,7 @@ def test_time_and_aggregation_words_are_never_a_gap(question: str) -> None:
     words at the top of every backlog forever, which is how a signal becomes
     furniture.
     """
-    vocabulary = build_vocabulary(TABLES, LAYER)
+    vocabulary = build_vocabulary(TABLES, TERMS)
     assert unknown_words(question, vocabulary) == []
 
 
@@ -180,7 +240,7 @@ def test_a_verb_form_matches_the_noun_somebody_named() -> None:
     # Folding a couple of endings at *lookup* time can only ever mark a word
     # known, which is the fail-safe direction — a false "known" costs one
     # backlog row, a false "unknown" costs noise on every question.
-    vocabulary = build_vocabulary(TABLES, LAYER)
+    vocabulary = build_vocabulary(TABLES, TERMS)
     assert unknown_words("customers who churned", vocabulary) == []
     assert unknown_words("customers who are churning", vocabulary) == []
     # …and the guards mean a short word is never mangled into a match.

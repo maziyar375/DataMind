@@ -7,6 +7,7 @@ keeping it is the failure mode that would poison every query that follows.
 from __future__ import annotations
 
 from app.semantic import (
+    GlossaryTerm,
     Provenance,
     SemanticColumn,
     SemanticDocument,
@@ -14,7 +15,9 @@ from app.semantic import (
     SemanticMetric,
     build_index,
     check_expression,
+    confine_to_tables,
     derive_joins,
+    fill_entity,
     merge_documents,
     validate_document,
 )
@@ -284,6 +287,268 @@ def test_an_untouched_exclusion_rule_is_replaced_by_the_generation() -> None:
     assert merged.default_exclusions == "Rows where deleted_at is not null."
 
 
+def test_an_edited_exclusion_rule_survives_over_an_otherwise_untouched_document() -> None:
+    """The case the comment in `merge_documents` calls the sharpest, and which
+    the old rule lost: a curator who wrote **only** the exclusion rule. Nothing
+    else was edited, so "keep it if anything was edited" threw it away on the
+    first regeneration. Each field is kept on its own flag now (Phase 2)."""
+    existing = _doc()
+    existing.default_exclusions = "Customers whose email ends in @internal.example."
+    existing.exclusions_provenance = Provenance(source="human", edited=True)
+    assert not any(e.edited for e in existing.entities)
+
+    merged = merge_documents(
+        existing,
+        SemanticDocument(
+            business_context="An online retailer.",
+            default_exclusions="Rows where deleted_at is not null.",
+            entities=[SemanticEntity(table="sales.orders", grain="regenerated")],
+        ),
+    )
+    assert merged.default_exclusions == "Customers whose email ends in @internal.example."
+    assert merged.exclusions_provenance.edited
+    # The context was not written by a person, so the generation's replaces it:
+    # one flag keeps one field.
+    assert merged.business_context == "An online retailer."
+    assert merged.entities[0].grain == "regenerated"
+
+
+def test_an_edited_context_survives_on_its_own_flag_too() -> None:
+    existing = _doc()
+    existing.business_context = "The order book of a furniture maker."
+    existing.context_provenance = Provenance(source="human", edited=True)
+    merged = merge_documents(
+        existing,
+        SemanticDocument(
+            business_context="A retailer.",
+            default_exclusions="Rows where deleted_at is not null.",
+            entities=[SemanticEntity(table="sales.orders")],
+        ),
+    )
+    assert merged.business_context == "The order book of a furniture maker."
+    assert merged.default_exclusions == "Rows where deleted_at is not null."
+
+
+# ── fill gaps (Phase 5) ──────────────────────────────────────────────────
+def _written(table: str = "sales.orders") -> SemanticEntity:
+    """An entity a person wrote every field of."""
+    return SemanticEntity(
+        table=table,
+        label="Orders",
+        description="Every order a customer placed.",
+        synonyms=["purchases"],
+        grain="one row per order",
+        role="fact",
+        default_time_column="ordered_at",
+        exclude=False,
+        columns=[SemanticColumn(
+            name="status", label="Status", description="Fulfilment state.",
+            synonyms=["state"], unit="n/a", value_meanings={"P": "paid"},
+            provenance=Provenance(source="human", edited=True),
+        )],
+        metrics=[SemanticMetric(
+            name="order_count", label="Orders", expression="COUNT(sales.orders.id)",
+            provenance=Provenance(source="human", edited=True),
+        )],
+        provenance=Provenance(source="human", edited=True, reviewed=True),
+    )
+
+
+def _guess(table: str = "sales.orders") -> SemanticEntity:
+    """The model's description of the same table: a different value everywhere."""
+    return SemanticEntity(
+        table=table,
+        label="Sales orders (generated)",
+        description="Generated description.",
+        synonyms=["generated"],
+        grain="generated grain",
+        role="dimension",
+        default_time_column="shipped_at",
+        columns=[
+            SemanticColumn(
+                name="status", label="Generated", description="Generated.",
+                synonyms=["generated"], unit="generated", value_meanings={"C": "cancelled"},
+            ),
+            SemanticColumn(name="customer_id", label="Customer", description="Who ordered."),
+        ],
+        metrics=[
+            SemanticMetric(
+                name="order_count", expression="COUNT(*)",
+                filters=["sales.orders.status <> 'CANCELLED'"],
+            ),
+            SemanticMetric(name="paid_orders", expression="COUNT(sales.orders.id)"),
+        ],
+    )
+
+
+def test_fill_gaps_never_overwrites_a_field_a_person_wrote() -> None:
+    """The phase's measurement (§8): every field of the entity and of its
+    columns and metrics is written, the generation disagrees with all of them,
+    and not one changes."""
+    person = _written()
+    filled = fill_entity(person, _guess())
+
+    kept = filled.model_copy(deep=True)
+    kept.columns = [c for c in kept.columns if c.name == "status"]
+    kept.metrics = [m for m in kept.metrics if m.name == "order_count"]
+    assert kept == person, "a written field was overwritten"
+    # …and the generation still added what the table lacked.
+    assert [c.name for c in filled.columns] == ["status", "customer_id"]
+    assert [m.name for m in filled.metrics] == ["order_count", "paid_orders"]
+
+
+def test_fill_gaps_takes_generated_values_only_where_a_field_is_empty() -> None:
+    person = SemanticEntity(
+        table="sales.orders",
+        label="Orders",
+        columns=[SemanticColumn(name="status", label="Status")],
+        provenance=Provenance(source="human", edited=True),
+    )
+    filled = fill_entity(person, _guess())
+
+    assert filled.label == "Orders"
+    assert (filled.description, filled.grain, filled.role) == (
+        "Generated description.", "generated grain", "dimension",
+    )
+    assert filled.synonyms == ["generated"]
+    [status, _] = filled.columns
+    assert status.label == "Status"
+    assert (status.description, status.unit, status.value_meanings) == (
+        "Generated.", "generated", {"C": "cancelled"},
+    )
+    # Still the person's entity: the next regeneration must protect it too.
+    assert filled.provenance.edited and filled.provenance.source == "human"
+
+
+def test_fill_gaps_never_touches_an_existing_metric_even_one_without_filters() -> None:
+    """A metric with no filters is a definition, not a blank — filling its
+    filters would change a number while claiming to fill a gap."""
+    person = SemanticEntity(
+        table="sales.orders",
+        metrics=[SemanticMetric(name="order_count", expression="COUNT(sales.orders.id)")],
+        provenance=Provenance(source="human", edited=True),
+    )
+    [metric, _] = fill_entity(person, _guess()).metrics
+    assert metric.expression == "COUNT(sales.orders.id)"
+    assert metric.filters == [] and metric.label == ""
+
+
+def test_fill_gaps_adds_no_metric_whose_name_another_table_defines() -> None:
+    """Adding it would make the name ambiguous, and `_refuse_ambiguous_metrics`
+    would then switch off both — the one a person relies on included."""
+    filled = fill_entity(
+        SemanticEntity(table="sales.orders", provenance=Provenance(edited=True)),
+        _guess(),
+        taken=frozenset({"paid_orders"}),
+    )
+    assert [m.name for m in filled.metrics] == ["order_count"]
+
+
+def test_a_fill_gaps_merge_fills_edited_entities_and_refreshes_the_rest() -> None:
+    existing = SemanticDocument(entities=[
+        _written(),
+        SemanticEntity(table="sales.customers", label="Old guess"),
+    ])
+    generated = SemanticDocument(entities=[
+        _guess(), SemanticEntity(table="sales.customers", label="New guess"),
+    ])
+
+    merged = merge_documents(existing, generated, fill_gaps=True)
+    orders, customers = merged.entities
+    assert orders.label == "Orders" and len(orders.columns) == 2
+    assert customers.label == "New guess"
+
+    # Without the flag, the edited entity is kept exactly as it was.
+    plain = merge_documents(existing, generated)
+    assert plain.entities[0] == existing.entities[0]
+
+
+def test_a_fill_gaps_merge_drops_nothing_the_generation_did_not_return() -> None:
+    """A table the model failed to describe, and a glossary term it did not
+    write again, are kept whether or not a person edited them."""
+    existing = SemanticDocument(
+        entities=[_written(), SemanticEntity(table="sales.customers", label="Customers")],
+        glossary=[GlossaryTerm(term="AOV", meaning="Average order value.")],
+    )
+    generated = SemanticDocument(entities=[_guess()])
+
+    merged = merge_documents(existing, generated, fill_gaps=True)
+    assert {e.table for e in merged.entities} == {"sales.orders", "sales.customers"}
+    assert [g.term for g in merged.glossary] == ["AOV"]
+
+    plain = merge_documents(existing, generated)
+    assert {e.table for e in plain.entities} == {"sales.orders"}
+    assert plain.glossary == []
+
+
+def test_two_filled_entities_do_not_both_gain_one_metric_name() -> None:
+    existing = SemanticDocument(entities=[
+        SemanticEntity(table="sales.orders", provenance=Provenance(edited=True)),
+        SemanticEntity(table="sales.order_items", provenance=Provenance(edited=True)),
+    ])
+    generated = SemanticDocument(entities=[
+        SemanticEntity(table="sales.orders", metrics=[
+            SemanticMetric(name="revenue", expression="COUNT(sales.orders.id)"),
+        ]),
+        SemanticEntity(table="sales.order_items", metrics=[
+            SemanticMetric(name="revenue", expression="SUM(sales.order_items.unit_price)"),
+        ]),
+    ])
+    merged = merge_documents(existing, generated, fill_gaps=True)
+    assert [len(e.metrics) for e in merged.entities] == [1, 0]
+    assert validate_document(merged, INDEX).issue_count == 0
+
+
+# ── a generation over chosen tables ──────────────────────────────────────
+def test_a_run_over_chosen_tables_changes_those_tables_and_nothing_else() -> None:
+    current = SemanticDocument(
+        business_context="A furniture maker.",
+        default_exclusions="",
+        entities=[
+            SemanticEntity(table="sales.customers", label="Customers"),
+            SemanticEntity(table="sales.orders", label="Orders"),
+        ],
+        glossary=[GlossaryTerm(term="AOV", meaning="Average order value.")],
+    )
+    merged = SemanticDocument(
+        business_context="Written from two tables.",
+        default_exclusions="Rows where is_test is true.",
+        entities=[
+            SemanticEntity(table="sales.orders", label="Orders (rewritten)"),
+            SemanticEntity(table="sales.order_items", label="Lines"),
+            SemanticEntity(table="sales.customers", label="Not chosen"),
+        ],
+        glossary=[
+            GlossaryTerm(term="aov", meaning="A different meaning."),
+            GlossaryTerm(term="Line", meaning="One product on an order."),
+        ],
+    )
+
+    out = confine_to_tables(current, merged, ["SALES.ORDERS", "sales.order_items"])
+    assert [(e.table, e.label) for e in out.entities] == [
+        ("sales.customers", "Customers"),
+        ("sales.orders", "Orders (rewritten)"),
+        ("sales.order_items", "Lines"),
+    ]
+    assert out.business_context == "A furniture maker.", "a written context is not replaced"
+    assert out.default_exclusions == "Rows where is_test is true.", "an empty one is filled"
+    assert [(g.term, g.meaning) for g in out.glossary] == [
+        ("AOV", "Average order value."), ("Line", "One product on an order."),
+    ]
+
+
+def test_a_run_over_chosen_tables_on_an_empty_layer_takes_the_whole_generation() -> None:
+    merged = SemanticDocument(
+        business_context="A furniture maker.",
+        entities=[SemanticEntity(table="sales.orders")],
+    )
+    merged.time.week_starts_on = "sunday"
+    out = confine_to_tables(SemanticDocument(), merged, ["sales.orders"])
+    assert out.business_context == "A furniture maker."
+    assert out.time.week_starts_on == "sunday"
+    assert [e.table for e in out.entities] == ["sales.orders"]
+
+
 # ── Oracle identifier case ───────────────────────────────────────────────
 # These four assert **current behaviour, hazard included**, and are deliberately
 # not a fix (docs/reference/catalog-metadata.md §6.1.3). `build_index` lower-cases
@@ -441,3 +706,20 @@ def test_a_metric_already_broken_keeps_the_reason_it_is_broken() -> None:
     assert not broken.valid and "also defined on" not in broken.issue
     # And with only one *valid* claim on the name, the other one stands.
     assert checked.entities[1].metrics[0].valid
+
+
+# ── a chained statement is not an expression (found in Phase 4) ─────────
+def test_a_chained_statement_is_refused_as_a_metric_or_a_filter() -> None:
+    """`parse_one` reads `WHERE 1; DROP TABLE orders` as a *block* of two
+    statements whose columns all resolve, so the check used to pass it. Found by
+    replaying the hostile SQL corpus through `check_expression`
+    (`test_semantic_transfer.py`)."""
+    index = build_index(
+        [{"schema": "sales", "name": "orders", "columns": [{"name": "amount"}]}], "postgres"
+    )
+    for text, boolean in (("1; DROP TABLE orders", True), ("SUM(amount); DELETE FROM orders", False)):
+        valid, issue = check_expression(text, entity_table="sales.orders", index=index, boolean=boolean)
+        assert not valid, text
+        assert "not a statement" in issue or "not valid SQL" in issue
+    # A trailing semicolon is still just an expression.
+    assert check_expression("amount > 0;", entity_table="sales.orders", index=index, boolean=True)[0]

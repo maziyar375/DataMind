@@ -22,7 +22,10 @@ import type {
   ReportSectionResult,
   ReportSummary, Review, Role, RunDetail, RunEvent, RunKnowledge, SchemaSnapshot,
   Reach, ScopedPrivilege, ServiceAccount, ServiceKey, ShareCheck, Team,
-  SemanticDocument, SemanticJob, Suggestion,
+  SemanticAttention, SemanticChange, SemanticChangeList, SemanticDocument,
+  SemanticGenerationMode, SemanticHistoryEntry,
+  SemanticImportResult, SemanticJob, SemanticLayerFile, SemanticMetricUse, SemanticVersionList,
+  SemanticVersionSummary, Suggestion,
   SemanticLayer, SqlDraft, TemplateCheckResult, TemplateParam,
   TilePosition, TileResult, TileType, TestResult, UsageSeries, UsageTotal, User,
 } from './types'
@@ -550,20 +553,117 @@ export const connections = {
 export const semantic = {
   get: (connectionId: string) =>
     get<SemanticLayer>(`/connections/${connectionId}/semantic`),
-  save: (connectionId: string, document: SemanticDocument) =>
+  // The editor's writes land in the draft, which no question reads; publishing
+  // is its own act. Every write names the revision it was made against, and a
+  // stale one is a 409 (`E_SEMANTIC_CONFLICT`) rather than an overwrite of
+  // whoever wrote in between.
+  saveDraft: (
+    connectionId: string,
+    document: SemanticDocument,
+    { baseRevision }: { baseRevision: number },
+  ) =>
+    request<SemanticLayer>(`/connections/${connectionId}/semantic/draft`, {
+      method: 'PUT',
+      body: JSON.stringify({ document, base_revision: baseRevision }),
+    }),
+  discardDraft: (connectionId: string, { baseRevision }: { baseRevision: number }) =>
+    request<SemanticLayer>(
+      `/connections/${connectionId}/semantic/draft?base_revision=${baseRevision}`,
+      { method: 'DELETE' },
+    ),
+  // `note` is why. Required by the server (`E_SEMANTIC_NOTE_REQUIRED`) when a
+  // change alters numbers; the change list is the what.
+  publish: (
+    connectionId: string,
+    { baseRevision, note = '' }: { baseRevision: number; note?: string },
+  ) =>
+    post<SemanticLayer>(`/connections/${connectionId}/semantic/publish`, {
+      base_revision: baseRevision, note,
+    }),
+  // Save and publish in one step — the API's `PUT /semantic`, for scripts. The
+  // editor does not call it.
+  save: (
+    connectionId: string,
+    document: SemanticDocument,
+    { baseRevision, note = '' }: { baseRevision: number; note?: string },
+  ) =>
     request<SemanticLayer>(`/connections/${connectionId}/semantic`, {
       method: 'PUT',
-      body: JSON.stringify({ document }),
+      body: JSON.stringify({ document, base_revision: baseRevision, note }),
     }),
+  // The server's one differ. Saves nothing — how the editor learns whether its
+  // edits change numbers, and what to list after a conflict.
+  diff: (connectionId: string, before: SemanticDocument, after: SemanticDocument) =>
+    post<SemanticChange[]>(`/connections/${connectionId}/semantic/diff`, { before, after }),
+  versions: (connectionId: string, { before, limit }: { before?: number; limit?: number } = {}) => {
+    const params = new URLSearchParams()
+    if (before !== undefined) params.set('before', String(before))
+    if (limit !== undefined) params.set('limit', String(limit))
+    const query = params.toString()
+    return get<SemanticVersionList>(
+      `/connections/${connectionId}/semantic/versions${query ? `?${query}` : ''}`,
+    )
+  },
+  changes: (connectionId: string, version: number, against?: number) =>
+    get<SemanticChangeList>(
+      `/connections/${connectionId}/semantic/versions/${version}/changes${
+        against !== undefined ? `?against=${against}` : ''
+      }`,
+    ),
+  restore: (
+    connectionId: string,
+    version: number,
+    { baseRevision, note = '' }: { baseRevision: number; note?: string },
+  ) =>
+    post<SemanticLayer>(
+      `/connections/${connectionId}/semantic/versions/${version}/restore`,
+      { base_revision: baseRevision, note },
+    ),
+  history: (connectionId: string, { entity, item }: { entity?: string; item?: string }) => {
+    const params = new URLSearchParams()
+    if (entity) params.set('entity', entity)
+    if (item) params.set('item', item)
+    return get<SemanticHistoryEntry[]>(
+      `/connections/${connectionId}/semantic/history?${params.toString()}`,
+    )
+  },
   remove: (connectionId: string) => del(`/connections/${connectionId}/semantic`),
   generate: (
     connectionId: string,
-    payload: { llm_config_id: string; mode: 'MERGE' | 'REPLACE'; only_tables?: string[] },
+    payload: { llm_config_id: string; mode: SemanticGenerationMode; only_tables?: string[] },
   ) => post<SemanticJob>(`/connections/${connectionId}/semantic/generate`, payload),
   job: (connectionId: string, jobId: string) =>
     get<SemanticJob>(`/connections/${connectionId}/semantic/jobs/${jobId}`),
   cancelJob: (connectionId: string, jobId: string) =>
     post<SemanticJob>(`/connections/${connectionId}/semantic/jobs/${jobId}/cancel`),
+  // One version, with its document as it was bound when it was published.
+  version: (connectionId: string, version: number) =>
+    get<SemanticVersionSummary & { document: SemanticDocument }>(
+      `/connections/${connectionId}/semantic/versions/${version}`,
+    ),
+  // A published version as a file — JSON, fetched with the bearer token rather
+  // than linked. `valueMeanings` opts in to values drawn from the data.
+  exportFile: (
+    connectionId: string,
+    { version, valueMeanings = false }: { version?: number; valueMeanings?: boolean } = {},
+  ) => {
+    const params = new URLSearchParams({ value_meanings: String(valueMeanings) })
+    if (version !== undefined) params.set('version', String(version))
+    return get<SemanticLayerFile>(
+      `/connections/${connectionId}/semantic/export?${params.toString()}`,
+    )
+  },
+  // A file into the draft. Nothing reaches a question until it is published.
+  importFile: (connectionId: string, file: unknown, { baseRevision }: { baseRevision: number }) =>
+    post<SemanticImportResult>(`/connections/${connectionId}/semantic/import`, {
+      file, base_revision: baseRevision,
+    }),
+  // *Metrics in use*: counts over the last `days` of answers, per metric.
+  metricUse: (connectionId: string, days = 30) =>
+    get<SemanticMetricUse>(`/connections/${connectionId}/semantic/metric-use?days=${days}`),
+  // *Needs attention*: what in the layer needs a person, and why.
+  attention: (connectionId: string, days = 30) =>
+    get<SemanticAttention>(`/connections/${connectionId}/semantic/attention?days=${days}`),
   // Same parser the save path uses, so the metric editor cannot promise
   // something the backend will later reject.
   check: (
@@ -709,11 +809,25 @@ export const knowledge = {
   // questions it was built from come back RETRIEVABLE.
   deleteBenchmark: (connectionId: string, setId: string) =>
     del(`/connections/${connectionId}/knowledge/benchmarks/${setId}`),
-  runBenchmark: (connectionId: string, setId: string) =>
-    post<BenchmarkRun>(
-      `/connections/${connectionId}/knowledge/benchmarks/${setId}/run`,
+  // `semanticSource: 'DRAFT'` scores the semantic layer's unpublished draft,
+  // and also needs `modify` on the layer. Such a run stays out of `runs`.
+  runBenchmark: (
+    connectionId: string,
+    setId: string,
+    { semanticSource, llmConfigId }: {
+      semanticSource?: 'PUBLISHED' | 'DRAFT'
+      llmConfigId?: string
+    } = {},
+  ) => {
+    const params = new URLSearchParams()
+    if (semanticSource) params.set('semantic_source', semanticSource)
+    if (llmConfigId) params.set('llm_config_id', llmConfigId)
+    const query = params.toString()
+    return post<BenchmarkRun>(
+      `/connections/${connectionId}/knowledge/benchmarks/${setId}/run${query ? `?${query}` : ''}`,
       {},
-    ),
+    )
+  },
   benchmarkResults: (connectionId: string, runId: string) =>
     get<BenchmarkResult[]>(
       `/connections/${connectionId}/knowledge/benchmarks/runs/${runId}/results`,

@@ -90,7 +90,7 @@ make authz-check  # prove no module decides access for itself
 make up / down / logs / secrets / migrate / fixtures / db-repair
 ```
 
-From `frontend/`: `npm run typecheck`, `npm run build`, `npm test` (sixteen
+From `frontend/`: `npm run typecheck`, `npm run build`, `npm test` (twenty
 suites). **`npm run lint` is a dead script** — eslint is neither a devDependency
 nor configured.
 
@@ -135,6 +135,9 @@ backend/app/
                   dashboard_transfer (a dashboard as a portable file: no ids,
                   no results, no connection internals — and an imported
                   statement is hostile input like any other),
+                  semantic_transfer (a semantic layer as a portable file: a
+                  published version out, value meanings only when asked; a
+                  file in, to the draft),
                   query_service (execute_saved_sql — the tile/report entry point
                   into guarded execution), sql_draft_service,
                   usage_service (how many tokens the models used: one union
@@ -178,9 +181,19 @@ backend/app/
                   self-contained like sqlguard,
                   and allowed to call the guard because that is what it is for
   semantic/       what the schema *means*: models.py (the document), validate.py
-                  (bind it to a snapshot, parse metric SQL), generator.py (build
-                  one with a model, one call per table), render.py (the prompt
-                  block), prompts.py — self-contained like sqlguard
+                  (bind it to a snapshot, parse metric SQL), bind.py (the one
+                  binder every reader goes through — stored `valid` flags are
+                  never trusted), terms.py (the words it speaks, for the
+                  backlog), diff.py (the one differ: typed changes keyed by
+                  entry, which versions store and the UI only words),
+                  attribute.py (whether an answer's SQL used a metric's
+                  definition — observed after the run, never enforced),
+                  limits.py (how long a text may be — checked on write,
+                  never on parse), attention.py (what in a layer needs a
+                  person, and why — from what is already stored, no job),
+                  generator.py (build one with a model, one call per
+                  table), render.py (the prompt block), prompts.py —
+                  self-contained like sqlguard
   reports/        the written document: outline.py (the proposed structure,
                   and how many sections to ask for), language.py (which
                   language the request is in — derived, never asked),
@@ -272,7 +285,23 @@ frontend/src/
                             bullets — read at display time into spans, never
                             into markup; `npm run test:chat`),
                             settings.tsx, semantic.tsx (the layer
-                            editor), semantic-drift.ts (an all-or-nothing
+                            editor), semantic-history.tsx (its versions, one
+                            version's changes, restore — `useMatch`
+                            sub-routes of the tab), semantic-publish.tsx
+                            (publishing the draft: its change list, the note a
+                            number-changing edit needs, and *Score this
+                            draft*), semantic-changes.ts (a
+                            change list grouped and worded, never computed —
+                            `npm run test:changes`), semantic-score.ts (whether
+                            a draft's benchmark score may be compared with the
+                            published one — `npm run test:score`),
+                            semantic-transfer.tsx (export and import
+                            dialogs), semantic-file.ts (reading a layer file
+                            before it is sent — `npm run test:layerfile`),
+                            semantic-attention.ts (*Needs attention* grouped
+                            per table and worded, never decided —
+                            `npm run test:attention`),
+                            semantic-drift.ts (an all-or-nothing
                             re-key told apart from ordinary drift —
                             engine-neutral detection, Oracle-specific
                             explanation; `npm run test:drift`),
@@ -596,7 +625,7 @@ described here — each has its own reference:
 
 | | What it is | Reference |
 |---|---|---|
-| **The semantic layer** | What the schema *means* — business names, grain, metrics bound to exact SQL, time conventions, fan-out cautions. One document per connection | [docs/reference/semantic-layer.md](docs/reference/semantic-layer.md) |
+| **The semantic layer** | What the schema *means* — business names, grain, metrics bound to exact SQL, time conventions, fan-out cautions. One document per connection. An edit, a generation and a restore land in a **draft no question reads**; publishing it writes a numbered version. A write names the revision it read and a stale one is a 409, not an overwrite. After a run, whether its SQL used each metric's definition is observed and stored, never enforced. Chosen tables can be regenerated, filling gaps without overwriting what a person wrote, and *Needs attention* lists what the schema, the history and the answers say needs a curator | [docs/reference/semantic-layer.md](docs/reference/semantic-layer.md) |
 | **Knowledge templates** | A question somebody already answered correctly, stored as a parameterized question→SQL template so the system answers it the same way next time | [docs/reference/knowledge-templates.md](docs/reference/knowledge-templates.md) |
 
 Both are **off-by-absence**: with neither present, the prompt is byte-identical
@@ -756,14 +785,15 @@ at commit time and shows up as drift a release later. Full tour:
   A literal hex or `oklch()` in a component is a bug in both themes — one of
   them just has not been looked at yet. Chart colours are the one exception and
   they live in `components/palette.ts`, tested apart from React.
-- **The fifteen DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
+- **The nineteen DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
   `table-format.ts`, `dashboard-document.ts`, `palette.ts`, `chat-format.ts`,
   `report-document.ts`, `report-readiness.ts`, `report-print.ts`,
-  `semantic-drift.ts`, `semantic-metrics.ts`, `knowledge-template.ts`,
-  `thinking.ts`, `knowledge-queue.ts`, `provider-params.ts`, `usage-chart.ts`
-  — they hold the
+  `semantic-drift.ts`, `semantic-metrics.ts`, `semantic-changes.ts`,
+  `semantic-score.ts`, `semantic-file.ts`, `semantic-attention.ts`,
+  `knowledge-template.ts`, `thinking.ts`, `knowledge-queue.ts`,
+  `provider-params.ts`, `usage-chart.ts` — they hold the
   logic whose failures are quiet, they are (with `scripts/permissions.test.ts`,
-  the sixteenth suite) the *only* tested code in the frontend, and their suites
+  the twentieth suite) the *only* tested code in the frontend, and their suites
   are plain `node --experimental-strip-types` scripts. **One React import turns
   a suite into a thing that cannot run.**
 - **Text a person wrote gets `dir={dirOf(value)}`.** The product ships Persian.
@@ -884,7 +914,7 @@ at commit time and shows up as drift a release later. Full tour:
   the pipeline — the pipeline reads a layer, a report reads a node, and
   neither a layer nor a node knows anything about the thing above it.
 
-  **The three constants as they stand: `PROMPT_VERSION` = `"v9"`,
+  **The three constants as they stand: `PROMPT_VERSION` = `"v10"`,
   `SEMANTIC_PROMPT_VERSION` = `"s4"`, `REPORT_PROMPT_VERSION` = `"r4"`.** Move
   the one whose prompts you changed — and note that "prompts" means everything
   the model ends up reading, not only wording: a change to how much of the

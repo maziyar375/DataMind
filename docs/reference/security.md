@@ -248,6 +248,56 @@ reads, under the same budget. On the way back, `_known_values()` filters the
 model's proposed `value_meanings` down to values already present in the
 snapshot, so a model cannot invent a key and have it stored as fact.
 
+**Versions are the same content class as the document.** Since migration `0032`
+every save of the layer is kept as an immutable version
+([plans/semantic-layer-model.md](../plans/semantic-layer-model.md) §7.2):
+
+- History exposes old versions — including `value_meanings` since removed from
+  the live document — to anyone with `select` on the layer. That is the person
+  who could read them while they were live, and revoking a grant revokes the
+  history with it, because every history route asks for the same `select`.
+- `value_meanings` in any version still reach a prompt only through
+  `HintBudget.value_lists`, at render time; nothing about versions changes a
+  render-time gate, and no run reads anything but the published copy.
+- Nothing in the layer is executed, so no version, restore or diff is a guard
+  entry point. The audit rows (`semantic.saved`, `.restored`, `.deleted`,
+  `.conflict`, `.generation.*`) carry versions and counts only; the names of
+  the entries that changed live in `semantic_layer_changes`, behind the
+  layer's own `select`.
+- **A draft is the same content class too** (migration `0033`). It is read by
+  whoever may read the layer (`select`) and written by whoever may edit it
+  (`modify`). No loader a question goes through reads it; the one reader
+  outside the editor is a benchmark run that was asked to score it, and asking
+  needs `modify` on the layer on top of the benchmark's own privilege.
+  Publishing is `modify` as well — no approval step, so the separation this
+  buys is between an edit and its effect, not between two people.
+- **A layer file carries nothing from inside the connection** (Phase 4). An
+  export names the connection and its engine, never its host, database, user,
+  password or id; strips `joins`, `valid` and `issue`; and leaves
+  `value_meanings` — codes drawn from the data — out unless the exporter asks,
+  with the choice audited (`semantic.exported`). It needs `select`, the
+  privilege that already reads the same version. **Import is not a guard entry
+  point**: it lands in the draft through the binder, under `modify`, and nothing
+  executes a metric. The hostile SQL corpus is replayed through
+  `check_expression` regardless; that replay found chained statements
+  (`1; DROP TABLE orders`) passing as valid filters, now refused. Text limits
+  (`app/semantic/limits.py`) bound what the editor and an import may write into
+  prompt text.
+- **Attribution adds no guard entry point** (migration `0034`). It parses the
+  statement the guard already validated and stores a verdict; it cannot change
+  what runs, and it fails open. `metric_use` holds metric and table names and a
+  verdict — schema vocabulary, no values and no SQL. *Metrics in use* aggregates
+  those verdicts across every asker's runs on the connection for a reader with
+  `select` on the layer, and returns counts only: no question, answer,
+  statement or asker.
+- ***Needs attention* adds no disclosure surface** (Phase 5). It is read under
+  `select` on the layer and returns reasons with counts and schema names —
+  tables, columns, metric names, the binder's issue sentences — the same
+  vocabulary the editor already shows that reader. Its two answer-derived
+  reasons are counts across every asker's runs, like *Metrics in use*. A
+  generation over chosen tables is `modify`, as every generation is, and lands
+  in the draft.
+
 ### 2.3 Reports (#10–#12) in detail
 
 A report is the only feature that **refuses to run under a narrow policy**

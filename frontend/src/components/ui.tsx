@@ -315,6 +315,14 @@ export const Icon = {
       <path d="M21 3v6h-6" />
     </svg>
   ),
+  /** A clock turning back — a record's versions. */
+  History: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <path d="M3 12a9 9 0 1 0 2.6-6.4" />
+      <path d="M3 3v6h6" />
+      <path d="M12 7v5l3 2" />
+    </svg>
+  ),
   Grid: ({ size = 17, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
     <svg {...iconBase(size, stroke, strokeWidth)}>
       <rect x="3" y="3" width="7" height="9" rx="1.5" />

@@ -4,8 +4,11 @@ Phase 6 of `docs/plans/learning-loop.md`. This is where a customer gets a number
 of their own, and the whole design is about that number being honest.
 
 **It runs the real pipeline.** The same `AnalyticsPipeline`, the same guard, the
-same connector the ask path uses — because a benchmark that measured a
-simplified path would be measuring something the customer never experiences.
+same connector and the same semantic layer the ask path uses — because a
+benchmark that measured a simplified path would be measuring something the
+customer never experiences. (The layer was the exception until
+`docs/plans/semantic-layer-model.md` Phase 0: every score before `PROMPT_VERSION`
+v10 was taken without it.)
 The only thing this does that a chat run does not is execute the *gold*
 statement afterwards and compare.
 
@@ -65,6 +68,7 @@ from app.pipeline.nodes import NodeDeps
 from app.pipeline.pipeline import AnalyticsPipeline
 from app.pipeline.prompts import PROMPT_VERSION
 from app.pipeline.state import RunState
+from app.semantic import SemanticDocument
 from app.services.benchmark_service import (
     FAILED,
     OUTCOME_ERROR,
@@ -75,6 +79,7 @@ from app.services.benchmark_service import (
     OUTCOME_NOT_PROBED,
     OUTCOME_VALIDATION_FAILED,
     RUNNING,
+    SEMANTIC_DRAFT,
     SUCCEEDED,
     BenchmarkService,
 )
@@ -85,6 +90,12 @@ from app.services.query_service import (
     policy_from_snapshot,
     resolve_llm,
     secret_box,
+)
+from app.services.semantic_service import (
+    DraftMovedError,
+    load_draft,
+    load_layer,
+    metric_use_of,
 )
 
 log = get_logger(__name__)
@@ -157,6 +168,26 @@ async def execute_benchmark_run(
             "against it.",
         )
 
+    # The connection's layer, through the loader every other surface uses:
+    # bound to this snapshot, and absent when the switch is off. Loaded once per
+    # run, as the ask path loads it once per question — the snapshot does not
+    # move between members, so neither does the layer.
+    #
+    # A DRAFT run is the one exception, and the only place outside the editor a
+    # draft is read: somebody asked what publishing it would do to this number.
+    if run.semantic_source == SEMANTIC_DRAFT:
+        try:
+            layer = await load_draft(
+                db, connection, snapshot=snapshot, revision=run.semantic_revision
+            )
+        except DraftMovedError as moved:
+            return await _fail(db, run, str(moved))
+    else:
+        layer = await load_layer(db, connection, snapshot=snapshot)
+    semantic = layer.document
+    # Which version was scored, with the same meaning it has on `runs`.
+    run.semantic_layer_version = layer.version
+
     gateway = LiteLLMGateway.from_settings(settings)
     connector = bind_connector(connection, box)
     now = utcnow()
@@ -165,7 +196,8 @@ async def execute_benchmark_run(
             result = await _run_one(
                 db, settings, run, connection, template,
                 gateway=gateway, llm=llm, connector=connector,
-                snapshot=snapshot, now=now,
+                snapshot=snapshot, semantic=semantic, now=now,
+                layer_version=layer.version,
             )
             db.add(result)
             await db.flush()
@@ -185,6 +217,7 @@ async def execute_benchmark_run(
     run.held_out_matched = score.held_out_matched
     run.taught_total = score.taught_total
     run.taught_matched = score.taught_matched
+    run.metric_use = metric_use_summary(results)
     run.status = SUCCEEDED
     run.finished_at = utcnow()
     await db.commit()
@@ -209,7 +242,9 @@ async def _run_one(
     llm: Any,
     connector: Any,
     snapshot: dict[str, Any],
+    semantic: SemanticDocument | None,
     now: Any,
+    layer_version: int = 0,
 ) -> BenchmarkResult:
     """One question, end to end: ask, execute the gold, compare.
 
@@ -258,11 +293,17 @@ async def _run_one(
     state = await _ask(
         settings, connection, question,
         gateway=gateway, llm=llm, connector=connector, snapshot=snapshot,
-        db=db,
+        semantic=semantic, db=db,
     )
     row.duration_ms = int((utcnow() - started).total_seconds() * 1000)
     row.from_template = state.match_outcome == "SHORT_CIRCUIT"
     row.candidate_sql = state.attempts[-1].raw_sql if state.attempts else ""
+    # The same attribution a chat run gets, on the same statement: the last one
+    # the guard accepted. Fail open — a question is scored whether or not its
+    # statement could be read.
+    _, row.metric_use = metric_use_of(
+        state.attempts, document=semantic, version=layer_version, snapshot=snapshot
+    )
 
     if state.intent in _NON_ANALYTICAL:
         row.outcome = OUTCOME_NO_SQL
@@ -315,6 +356,28 @@ async def _run_one(
     return row
 
 
+def metric_use_summary(results: list[BenchmarkResult]) -> dict[str, int] | None:
+    """How often the run's answers matched a metric definition.
+
+    Counted over every verdict of every attributed question: `in_scope` is how
+    many metric-and-question pairs there were, and `used`, `ignored` and
+    `unknown` split them. `None` when no question was attributed, so a run with
+    no layer reads *not measured* rather than *never used*.
+    """
+    counts = {"in_scope": 0, "used": 0, "ignored": 0, "unknown": 0}
+    attributed = False
+    for result in results:
+        verdicts = (result.metric_use or {}).get("verdicts") or []
+        if result.metric_use is not None:
+            attributed = True
+        for verdict in verdicts:
+            counts["in_scope"] += 1
+            key = verdict.get("verdict")
+            if key in counts:
+                counts[key] += 1
+    return counts if attributed else None
+
+
 async def _ask(
     settings: Settings,
     connection: DatabaseConnection,
@@ -324,6 +387,7 @@ async def _ask(
     llm: Any,
     connector: Any,
     snapshot: dict[str, Any],
+    semantic: SemanticDocument | None,
     db: AsyncSession,
 ) -> RunState:
     """One question through the real pipeline, with no conversation behind it.
@@ -359,9 +423,16 @@ async def _ask(
     deps = NodeDeps(
         llm_gateway=gateway, llm=llm, connector=connector, snapshot=snapshot,
         history=[], policy=policy_from_snapshot(snapshot, connection), emit=emit,
+        # The semantic layer, on the ask path's terms. Before this was passed
+        # the field defaulted to None, so a connection with a layer was scored
+        # on a prompt without one while chat answered with it — the number on
+        # `/knowledge/:id` was not the product's number, and toggling
+        # `semantic_layer_enabled` changed nothing a benchmark rendered.
+        semantic=semantic.model_dump(mode="json") if semantic else None,
         # `clarify` is off: a benchmark cannot answer a clarifying question, and
         # a run that stopped to ask would be scored as a failure it did not
-        # commit. Everything else is exactly the ask path.
+        # commit. Everything else — the layer included — is exactly the ask
+        # path.
         clarify_enabled=False,
         include_db_comments=connection.include_db_comments,
         matcher=build_matcher(db, connection=connection, settings=settings),

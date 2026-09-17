@@ -550,7 +550,7 @@ class ReportService:
 
         # The same block the generator sees, under the same disclosure budget:
         # the schema, the foreign keys, and the semantic layer scoped to them.
-        semantic = await load_document(self._db, connection)
+        semantic = await load_document(self._db, connection, snapshot=snapshot)
         context = RetrievedContext(
             dialect=snapshot["dialect"],
             tables=snapshot["tables"],
@@ -796,7 +796,8 @@ class ReportService:
         month" is calendar or rolling are facts about the database, and the
         semantic layer is where this codebase already records them.
         """
-        document = await load_document(self._db, connection)
+        snapshot = await latest_snapshot(self._db, connection.id)
+        document = await load_document(self._db, connection, snapshot=snapshot)
         return _render_time(document) if document else ""
 
     # ── runs ─────────────────────────────────────────────────────────────

@@ -141,6 +141,15 @@ class RecordOutcome:
     #: actually retrieved are different facts and the report prints the second.
     matcher: str = ""
 
+    # ── definition use (semantic layer Phase 3) ─────────────────────────
+    #: True when the last accepted statement was attributed against the
+    #: fixture's semantic layer. Set on **both** arms: on the layer-off arm the
+    #: layer is never rendered, and a `used` there is coincidence — the control
+    #: that gives the layer-on arm's rate a meaning.
+    metric_attributed: bool = False
+    #: `{"metric", "entity", "verdict"}` for each metric on a touched table.
+    metric_verdicts: list[dict[str, str]] = field(default_factory=list)
+
     llm_ms: int = 0
     validate_ms: int = 0
     db_ms: int = 0
@@ -308,6 +317,35 @@ def aggregate(outcomes: list[RecordOutcome]) -> SuiteReport:
         per_tag=per_tag,
         outcome_counts=dict(Counter(o.outcome for o in outcomes).most_common()),
     )
+
+
+def definition_use(outcomes: list[RecordOutcome]) -> dict[str, Any] | None:
+    """How often an arm's statements matched a metric definition.
+
+    `in_scope` counts metric-and-question pairs over the attributed questions;
+    `used_rate` is `used / in_scope`, or None with nothing in scope. **One arm's
+    rate means little alone**: a filterless metric such as `SUM(amount)` is
+    matched by coincidence, so the layer's effect on definition use is the
+    layer-on arm's rate minus the layer-off arm's, on the same suite and model
+    (`docs/plans/semantic-layer-model.md` §4.4). None when nothing was
+    attributed — no layer to attribute against is not a rate of zero.
+    """
+    attributed = [o for o in outcomes if o.metric_attributed]
+    if not attributed:
+        return None
+    counts = {"used": 0, "ignored": 0, "unknown": 0}
+    in_scope = 0
+    for outcome in attributed:
+        for verdict in outcome.metric_verdicts:
+            in_scope += 1
+            if verdict.get("verdict") in counts:
+                counts[verdict["verdict"]] += 1
+    return {
+        "questions_attributed": len(attributed),
+        "in_scope": in_scope,
+        **counts,
+        "used_rate": round(counts["used"] / in_scope, 4) if in_scope else None,
+    }
 
 
 def report_to_dict(report: SuiteReport) -> dict[str, Any]:

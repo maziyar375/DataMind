@@ -22,12 +22,24 @@
  *
  * Validation is never guessed at locally: metric expressions are checked by
  * the same backend parser that will reject them at save time.
+ *
+ * **A save is a draft; a publish is a version.** Save writes the draft, which
+ * no question reads, and *Review and publish* (`semantic-publish.tsx`) is the
+ * act that makes it what the model reads — with a note when a change moves a
+ * number. A generation and a restore land in the same draft. Every write names
+ * the revision it was edited from and is refused — not merged — when somebody
+ * wrote in between; the refusal says who, beside the button, and keeps the
+ * edits in the tab. What changed is always the server's answer (the layer's
+ * `unpublished_changes`, and `POST …/semantic/diff` for the edits a conflict
+ * displaced), the same differ the History tab reads (`semantic-history.tsx`).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { llmConfigs as llmApi, semantic as api } from '../api/client'
+import { useMatch, useNavigate, useSearchParams } from 'react-router-dom'
+import { ApiError, llmConfigs as llmApi, semantic as api } from '../api/client'
 import type {
-  Connection, GlossaryTerm, LlmConfig, SemanticColumn, SemanticDocument,
-  SemanticEntity, SemanticJob, SemanticLayer, SemanticMetric,
+  Connection, GlossaryTerm, LlmConfig, ProblemDetail, SemanticAttention, SemanticChange,
+  SemanticColumn, SemanticDocument, SemanticEntity, SemanticGenerationMode, SemanticJob,
+  SemanticLayer, SemanticMetric, SemanticMetricUse,
 } from '../api/types'
 import {
   Chip, DangerButton, ErrorNote, Field, GhostButton, Icon, Modal,
@@ -39,6 +51,14 @@ import { AccessPopover } from './access'
 import { DetailBody, FieldRow } from './settings'
 import { useBackgroundWatch } from '../shell'
 import { explainRekey, rekeyDrift } from './semantic-drift'
+import { SemanticHistory } from './semantic-history'
+import { ChangeList, PublishDialog } from './semantic-publish'
+import { ExportDialog, ImportDialog } from './semantic-transfer'
+import { authorship, historyPath, unpublishedWords } from './semantic-changes'
+import { attentionSection, attentionView, undescribedWords } from './semantic-attention'
+import type {
+  AttentionLine, AttentionRow, AttentionTone, AttentionView,
+} from './semantic-attention'
 import {
   collectMetrics, matchesMetric, metricSummary,
 } from './semantic-metrics'
@@ -76,7 +96,7 @@ const COLUMN_ROLE_TONE: Record<string, ChipTone> = {
   attribute: 'neutral',
 }
 
-type Filter = 'all' | 'review' | 'metrics' | 'issues'
+type Filter = 'all' | 'review' | 'metrics' | 'issues' | 'attention'
 
 /** Shown in place of the stats strip before anything has been generated —
  *  three concrete examples beat a paragraph about "semantics". */
@@ -103,51 +123,101 @@ export function SemanticLayerTab({
 }) {
   const [layer, setLayer] = useState<SemanticLayer | null>(null)
   const [doc, setDoc] = useState<SemanticDocument | null>(null)
-  const [baseline, setBaseline] = useState('')
+  // The server document the edits in this tab were made from, and its
+  // revision. Moved only when a server document is *adopted* — never by a
+  // reload that kept local edits — because the revision a save presents has
+  // to be the one those edits were made against, or a generation that landed
+  // mid-edit would be overwritten by the next Save without a word.
+  const [base, setBase] = useState<{ json: string; revision: number }>({ json: '', revision: 0 })
   const [job, setJob] = useState<SemanticJob | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [askGenerate, setAskGenerate] = useState(false)
+  const [conflict, setConflict] = useState<ProblemDetail | null>(null)
+  // The edits a conflict reload displaced — the server's change list, never a
+  // local comparison.
+  const [displaced, setDisplaced] = useState<SemanticChange[] | null>(null)
+  const [publishing, setPublishing] = useState(false)
+  const [askDiscardDraft, setAskDiscardDraft] = useState(false)
+  const [askExport, setAskExport] = useState(false)
+  const [askImport, setAskImport] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+  // The generate dialog, and the tables it opens with already chosen — set when
+  // a *Needs attention* row asks for a table's gaps to be filled.
+  const [generateFor, setGenerateFor] = useState<{ tables?: string[] } | null>(null)
+  const [attention, setAttention] = useState<SemanticAttention | null>(null)
+  const [attentionFailed, setAttentionFailed] = useState(false)
   const [askDelete, setAskDelete] = useState(false)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
   const [open, setOpen] = useState<Record<string, boolean>>({})
   const watch = useBackgroundWatch()
+  const navigate = useNavigate()
 
-  const dirty = doc !== null && JSON.stringify(doc) !== baseline
+  // History is three sub-routes of this tab, read here rather than nested, so
+  // the editor — and anything unsaved in it — stays mounted while somebody
+  // looks back.
+  const historyVersion = useMatch('/sources/:id/semantic/history/:version')
+  const historyList = useMatch('/sources/:id/semantic/history')
+  const [query, setQuery] = useSearchParams()
+  const inHistory = historyVersion !== null || historyList !== null
+  const shownVersion = historyVersion ? Number(historyVersion.params.version) : null
 
-  // Read inside `load` without making it depend on `baseline`, which would
-  // rebuild the callback on every keystroke.
-  const baselineRef = useRef('')
+  const dirty = doc !== null && JSON.stringify(doc) !== base.json
+
+  // Read inside `load` without making it depend on `base` or `doc`, which
+  // would rebuild the callback on every keystroke.
+  const baseRef = useRef(base)
+  const docRef = useRef(doc)
   useEffect(() => {
-    baselineRef.current = baseline
-  }, [baseline])
+    baseRef.current = base
+    docRef.current = doc
+  }, [base, doc])
+
+  const adopt = useCallback((next: SemanticLayer) => {
+    setLayer(next)
+    setDoc(next.document)
+    setBase({ json: JSON.stringify(next.document), revision: next.revision })
+  }, [])
 
   const load = useCallback(async () => {
     const next = await api.get(connection.id)
-    setLayer(next)
     setJob(next.job)
+    setLayer(next)
     // A reload mid-edit would silently discard what the user has typed, so
-    // the document is only adopted when there is nothing unsaved to lose.
-    setDoc((current) =>
-      current !== null && JSON.stringify(current) !== baselineRef.current
-        ? current
-        : next.document,
-    )
-    setBaseline(JSON.stringify(next.document))
+    // the document is only adopted when there is nothing unsaved to lose —
+    // and the base revision stays where those edits were made.
+    const current = docRef.current
+    if (current !== null && JSON.stringify(current) !== baseRef.current.json) return next
+    const adopted = { json: JSON.stringify(next.document), revision: next.revision }
+    baseRef.current = adopted
+    docRef.current = next.document
+    setBase(adopted)
+    setDoc(next.document)
     return next
   }, [connection.id])
 
   useEffect(() => {
     setLoading(true)
     setDoc(null)
-    setBaseline('')
-    baselineRef.current = ''
+    setBase({ json: '', revision: 0 })
+    baseRef.current = { json: '', revision: 0 }
+    docRef.current = null
     load()
       .catch(() => setError('Could not load the semantic layer.'))
       .finally(() => setLoading(false))
   }, [connection.id])
+
+  // `?publish=1` — the generation notice's link — opens the publish dialog once
+  // there is a draft to publish, and is then taken out of the address so a
+  // reload does not open it again.
+  useEffect(() => {
+    if (query.get('publish') !== '1' || !layer) return
+    if (layer.has_draft) setPublishing(true)
+    const next = new URLSearchParams(query)
+    next.delete('publish')
+    setQuery(next, { replace: true })
+  }, [query, layer, setQuery])
 
   // Poll while a generation is in flight; reload the document when it ends.
   useEffect(() => {
@@ -172,6 +242,28 @@ export function SemanticLayerTab({
     }
   }, [job?.id, job?.status, connection.id, load])
 
+  // *Needs attention* is a reading of what the server holds, so it is asked for
+  // again whenever that moves: a write (the revision), a re-sync (the schema
+  // version), or a generation landing — never on a keystroke.
+  useEffect(() => {
+    if (!layer) return
+    let live = true
+    api.attention(connection.id)
+      .then((next) => {
+        if (!live) return
+        setAttention(next)
+        setAttentionFailed(false)
+      })
+      .catch(() => {
+        if (!live) return
+        setAttention(null)
+        setAttentionFailed(true)
+      })
+    return () => {
+      live = false
+    }
+  }, [connection.id, layer?.revision, layer?.schema_version, layer?.published_version])
+
   function patch(next: SemanticDocument) {
     setDoc({ ...next })
   }
@@ -194,17 +286,71 @@ export function SemanticLayerTab({
     })
   }
 
-  async function save() {
+  /** Save the edits to the draft. Nothing a question reads moves.
+   *
+   *  No note here: a note belongs to the version the draft becomes, and the
+   *  publish dialog asks for it when a change moves a number. An edit that
+   *  changes nothing the model reads — a flag flipped back, a field typed and
+   *  restored — is not a draft, and the bar simply stands down. */
+  async function saveDraft() {
     if (!doc) return
     setSaving(true)
     setError(null)
+    setNotice(null)
     try {
-      const next = await api.save(connection.id, doc)
-      setLayer(next)
-      setDoc(next.document)
-      setBaseline(JSON.stringify(next.document))
+      adopt(await api.saveDraft(connection.id, doc, { baseRevision: base.revision }))
+      setConflict(null)
+      setDisplaced(null)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not save this layer.')
+      if (err instanceof ApiError && err.code === 'E_SEMANTIC_CONFLICT') {
+        setConflict(err.detail ?? {})
+      } else if (err instanceof ApiError && err.code === 'E_SEMANTIC_NO_CHANGES') {
+        setBase({ json: JSON.stringify(doc), revision: base.revision })
+        setNotice('Nothing the model reads has changed, so there was nothing to save.')
+      } else {
+        setError(err instanceof Error ? err.message : 'Could not save this draft.')
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  /** Throw the saved draft away; the published version is untouched. */
+  async function discardDraft() {
+    setAskDiscardDraft(false)
+    setSaving(true)
+    setError(null)
+    try {
+      adopt(await api.discardDraft(connection.id, { baseRevision: base.revision }))
+      setConflict(null)
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'E_SEMANTIC_CONFLICT') {
+        setConflict(err.detail ?? {})
+      } else {
+        setError(err instanceof Error ? err.message : 'Could not discard this draft.')
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  /** Take the version somebody else wrote, and list what this tab had.
+   *
+   *  No automatic re-apply (D6): the list is the server's reading of the
+   *  edits against the document they were made from, so they can be made
+   *  again by hand on top of what is there now. */
+  async function reloadAfterConflict() {
+    if (!doc) return
+    setSaving(true)
+    try {
+      const lost = base.json
+        ? await api.diff(connection.id, JSON.parse(base.json) as SemanticDocument, doc)
+        : []
+      adopt(await api.get(connection.id))
+      setDisplaced(lost.length ? lost : null)
+      setConflict(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not reload this layer.')
     } finally {
       setSaving(false)
     }
@@ -212,14 +358,14 @@ export function SemanticLayerTab({
 
   async function startGeneration(payload: {
     llm_config_id: string
-    mode: 'MERGE' | 'REPLACE'
+    mode: SemanticGenerationMode
     only_tables?: string[]
   }) {
     setError(null)
     try {
       const started = await api.generate(connection.id, payload)
       setJob(started)
-      setAskGenerate(false)
+      setGenerateFor(null)
       // Writing a layer is minutes of model calls, and nobody watches a
       // progress bar for four minutes. The poll above draws that bar while
       // this tab is open; this hands the *ending* to the shell, which is
@@ -230,12 +376,14 @@ export function SemanticLayerTab({
           const next = await api.job(connection.id, started.id)
           if (ACTIVE.includes(next.status)) return null
           if (next.status === 'SUCCEEDED') {
+            // Written to the draft, not to what questions read — which is the
+            // one thing a person three screens away must not assume otherwise.
             return {
               tone: 'ok',
-              title: `Semantic layer written for ${connection.name}`,
-              body: describeOutcome(next),
-              to: `/sources/${connection.id}/semantic`,
-              toLabel: 'Review it',
+              title: `Semantic layer draft written for ${connection.name}`,
+              body: `${describeOutcome(next)} Nothing reaches an answer until you review and publish it.`,
+              to: `/sources/${connection.id}/semantic?publish=1`,
+              toLabel: 'Review and publish',
             }
           }
           if (next.status === 'CANCELLED') return null
@@ -265,8 +413,10 @@ export function SemanticLayerTab({
   async function discardLayer() {
     setAskDelete(false)
     await api.remove(connection.id)
-    await load()
+    adopt(await api.get(connection.id))
   }
+
+  const needs = useMemo<AttentionView>(() => attentionView(attention?.items ?? []), [attention])
 
   const entities = useMemo(() => {
     if (!doc) return []
@@ -284,14 +434,15 @@ export function SemanticLayerTab({
       if (filter === 'review') return !entity.provenance.reviewed
       if (filter === 'metrics') return entity.metrics.length > 0
       if (filter === 'issues') return hasIssue(entity)
+      if (filter === 'attention') return needs.tables.has(entity.table.toLowerCase())
       return true
     })
-  }, [doc, search, filter])
+  }, [doc, search, filter, needs])
 
   // Which card the metrics panel sent the reader to, and when. The timestamp
   // is what makes a second click on the *same* table work: the card has to be
   // told again, and a value that did not change tells it nothing.
-  const [focus, setFocus] = useState<{ table: string; at: number } | null>(null)
+  const [focus, setFocus] = useState<{ table: string; at: number; section?: Section } | null>(null)
 
   /** Open a table's card on its metrics section and scroll to it.
    *
@@ -347,26 +498,65 @@ export function SemanticLayerTab({
 
   const running = job !== null && ACTIVE.includes(job.status)
   const empty = !doc || doc.entities.length === 0
+  const hasDraft = !!layer?.has_draft
+  const barShown = dirty || !!notice || !!conflict || hasDraft
+
+  /** Open one table's card in the editor, from a line in the history. */
+  const openEntity = (table: string) => {
+    navigate(`/sources/${connection.id}/semantic`)
+    setFilter('all')
+    setSearch('')
+    setOpen((prev) => ({ ...prev, [table]: true }))
+    setFocus({ table, at: Date.now() })
+  }
 
   return (
     <>
-      <Shell padBottom={dirty}>
+      <Shell padBottom={barShown}>
         {error && <ErrorNote>{error}</ErrorNote>}
 
+        {inHistory ? (
+          <SemanticHistory
+            connectionId={connection.id}
+            layer={layer}
+            version={shownVersion !== null && Number.isFinite(shownVersion) ? shownVersion : null}
+            entity={query.get('entity')}
+            item={query.get('item')}
+            dirty={dirty}
+            onRestored={(next) => {
+              adopt(next)
+              setDisplaced(null)
+              navigate(`/sources/${connection.id}/semantic`)
+            }}
+            onOpenEntity={openEntity}
+          />
+        ) : (
+        <>
         <Hero
           layer={layer}
           connection={connection}
           running={running}
           job={job}
-          onGenerate={() => setAskGenerate(true)}
+          onGenerate={() => setGenerateFor({})}
           onDelete={() => setAskDelete(true)}
           onCancel={cancelGeneration}
           onToggle={(value) => onConnectionChange({ semantic_layer_enabled: value })}
+          needs={attention ? needs : null}
+          needsFailed={attentionFailed}
           onFocusFilter={(next) => {
             setFilter(next)
             setSearch('')
           }}
+          onHistory={() => navigate(historyPath(connection.id))}
+          onPublish={() => setPublishing(true)}
+          onExport={() => setAskExport(true)}
+          onImport={() => setAskImport(true)}
+          dirty={dirty}
         />
+
+        {displaced && (
+          <Displaced changes={displaced} onDismiss={() => setDisplaced(null)} />
+        )}
 
         {/* The re-key note replaces the stale one rather than joining it: it
             says everything the stale note says and then names the cause, and
@@ -397,6 +587,7 @@ export function SemanticLayerTab({
                 *measures*, then the words people use for both. Metrics sit
                 above the glossary because a term routinely maps to one. */}
             <MetricsPanel
+              connectionId={connection.id}
               doc={doc!}
               onOpen={revealMetrics}
               onAdd={(table) => {
@@ -418,9 +609,31 @@ export function SemanticLayerTab({
                 review: doc!.entities.filter((e) => !e.provenance.reviewed).length,
                 metrics: doc!.entities.filter((e) => e.metrics.length > 0).length,
                 issues: doc!.entities.filter(hasIssue).length,
+                attention: needs.count,
               }}
+              attentionTone={needs.tone}
               shown={entities.length}
             />
+
+            {filter === 'attention' && (
+              <AttentionList
+                view={needs}
+                loaded={attention !== null}
+                failed={attentionFailed}
+                days={attention?.days ?? 30}
+                running={running}
+                onOpen={(row) => {
+                  // The server keys a table in lower case; the card is keyed
+                  // by the entity's own spelling.
+                  const table = doc!.entities.find((e) => e.table.toLowerCase() === row.table)?.table
+                  if (!table) return
+                  setOpen((prev) => ({ ...prev, [table]: true }))
+                  setFocus({ table, at: Date.now(), section: attentionSection(row, row.broken) })
+                }}
+                onFill={(tables) => setGenerateFor({ tables })}
+                onPublish={() => setPublishing(true)}
+              />
+            )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {entities.map((entity) => (
@@ -429,14 +642,18 @@ export function SemanticLayerTab({
                   connectionId={connection.id}
                   entity={entity}
                   focusedAt={focus?.table === entity.table ? focus.at : 0}
+                  focusedSection={focus?.table === entity.table ? focus.section : undefined}
                   open={!!open[entity.table]}
                   onToggle={() =>
                     setOpen((prev) => ({ ...prev, [entity.table]: !prev[entity.table] }))
                   }
                   onChange={(change) => updateEntity(entity.table, change)}
+                  onHistory={(item) =>
+                    navigate(historyPath(connection.id, { entity: entity.table.toLowerCase(), item }))
+                  }
                 />
               ))}
-              {entities.length === 0 && (
+              {entities.length === 0 && filter !== 'attention' && (
                 <div
                   style={{
                     border: '1px dashed var(--border-strong)',
@@ -453,22 +670,102 @@ export function SemanticLayerTab({
             </div>
           </>
         )}
+        </>
+        )}
       </Shell>
 
-
-      {dirty && (
+      {barShown && (
         <SaveBar
+          dirty={dirty}
           saving={saving}
-          onSave={save}
-          onDiscard={() => setDoc(JSON.parse(baseline) as SemanticDocument)}
+          notice={notice}
+          conflict={conflict}
+          unpublished={hasDraft ? layer!.unpublished_changes.length : 0}
+          onSave={saveDraft}
+          onPublish={() => setPublishing(true)}
+          onDiscardDraft={() => setAskDiscardDraft(true)}
+          onSeeConflict={() => {
+            if (conflict?.published_version) {
+              navigate(historyPath(connection.id, { version: conflict.published_version }))
+            }
+          }}
+          onReload={reloadAfterConflict}
+          onDismissNotice={() => setNotice(null)}
+          onDiscard={async () => {
+            // Back to what the server holds now — which after a conflict is not
+            // the document these edits started from, so it is asked for again.
+            if (conflict) {
+              setConflict(null)
+              try {
+                adopt(await api.get(connection.id))
+                return
+              } catch {
+                /* fall back to the last layer this tab read */
+              }
+            }
+            if (layer) adopt(layer)
+          }}
         />
       )}
 
-      {askGenerate && (
+      {publishing && layer && (
+        <PublishDialog
+          connectionId={connection.id}
+          layer={layer}
+          onClose={() => setPublishing(false)}
+          onPublished={(next) => {
+            setPublishing(false)
+            adopt(next)
+            setNotice(`Published v${next.published_version}. The next question reads it.`)
+          }}
+          onConflict={(detail) => {
+            setPublishing(false)
+            setConflict(detail)
+          }}
+        />
+      )}
+
+      {askExport && layer && (
+        <ExportDialog
+          connectionId={connection.id}
+          connectionName={connection.name}
+          layer={layer}
+          onClose={() => setAskExport(false)}
+        />
+      )}
+
+      {askImport && (
+        <ImportDialog
+          connectionId={connection.id}
+          layer={layer}
+          dirty={dirty}
+          onClose={() => setAskImport(false)}
+          onImported={(next) => {
+            adopt(next)
+            setDisplaced(null)
+            setConflict(null)
+          }}
+          onPublish={() => {
+            setAskImport(false)
+            setPublishing(true)
+          }}
+        />
+      )}
+
+      {askDiscardDraft && layer && (
+        <ConfirmDiscardDraft
+          layer={layer}
+          onClose={() => setAskDiscardDraft(false)}
+          onConfirm={discardDraft}
+        />
+      )}
+
+      {generateFor && (
         <GenerateModal
           layer={layer}
           undescribed={undescribed}
-          onClose={() => setAskGenerate(false)}
+          initialTables={generateFor.tables}
+          onClose={() => setGenerateFor(null)}
           onStart={startGeneration}
         />
       )}
@@ -506,21 +803,30 @@ function Shell({
 
 // ── hero ───────────────────────────────────────────────────────────────────
 function Hero({
-  layer, connection, running, job, onGenerate, onDelete, onCancel, onToggle,
-  onFocusFilter,
+  layer, connection, running, job, onGenerate, onDelete, onCancel, onToggle, needs, needsFailed,
+  onFocusFilter, onHistory, onPublish, onExport, onImport, dirty,
 }: {
   layer: SemanticLayer | null
   connection: Connection
   running: boolean
   job: SemanticJob | null
+  /** *Needs attention*, or `null` until the server has answered. */
+  needs: AttentionView | null
+  needsFailed: boolean
   onGenerate: () => void
   onDelete: () => void
   onCancel: () => void
   onToggle: (value: boolean) => void
   onFocusFilter: (next: Filter) => void
+  onHistory: () => void
+  onPublish: () => void
+  onExport: () => void
+  onImport: () => void
+  dirty: boolean
 }) {
   const exists = !!layer?.exists
   const model = layer?.model_snapshot?.model as string | undefined
+  const version = layer?.published_version ?? null
   const described = layer?.entity_count ?? 0
   const total = layer?.tables.length ?? 0
 
@@ -599,10 +905,17 @@ function Hero({
               Regenerate
             </GhostButton>
           ) : (
-            <PrimaryButton onClick={onGenerate} disabled={running}>
-              <Icon.Sparkle size={14} />
-              Generate with AI
-            </PrimaryButton>
+            <>
+              {/* Nothing to describe yet, so the other way in sits beside the
+                  first one: a layer somebody already wrote, as a file. */}
+              <GhostButton onClick={onImport} disabled={running}>
+                Import a file
+              </GhostButton>
+              <PrimaryButton onClick={onGenerate} disabled={running}>
+                <Icon.Sparkle size={14} />
+                Generate with AI
+              </PrimaryButton>
+            </>
           )}
           {exists && (
             <IconButton
@@ -651,8 +964,8 @@ function Hero({
             label={job.phase || 'Preparing'}
           />
           <span style={{ fontSize: 11.5, color: 'var(--text-dim)' }}>
-            You can leave this page — generation carries on and the result is
-            saved when it finishes.
+            You can leave this page — generation carries on, and the result is
+            written to your draft for you to review and publish.
           </span>
         </div>
       )}
@@ -664,7 +977,7 @@ function Hero({
       )}
       {!running && job && job.status === 'CANCELLED' && (
         <div style={{ padding: '0 20px 16px' }}>
-          <Note tone="amber">Generation was stopped. Nothing was saved.</Note>
+          <Note tone="amber">Generation was stopped. Nothing was written.</Note>
         </div>
       )}
       {!running && job && job.status === 'SUCCEEDED' && (
@@ -735,11 +1048,14 @@ function Hero({
               tone={layer!.reviewed_count > 0 ? 'accent' : 'neutral'}
               onClick={() => onFocusFilter('review')}
             />
+            {/* The same count the *Needs attention* filter carries, and the
+                way into it. Until the server has answered it says so, rather
+                than showing a number that is about to change. */}
             <Stat
-              value={layer!.issue_count}
+              value={needs ? needs.count : needsFailed ? '—' : '…'}
               label="need attention"
-              tone={layer!.issue_count > 0 ? 'red' : 'neutral'}
-              onClick={layer!.issue_count > 0 ? () => onFocusFilter('issues') : undefined}
+              tone={!needs || needs.count === 0 ? 'neutral' : needs.tone}
+              onClick={needs && needs.count > 0 ? () => onFocusFilter('attention') : undefined}
               last
             />
           </div>
@@ -765,23 +1081,167 @@ function Hero({
               }
               hint="Turn off to write SQL from the bare schema — the way to check whether this layer is helping."
             />
-            <span
-              style={{
-                marginLeft: 'auto',
-                fontSize: 11.5,
-                color: 'var(--text-faint)',
-                textAlign: 'right',
-              }}
-            >
-              {layer!.generated_at
-                ? `generated ${relativeTime(layer!.generated_at)}`
-                : 'written by hand'}
-              {model ? ` · ${model}` : ''}
-              {layer!.edited_at ? ` · edited ${relativeTime(layer!.edited_at)}` : ''}
-            </span>
+            <VersionLine
+              layer={layer!}
+              model={model}
+              onHistory={onHistory}
+              onPublish={onPublish}
+              onExport={onExport}
+              onImport={onImport}
+              dirty={dirty}
+            />
           </div>
         </>
       )}
+
+      {/* A deleted layer still has a history, and restoring it is the undo —
+          so the way back is offered where the stats would have been. */}
+      {!exists && !running && version !== null && (
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: 10, padding: '11px 20px',
+            borderTop: '1px solid var(--border)', background: 'var(--panel-alt)',
+            fontSize: 12, color: 'var(--text-dim)',
+          }}
+        >
+          <span style={{ flex: 1 }}>
+            v{version} · {authorship(layer!.published_origin, layer!.published_by_name)}
+            {layer!.published_at ? ` · ${relativeTime(layer!.published_at)}` : ''}
+          </span>
+          <GhostButton onClick={onHistory} style={{ padding: '5px 10px', fontSize: 12 }}>
+            <Icon.History size={13} />
+            History
+          </GhostButton>
+        </div>
+      )}
+    </section>
+  )
+}
+
+/**
+ * `Published v12 · by Sara Karimi · 2 days ago`, then whether anything is
+ * waiting: `No unpublished changes`, or an amber `◐ 3 unpublished changes` chip
+ * that opens the publish dialog. Every state has a glyph and a word.
+ *
+ * A layer written before versions existed reads `v1 · recorded at migration`,
+ * which is true and says nothing earlier was kept.
+ */
+function VersionLine({
+  layer, model, onHistory, onPublish, onExport, onImport, dirty,
+}: {
+  layer: SemanticLayer
+  model: string | undefined
+  onHistory: () => void
+  onPublish: () => void
+  onExport: () => void
+  onImport: () => void
+  dirty: boolean
+}) {
+  const version = layer.published_version
+  const how = authorship(layer.published_origin, layer.published_by_name)
+  const waiting = layer.has_draft ? layer.unpublished_changes.length : 0
+  return (
+    <span
+      style={{
+        marginLeft: 'auto',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap',
+        justifyContent: 'flex-end',
+        fontSize: 11.5,
+        color: 'var(--text-faint)',
+        textAlign: 'right',
+      }}
+    >
+      <span>
+        {version !== null ? (
+          <>
+            Published{' '}
+            <span className="mono" style={{ color: 'var(--text-dim)', fontWeight: 600 }}>
+              v{version}
+            </span>
+            {` · ${how}`}
+            {layer.published_at ? ` · ${relativeTime(layer.published_at)}` : ''}
+          </>
+        ) : (
+          'Not published yet'
+        )}
+        {model ? ` · ${model}` : ''}
+      </span>
+      {layer.has_draft ? (
+        <button
+          onClick={onPublish}
+          disabled={dirty}
+          title={dirty ? 'Save your edits to the draft first' : 'Review and publish'}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 5,
+            padding: '3px 9px', borderRadius: 999, fontSize: 11.5, fontWeight: 600,
+            color: 'var(--amber)', background: 'var(--amber-bg)',
+            border: '1px solid var(--amber-border)',
+            cursor: dirty ? 'default' : 'pointer',
+          }}
+        >
+          <span aria-hidden>◐</span>
+          {unpublishedWords(waiting)}
+        </button>
+      ) : version !== null ? (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+          <span aria-hidden style={{ color: 'var(--green)' }}>●</span>
+          {unpublishedWords(0)}
+        </span>
+      ) : null}
+      {version !== null && (
+        <GhostButton onClick={onHistory} style={{ padding: '4px 9px', fontSize: 12 }}>
+          <Icon.History size={13} />
+          History
+        </GhostButton>
+      )}
+      {/* A file is a published version, so Export waits for one; Import lands
+          in the draft and is always offered. */}
+      {version !== null && (
+        <GhostButton onClick={onExport} style={{ padding: '4px 9px', fontSize: 12 }}>
+          <Icon.ArrowDown size={12} />
+          Export
+        </GhostButton>
+      )}
+      <GhostButton onClick={onImport} style={{ padding: '4px 9px', fontSize: 12 }}>
+        Import
+      </GhostButton>
+    </span>
+  )
+}
+
+/** The edits a conflict reload took out of the tab, as the server words them.
+ *  Listed so they can be made again by hand; nothing re-applies them (D6). */
+function Displaced({
+  changes, onDismiss,
+}: {
+  changes: SemanticChange[]
+  onDismiss: () => void
+}) {
+  return (
+    <section
+      style={{
+        border: '1px solid var(--amber-border)',
+        background: 'var(--amber-bg)',
+        borderRadius: 12,
+        padding: '12px 16px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ color: 'var(--amber)', display: 'flex' }}><Icon.Alert /></span>
+        <span style={{ flex: 1, fontSize: 12.5, fontWeight: 600, color: 'var(--text-strong)' }}>
+          Your unsaved edits — make them again on top of the version below
+        </span>
+        <GhostButton onClick={onDismiss} style={{ padding: '4px 9px', fontSize: 12 }}>
+          Done
+        </GhostButton>
+      </div>
+      <ChangeList changes={changes} />
     </section>
   )
 }
@@ -789,10 +1249,10 @@ function Hero({
 function Stat({
   value, label, hint, tone = 'neutral', onClick, last,
 }: {
-  value: number
+  value: number | string
   label: string
   hint?: string
-  tone?: 'neutral' | 'green' | 'accent' | 'red'
+  tone?: 'neutral' | 'green' | 'accent' | 'red' | 'amber'
   onClick?: () => void
   last?: boolean
 }) {
@@ -873,8 +1333,44 @@ function ConfirmDelete({
     >
       <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: 'var(--text-dim)' }}>
         Your schema, connection and conversations are untouched. Questions will
-        go back to being answered from the bare schema. You can generate a new
-        layer at any time.
+        go back to being answered from the bare schema, and any unpublished
+        draft is discarded. The history is kept, so a deleted layer can be
+        restored from it.
+      </p>
+    </Modal>
+  )
+}
+
+function ConfirmDiscardDraft({
+  layer, onClose, onConfirm,
+}: {
+  layer: SemanticLayer
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  const count = layer.unpublished_changes.length
+  const by = layer.draft_updated_by_name
+  return (
+    <Modal
+      title="Discard the draft?"
+      subtitle={`${unpublishedWords(count)}${by ? `, last saved by ${by}` : ''}.`}
+      onClose={onClose}
+      width={440}
+      footer={
+        <>
+          <GhostButton onClick={onClose}>Keep it</GhostButton>
+          <DangerButton onClick={onConfirm} style={{ padding: '9px 16px', fontSize: 13 }}>
+            <Icon.Trash />
+            Discard draft
+          </DangerButton>
+        </>
+      }
+    >
+      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: 'var(--text-dim)' }}>
+        {layer.published_version !== null
+          ? `The published v${layer.published_version} is untouched, and it is what questions keep reading.`
+          : 'Nothing has been published, so questions keep being answered from the bare schema.'}
+        {' '}A draft is not a version: once discarded, it cannot be restored.
       </p>
     </Modal>
   )
@@ -1101,14 +1597,37 @@ function Note({ tone, children }: { tone: 'amber' | 'red'; children: React.React
 }
 
 /** Floats clear of the content instead of eating a strip of the pane, so the
- *  last card is never half-hidden behind it. */
+ *  last card is never half-hidden behind it.
+ *
+ *  Two states, never both, because they are two different acts:
+ *
+ *   - edits in this tab not saved yet — `Unsaved edits [Discard] [Save draft]`;
+ *   - a saved draft that differs from what is published —
+ *     `3 unpublished changes [Discard draft] [Review and publish]`.
+ *
+ *  Everything a write can answer lands here, beside the button that was
+ *  pressed — not in a toast: the conflict when somebody wrote first, and the
+ *  quiet "nothing to save". */
 function SaveBar({
-  saving, onSave, onDiscard,
+  dirty, saving, notice, conflict, unpublished, onSave, onPublish, onDiscardDraft,
+  onSeeConflict, onReload, onDismissNotice, onDiscard,
 }: {
+  dirty: boolean
   saving: boolean
+  notice: string | null
+  conflict: ProblemDetail | null
+  /** Changes in the saved draft against the published layer; 0 for no draft. */
+  unpublished: number
   onSave: () => void
+  onPublish: () => void
+  onDiscardDraft: () => void
+  onSeeConflict: () => void
+  onReload: () => void
+  onDismissNotice: () => void
   onDiscard: () => void
 }) {
+  const who = conflict?.updated_by_name || 'Someone'
+  const drafted = !dirty && !conflict && unpublished > 0
   return (
     <div
       style={{
@@ -1124,30 +1643,91 @@ function SaveBar({
     >
       <div
         className="rm-enter"
+        role={conflict ? 'alert' : undefined}
         style={{
           pointerEvents: 'auto',
           display: 'flex',
-          alignItems: 'center',
-          gap: 14,
+          flexDirection: 'column',
+          gap: 10,
+          width: conflict ? 'min(560px, calc(100% - 32px))' : undefined,
+          maxWidth: 'calc(100% - 32px)',
           padding: '10px 12px 10px 18px',
           borderRadius: 12,
           background: 'var(--panel)',
-          border: '1px solid var(--border-strong)',
+          border: `1px solid ${
+            conflict ? 'var(--red-border)' : drafted ? 'var(--amber-border)' : 'var(--border-strong)'
+          }`,
           boxShadow: 'inset 0 1px 0 0 var(--sheen), var(--elev-3)',
         }}
       >
-        <span style={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
-          Unsaved changes
-        </span>
-        <span style={{ display: 'flex', gap: 8 }}>
-          <GhostButton onClick={onDiscard} disabled={saving} style={{ padding: '7px 12px' }}>
-            Discard
-          </GhostButton>
-          <PrimaryButton onClick={onSave} disabled={saving} style={{ padding: '7px 14px' }}>
-            {saving && <Spinner />}
-            Save changes
-          </PrimaryButton>
-        </span>
+        {conflict && (
+          <div
+            style={{
+              display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12.5,
+              lineHeight: 1.55, color: 'var(--red)', paddingTop: 4,
+            }}
+          >
+            <span style={{ marginTop: 2, flexShrink: 0 }}><Icon.Alert /></span>
+            <span style={{ flex: 1 }}>
+              <strong>{who}</strong> changed this layer
+              {conflict.published_version ? ` (published v${conflict.published_version})` : ''} while
+              you were editing. Your edits are still in this tab.
+            </span>
+          </div>
+        )}
+
+        {notice && !conflict && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--text-dim)' }}>
+            <span style={{ color: 'var(--green)', display: 'flex' }}><Icon.Check /></span>
+            <span style={{ flex: 1 }}>{notice}</span>
+            {!dirty && !drafted && (
+              <GhostButton onClick={onDismissNotice} style={{ padding: '4px 9px', fontSize: 12 }}>
+                OK
+              </GhostButton>
+            )}
+          </div>
+        )}
+
+        {(dirty || conflict || drafted) && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, justifyContent: 'space-between', flexWrap: 'wrap' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--text-dim)' }}>
+              {drafted && <span aria-hidden style={{ color: 'var(--amber)' }}>◐</span>}
+              {conflict ? 'Not saved' : dirty ? 'Unsaved edits' : unpublishedWords(unpublished)}
+            </span>
+            <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              {conflict ? (
+                <>
+                  <GhostButton onClick={onSeeConflict} disabled={saving} style={{ padding: '7px 12px' }}>
+                    See what changed
+                  </GhostButton>
+                  <PrimaryButton onClick={onReload} disabled={saving} style={{ padding: '7px 14px' }}>
+                    {saving && <Spinner />}
+                    Reload
+                  </PrimaryButton>
+                </>
+              ) : dirty ? (
+                <>
+                  <GhostButton onClick={onDiscard} disabled={saving} style={{ padding: '7px 12px' }}>
+                    Discard
+                  </GhostButton>
+                  <PrimaryButton onClick={onSave} disabled={saving} style={{ padding: '7px 14px' }}>
+                    {saving && <Spinner />}
+                    Save draft
+                  </PrimaryButton>
+                </>
+              ) : (
+                <>
+                  <GhostButton onClick={onDiscardDraft} disabled={saving} style={{ padding: '7px 12px' }}>
+                    Discard draft
+                  </GhostButton>
+                  <PrimaryButton onClick={onPublish} disabled={saving} style={{ padding: '7px 14px' }}>
+                    Review and publish
+                  </PrimaryButton>
+                </>
+              )}
+            </span>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -1201,7 +1781,15 @@ function Overview({
           // makes `dim_cust_x` readable as customers.
           rows={6}
           placeholder="e.g. An online retailer's order book: customers place orders made of line items, fulfilled from warehouses…"
-          onChange={(e) => onChange({ ...doc, business_context: e.target.value })}
+          onChange={(e) =>
+            onChange({
+              ...doc,
+              business_context: e.target.value,
+              // Its own flag, so a regeneration keeps what a person wrote here
+              // even when nothing else in the layer was touched.
+              context_provenance: { source: 'human', reviewed: false, ...doc.context_provenance, edited: true },
+            })
+          }
           style={{ minHeight: 132 }}
         />
       </Field>
@@ -1217,7 +1805,13 @@ function Overview({
           value={doc.default_exclusions}
           rows={2}
           placeholder="e.g. Rows where is_archived is true. Customers whose email ends in @internal.example — these are test accounts."
-          onChange={(e) => onChange({ ...doc, default_exclusions: e.target.value })}
+          onChange={(e) =>
+            onChange({
+              ...doc,
+              default_exclusions: e.target.value,
+              exclusions_provenance: { source: 'human', reviewed: false, ...doc.exclusions_provenance, edited: true },
+            })
+          }
           style={{ minHeight: 58 }}
         />
       </Field>
@@ -1322,7 +1916,13 @@ function PillTabs<T extends string>({
         background: 'var(--panel-alt)',
         borderRadius: 9,
         padding: 3,
-        flexShrink: 0,
+        // Scrolls sideways when it is wider than its row — five filters do not
+        // fit a phone, and a clipped tab is a tab nobody can reach.
+        flexShrink: 1,
+        minWidth: 0,
+        maxWidth: '100%',
+        overflowX: 'auto',
+        scrollbarWidth: 'none',
       }}
     >
       {options.map((option) => {
@@ -1338,6 +1938,8 @@ function PillTabs<T extends string>({
               display: 'inline-flex',
               alignItems: 'center',
               gap: 6,
+              flexShrink: 0,
+              whiteSpace: 'nowrap',
               fontSize: 12.5,
               fontWeight: 600,
               padding: '6px 11px',
@@ -1378,20 +1980,23 @@ function PillTabs<T extends string>({
 }
 
 function FilterBar({
-  value, onChange, search, onSearch, counts, shown,
+  value, onChange, search, onSearch, counts, attentionTone, shown,
 }: {
   value: Filter
   onChange: (next: Filter) => void
   search: string
   onSearch: (next: string) => void
   counts: Record<Filter, number>
+  /** Red only when something is broken: an undescribed table is work, not an alarm. */
+  attentionTone: AttentionTone
   shown: number
 }) {
   const options: { value: Filter; label: string }[] = [
     { value: 'all', label: 'All' },
     { value: 'review', label: 'Needs review' },
     { value: 'metrics', label: 'Has metrics' },
-    { value: 'issues', label: 'Needs attention' },
+    { value: 'issues', label: 'Has issues' },
+    { value: 'attention', label: 'Needs attention' },
   ]
   return (
     <div
@@ -1421,7 +2026,9 @@ function FilterBar({
           value: option.value,
           label: option.label,
           count: counts[option.value],
-          alert: option.value === 'issues' && counts[option.value] > 0,
+          alert:
+            (option.value === 'issues' && counts.issues > 0) ||
+            (option.value === 'attention' && counts.attention > 0 && attentionTone === 'red'),
         }))}
       />
 
@@ -1453,6 +2060,203 @@ function FilterBar({
   )
 }
 
+// ── needs attention ────────────────────────────────────────────────────────
+/** How many undescribed tables are named before *Show all*. */
+const UNDESCRIBED_SHOWN = 12
+
+/**
+ * *Needs attention*, above the cards it opens.
+ *
+ * Every sentence is the server's reason in words (`semantic-attention.ts`);
+ * nothing here decides whether a table needs anybody. The shape is one line
+ * for a draft left sitting, **a row per table** carrying each of its reasons,
+ * and the undescribed tables together in one row — twenty-one "no
+ * description" lines would bury the one that says a metric is broken.
+ *
+ * Each row offers the act that answers it. *Open* expands the table's card,
+ * which the filter keeps in the list below. A table whose columns grew offers
+ * *Fill the gaps…*, and the undescribed row *Describe…*: both open the
+ * generate dialog with those tables already chosen, so the one fix that needs
+ * a model is one click from the reason that asked for it.
+ */
+function AttentionList({
+  view, loaded, failed, days, running, onOpen, onFill, onPublish,
+}: {
+  view: AttentionView
+  loaded: boolean
+  failed: boolean
+  days: number
+  running: boolean
+  onOpen: (row: AttentionRow) => void
+  onFill: (tables: string[]) => void
+  onPublish: () => void
+}) {
+  const [everyTable, setEveryTable] = useState(false)
+
+  if (failed) {
+    return <ErrorNote>Could not work out what needs attention. Reload the page to try again.</ErrorNote>
+  }
+  if (!loaded) {
+    return (
+      <span style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12.5, color: 'var(--text-faint)', padding: '6px 2px' }}>
+        <Spinner size={12} /> Looking for what needs attention…
+      </span>
+    )
+  }
+  if (view.count === 0) {
+    return (
+      <div
+        style={{
+          display: 'flex', gap: 10, alignItems: 'baseline',
+          border: '1px dashed var(--border-strong)', borderRadius: 10,
+          padding: '16px 18px', fontSize: 13, color: 'var(--text-dim)', lineHeight: 1.55,
+        }}
+      >
+        <span aria-hidden style={{ color: 'var(--green)', fontWeight: 700 }}>✓</span>
+        <span>
+          Nothing needs attention. Every table is described, the schema breaks
+          nothing, and no answer in the last {days} days leaned on text nobody
+          reviewed.
+        </span>
+      </div>
+    )
+  }
+
+  const shown = everyTable ? view.undescribed : view.undescribed.slice(0, UNDESCRIBED_SHOWN)
+  return (
+    <div role="list" aria-label="Needs attention" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {view.draft && (
+        <AttentionRowFrame
+          tone={view.draft.tone}
+          heading="Your draft"
+          lines={[view.draft]}
+          actions={<GhostButton onClick={onPublish} style={ROW_BUTTON}>Review and publish</GhostButton>}
+        />
+      )}
+      {view.rows.map((row) => (
+        <AttentionRowFrame
+          key={row.table}
+          tone={row.tone}
+          heading={row.table}
+          mono
+          lines={row.lines}
+          actions={
+            <>
+              {row.fillable && (
+                <GhostButton
+                  onClick={() => onFill([row.table])}
+                  disabled={running}
+                  title={running ? 'A generation is already running.' : undefined}
+                  style={ROW_BUTTON}
+                >
+                  Fill the gaps…
+                </GhostButton>
+              )}
+              <GhostButton onClick={() => onOpen(row)} style={ROW_BUTTON}>Open</GhostButton>
+            </>
+          }
+        />
+      ))}
+      {view.undescribed.length > 0 && (
+        <AttentionRowFrame
+          tone="neutral"
+          heading={`${view.undescribed.length} undescribed`}
+          lines={[{ reason: 'UNDESCRIBED', glyph: '○', tone: 'neutral', text: undescribedWords(view.undescribed.length) }]}
+          actions={
+            <GhostButton
+              onClick={() => onFill(view.undescribed.map((t) => t.table))}
+              disabled={running}
+              title={running ? 'A generation is already running.' : undefined}
+              style={ROW_BUTTON}
+            >
+              Describe…
+            </GhostButton>
+          }
+        >
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 7 }}>
+            {shown.map((t) => (
+              <Chip key={t.table} tone="neutral" small>
+                <span className="mono" dir="ltr">{t.table}</span>
+              </Chip>
+            ))}
+            {view.undescribed.length > UNDESCRIBED_SHOWN && (
+              <button
+                type="button"
+                onClick={() => setEveryTable((v) => !v)}
+                style={{
+                  font: 'inherit', fontSize: 11.5, color: 'var(--accent)', background: 'none',
+                  border: 'none', padding: '0 4px', cursor: 'pointer',
+                }}
+              >
+                {everyTable ? 'Show fewer' : `and ${view.undescribed.length - UNDESCRIBED_SHOWN} more`}
+              </button>
+            )}
+          </div>
+        </AttentionRowFrame>
+      )}
+    </div>
+  )
+}
+
+const ROW_BUTTON: React.CSSProperties = { padding: '4px 10px', fontSize: 12 }
+
+function AttentionRowFrame({
+  tone, heading, mono, lines, actions, children,
+}: {
+  tone: AttentionTone
+  heading: string
+  mono?: boolean
+  lines: AttentionLine[]
+  actions: React.ReactNode
+  children?: React.ReactNode
+}) {
+  const border =
+    tone === 'red' ? 'var(--red-border)' : tone === 'amber' ? 'var(--amber-border)' : 'var(--border)'
+  return (
+    <div
+      role="listitem"
+      style={{
+        display: 'flex', gap: 12, rowGap: 8, flexWrap: 'wrap', alignItems: 'flex-start',
+        padding: '10px 12px', borderRadius: 9,
+        background: 'var(--panel-alt)', border: `1px solid ${border}`,
+      }}
+    >
+      <div style={{ minWidth: 0, flex: '1 1 260px' }}>
+        <div
+          className={mono ? 'mono' : undefined}
+          dir={mono ? 'ltr' : undefined}
+          style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-strong)', overflowWrap: 'anywhere' }}
+        >
+          {heading}
+        </div>
+        {lines.map((line, index) => (
+          <div key={`${line.reason}-${index}`} style={{ display: 'flex', gap: 7, marginTop: 4, fontSize: 12.5, lineHeight: 1.5 }}>
+            <span
+              aria-hidden
+              style={{
+                flexShrink: 0, width: 14, textAlign: 'center', fontWeight: 700,
+                color: line.tone === 'neutral' ? 'var(--text-faint)' : `var(--${line.tone})`,
+              }}
+            >
+              {line.glyph}
+            </span>
+            <span style={{ minWidth: 0, color: 'var(--text)' }}>
+              {line.text}
+              {line.note && (
+                <span style={{ display: 'block', fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2 }}>
+                  {line.note}
+                </span>
+              )}
+            </span>
+          </div>
+        ))}
+        {children}
+      </div>
+      <div style={{ display: 'flex', gap: 6, flexShrink: 0, marginInlineStart: 'auto' }}>{actions}</div>
+    </div>
+  )
+}
+
 // ── one entity ─────────────────────────────────────────────────────────────
 /**
  * One table in the layer — a row when closed, three tabs when open.
@@ -1480,7 +2284,7 @@ function FilterBar({
 type Section = 'meaning' | 'columns' | 'metrics'
 
 function EntityCard({
-  connectionId, entity, open, focusedAt = 0, onToggle, onChange,
+  connectionId, entity, open, focusedAt = 0, focusedSection, onToggle, onChange, onHistory,
 }: {
   connectionId: string
   entity: SemanticEntity
@@ -1489,8 +2293,12 @@ function EntityCard({
    *  than a boolean, so arriving twice at the same card works: the second
    *  visit has to reopen the metrics section the reader may have left. */
   focusedAt?: number
+  /** Which part to open on when focused — Metrics unless a caller says. */
+  focusedSection?: Section
   onToggle: () => void
   onChange: (change: Partial<SemanticEntity>) => void
+  /** This table's history, or one metric's on it. */
+  onHistory: (item?: string) => void
 }) {
   const broken = hasIssue(entity)
   const role = ROLE_META[entity.role] ?? ROLE_META.unknown
@@ -1500,7 +2308,7 @@ function EntityCard({
   // the card by hand — still starts on meaning, which is where a table is
   // read rather than measured.
   useEffect(() => {
-    if (focusedAt) setSection('metrics')
+    if (focusedAt) setSection(focusedSection ?? 'metrics')
   }, [focusedAt])
 
   const badColumns = entity.columns.filter((c) => !c.valid).length
@@ -1625,7 +2433,15 @@ function EntityCard({
         </button>
 
         {open && (
-          <div style={{ padding: '0 14px 12px 38px' }}>
+          <div
+            style={{
+              padding: '0 14px 12px 38px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              flexWrap: 'wrap',
+            }}
+          >
             <PillTabs
               value={section}
               onChange={setSection}
@@ -1650,6 +2466,14 @@ function EntityCard({
                 },
               ]}
             />
+            <GhostButton
+              onClick={() => onHistory()}
+              title={`Every saved change to ${entity.table}`}
+              style={{ marginLeft: 'auto', padding: '4px 9px', fontSize: 12 }}
+            >
+              <Icon.History size={13} />
+              History
+            </GhostButton>
           </div>
         )}
       </div>
@@ -1771,6 +2595,7 @@ function EntityCard({
               connectionId={connectionId}
               entity={entity}
               onChange={(metrics) => onChange({ metrics })}
+              onHistory={(name) => onHistory(name)}
             />
           )}
         </div>
@@ -2043,11 +2868,12 @@ function Columns({
 
 // ── metrics ────────────────────────────────────────────────────────────────
 function Metrics({
-  connectionId, entity, onChange,
+  connectionId, entity, onChange, onHistory,
 }: {
   connectionId: string
   entity: SemanticEntity
   onChange: (metrics: SemanticMetric[]) => void
+  onHistory: (name: string) => void
 }) {
   const [open, setOpen] = useState<Set<number>>(new Set())
 
@@ -2109,6 +2935,7 @@ function Metrics({
           onToggle={() => toggle(index)}
           onChange={(change) => update(index, change)}
           onRemove={() => onChange(entity.metrics.filter((_, i) => i !== index))}
+          onHistory={metric.name.trim() ? () => onHistory(metric.name.trim().toLowerCase()) : undefined}
         />
       ))}
     </Group>
@@ -2116,7 +2943,7 @@ function Metrics({
 }
 
 function MetricCard({
-  connectionId, table, metric, open, onToggle, onChange, onRemove,
+  connectionId, table, metric, open, onToggle, onChange, onRemove, onHistory,
 }: {
   connectionId: string
   table: string
@@ -2125,6 +2952,8 @@ function MetricCard({
   onToggle: () => void
   onChange: (change: Partial<SemanticMetric>) => void
   onRemove: () => void
+  /** Absent for a metric with no name yet: there is no entry to look up. */
+  onHistory?: () => void
 }) {
   // Server-side validation, debounced: the browser cannot know the dialect or
   // the schema, and a second opinion here would only be wrong differently.
@@ -2180,6 +3009,8 @@ function MetricCard({
         }
         onRemove={onRemove}
         removeLabel="Remove metric"
+        onHistory={onHistory}
+        historyLabel={`History of ${metric.name}`}
       />
 
       {!open ? null : (
@@ -2482,8 +3313,9 @@ function entityDomId(table: string): string {
  *   them on save, and this says it while it is still being typed.
  */
 function MetricsPanel({
-  doc, onOpen, onAdd,
+  connectionId, doc, onOpen, onAdd,
 }: {
+  connectionId: string
   doc: SemanticDocument
   /** Reveal a metric where it is edited: its table's card, on its metrics
    *  section, scrolled to. */
@@ -2552,6 +3384,8 @@ function MetricsPanel({
         />
       ))}
 
+      {rows.length > 0 && <MetricsInUse connectionId={connectionId} />}
+
       {tables.length > 0 && (
         <div
           style={{
@@ -2583,6 +3417,122 @@ function MetricsPanel({
         </div>
       )}
     </Panel>
+  )
+}
+
+/** Rows *Metrics in use* shows before *Show all*. */
+const IN_USE_ROWS = 8
+
+/**
+ * *Metrics in use*: how the answers of the last 30 days fared against each
+ * definition — how many touched the metric's table, how many used the
+ * definition, how many left part of it out. Most-left-out first, which is the
+ * order a curator should look in.
+ *
+ * Counts only: the server names no question and no asker. `left out` here is a
+ * count over many answers and accuses no single one; on an answer it is not
+ * shown at all until its precision has been measured.
+ */
+function MetricsInUse({ connectionId }: { connectionId: string }) {
+  const [use, setUse] = useState<SemanticMetricUse | null>(null)
+  const [failed, setFailed] = useState(false)
+  const [all, setAll] = useState(false)
+  useEffect(() => {
+    let live = true
+    setUse(null)
+    setFailed(false)
+    api.metricUse(connectionId)
+      .then((next) => live && setUse(next))
+      .catch(() => live && setFailed(true))
+    return () => {
+      live = false
+    }
+  }, [connectionId])
+
+  if (failed) return null
+  const head = (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-strong)' }}>In use</span>
+      <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
+        the last {use?.days ?? 30} days of answers, counted per metric over those
+        whose SQL touched its table — most left out first
+      </span>
+    </div>
+  )
+  if (use === null) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 4 }}>
+        {head}
+        <span style={{ display: 'flex', gap: 7, alignItems: 'center', fontSize: 12, color: 'var(--text-faint)' }}>
+          <Spinner size={12} /> Counting…
+        </span>
+      </div>
+    )
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 4 }}>
+      {head}
+      {use.rows.length === 0 ? (
+        <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
+          No answer in that time touched a table with a metric.
+        </span>
+      ) : (
+        <div style={{ overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 9 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ color: 'var(--text-faint)', textAlign: 'start' }}>
+                {['Metric', 'Answers on its table', 'Used it', 'Left part out'].map((label, index) => (
+                  <th
+                    key={label}
+                    scope="col"
+                    style={{
+                      padding: '7px 10px', fontWeight: 600, fontSize: 11,
+                      textAlign: index === 0 ? 'start' : 'end',
+                      borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {(all ? use.rows : use.rows.slice(0, IN_USE_ROWS)).map((row) => (
+                <tr key={`${row.entity}.${row.metric}`} style={{ borderTop: '1px solid var(--border)' }}>
+                  <td style={{ padding: '7px 10px' }}>
+                    <span className="mono" style={{ fontWeight: 600, color: 'var(--text-strong)' }}>{row.metric}</span>
+                    <span className="mono" style={{ display: 'block', fontSize: 11, color: 'var(--text-faint)' }}>{row.entity}</span>
+                  </td>
+                  <td style={{ padding: '7px 10px', textAlign: 'end', fontVariantNumeric: 'tabular-nums' }}>{row.questions}</td>
+                  <td style={{ padding: '7px 10px', textAlign: 'end', fontVariantNumeric: 'tabular-nums', color: 'var(--text-strong)' }}>{row.used}</td>
+                  <td
+                    style={{
+                      padding: '7px 10px', textAlign: 'end', fontVariantNumeric: 'tabular-nums',
+                      color: row.ignored > row.used ? 'var(--amber)' : 'var(--text-dim)',
+                      fontWeight: row.ignored > row.used ? 700 : 400,
+                    }}
+                  >
+                    {row.ignored > row.used ? `◆ ${row.ignored}` : row.ignored}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {use.rows.length > IN_USE_ROWS && (
+        <GhostButton
+          onClick={() => setAll((v) => !v)}
+          style={{ alignSelf: 'flex-start', padding: '4px 9px', fontSize: 12 }}
+        >
+          {all ? 'Show fewer' : `Show all ${use.rows.length}`}
+        </GhostButton>
+      )}
+      <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>
+        The rest of each row’s answers either did not compute the metric or wrote
+        it in a form that could not be compared — neither is counted against it.
+      </span>
+    </div>
   )
 }
 
@@ -2664,25 +3614,56 @@ function MetricLine({ row, onOpen }: { row: MetricRow; onOpen: () => void }) {
 }
 
 // ── generate modal ─────────────────────────────────────────────────────────
+type Scope = 'missing' | 'chosen' | 'all'
+
+/**
+ * Generate: which model, which tables, and what happens to what is written.
+ *
+ * **Which tables** is three answers: what is missing, tables somebody picks,
+ * or every table. The picker is how a described table is described again —
+ * the one a re-sync grew six columns on — and *Needs attention* opens it with
+ * that table already chosen.
+ *
+ * **What happens to a table that already has an entity** is two modes (Phase 5):
+ * *Fill the gaps*, the default, keeps every field a person wrote and adds only
+ * what is missing; *Rewrite* replaces it. Over chosen tables either one changes
+ * those tables and nothing else. Both land in the draft, so a rewrite is a
+ * change list somebody reads before it answers anything.
+ */
 function GenerateModal({
-  layer, undescribed, onClose, onStart,
+  layer, undescribed, initialTables, onClose, onStart,
 }: {
   layer: SemanticLayer | null
   undescribed: string[]
+  /** Tables to open with chosen — from a *Needs attention* row. */
+  initialTables?: string[]
   onClose: () => void
   onStart: (payload: {
     llm_config_id: string
-    mode: 'MERGE' | 'REPLACE'
+    mode: SemanticGenerationMode
     only_tables?: string[]
   }) => void
 }) {
+  const tables = layer?.tables ?? []
+  const exists = !!layer?.exists
   const [configs, setConfigs] = useState<LlmConfig[]>([])
   const [loading, setLoading] = useState(true)
   const [configId, setConfigId] = useState('')
-  const [mode, setMode] = useState<'MERGE' | 'REPLACE'>('MERGE')
-  const [scope, setScope] = useState<'all' | 'missing'>(
-    undescribed.length > 0 && layer?.exists ? 'missing' : 'all',
+  const [mode, setMode] = useState<'FILL_GAPS' | 'REPLACE'>('FILL_GAPS')
+  const [scope, setScope] = useState<Scope>(() => {
+    const asked = (initialTables ?? []).map((t) => t.toLowerCase())
+    const missing = new Set(undescribed.map((t) => t.toLowerCase()))
+    if (asked.length > 0) {
+      return exists && asked.length === missing.size && asked.every((t) => missing.has(t))
+        ? 'missing'
+        : 'chosen'
+    }
+    return undescribed.length > 0 && exists ? 'missing' : 'all'
+  })
+  const [chosen, setChosen] = useState<Set<string>>(
+    () => new Set((initialTables ?? []).map((t) => t.toLowerCase())),
   )
+  const [pick, setPick] = useState('')
   const [starting, setStarting] = useState(false)
 
   useEffect(() => {
@@ -2701,8 +3682,45 @@ function GenerateModal({
       .finally(() => setLoading(false))
   }, [])
 
-  const total = layer?.tables.length ?? 0
-  const count = scope === 'missing' ? undescribed.length : total
+  const total = tables.length
+  const picked = tables.filter((t) => chosen.has(t.table))
+  const onlyTables =
+    scope === 'missing' ? undescribed : scope === 'chosen' ? picked.map((t) => t.table) : []
+  const count = scope === 'all' ? total : onlyTables.length
+  // The mode only means something for a table that already has an entity.
+  const describedInScope =
+    scope === 'all'
+      ? tables.filter((t) => t.described).length
+      : scope === 'chosen'
+        ? picked.filter((t) => t.described).length
+        : 0
+  // Tables the dialog was opened with come first, so the reason it was opened
+  // for is on screen. Fixed at open: re-sorting on every tick would move a row
+  // out from under the pointer.
+  const [first] = useState(() => new Set((initialTables ?? []).map((t) => t.toLowerCase())))
+  const ordered = useMemo(
+    () => [...tables.filter((t) => first.has(t.table)), ...tables.filter((t) => !first.has(t.table))],
+    [tables, first],
+  )
+  const needle = pick.trim().toLowerCase()
+  const listed = needle ? ordered.filter((t) => t.table.includes(needle)) : ordered
+
+  const scopes: { value: Scope; label: string; hint: string; disabled?: boolean }[] = [
+    ...(exists
+      ? [{
+          value: 'missing' as const,
+          label: 'What is missing',
+          hint: `${undescribed.length} ${undescribed.length === 1 ? 'table' : 'tables'}`,
+          disabled: undescribed.length === 0,
+        }]
+      : []),
+    {
+      value: 'chosen',
+      label: 'Tables I choose',
+      hint: picked.length ? `${picked.length} chosen` : 'pick below',
+    },
+    { value: 'all', label: 'Every table', hint: `${total} tables` },
+  ]
 
   return (
     <Modal
@@ -2719,8 +3737,9 @@ function GenerateModal({
               setStarting(true)
               onStart({
                 llm_config_id: configId,
-                mode,
-                only_tables: scope === 'missing' ? undescribed : [],
+                // Nothing is there to keep or replace for a table with no entity.
+                mode: scope === 'missing' ? 'FILL_GAPS' : mode,
+                only_tables: onlyTables,
               })
             }}
           >
@@ -2768,48 +3787,47 @@ function GenerateModal({
         )}
       </ModalGroup>
 
-      {layer?.exists && (
-        <>
-          <ModalGroup title="How much to describe">
-            <ChoiceRow
-              value={scope}
-              onChange={(next) => setScope(next as 'all' | 'missing')}
-              options={[
-                {
-                  value: 'missing',
-                  label: 'Only what is missing',
-                  hint: `${undescribed.length} ${undescribed.length === 1 ? 'table' : 'tables'}`,
-                  disabled: undescribed.length === 0,
-                },
-                {
-                  value: 'all',
-                  label: 'Every table',
-                  hint: `${total} tables`,
-                },
-              ]}
+      {total > 0 && (
+        <ModalGroup title="How much to describe">
+          <ChoiceRow value={scope} onChange={(next) => setScope(next as Scope)} options={scopes} />
+          {scope === 'chosen' && (
+            <TablePicker
+              tables={listed}
+              filtered={needle !== ''}
+              chosen={chosen}
+              query={pick}
+              onQuery={setPick}
+              onChange={setChosen}
             />
-          </ModalGroup>
+          )}
+        </ModalGroup>
+      )}
 
-          <ModalGroup title="What happens to what is already there">
-            <ChoiceRow
-              value={mode}
-              onChange={(next) => setMode(next as 'MERGE' | 'REPLACE')}
-              options={[
-                {
-                  value: 'MERGE',
-                  label: 'Keep my edits',
-                  hint: 'Refresh the rest',
-                },
-                {
-                  value: 'REPLACE',
-                  label: 'Start over',
-                  hint: 'Discard everything',
-                  tone: 'red',
-                },
-              ]}
-            />
-          </ModalGroup>
-        </>
+      {exists && describedInScope > 0 && (
+        <ModalGroup title="Tables that are already described">
+          <ChoiceRow
+            value={mode}
+            onChange={(next) => setMode(next as 'FILL_GAPS' | 'REPLACE')}
+            options={[
+              { value: 'FILL_GAPS', label: 'Fill the gaps', hint: 'Keep what people wrote' },
+              {
+                value: 'REPLACE',
+                label: 'Rewrite',
+                hint: scope === 'all' ? 'Start over, edits too' : 'Replace these tables',
+                tone: 'red',
+              },
+            ]}
+          />
+          <span style={{ fontSize: 11.5, lineHeight: 1.55, color: 'var(--text-dim)' }}>
+            {mode === 'FILL_GAPS'
+              ? 'A table somebody edited keeps every field they wrote and gains only what it lacks: empty fields, and columns and metrics it does not have. Tables nobody edited are described afresh. Nothing is removed.'
+              : scope === 'all'
+                ? 'Every table is described from scratch, and edits are replaced along with everything else.'
+                : `${describedInScope === 1 ? 'The described table is' : `${describedInScope} described tables are`} written from scratch, edits included.`}
+            {scope !== 'all' &&
+              ' Other tables stay as they are, and the business context and glossary are only filled where empty.'}
+          </span>
+        </ModalGroup>
       )}
 
       <div
@@ -2829,9 +3847,105 @@ function GenerateModal({
         </strong>{' '}
         for {count} {count === 1 ? 'table' : 'tables'}. The model sees the same
         schema detail it already sees when answering a question, so this shares
-        nothing new with your provider. Nothing is saved until it finishes.
+        nothing new with your provider. It lands in your draft when it
+        finishes, and no answer reads it until you publish.
       </div>
     </Modal>
+  )
+}
+
+/** The generate dialog's table list: search, choose, and see which tables
+ *  already have a description — the ones the mode below applies to. */
+function TablePicker({
+  tables, filtered, chosen, query, onQuery, onChange,
+}: {
+  tables: SemanticLayer['tables']
+  filtered: boolean
+  chosen: Set<string>
+  query: string
+  onQuery: (next: string) => void
+  onChange: (next: Set<string>) => void
+}) {
+  const allShown = tables.length > 0 && tables.every((t) => chosen.has(t.table))
+  function toggle(table: string, on: boolean) {
+    const next = new Set(chosen)
+    if (on) next.add(table)
+    else next.delete(table)
+    onChange(next)
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <TextInput
+          placeholder="Find a table…"
+          aria-label="Find a table"
+          value={query}
+          onChange={(e) => onQuery(e.target.value)}
+          style={{ fontSize: 12.5, padding: '6px 10px', flex: '1 1 180px', minWidth: 0 }}
+        />
+        <GhostButton
+          onClick={() => {
+            const next = new Set(chosen)
+            for (const t of tables) {
+              if (allShown) next.delete(t.table)
+              else next.add(t.table)
+            }
+            onChange(next)
+          }}
+          disabled={tables.length === 0}
+          style={{ padding: '4px 10px', fontSize: 12 }}
+        >
+          {allShown ? 'Clear' : filtered ? 'Choose these' : 'Choose all'}
+        </GhostButton>
+      </div>
+      <div
+        role="group"
+        aria-label="Tables"
+        style={{
+          maxHeight: 216, overflowY: 'auto', border: '1px solid var(--border)',
+          borderRadius: 9, padding: 4,
+        }}
+      >
+        {tables.length === 0 && (
+          <div style={{ fontSize: 12, color: 'var(--text-faint)', padding: '8px 8px' }}>
+            No table matches.
+          </div>
+        )}
+        {tables.map((t) => (
+          <label
+            key={t.table}
+            className="rm-krow"
+            style={{
+              display: 'flex', gap: 9, alignItems: 'center', padding: '6px 8px',
+              borderRadius: 6, cursor: 'pointer',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={chosen.has(t.table)}
+              onChange={(e) => toggle(t.table, e.target.checked)}
+              style={{ accentColor: 'var(--accent)', cursor: 'pointer', flexShrink: 0 }}
+            />
+            <span
+              className="mono"
+              dir="ltr"
+              style={{
+                fontSize: 12, color: 'var(--text-strong)', minWidth: 0, flex: 1,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}
+            >
+              {t.table}
+            </span>
+            <span style={{ fontSize: 11, color: 'var(--text-faint)', flexShrink: 0 }}>
+              {t.column_count} {t.column_count === 1 ? 'column' : 'columns'}
+            </span>
+            <Chip tone={t.described ? 'accent' : 'neutral'} small>
+              {t.described ? '● described' : '○ new'}
+            </Chip>
+          </label>
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -3072,7 +4186,8 @@ function SubCard({
  *  and whatever it means — and the form appears only for the one being
  *  edited. Same disclosure the table list above already uses, one level down. */
 function SubCardHead({
-  title, mono, badge, summary, open, onToggle, onRemove, removeLabel,
+  title, mono, badge, summary, open, onToggle, onRemove, removeLabel, onHistory,
+  historyLabel = 'History',
 }: {
   title: string
   mono?: boolean
@@ -3082,6 +4197,8 @@ function SubCardHead({
   onToggle: () => void
   onRemove: () => void
   removeLabel: string
+  onHistory?: () => void
+  historyLabel?: string
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -3136,7 +4253,12 @@ function SubCardHead({
           buttons down one card, which made *remove* the most repeated thing on
           a screen whose job is describing. It waits for the row now — and
           stays for a row that is open, or focused from the keyboard. */}
-      <span className="rm-row-actions" style={{ flexShrink: 0 }}>
+      <span className="rm-row-actions" style={{ flexShrink: 0, display: 'flex', gap: 6 }}>
+        {onHistory && (
+          <IconButton label={historyLabel} onClick={onHistory} tone="neutral">
+            <Icon.History size={13} />
+          </IconButton>
+        )}
         <IconButton label={removeLabel} onClick={onRemove}>
           <Icon.Trash />
         </IconButton>
@@ -3150,14 +4272,19 @@ function SubCardHead({
  *  lives — a red panel parked in the page reads as a warning about the
  *  content, not about the button. */
 function IconButton({
-  label, onClick, children, size = 28,
+  label, onClick, children, size = 28, tone = 'danger',
 }: {
   label: string
   onClick: () => void
   children: React.ReactNode
   size?: number
+  /** `neutral` for a control that goes somewhere rather than removes something. */
+  tone?: 'danger' | 'neutral'
 }) {
   const [hover, setHover] = useState(false)
+  const hot = tone === 'danger'
+    ? { border: 'var(--red-border)', background: 'var(--red-bg)', color: 'var(--red)' }
+    : { border: 'var(--accent-border)', background: 'var(--accent-bg)', color: 'var(--accent)' }
   return (
     <button
       aria-label={label}
@@ -3172,9 +4299,9 @@ function IconButton({
         width: size,
         height: size,
         borderRadius: size > 30 ? 8 : 7,
-        border: `1px solid ${hover ? 'var(--red-border)' : 'var(--border-strong)'}`,
-        background: hover ? 'var(--red-bg)' : 'transparent',
-        color: hover ? 'var(--red)' : 'var(--text-faint)',
+        border: `1px solid ${hover ? hot.border : 'var(--border-strong)'}`,
+        background: hover ? hot.background : 'transparent',
+        color: hover ? hot.color : 'var(--text-faint)',
         cursor: 'pointer',
         flexShrink: 0,
       }}

@@ -515,12 +515,41 @@ each Vega plot at page width in the light palette — are
 
 ## 7. What is tested, and what is not
 
-Fifteen modules are deliberately **DOM-free** and carry their own suites,
+Nineteen modules are deliberately **DOM-free** and carry their own suites,
 because every way they can be wrong is quiet: `dashboard-schedule.ts`,
 `table-format.ts`, `dashboard-document.ts`, `palette.ts`, `chat-format.ts`,
 `report-document.ts`, `report-readiness.ts`, `report-print.ts`,
-`semantic-drift.ts`, `semantic-metrics.ts`, `knowledge-template.ts`,
-`thinking.ts`, `knowledge-queue.ts`, `provider-params.ts`, `usage-chart.ts`.
+`semantic-drift.ts`, `semantic-metrics.ts`, `semantic-changes.ts`,
+`semantic-score.ts`, `semantic-file.ts`, `semantic-attention.ts`,
+`knowledge-template.ts`, `thinking.ts`, `knowledge-queue.ts`,
+`provider-params.ts`, `usage-chart.ts`.
+
+`semantic-attention.ts` words the semantic layer's *Needs attention* list and
+decides only its shape: a line for a draft left sitting, one row per table with
+each of its reasons, and every undescribed table in one row, so twenty
+"no description" lines cannot bury a broken metric. Whether anything needs
+attention is the server's answer (`app/semantic/attention.py`). It also says
+which tab of a table's card a row opens on — Metrics for a broken or ignored
+metric, Columns for a table whose columns moved, Meaning otherwise.
+
+`semantic-file.ts` reads a semantic layer export before it is sent — format,
+version, a document at all — counts what is in it for the import preview,
+names a downloaded file, and words an import's report with the tables that did
+not resolve first. `semantic-metrics.ts` also words an answer's *Matches the
+definition* chip.
+
+`semantic-changes.ts` groups, orders and words a semantic layer's change list
+for the History screens, the publish dialog, the draft chip and the conflict
+note. It never compares two documents: the server's `app/semantic/diff.py` is
+the only differ, because two differs in two languages would have to agree
+forever.
+
+`semantic-score.ts` reads a benchmark run of a layer **draft** beside the
+newest run of the published layer and says whether the two are the same
+measurement — same prompt version, same model, held-out questions on both. Only
+then does the publish dialog (`semantic-publish.tsx`) print a delta; otherwise
+it prints the reason there is none. A delta between runs that used different
+prompts looks exactly like evidence, which is why this is tested apart.
 
 `usage-chart.ts` is the newest and the clearest case for the rule: it holds
 the usage chart's Vega-Lite spec — **written rather than planned**, because

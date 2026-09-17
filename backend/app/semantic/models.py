@@ -200,6 +200,12 @@ class SemanticDocument(BaseModel):
     # Advisory, like every other line of this document. The SQL guard enforces
     # what may run; the layer only says what the numbers mean.
     default_exclusions: str = ""
+    # Who wrote each of the two fields above, on its own flag. Before these a
+    # merge could only guess — it kept a hand-written context or exclusion rule
+    # when *something else* in the document had been edited — so a curator who
+    # wrote only the exclusion rule lost it to the first regeneration.
+    context_provenance: Provenance = Field(default_factory=Provenance)
+    exclusions_provenance: Provenance = Field(default_factory=Provenance)
     time: TimeSemantics = Field(default_factory=TimeSemantics)
     entities: list[SemanticEntity] = Field(default_factory=list)
     joins: list[SemanticJoin] = Field(default_factory=list)

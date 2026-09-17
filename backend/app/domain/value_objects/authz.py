@@ -263,8 +263,11 @@ PRIVILEGE_MEANINGS: Mapping[ResourceType, Mapping[Privilege, str]] = MappingProx
     }),
     ResourceType.SEMANTIC_LAYER: MappingProxyType({
         Privilege.DESCRIBE: "See that a layer exists and when it was last written.",
-        Privilege.SELECT: "Read the layer document.",
-        Privilege.MODIFY: "Edit it, check an expression, queue a generation job.",
+        Privilege.SELECT: "Read the published layer, its draft, and its history.",
+        Privilege.MODIFY: (
+            "Edit the draft, publish it, restore a version, import, check an "
+            "expression, queue a generation."
+        ),
         Privilege.DELETE: "Delete the layer.",
         Privilege.MANAGE: "Grant and revoke access to it.",
     }),

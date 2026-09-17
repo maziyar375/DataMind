@@ -26,6 +26,7 @@ from app.api.schemas import (
     MessageAccepted,
     MessageCreate,
     MessageRead,
+    MetricUsedRead,
     RunKnowledge,
     RunRead,
     RunStepRead,
@@ -48,16 +49,29 @@ from app.infra.db.models import (
     Run,
     RunEventRow,
     RunStep,
-    SemanticLayerRow,
+    SemanticLayerVersionRow,
     User,
 )
 from app.infra.events.bus import event_bus
+from app.semantic import SemanticDocument
 from app.services import audit, restricted
 from app.services.knowledge_service import FeedbackService, record_hit
 from app.services.policy import require
 from app.services.run_service import RunService
+from app.services.semantic_service import (
+    current_described,
+    is_grounded,
+    version_described,
+)
 
 router = APIRouter(tags=["conversations"])
+
+#: The tables a layer describes, memoised for one request, keyed by connection
+#: and by the version a run recorded (`None` for a run from before `0032`).
+_Described = dict[tuple[UUID, int | None], frozenset[str]]
+#: Published version documents, memoised the same way, for the definitions an
+#: answer's *Matches the definition* chip shows.
+_Versions = dict[tuple[UUID, int], SemanticDocument | None]
 
 # **A conversation is not shareable, and has no access routes.** Phase 8 gave
 # every artifact `/grants`, `/actions` and `/transfer`, a thread included, on
@@ -248,9 +262,15 @@ async def list_messages(
     by_user = {r.user_message_id: r for r in runs}
 
     reachable = await _reachable_data(db, ctx, authz, runs)
+    # One bound layer per connection for the whole transcript, not one per
+    # turn: a thread is pinned to one connection, and binding is a parse per
+    # metric that forty turns would otherwise repeat forty times.
+    described: _Described = {}
+    versions: _Versions = {}
     hydrated = {
         r.id: await _hydrate_run(
-            db, r, may_read_data=r.connection_id in reachable
+            db, r, may_read_data=r.connection_id in reachable, described=described,
+            versions=versions,
         )
         for r in runs
     }
@@ -402,7 +422,14 @@ async def _require_run_data(db, ctx, authz, run: Run) -> None:
     )
 
 
-async def _hydrate_run(db, run: Run, *, may_read_data: bool = True) -> RunRead:
+async def _hydrate_run(
+    db,
+    run: Run,
+    *,
+    may_read_data: bool = True,
+    described: _Described | None = None,
+    versions: _Versions | None = None,
+) -> RunRead:
     steps = await db.execute(
         select(RunStep).where(RunStep.run_id == run.id).order_by(RunStep.seq)
     )
@@ -430,17 +457,33 @@ async def _hydrate_run(db, run: Run, *, may_read_data: bool = True) -> RunRead:
         .order_by(GeneratedQuery.attempt_no)
     )
     data.artifacts = [ArtifactRead.model_validate(a) for a in artifacts.scalars()]
-    data.queries = [GeneratedQueryRead.model_validate(q) for q in queries.scalars()]
-    data.knowledge = await _knowledge(db, run, data.queries)
+    rows = list(queries.scalars())
+    data.queries = [GeneratedQueryRead.model_validate(q) for q in rows]
+    data.knowledge = await _knowledge(
+        db, run, data.queries, described=described,
+        metric_use=next((q.metric_use for q in reversed(rows) if q.metric_use), None),
+        versions=versions if versions is not None else {},
+    )
     return data
 
 
-async def _knowledge(db, run: Run, queries: list[GeneratedQueryRead]) -> RunKnowledge:
+async def _knowledge(
+    db,
+    run: Run,
+    queries: list[GeneratedQueryRead],
+    *,
+    described: _Described | None = None,
+    metric_use: dict[str, Any] | None = None,
+    versions: _Versions | None = None,
+) -> RunKnowledge:
     """Which of the three tiers this answer earned, and the evidence for it.
 
     Computed on read rather than stamped on the run row, for the reason every
-    other derived thing in this codebase is: the semantic layer moves, and an
-    answer's *Grounded* claim is a statement about what is described now.
+    other derived thing in this codebase is: it is derived, and a derived value
+    stored is a second source of truth. What changed with versions is the
+    *input*: *Grounded* now means "described in the layer this answer was
+    written with", read off the version the run recorded, so describing a
+    table next week no longer turns last week's answer Grounded after the fact.
 
     The order matters. **Verified** is a fact about this run — it was answered
     from a template — and outranks everything. **Grounded** is a fact about the
@@ -462,6 +505,9 @@ async def _knowledge(db, run: Run, queries: list[GeneratedQueryRead]) -> RunKnow
     rows = list(hits.scalars())
     short_circuit = next((h for h in rows if h.outcome == "SHORT_CIRCUIT"), None)
     overridden = any(h.outcome == "OVERRIDDEN_BY_USER" for h in rows)
+    matched, matched_version = await _metrics_used(
+        db, run, metric_use, versions if versions is not None else {}
+    )
 
     if short_circuit is not None:
         question = ""
@@ -479,35 +525,106 @@ async def _knowledge(db, run: Run, queries: list[GeneratedQueryRead]) -> RunKnow
             matcher=short_circuit.matcher,
             overridden=overridden,
             feedback=given,
+            metrics_used=matched,
+            metrics_version=matched_version,
         )
 
     touched = {t.lower() for q in queries for t in (q.referenced_tables or [])}
     if touched and run.connection_id is not None and await _all_described(
-        db, run.connection_id, touched
+        db, run, touched, described if described is not None else {}
     ):
-        return RunKnowledge(tier="GROUNDED", overridden=overridden, feedback=given)
-    return RunKnowledge(tier="GENERATED", overridden=overridden, feedback=given)
+        return RunKnowledge(
+            tier="GROUNDED", overridden=overridden, feedback=given,
+            metrics_used=matched, metrics_version=matched_version,
+        )
+    return RunKnowledge(
+        tier="GENERATED", overridden=overridden, feedback=given,
+        metrics_used=matched, metrics_version=matched_version,
+    )
 
 
-async def _all_described(db, connection_id: UUID, tables: set[str]) -> bool:
-    """Whether the semantic layer has an entry for every table the SQL touched.
+async def _metrics_used(
+    db, run: Run, metric_use: dict[str, Any] | None, memo: _Versions
+) -> tuple[list[MetricUsedRead], int | None]:
+    """The definitions this answer matched, and the version they come from.
+
+    **`used` only.** `ignored` is stored and counted, and is shown nowhere on an
+    answer until its precision has been measured on real runs (§4.4 of the
+    plan); `unknown` is the default and says nothing. The expression and filters
+    are read from the version the verdict was judged against, which is
+    immutable, so the chip on an old answer keeps saying what it matched.
+    """
+    if not metric_use or run.connection_id is None:
+        return [], None
+    version = metric_use.get("version") or 0
+    used = [v for v in metric_use.get("verdicts") or [] if v.get("verdict") == "used"]
+    if not version or not used:
+        return [], None
+    key = (run.connection_id, version)
+    if key not in memo:
+        result = await db.execute(
+            select(SemanticLayerVersionRow.document).where(
+                SemanticLayerVersionRow.connection_id == run.connection_id,
+                SemanticLayerVersionRow.version == version,
+            )
+        )
+        document = result.scalar_one_or_none()
+        try:
+            memo[key] = SemanticDocument.model_validate(document) if document else None
+        except ValueError:
+            memo[key] = None
+    layer = memo[key]
+    if layer is None:
+        return [], None
+    out: list[MetricUsedRead] = []
+    for verdict in used:
+        entity = layer.entity(str(verdict.get("entity", "")))
+        metric = next(
+            (m for m in (entity.metrics if entity else []) if m.name == verdict.get("metric")),
+            None,
+        )
+        if entity is None or metric is None:
+            continue
+        out.append(MetricUsedRead(
+            metric=metric.name, entity=entity.table.lower(), label=metric.label,
+            expression=metric.expression, filters=list(metric.filters),
+        ))
+    return out, (version if out else None)
+
+
+async def _all_described(db, run: Run, tables: set[str], memo: _Described) -> bool:
+    """Whether the layer this answer was written with described every table it touched.
 
     All of them, not most: *"every table it used is described in your semantic
     layer"* is what the chip says, and a chip that is true four times out of
     five is worse than no chip.
+
+    Three cases, by what the run recorded (`runs.semantic_layer_version`):
+
+    * **`0`** — no layer reached the prompt. Never Grounded.
+    * **`n`** — every table is a valid, non-excluded entity of version *n*, as
+      bound when that version was published. The version is immutable, so the
+      chip on an old answer stops moving when the layer does.
+    * **`NULL`** — a run from before versions. The interim rule: the layer as it
+      is now, through `load_document`, so a switched-off layer describes
+      nothing and an entity counts only while it binds to the current snapshot.
+
+    The rule itself lives in `semantic_service` (`is_grounded` and the two
+    `*_described` readers), because *Needs attention* counts the Grounded
+    answers an unreviewed description stood on, and two copies of what
+    Grounded means would be two answers.
     """
-    result = await db.execute(
-        select(SemanticLayerRow).where(SemanticLayerRow.connection_id == connection_id)
-    )
-    layer = result.scalar_one_or_none()
-    if layer is None or not layer.document:
+    version = run.semantic_layer_version
+    if version == 0 or run.connection_id is None:
         return False
-    described = {
-        str(entity.get("table", "")).lower()
-        for entity in (layer.document.get("entities") or [])
-        if entity.get("valid", True)
-    }
-    return bool(described) and tables <= described
+    key = (run.connection_id, version)
+    if key not in memo:
+        memo[key] = (
+            await current_described(db, run.connection_id)
+            if version is None
+            else await version_described(db, run.connection_id, version)
+        )
+    return is_grounded(tables, memo[key])
 
 
 @router.get("/runs/{run_id}", response_model=RunRead)

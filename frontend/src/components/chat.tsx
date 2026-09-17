@@ -14,6 +14,7 @@
 import { Fragment, memo, useEffect, useMemo, useRef, useState } from 'react'
 import { runs } from '../api/client'
 import { formatAnswer } from './chat-format'
+import { definitionLine, matchedLabel } from './semantic-metrics'
 import { thoughtTime } from './thinking'
 import type { ThinkingState } from './thinking'
 import type {
@@ -1122,21 +1123,30 @@ function AnswerBadge({
   /** Absent while the run is still streaming, or once already overridden. */
   onRegenerate?: () => void
 }) {
+  const matched = knowledge.metrics_used ?? []
   if (knowledge.tier === 'GENERATED') {
     return (
-      <div style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
-        Generated against the bare schema.
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
+          {/* A matched definition means the layer was in the prompt, so "the
+              bare schema" would contradict the chip beside it. */}
+          {matched.length > 0
+            ? 'Generated with your semantic layer.'
+            : 'Generated against the bare schema.'}
+        </span>
+        <DefinitionChip knowledge={knowledge} />
       </div>
     )
   }
 
   if (knowledge.tier === 'GROUNDED') {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <Chip tone="accent">◆ Grounded</Chip>
         <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>
           every table it used is described in your semantic layer
         </span>
+        <DefinitionChip knowledge={knowledge} />
       </div>
     )
   }
@@ -1157,6 +1167,7 @@ function AnswerBadge({
         <span style={{ fontSize: 11.5, color: 'var(--text-dim)' }}>
           answered from a saved question
         </span>
+        <DefinitionChip knowledge={knowledge} />
       </div>
       {knowledge.question && (
         <div
@@ -1193,6 +1204,52 @@ function AnswerBadge({
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * `✓ Matches the revenue definition` — evidence beside the tier, not a tier.
+ *
+ * Shown only for `used` verdicts: the SQL matched a metric's expression with
+ * every filter the definition carries (`app/semantic/attribute.py`). Nothing is
+ * shown for `unknown`, and `ignored` is not shown on an answer at all until its
+ * precision has been measured on real runs. Hovering or focusing the chip opens
+ * the definitions themselves and the layer version they were read from, so a
+ * reader can check the claim rather than take it.
+ */
+function DefinitionChip({ knowledge }: { knowledge: RunKnowledge }) {
+  const matched = knowledge.metrics_used ?? []
+  if (matched.length === 0) return null
+  return (
+    <span className="rm-definition" tabIndex={0} aria-label={matchedLabel(matched)}>
+      <Chip tone="green">✓ {matchedLabel(matched)}</Chip>
+      <span className="rm-definition-card" role="tooltip">
+        {matched.map((metric) => (
+          <span key={`${metric.entity}.${metric.metric}`} style={{ display: 'block', marginBottom: 8 }}>
+            <span className="mono" style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-strong)' }}>
+              {metric.metric}
+            </span>
+            {metric.label && (
+              <span dir={dirOf(metric.label)} style={{ fontSize: 11.5, color: 'var(--text-dim)', marginInlineStart: 6 }}>
+                {metric.label}
+              </span>
+            )}
+            <span
+              className="mono"
+              dir="ltr"
+              style={{ display: 'block', fontSize: 11.5, color: 'var(--text)', marginTop: 3, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+            >
+              {definitionLine(metric)}
+            </span>
+          </span>
+        ))}
+        <span style={{ display: 'block', fontSize: 11, color: 'var(--text-faint)' }}>
+          {knowledge.metrics_version !== null ? `semantic layer v${knowledge.metrics_version}` : 'semantic layer'}
+          {' · on '}
+          <span className="mono">{matched[0].entity}</span>
+        </span>
+      </span>
+    </span>
   )
 }
 

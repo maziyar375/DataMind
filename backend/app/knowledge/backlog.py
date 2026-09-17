@@ -36,6 +36,7 @@ property that makes it worth having.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -144,14 +145,20 @@ def rank_suggestions(items: list[Suggestion], *, limit: int = 30) -> list[Sugges
 # ── the vocabulary gap ───────────────────────────────────────────────────
 def build_vocabulary(
     tables: list[dict[str, Any]] | None = None,
-    semantic: dict[str, Any] | None = None,
+    terms: Iterable[str] = (),
 ) -> set[str]:
     """Every word this connection can be said to *know*.
 
-    Four sources, and all four matter: the physical names, the catalog comments
-    a DBA wrote, the business names and synonyms in the semantic layer, and the
-    glossary. A word absent from all four is one the retrieval had no way to
+    Three sources, and all three matter: the physical names, the catalog
+    comments a DBA wrote, and the semantic layer's names, labels, synonyms and
+    glossary. A word absent from all three is one the retrieval had no way to
     resolve — which is exactly the gap worth showing a curator.
+
+    The layer arrives as `terms`, plain strings, and never as a document.
+    `app.knowledge` sits below `app.semantic` and cannot import its model; the
+    dict this used to read asked for four keys the model has never had, so
+    every label a curator wrote was invisible here. The service layer reads the
+    typed model (`app.semantic.vocabulary_terms`) and passes the strings down.
 
     Names are split on the separators that appear in real schemas, so
     `order_items` contributes `order` and `items` and a question saying "order
@@ -167,24 +174,8 @@ def build_vocabulary(
             words |= _words(str(column.get("name", "")))
             words |= _words(str(column.get("comment", "")))
 
-    for entity in (semantic or {}).get("entities", []) or []:
-        words |= _words(str(entity.get("business_name", "")))
-        words |= _words(str(entity.get("table", "")))
-        for synonym in entity.get("synonyms", []) or []:
-            words |= _words(str(synonym))
-        for column in entity.get("columns", []) or []:
-            words |= _words(str(column.get("business_name", "")))
-            words |= _words(str(column.get("name", "")))
-        for metric in entity.get("metrics", []) or []:
-            words |= _words(str(metric.get("name", "")))
-            words |= _words(str(metric.get("business_name", "")))
-            for synonym in metric.get("synonyms", []) or []:
-                words |= _words(str(synonym))
-
-    for term in (semantic or {}).get("glossary", []) or []:
-        words |= _words(str(term.get("term", "")))
-        for synonym in term.get("synonyms", []) or []:
-            words |= _words(str(synonym))
+    for term in terms:
+        words |= _words(term)
 
     return words
 
