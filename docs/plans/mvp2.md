@@ -960,6 +960,13 @@ language. The 2026 framing across the industry is consistent — the shift from
 
 ## 2.6 The matrix
 
+> **Superseded for the DataMind column.** This matrix was taken in August 2026;
+> nine of its DataMind rows have moved since. [research/competitive-matrix.md](../research/competitive-matrix.md) re-runs it on
+> 2026-09-17 against the tree, swaps Data Formulator for **Apache Superset and
+> Metabase**, and lists in its §3 exactly which rows changed. The competitor
+> columns below still hold; read this one for the *argument*, that one for the
+> *score*.
+
 `●` present · `◐` partial · `○` absent
 
 | Capability | DataMind | Data Formulator | Wren AI | Genie | Power BI |

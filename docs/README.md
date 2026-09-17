@@ -1,6 +1,6 @@
 # Documentation
 
-Thirty-six documents, in five groups. **Which group a document is in tells
+Thirty-seven documents, in five groups. **Which group a document is in tells
 you how to read it**, and that is the whole point of the arrangement:
 
 | Folder | What it is | How to read it |
@@ -100,7 +100,7 @@ against, and carrying a dated record of what changed while it was. Read
 
 ## `research/` — arguments, not descriptions
 
-Six notes. Each reads what other products do and proposes what DataMind should
+Seven notes. Each reads what other products do and proposes what DataMind should
 take from it. **Where a research note and a reference doc disagree, the
 reference doc is what the code does.**
 
@@ -112,6 +112,7 @@ reference doc is what the code does.**
 | [retrieval-at-scale.md](research/retrieval-at-scale.md) | Not yet a plan — mvp2 Theme B |
 | [semantic-layer.md](research/semantic-layer.md) | Not yet a plan — mvp2 §1.3 and Theme B. Its §5 carries three corrections to that section |
 | [data-surface.md](research/data-surface.md) | Not yet a plan — mvp2 Theme E |
+| [competitive-matrix.md](research/competitive-matrix.md) | Not a plan — a scoreboard. mvp2 §2.6's matrix re-run on 2026-09-17 against Power BI, Wren AI, Genie, **Superset and Metabase**, with the DataMind column updated to the tree. Its §3 lists the nine rows that moved since August; its §4 argues that dashboard filters unblock more of the gap than anything else |
 
 ## `history/` — superseded, and kept
 
