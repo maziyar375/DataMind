@@ -2954,8 +2954,9 @@ code, pre, .mono {
 }
 .rm-nav-btn:hover { background: var(--panel-hover); color: var(--text); }
 
-/* The open row. It was a flat `--accent-bg` fill; it is now that same tint
-   lit from its left edge and closed with a hairline ring.
+/* The open row: the `--accent-bg` tint, fading gently toward its right edge,
+   closed with a hairline ring. The fade stops at 60% of the tint on purpose:
+   an earlier version fell to 40% and read as too loud for a nav state.
 
    The ring is the part worth explaining, because the note above records an
    accent *spine* being removed from exactly this element. A spine is an inset
@@ -2970,11 +2971,9 @@ code, pre, .mono {
   background: linear-gradient(
     100deg,
     var(--accent-bg),
-    color-mix(in oklch, var(--accent-bg) 40%, transparent) 86%
+    color-mix(in oklch, var(--accent-bg) 60%, transparent)
   );
-  box-shadow:
-    inset 0 0 0 1px var(--accent-border),
-    inset 0 1px 0 0 var(--sheen);
+  box-shadow: inset 0 0 0 1px var(--accent-border);
   color: var(--text-strong);
   font-weight: 600;
 }
@@ -4439,7 +4438,11 @@ code, pre, .mono {
 .rm-usage-row:hover { background: var(--panel-hover); }
 .rm-usage-row[aria-pressed='true'],
 .rm-usage-row[aria-expanded='true'] {
-  background: var(--accent-bg);
+  background: linear-gradient(
+    100deg,
+    var(--accent-bg),
+    color-mix(in oklch, var(--accent-bg) 60%, transparent)
+  );
   box-shadow: inset 0 0 0 1px var(--accent-border);
 }
 .rm-usage-row-list li + li .rm-usage-row[aria-pressed='true'],
