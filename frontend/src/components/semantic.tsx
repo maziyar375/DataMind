@@ -37,9 +37,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMatch, useNavigate, useSearchParams } from 'react-router-dom'
 import { ApiError, llmConfigs as llmApi, semantic as api } from '../api/client'
 import type {
-  Connection, GlossaryTerm, LlmConfig, ProblemDetail, SemanticChange, SemanticColumn,
-  SemanticDocument, SemanticEntity, SemanticJob, SemanticLayer, SemanticMetric,
-  SemanticMetricUse,
+  Connection, GlossaryTerm, LlmConfig, ProblemDetail, SemanticAttention, SemanticChange,
+  SemanticColumn, SemanticDocument, SemanticEntity, SemanticGenerationMode, SemanticJob,
+  SemanticLayer, SemanticMetric, SemanticMetricUse,
 } from '../api/types'
 import {
   Chip, DangerButton, ErrorNote, Field, GhostButton, Icon, Modal,
@@ -55,6 +55,10 @@ import { SemanticHistory } from './semantic-history'
 import { ChangeList, PublishDialog } from './semantic-publish'
 import { ExportDialog, ImportDialog } from './semantic-transfer'
 import { authorship, historyPath, unpublishedWords } from './semantic-changes'
+import { attentionSection, attentionView, undescribedWords } from './semantic-attention'
+import type {
+  AttentionLine, AttentionRow, AttentionTone, AttentionView,
+} from './semantic-attention'
 import {
   collectMetrics, matchesMetric, metricSummary,
 } from './semantic-metrics'
@@ -92,7 +96,7 @@ const COLUMN_ROLE_TONE: Record<string, ChipTone> = {
   attribute: 'neutral',
 }
 
-type Filter = 'all' | 'review' | 'metrics' | 'issues'
+type Filter = 'all' | 'review' | 'metrics' | 'issues' | 'attention'
 
 /** Shown in place of the stats strip before anything has been generated —
  *  three concrete examples beat a paragraph about "semantics". */
@@ -138,7 +142,11 @@ export function SemanticLayerTab({
   const [askExport, setAskExport] = useState(false)
   const [askImport, setAskImport] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
-  const [askGenerate, setAskGenerate] = useState(false)
+  // The generate dialog, and the tables it opens with already chosen — set when
+  // a *Needs attention* row asks for a table's gaps to be filled.
+  const [generateFor, setGenerateFor] = useState<{ tables?: string[] } | null>(null)
+  const [attention, setAttention] = useState<SemanticAttention | null>(null)
+  const [attentionFailed, setAttentionFailed] = useState(false)
   const [askDelete, setAskDelete] = useState(false)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
@@ -234,6 +242,28 @@ export function SemanticLayerTab({
     }
   }, [job?.id, job?.status, connection.id, load])
 
+  // *Needs attention* is a reading of what the server holds, so it is asked for
+  // again whenever that moves: a write (the revision), a re-sync (the schema
+  // version), or a generation landing — never on a keystroke.
+  useEffect(() => {
+    if (!layer) return
+    let live = true
+    api.attention(connection.id)
+      .then((next) => {
+        if (!live) return
+        setAttention(next)
+        setAttentionFailed(false)
+      })
+      .catch(() => {
+        if (!live) return
+        setAttention(null)
+        setAttentionFailed(true)
+      })
+    return () => {
+      live = false
+    }
+  }, [connection.id, layer?.revision, layer?.schema_version, layer?.published_version])
+
   function patch(next: SemanticDocument) {
     setDoc({ ...next })
   }
@@ -328,14 +358,14 @@ export function SemanticLayerTab({
 
   async function startGeneration(payload: {
     llm_config_id: string
-    mode: 'MERGE' | 'REPLACE'
+    mode: SemanticGenerationMode
     only_tables?: string[]
   }) {
     setError(null)
     try {
       const started = await api.generate(connection.id, payload)
       setJob(started)
-      setAskGenerate(false)
+      setGenerateFor(null)
       // Writing a layer is minutes of model calls, and nobody watches a
       // progress bar for four minutes. The poll above draws that bar while
       // this tab is open; this hands the *ending* to the shell, which is
@@ -386,6 +416,8 @@ export function SemanticLayerTab({
     adopt(await api.get(connection.id))
   }
 
+  const needs = useMemo<AttentionView>(() => attentionView(attention?.items ?? []), [attention])
+
   const entities = useMemo(() => {
     if (!doc) return []
     const needle = search.trim().toLowerCase()
@@ -402,14 +434,15 @@ export function SemanticLayerTab({
       if (filter === 'review') return !entity.provenance.reviewed
       if (filter === 'metrics') return entity.metrics.length > 0
       if (filter === 'issues') return hasIssue(entity)
+      if (filter === 'attention') return needs.tables.has(entity.table.toLowerCase())
       return true
     })
-  }, [doc, search, filter])
+  }, [doc, search, filter, needs])
 
   // Which card the metrics panel sent the reader to, and when. The timestamp
   // is what makes a second click on the *same* table work: the card has to be
   // told again, and a value that did not change tells it nothing.
-  const [focus, setFocus] = useState<{ table: string; at: number } | null>(null)
+  const [focus, setFocus] = useState<{ table: string; at: number; section?: Section } | null>(null)
 
   /** Open a table's card on its metrics section and scroll to it.
    *
@@ -504,10 +537,12 @@ export function SemanticLayerTab({
           connection={connection}
           running={running}
           job={job}
-          onGenerate={() => setAskGenerate(true)}
+          onGenerate={() => setGenerateFor({})}
           onDelete={() => setAskDelete(true)}
           onCancel={cancelGeneration}
           onToggle={(value) => onConnectionChange({ semantic_layer_enabled: value })}
+          needs={attention ? needs : null}
+          needsFailed={attentionFailed}
           onFocusFilter={(next) => {
             setFilter(next)
             setSearch('')
@@ -574,9 +609,31 @@ export function SemanticLayerTab({
                 review: doc!.entities.filter((e) => !e.provenance.reviewed).length,
                 metrics: doc!.entities.filter((e) => e.metrics.length > 0).length,
                 issues: doc!.entities.filter(hasIssue).length,
+                attention: needs.count,
               }}
+              attentionTone={needs.tone}
               shown={entities.length}
             />
+
+            {filter === 'attention' && (
+              <AttentionList
+                view={needs}
+                loaded={attention !== null}
+                failed={attentionFailed}
+                days={attention?.days ?? 30}
+                running={running}
+                onOpen={(row) => {
+                  // The server keys a table in lower case; the card is keyed
+                  // by the entity's own spelling.
+                  const table = doc!.entities.find((e) => e.table.toLowerCase() === row.table)?.table
+                  if (!table) return
+                  setOpen((prev) => ({ ...prev, [table]: true }))
+                  setFocus({ table, at: Date.now(), section: attentionSection(row, row.broken) })
+                }}
+                onFill={(tables) => setGenerateFor({ tables })}
+                onPublish={() => setPublishing(true)}
+              />
+            )}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {entities.map((entity) => (
@@ -585,6 +642,7 @@ export function SemanticLayerTab({
                   connectionId={connection.id}
                   entity={entity}
                   focusedAt={focus?.table === entity.table ? focus.at : 0}
+                  focusedSection={focus?.table === entity.table ? focus.section : undefined}
                   open={!!open[entity.table]}
                   onToggle={() =>
                     setOpen((prev) => ({ ...prev, [entity.table]: !prev[entity.table] }))
@@ -595,7 +653,7 @@ export function SemanticLayerTab({
                   }
                 />
               ))}
-              {entities.length === 0 && (
+              {entities.length === 0 && filter !== 'attention' && (
                 <div
                   style={{
                     border: '1px dashed var(--border-strong)',
@@ -702,11 +760,12 @@ export function SemanticLayerTab({
         />
       )}
 
-      {askGenerate && (
+      {generateFor && (
         <GenerateModal
           layer={layer}
           undescribed={undescribed}
-          onClose={() => setAskGenerate(false)}
+          initialTables={generateFor.tables}
+          onClose={() => setGenerateFor(null)}
           onStart={startGeneration}
         />
       )}
@@ -744,13 +803,16 @@ function Shell({
 
 // ── hero ───────────────────────────────────────────────────────────────────
 function Hero({
-  layer, connection, running, job, onGenerate, onDelete, onCancel, onToggle,
+  layer, connection, running, job, onGenerate, onDelete, onCancel, onToggle, needs, needsFailed,
   onFocusFilter, onHistory, onPublish, onExport, onImport, dirty,
 }: {
   layer: SemanticLayer | null
   connection: Connection
   running: boolean
   job: SemanticJob | null
+  /** *Needs attention*, or `null` until the server has answered. */
+  needs: AttentionView | null
+  needsFailed: boolean
   onGenerate: () => void
   onDelete: () => void
   onCancel: () => void
@@ -986,11 +1048,14 @@ function Hero({
               tone={layer!.reviewed_count > 0 ? 'accent' : 'neutral'}
               onClick={() => onFocusFilter('review')}
             />
+            {/* The same count the *Needs attention* filter carries, and the
+                way into it. Until the server has answered it says so, rather
+                than showing a number that is about to change. */}
             <Stat
-              value={layer!.issue_count}
+              value={needs ? needs.count : needsFailed ? '—' : '…'}
               label="need attention"
-              tone={layer!.issue_count > 0 ? 'red' : 'neutral'}
-              onClick={layer!.issue_count > 0 ? () => onFocusFilter('issues') : undefined}
+              tone={!needs || needs.count === 0 ? 'neutral' : needs.tone}
+              onClick={needs && needs.count > 0 ? () => onFocusFilter('attention') : undefined}
               last
             />
           </div>
@@ -1184,10 +1249,10 @@ function Displaced({
 function Stat({
   value, label, hint, tone = 'neutral', onClick, last,
 }: {
-  value: number
+  value: number | string
   label: string
   hint?: string
-  tone?: 'neutral' | 'green' | 'accent' | 'red'
+  tone?: 'neutral' | 'green' | 'accent' | 'red' | 'amber'
   onClick?: () => void
   last?: boolean
 }) {
@@ -1851,7 +1916,13 @@ function PillTabs<T extends string>({
         background: 'var(--panel-alt)',
         borderRadius: 9,
         padding: 3,
-        flexShrink: 0,
+        // Scrolls sideways when it is wider than its row — five filters do not
+        // fit a phone, and a clipped tab is a tab nobody can reach.
+        flexShrink: 1,
+        minWidth: 0,
+        maxWidth: '100%',
+        overflowX: 'auto',
+        scrollbarWidth: 'none',
       }}
     >
       {options.map((option) => {
@@ -1867,6 +1938,8 @@ function PillTabs<T extends string>({
               display: 'inline-flex',
               alignItems: 'center',
               gap: 6,
+              flexShrink: 0,
+              whiteSpace: 'nowrap',
               fontSize: 12.5,
               fontWeight: 600,
               padding: '6px 11px',
@@ -1907,20 +1980,23 @@ function PillTabs<T extends string>({
 }
 
 function FilterBar({
-  value, onChange, search, onSearch, counts, shown,
+  value, onChange, search, onSearch, counts, attentionTone, shown,
 }: {
   value: Filter
   onChange: (next: Filter) => void
   search: string
   onSearch: (next: string) => void
   counts: Record<Filter, number>
+  /** Red only when something is broken: an undescribed table is work, not an alarm. */
+  attentionTone: AttentionTone
   shown: number
 }) {
   const options: { value: Filter; label: string }[] = [
     { value: 'all', label: 'All' },
     { value: 'review', label: 'Needs review' },
     { value: 'metrics', label: 'Has metrics' },
-    { value: 'issues', label: 'Needs attention' },
+    { value: 'issues', label: 'Has issues' },
+    { value: 'attention', label: 'Needs attention' },
   ]
   return (
     <div
@@ -1950,7 +2026,9 @@ function FilterBar({
           value: option.value,
           label: option.label,
           count: counts[option.value],
-          alert: option.value === 'issues' && counts[option.value] > 0,
+          alert:
+            (option.value === 'issues' && counts.issues > 0) ||
+            (option.value === 'attention' && counts.attention > 0 && attentionTone === 'red'),
         }))}
       />
 
@@ -1982,6 +2060,203 @@ function FilterBar({
   )
 }
 
+// ── needs attention ────────────────────────────────────────────────────────
+/** How many undescribed tables are named before *Show all*. */
+const UNDESCRIBED_SHOWN = 12
+
+/**
+ * *Needs attention*, above the cards it opens.
+ *
+ * Every sentence is the server's reason in words (`semantic-attention.ts`);
+ * nothing here decides whether a table needs anybody. The shape is one line
+ * for a draft left sitting, **a row per table** carrying each of its reasons,
+ * and the undescribed tables together in one row — twenty-one "no
+ * description" lines would bury the one that says a metric is broken.
+ *
+ * Each row offers the act that answers it. *Open* expands the table's card,
+ * which the filter keeps in the list below. A table whose columns grew offers
+ * *Fill the gaps…*, and the undescribed row *Describe…*: both open the
+ * generate dialog with those tables already chosen, so the one fix that needs
+ * a model is one click from the reason that asked for it.
+ */
+function AttentionList({
+  view, loaded, failed, days, running, onOpen, onFill, onPublish,
+}: {
+  view: AttentionView
+  loaded: boolean
+  failed: boolean
+  days: number
+  running: boolean
+  onOpen: (row: AttentionRow) => void
+  onFill: (tables: string[]) => void
+  onPublish: () => void
+}) {
+  const [everyTable, setEveryTable] = useState(false)
+
+  if (failed) {
+    return <ErrorNote>Could not work out what needs attention. Reload the page to try again.</ErrorNote>
+  }
+  if (!loaded) {
+    return (
+      <span style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12.5, color: 'var(--text-faint)', padding: '6px 2px' }}>
+        <Spinner size={12} /> Looking for what needs attention…
+      </span>
+    )
+  }
+  if (view.count === 0) {
+    return (
+      <div
+        style={{
+          display: 'flex', gap: 10, alignItems: 'baseline',
+          border: '1px dashed var(--border-strong)', borderRadius: 10,
+          padding: '16px 18px', fontSize: 13, color: 'var(--text-dim)', lineHeight: 1.55,
+        }}
+      >
+        <span aria-hidden style={{ color: 'var(--green)', fontWeight: 700 }}>✓</span>
+        <span>
+          Nothing needs attention. Every table is described, the schema breaks
+          nothing, and no answer in the last {days} days leaned on text nobody
+          reviewed.
+        </span>
+      </div>
+    )
+  }
+
+  const shown = everyTable ? view.undescribed : view.undescribed.slice(0, UNDESCRIBED_SHOWN)
+  return (
+    <div role="list" aria-label="Needs attention" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {view.draft && (
+        <AttentionRowFrame
+          tone={view.draft.tone}
+          heading="Your draft"
+          lines={[view.draft]}
+          actions={<GhostButton onClick={onPublish} style={ROW_BUTTON}>Review and publish</GhostButton>}
+        />
+      )}
+      {view.rows.map((row) => (
+        <AttentionRowFrame
+          key={row.table}
+          tone={row.tone}
+          heading={row.table}
+          mono
+          lines={row.lines}
+          actions={
+            <>
+              {row.fillable && (
+                <GhostButton
+                  onClick={() => onFill([row.table])}
+                  disabled={running}
+                  title={running ? 'A generation is already running.' : undefined}
+                  style={ROW_BUTTON}
+                >
+                  Fill the gaps…
+                </GhostButton>
+              )}
+              <GhostButton onClick={() => onOpen(row)} style={ROW_BUTTON}>Open</GhostButton>
+            </>
+          }
+        />
+      ))}
+      {view.undescribed.length > 0 && (
+        <AttentionRowFrame
+          tone="neutral"
+          heading={`${view.undescribed.length} undescribed`}
+          lines={[{ reason: 'UNDESCRIBED', glyph: '○', tone: 'neutral', text: undescribedWords(view.undescribed.length) }]}
+          actions={
+            <GhostButton
+              onClick={() => onFill(view.undescribed.map((t) => t.table))}
+              disabled={running}
+              title={running ? 'A generation is already running.' : undefined}
+              style={ROW_BUTTON}
+            >
+              Describe…
+            </GhostButton>
+          }
+        >
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 7 }}>
+            {shown.map((t) => (
+              <Chip key={t.table} tone="neutral" small>
+                <span className="mono" dir="ltr">{t.table}</span>
+              </Chip>
+            ))}
+            {view.undescribed.length > UNDESCRIBED_SHOWN && (
+              <button
+                type="button"
+                onClick={() => setEveryTable((v) => !v)}
+                style={{
+                  font: 'inherit', fontSize: 11.5, color: 'var(--accent)', background: 'none',
+                  border: 'none', padding: '0 4px', cursor: 'pointer',
+                }}
+              >
+                {everyTable ? 'Show fewer' : `and ${view.undescribed.length - UNDESCRIBED_SHOWN} more`}
+              </button>
+            )}
+          </div>
+        </AttentionRowFrame>
+      )}
+    </div>
+  )
+}
+
+const ROW_BUTTON: React.CSSProperties = { padding: '4px 10px', fontSize: 12 }
+
+function AttentionRowFrame({
+  tone, heading, mono, lines, actions, children,
+}: {
+  tone: AttentionTone
+  heading: string
+  mono?: boolean
+  lines: AttentionLine[]
+  actions: React.ReactNode
+  children?: React.ReactNode
+}) {
+  const border =
+    tone === 'red' ? 'var(--red-border)' : tone === 'amber' ? 'var(--amber-border)' : 'var(--border)'
+  return (
+    <div
+      role="listitem"
+      style={{
+        display: 'flex', gap: 12, rowGap: 8, flexWrap: 'wrap', alignItems: 'flex-start',
+        padding: '10px 12px', borderRadius: 9,
+        background: 'var(--panel-alt)', border: `1px solid ${border}`,
+      }}
+    >
+      <div style={{ minWidth: 0, flex: '1 1 260px' }}>
+        <div
+          className={mono ? 'mono' : undefined}
+          dir={mono ? 'ltr' : undefined}
+          style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-strong)', overflowWrap: 'anywhere' }}
+        >
+          {heading}
+        </div>
+        {lines.map((line, index) => (
+          <div key={`${line.reason}-${index}`} style={{ display: 'flex', gap: 7, marginTop: 4, fontSize: 12.5, lineHeight: 1.5 }}>
+            <span
+              aria-hidden
+              style={{
+                flexShrink: 0, width: 14, textAlign: 'center', fontWeight: 700,
+                color: line.tone === 'neutral' ? 'var(--text-faint)' : `var(--${line.tone})`,
+              }}
+            >
+              {line.glyph}
+            </span>
+            <span style={{ minWidth: 0, color: 'var(--text)' }}>
+              {line.text}
+              {line.note && (
+                <span style={{ display: 'block', fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2 }}>
+                  {line.note}
+                </span>
+              )}
+            </span>
+          </div>
+        ))}
+        {children}
+      </div>
+      <div style={{ display: 'flex', gap: 6, flexShrink: 0, marginInlineStart: 'auto' }}>{actions}</div>
+    </div>
+  )
+}
+
 // ── one entity ─────────────────────────────────────────────────────────────
 /**
  * One table in the layer — a row when closed, three tabs when open.
@@ -2009,7 +2284,7 @@ function FilterBar({
 type Section = 'meaning' | 'columns' | 'metrics'
 
 function EntityCard({
-  connectionId, entity, open, focusedAt = 0, onToggle, onChange, onHistory,
+  connectionId, entity, open, focusedAt = 0, focusedSection, onToggle, onChange, onHistory,
 }: {
   connectionId: string
   entity: SemanticEntity
@@ -2018,6 +2293,8 @@ function EntityCard({
    *  than a boolean, so arriving twice at the same card works: the second
    *  visit has to reopen the metrics section the reader may have left. */
   focusedAt?: number
+  /** Which part to open on when focused — Metrics unless a caller says. */
+  focusedSection?: Section
   onToggle: () => void
   onChange: (change: Partial<SemanticEntity>) => void
   /** This table's history, or one metric's on it. */
@@ -2031,7 +2308,7 @@ function EntityCard({
   // the card by hand — still starts on meaning, which is where a table is
   // read rather than measured.
   useEffect(() => {
-    if (focusedAt) setSection('metrics')
+    if (focusedAt) setSection(focusedSection ?? 'metrics')
   }, [focusedAt])
 
   const badColumns = entity.columns.filter((c) => !c.valid).length
@@ -3337,25 +3614,56 @@ function MetricLine({ row, onOpen }: { row: MetricRow; onOpen: () => void }) {
 }
 
 // ── generate modal ─────────────────────────────────────────────────────────
+type Scope = 'missing' | 'chosen' | 'all'
+
+/**
+ * Generate: which model, which tables, and what happens to what is written.
+ *
+ * **Which tables** is three answers: what is missing, tables somebody picks,
+ * or every table. The picker is how a described table is described again —
+ * the one a re-sync grew six columns on — and *Needs attention* opens it with
+ * that table already chosen.
+ *
+ * **What happens to a table that already has an entity** is two modes (Phase 5):
+ * *Fill the gaps*, the default, keeps every field a person wrote and adds only
+ * what is missing; *Rewrite* replaces it. Over chosen tables either one changes
+ * those tables and nothing else. Both land in the draft, so a rewrite is a
+ * change list somebody reads before it answers anything.
+ */
 function GenerateModal({
-  layer, undescribed, onClose, onStart,
+  layer, undescribed, initialTables, onClose, onStart,
 }: {
   layer: SemanticLayer | null
   undescribed: string[]
+  /** Tables to open with chosen — from a *Needs attention* row. */
+  initialTables?: string[]
   onClose: () => void
   onStart: (payload: {
     llm_config_id: string
-    mode: 'MERGE' | 'REPLACE'
+    mode: SemanticGenerationMode
     only_tables?: string[]
   }) => void
 }) {
+  const tables = layer?.tables ?? []
+  const exists = !!layer?.exists
   const [configs, setConfigs] = useState<LlmConfig[]>([])
   const [loading, setLoading] = useState(true)
   const [configId, setConfigId] = useState('')
-  const [mode, setMode] = useState<'MERGE' | 'REPLACE'>('MERGE')
-  const [scope, setScope] = useState<'all' | 'missing'>(
-    undescribed.length > 0 && layer?.exists ? 'missing' : 'all',
+  const [mode, setMode] = useState<'FILL_GAPS' | 'REPLACE'>('FILL_GAPS')
+  const [scope, setScope] = useState<Scope>(() => {
+    const asked = (initialTables ?? []).map((t) => t.toLowerCase())
+    const missing = new Set(undescribed.map((t) => t.toLowerCase()))
+    if (asked.length > 0) {
+      return exists && asked.length === missing.size && asked.every((t) => missing.has(t))
+        ? 'missing'
+        : 'chosen'
+    }
+    return undescribed.length > 0 && exists ? 'missing' : 'all'
+  })
+  const [chosen, setChosen] = useState<Set<string>>(
+    () => new Set((initialTables ?? []).map((t) => t.toLowerCase())),
   )
+  const [pick, setPick] = useState('')
   const [starting, setStarting] = useState(false)
 
   useEffect(() => {
@@ -3374,8 +3682,45 @@ function GenerateModal({
       .finally(() => setLoading(false))
   }, [])
 
-  const total = layer?.tables.length ?? 0
-  const count = scope === 'missing' ? undescribed.length : total
+  const total = tables.length
+  const picked = tables.filter((t) => chosen.has(t.table))
+  const onlyTables =
+    scope === 'missing' ? undescribed : scope === 'chosen' ? picked.map((t) => t.table) : []
+  const count = scope === 'all' ? total : onlyTables.length
+  // The mode only means something for a table that already has an entity.
+  const describedInScope =
+    scope === 'all'
+      ? tables.filter((t) => t.described).length
+      : scope === 'chosen'
+        ? picked.filter((t) => t.described).length
+        : 0
+  // Tables the dialog was opened with come first, so the reason it was opened
+  // for is on screen. Fixed at open: re-sorting on every tick would move a row
+  // out from under the pointer.
+  const [first] = useState(() => new Set((initialTables ?? []).map((t) => t.toLowerCase())))
+  const ordered = useMemo(
+    () => [...tables.filter((t) => first.has(t.table)), ...tables.filter((t) => !first.has(t.table))],
+    [tables, first],
+  )
+  const needle = pick.trim().toLowerCase()
+  const listed = needle ? ordered.filter((t) => t.table.includes(needle)) : ordered
+
+  const scopes: { value: Scope; label: string; hint: string; disabled?: boolean }[] = [
+    ...(exists
+      ? [{
+          value: 'missing' as const,
+          label: 'What is missing',
+          hint: `${undescribed.length} ${undescribed.length === 1 ? 'table' : 'tables'}`,
+          disabled: undescribed.length === 0,
+        }]
+      : []),
+    {
+      value: 'chosen',
+      label: 'Tables I choose',
+      hint: picked.length ? `${picked.length} chosen` : 'pick below',
+    },
+    { value: 'all', label: 'Every table', hint: `${total} tables` },
+  ]
 
   return (
     <Modal
@@ -3392,8 +3737,9 @@ function GenerateModal({
               setStarting(true)
               onStart({
                 llm_config_id: configId,
-                mode,
-                only_tables: scope === 'missing' ? undescribed : [],
+                // Nothing is there to keep or replace for a table with no entity.
+                mode: scope === 'missing' ? 'FILL_GAPS' : mode,
+                only_tables: onlyTables,
               })
             }}
           >
@@ -3441,48 +3787,47 @@ function GenerateModal({
         )}
       </ModalGroup>
 
-      {layer?.exists && (
-        <>
-          <ModalGroup title="How much to describe">
-            <ChoiceRow
-              value={scope}
-              onChange={(next) => setScope(next as 'all' | 'missing')}
-              options={[
-                {
-                  value: 'missing',
-                  label: 'Only what is missing',
-                  hint: `${undescribed.length} ${undescribed.length === 1 ? 'table' : 'tables'}`,
-                  disabled: undescribed.length === 0,
-                },
-                {
-                  value: 'all',
-                  label: 'Every table',
-                  hint: `${total} tables`,
-                },
-              ]}
+      {total > 0 && (
+        <ModalGroup title="How much to describe">
+          <ChoiceRow value={scope} onChange={(next) => setScope(next as Scope)} options={scopes} />
+          {scope === 'chosen' && (
+            <TablePicker
+              tables={listed}
+              filtered={needle !== ''}
+              chosen={chosen}
+              query={pick}
+              onQuery={setPick}
+              onChange={setChosen}
             />
-          </ModalGroup>
+          )}
+        </ModalGroup>
+      )}
 
-          <ModalGroup title="What happens to what is already there">
-            <ChoiceRow
-              value={mode}
-              onChange={(next) => setMode(next as 'MERGE' | 'REPLACE')}
-              options={[
-                {
-                  value: 'MERGE',
-                  label: 'Keep my edits',
-                  hint: 'Refresh the rest',
-                },
-                {
-                  value: 'REPLACE',
-                  label: 'Start over',
-                  hint: 'Discard everything',
-                  tone: 'red',
-                },
-              ]}
-            />
-          </ModalGroup>
-        </>
+      {exists && describedInScope > 0 && (
+        <ModalGroup title="Tables that are already described">
+          <ChoiceRow
+            value={mode}
+            onChange={(next) => setMode(next as 'FILL_GAPS' | 'REPLACE')}
+            options={[
+              { value: 'FILL_GAPS', label: 'Fill the gaps', hint: 'Keep what people wrote' },
+              {
+                value: 'REPLACE',
+                label: 'Rewrite',
+                hint: scope === 'all' ? 'Start over, edits too' : 'Replace these tables',
+                tone: 'red',
+              },
+            ]}
+          />
+          <span style={{ fontSize: 11.5, lineHeight: 1.55, color: 'var(--text-dim)' }}>
+            {mode === 'FILL_GAPS'
+              ? 'A table somebody edited keeps every field they wrote and gains only what it lacks: empty fields, and columns and metrics it does not have. Tables nobody edited are described afresh. Nothing is removed.'
+              : scope === 'all'
+                ? 'Every table is described from scratch, and edits are replaced along with everything else.'
+                : `${describedInScope === 1 ? 'The described table is' : `${describedInScope} described tables are`} written from scratch, edits included.`}
+            {scope !== 'all' &&
+              ' Other tables stay as they are, and the business context and glossary are only filled where empty.'}
+          </span>
+        </ModalGroup>
       )}
 
       <div
@@ -3502,9 +3847,105 @@ function GenerateModal({
         </strong>{' '}
         for {count} {count === 1 ? 'table' : 'tables'}. The model sees the same
         schema detail it already sees when answering a question, so this shares
-        nothing new with your provider. Nothing is saved until it finishes.
+        nothing new with your provider. It lands in your draft when it
+        finishes, and no answer reads it until you publish.
       </div>
     </Modal>
+  )
+}
+
+/** The generate dialog's table list: search, choose, and see which tables
+ *  already have a description — the ones the mode below applies to. */
+function TablePicker({
+  tables, filtered, chosen, query, onQuery, onChange,
+}: {
+  tables: SemanticLayer['tables']
+  filtered: boolean
+  chosen: Set<string>
+  query: string
+  onQuery: (next: string) => void
+  onChange: (next: Set<string>) => void
+}) {
+  const allShown = tables.length > 0 && tables.every((t) => chosen.has(t.table))
+  function toggle(table: string, on: boolean) {
+    const next = new Set(chosen)
+    if (on) next.add(table)
+    else next.delete(table)
+    onChange(next)
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <TextInput
+          placeholder="Find a table…"
+          aria-label="Find a table"
+          value={query}
+          onChange={(e) => onQuery(e.target.value)}
+          style={{ fontSize: 12.5, padding: '6px 10px', flex: '1 1 180px', minWidth: 0 }}
+        />
+        <GhostButton
+          onClick={() => {
+            const next = new Set(chosen)
+            for (const t of tables) {
+              if (allShown) next.delete(t.table)
+              else next.add(t.table)
+            }
+            onChange(next)
+          }}
+          disabled={tables.length === 0}
+          style={{ padding: '4px 10px', fontSize: 12 }}
+        >
+          {allShown ? 'Clear' : filtered ? 'Choose these' : 'Choose all'}
+        </GhostButton>
+      </div>
+      <div
+        role="group"
+        aria-label="Tables"
+        style={{
+          maxHeight: 216, overflowY: 'auto', border: '1px solid var(--border)',
+          borderRadius: 9, padding: 4,
+        }}
+      >
+        {tables.length === 0 && (
+          <div style={{ fontSize: 12, color: 'var(--text-faint)', padding: '8px 8px' }}>
+            No table matches.
+          </div>
+        )}
+        {tables.map((t) => (
+          <label
+            key={t.table}
+            className="rm-krow"
+            style={{
+              display: 'flex', gap: 9, alignItems: 'center', padding: '6px 8px',
+              borderRadius: 6, cursor: 'pointer',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={chosen.has(t.table)}
+              onChange={(e) => toggle(t.table, e.target.checked)}
+              style={{ accentColor: 'var(--accent)', cursor: 'pointer', flexShrink: 0 }}
+            />
+            <span
+              className="mono"
+              dir="ltr"
+              style={{
+                fontSize: 12, color: 'var(--text-strong)', minWidth: 0, flex: 1,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}
+            >
+              {t.table}
+            </span>
+            <span style={{ fontSize: 11, color: 'var(--text-faint)', flexShrink: 0 }}>
+              {t.column_count} {t.column_count === 1 ? 'column' : 'columns'}
+            </span>
+            <Chip tone={t.described ? 'accent' : 'neutral'} small>
+              {t.described ? '● described' : '○ new'}
+            </Chip>
+          </label>
+        ))}
+      </div>
+    </div>
   )
 }
 

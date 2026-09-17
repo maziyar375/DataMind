@@ -1,7 +1,9 @@
 # The semantic layer as a model — build plan
 
-> **Status: Phases 0 and 1 landed 2026-09-15, Phases 2 and 3 on 2026-09-16,
-> Phase 4 on 2026-09-17.**
+> **Status: built. Phases 0 and 1 landed 2026-09-15, Phases 2 and 3 on
+> 2026-09-16, Phases 4 and 5 on 2026-09-17** — 61 of the §14 ledger's 63 items.
+> The two left are Phase 3 measurements that need a provider key and real
+> runs, not code.
 > Written 2026-09-15 against `main` at `d7cba6f`; the §14 ledger is the record
 > of what is in the tree since. **Migration numbers moved:** `0030` and `0031`
 > went to the usage screen while this was being written, so the plan's
@@ -962,6 +964,8 @@ All paths are under `/connections/{connection_id}`. Every privilege is asked on
 | `POST /knowledge/benchmarks/{set_id}/run` | 2 | existing, plus `modify` on the layer when `semantic_source = DRAFT` | Adds `semantic_source` |
 | `GET /semantic/export` | 4 | select | `?version=&value_meanings=` |
 | `POST /semantic/import` | 4 | modify | Into the draft |
+| `GET /semantic/attention` | 5 | select | `?days=` — *Needs attention*: reasons with counts and schema names. Added while building Phase 5; §4.6 named the filter, not its route |
+| `POST /semantic/generate` | 5 | modify | `mode` gains `FILL_GAPS`; `only_tables` the schema lacks is a 422 |
 
 The new literal paths (`/diff`, `/versions`, `/history`, `/draft`, `/publish`,
 `/export`, `/import`) sit under `/semantic` beside `/check` and `/generate`, and
@@ -1245,29 +1249,29 @@ phase, and now renders neither.
 - [x] Frontend: export and import dialogs (`semantic-transfer.tsx`), beside History and, on an empty layer, beside *Generate with AI*; `semantic-file.ts` reads a file before it is sent and is the eighteenth DOM-free module (`npm run test:layerfile`). Driven on a clone: download an export, import an edited file with a table the schema lacks, read the report, publish as v2 *imported*, refuse a dashboard file
 - [x] Tests: `test_semantic_transfer.py` — the round trip (empty change list with value meanings; only `value_meanings_changed` without), stripped fields and no connection internals, draft landing and origin, flagged not dropped, eight refusals of a hostile file, the limits on both doors and on a generation, the hostile replay, and the routes' privileges
 
-### 14.6 Phase 5: Upkeep · **0 / 5**
+### 14.6 Phase 5: Upkeep · **5 / 5**
 
-- [ ] Table picker for described tables, with fill-gaps and rewrite
-- [ ] `merge_documents(fill_gaps=True)`
-- [ ] Column-shape drift between a version's snapshot and the newest
-- [ ] The needs-attention filter with its six reasons
-- [ ] Tests: `fill_gaps` never overwrites; drift detection; filter counts
+- [x] Table picker for described tables, with fill-gaps and rewrite — *What is missing*, *Tables I choose* (searchable, marking which are described) or *Every table*; *Fill the gaps* (`FILL_GAPS`, the default) and *Rewrite* (`REPLACE`), shown only when a table in scope is already described. `create_job` refuses a mode it does not know and tables the schema lacks. **Found and fixed here:** a run over chosen tables replaced an unedited business context with one written from those tables alone and dropped every glossary term they did not produce; `confine_to_tables` now makes a partial run change the chosen entities and nothing else, in every mode, filling document-level fields only where empty
+- [x] `merge_documents(fill_gaps=True)` — **the rules the plan left open, decided:** an edited entity takes a generated value only where its own is empty (a text, an empty list, a role still `unknown`) and gains missing columns and metrics; an existing column gains only its own empty texts; **an existing metric is never touched**, because empty `filters` are a definition rather than a blank; a generated metric whose name another table defines is not added, because `_refuse_ambiguous_metrics` would switch off both; and nothing is dropped — an entity or term the generation did not return stays, edited or not. Entities nobody edited are refreshed, as under `MERGE`, which stays the API's default for scripts
+- [x] Column-shape drift between a version's snapshot and the newest — `app/semantic/attention.py` `column_drift`: added, removed and retyped columns; nullability and comments are not shape. The baseline is the newest version whose change rows name the entity; one no row names dates from the first version (only a migrated v1 writes none); an entity a draft saved after the newest sync changed is not compared, nor one the draft adds. On the demo `aurora` layer it found four columns retyped `smallint` → `integer` since v1
+- [x] The needs-attention filter with its six reasons — `GET …/semantic/attention` (`select`, counts and schema names) and `needs_attention`, most urgent first; excluded entities are never a reason. **Decided here:** "a Grounded answer relied on" counts succeeded, non-Verified runs in the last 30 days that the tier's own rule (`is_grounded`, now shared by `conversations.py` and the service) calls Grounded, against each run's recorded version; "a draft older than 7 days" is measured from `draft_updated_at`, the last edit, since a draft has no creation time. The editor shows it as a filter beside *Has issues* (renamed from the old *Needs attention*, which counted only broken entries) and as the hero's *need attention* count; rows group per table (`semantic-attention.ts`, the nineteenth DOM-free module, `npm run test:attention`), *Open* lands on the tab the reason is about, and *Fill the gaps…* and *Describe…* open the generate dialog with those tables chosen. The filter pills now scroll sideways when they do not fit, instead of clipping — at 390px the new pill was otherwise out of reach. Checked in both themes and at 390px, on the real `aurora` layer, with a patched response for the states it lacks (an old draft, an ignored metric, added columns)
+- [x] Tests: `fill_gaps` never overwrites; drift detection; filter counts — `test_semantic_validate.py` (every written field of an entity, its columns and metrics survives a disagreeing generation; gaps filled; metrics untouched; no ambiguous name added; nothing dropped; chosen tables confined), `test_semantic_upkeep.py` (both modes through the real job path; the refusals; `column_drift`; all six reasons and their counts over a fixture; drift across two snapshots, the migrated baseline and the draft rule; broken and undescribed; the week-old draft; Grounded reliance with Verified, version 0, failed, out-of-window and pre-version runs; ignored metrics; the route's privilege), `semantic-attention.test.ts`. **Not run:** a generation against a real provider — the job path is exercised with a fake gateway
 
-### 14.7 Documentation · **7 / 10**
+### 14.7 Documentation · **10 / 10**
 
 The other nine documents span phases, so each is ticked when the last phase it
-describes lands. What Phases 0 to 4 changed is already in each of them:
+describes lands. What Phases 0 to 5 changed is in each of them:
 reference/semantic-layer.md, CLAUDE.md, status.md, decisions.md §5,
 reference/security.md §2.2, reference/eval.md §6,
 reference/knowledge-templates.md §6, and (Phase 2) the privilege matrix quoted
 in plans/user-management-and-access-control.md §13.3 — reference/access-control.md
 quotes no wording to change.
 
-- [ ] reference/semantic-layer.md
-- [ ] CLAUDE.md
-- [ ] status.md
-- [x] decisions.md §5 — D1–D11 are all recorded, with the decisions taken while building Phases 2–4
-- [x] reference/security.md — §7.1 and §7.2: versions, drafts, attribution and the portable file; Phase 5 adds no disclosure surface
+- [x] reference/semantic-layer.md — upkeep: the picker, both modes and their rules, chosen tables confined, *Needs attention* and its six reasons
+- [x] CLAUDE.md — the curated-documents row, `attention.py` in the code map, `semantic-attention.ts` as the nineteenth DOM-free module and the twentieth `npm test` suite
+- [x] status.md — a §2 row per phase, Phase 5's included
+- [x] decisions.md §5 — D1–D11 are all recorded, with the decisions taken while building Phases 2–5
+- [x] reference/security.md — §7.1 and §7.2: versions, drafts, attribution and the portable file; and a line saying why *Needs attention* adds no disclosure surface
 - [x] reference/eval.md — no later phase touches it: v10, the benchmark reading the layer, and the definition-use control arm
 - [x] reference/knowledge-templates.md §6 — a score with the layer, draft runs kept apart, the metric-use rate
 - [x] reference/access-control.md — it quotes no privilege wording; the matrix that does, in plans/user-management-and-access-control.md §13.3, was updated in Phase 2
@@ -1283,6 +1287,6 @@ quotes no wording to change.
 | 2 · Draft and publish | 11 | 11 |
 | 3 · Metric attribution | 7 | 9 |
 | 4 · Portable document | 6 | 6 |
-| 5 · Upkeep | 0 | 5 |
-| Documentation | 7 | 10 |
-| **Total** | **53** | **63** |
+| 5 · Upkeep | 5 | 5 |
+| Documentation | 10 | 10 |
+| **Total** | **61** | **63** |

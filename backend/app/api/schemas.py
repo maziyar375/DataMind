@@ -998,11 +998,15 @@ class SemanticLayerRead(BaseModel):
 
 class SemanticGenerateRequest(BaseModel):
     llm_config_id: UUID
-    # MERGE keeps every entity a person edited; REPLACE is the explicit
-    # "start over" the UI has to make the user confirm.
-    mode: Literal["MERGE", "REPLACE"] = "MERGE"
-    # Empty means the whole schema.
-    only_tables: list[str] = Field(default_factory=list)
+    # MERGE keeps every entity a person edited and refreshes the rest.
+    # FILL_GAPS does that and also fills an edited entity's blanks — its empty
+    # fields, and columns and metrics it lacks — dropping nothing (the editor's
+    # default). REPLACE is the explicit "rewrite" the UI makes the user choose.
+    mode: Literal["MERGE", "FILL_GAPS", "REPLACE"] = "MERGE"
+    # Empty means the whole schema. Chosen tables are changed and nothing else
+    # is: the business context and glossary are only ever filled, never
+    # replaced, by a run over some of the tables.
+    only_tables: list[str] = Field(default_factory=list, max_length=5_000)
 
 
 class SemanticSaveRequest(BaseModel):
@@ -1162,6 +1166,31 @@ class SemanticMetricUse(BaseModel):
 
     days: int
     rows: list[SemanticMetricUseRow] = Field(default_factory=list)
+
+
+class SemanticAttentionItem(BaseModel):
+    """One thing in a layer that needs a person (`app/semantic/attention.py`).
+
+    `reason` is one of `DRAFT_OLD`, `INVALID`, `COLUMNS_CHANGED`,
+    `METRIC_IGNORED`, `UNREVIEWED_RELIED_ON`, `UNDESCRIBED`. `table` is empty
+    for the document; `item` names the metric for `METRIC_IGNORED`. `detail`
+    holds counts and schema names — never a question, an answer or a value.
+    """
+
+    reason: str
+    table: str = ""
+    item: str = ""
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+
+class SemanticAttention(BaseModel):
+    """*Needs attention*, most urgent first, over the document the editor shows."""
+
+    #: The window answers are counted over.
+    days: int
+    #: How old a draft may get before it is listed.
+    draft_days: int
+    items: list[SemanticAttentionItem] = Field(default_factory=list)
 
 
 class SemanticExpressionCheck(BaseModel):

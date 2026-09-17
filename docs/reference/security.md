@@ -290,6 +290,13 @@ every save of the layer is kept as an immutable version
   those verdicts across every asker's runs on the connection for a reader with
   `select` on the layer, and returns counts only: no question, answer,
   statement or asker.
+- ***Needs attention* adds no disclosure surface** (Phase 5). It is read under
+  `select` on the layer and returns reasons with counts and schema names —
+  tables, columns, metric names, the binder's issue sentences — the same
+  vocabulary the editor already shows that reader. Its two answer-derived
+  reasons are counts across every asker's runs, like *Metrics in use*. A
+  generation over chosen tables is `modify`, as every generation is, and lands
+  in the draft.
 
 ### 2.3 Reports (#10–#12) in detail
 

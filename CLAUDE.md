@@ -90,7 +90,7 @@ make authz-check  # prove no module decides access for itself
 make up / down / logs / secrets / migrate / fixtures / db-repair
 ```
 
-From `frontend/`: `npm run typecheck`, `npm run build`, `npm test` (nineteen
+From `frontend/`: `npm run typecheck`, `npm run build`, `npm test` (twenty
 suites). **`npm run lint` is a dead script** — eslint is neither a devDependency
 nor configured.
 
@@ -189,7 +189,8 @@ backend/app/
                   attribute.py (whether an answer's SQL used a metric's
                   definition — observed after the run, never enforced),
                   limits.py (how long a text may be — checked on write,
-                  never on parse),
+                  never on parse), attention.py (what in a layer needs a
+                  person, and why — from what is already stored, no job),
                   generator.py (build one with a model, one call per
                   table), render.py (the prompt block), prompts.py —
                   self-contained like sqlguard
@@ -297,6 +298,9 @@ frontend/src/
                             semantic-transfer.tsx (export and import
                             dialogs), semantic-file.ts (reading a layer file
                             before it is sent — `npm run test:layerfile`),
+                            semantic-attention.ts (*Needs attention* grouped
+                            per table and worded, never decided —
+                            `npm run test:attention`),
                             semantic-drift.ts (an all-or-nothing
                             re-key told apart from ordinary drift —
                             engine-neutral detection, Oracle-specific
@@ -621,7 +625,7 @@ described here — each has its own reference:
 
 | | What it is | Reference |
 |---|---|---|
-| **The semantic layer** | What the schema *means* — business names, grain, metrics bound to exact SQL, time conventions, fan-out cautions. One document per connection. An edit, a generation and a restore land in a **draft no question reads**; publishing it writes a numbered version. A write names the revision it read and a stale one is a 409, not an overwrite. After a run, whether its SQL used each metric's definition is observed and stored, never enforced | [docs/reference/semantic-layer.md](docs/reference/semantic-layer.md) |
+| **The semantic layer** | What the schema *means* — business names, grain, metrics bound to exact SQL, time conventions, fan-out cautions. One document per connection. An edit, a generation and a restore land in a **draft no question reads**; publishing it writes a numbered version. A write names the revision it read and a stale one is a 409, not an overwrite. After a run, whether its SQL used each metric's definition is observed and stored, never enforced. Chosen tables can be regenerated, filling gaps without overwriting what a person wrote, and *Needs attention* lists what the schema, the history and the answers say needs a curator | [docs/reference/semantic-layer.md](docs/reference/semantic-layer.md) |
 | **Knowledge templates** | A question somebody already answered correctly, stored as a parameterized question→SQL template so the system answers it the same way next time | [docs/reference/knowledge-templates.md](docs/reference/knowledge-templates.md) |
 
 Both are **off-by-absence**: with neither present, the prompt is byte-identical
@@ -781,14 +785,15 @@ at commit time and shows up as drift a release later. Full tour:
   A literal hex or `oklch()` in a component is a bug in both themes — one of
   them just has not been looked at yet. Chart colours are the one exception and
   they live in `components/palette.ts`, tested apart from React.
-- **The eighteen DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
+- **The nineteen DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
   `table-format.ts`, `dashboard-document.ts`, `palette.ts`, `chat-format.ts`,
   `report-document.ts`, `report-readiness.ts`, `report-print.ts`,
   `semantic-drift.ts`, `semantic-metrics.ts`, `semantic-changes.ts`,
-  `semantic-score.ts`, `semantic-file.ts`, `knowledge-template.ts`, `thinking.ts`,
-  `knowledge-queue.ts`, `provider-params.ts`, `usage-chart.ts` — they hold the
+  `semantic-score.ts`, `semantic-file.ts`, `semantic-attention.ts`,
+  `knowledge-template.ts`, `thinking.ts`, `knowledge-queue.ts`,
+  `provider-params.ts`, `usage-chart.ts` — they hold the
   logic whose failures are quiet, they are (with `scripts/permissions.test.ts`,
-  the nineteenth suite) the *only* tested code in the frontend, and their suites
+  the twentieth suite) the *only* tested code in the frontend, and their suites
   are plain `node --experimental-strip-types` scripts. **One React import turns
   a suite into a thing that cannot run.**
 - **Text a person wrote gets `dir={dirOf(value)}`.** The product ships Persian.

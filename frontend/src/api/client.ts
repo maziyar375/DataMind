@@ -22,7 +22,8 @@ import type {
   ReportSectionResult,
   ReportSummary, Review, Role, RunDetail, RunEvent, RunKnowledge, SchemaSnapshot,
   Reach, ScopedPrivilege, ServiceAccount, ServiceKey, ShareCheck, Team,
-  SemanticChange, SemanticChangeList, SemanticDocument, SemanticHistoryEntry,
+  SemanticAttention, SemanticChange, SemanticChangeList, SemanticDocument,
+  SemanticGenerationMode, SemanticHistoryEntry,
   SemanticImportResult, SemanticJob, SemanticLayerFile, SemanticMetricUse, SemanticVersionList,
   SemanticVersionSummary, Suggestion,
   SemanticLayer, SqlDraft, TemplateCheckResult, TemplateParam,
@@ -629,7 +630,7 @@ export const semantic = {
   remove: (connectionId: string) => del(`/connections/${connectionId}/semantic`),
   generate: (
     connectionId: string,
-    payload: { llm_config_id: string; mode: 'MERGE' | 'REPLACE'; only_tables?: string[] },
+    payload: { llm_config_id: string; mode: SemanticGenerationMode; only_tables?: string[] },
   ) => post<SemanticJob>(`/connections/${connectionId}/semantic/generate`, payload),
   job: (connectionId: string, jobId: string) =>
     get<SemanticJob>(`/connections/${connectionId}/semantic/jobs/${jobId}`),
@@ -660,6 +661,9 @@ export const semantic = {
   // *Metrics in use*: counts over the last `days` of answers, per metric.
   metricUse: (connectionId: string, days = 30) =>
     get<SemanticMetricUse>(`/connections/${connectionId}/semantic/metric-use?days=${days}`),
+  // *Needs attention*: what in the layer needs a person, and why.
+  attention: (connectionId: string, days = 30) =>
+    get<SemanticAttention>(`/connections/${connectionId}/semantic/attention?days=${days}`),
   // Same parser the save path uses, so the metric editor cannot promise
   // something the backend will later reject.
   check: (

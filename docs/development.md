@@ -35,11 +35,11 @@ From `frontend/`: `npm run dev`, `npm run build` (`tsc -b && vite build`),
 work** — the script exists but eslint is neither a devDependency nor
 configured.
 
-`npm test` runs **nineteen** suites with `node --experimental-strip-types`:
-eighteen DOM-free logic modules under `src/components/` — `dashboard-schedule`,
+`npm test` runs **twenty** suites with `node --experimental-strip-types`:
+nineteen DOM-free logic modules under `src/components/` — `dashboard-schedule`,
 `table-format`, `dashboard-document`, `palette`, `chat-format`,
 `report-document`, `report-readiness`, `report-print`, `semantic-drift`,
-`semantic-metrics`, `semantic-changes`, `semantic-score`, `semantic-file`, `knowledge-template`, `thinking`, `knowledge-queue`,
+`semantic-metrics`, `semantic-changes`, `semantic-score`, `semantic-file`, `semantic-attention`, `knowledge-template`, `thinking`, `knowledge-queue`,
 `provider-params`, `usage-chart` — plus `scripts/permissions.test.ts`. They hold the logic
 whose failures are quiet, and they are the *only* tested code in the frontend.
 **One React import turns a suite into a thing that cannot run.**
@@ -146,7 +146,7 @@ plus `vite build`.
 Two things it does **not** gate, and both are worth knowing before trusting a
 green tick:
 
-- **`npm test`** is not in CI. The nineteen suites above run only where somebody
+- **`npm test`** is not in CI. The twenty suites above run only where somebody
   runs them.
 - **mypy** runs with `|| true`. Strict mode is configured but is being adopted
   module by module, so a green tick is not a type-clean tree.

@@ -38,7 +38,7 @@ from datetime import timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clock import utcnow
@@ -61,6 +61,7 @@ from app.infra.db.models import (
     BenchmarkRun,
     DatabaseConnection,
     GeneratedQuery,
+    KnowledgeTemplateHit,
     LlmConfig,
     Run,
     SchemaSnapshotRow,
@@ -76,20 +77,25 @@ from app.semantic import (
     IGNORED,
     SEMANTIC_PROMPT_VERSION,
     USED,
+    Attention,
+    Baseline,
     Change,
+    MetricCount,
     Progress,
     SchemaIndex,
     SemanticDocument,
     attribute,
     bind_layer,
     build_index,
+    confine_to_tables,
     diff_documents,
     generate_document,
     merge_documents,
+    needs_attention,
 )
 from app.semantic import limits as semantic_limits
 from app.services import audit
-from app.services.query_service import resolve_llm
+from app.services.query_service import latest_snapshot, resolve_llm
 from app.services.semantic_transfer import ImportReport, LayerFile, build_file, read_file
 
 log = get_logger(__name__)
@@ -111,8 +117,15 @@ SEMANTIC_PUBLISHED = "semantic.published"
 SEMANTIC_EXPORTED = "semantic.exported"
 SEMANTIC_IMPORTED = "semantic.imported"
 
-#: The window the *Metrics in use* table counts over.
+#: The window the *Metrics in use* table and *Needs attention* count over.
 METRIC_USE_DAYS = 30
+
+#: A generation's modes, for tables that already have an entity. `MERGE` keeps
+#: every entity a person edited and refreshes the rest; `FILL_GAPS` does that
+#: and also fills an edited entity's blanks, and drops nothing (Phase 5);
+#: `REPLACE` takes the generation over what is there. Over chosen tables, every
+#: mode changes those tables and nothing else (`confine_to_tables`).
+GENERATION_MODES = ("MERGE", "FILL_GAPS", "REPLACE")
 
 #: How long a version note may be. A sentence or a paragraph about *why*; the
 #: what is already the change list.
@@ -665,6 +678,171 @@ class SemanticService:
         )
         return summarise_metric_use(result.scalars().all())
 
+    async def attention(
+        self, connection: DatabaseConnection, *, days: int = METRIC_USE_DAYS
+    ) -> list[Attention]:
+        """What in the document the editor shows needs a person, and why.
+
+        The facts are gathered here and judged in `app/semantic/attention.py`:
+        the binder's verdicts on the working document (the draft when there is
+        one), the newest snapshot's tables, the snapshot each entity was last
+        changed against, *Metrics in use*, which unreviewed descriptions
+        Grounded answers stood on, and how long the draft has sat. **Counts and
+        schema names only** — a reader of the layer learns how its entries fare,
+        not who asked what.
+        """
+        doc, row, facts = await self.read(connection)
+        snapshot = await self._snapshot(connection.id)
+        use = await self.metric_use(connection.id, days=days)
+        return needs_attention(
+            doc,
+            tables=snapshot["tables"],
+            baselines=await self._baselines(connection.id, doc, row, facts, snapshot),
+            metric_counts=[MetricCount(u.metric, u.entity, u.used, u.ignored) for u in use],
+            relied_on=await self._relied_on(connection.id, doc, days=days),
+            draft_updated_at=(
+                row.draft_updated_at if row is not None and facts["has_draft"] else None
+            ),
+            now=utcnow(),
+            days=days,
+        )
+
+    async def _baselines(
+        self,
+        connection_id: UUID,
+        doc: SemanticDocument,
+        row: SemanticLayerRow | None,
+        facts: dict[str, Any],
+        snapshot: dict[str, Any],
+    ) -> dict[str, Baseline]:
+        """Per entity, the version that last changed it and that version's tables.
+
+        The version is the newest whose change rows name the entity. An entity
+        no change row names has been there, unchanged, since the first version —
+        only a migrated version 1 writes no rows — so that is its baseline.
+        Two cases have none, and are not compared:
+
+        * an entity the draft **adds** has never been published against any
+          snapshot;
+        * an entity the draft **changes**, in a draft saved after the newest
+          sync, was last changed against the schema as it is now.
+
+        Only snapshots that differ from the newest are loaded.
+        """
+        if row is None or not row.published_version:
+            return {}
+        pending = [c for c in facts["unpublished_changes"] if c.entity_key]
+        keys = {e.table.lower() for e in doc.entities if not e.exclude and e.valid}
+        keys -= {c.entity_key for c in pending if c.kind == "entity_added"}
+        if row.draft_updated_at is not None and pending:
+            synced_at = (await self._db.execute(
+                select(SchemaSnapshotRow.created_at).where(
+                    SchemaSnapshotRow.connection_id == connection_id,
+                    SchemaSnapshotRow.version == snapshot["version"],
+                )
+            )).scalar_one_or_none()
+            if synced_at is not None and row.draft_updated_at >= synced_at:
+                keys -= {c.entity_key for c in pending}
+        if not keys:
+            return {}
+
+        last: dict[str, int] = dict((await self._db.execute(
+            select(SemanticLayerChangeRow.entity_key, func.max(SemanticLayerVersionRow.version))
+            .join(
+                SemanticLayerVersionRow,
+                SemanticLayerVersionRow.id == SemanticLayerChangeRow.version_id,
+            )
+            .where(
+                SemanticLayerChangeRow.connection_id == connection_id,
+                SemanticLayerChangeRow.entity_key.in_(sorted(keys)),
+            )
+            .group_by(SemanticLayerChangeRow.entity_key)
+        )).tuples().all())
+        first = (await self._db.execute(
+            select(func.min(SemanticLayerVersionRow.version))
+            .where(SemanticLayerVersionRow.connection_id == connection_id)
+        )).scalar_one_or_none()
+        numbers: dict[str, int] = {}
+        for key in keys:
+            number = last.get(key, first)
+            if number:
+                numbers[key] = number
+
+        schema_of: dict[int, int] = dict((await self._db.execute(
+            select(SemanticLayerVersionRow.version, SemanticLayerVersionRow.schema_version)
+            .where(
+                SemanticLayerVersionRow.connection_id == connection_id,
+                SemanticLayerVersionRow.version.in_(sorted(set(numbers.values()))),
+            )
+        )).tuples().all())
+        older = {
+            v for v in schema_of.values() if v and v != snapshot["version"]
+        }
+        tables_of: dict[int, list[dict[str, Any]]] = dict((await self._db.execute(
+            select(SchemaSnapshotRow.version, SchemaSnapshotRow.tables).where(
+                SchemaSnapshotRow.connection_id == connection_id,
+                SchemaSnapshotRow.version.in_(sorted(older)),
+            )
+        )).tuples().all()) if older else {}
+        return {
+            key: Baseline(version=number, tables=tables_of[schema_of[number]])
+            for key, number in numbers.items()
+            if schema_of.get(number) in tables_of
+        }
+
+    async def _relied_on(
+        self, connection_id: UUID, doc: SemanticDocument, *, days: int
+    ) -> dict[str, int]:
+        """Per table, how many Grounded answers in the last `days` touched it.
+
+        Asked only about what could be a reason — an entity a model wrote that
+        nobody has reviewed — so a reviewed layer costs no query. *Grounded* is
+        the tier's own rule (`is_grounded`) against the version each run
+        recorded; a Verified answer stood on a template, not on the layer, and
+        is not counted.
+        """
+        unreviewed = {
+            e.table.lower() for e in doc.entities
+            if not e.exclude and e.provenance.source == "llm" and not e.provenance.reviewed
+        }
+        if not unreviewed:
+            return {}
+        since = utcnow() - timedelta(days=days)
+        result = await self._db.execute(
+            select(Run.id, Run.semantic_layer_version, GeneratedQuery.referenced_tables)
+            .join(GeneratedQuery, GeneratedQuery.run_id == Run.id)
+            .where(
+                Run.connection_id == connection_id,
+                Run.created_at >= since,
+                Run.status == "SUCCEEDED",
+                or_(Run.semantic_layer_version.is_(None), Run.semantic_layer_version > 0),
+                ~exists().where(
+                    KnowledgeTemplateHit.run_id == Run.id,
+                    KnowledgeTemplateHit.outcome == "SHORT_CIRCUIT",
+                ),
+            )
+        )
+        touched: dict[UUID, tuple[int | None, set[str]]] = {}
+        for run_id, version, tables in result.all():
+            entry = touched.setdefault(run_id, (version, set()))
+            entry[1].update(t.lower() for t in tables or [])
+
+        described: dict[int | None, frozenset[str]] = {}
+        counts: dict[str, int] = {}
+        for version, tables in touched.values():
+            if not tables & unreviewed:
+                continue
+            if version not in described:
+                described[version] = (
+                    await current_described(self._db, connection_id)
+                    if version is None
+                    else await version_described(self._db, connection_id, version)
+                )
+            if is_grounded(tables, described[version]):
+                for table in tables & unreviewed:
+                    counts[table] = counts.get(table, 0) + 1
+        return counts
+
     async def diff(
         self, connection: DatabaseConnection, before: dict[str, Any], after: dict[str, Any]
     ) -> list[Change]:
@@ -710,6 +888,18 @@ class SemanticService:
             raise ValidationError(
                 "Sync this connection's schema before generating a semantic layer."
             )
+        if mode not in GENERATION_MODES:
+            raise ValidationError(f"Unknown generation mode {mode!r}.")
+        known = {
+            f"{t.get('schema', '')}.{t.get('name', '')}".lower() for t in snapshot["tables"]
+        }
+        unknown = sorted({t.lower() for t in only_tables or []} - known)
+        if unknown:
+            raise ValidationError(
+                f"{len(unknown)} of the chosen tables "
+                f"{'is' if len(unknown) == 1 else 'are'} not in this connection's "
+                f"schema: {', '.join(unknown[:5])}. Sync the schema and choose again."
+            )
 
         config = await self._db.get(LlmConfig, llm_config_id)
         # `select`: generating a layer *answers with* the model. `modify` on an
@@ -720,6 +910,7 @@ class SemanticService:
         ):
             raise NotFoundError("Model configuration not found.")
 
+        chosen = sorted({t.lower() for t in only_tables or []})
         job = SemanticJobRow(
             id=uuid.uuid4(),
             connection_id=connection.id,
@@ -732,11 +923,9 @@ class SemanticService:
             llm_config_id=config.id,
             model_snapshot={"provider": config.provider, "model": config.model},
             mode=mode,
-            only_tables=[t.lower() for t in (only_tables or [])],
+            only_tables=chosen,
             status="QUEUED",
-            progress_total=(
-                len(only_tables) if only_tables else len(snapshot["tables"])
-            ) + 2,
+            progress_total=(len(chosen) or len(snapshot["tables"])) + 2,
         )
         self._db.add(job)
         await self._db.flush()
@@ -905,21 +1094,20 @@ class SemanticService:
         spent at the provider is part of the current draft by the time this
         runs, so the merge keeps it — before versions, the job merged into the
         document it had read at the start and silently overwrote that save.
+
+        `mode` is one of `GENERATION_MODES`. A run over chosen tables changes
+        those tables and nothing else, whatever the mode: *Rewrite* (`REPLACE`)
+        over two tables rewrites two tables, not the business context.
         """
         async with get_sessionmaker()() as session:
             head = await _lock_head(session, connection_id)
             current = SemanticDocument.model_validate(_working(head))
             merged = (
-                generated if mode == "REPLACE" else merge_documents(current, generated)
+                generated if mode == "REPLACE"
+                else merge_documents(current, generated, fill_gaps=mode == "FILL_GAPS")
             )
-            # A partial run describes a subset; everything it did not touch stays.
             if only_tables:
-                touched = {e.table.lower() for e in merged.entities}
-                merged.entities.extend(
-                    e.model_copy(deep=True)
-                    for e in current.entities
-                    if e.table.lower() not in touched
-                )
+                merged = confine_to_tables(current, merged, only_tables)
             # A model's text is cut to the limits a person's write is held to,
             # so the next save of this layer is never refused for a sentence
             # nobody here wrote.
@@ -1461,6 +1649,52 @@ async def load_layer(
         log.warning("semantic_document_unreadable", connection_id=str(connection.id))
         return LoadedLayer(None)
     return LoadedLayer(document, row.published_version or 0)
+
+
+def described_tables(layer: SemanticDocument) -> frozenset[str]:
+    """The tables a layer describes, for the *Grounded* tier: valid and not excluded."""
+    return frozenset(
+        entity.table.lower()
+        for entity in layer.entities
+        if entity.valid and not entity.exclude
+    )
+
+
+def is_grounded(tables: set[str] | frozenset[str], described: frozenset[str]) -> bool:
+    """*Grounded*: every table an answer touched is described. All of them, not most."""
+    return bool(tables) and bool(described) and set(tables) <= described
+
+
+async def version_described(
+    db: AsyncSession, connection_id: UUID, version: int
+) -> frozenset[str]:
+    """What version `version` described, as bound when it was published."""
+    result = await db.execute(
+        select(SemanticLayerVersionRow.document).where(
+            SemanticLayerVersionRow.connection_id == connection_id,
+            SemanticLayerVersionRow.version == version,
+        )
+    )
+    document = result.scalar_one_or_none()
+    if not document:
+        return frozenset()
+    try:
+        layer = SemanticDocument.model_validate(document)
+    except ValueError:
+        return frozenset()
+    return described_tables(layer)
+
+
+async def current_described(db: AsyncSession, connection_id: UUID) -> frozenset[str]:
+    """What the published layer describes now — the rule for a run from before
+    versions: through `load_document`, so a switched-off layer describes nothing
+    and an entity counts only while it binds to the current snapshot."""
+    connection = await db.get(DatabaseConnection, connection_id)
+    if connection is None:
+        return frozenset()
+    snapshot = await latest_snapshot(db, connection_id)
+    layer = await load_document(db, connection, snapshot=snapshot)
+    return described_tables(layer) if layer is not None else frozenset()
 
 
 def metric_use_of(

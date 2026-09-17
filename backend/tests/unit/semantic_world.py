@@ -49,6 +49,7 @@ TABLES = (
     "semantic_layers", "semantic_layer_versions", "semantic_layer_changes",
     "semantic_jobs", "audit_logs", "benchmark_sets", "benchmark_runs",
     "conversations", "messages", "runs", "generated_queries",
+    "knowledge_templates", "knowledge_template_hits",
 )
 
 AUTHOR = uuid4()

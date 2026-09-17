@@ -6,6 +6,7 @@ no fastapi, no sqlalchemy, no litellm — so it can be exercised end to end
 against a dict snapshot and a fake gateway.
 
     bind_layer                        the one binder every reader goes through
+    needs_attention                   what in a layer needs a person, and why
     attribute                         which metric definitions a statement matched
     build_index / validate_document   bind a document to a schema snapshot
     derive_joins                      cardinality + fan-out, read off the catalog
@@ -18,6 +19,22 @@ against a dict snapshot and a fake gateway.
 """
 from __future__ import annotations
 
+from app.semantic.attention import (
+    COLUMNS_CHANGED,
+    DRAFT_DAYS,
+    DRAFT_OLD,
+    INVALID,
+    METRIC_IGNORED,
+    REASONS,
+    UNDESCRIBED,
+    UNREVIEWED_RELIED_ON,
+    Attention,
+    Baseline,
+    ColumnDrift,
+    MetricCount,
+    column_drift,
+    needs_attention,
+)
 from app.semantic.attribute import (
     IGNORED,
     UNKNOWN,
@@ -57,14 +74,32 @@ from app.semantic.validate import (
     SchemaIndex,
     build_index,
     check_expression,
+    confine_to_tables,
     derive_joins,
     entity_stub,
+    fill_entity,
     merge_documents,
     validate_document,
 )
 
 __all__ = [
     "AFFECTS_SQL",
+    "COLUMNS_CHANGED",
+    "DRAFT_DAYS",
+    "DRAFT_OLD",
+    "INVALID",
+    "METRIC_IGNORED",
+    "REASONS",
+    "UNDESCRIBED",
+    "UNREVIEWED_RELIED_ON",
+    "Attention",
+    "Baseline",
+    "ColumnDrift",
+    "MetricCount",
+    "column_drift",
+    "confine_to_tables",
+    "fill_entity",
+    "needs_attention",
     "IGNORED",
     "UNKNOWN",
     "USED",

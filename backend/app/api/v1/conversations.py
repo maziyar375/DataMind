@@ -57,9 +57,12 @@ from app.semantic import SemanticDocument
 from app.services import audit, restricted
 from app.services.knowledge_service import FeedbackService, record_hit
 from app.services.policy import require
-from app.services.query_service import latest_snapshot
 from app.services.run_service import RunService
-from app.services.semantic_service import load_document
+from app.services.semantic_service import (
+    current_described,
+    is_grounded,
+    version_described,
+)
 
 router = APIRouter(tags=["conversations"])
 
@@ -605,6 +608,11 @@ async def _all_described(db, run: Run, tables: set[str], memo: _Described) -> bo
     * **`NULL`** — a run from before versions. The interim rule: the layer as it
       is now, through `load_document`, so a switched-off layer describes
       nothing and an entity counts only while it binds to the current snapshot.
+
+    The rule itself lives in `semantic_service` (`is_grounded` and the two
+    `*_described` readers), because *Needs attention* counts the Grounded
+    answers an unreviewed description stood on, and two copies of what
+    Grounded means would be two answers.
     """
     version = run.semantic_layer_version
     if version == 0 or run.connection_id is None:
@@ -612,46 +620,11 @@ async def _all_described(db, run: Run, tables: set[str], memo: _Described) -> bo
     key = (run.connection_id, version)
     if key not in memo:
         memo[key] = (
-            await _current_described(db, run.connection_id)
+            await current_described(db, run.connection_id)
             if version is None
-            else await _version_described(db, run.connection_id, version)
+            else await version_described(db, run.connection_id, version)
         )
-    described = memo[key]
-    return bool(described) and tables <= described
-
-
-async def _version_described(db, connection_id: UUID, version: int) -> frozenset[str]:
-    result = await db.execute(
-        select(SemanticLayerVersionRow.document).where(
-            SemanticLayerVersionRow.connection_id == connection_id,
-            SemanticLayerVersionRow.version == version,
-        )
-    )
-    document = result.scalar_one_or_none()
-    if not document:
-        return frozenset()
-    try:
-        layer = SemanticDocument.model_validate(document)
-    except ValueError:
-        return frozenset()
-    return _described(layer)
-
-
-def _described(layer: SemanticDocument) -> frozenset[str]:
-    return frozenset(
-        entity.table.lower()
-        for entity in layer.entities
-        if entity.valid and not entity.exclude
-    )
-
-
-async def _current_described(db, connection_id: UUID) -> frozenset[str]:
-    connection = await db.get(DatabaseConnection, connection_id)
-    if connection is None:
-        return frozenset()
-    snapshot = await latest_snapshot(db, connection_id)
-    layer = await load_document(db, connection, snapshot=snapshot)
-    return _described(layer) if layer is not None else frozenset()
+    return is_grounded(tables, memo[key])
 
 
 @router.get("/runs/{run_id}", response_model=RunRead)

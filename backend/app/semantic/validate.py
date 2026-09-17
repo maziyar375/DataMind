@@ -13,6 +13,7 @@ where someone can fix it, and keeps it out of the prompt in the meantime.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -359,7 +360,7 @@ def derive_joins(
 
 # ── merging a regeneration over an edited document ───────────────────────
 def merge_documents(
-    existing: SemanticDocument, generated: SemanticDocument
+    existing: SemanticDocument, generated: SemanticDocument, *, fill_gaps: bool = False
 ) -> SemanticDocument:
     """Lay a fresh generation under what a person already wrote.
 
@@ -367,6 +368,14 @@ def merge_documents(
     survives untouched and only *new* tables are taken from the generation.
     Everything else prefers the generated entry — that is what the user asked
     for by pressing the button.
+
+    `fill_gaps` (Phase 5 of `docs/plans/semantic-layer-model.md`) is for the
+    table that grew six columns after somebody described it. It changes two
+    things and nothing else: an edited entity is still kept, but it also takes
+    what the generation found that it lacks (`fill_entity`); and nothing is
+    dropped — an entity or glossary term the generation did not return stays,
+    edited or not, because a gap-filling run that loses a table it failed to
+    describe has not filled a gap.
     """
     merged = generated.model_copy(deep=True)
 
@@ -394,18 +403,135 @@ def merge_documents(
     merged.entities = [
         kept.get(e.table.lower(), e).model_copy(deep=True) for e in merged.entities
     ]
-    # An edited entity for a table the generation skipped is still the user's.
+    # An edited entity for a table the generation skipped is still the user's —
+    # and under `fill_gaps`, so is every other one.
     present = {e.table.lower() for e in merged.entities}
     merged.entities.extend(
-        e.model_copy(deep=True) for t, e in kept.items() if t not in present
+        e.model_copy(deep=True)
+        for e in existing.entities
+        if e.table.lower() not in present and (fill_gaps or e.edited)
     )
+    if fill_gaps:
+        found = {e.table.lower(): e for e in generated.entities}
+        for index, entity in enumerate(merged.entities):
+            source = found.get(entity.table.lower())
+            if entity.table.lower() in kept and source is not None:
+                merged.entities[index] = fill_entity(
+                    entity, source, taken=_metric_names(merged, but=entity.table)
+                )
 
-    edited_terms = [g for g in existing.glossary if g.provenance.edited]
     have = {g.term.lower() for g in merged.glossary}
     merged.glossary.extend(
-        g.model_copy(deep=True) for g in edited_terms if g.term.lower() not in have
+        g.model_copy(deep=True)
+        for g in existing.glossary
+        if g.term.lower() not in have and (fill_gaps or g.provenance.edited)
     )
     return merged
+
+
+def fill_entity(
+    person: SemanticEntity, generated: SemanticEntity, *, taken: frozenset[str] = frozenset()
+) -> SemanticEntity:
+    """`person`'s entity, with only the gaps taken from `generated`.
+
+    **A field somebody wrote is never overwritten.** A text is taken only where
+    it is empty, a list only where it has nothing in it, a role only where it is
+    still `unknown`; `exclude` and the provenance stay the person's, so the
+    entity is still protected from the next regeneration. Columns and metrics
+    are **added** when the entity has none by that name, and an existing column
+    gains only its own empty texts.
+
+    An existing **metric is never touched**. Its empty `filters` are not a gap
+    — a metric with no filters is a definition, and filling them would change a
+    number while claiming to fill a blank. A generated metric whose name is in
+    `taken` (defined on another table of the document) is not added either:
+    `_refuse_ambiguous_metrics` would then switch off both, including the one a
+    person relies on.
+    """
+    filled = person.model_copy(deep=True)
+    for name in ("label", "description", "grain", "default_time_column"):
+        if not getattr(filled, name).strip() and getattr(generated, name).strip():
+            setattr(filled, name, getattr(generated, name))
+    if not filled.synonyms:
+        filled.synonyms = list(generated.synonyms)
+    if filled.role == "unknown":
+        filled.role = generated.role
+
+    columns = {c.name.lower(): c for c in filled.columns}
+    for column in generated.columns:
+        mine = columns.get(column.name.lower())
+        if mine is None:
+            filled.columns.append(column.model_copy(deep=True))
+            continue
+        for name in ("label", "description", "unit"):
+            if not getattr(mine, name).strip() and getattr(column, name).strip():
+                setattr(mine, name, getattr(column, name))
+        if not mine.synonyms:
+            mine.synonyms = list(column.synonyms)
+        if not mine.value_meanings:
+            mine.value_meanings = dict(column.value_meanings)
+
+    names = {m.name.lower() for m in filled.metrics} | taken
+    for metric in generated.metrics:
+        if metric.name.lower() not in names:
+            filled.metrics.append(metric.model_copy(deep=True))
+            names.add(metric.name.lower())
+    return filled
+
+
+def confine_to_tables(
+    current: SemanticDocument, merged: SemanticDocument, tables: Iterable[str]
+) -> SemanticDocument:
+    """A generation over chosen tables changes those tables and nothing else.
+
+    The generator still writes a business context, an exclusion rule, time
+    conventions and a glossary on a partial run — it needs them to describe
+    the tables well — but the person chose *tables*. So the chosen entities
+    come from `merged`, every other entity stays exactly as it is in `current`
+    and where it was, and the document-level fields are only **filled**: a
+    text that is empty takes the generated one, the time conventions are taken
+    only when nothing was ever set, and generated glossary terms are added
+    beside the existing ones, never over them.
+
+    Before this a partial run replaced an untouched business context with one
+    written from the chosen tables alone, and dropped every glossary term those
+    tables did not produce.
+    """
+    chosen = {t.lower() for t in tables}
+    produced = {e.table.lower(): e for e in merged.entities if e.table.lower() in chosen}
+
+    out = current.model_copy(deep=True)
+    out.entities = [
+        produced.pop(e.table.lower()).model_copy(deep=True)
+        if e.table.lower() in produced else e
+        for e in out.entities
+    ]
+    out.entities.extend(e.model_copy(deep=True) for e in produced.values())
+
+    if not out.business_context.strip() and merged.business_context.strip():
+        out.business_context = merged.business_context
+        out.context_provenance = merged.context_provenance.model_copy()
+    if not out.default_exclusions.strip() and merged.default_exclusions.strip():
+        out.default_exclusions = merged.default_exclusions
+        out.exclusions_provenance = merged.exclusions_provenance.model_copy()
+    if not current.entities and not current.time.provenance.edited:
+        out.time = merged.time.model_copy(deep=True)
+
+    have = {g.term.lower() for g in out.glossary}
+    out.glossary.extend(
+        g.model_copy(deep=True) for g in merged.glossary if g.term.lower() not in have
+    )
+    return out
+
+
+def _metric_names(doc: SemanticDocument, *, but: str) -> frozenset[str]:
+    """Every metric name defined on a table other than `but`."""
+    return frozenset(
+        m.name.lower()
+        for e in doc.entities
+        if e.table.lower() != but.lower()
+        for m in e.metrics
+    )
 
 
 def _edited(doc: SemanticDocument) -> bool:

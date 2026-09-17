@@ -515,13 +515,22 @@ each Vega plot at page width in the light palette — are
 
 ## 7. What is tested, and what is not
 
-Eighteen modules are deliberately **DOM-free** and carry their own suites,
+Nineteen modules are deliberately **DOM-free** and carry their own suites,
 because every way they can be wrong is quiet: `dashboard-schedule.ts`,
 `table-format.ts`, `dashboard-document.ts`, `palette.ts`, `chat-format.ts`,
 `report-document.ts`, `report-readiness.ts`, `report-print.ts`,
 `semantic-drift.ts`, `semantic-metrics.ts`, `semantic-changes.ts`,
-`semantic-score.ts`, `semantic-file.ts`, `knowledge-template.ts`, `thinking.ts`,
-`knowledge-queue.ts`, `provider-params.ts`, `usage-chart.ts`.
+`semantic-score.ts`, `semantic-file.ts`, `semantic-attention.ts`,
+`knowledge-template.ts`, `thinking.ts`, `knowledge-queue.ts`,
+`provider-params.ts`, `usage-chart.ts`.
+
+`semantic-attention.ts` words the semantic layer's *Needs attention* list and
+decides only its shape: a line for a draft left sitting, one row per table with
+each of its reasons, and every undescribed table in one row, so twenty
+"no description" lines cannot bury a broken metric. Whether anything needs
+attention is the server's answer (`app/semantic/attention.py`). It also says
+which tab of a table's card a row opens on — Metrics for a broken or ignored
+metric, Columns for a table whose columns moved, Meaning otherwise.
 
 `semantic-file.ts` reads a semantic layer export before it is sent — format,
 version, a document at all — counts what is in it for the import preview,

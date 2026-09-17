@@ -1099,6 +1099,30 @@ export interface SemanticImportResult {
   report: SemanticImportReport
 }
 
+/** One thing in a layer that needs a person — decided on the server
+ *  (`app/semantic/attention.py`), worded by `semantic-attention.ts`. */
+export interface SemanticAttentionItem {
+  reason: string
+  /** Lower-cased `schema.table`, or empty for the document. */
+  table: string
+  /** The metric, for `METRIC_IGNORED`. */
+  item: string
+  /** Counts and schema names — never a question, an answer or a value. */
+  detail: Record<string, unknown>
+}
+
+/** *Needs attention*, most urgent first. */
+export interface SemanticAttention {
+  days: number
+  draft_days: number
+  items: SemanticAttentionItem[]
+}
+
+/** How a generation treats a table that already has an entity. `FILL_GAPS`
+ *  keeps what people wrote and adds what is missing; `REPLACE` rewrites;
+ *  `MERGE` (API only) keeps edits and refreshes the rest. */
+export type SemanticGenerationMode = 'MERGE' | 'FILL_GAPS' | 'REPLACE'
+
 /** *Metrics in use*: per metric, over the last `days` of answers. Counts only. */
 export interface SemanticMetricUse {
   days: number

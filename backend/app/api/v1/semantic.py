@@ -21,6 +21,8 @@ from sqlalchemy import select
 from app.api.deps import AuthzDep, CtxDep, DbDep, SettingsDep
 from app.api.errors import problem_response
 from app.api.schemas import (
+    SemanticAttention,
+    SemanticAttentionItem,
     SemanticChangeList,
     SemanticChangeRead,
     SemanticDiffRequest,
@@ -54,7 +56,13 @@ from app.core.errors import (
 from app.domain.ports.authz import ResourceRef
 from app.domain.value_objects.authz import Privilege, ResourceType
 from app.infra.db.models import DatabaseConnection, SemanticJobRow, SemanticLayerVersionRow
-from app.semantic import AFFECTS_SQL, Change, SemanticDocument, check_expression
+from app.semantic import (
+    AFFECTS_SQL,
+    DRAFT_DAYS,
+    Change,
+    SemanticDocument,
+    check_expression,
+)
 from app.semantic import limits as semantic_limits
 from app.services.policy import require
 from app.services.semantic_service import SemanticService, VersionSummary
@@ -591,6 +599,32 @@ async def get_semantic_metric_use(
             )
             for r in rows
         ],
+    )
+
+
+@router.get("/attention", response_model=SemanticAttention)
+async def get_semantic_attention(
+    connection_id: UUID,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    authz: AuthzDep,
+    days: int = Query(default=30, ge=1, le=365),
+) -> SemanticAttention:
+    """*Needs attention*: what in the layer the editor shows needs a person,
+    and why — entries the schema broke, tables whose columns moved since they
+    were described, definitions answers keep leaving out, unreviewed text that
+    Grounded answers stood on, undescribed tables, and a draft left sitting.
+
+    `select`, because it is a reading of the layer. Counts and schema names
+    only: it names no question, no answer and no asker.
+    """
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.SELECT)
+    items = await SemanticService(db, settings, authz).attention(connection, days=days)
+    return SemanticAttention(
+        days=days,
+        draft_days=DRAFT_DAYS,
+        items=[SemanticAttentionItem(**item.as_dict()) for item in items],
     )
 
 

@@ -9,10 +9,11 @@ is refused, and `merge_documents`: what survives a regeneration), `bind.py`
 (the one binder every reader goes through), `terms.py` (the words the layer
 speaks, for the knowledge backlog), `diff.py` (the one differ), `attribute.py`
 (which definitions an answer's SQL matched), `limits.py` (how long a text may
-be). The portable file is `backend/app/services/semantic_transfer.py`. The editor is
+be), `attention.py` (what in a layer needs a person, and why). The portable file is `backend/app/services/semantic_transfer.py`. The editor is
 [`frontend/src/components/semantic.tsx`](../../frontend/src/components/semantic.tsx).
-The plan that is turning the document into a versioned model is
-[plans/semantic-layer-model.md](../plans/semantic-layer-model.md).
+The plan that turned the document into a versioned model is
+[plans/semantic-layer-model.md](../plans/semantic-layer-model.md); all six of
+its phases have landed.
 
 Companion to [pipeline-chat.md](pipeline-chat.md) (the `retrieve` node that
 renders it), [catalog-metadata.md](catalog-metadata.md) (DDL comments, which
@@ -221,6 +222,55 @@ shapes. That is the class this addresses.
     generated sentence sink a table. The real layers sit far inside them (the
     longest text in `sales` and `aurora` is a 411-character context), and a
     test fails when a text field exists without a limit.
+- **Upkeep: regenerate chosen tables, and see what needs attention** (Phase 5,
+  no migration).
+  - **The generate dialog picks tables.** *What is missing*, *Tables I choose*
+    (a searchable list marking which are already described) or *Every table*,
+    and two modes for a table that already has an entity: **Fill the gaps**,
+    the default, and **Rewrite**. `POST …/semantic/generate` takes `mode`
+    `FILL_GAPS`, `REPLACE` or `MERGE` (the API's default, kept for scripts) and
+    refuses tables the schema does not have. Either way the result is a draft.
+  - **Fill the gaps never overwrites a field a person wrote**
+    (`merge_documents(…, fill_gaps=True)` and `fill_entity`). An edited entity
+    is kept and takes a generated value only where its own is empty — a text,
+    an empty list, a role still `unknown` — and gains the columns and metrics it
+    does not have; an existing column gains only its own empty texts. **An
+    existing metric is never touched**: its empty `filters` are a definition,
+    not a blank. A generated metric whose name another table already defines is
+    not added, because `_refuse_ambiguous_metrics` would then switch off both.
+    Nothing is dropped — an entity or glossary term the generation did not
+    return stays, edited or not. Entities nobody edited are described afresh,
+    as under `MERGE`.
+  - **A run over chosen tables changes those tables and nothing else**, in any
+    mode (`confine_to_tables`): every other entity stays as it was and where it
+    was, and the business context, exclusion rule and glossary are only filled
+    where empty. *Before this* a partial run replaced an unedited business
+    context with one written from the chosen tables alone and dropped every
+    glossary term those tables did not produce.
+  - ***Needs attention*** (`GET …/semantic/attention?days=30`, `select`) is a
+    filter beside *Has issues* and *Needs review*, and the hero's *need
+    attention* count. Six reasons, decided in `app/semantic/attention.py` from
+    what is already stored, most urgent first: **a draft untouched for 7
+    days**; **an entity, column or metric the current snapshot breaks** (the
+    binder's verdicts, not stored flags); **a table whose columns were added,
+    removed or retyped since the version that last changed its entity** — the
+    snapshot at that version's `schema_version` against the newest (a migrated
+    v1 wrote no change rows, so an entity no row names dates from the first
+    version; an entity a draft saved after the newest sync changed is not
+    compared, and neither is one the draft adds); **a metric answers left part
+    of more often than they used it** over 30 days; **an entity a model wrote
+    that nobody reviewed, which Grounded answers stood on** over 30 days (the
+    tier's own rule, `is_grounded`, against each run's version; Verified
+    answers are not counted); and **a table with no entity**. Excluded entities
+    are never a reason. Counts and schema names only. The editor groups it per
+    table (`semantic-attention.ts`): *Open* opens the card on the tab the reason
+    is about, a table that gained columns offers *Fill the gaps…*, and the
+    undescribed tables share one row with *Describe…* — both open the generate
+    dialog with those tables chosen.
+  - On the demo `aurora` layer it found what nothing had shown before: four
+    columns on `orders` and `order_items` retyped `smallint` → `integer` since
+    v1 was bound, and nine model-written, unreviewed entities that Grounded
+    answers stood on — `orders` alone by ten answers in 30 days.
 - **The benchmark is scored with the layer.** Before v10 `workers/benchmark.py`
   never passed it, so every `benchmark_runs` row at v9 or earlier was taken
   layer-off whatever the switch said.
@@ -229,8 +279,9 @@ shapes. That is the class this addresses.
   counts only while it binds and is not excluded.
 - **Regeneration is safe.** Any field a user edits sets `provenance.edited`, and
   `merge_documents` keeps those entities — and the business context and
-  exclusion rule, each on its own flag; `REPLACE` is the explicit "start over"
-  the UI makes you choose. Either way the result is a draft.
+  exclusion rule, each on its own flag. *Fill the gaps* keeps them and adds only
+  what they lack; *Rewrite* (`REPLACE`) is the explicit choice the UI makes you
+  make. Either way the result is a draft.
 - **It is off-by-absence.** With no layer, or with
   `connections.semantic_layer_enabled` false, `RetrievedContext.render` emits
   **byte-identical** output to before the feature existed — verified by a test.
