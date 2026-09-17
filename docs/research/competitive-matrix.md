@@ -27,10 +27,10 @@
 ## 0. The one-paragraph answer
 
 Against the two open-source incumbents, DataMind is **narrower and deeper**.
-Superset and Metabase are mature BI platforms — fifty chart types, drill-down,
-subscriptions, row-level security, forty connectors — that have bolted a
-language model on top of a product designed for people who already know what a
-dashboard is. DataMind is a language-model product that has grown the
+Superset and Metabase are mature BI platforms — forty-plus chart types,
+drill-down, subscriptions, row-level security, dozens of connectors — that have
+bolted a language model on top of a product designed for people who already
+know what a dashboard is. DataMind is a language-model product that has grown the
 governance a BI platform needs. The consequence is visible in the matrix as two
 almost disjoint `○` columns: **they lack everything in "accuracy & trust"; we
 lack everything in "reach and delivery".** Against Genie and Wren AI — products
@@ -39,7 +39,7 @@ August, and what remains of it is mostly reach, not trust.
 
 ---
 
-## 1. The three that are new here
+## 1. The two that are new, and one Power BI row
 
 Power BI, Wren AI and Genie are profiled in [mvp2.md §2.1–2.4](../plans/mvp2.md#part-2--what-the-other-four-do)
 and nothing in this section supersedes that. What follows is the two additions,
@@ -55,8 +55,8 @@ datasets, run SQL under the caller's RBAC, create virtual datasets, build charts
 through a preview-first Explore link, and assemble dashboards. The Superset
 maintainers' stated direction is explicitly to keep AI **out of core** and in
 extensions; the text-to-SQL work that exists lives in Preset's commercial *AI
-Assist* and in community forks, not in the Apache project. [SIP-166] proposes an
-in-core assistant and has not landed.
+Assist* and in community forks, not in the Apache project. [SIP-166](https://github.com/apache/superset/issues/33215) proposes
+an in-core assistant and has not landed.
 
 What Superset *is* strong at is the half DataMind does not have:
 
@@ -64,13 +64,14 @@ What Superset *is* strong at is the half DataMind does not have:
   though it is per-dataset SQL expressions rather than a reviewed business
   model, with **certification badges** on datasets and charts.
 - **Explore** — drag-and-drop encoding, ad-hoc metrics, drill-to-detail and
-  drill-by, cross-filtering, and 50+ visualization types.
+  drill-by, cross-filtering, and 40+ pre-installed visualization types.
 - **Native row-level security**, applied as a WHERE clause per role.
 - **Alerts and reports** — threshold alerts and scheduled email/Slack delivery,
   in core, free.
-- **Forecasting in core** — Prophet-based predictive analytics in the Advanced
+- **Forecasting** — Prophet-based predictive analytics in the Advanced
   Analytics panel, which is the one piece of "analysis depth" a free BI tool
-  rarely has.
+  rarely has. Two caveats: the `prophet` package is an optional install, and
+  forecasting works **only on the ECharts time-series chart**.
 - **Reach** — any SQLAlchemy-supported database (dozens), CSV/Excel upload, a
   full REST API, OAuth/LDAP/OIDC through Flask-AppBuilder.
 
@@ -85,9 +86,11 @@ The most dangerous of the five for DataMind's positioning, because it is the one
 that has moved most and is aimed at the same buyer: a team that wants
 self-hosted, plain-language analytics without a data engineer.
 
-- **Metabot went GA in January 2026.** It answers in natural language, builds
-  query-builder charts, generates and *fixes* SQL in the native editor, analyzes
-  an existing visualization, creates transforms, and runs **inside Slack**.
+- **Metabot shipped in Metabase 60, April 2026.** It answers in natural
+  language, builds query-builder charts, generates and *fixes* SQL in the native
+  editor, analyzes an existing visualization, creates transforms, and runs
+  **inside Slack**. The same release added an **Agent API** and an **MCP
+  server**. Core AI is on **all plans**; semantic search is Pro/Enterprise.
 - **It is grounded in a real semantic layer** — models (curated tables), metrics
   (reusable definitions), transforms, plus a **glossary** of business terms —
   and Metabase's own framing is that Metabot "queries your defined logic"
@@ -102,7 +105,8 @@ self-hosted, plain-language analytics without a data engineer.
   verified pair, or a score.**
 - **Platform strengths:** best-in-class drill-through, sandboxing (row- and
   column-level, paid), verified/official content, subscriptions and alerts,
-  embedding as a first-class paid product, ~25 connectors, file upload.
+  embedding as a first-class paid product, 18 official connectors (11 more
+  from the community), file upload.
 
 **The honest read for us:** Metabase now matches DataMind on the *shape* of the
 semantic layer and beats us comprehensively on reach, delivery and interaction.
@@ -149,7 +153,8 @@ RLS.
 | Static AST validation, fail-closed | ● **best in class** | n/a | ● dry-plan | ◐ | ○ | ○ |
 | Read-only proven at the engine | ● | n/a | ◐ | ◐ | ◐ *per-DB DML toggle* | ◐ *DB privileges* |
 | Explicit disclosure policy to the LLM | ● **unique** | ○ | ○ | ○ | ○ | ○ |
-| Generated SQL shown before it runs | ● | ◐ | ● | ● | ● *(MCP preview)* | ● |
+| Generated SQL shown to the reader | ● | ◐ | ● | ● | ● | ● |
+| Execution gated on a human approving the SQL | ○ | ○ | ○ | ○ | ◐ *MCP preview-first* | ○ |
 
 ### Interaction
 
@@ -163,7 +168,7 @@ RLS.
 | Direct manipulation of a result | ◐ *chart type* | ● | ◐ | ◐ | ● | ● |
 | Drill-down / drill-through / cross-filter | ○ | ● | ◐ | ◐ | ● | ● **strong** |
 | Chart → dashboard in one click | ● *chat bridge* | ● | ● | ● | ● | ● |
-| Chart types | 8 | 30+ | ~10 | ~10 | 50+ | ~20 |
+| Chart types | 8 | 30+ | ~10 | ~10 | 40+ | ~20 |
 
 ### Analysis depth
 
@@ -172,7 +177,7 @@ RLS.
 | Multi-step / iterative agent | ○ | ◐ | ● sandboxed | ● | ○ | ◐ *agentic workflows* |
 | Compute beyond SQL | ○ | ● DAX/Python | ● | ◐ | ◐ *Jinja* | ◐ |
 | Root-cause / key drivers | ○ | ● | ◐ | ◐ | ○ | ○ |
-| Forecasting / anomaly detection | ○ | ● | ○ | ◐ | ● *Prophet, in core* | ◐ *trend lines* |
+| Forecasting / anomaly detection | ○ | ● | ○ | ◐ | ◐ *Prophet, time-series only* | ◐ *trend lines* |
 
 ### Documents and delivery
 
@@ -200,14 +205,15 @@ RLS.
 
 | Capability | DataMind | Power BI | Wren AI | Genie | Superset | Metabase |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|
-| Data sources | 4 | many | 22+ | Databricks | dozens *(any SQLAlchemy)* | ~25 |
+| Data sources | 4 | many | 22+ | Databricks | dozens *(any SQLAlchemy)* | 18 + 11 community |
 | File upload (CSV/Excel) | ○ | ● | ● | ○ | ● | ● |
 | Result export | ◐ *CSV, no Excel* | ● | ● | ● | ● | ● |
 | Public API | ○ | ● | ● | ● | ● | ● |
-| MCP server | ○ | ◐ | ● | ● | ● *5.0+* | ? |
+| MCP server | ○ | ◐ | ● | ● | ● *5.0+* | ● *v60* |
 | Embedded analytics | ○ | ● | ● | ● | ◐ | ● *(paid)* |
 | SSO / OIDC / SAML | ○ *seams built* | ● | ● | ● | ● | ● *(paid)* |
-| Self-hostable / open source | ● | ○ | ● | ○ | ● | ● |
+| Self-hostable | ● | ○ | ● | ○ | ● | ● |
+| Licence | PolyForm **Noncommercial** | proprietary | Apache-2.0 core | proprietary | Apache-2.0 | AGPL core + paid editions |
 | Provider-agnostic LLM | ● | ○ | ● | ○ | ● *(BYO client)* | ● |
 
 ---
@@ -274,13 +280,24 @@ over.
 
 **4. One row is worth taking seriously as a threat rather than a gap.**
 Metabase grounding Metabot in models, metrics and a glossary is DataMind's §1.3
-thesis arriving in a product with twenty-five connectors and an existing
-install base. What they have not built is the part that is hard: proving the
-statement is safe before it runs, and turning a wrong answer into stored,
-parameterized, benchmarked knowledge. That is the moat. It is only a moat while
-we keep measuring it — which is the argument for the three unrun eval baselines
-in [status.md](../status.md) §3 being the most valuable unstarted work in the
-repo.
+thesis arriving in a product with twenty-nine connectors, an MCP server, an
+Agent API and an existing install base. What they have not built is the part
+that is hard: proving the statement is safe before it runs, and turning a wrong
+answer into stored, parameterized, benchmarked knowledge. That is the moat, and
+it is only a moat while we keep measuring it — which is the argument for the
+three unrun eval baselines in [status.md](../status.md) §3 being the most
+valuable unstarted work in the repo.
+
+**5. The licence is an asymmetry worth naming before someone else names it.**
+Superset is Apache-2.0 and Metabase's core is AGPL: both are free to run
+commercially, forever. DataMind is **PolyForm Noncommercial 1.0.0** — source
+you can read and self-host, but **commercial use requires a paid licence**.
+Against Wren AI (Apache-2.0 core, paid for RLS, access control and embedding)
+that is a normal open-core position; against Superset and Metabase it means the
+trust column has to be worth paying for, since the alternative is free. This
+page does not argue the licence either way. It argues that the pitch cannot
+rest on "open source and self-hosted", because two of the five match that and
+cost nothing.
 
 ---
 
@@ -291,18 +308,22 @@ repo.
 - [SIP-166: AI Assistant](https://github.com/apache/superset/issues/33215) — the proposal, not landed
 - [Enabling AI NLP feature in Superset (discussion #39274)](https://github.com/apache/superset/discussions/39274) — maintainers' stated "extensions, not core" direction
 - [Building Preset AI Assist (Preset blog)](https://preset.io/blog/building-preset-ai-assist-how-we-brought-text-to-sql-into-apache-superset/) — **vendor blog**; text-to-SQL as a commercial layer above Apache Superset
+- [Row Level Security API (official docs)](https://superset.apache.org/developer-docs/api/row-level-security/) — RLS as a core feature, a WHERE clause per role
+- [Time series forecasting (Preset blog)](https://preset.io/blog/time-series-forecasting-a-complete-guide/) — **vendor blog**; the source for the two Prophet caveats: optional package, ECharts time-series charts only
 
 **Metabase**
 - [Metabot (official docs)](https://www.metabase.com/docs/latest/ai/metabot) — capabilities *and* the documented limitations quoted in §1.2
 - [AI in Metabase (official docs)](https://www.metabase.com/docs/latest/ai/start) — provider choice, per-group permissions
 - [Semantic layer / models (product page)](https://www.metabase.com/features/models) — **vendor page**
 - [Metabase AI (product page)](https://www.metabase.com/features/metabase-ai) — **vendor page**
-- [Metabase 60 release notes](https://www.metabase.com/releases/metabase-60)
+- [Metabase 60 release notes](https://www.metabase.com/releases/metabase-60) — the source for the April 2026 date, the Agent API, the MCP server, and which plans carry which AI feature
+- [MCP server (official docs)](https://www.metabase.com/docs/latest/ai/mcp)
+- [Data sources](https://www.metabase.com/data-sources) — **vendor page**; 18 official drivers plus 11 community
 
 **Power BI, Wren AI, Genie** — sourced in [mvp2.md §2.2–2.4](../plans/mvp2.md#22-wren-ai);
 nothing here re-researches them beyond §1.3.
 
-**DataMind** — [../status.md](../status.md) (2026-09-17),
+**DataMind** — [../status.md](../status.md) (2026-09-17), [../../LICENSE](../../LICENSE),
 [reference/knowledge-templates.md](../reference/knowledge-templates.md),
 [reference/access-control.md](../reference/access-control.md),
 [reference/charts.md](../reference/charts.md) §2,
