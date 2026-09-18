@@ -48,6 +48,29 @@ TEAM_MEMBER_REMOVED = "team.member.removed"
 TEAM_SOURCE_BOUND = "team.source.bound"
 
 
+async def delegated_context(
+    db: AsyncSession, user_id: UUID, *, correlation_id: str | None = None
+) -> RequestContext:
+    """`RequestContext.on_behalf_of(user_id)`, **with that person's teams**.
+
+    Background work asks *"may this person do this?"* as the person — and a
+    person's reach includes every team they are in. `on_behalf_of` alone built
+    a context with no teams, so a chat answer or a report run whose data source
+    was shared with the asker's *team* passed every interactive check and was
+    then refused at execution: the recommended way to share data (to a team,
+    so it survives people leaving) was the one way that did not work.
+
+    Resolved from the database at the moment of asking, like `get_ctx` does per
+    request, so a removal from a team stops a queued run too. Capabilities stay
+    empty — a delegated context holds no app-wide verb (see `on_behalf_of`).
+    """
+    return RequestContext.on_behalf_of(
+        user_id,
+        correlation_id=correlation_id,
+        team_ids=await TeamService(db).team_ids(user_id),
+    )
+
+
 class TeamService:
     def __init__(self, db: AsyncSession) -> None:
         self._db = db

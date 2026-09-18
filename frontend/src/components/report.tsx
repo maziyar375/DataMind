@@ -47,7 +47,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
-  isReportRunInFlight, llmConfigs as modelsApi, reports as api,
+  access, isReportRunInFlight, llmConfigs as modelsApi, reports as api,
 } from '../api/client'
 import { DEFAULT_SECTIONS, MAX_SECTIONS, MIN_SECTIONS } from '../api/types'
 import type {
@@ -56,7 +56,10 @@ import type {
   ReportBlockType, ReportFeasibility, ReportLanguage, ReportRun, ReportRunDetail,
   ReportSection, ReportSectionResult, ReportSummary, ReportTimeWindow,
 } from '../api/types'
-import { AccessPopover, ReachBadge, Restricted, TransferControl } from './access'
+import {
+  AccessPopover, ReachBadge, Restricted, TransferControl, type WarnFn,
+} from './access'
+import { accessOf } from '../permissions'
 import { ChartGlyph, ChartTypePicker } from './chart-picker'
 import {
   assembleDocument, captionOf, chartTypeOf, figureNumbers, isCallout, isEdited,
@@ -787,6 +790,21 @@ export function ReportOutlineEditor({
     return <EditorSkeleton onBack={onBack} error={error} />
   }
 
+  // Somebody this report was shared with **for viewing** reads it; they do not
+  // get an editor whose every field, button and check answers 403.
+  if (!accessOf(report.privileges).edit) {
+    return (
+      <ReportReadOnly
+        report={report}
+        latestRun={latestRun}
+        runCount={runCount}
+        onBack={onBack}
+        onOpenRun={onOpenRun}
+        onHistory={onHistory}
+      />
+    )
+  }
+
   const busy = proposing || sweep !== null
   // Not "busy" — unfixable. Everything that writes to this report needs the
   // database it was built against, and that database is gone; only reading is
@@ -828,9 +846,10 @@ export function ReportOutlineEditor({
               the API will give the next request — so somebody who was shared
               this report sees a header without a share control rather than
               one whose button 403s. */}
-          <ReachBadge privileges={report.privileges} />
+          <ReachBadge privileges={report.privileges} owner={report.owner_name} />
           <AccessPopover
             base={`reports/${report.id}`}
+            warn={reportWarn(report.id)}
             resourceLabel={report.name}
             // Sized to the ghost buttons it stands beside, which all carry
             // `toolbarBtn`. It was the one control in this row at 13px.
@@ -1448,6 +1467,15 @@ function RequestCard({
             style={{ fontSize: 12 }}
           >
             {report.llm_config_id === null && <option value="">Choose a model</option>}
+            {/* The report's own model, when it was not shared with this
+                editor: named, so the picker does not silently show another,
+                and marked, because generating with it will be refused. */}
+            {report.llm_config_id !== null
+              && !models.some((model) => model.id === report.llm_config_id) && (
+                <option value={report.llm_config_id} disabled>
+                  {report.llm_config_name ?? 'Its model'} — not shared with you
+                </option>
+              )}
             {models.map((model) => (
               <option key={model.id} value={model.id}>
                 {model.name}
@@ -2431,6 +2459,163 @@ function reorder<T>(items: T[], from: number, to: number): T[] {
   const [moved] = next.splice(from, 1)
   next.splice(to, 0, moved)
   return next
+}
+
+/** "Would they see the figures?" for the share dialog — see `WarnFn`. */
+const REPORT_WARN = new Map<string, WarnFn>()
+export function reportWarn(reportId: string): WarnFn {
+  let fn = REPORT_WARN.get(reportId)
+  if (!fn) {
+    fn = async (principal) => (await access.reportShareCheck(reportId, principal)).unreadable
+    REPORT_WARN.set(reportId, fn)
+  }
+  return fn
+}
+
+/**
+ * A report as somebody who may **view** it sees its outline: what it covers,
+ * its sections and their questions — and the door to the document, which is
+ * the thing they were shared it for. No fields, no checks, no Generate.
+ */
+function ReportReadOnly({
+  report, latestRun, runCount, onBack, onOpenRun, onHistory,
+}: {
+  report: Report
+  latestRun: ReportRun | null
+  runCount: number
+  onBack: () => void
+  onOpenRun: (runId: string) => void
+  onHistory: () => void
+}) {
+  const sections = report.sections
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      <header className="rm-dash-header" style={headerStyle}>
+        <button onClick={onBack} aria-label="Back to reports" className="rm-icon-btn" style={backButton}>
+          <Icon.ArrowLeft size={15} />
+        </button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0, flex: 1, maxWidth: 460 }}>
+          <span
+            dir="auto"
+            style={{
+              fontSize: 16.5,
+              fontWeight: 700,
+              letterSpacing: '-0.01em',
+              color: 'var(--text-strong)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {report.name}
+          </span>
+          <span dir="auto" style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+            {report.description
+              || `${sections.length} ${sections.length === 1 ? 'section' : 'sections'}`}
+          </span>
+        </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <ReachBadge privileges={report.privileges} owner={report.owner_name} />
+          {runCount > 0 && (
+            <GhostButton onClick={onHistory} style={toolbarBtn}>
+              <Icon.List size={13} /> History
+              <span style={{ opacity: 0.6 }}>{runCount}</span>
+            </GhostButton>
+          )}
+          {latestRun && (
+            <PrimaryButton onClick={() => onOpenRun(latestRun.id)} style={{ padding: '8px 14px' }}>
+              <Icon.Doc size={13} /> Open the latest document
+            </PrimaryButton>
+          )}
+        </div>
+      </header>
+
+      <div className="rm-page-pad" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+        <div
+          style={{
+            maxWidth: CONTENT_WIDTH,
+            margin: '0 auto',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 16,
+          }}
+        >
+          {report.data_access === false ? (
+            <Note tone="amber">
+              This report reads{report.connection_name ? ` “${report.connection_name}”` : ' a data source'},
+              which hasn’t been shared with you — its documents show the writing, and a lock
+              where each figure would be. Ask the data source’s owner for access to see the numbers.
+            </Note>
+          ) : null}
+          {!latestRun && (
+            <Note tone="amber">
+              Nothing has been generated from this report yet
+              {report.owner_name ? ` — ${report.owner_name} can generate it` : ''}.
+            </Note>
+          )}
+
+          {report.prompt.trim() && (
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+                padding: 15,
+                background: 'var(--panel)',
+                border: '1px solid var(--border)',
+                borderRadius: 12,
+              }}
+            >
+              <span style={{ fontSize: 12.5, fontWeight: 650, color: 'var(--text-strong)' }}>
+                What this report covers
+              </span>
+              <p dir="auto" style={{ margin: 0, fontSize: 13, color: 'var(--text)', lineHeight: 1.6 }}>
+                {report.prompt}
+              </p>
+            </div>
+          )}
+
+          {sections.map((section, index) => (
+            <section
+              key={section.id}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+                padding: '15px 16px',
+                background: 'var(--panel)',
+                border: '1px solid var(--border)',
+                borderRadius: 12,
+              }}
+            >
+              <div style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}>
+                <span style={{ fontSize: 12, color: 'var(--text-faint)', fontVariantNumeric: 'tabular-nums' }}>
+                  {section.kind === 'EXECUTIVE_SUMMARY' ? '★' : index + 1}
+                </span>
+                <span dir="auto" style={{ fontSize: 15, fontWeight: 650, color: 'var(--text-strong)' }}>
+                  {section.heading}
+                </span>
+              </div>
+              {section.intent && (
+                <p dir="auto" style={{ margin: 0, fontSize: 12.5, color: 'var(--text-dim)', lineHeight: 1.55, paddingInlineStart: 22 }}>
+                  {section.intent}
+                </p>
+              )}
+              {section.blocks.length > 0 && (
+                <ol style={{ margin: 0, paddingInlineStart: 40, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {section.blocks.map((block) => (
+                    <li key={block.id} dir="auto" style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.55 }}>
+                      {block.title || block.question}
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </section>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function EditorSkeleton({ onBack, error }: { onBack: () => void; error: string | null }) {

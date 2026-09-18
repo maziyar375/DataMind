@@ -27,6 +27,7 @@ from app.core.clock import utcnow
 from app.core.context import RequestContext
 from app.core.errors import NotFoundError, SqlRejectedError
 from app.domain.ports.database import ResultColumn
+from app.domain.value_objects.authz import Capability
 from app.infra.db.models import Dashboard, DashboardTile, DatabaseConnection
 from app.main import create_app
 from app.services.dashboard_transfer import (
@@ -170,6 +171,17 @@ class FakeService:
 
     async def tile_counts(self, ids: list[UUID]) -> dict[UUID, int]:
         return {DASHBOARD_ID: 2}
+
+    async def owner_name(self, ctx: RequestContext, dashboard: Any) -> str | None:
+        return None
+
+    async def readable_connection_ids(
+        self, ctx: RequestContext, tiles: list[DashboardTile]
+    ) -> set[UUID]:
+        # The reader here owns every connection, so nothing is withheld; the
+        # withholding itself is proven against real rows in
+        # `test_access_behaviour.py`.
+        return {t.connection_id for t in tiles if t.connection_id}
 
     async def last_refreshed(self, ids: list[UUID]) -> dict[UUID, datetime]:
         return {DASHBOARD_ID: utcnow()}
@@ -347,7 +359,11 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Any:
     app = create_app()
     app.dependency_overrides[deps.get_db] = lambda: _NameLookupOnly()
     app.dependency_overrides[deps.get_ctx] = lambda: RequestContext(
-        user_id=USER, email="user@test.local", correlation_id="test"
+        user_id=USER, email="user@test.local", correlation_id="test",
+        # Creating and importing a board are gated on this, as they are for
+        # every Normal User; the refusal without it is in
+        # `test_access_behaviour.py`.
+        capabilities=frozenset({Capability.DASHBOARD_CREATE}),
     )
     yield TestClient(app)
     app.dependency_overrides.clear()

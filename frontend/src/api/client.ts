@@ -9,6 +9,7 @@
 
 import type {
   Actions,
+  Directory,
   AnswerFeedback,
   AuditEntry,
   ArtifactSpec, BenchmarkCandidate, BenchmarkOverview, BenchmarkResult,
@@ -432,6 +433,9 @@ export const access = {
    *  interprets itself — `can.share` is the question; the lattice stays in the
    *  backend. */
   actions: (base: string) => get<Actions>(`/${base}/actions`),
+  /** Who anybody may share with — people, service accounts and teams, by
+   *  name. Not `/users`, which is administration and needs `user.read`. */
+  directory: () => get<Directory>('/directory'),
   transfer: (base: string, to: string) =>
     post<void>(`/${base}/transfer`, { to }),
   /**
@@ -476,6 +480,14 @@ export const access = {
   shareCheck: (dashboardId: string, principal: { user_id?: string; team_id?: string }) =>
     get<ShareCheck>(
       `/dashboards/${dashboardId}/share-check?` +
+        new URLSearchParams(
+          Object.entries(principal).filter(([, v]) => v) as [string, string][],
+        ).toString(),
+    ),
+  /** The same question for a report, whose one data source is the answer. */
+  reportShareCheck: (reportId: string, principal: { user_id?: string; team_id?: string }) =>
+    get<ShareCheck>(
+      `/reports/${reportId}/share-check?` +
         new URLSearchParams(
           Object.entries(principal).filter(([, v]) => v) as [string, string][],
         ).toString(),

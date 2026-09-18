@@ -86,7 +86,6 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
 from app.core.clock import utcnow
-from app.core.context import RequestContext
 from app.core.errors import DisclosureTooNarrowError
 from app.core.logging import get_logger
 from app.domain.ports.llm import Usage
@@ -105,6 +104,7 @@ from app.infra.db.models import (
 )
 from app.reports.narrate import WrittenSection
 from app.services.report_service import assert_wide_enough
+from app.services.team_service import delegated_context
 from app.workers import report
 
 log = get_logger(__name__)
@@ -355,7 +355,7 @@ async def _execute_blocks(work: ReportWork, config: RunnableConfig) -> str:
             cfg["settings"],
             work.connection,
             work.blocks,
-            RequestContext.on_behalf_of(work.run.owner_id),
+            await delegated_context(cfg["db"], work.run.owner_id),
         )
         if work.blocks
         else {}

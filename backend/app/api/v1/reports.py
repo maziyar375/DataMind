@@ -20,9 +20,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, Request, status
 
-from app.api.deps import AuthzDep, CtxDep, DbDep, SettingsDep
+from app.api.deps import AuthzDep, CtxDep, DbDep, ReportCreateDep, SettingsDep
 from app.api.schemas import (
     ChartOptionRead,
+    NamedRef,
     ReportBlockCheckRead,
     ReportBlockCreate,
     ReportBlockRead,
@@ -42,6 +43,7 @@ from app.api.schemas import (
     ReportSectionUpdate,
     ReportSummaryRead,
     ReportUpdate,
+    ShareCheckRead,
     TileResultRead,
 )
 from app.api.v1.access import attach_access_routes, owner_names
@@ -101,6 +103,7 @@ async def _report_read(
             "llm_config_name",
             "data_access",
             "privileges",
+            "owner_name",
         )
     }
     return ReportRead(
@@ -113,6 +116,7 @@ async def _report_read(
         ],
         data_access=await service.may_read_data(ctx, report),
         privileges=sorted(str(p) for p in held),
+        owner_name=await service.owner_name(ctx, report),
     )
 
 
@@ -151,19 +155,55 @@ async def list_reports(
         # The owner's name only on a card the reader does not own — "shared
         # with you by you" is noise on every card somebody made themselves.
         card.owner_name = owners.get(report.owner_id) if card.shared else None
+        # Rendering, not filtering — `visible` already filtered, in one query.
+        # Free for an owned card: the authorizer answers ownership off the row
+        # in hand, without a read.
+        card.privileges = sorted(
+            str(p)
+            for p in await authz.privileges_on(
+                ctx, ResourceRef.to(ResourceType.REPORT, report)
+            )
+        )
         cards.append(card)
     return cards
 
 
+
 @router.post("", response_model=ReportRead, status_code=status.HTTP_201_CREATED)
 async def create_report(
-    payload: ReportCreate, ctx: CtxDep, db: DbDep, settings: SettingsDep, authz: AuthzDep
+    payload: ReportCreate,
+    ctx: ReportCreateDep,
+    db: DbDep,
+    settings: SettingsDep,
+    authz: AuthzDep,
 ) -> ReportRead:
     """Create a report. **The disclosure gate is here** — a connection that
     shares no result values cannot carry a document written from them."""
     service = ReportService(db, settings, authz)
     report = await service.create(ctx, **payload.model_dump())
     return await _report_read(service, report, ctx, authz)
+
+
+@router.get("/{report_id}/share-check", response_model=ShareCheckRead)
+async def share_check(
+    report_id: UUID,
+    ctx: CtxDep,
+    db: DbDep,
+    settings: SettingsDep,
+    authz: AuthzDep,
+    user_id: UUID | None = None,
+    team_id: UUID | None = None,
+) -> ShareCheckRead:
+    """Whether the person you are about to share with can read the data
+    behind this report. A warning, never a gate — see the dashboard route of
+    the same name, which this mirrors."""
+    total, withheld = await ReportService(db, settings, authz).share_check(
+        ctx, report_id, user_id=user_id, team_id=team_id
+    )
+    return ShareCheckRead(
+        total_connections=total,
+        unreadable=[NamedRef(id=cid, name=name) for cid, name in withheld],
+    )
 
 
 @router.get("/{report_id}", response_model=ReportRead)

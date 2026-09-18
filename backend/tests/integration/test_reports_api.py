@@ -39,6 +39,7 @@ from app.core.errors import (
     ValidationError,
 )
 from app.domain.ports.database import ResultColumn
+from app.domain.value_objects.authz import Capability
 from app.infra.db.models import (
     Report,
     ReportBlock,
@@ -298,6 +299,22 @@ class FakeService:
 
     async def display_names(self, reports: list[Any]) -> tuple[dict, dict]:
         return {CONNECTION_ID: "sales"}, {LLM_ID: "deepseek"}
+
+    async def owner_name(self, ctx: RequestContext, report: Any) -> str | None:
+        """The reader owns every report here. Not recorded, for the reason
+        `may_read_data` gives."""
+        return None
+
+    async def share_check(
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        *,
+        user_id: UUID | None = None,
+        team_id: UUID | None = None,
+    ) -> tuple[int, list[tuple[UUID, str]]]:
+        self._record("share_check", ctx=ctx, report_id=report_id)
+        return 1, []
 
     async def may_read_data(self, ctx: RequestContext, report: Any) -> bool:
         """The second half of a report's authorization: reach on its data.
@@ -576,7 +593,10 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Any:
     app.state.report_executor = FakeExecutor()
     app.dependency_overrides[deps.get_db] = FakeSession
     app.dependency_overrides[deps.get_ctx] = lambda: RequestContext(
-        user_id=USER, email="user@test.local", correlation_id="test"
+        user_id=USER, email="user@test.local", correlation_id="test",
+        # Creating a report is gated on this, as it is for every Normal User;
+        # the refusal without it is in `tests/unit/test_access_behaviour.py`.
+        capabilities=frozenset({Capability.REPORT_CREATE}),
     )
     yield TestClient(app)
     app.dependency_overrides.clear()
@@ -1255,6 +1275,7 @@ ROUTES: list[tuple[str, str, dict | None]] = [
     ("get", "", None),
     ("post", "", {"name": "New", "connection_id": str(CONNECTION_ID)}),
     ("get", f"/{REPORT_ID}", None),
+    ("get", f"/{REPORT_ID}/share-check", None),
     ("patch", f"/{REPORT_ID}", {"name": "Renamed"}),
     ("delete", f"/{REPORT_ID}", None),
     ("post", f"/{REPORT_ID}/outline", None),

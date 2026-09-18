@@ -351,6 +351,37 @@ class ActionsRead(BaseModel):
     privileges: list[str]
     can: dict[str, bool]
     meanings: dict[str, str]
+    #: A short name for every privilege on this type — *Can view*, *Can edit*,
+    #: *Full access* — for the row of somebody who holds it.
+    labels: dict[str, str] = Field(default_factory=dict)
+    #: The levels the share dialog offers, in order. A subset of the five:
+    #: a model configuration offers *Can use* alone.
+    levels: list[str] = Field(default_factory=list)
+    #: Who owns this, by display name — so a person who cannot change access
+    #: can be told whom to ask. Absent for a type with no owner of its own.
+    owner_name: str | None = None
+    #: True when the caller is that owner.
+    is_owner: bool = False
+
+
+class DirectoryEntry(BaseModel):
+    """One person, service account or team somebody could share with.
+
+    A name and a kind, never an address — see `api/v1/directory.py`.
+    """
+
+    id: UUID
+    name: str
+    kind: Literal["HUMAN", "SERVICE", "TEAM"]
+    #: Teams only.
+    members: int | None = None
+    #: The caller, so a picker can leave them out without a second request.
+    is_you: bool = False
+
+
+class DirectoryRead(BaseModel):
+    people: list[DirectoryEntry]
+    teams: list[DirectoryEntry]
 
 
 class SelfGrantWrite(BaseModel):
@@ -595,6 +626,13 @@ class LlmConfigRead(BaseModel):
     status: str
     has_api_key: bool = False
     last_tested_at: datetime | None = None
+    # What this reader may do with it. A model shared for *use* holds
+    # `describe` and `select`, and the providers page renders it read-only
+    # rather than as a form whose Save can only 403.
+    privileges: list[str] = Field(default_factory=list)
+    # Whose it is, when it is not yours. A display name, never an address.
+    shared: bool = False
+    owner_name: str | None = None
 
 
 class EmbeddingProbe(BaseModel):
@@ -2035,6 +2073,10 @@ class DashboardTileRead(BaseModel):
     position: int = 0
     created_at: datetime
     updated_at: datetime
+    # True when this reader may not query the tile's data source. The tile
+    # then arrives without its `sql` — that is the source's schema — and the
+    # client says why instead of opening an empty editor.
+    restricted: bool = False
 
 
 class DashboardRead(BaseModel):
@@ -2059,6 +2101,9 @@ class DashboardRead(BaseModel):
     # renders from. Embedded so the header does not draw every control enabled
     # for one frame and then take half of them away.
     privileges: list[str] = Field(default_factory=list)
+    # Whose board this is, when it is not the reader's — the header says it,
+    # because it is who to ask. A display name, never an address.
+    owner_name: str | None = None
 
 
 class DashboardSummaryRead(BaseModel):
@@ -2078,6 +2123,10 @@ class DashboardSummaryRead(BaseModel):
     # me" filter and the owner's name on the card.
     shared: bool = False
     owner_name: str | None = None
+    # What this reader may do with it, so a card they can only *describe* is
+    # not drawn as one they can open, and the kebab offers only what the
+    # server would allow.
+    privileges: list[str] = Field(default_factory=list)
 
 
 class NamedRef(BaseModel):
@@ -2339,6 +2388,8 @@ class ReportRead(BaseModel):
     # from. Embedded so the header does not draw every control enabled for one
     # frame and then take half of them away.
     privileges: list[str] = Field(default_factory=list)
+    # Whose report this is, when it is not the reader's. A display name.
+    owner_name: str | None = None
 
 
 class ReportSummaryRead(BaseModel):
@@ -2363,6 +2414,8 @@ class ReportSummaryRead(BaseModel):
     # neither, because "shared with you by you" is noise.
     shared: bool = False
     owner_name: str | None = None
+    # What this reader may do with it — see `DashboardSummaryRead.privileges`.
+    privileges: list[str] = Field(default_factory=list)
 
 
 class ReportCreate(BaseModel):

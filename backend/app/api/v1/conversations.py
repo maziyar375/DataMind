@@ -11,7 +11,7 @@ from fastapi import APIRouter, Header, Query, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 
-from app.api.deps import AuthzDep, CtxDep, DbDep, SettingsDep
+from app.api.deps import AuthzDep, ConversationCreateDep, CtxDep, DbDep, SettingsDep
 from app.api.schemas import (
     AnswerFeedbackRead,
     AnswerFeedbackWrite,
@@ -169,7 +169,7 @@ async def list_conversations(
     status_code=status.HTTP_201_CREATED,
 )
 async def create_conversation(
-    payload: ConversationCreate, ctx: CtxDep, db: DbDep
+    payload: ConversationCreate, ctx: ConversationCreateDep, db: DbDep
 ) -> ConversationRead:
     # No auto-default: a conversation stores exactly the database and model the
     # user chose (or nothing yet). The chooser in the chat header is where that
@@ -772,8 +772,13 @@ async def cancel_run(
     run_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep, request: Request,
     authz: AuthzDep,
 ) -> dict[str, bool]:
-    await request.app.state.run_executor.cancel(run_id)
+    # **Authorize, then stop.** The order used to be the other way round, so
+    # the executor dropped the run before anybody asked whose it was: any
+    # signed-in person holding a run id could stop somebody else's answer, and
+    # got a 404 only afterwards. `RunService.cancel` asks `modify` on the
+    # run's conversation; only a yes reaches the executor.
     cancelled = await RunService(db, settings, authz).cancel(ctx, run_id)
+    await request.app.state.run_executor.cancel(run_id)
     return {"cancelled": cancelled}
 
 

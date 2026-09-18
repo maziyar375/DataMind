@@ -60,6 +60,15 @@ _OWNED_TABLES: dict[ResourceType, type[Any]] = {
     ResourceType.CONVERSATION: models.Conversation,
 }
 
+def owned_table(type_: ResourceType) -> type[Any] | None:
+    """The table whose `owner_id` answers *whose is this?* for `type_`.
+
+    Public so the API can name an owner to a person who cannot change access
+    ("ask Sara") without a second copy of this mapping.
+    """
+    return _OWNED_TABLES.get(type_)
+
+
 #: The one word `Decision.because` can carry under this policy.
 _OWNER = ("owner",)
 

@@ -35,8 +35,9 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMatch, useNavigate, useSearchParams } from 'react-router-dom'
-import { ApiError, llmConfigs as llmApi, semantic as api } from '../api/client'
+import { ApiError, access, llmConfigs as llmApi, semantic as api } from '../api/client'
 import type {
+  Actions,
   Connection, GlossaryTerm, LlmConfig, ProblemDetail, SemanticAttention, SemanticChange,
   SemanticColumn, SemanticDocument, SemanticEntity, SemanticGenerationMode, SemanticJob,
   SemanticLayer, SemanticMetric, SemanticMetricUse,
@@ -153,6 +154,24 @@ export function SemanticLayerTab({
   const [open, setOpen] = useState<Record<string, boolean>>({})
   const watch = useBackgroundWatch()
   const navigate = useNavigate()
+  // What this reader may do to the **layer** — a separate grant from the data
+  // source's. A Data Engineer curates it without the credential; somebody it
+  // was shared with for viewing reads it and changes nothing. Until the answer
+  // arrives nothing that writes is drawn, rather than drawn and taken away.
+  const [layerAccess, setLayerAccess] = useState<Actions | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    access.actions(`connections/${connection.id}/semantic`)
+      .then((next) => !cancelled && setLayerAccess(next))
+      .catch(() => !cancelled && setLayerAccess(null))
+    return () => {
+      cancelled = true
+    }
+  }, [connection.id])
+  const readOnly = !(layerAccess?.can.edit ?? false)
+  // The on/off switch is a field of the *data source*, so it needs edit
+  // access there — which a layer curator may well not have.
+  const mayToggle = (connection.privileges ?? []).includes('modify')
 
   // History is three sub-routes of this tab, read here rather than nested, so
   // the editor — and anything unsaved in it — stays mounted while somebody
@@ -532,11 +551,19 @@ export function SemanticLayerTab({
           />
         ) : (
         <>
+        {readOnly && layerAccess && (
+          <Note tone="amber">
+            You can read this semantic layer, not change it
+            {layerAccess.owner_name ? ` — ${layerAccess.owner_name} and anyone they give edit access can` : ''}.
+          </Note>
+        )}
         <Hero
           layer={layer}
           connection={connection}
           running={running}
           job={job}
+          readOnly={readOnly}
+          mayToggle={mayToggle}
           onGenerate={() => setGenerateFor({})}
           onDelete={() => setAskDelete(true)}
           onCancel={cancelGeneration}
@@ -582,6 +609,7 @@ export function SemanticLayerTab({
                 and made it read as an appendix to the last table rather than a
                 peer of "About this database". It also fell under the filter
                 bar, whose search and filters never applied to it. */}
+            <fieldset disabled={readOnly} style={READ_ONLY_FIELDSET}>
             <Overview doc={doc!} onChange={patch} />
             {/* Between the two: what the database *is*, then what it
                 *measures*, then the words people use for both. Metrics sit
@@ -598,6 +626,7 @@ export function SemanticLayerTab({
               }}
             />
             <Glossary doc={doc!} onChange={patch} />
+            </fieldset>
 
             <FilterBar
               value={filter}
@@ -641,6 +670,7 @@ export function SemanticLayerTab({
                   key={entity.table}
                   connectionId={connection.id}
                   entity={entity}
+                  readOnly={readOnly}
                   focusedAt={focus?.table === entity.table ? focus.at : 0}
                   focusedSection={focus?.table === entity.table ? focus.section : undefined}
                   open={!!open[entity.table]}
@@ -674,7 +704,7 @@ export function SemanticLayerTab({
         )}
       </Shell>
 
-      {barShown && (
+      {barShown && !readOnly && (
         <SaveBar
           dirty={dirty}
           saving={saving}
@@ -804,12 +834,16 @@ function Shell({
 // ── hero ───────────────────────────────────────────────────────────────────
 function Hero({
   layer, connection, running, job, onGenerate, onDelete, onCancel, onToggle, needs, needsFailed,
-  onFocusFilter, onHistory, onPublish, onExport, onImport, dirty,
+  onFocusFilter, onHistory, onPublish, onExport, onImport, dirty, readOnly, mayToggle,
 }: {
   layer: SemanticLayer | null
   connection: Connection
   running: boolean
   job: SemanticJob | null
+  /** The reader may view the layer, not change it: nothing that writes. */
+  readOnly: boolean
+  /** Whether the reader may flip the data source's own on/off switch. */
+  mayToggle: boolean
   /** *Needs attention*, or `null` until the server has answered. */
   needs: AttentionView | null
   needsFailed: boolean
@@ -899,7 +933,7 @@ function Hero({
             base={`connections/${connection.id}/semantic`}
             resourceLabel="this semantic layer"
           />
-          {exists ? (
+          {readOnly ? null : exists ? (
             <GhostButton onClick={onGenerate} disabled={running}>
               <Icon.Sparkle size={14} />
               Regenerate
@@ -917,7 +951,7 @@ function Hero({
               </PrimaryButton>
             </>
           )}
-          {exists && (
+          {exists && !readOnly && (
             <IconButton
               label="Delete semantic layer"
               onClick={onDelete}
@@ -1074,6 +1108,7 @@ function Hero({
             <Toggle
               checked={connection.semantic_layer_enabled}
               onChange={onToggle}
+              disabled={!mayToggle}
               label={
                 connection.semantic_layer_enabled
                   ? 'Sent to the model'
@@ -1089,6 +1124,7 @@ function Hero({
               onExport={onExport}
               onImport={onImport}
               dirty={dirty}
+              readOnly={readOnly}
             />
           </div>
         </>
@@ -1127,7 +1163,7 @@ function Hero({
  * which is true and says nothing earlier was kept.
  */
 function VersionLine({
-  layer, model, onHistory, onPublish, onExport, onImport, dirty,
+  layer, model, onHistory, onPublish, onExport, onImport, dirty, readOnly = false,
 }: {
   layer: SemanticLayer
   model: string | undefined
@@ -1135,6 +1171,7 @@ function VersionLine({
   onPublish: () => void
   onExport: () => void
   onImport: () => void
+  readOnly?: boolean
   dirty: boolean
 }) {
   const version = layer.published_version
@@ -1169,7 +1206,7 @@ function VersionLine({
         )}
         {model ? ` · ${model}` : ''}
       </span>
-      {layer.has_draft ? (
+      {layer.has_draft && !readOnly ? (
         <button
           onClick={onPublish}
           disabled={dirty}
@@ -1205,9 +1242,11 @@ function VersionLine({
           Export
         </GhostButton>
       )}
-      <GhostButton onClick={onImport} style={{ padding: '4px 9px', fontSize: 12 }}>
-        Import
-      </GhostButton>
+      {!readOnly && (
+        <GhostButton onClick={onImport} style={{ padding: '4px 9px', fontSize: 12 }}>
+          Import
+        </GhostButton>
+      )}
     </span>
   )
 }
@@ -1570,6 +1609,18 @@ function PartialOutcome({ job }: { job: SemanticJob }) {
       </Note>
     </div>
   )
+}
+
+/** A fieldset that only disables what it holds — no box, no spacing of its own
+ *  beyond the column gap the panels it wraps already had. */
+const READ_ONLY_FIELDSET: React.CSSProperties = {
+  border: 0,
+  padding: 0,
+  margin: 0,
+  minWidth: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 16,
 }
 
 function Note({ tone, children }: { tone: 'amber' | 'red'; children: React.ReactNode }) {
@@ -2285,9 +2336,12 @@ type Section = 'meaning' | 'columns' | 'metrics'
 
 function EntityCard({
   connectionId, entity, open, focusedAt = 0, focusedSection, onToggle, onChange, onHistory,
+  readOnly = false,
 }: {
   connectionId: string
   entity: SemanticEntity
+  /** Viewable, not editable: the card opens, its fields do not take input. */
+  readOnly?: boolean
   open: boolean
   /** When the metrics panel last sent a reader here, or 0. A timestamp rather
    *  than a boolean, so arriving twice at the same card works: the second
@@ -2479,6 +2533,7 @@ function EntityCard({
       </div>
 
       {open && (
+        <fieldset disabled={readOnly} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
         <div
           style={{
             padding: 18,
@@ -2599,6 +2654,7 @@ function EntityCard({
             />
           )}
         </div>
+        </fieldset>
       )}
     </div>
   )

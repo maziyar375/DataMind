@@ -19,8 +19,8 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMatch, useNavigate } from 'react-router-dom'
-import { connections as api } from '../api/client'
-import type { Connection } from '../api/types'
+import { access, connections as api } from '../api/client'
+import type { Actions, Connection } from '../api/types'
 import { useQueue } from '../shell'
 import {
   Chip, EmptyState, GlyphBadge, Icon, PrimaryButton, engineHue,
@@ -78,6 +78,22 @@ export default function KnowledgePage() {
     () => list.find((c) => c.id === routeId) ?? null,
     [list, routeId],
   )
+  // What this reader may do with the open store — its own grant, not the data
+  // source's. `'none'` when nothing reaches them: the console would only say
+  // "Connection not found." about a data source they can plainly see.
+  const [storeAccess, setStoreAccess] = useState<Actions | 'none' | null>(null)
+  useEffect(() => {
+    if (!selected) return
+    let cancelled = false
+    setStoreAccess(null)
+    access.actions(`connections/${selected.id}/knowledge`)
+      .then((next) => !cancelled && setStoreAccess(next))
+      .catch(() => !cancelled && setStoreAccess('none'))
+    return () => {
+      cancelled = true
+    }
+  }, [selected])
+
 
   const ordered = useMemo(() => {
     const rows: QueueRow[] = list.map(
@@ -182,7 +198,14 @@ export default function KnowledgePage() {
                 </GlyphBadge>
               }
               title={selected.name}
-              subtitle={`${selected.host}:${selected.port}/${selected.database_name}`}
+              // A curator may hold the store and only *describe* on the data
+              // source, and then its address is withheld — which printed as
+              // "null:null/null". Say what is known instead.
+              subtitle={
+                selected.host
+                  ? `${selected.host}:${selected.port}/${selected.database_name}`
+                  : `${selected.database_type} · connection details not shared with you`
+              }
               chips={<QueueChips queue={queue} connectionId={selected.id} />}
               // Two controls about the store as a whole, in the one row this
               // screen has for them. Who can reach it comes first because it
@@ -202,7 +225,23 @@ export default function KnowledgePage() {
             {/* Keyed on the connection so switching one out replaces the
                 console rather than letting the previous store's rows sit
                 under the new one's header while it loads. */}
-            <KnowledgeTab key={selected.id} connection={selected} />
+            {storeAccess === 'none' ? (
+              <div style={{ flex: 1, display: 'grid', placeItems: 'center', padding: 24 }}>
+                <EmptyState
+                  icon={<Icon.Lock size={20} />}
+                  title="This knowledge store isn’t shared with you"
+                  body={`You can use “${selected.name}”, but what it has been taught is a separate thing to share. Ask its owner if you should help curate it.`}
+                />
+              </div>
+            ) : (
+              <KnowledgeTab
+                key={selected.id}
+                connection={selected}
+                // Embedding settings are `manage` on the store — a curator
+                // (`modify`) was offered the switch and refused on pressing it.
+                mayManage={storeAccess !== null && storeAccess.can.share}
+              />
+            )}
           </>
         ) : (
           <div

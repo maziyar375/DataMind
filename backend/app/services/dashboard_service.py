@@ -64,7 +64,8 @@ from app.services.dashboard_transfer import (
     parse_document,
     tile_fields,
 )
-from app.services.policy import require
+from app.services.grant_service import display_name
+from app.services.policy import refuse_bound, require
 from app.services.query_service import (
     TileRequest,
     TileResult,
@@ -73,12 +74,21 @@ from app.services.query_service import (
     latest_snapshot,
     policy_from_snapshot,
 )
+from app.services.team_service import delegated_context
 from app.sqlguard import guard
 
 log = get_logger(__name__)
 
 # Tile types that hold no SQL and are never executed or refreshed.
 _NO_SQL_TYPES = frozenset({TileType.TEXT})
+
+#: The tile fields that change **what it asks, or of whom**. An edit touching
+#: none of them is presentation — title, chart, table, clock — and is decided
+#: by `modify` on the board alone; an edit touching any of them goes back
+#: through the guard and the data source's `select`.
+_QUERY_FIELDS = frozenset({
+    "tile_type", "connection_id", "llm_config_id", "sql", "question", "max_rows",
+})
 
 
 # ── the refresh policy, as pure functions ────────────────────────────────
@@ -323,6 +333,29 @@ class DashboardService:
         self, ctx: RequestContext, dashboard_id: UUID, tile_id: UUID, **changes: Any
     ) -> DashboardTile:
         tile = await self.tile(ctx, dashboard_id, tile_id, Privilege.MODIFY)
+
+        # **A change that does not touch the query does not ask about the
+        # data.** Renaming a tile, recolouring its chart or changing its clock
+        # is editing the *board*, which `modify` on the dashboard already
+        # allows. Re-running the guard for those used to mean an editor who was
+        # not given the tile's data source could not even fix a typo in its
+        # title — and was told the connection "was not found".
+        if not _QUERY_FIELDS & changes.keys():
+            for field, value in changes.items():
+                setattr(tile, field, value)
+            await self._db.flush()
+            await self._db.refresh(tile)
+            return tile
+
+        # Changing what the tile asks, on the data source it already reads:
+        # that name is on the tile for anyone who can open the board, so the
+        # refusal says it rather than hiding it behind a 404.
+        if (
+            tile.connection_id is not None
+            and changes.get("connection_id", tile.connection_id) == tile.connection_id
+        ):
+            await self._readable_bound_connection(ctx, tile)
+
         merged = {
             "tile_type": tile.tile_type,
             "connection_id": tile.connection_id,
@@ -462,6 +495,27 @@ class DashboardService:
             )
         return fields
 
+    async def _readable_bound_connection(
+        self, ctx: RequestContext, tile: DashboardTile
+    ) -> None:
+        """Refuse, by name, a query change on a data source this editor lacks."""
+        result = await self._db.execute(
+            select(DatabaseConnection).where(DatabaseConnection.id == tile.connection_id)
+        )
+        connection = result.scalar_one_or_none()
+        if connection is None:
+            return  # `_validated_tile_fields` says what to do about a removed one
+        ref = ResourceRef.to(ResourceType.CONNECTION, connection)
+        if not await self._authz.allowed(ctx, ref, Privilege.SELECT):
+            await refuse_bound(
+                ctx, ref, Privilege.SELECT,
+                f"This tile reads “{connection.name}”, which hasn't been shared "
+                "with you, so you can't change its query. You can still rename, "
+                "move and resize it.",
+                db=self._db,
+                on=ResourceRef(type=ResourceType.DASHBOARD, id=tile.dashboard_id),
+            )
+
     async def _authorized_connection(
         self, ctx: RequestContext, connection_id: UUID
     ) -> DatabaseConnection:
@@ -520,7 +574,25 @@ class DashboardService:
         dashboard = await self.get(ctx, dashboard_id)
         tiles = await self.tiles_of(dashboard_id)
         connections = await self._connections_of(ctx, tiles)
-        return build_document(dashboard, tiles, connections)
+        withheld = frozenset(
+            tile.id
+            for tile in tiles
+            if tile.connection_id is not None and tile.connection_id not in connections
+        )
+        return build_document(dashboard, tiles, connections, withheld=withheld)
+
+    async def readable_connection_ids(
+        self, ctx: RequestContext, tiles: list[DashboardTile]
+    ) -> set[UUID]:
+        """Which of these tiles' data sources this principal may query.
+
+        One composed query, for rendering the board: a tile on a source outside
+        this set is shown without its statement (see `_dashboard_read`).
+        """
+        return await restricted.readable_connection_ids(
+            self._db, ctx, self._authz,
+            {t.connection_id for t in tiles if t.connection_id},
+        )
 
     async def import_document(
         self,
@@ -705,7 +777,7 @@ class DashboardService:
         as_them = (
             RequestContext.as_team(team_id)
             if team_id is not None
-            else RequestContext.on_behalf_of(user_id or ctx.user_id)
+            else await delegated_context(self._db, user_id or ctx.user_id)
         )
         readable = await restricted.readable_connection_ids(
             self._db, as_them, self._authz, ids
@@ -717,6 +789,16 @@ class DashboardService:
         )
 
     # ── display names for the tile chrome ────────────────────────────────
+    async def owner_name(self, ctx: RequestContext, dashboard: Dashboard) -> str | None:
+        """Whose this is, by name — or nothing, when it is the reader's own.
+
+        A fact for the header, not a decision: the reader is already reading
+        it. The comparison below is a badge, not a gate.
+        """
+        if dashboard.owner_id == ctx.user_id:  # authz-ok: a badge
+            return None
+        return await display_name(self._db, dashboard.owner_id)
+
     async def display_names(
         self, tiles: list[DashboardTile]
     ) -> tuple[dict[UUID, str], dict[UUID, str]]:

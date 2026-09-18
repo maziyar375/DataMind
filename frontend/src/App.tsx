@@ -39,7 +39,9 @@ import { applyTheme, type ThemeName } from './theme/tokens'
  * the page is, and it leaves `/settings` free for the account screen.
  */
 const NAV = [
-  { path: '/chat', label: 'Chat', icon: <Icon.Chat /> },
+  // `conversation.create` is "may I use Chat at all" — a Viewer's role does
+  // not carry it, and the server refuses a new thread without it.
+  { path: '/chat', label: 'Chat', icon: <Icon.Chat />, needsAny: ['conversation.create'] },
   { path: '/dashboards', label: 'Dashboards', icon: <Icon.Grid /> },
   { path: '/reports', label: 'Reports', icon: <Icon.Doc /> },
   // Last of the four you *work* in rather than first of the three you keep,
@@ -357,6 +359,10 @@ export default function App() {
   const reachesAdmin = ADMIN_SECTION.some((capability) =>
     (user.capabilities ?? []).includes(capability),
   )
+  // Somebody who may not use Chat lands on the boards shared with them
+  // instead of on a composer that can only refuse.
+  const chats = (user.capabilities ?? []).includes('conversation.create')
+  const home = chats ? '/chat' : '/dashboards'
 
   return (
     <PermissionsProvider user={user}>
@@ -409,7 +415,10 @@ export default function App() {
                 was just looking at. Anything unrecognised lands on Chat, which
                 is where the app used to open. */}
             <Routes>
-              <Route path="/chat/*" element={<ChatPage />} />
+              <Route
+                path="/chat/*"
+                element={chats ? <ChatPage /> : <Navigate to={home} replace />}
+              />
               <Route path="/dashboards/*" element={<DashboardsPage />} />
               <Route path="/reports/*" element={<ReportsPage />} />
               <Route path="/sources/*" element={<DataSourcesPage />} />
@@ -443,7 +452,7 @@ export default function App() {
                 element={<AccountPage user={user} onUserChange={setUser} />}
               />
               <Route path="/about" element={<AboutPage />} />
-              <Route path="*" element={<Navigate to="/chat" replace />} />
+              <Route path="*" element={<Navigate to={home} replace />} />
             </Routes>
           </main>
         </div>

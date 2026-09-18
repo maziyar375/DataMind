@@ -61,6 +61,7 @@ import {
   dirOf, engineHue,
 } from '../components/ui'
 import { LIST_DRAWER_ID, ListScrim, ListToggle, useListDrawer } from '../components/list-drawer'
+import { queryable } from '../permissions'
 
 /**
  * How long streamed tokens are collected before they are painted.
@@ -279,7 +280,10 @@ export default function ChatPage() {
           // picks a database and a model here, and selecting a saved
           // conversation from the list restores whatever it was started with.
         }
-        if (conns.status === 'fulfilled') setConnections(conns.value)
+        // Only what can be asked: a data source known merely to *exist* (a
+        // Knowledge Manager's reach over every one) would be a choice whose
+        // first question is refused.
+        if (conns.status === 'fulfilled') setConnections(conns.value.filter(queryable))
         if (llms.status === 'fulfilled') setModels(llms.value)
 
         const missing = [

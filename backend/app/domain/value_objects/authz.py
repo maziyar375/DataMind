@@ -239,10 +239,10 @@ PRIVILEGE_MEANINGS: Mapping[ResourceType, Mapping[Privilege, str]] = MappingProx
             "See that it exists — name, engine and disclosure policy, "
             "but not its schema."
         ),
-        Privilege.SELECT: (
-            "Ask questions through it; read its schema snapshot and its "
-            "semantic layer."
-        ),
+        # The semantic layer is its own grant (`SEMANTIC_LAYER`), so this
+        # sentence no longer claims it: a query-only reader was promised the
+        # layer here and shown "Connection not found." on its tab.
+        Privilege.SELECT: "Ask questions through it and read its schema.",
         Privilege.MODIFY: "Edit its host and credentials, re-sync the schema, test it.",
         Privilege.DELETE: "Delete the connection.",
         Privilege.MANAGE: (
@@ -342,3 +342,97 @@ KEY_EQUIVALENT_PRIVILEGES = frozenset({
 #: What the share UI may offer on an `llm_config`, and the API may accept for
 #: one from anybody but its owner. The complement of the set above.
 SHAREABLE_LLM_CONFIG_PRIVILEGES = frozenset({Privilege.DESCRIBE, Privilege.SELECT})
+
+
+# ── what a person is shown, per resource type ────────────────────────────
+#: **The share dialog's vocabulary.** A short name for every cell of the
+#: table above, in the words somebody choosing who may see their dashboard
+#: already uses — *Can view*, *Can edit*, *Full access* — rather than the five
+#: the model, the API and the audit log speak. The sentence in
+#: `PRIVILEGE_MEANINGS` stays the explanation; this is the label beside it.
+#:
+#: Every type has all five, even where the dialog offers fewer, because a grant
+#: made before — or made through the API — still has to be named on its row.
+PRIVILEGE_LABELS: Mapping[ResourceType, Mapping[Privilege, str]] = MappingProxyType({
+    ResourceType.CONNECTION: MappingProxyType({
+        Privilege.DESCRIBE: "Can see it exists",
+        Privilege.SELECT: "Can query",
+        Privilege.MODIFY: "Can edit",
+        Privilege.DELETE: "Can edit and delete",
+        Privilege.MANAGE: "Full access",
+    }),
+    ResourceType.KNOWLEDGE: MappingProxyType({
+        Privilege.DESCRIBE: "Can see it exists",
+        Privilege.SELECT: "Can view",
+        Privilege.MODIFY: "Can curate",
+        Privilege.DELETE: "Can curate and delete",
+        Privilege.MANAGE: "Full access",
+    }),
+    ResourceType.SEMANTIC_LAYER: MappingProxyType({
+        Privilege.DESCRIBE: "Can see it exists",
+        Privilege.SELECT: "Can view",
+        Privilege.MODIFY: "Can edit",
+        Privilege.DELETE: "Can edit and delete",
+        Privilege.MANAGE: "Full access",
+    }),
+    ResourceType.LLM_CONFIG: MappingProxyType({
+        Privilege.DESCRIBE: "Can see it exists",
+        Privilege.SELECT: "Can use",
+        Privilege.MODIFY: "Can edit",
+        Privilege.DELETE: "Can edit and delete",
+        Privilege.MANAGE: "Full access",
+    }),
+    ResourceType.DASHBOARD: MappingProxyType({
+        Privilege.DESCRIBE: "Can see it exists",
+        Privilege.SELECT: "Can view",
+        Privilege.MODIFY: "Can edit",
+        Privilege.DELETE: "Can edit and delete",
+        Privilege.MANAGE: "Full access",
+    }),
+    ResourceType.REPORT: MappingProxyType({
+        Privilege.DESCRIBE: "Can see it exists",
+        Privilege.SELECT: "Can view",
+        Privilege.MODIFY: "Can edit",
+        Privilege.DELETE: "Can edit and delete",
+        Privilege.MANAGE: "Full access",
+    }),
+    ResourceType.CONVERSATION: MappingProxyType({
+        Privilege.DESCRIBE: "Can see it exists",
+        Privilege.SELECT: "Can read",
+        Privilege.MODIFY: "Can reply",
+        Privilege.DELETE: "Can reply and delete",
+        Privilege.MANAGE: "Full access",
+    }),
+    ResourceType.TEAM: MappingProxyType({
+        Privilege.DESCRIBE: "Can see it exists",
+        Privilege.SELECT: "Can see members",
+        Privilege.MODIFY: "Can change members",
+        Privilege.DELETE: "Can delete",
+        Privilege.MANAGE: "Full access",
+    }),
+})
+
+#: **Which levels the share dialog offers**, per type, in lattice order.
+#:
+#: Three for almost everything — view, edit, full access — because those are
+#: the three answers people actually give. The other two rungs stay in the
+#: model and are still grantable through the API; they are left out of the
+#: dialog because offering them there did harm: `describe` on a dashboard is a
+#: card its holder cannot open, and `delete` without `manage` is a distinction
+#: nobody sharing a board has ever asked for.
+#:
+#: A model configuration offers **one**: `modify` and above are key-equivalent
+#: (see `KEY_EQUIVALENT_PRIVILEGES`), and `describe` alone would let somebody
+#: see a model in no picker. The conformance test holds this to
+#: `SHAREABLE_LLM_CONFIG_PRIVILEGES`.
+_VIEW_EDIT_FULL = (Privilege.SELECT, Privilege.MODIFY, Privilege.MANAGE)
+SHARE_LEVELS: Mapping[ResourceType, tuple[Privilege, ...]] = MappingProxyType({
+    ResourceType.CONNECTION: _VIEW_EDIT_FULL,
+    ResourceType.KNOWLEDGE: _VIEW_EDIT_FULL,
+    ResourceType.SEMANTIC_LAYER: _VIEW_EDIT_FULL,
+    ResourceType.LLM_CONFIG: (Privilege.SELECT,),
+    ResourceType.DASHBOARD: _VIEW_EDIT_FULL,
+    ResourceType.REPORT: _VIEW_EDIT_FULL,
+    ResourceType.CONVERSATION: (Privilege.SELECT,),
+    ResourceType.TEAM: _VIEW_EDIT_FULL,
+})

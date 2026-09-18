@@ -195,7 +195,14 @@ function useStuck(): [(node: HTMLDivElement | null) => void, boolean] {
   return [ref, stuck]
 }
 
-export function KnowledgeTab({ connection }: { connection: Connection }) {
+export function KnowledgeTab({
+  connection, mayManage = true,
+}: {
+  connection: Connection
+  /** `manage` on the store: embedding settings. Curating is `modify`, which
+   *  the store's own `can_curate` already answers. */
+  mayManage?: boolean
+}) {
   const [stickyTop, stuck] = useStuck()
   const [rows, setRows] = useState<KnowledgeTemplate[]>([])
   const [staleIds, setStaleIds] = useState<string[]>([])
@@ -599,7 +606,7 @@ export function KnowledgeTab({ connection }: { connection: Connection }) {
         // — pin intact, invisible.
         <MatchingMode
           status={embeddings}
-          canCurate={canCurate}
+          canCurate={canCurate && mayManage}
           busy={switching}
           onToggle={async (enabled, force = false) => {
             setSwitching(true)

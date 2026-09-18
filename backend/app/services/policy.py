@@ -38,7 +38,7 @@ where the answer is not being used to decide reach.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NoReturn
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -187,6 +187,60 @@ async def require(
             "meaning": meaning,
             "held": sorted(str(p) for p in held),
             "because": list(decision.because),
+            "resource_type": str(ref.type),
+            "resource_id": str(ref.id),
+            "noun": _NOUN[ref.type],
+        },
+    )
+
+
+async def refuse_bound(
+    ctx: RequestContext,
+    ref: ResourceRef,
+    privilege: Privilege,
+    message: str,
+    *,
+    db: AsyncSession | None = None,
+    on: ResourceRef | None = None,
+) -> NoReturn:
+    """A 403 about something the caller was **already shown**, naming it.
+
+    `require` answers 404 when nothing reaches the caller, and that is right
+    for an id somebody typed. It is wrong for the data source a report is
+    bound to, or the one a tile reads: the report and the tile already print
+    that name to anyone who can open them, so a 404 hides nothing and tells a
+    person who pressed *Run* that a model they never chose "was not found".
+    Here the refusal says what it is about and what to do instead.
+
+    Audited exactly as `require`'s 403 is (invariant I3), with `rendered_in`
+    naming the artifact the refusal came from, so the review screen can say
+    *"refused on Sales warehouse, from the Q3 report"*.
+    """
+    if db is not None:
+        detail: dict[str, Any] = {
+            "privilege": str(privilege),
+            "held": [],
+            "because": ["bound"],
+        }
+        if on is not None:
+            detail["rendered_in"] = str(on.type)
+            detail["rendered_in_id"] = str(on.id)
+        await audit.record(
+            db, ctx,
+            action=ACCESS_DENIED,
+            resource_type=str(ref.type),
+            resource_id=ref.id,
+            outcome=audit.DENIED,
+            detail=detail,
+        )
+    meaning = PRIVILEGE_MEANINGS[ref.type][privilege]
+    raise ForbiddenError(
+        message,
+        reason={
+            "needed": str(privilege),
+            "meaning": meaning,
+            "held": [],
+            "because": ["bound"],
             "resource_type": str(ref.type),
             "resource_id": str(ref.id),
             "noun": _NOUN[ref.type],

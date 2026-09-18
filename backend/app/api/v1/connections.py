@@ -6,7 +6,15 @@ from uuid import UUID
 from fastapi import APIRouter, status
 from sqlalchemy import select
 
-from app.api.deps import AuthzDep, CtxDep, DbDep, SecretBoxDep, SettingsDep
+from app.api.deps import (
+    AuthzDep,
+    ConnectionCreateDep,
+    CtxDep,
+    DbDep,
+    SecretBoxDep,
+    SettingsDep,
+    demand,
+)
 from app.api.schemas import (
     ConnectionCreate,
     ConnectionRead,
@@ -22,7 +30,7 @@ from app.core.clock import utcnow
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.domain.ports.authz import ResourceRef
 from app.domain.value_objects import HintBudget
-from app.domain.value_objects.authz import Privilege, ResourceType
+from app.domain.value_objects.authz import Capability, Privilege, ResourceType
 from app.infra.authz.compose import restrict
 from app.infra.connectors.factory import build_connector
 from app.infra.db.models import DatabaseConnection, SchemaSnapshotRow
@@ -139,8 +147,12 @@ async def list_connections(
 
 @router.post("", response_model=ConnectionRead, status_code=status.HTTP_201_CREATED)
 async def create_connection(
-    payload: ConnectionCreate, ctx: CtxDep, db: DbDep, box: SecretBoxDep
-) -> DatabaseConnection:
+    payload: ConnectionCreate,
+    ctx: ConnectionCreateDep,
+    db: DbDep,
+    box: SecretBoxDep,
+    authz: AuthzDep,
+) -> ConnectionRead:
     existing = await db.execute(
         select(DatabaseConnection).where(
             # Asks about the row that is about to be *written*, whose owner
@@ -177,7 +189,25 @@ async def create_connection(
     )
     db.add(connection)
     await db.flush()
-    return connection
+    await db.refresh(connection)
+    return await _with_privileges(connection, ctx, authz)
+
+
+async def _with_privileges(
+    connection: DatabaseConnection, ctx: CtxDep, authz: AuthzDep
+) -> ConnectionRead:
+    """The row as this caller reads it, with what they hold on it.
+
+    Every response that returns a connection carries `privileges`, not only the
+    list and the detail — a client that updates its copy from a `PATCH`
+    response must not learn from it that the owner may do nothing.
+    """
+    held = await authz.privileges_on(
+        ctx, ResourceRef.to(ResourceType.CONNECTION, connection)
+    )
+    return ConnectionRead.model_validate(connection).model_copy(
+        update={"privileges": sorted(str(p) for p in held)}
+    )
 
 
 @router.post("/test", response_model=ConnectionTestResult)
@@ -199,12 +229,22 @@ async def test_draft_connection(
     password is reused so an edit can be tested without re-entering the secret;
     every other value comes from the form.
     """
-    if payload.password is not None:
-        password = payload.password.get_secret_value()
-    elif payload.connection_id is not None:
+    # **Who may make the server open a socket.** Probing is not free: it is
+    # this server dialling a host and port somebody typed. With an id it tests
+    # an *edit* of that row, so it needs `modify` on it — whether or not a new
+    # password was typed, which used to skip the check. Without one it tests a
+    # row about to be created, so it needs what creating one needs.
+    connection = None
+    if payload.connection_id is not None:
         connection = await _authorized(
             db, authz, payload.connection_id, ctx, Privilege.MODIFY
         )
+    else:
+        demand(ctx, Capability.CONNECTION_CREATE)
+
+    if payload.password is not None:
+        password = payload.password.get_secret_value()
+    elif connection is not None:
         password = box.decrypt(
             connection.encrypted_password, aad=f"connection:{connection.id}"
         )
@@ -264,7 +304,7 @@ async def get_connection(
 async def update_connection(
     connection_id: UUID, payload: ConnectionUpdate,
     ctx: CtxDep, db: DbDep, box: SecretBoxDep, authz: AuthzDep,
-) -> DatabaseConnection:
+) -> ConnectionRead:
     connection = await _authorized(db, authz, connection_id, ctx, Privilege.MODIFY)
     data = payload.model_dump(exclude_unset=True, exclude={"password"})
     semantic_was = connection.semantic_layer_enabled
@@ -289,7 +329,8 @@ async def update_connection(
             resource_type=audit.CONNECTION, resource_id=connection.id,
             detail={"from": semantic_was, "to": connection.semantic_layer_enabled},
         )
-    return connection
+    await db.refresh(connection)
+    return await _with_privileges(connection, ctx, authz)
 
 
 @router.put("/{connection_id}/disclosure", response_model=ConnectionRead)

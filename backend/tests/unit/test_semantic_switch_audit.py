@@ -32,6 +32,9 @@ class FakeDb:
     async def flush(self) -> None:
         return None
 
+    async def refresh(self, _obj: Any) -> None:
+        return None
+
     @property
     def audit_rows(self) -> list[AuditLog]:
         return [row for row in self.added if isinstance(row, AuditLog)]
@@ -48,7 +51,12 @@ async def _patch(
     async def authorized(*_a: Any, **_k: Any) -> DatabaseConnection:
         return connection
 
+    async def as_read(*_a: Any, **_k: Any) -> None:
+        # The response is not what this file is about; the audit rows are.
+        return None
+
     monkeypatch.setattr(connections, "_authorized", authorized)
+    monkeypatch.setattr(connections, "_with_privileges", as_read)
     db = FakeDb()
     await connections.update_connection(
         connection.id, payload, ctx=CTX, db=db, box=None, authz=None  # type: ignore[arg-type]

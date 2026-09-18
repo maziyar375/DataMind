@@ -206,6 +206,30 @@ export interface Actions {
   privileges: string[]
   can: Record<string, boolean>
   meanings: Record<string, string>
+  /** A short name for every privilege on this type — *Can view*, *Can edit*,
+   *  *Full access* — for the row of whoever holds it. */
+  labels: Record<string, string>
+  /** What the share dialog offers, in order. Three for most types; a model
+   *  configuration offers *Can use* alone. */
+  levels: string[]
+  /** Whose it is, so somebody who cannot change access is told whom to ask. */
+  owner_name: string | null
+  is_owner: boolean
+}
+
+/** `GET /directory` — who anybody may share with. Names and kinds, never an
+ *  address; any signed-in person may read it. */
+export interface DirectoryEntry {
+  id: string
+  name: string
+  kind: 'HUMAN' | 'SERVICE' | 'TEAM'
+  members: number | null
+  is_you: boolean
+}
+
+export interface Directory {
+  people: DirectoryEntry[]
+  teams: DirectoryEntry[]
 }
 
 /**
@@ -435,6 +459,12 @@ export interface LlmConfig {
   status: string
   has_api_key: boolean
   last_tested_at: string | null
+  /** What the viewer may do with it. A model shared for *use* holds
+   *  `describe` and `select`, and renders read-only. */
+  privileges?: string[]
+  /** Somebody else's, shared with you — and their display name. */
+  shared?: boolean
+  owner_name?: string | null
 }
 
 /** One documented request parameter, in enough detail to render a field.
@@ -1402,6 +1432,9 @@ export interface DashboardTile {
   position: number
   created_at: string
   updated_at: string
+  /** The reader may not query this tile's data source, so it arrives without
+   *  its `sql` — that would be the source's schema. */
+  restricted?: boolean
 }
 
 export interface Dashboard {
@@ -1425,6 +1458,8 @@ export interface Dashboard {
    * frame and then take half of them away.
    */
   privileges: string[]
+  /** Whose it is, when it is not yours — a display name. */
+  owner_name?: string | null
 }
 
 export interface DashboardSummary {
@@ -1441,6 +1476,9 @@ export interface DashboardSummary {
   shared: boolean
   /** Their display name — never an address. Null on a board you own. */
   owner_name: string | null
+  /** What you may do with it — a card you can only *describe* cannot be
+   *  opened, and the kebab offers only what the server would allow. */
+  privileges: string[]
 }
 
 // ── a dashboard as a file ─────────────────────────────────────────────────
@@ -1687,6 +1725,8 @@ export interface Report {
    */
   data_access: boolean
   privileges: string[]
+  /** Whose it is, when it is not yours — a display name. */
+  owner_name?: string | null
 }
 
 export interface ReportSummary {
@@ -1705,6 +1745,8 @@ export interface ReportSummary {
   updated_at: string
   shared: boolean
   owner_name: string | null
+  /** What you may do with it — see `DashboardSummary.privileges`. */
+  privileges: string[]
 }
 
 /** What a feasibility check answers: the block, and what the verdict came from. */

@@ -87,10 +87,13 @@ from app.reports.outline import (
 )
 from app.reports.prompts import REPORT_PROMPT_VERSION, report_time_rules
 from app.semantic.render import _render_time
-from app.services.policy import require
+from app.services import restricted
+from app.services.grant_service import display_name
+from app.services.policy import refuse_bound, require
 from app.services.query_service import effective_max_rows, latest_snapshot, resolve_llm
 from app.services.semantic_service import load_document
 from app.services.sql_draft_service import SqlDraft, draft_sql, validate_sql
+from app.services.team_service import delegated_context
 
 log = get_logger(__name__)
 
@@ -535,10 +538,10 @@ class ReportService:
                 "This report's connection was removed, so its outline cannot be "
                 "proposed. Past runs stay readable."
             )
-        connection = await self._authorized_connection(ctx, report.connection_id)
+        connection = await self._bound_connection(ctx, report, "propose an outline for")
         if report.llm_config_id is None:
             raise ValidationError("Choose a model for this report before proposing an outline.")
-        config = await self._authorized_llm_config(ctx, report.llm_config_id)
+        config = await self._bound_model(ctx, report)
 
         snapshot = await latest_snapshot(self._db, connection.id)
         if not snapshot.get("tables"):
@@ -660,7 +663,7 @@ class ReportService:
                 "This report's connection was removed, so its blocks cannot be "
                 "checked. Past runs stay readable."
             )
-        connection = await self._authorized_connection(ctx, report.connection_id)
+        connection = await self._bound_connection(ctx, report, "check its queries in")
         if report.llm_config_id is None:
             raise ValidationError("Choose a model for this report before checking a block.")
 
@@ -672,9 +675,8 @@ class ReportService:
                 connection_id=connection.id,
                 llm_config_id=report.llm_config_id,
                 question=block.question,
-                # `sql_draft_service` still takes a bare owner id; Phase 2
-                # gives it a context of its own.
-                owner_id=ctx.user_id,
+                ctx=ctx,
+                authz=self._authz,
                 extra_rules=report_time_rules(
                     database_type=connection.database_type,
                     time_window=block.time_window,
@@ -757,7 +759,7 @@ class ReportService:
                 "This report's connection was removed, so its queries cannot "
                 "be validated. Past runs stay readable."
             )
-        connection = await self._authorized_connection(ctx, report.connection_id)
+        connection = await self._bound_connection(ctx, report, "edit a query in")
 
         statement = sql.strip()
         if not statement:
@@ -771,8 +773,8 @@ class ReportService:
             self._settings,
             connection_id=connection.id,
             sql=statement,
-            # Phase 2 boundary, as above.
-            owner_id=ctx.user_id,
+            ctx=ctx,
+            authz=self._authz,
             # No prompt on this road to append rules to, so this buys the
             # preview's KPI alone — the same figure `workers/report.py` will
             # compute for a METRIC block at generation time, available to the
@@ -831,12 +833,12 @@ class ReportService:
                 "This report's connection was removed, so it cannot be "
                 "generated. Past runs stay readable."
             )
-        connection = await self._authorized_connection(ctx, report.connection_id)
+        connection = await self._bound_connection(ctx, report, "generate")
         assert_wide_enough(connection)
 
         if report.llm_config_id is None:
             raise ValidationError("Choose a model for this report before generating it.")
-        config = await self._authorized_llm_config(ctx, report.llm_config_id)
+        config = await self._bound_model(ctx, report)
 
         sections = await self.sections_of(report_id)
         blocks = await self.blocks_of([s.id for s in sections])
@@ -998,7 +1000,9 @@ class ReportService:
                 "This report's connection was removed, so its sections cannot "
                 "be retried. Past runs stay readable."
             )
-        assert_wide_enough(await self._authorized_connection(ctx, report.connection_id))
+        assert_wide_enough(
+            await self._bound_connection(ctx, report, "retry a section of")
+        )
 
         run.status = ReportRunStatus.RUNNING
         run.phase = f"Retrying {section.heading}"[:200]
@@ -1315,6 +1319,16 @@ class ReportService:
         return int(result.scalar() or 0) + 1
 
     # ── display names ────────────────────────────────────────────────────
+    async def owner_name(self, ctx: RequestContext, report: Report) -> str | None:
+        """Whose this is, by name — or nothing, when it is the reader's own.
+
+        A fact for the header, not a decision: the reader is already reading
+        it. The comparison below is a badge, not a gate.
+        """
+        if report.owner_id == ctx.user_id:  # authz-ok: a badge
+            return None
+        return await display_name(self._db, report.owner_id)
+
     async def display_names(
         self, reports: list[Report]
     ) -> tuple[dict[UUID, str], dict[UUID, str]]:
@@ -1344,6 +1358,37 @@ class ReportService:
         return connections, models
 
     # ── authorization ────────────────────────────────────────────────────
+    async def share_check(
+        self,
+        ctx: RequestContext,
+        report_id: UUID,
+        *,
+        user_id: UUID | None = None,
+        team_id: UUID | None = None,
+    ) -> tuple[int, list[tuple[UUID, str]]]:
+        """Whether the named principal could read this report's data source.
+
+        The report half of `DashboardService.share_check`, and asked the same
+        way — as them, with their teams — so the share dialog can say *"they
+        will see the headings and not the figures"* before Share is pressed,
+        and offer to share the data source too. `manage` on the report,
+        because the answer is about a third party's reach.
+        """
+        report = await self.get(ctx, report_id, Privilege.MANAGE)
+        if report.connection_id is None:
+            return 0, []
+        as_them = (
+            RequestContext.as_team(team_id)
+            if team_id is not None
+            else await delegated_context(self._db, user_id or ctx.user_id)
+        )
+        ids = {report.connection_id}
+        withheld = ids - await restricted.readable_connection_ids(
+            self._db, as_them, self._authz, ids
+        )
+        names = await restricted.connection_names(self._db, withheld)
+        return 1, [(cid, names.get(cid, "")) for cid in withheld]
+
     async def may_read_data(self, ctx: RequestContext, report: Report) -> bool:
         """May this reader see the **numbers**, not merely the document?
 
@@ -1371,6 +1416,65 @@ class ReportService:
                 Privilege.SELECT,
             )
         )
+
+    async def _bound_connection(
+        self, ctx: RequestContext, report: Report, doing: str
+    ) -> DatabaseConnection:
+        """The report's own data source, if this principal may query it.
+
+        Not `_authorized_connection`, which answers 404 for an id somebody
+        *supplied*. This one is already printed on the report for anybody who
+        can open it, so a refusal can name it — and should, because the person
+        who pressed Generate on a report shared with them for editing needs to
+        hear *"it reads Sales warehouse, which you were not given"*, not that
+        a connection "was not found".
+        """
+        result = await self._db.execute(
+            select(DatabaseConnection).where(
+                DatabaseConnection.id == report.connection_id
+            )
+        )
+        connection = result.scalar_one_or_none()
+        if connection is None:
+            raise ValidationError(
+                "This report's data source was removed. Past runs stay readable."
+            )
+        ref = ResourceRef.to(ResourceType.CONNECTION, connection)
+        if not await self._authz.allowed(ctx, ref, Privilege.SELECT):
+            await refuse_bound(
+                ctx, ref, Privilege.SELECT,
+                f"This report reads “{connection.name}”, which hasn't been "
+                f"shared with you, so you can't {doing} it. Ask whoever owns "
+                f"“{connection.name}” to give you access.",
+                db=self._db,
+                on=ResourceRef.to(ResourceType.REPORT, report),
+            )
+        return connection
+
+    async def _bound_model(self, ctx: RequestContext, report: Report) -> LlmConfig:
+        """The report's own model, if this principal may answer with it.
+
+        The same reasoning as `_bound_connection`: the model's name is on the
+        report, so the refusal names it and says the two ways out — pick a
+        model you can use, or ask for this one.
+        """
+        result = await self._db.execute(
+            select(LlmConfig).where(LlmConfig.id == report.llm_config_id)
+        )
+        config = result.scalar_one_or_none()
+        if config is None:
+            raise ValidationError("Choose a model for this report before generating it.")
+        ref = ResourceRef.to(ResourceType.LLM_CONFIG, config)
+        if not await self._authz.allowed(ctx, ref, Privilege.SELECT):
+            await refuse_bound(
+                ctx, ref, Privilege.SELECT,
+                f"This report is written by “{config.name}”, a model that "
+                "hasn't been shared with you. Choose a model you can use in the "
+                "report's settings, or ask its owner to share it.",
+                db=self._db,
+                on=ResourceRef.to(ResourceType.REPORT, report),
+            )
+        return config
 
     async def _authorized_connection(
         self, ctx: RequestContext, connection_id: UUID

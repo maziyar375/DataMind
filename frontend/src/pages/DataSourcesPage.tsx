@@ -36,7 +36,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMatch, useNavigate } from 'react-router-dom'
-import { connections as api } from '../api/client'
+import { access, connections as api } from '../api/client'
 import { useQueue, useUnsavedWork } from '../shell'
 import type { Connection, SchemaSnapshot, SchemaTable, TestResult } from '../api/types'
 import {
@@ -48,7 +48,8 @@ import {
   DetailBody, DetailHeader, FieldRow, MasterColumn, MasterItem, Section,
   StatusLine, Tabs, UnsavedNote,
 } from '../components/settings'
-import { AccessPanel, TransferControl } from '../components/access'
+import { AccessPanel, ReachBadge, TransferControl } from '../components/access'
+import { useCan } from '../permissions'
 import { ListScrim, ListToggle, useListDrawer } from '../components/list-drawer'
 import { forConnection } from '../components/knowledge-queue'
 import { SemanticLayerTab } from '../components/semantic'
@@ -171,6 +172,14 @@ export default function DataSourcesPage() {
   const [draft, setDraft] = useState<Record<string, any>>(BLANK)
   const [password, setPassword] = useState('')
   const [schema, setSchema] = useState<SchemaSnapshot | null>(null)
+  /**
+   * Whether this reader may open the data source's **semantic layer** and its
+   * **knowledge store** — two grants of their own, not implied by the data
+   * source's. Somebody given the data source to query used to see both tabs
+   * and get "Connection not found." inside them. `null` while asking: the
+   * tabs stay, so an owner's strip does not shuffle on every selection.
+   */
+  const [derived, setDerived] = useState<{ semantic: boolean; knowledge: boolean } | null>(null)
   const [schemaView, setSchemaView] = useState<'tables' | 'graph'>('tables')
   const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -282,6 +291,40 @@ export default function DataSourcesPage() {
     releasePolicy()
   }, [releaseConnection, releasePolicy])
 
+  // Ask once per data source whether its semantic layer and knowledge store
+  // are reachable at all. A 404 from `…/actions` is the server's "nothing
+  // reaches you here" — the same answer every route on them would give.
+  useEffect(() => {
+    if (creating || !selectedId) {
+      setDerived(null)
+      return
+    }
+    let cancelled = false
+    setDerived(null)
+    void Promise.allSettled([
+      access.actions(`connections/${selectedId}/semantic`),
+      access.actions(`connections/${selectedId}/knowledge`),
+    ]).then(([semantic, knowledge]) => {
+      if (cancelled) return
+      setDerived({
+        semantic: semantic.status === 'fulfilled',
+        knowledge: knowledge.status === 'fulfilled',
+      })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [creating, selectedId])
+
+  // Standing on a tab this reader cannot open — a bookmark, or a selection
+  // that moved from a data source they own — lands on the first one instead.
+  useEffect(() => {
+    if (!derived) return
+    if ((tab === 'semantic' && !derived.semantic) || (tab === 'knowledge' && !derived.knowledge)) {
+      setTab('connection')
+    }
+  }, [derived, tab, setTab])
+
   // A typed or bookmarked `/sources/:id/knowledge` is not an error — it is
   // where this screen used to be. Replace, so Back does not bounce between
   // the two addresses.
@@ -329,10 +372,15 @@ export default function DataSourcesPage() {
       conflict_checks_enabled: selected.conflict_checks_enabled,
       knowledge_examples_enabled: selected.knowledge_examples_enabled,
     })
-    api
-      .schema(selected.id)
-      .then(setSchema)
-      .catch(() => setSchema(null))
+    // `select` reads the schema; a describe-only reader would only get a 403.
+    if ((selected.privileges ?? []).includes('select')) {
+      api
+        .schema(selected.id)
+        .then(setSchema)
+        .catch(() => setSchema(null))
+    } else {
+      setSchema(null)
+    }
     // Keyed on the **loaded row's** id, not on the id in the URL.
     //
     // Those differ for exactly one arrival, and it is the one routing made
@@ -601,6 +649,14 @@ export default function DataSourcesPage() {
   // A brand-new connection has no row yet, so nothing has been resolved: the
   // creator is about to own it, and an owner holds everything.
   const mayManage = creating || held.has('manage')
+  // The rest of the page's verbs, off the same row. `modify` edits the
+  // connection, re-syncs and tests it; `delete` removes it; `select` reads
+  // its schema. Somebody shared a data source *to query* gets a page that
+  // describes it, not a form whose Save, Test and Delete all answer 403.
+  const mayEdit = creating || held.has('modify')
+  const mayDelete = !creating && held.has('delete')
+  const mayRead = creating || held.has('select')
+  const mayCreate = useCan()('connection.create')
 
   const policyFields = (
     <>
@@ -630,12 +686,12 @@ export default function DataSourcesPage() {
               teaches them the rule — and this rule is worth knowing, because
               it is why the person who can fix a password cannot also widen
               what leaves the database. */}
-          {!mayManage && (
+          {mayEdit && !mayManage && (
             <span style={{ fontSize: 11.5, color: 'var(--text-faint)', lineHeight: 1.5 }}>
-              Changing this needs <strong>manage</strong> on this data source.
-              You can edit its connection details and re-sync its schema;
-              deciding how much of a result may leave for the model provider is
-              a decision for whoever can also share it. Ask on the Access tab.
+              Only someone with full access can change this. You can edit the
+              connection details and re-sync its schema; how much of a result
+              may leave for the model provider is decided by whoever can also
+              share it.
             </span>
           )}
         </Field>
@@ -758,7 +814,7 @@ export default function DataSourcesPage() {
         loading={loading}
         query={filter}
         onQuery={setFilter}
-        onNew={startCreate}
+        onNew={mayCreate ? startCreate : undefined}
         newLabel="Add a connection"
         // Not "no data sources yet": the list is per-account, so a colleague's
         // connection is genuinely absent here rather than missing, and a
@@ -874,7 +930,11 @@ export default function DataSourcesPage() {
                 // Test rides with Connection alone, and always has probed only
                 // connectivity fields — it was simply parked on a tab that also
                 // held the disclosure policy.
-                creating || tab === 'connection' ? (
+                !mayEdit ? (
+                  // What this reader may do here, and whose it is — in place
+                  // of the Test and Save buttons they cannot use.
+                  <ReachBadge privileges={selected?.privileges ?? []} owner={selected?.owner} />
+                ) : creating || tab === 'connection' ? (
                   <>
                     {!creating && connectionChanges && <UnsavedNote />}
                     <GhostButton
@@ -925,7 +985,9 @@ export default function DataSourcesPage() {
                   { value: 'policy', label: 'Policy' },
                   { value: 'access', label: 'Access' },
                   { value: 'schema', label: 'Schema', count: schema?.tables.length },
-                  { value: 'semantic', label: 'Semantic layer' },
+                  ...(derived?.semantic === false
+                    ? []
+                    : [{ value: 'semantic', label: 'Semantic layer' }]),
                   // It has a count now, and the objection that kept it off
                   // is answered rather than overruled: the number was not
                   // known until the tab had loaded, so a badge would have
@@ -933,15 +995,17 @@ export default function DataSourcesPage() {
                   // signal. The shell counts the queue for the rail already,
                   // so this is the same number, known before the tab opens,
                   // and still absent rather than zero when there is no work.
-                  {
-                    value: 'knowledge',
-                    label: 'Knowledge',
-                    count: selected ? forConnection(queue, selected.id) : undefined,
-                    // Marked as leaving, because it does: a tab that quietly
-                    // navigates out of its own strip is worse than one that
-                    // says it will.
-                    leaves: true,
-                  },
+                  ...(derived?.knowledge === false
+                    ? []
+                    : [{
+                      value: 'knowledge',
+                      label: 'Knowledge',
+                      count: selected ? forConnection(queue, selected.id) : undefined,
+                      // Marked as leaving, because it does: a tab that quietly
+                      // navigates out of its own strip is worse than one that
+                      // says it will.
+                      leaves: true,
+                    }]),
                 ]}
               />
             )}
@@ -949,6 +1013,8 @@ export default function DataSourcesPage() {
             {(creating || tab === 'connection') && (
               <DetailBody>
                 {error && <ErrorNote>{error}</ErrorNote>}
+                {!mayEdit && <ReadOnlyNote held={held} owner={selected?.owner} />}
+                <fieldset disabled={!mayEdit} style={READ_ONLY_FIELDSET}>
                 {testResult && (
                   <StatusLine ok={testResult.ok}>
                     {testResult.ok
@@ -1067,8 +1133,9 @@ export default function DataSourcesPage() {
                 {/* A new row is one form with one Save: the policy has no tab
                     of its own until the record exists. */}
                 {creating && policyFields}
+                </fieldset>
 
-                {!creating && (
+                {mayDelete && (
                   <Section
                     title="Danger zone"
                     description="Conversations that used this connection keep their recorded history."
@@ -1087,7 +1154,10 @@ export default function DataSourcesPage() {
             {!creating && tab === 'policy' && (
               <DetailBody>
                 {error && <ErrorNote>{error}</ErrorNote>}
-                {policyFields}
+                {!mayEdit && <ReadOnlyNote held={held} owner={selected?.owner} />}
+                <fieldset disabled={!mayEdit} style={READ_ONLY_FIELDSET}>
+                  {policyFields}
+                </fieldset>
               </DetailBody>
             )}
 
@@ -1143,10 +1213,12 @@ export default function DataSourcesPage() {
                     flexWrap: 'wrap',
                   }}
                 >
-                  <GhostButton onClick={sync} disabled={syncing}>
-                    {syncing ? <Spinner /> : <Icon.Refresh size={14} />}
-                    Re-sync schema
-                  </GhostButton>
+                  {mayEdit && (
+                    <GhostButton onClick={sync} disabled={syncing}>
+                      {syncing ? <Spinner /> : <Icon.Refresh size={14} />}
+                      Re-sync schema
+                    </GhostButton>
+                  )}
                   <span style={{ fontSize: 12, color: 'var(--text-faint)' }}>
                     {selected!.last_synced_at
                       ? `last synced ${relativeTime(selected!.last_synced_at)}`
@@ -1178,16 +1250,30 @@ export default function DataSourcesPage() {
                   )}
                 </div>
 
-                {!schema ? (
+                {!mayRead ? (
+                  <EmptyState
+                    icon={<Icon.Lock size={20} />}
+                    title="Tables aren’t shown to you"
+                    body={`You can see that this data source exists, but not what is in it. ${
+                      selected?.owner ? `Ask ${selected.owner}` : 'Ask its owner'
+                    } for query access to see its tables.`}
+                  />
+                ) : !schema ? (
                   <EmptyState
                     icon={<Icon.Database size={20} />}
                     title="No schema yet"
-                    body="Sync this connection to read its tables, columns, and foreign keys. DataMind only ever writes SQL against what it finds here."
+                    body={
+                      mayEdit
+                        ? 'Sync this connection to read its tables, columns, and foreign keys. DataMind only ever writes SQL against what it finds here.'
+                        : 'It has not been synced yet — whoever can edit it can sync it.'
+                    }
                     action={
-                      <PrimaryButton onClick={sync} disabled={syncing}>
-                        {syncing && <Spinner />}
-                        Sync schema
-                      </PrimaryButton>
+                      mayEdit ? (
+                        <PrimaryButton onClick={sync} disabled={syncing}>
+                          {syncing && <Spinner />}
+                          Sync schema
+                        </PrimaryButton>
+                      ) : undefined
                     }
                   />
                 ) : (
@@ -1569,6 +1655,55 @@ function GraphView({ schema }: { schema: SchemaSnapshot }) {
           </g>
         ))}
       </svg>
+    </div>
+  )
+}
+
+/** A fieldset that is only there to disable what it holds — no box of its own. */
+const READ_ONLY_FIELDSET: React.CSSProperties = {
+  border: 0,
+  padding: 0,
+  margin: 0,
+  minWidth: 0,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 16,
+}
+
+/**
+ * What somebody who may not edit this data source is told, above a form they
+ * can read and not change: what they *can* do with it, and whose it is.
+ */
+function ReadOnlyNote({ held, owner }: { held: Set<string>; owner?: string }) {
+  const can = held.has('select')
+    ? 'You can ask questions through this data source'
+    : 'You can see that this data source exists'
+  return (
+    <div
+      style={{
+        display: 'flex',
+        gap: 10,
+        alignItems: 'flex-start',
+        padding: '11px 14px',
+        borderRadius: 10,
+        background: 'var(--panel-alt)',
+        border: '1px solid var(--border)',
+        fontSize: 12.5,
+        color: 'var(--text-dim)',
+        lineHeight: 1.55,
+      }}
+    >
+      <span aria-hidden style={{ color: 'var(--text-faint)', marginTop: 1 }}>
+        <Icon.Lock size={14} />
+      </span>
+      <span>
+        {can}, but not change it.{' '}
+        {owner ? (
+          <>
+            <strong style={{ color: 'var(--text-strong)' }}>{owner}</strong> owns it.
+          </>
+        ) : null}
+      </span>
     </div>
   )
 }

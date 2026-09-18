@@ -8,7 +8,15 @@ from uuid import UUID
 from fastapi import APIRouter, status
 from sqlalchemy import func, select
 
-from app.api.deps import AuthzDep, CtxDep, DbDep, SecretBoxDep, SettingsDep
+from app.api.deps import (
+    AuthzDep,
+    CtxDep,
+    DbDep,
+    LlmConfigCreateDep,
+    SecretBoxDep,
+    SettingsDep,
+    demand,
+)
 from app.api.schemas import (
     EmbeddingProbe,
     LlmConfigCreate,
@@ -18,12 +26,13 @@ from app.api.schemas import (
     ParameterCatalog,
     TestResult,
 )
-from app.api.v1.access import attach_access_routes
+from app.api.v1.access import attach_access_routes, owner_names
 from app.core.clock import utcnow
+from app.core.context import RequestContext
 from app.core.errors import ConflictError, LLMError, NotFoundError, ValidationError
-from app.domain.ports.authz import ResourceRef
+from app.domain.ports.authz import Authorizer, ResourceRef
 from app.domain.ports.llm import ProviderCapabilities, ResolvedLLM
-from app.domain.value_objects.authz import Privilege, ResourceType
+from app.domain.value_objects.authz import Capability, Privilege, ResourceType
 from app.domain.value_objects.llm_params import (
     ParamError,
     embedding_specs,
@@ -73,6 +82,28 @@ attach_access_routes(router, ResourceType.LLM_CONFIG, param="config_id")
 def _to_read(row: LlmConfig) -> LlmConfigRead:
     data = LlmConfigRead.model_validate(row)
     data.has_api_key = bool(row.encrypted_api_key)
+    return data
+
+
+async def _read_for(
+    row: LlmConfig,
+    ctx: RequestContext,
+    authz: Authorizer,
+    owners: dict[UUID, str] | None = None,
+) -> LlmConfigRead:
+    """`_to_read`, plus what *this* reader may do with the row and whose it is.
+
+    A shared model reaches the providers page as `describe` + `select`, and the
+    page has to know that to render it as something to use rather than a form
+    whose Save can only 403. Free for an owned row — the authorizer answers
+    ownership off the row in hand.
+    """
+    data = _to_read(row)
+    held = await authz.privileges_on(ctx, ResourceRef.to(ResourceType.LLM_CONFIG, row))
+    data.privileges = sorted(str(p) for p in held)
+    data.shared = row.owner_id != ctx.user_id  # authz-ok: a badge
+    if data.shared and owners is not None:
+        data.owner_name = owners.get(row.owner_id)
     return data
 
 
@@ -188,7 +219,13 @@ async def list_configs(
     Filtered with the same two predicates `resolve_llm` refuses on, so a picker
     and the funnel behind it cannot disagree about what a row is for.
     """
-    visible = await authz.visible(ctx, ResourceType.LLM_CONFIG, Privilege.DESCRIBE)
+    # A list asked for a *purpose* is a picker: it offers models to answer
+    # with, and answering with one is `select`. Only the providers page — no
+    # purpose — lists what may merely be *seen*, and it renders those
+    # read-only. A picker that offered a describe-only model would offer a
+    # choice whose first use is a refusal.
+    needed = Privilege.DESCRIBE if purpose is None else Privilege.SELECT
+    visible = await authz.visible(ctx, ResourceType.LLM_CONFIG, needed)
     result = await db.execute(
         restrict(
             select(LlmConfig).order_by(LlmConfig.created_at),
@@ -201,12 +238,17 @@ async def list_configs(
         rows = [row for row in rows if can_chat(row)]
     elif purpose == "embedding":
         rows = [row for row in rows if can_embed(row)]
-    return [_to_read(row) for row in rows]
+    owners = await owner_names(db, {row.owner_id for row in rows if row.owner_id})
+    return [await _read_for(row, ctx, authz, owners) for row in rows]
 
 
 @router.post("", response_model=LlmConfigRead, status_code=status.HTTP_201_CREATED)
 async def create_config(
-    payload: LlmConfigCreate, ctx: CtxDep, db: DbDep, box: SecretBoxDep
+    payload: LlmConfigCreate,
+    ctx: LlmConfigCreateDep,
+    db: DbDep,
+    box: SecretBoxDep,
+    authz: AuthzDep,
 ) -> LlmConfigRead:
     existing = await db.execute(
         select(LlmConfig).where(
@@ -248,7 +290,7 @@ async def create_config(
     )
     db.add(row)
     await db.flush()
-    return _to_read(row)
+    return await _read_for(row, ctx, authz)
 
 
 @router.post("/test", response_model=TestResult)
@@ -268,11 +310,16 @@ async def test_draft_config(
     reused so an edit can be tested without re-entering the secret; every other
     value comes from the form.
     """
+    # Probing sends a request to whatever `base_url` the form holds, so it is
+    # never free: an edit of a row needs `modify` on it (typed key or not), and
+    # a row about to be created needs what creating one needs.
     api_key = payload.api_key.get_secret_value() if payload.api_key else ""
-    if payload.config_id is not None and not payload.api_key:
+    if payload.config_id is not None:
         row = await _authorized(db, authz, payload.config_id, ctx, Privilege.MODIFY)
-        if row.encrypted_api_key:
+        if not payload.api_key and row.encrypted_api_key:
             api_key = box.decrypt(row.encrypted_api_key, aad=f"llm_config:{row.id}")
+    else:
+        demand(ctx, Capability.LLM_CONFIG_CREATE)
 
     embedding_model = payload.embedding_model.strip()
     _declares_something(payload.model.strip(), embedding_model)
@@ -459,7 +506,7 @@ async def update_config(
         )
 
     await db.flush()
-    return _to_read(row)
+    return await _read_for(row, ctx, authz)
 
 
 @router.delete("/{config_id}", status_code=status.HTTP_204_NO_CONTENT)

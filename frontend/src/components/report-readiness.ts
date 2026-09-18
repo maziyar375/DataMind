@@ -251,9 +251,10 @@ export function generationBlockedBy(report: {
   if (report.data_access === false) {
     const which = report.connection_name ? ` “${report.connection_name}”` : ''
     return (
-      `You do not have access to${which}, the database this report was built ` +
-      'over, so it cannot be generated or checked. Ask whoever owns it for ' +
-      '“select”. Every run it already produced stays readable.'
+      `This report reads${which}, a data source that hasn’t been shared with ` +
+      'you, so you can edit its outline but not check or generate it. Ask ' +
+      'the data source’s owner for access. Every document it already produced ' +
+      'stays readable.'
     )
   }
   if (report.connection_id !== null) return null

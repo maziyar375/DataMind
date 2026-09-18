@@ -7,6 +7,7 @@ from app.api.v1 import (
     connections,
     conversations,
     dashboards,
+    directory,
     drafts,
     knowledge,
     llm_configs,
@@ -43,6 +44,10 @@ api_router.include_router(audit.router)
 # answer the two halves of one question: the log says what happened, the
 # review says what is possible.
 api_router.include_router(access_review.router)
+# Who you can share with. Not an administration router: any signed-in person
+# may read it, because choosing who else sees your own dashboard is part of
+# owning one — and it carries names and kinds, never addresses.
+api_router.include_router(directory.router)
 api_router.include_router(llm_configs.router)
 api_router.include_router(connections.router)
 # Before the connections router would also work; after is fine because the

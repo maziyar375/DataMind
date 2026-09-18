@@ -60,14 +60,16 @@ def no_access_message(connection_name: str | None) -> str:
     is also what a CSV export, a printed report and an API client see, and
     three copies of it would be three chances to describe the rule wrongly.
     """
+    # No privilege word: "ask for select" asked a reader to learn the model
+    # before they could ask a colleague for anything.
     if connection_name:
         return (
-            f"You do not have access to “{connection_name}”, the data source "
-            "behind this. Ask whoever owns it for “select”."
+            f"This uses “{connection_name}”, a data source that hasn't been "
+            "shared with you. Ask its owner for access to see the numbers."
         )
     return (
-        "You do not have access to the data source behind this. Ask whoever "
-        "owns it for “select”."
+        "This uses a data source that hasn't been shared with you. Ask its "
+        "owner for access to see the numbers."
     )
 
 

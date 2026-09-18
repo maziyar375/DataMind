@@ -80,6 +80,7 @@ from app.services.query_service import (
     resolve_llm,
 )
 from app.services.semantic_service import LoadedLayer, load_layer, metric_use_of
+from app.services.team_service import delegated_context
 
 log = get_logger(__name__)
 
@@ -454,7 +455,7 @@ class RunService:
         # enough; answering a question is `select` on both.
         revoked = False
         if connection is not None and llm_config is not None:
-            as_actor = RequestContext.on_behalf_of(run.actor_id or run.owner_id)
+            as_actor = await delegated_context(self._db, run.actor_id or run.owner_id)
             if not await self._authorizer().allowed(
                 as_actor,
                 ResourceRef.to(ResourceType.CONNECTION, connection),

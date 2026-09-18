@@ -23,7 +23,8 @@ import { useMatch, useNavigate } from 'react-router-dom'
 import { ApiError, connections as connectionsApi, llmConfigs as modelsApi, reports as api } from '../api/client'
 import type { Connection, LlmConfig, Report, ReportSummary } from '../api/types'
 import { AccessPanel, TransferControl } from '../components/access'
-import { ReportOutlineEditor, ReportRunViewer } from '../components/report'
+import { accessOf, queryable, useCan } from '../permissions'
+import { ReportOutlineEditor, ReportRunViewer, reportWarn } from '../components/report'
 import { ReportRunHistory } from '../components/report-history'
 import {
   Chip, DisclosureBadge, EmptyState, ErrorNote, Field, GhostButton, Icon, MetaDot,
@@ -163,6 +164,7 @@ function ReportsIndex({
 }) {
   const [error, setError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  const mayCreate = useCan()('report.create')
   const [renaming, setRenaming] = useState<ReportSummary | null>(null)
   /** The report whose access panel is open, from a card's kebab. */
   const [sharing, setSharing] = useState<ReportSummary | null>(null)
@@ -327,13 +329,16 @@ function ReportsIndex({
           )
         }
         actions={
-          <PrimaryButton
-            style={{ padding: '10px 17px' }}
-            onClick={() => setCreating(true)}
-            disabled={busy}
-          >
-            <Icon.Plus /> New report
-          </PrimaryButton>
+          // Needs `report.create`: a Viewer's role does not carry it.
+          mayCreate ? (
+            <PrimaryButton
+              style={{ padding: '10px 17px' }}
+              onClick={() => setCreating(true)}
+              disabled={busy}
+            >
+              <Icon.Plus /> New report
+            </PrimaryButton>
+          ) : undefined
         }
       />
 
@@ -414,8 +419,16 @@ function ReportsIndex({
           <EmptyState
             icon={<Icon.Doc size={20} />}
             title="No reports yet"
-            body="Describe what you need in plain language — “an analysis of the last three months of sales” — and a report proposes its own structure. Approve it, and every section is written from your database."
-            action={<PrimaryButton onClick={() => setCreating(true)}>New report</PrimaryButton>}
+            body={
+              mayCreate
+                ? 'Describe what you need in plain language — “an analysis of the last three months of sales” — and a report proposes its own structure. Approve it, and every section is written from your database.'
+                : 'Reports people share with you will appear here.'
+            }
+            action={
+              mayCreate ? (
+                <PrimaryButton onClick={() => setCreating(true)}>New report</PrimaryButton>
+              ) : undefined
+            }
           />
         </div>
       ) : visible.length === 0 ? (
@@ -493,6 +506,7 @@ function ReportsIndex({
           <AccessPanel
             base={`reports/${sharing.id}`}
             title={sharing.name}
+            warn={reportWarn(sharing.id)}
             // Same gap as the dashboard's: transferable on the server since
             // Phase 8, with nowhere to press.
             extraActions={
@@ -545,8 +559,9 @@ function toCard(report: Report): ReportSummary {
     // *shared with you* is a fact the index carries and this conversion
     // cannot invent, so it takes the safe reading — the badge and the filter
     // correct themselves on the next list read.
-    shared: false,
-    owner_name: null,
+    shared: report.owner_name != null,
+    owner_name: report.owner_name ?? null,
+    privileges: report.privileges,
   }
 }
 
@@ -573,6 +588,9 @@ function ReportCard({
 }) {
   const hue = cardHue(report.id)
   const archived = report.status === 'ARCHIVED'
+  // Known to exist, not openable — a role that reaches every report at
+  // `describe`. Listed honestly; not drawn as a link that answers 403.
+  const locked = !accessOf(report.privileges).view
 
   return (
     // `rm-dash-card` carries the pointer and the hover lift of a card you can
@@ -609,10 +627,11 @@ function ReportCard({
             over the whole card — so the kebab beside it still gets its own
             clicks instead of opening the report. */}
         <button
-          className="rm-dash-card-link"
-          onClick={onOpen}
+          className={locked ? undefined : 'rm-dash-card-link'}
+          onClick={locked ? undefined : onOpen}
+          disabled={locked}
+          title={locked ? lockedTitle(report) : report.name}
           dir="auto"
-          title={report.name}
           style={{
             flex: 1,
             minWidth: 0,
@@ -643,6 +662,7 @@ function ReportCard({
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
         {archived && <Chip tone="amber">Archived</Chip>}
+        {locked && <Chip tone="neutral">No access</Chip>}
         {/* Whose report this is, when it is not yours. A display name, never
             an address — the rule every list that became shareable follows. */}
         {report.shared && (
@@ -727,6 +747,9 @@ function ReportRow({
 }) {
   const hue = cardHue(report.id)
   const archived = report.status === 'ARCHIVED'
+  // Known to exist, not openable — a role that reaches every report at
+  // `describe`. Listed honestly; not drawn as a link that answers 403.
+  const locked = !accessOf(report.privileges).view
 
   return (
     <div
@@ -760,10 +783,11 @@ function ReportRow({
       <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
           <button
-            className="rm-dash-card-link"
-            onClick={onOpen}
+            className={locked ? undefined : 'rm-dash-card-link'}
+            onClick={locked ? undefined : onOpen}
+            disabled={locked}
+            title={locked ? lockedTitle(report) : report.name}
             dir="auto"
-            title={report.name}
             style={{
               minWidth: 0,
               textAlign: 'left',
@@ -782,6 +806,7 @@ function ReportRow({
             {report.name}
           </button>
           {archived && <Chip tone="amber">Archived</Chip>}
+          {locked && <Chip tone="neutral">No access</Chip>}
           {report.shared && (
             <Chip tone="accent">
               {report.owner_name ? `Shared by ${report.owner_name}` : 'Shared'}
@@ -856,6 +881,13 @@ function ReportRow({
   )
 }
 
+/** What a locked card says on hover: that it exists, and whom to ask. */
+function lockedTitle(report: ReportSummary): string {
+  return report.owner_name
+    ? `You can see this report exists, but not open it. Ask ${report.owner_name} to share it with you.`
+    : 'You can see this report exists, but not open it.'
+}
+
 function ReportMenu({
   report, onRename, onArchive, onDelete, onShare,
 }: {
@@ -866,14 +898,17 @@ function ReportMenu({
   onShare: () => void
 }) {
   const [open, setOpen] = useState(false)
+  const may = accessOf(report.privileges)
+  // Only what the server would allow — a report shared *to* you used to offer
+  // Rename, Archive and Delete, each a 403 after the click.
   const items = [
-    // First, and above Rename: this is the verb that changes who else has the
-    // document, which is a bigger act than the three below it.
-    { label: 'Share…', run: onShare },
-    { label: 'Rename', run: onRename },
-    { label: report.status === 'ARCHIVED' ? 'Unarchive' : 'Archive', run: onArchive },
-    { label: 'Delete', run: onDelete, danger: true },
-  ]
+    may.share && { label: 'Share…', run: onShare },
+    may.edit && { label: 'Rename', run: onRename },
+    may.edit && { label: report.status === 'ARCHIVED' ? 'Unarchive' : 'Archive', run: onArchive },
+    may.delete && { label: 'Delete', run: onDelete, danger: true },
+  ].filter((item): item is { label: string; run: () => void; danger?: boolean } => !!item)
+
+  if (items.length === 0) return null
 
   return (
     <div style={{ position: 'relative', zIndex: 2 }}>
@@ -1033,7 +1068,8 @@ function CreateDialog({
           modelsApi.list('chat'),
         ])
         if (cancelled) return
-        setChoices({ connections, models })
+        // Only data sources this person can query — see `queryable`.
+        setChoices({ connections: connections.filter(queryable), models })
         // Preselect the first connection a report can actually be written
         // from, and the first model — the common case is one of each. The
         // model is a default rather than a choice here: it is named below and

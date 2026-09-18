@@ -200,8 +200,8 @@ class FakeResult:
     def __init__(self, rows: list[Any]) -> None:
         self._rows = rows
 
-    def scalars(self) -> list[Any]:
-        return self._rows
+    def scalars(self) -> _Scalars:
+        return _Scalars(self._rows)
 
     def scalar_one_or_none(self) -> Any:
         return self._rows[0] if self._rows else None
@@ -211,6 +211,14 @@ class FakeResult:
 
     def __iter__(self) -> Any:
         return iter(self._rows)
+
+
+class _Scalars(list[Any]):
+    """A list that also answers `.all()`, as SQLAlchemy's `ScalarResult` does —
+    `team_service.delegated_context` reads a run's actor's teams that way."""
+
+    def all(self) -> list[Any]:
+        return list(self)
 
 
 class FakeSnapshotRow:

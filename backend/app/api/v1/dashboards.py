@@ -17,7 +17,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, status
 
-from app.api.deps import AuthzDep, CtxDep, DbDep, SettingsDep
+from app.api.deps import AuthzDep, CtxDep, DashboardCreateDep, DbDep, SettingsDep
 from app.api.schemas import (
     DashboardCreate,
     DashboardDataRead,
@@ -82,6 +82,7 @@ async def _dashboard_read(
     held = await authz.privileges_on(
         ctx, ResourceRef.to(ResourceType.DASHBOARD, dashboard)
     )
+    readable = await service.readable_connection_ids(ctx, tiles)
     # Every field *except* `tiles` is copied off the row. `Dashboard.tiles` is
     # a lazy relationship, and `model_validate` would read it — a lazy load
     # inside a response, in a context that cannot await, which is
@@ -90,13 +91,30 @@ async def _dashboard_read(
     fields = {
         name: getattr(dashboard, name)
         for name in DashboardRead.model_fields
-        if name not in ("tiles", "privileges")
+        if name not in ("tiles", "privileges", "owner_name")
     }
     return DashboardRead(
         **fields,
-        tiles=[_tile_read(t, dashboard, connections, models) for t in tiles],
+        tiles=[
+            _withhold(_tile_read(t, dashboard, connections, models), readable)
+            for t in tiles
+        ],
         privileges=sorted(str(p) for p in held),
+        owner_name=await service.owner_name(ctx, dashboard),
     )
+
+
+def _withhold(read: DashboardTileRead, readable: set[UUID]) -> DashboardTileRead:
+    """A tile on a data source this reader may not query, without its SQL.
+
+    The statement is that source's table and column names — its schema — which
+    is exactly what `describe` on a connection withholds. The title, the
+    question and the layout stay: they are the board, and the board was shared.
+    `restricted` tells the client to say so instead of showing an empty editor.
+    """
+    if read.connection_id is None or read.connection_id in readable:
+        return read
+    return read.model_copy(update={"sql": "", "restricted": True})
 
 
 def _data_read(results: dict[UUID, TileResult]) -> DashboardDataRead:
@@ -131,13 +149,27 @@ async def list_dashboards(
         # reachable, and this only says whether to name an owner.
         card.shared = dashboard.owner_id != ctx.user_id  # authz-ok: a badge
         card.owner_name = owners.get(dashboard.owner_id) if card.shared else None
+        # Rendering, not filtering — `visible` already filtered, in one query.
+        # Free for an owned card: the authorizer answers ownership off the row
+        # in hand, without a read.
+        card.privileges = sorted(
+            str(p)
+            for p in await authz.privileges_on(
+                ctx, ResourceRef.to(ResourceType.DASHBOARD, dashboard)
+            )
+        )
         cards.append(card)
     return cards
 
 
+
 @router.post("", response_model=DashboardRead, status_code=status.HTTP_201_CREATED)
 async def create_dashboard(
-    payload: DashboardCreate, ctx: CtxDep, db: DbDep, settings: SettingsDep, authz: AuthzDep
+    payload: DashboardCreate,
+    ctx: DashboardCreateDep,
+    db: DbDep,
+    settings: SettingsDep,
+    authz: AuthzDep,
 ) -> DashboardRead:
     service = DashboardService(db, settings, authz)
     dashboard = await service.create(ctx, **payload.model_dump())
@@ -149,7 +181,7 @@ async def create_dashboard(
 )
 async def import_dashboard(
     payload: DashboardImportRequest,
-    ctx: CtxDep,
+    ctx: DashboardCreateDep,
     db: DbDep,
     settings: SettingsDep,
     authz: AuthzDep,

@@ -661,6 +661,23 @@ def _known(word: str) -> Privilege | None:
         return None
 
 
+async def display_name(db: AsyncSession, user_id: UUID | None) -> str | None:
+    """What to call a person on a screen somebody else is reading.
+
+    The display name, or the part of the address before the `@` — never the
+    whole address, the rule `api/v1/access.owner_names` follows for the same
+    reason: *"whose is this"* is answered by a name.
+    """
+    if user_id is None:
+        return None
+    row = (
+        await db.execute(select(User.display_name, User.email).where(User.id == user_id))
+    ).one_or_none()
+    if row is None:
+        return None
+    return row[0] or row[1].split("@")[0]
+
+
 async def owned_resources(db: AsyncSession, principal_id: UUID) -> list[str]:
     """What this principal owns, named — for `DELETE /users/{id}`'s refusal.
 

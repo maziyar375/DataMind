@@ -164,7 +164,9 @@ Eight places, and the conformance test fails on six of them.
 
 - [ ] The `ResourceType` enum member (`domain/value_objects/authz.py`).
 - [ ] A `PRIVILEGE_MEANINGS` row — **all five privileges**, in the words a
-      person reads, because a 403 and a share dialog both quote it.
+      person reads, because a 403 and a share dialog both quote it — and a
+      `PRIVILEGE_LABELS` row and a `SHARE_LEVELS` entry, which are what the
+      share dialog offers (*Can view / Can edit / Full access*).
 - [ ] `_OWNED_TABLES` in `infra/authz/owner_only.py`, so `visible` has an
       ownership arm to union.
 - [ ] A `_NOUN` and a `_NOT_FOUND` entry in `services/policy.py`.
@@ -202,7 +204,8 @@ of them is why that product's permissions are hard to reason about:
   nobody's behalf. `RequestContext.user_id` has no default, so it is a
   `TypeError` rather than a convention.
 - **No god context.** Background work names its principal through
-  `RequestContext.on_behalf_of(owner)` and gets exactly that person's answers.
+  `team_service.delegated_context(db, owner)` — `on_behalf_of` plus that
+  person's teams — and gets exactly that person's answers.
   A scheduled run its owner could not perform by hand is *supposed* to fail.
 - **No permission keyed on an email or an external subject.** Both are
   mutable, and a permission that survives a rename is the point of an id.
@@ -226,7 +229,8 @@ of them is why that product's permissions are hard to reason about:
 | Every route resolves a `ctx` | `test_authz_conformance.py` |
 | Every `ResourceType` × `Privilege` has a meaning | `test_authz_conformance.py` |
 | Every owner-scoped list composes `visible` | `test_authz_conformance.py` |
-| I5 — every mutating route refuses an unprivileged caller | `test_authz_conformance.py`, walking the route table |
+| I5 — every mutating route refuses an unprivileged caller | `test_access_behaviour.py`, **calling** every one as a principal with nothing (and `test_authz_conformance.py`, reading them) |
+| Every `*.create` capability is asked at its collection; background work acts with the person's teams | `test_access_behaviour.py` |
 | I4 — nothing subtracts | `test_authz_conformance.py`, a property test |
 | I2 — the intersection rule, and the cache order | `test_intersection.py` |
 | I3 — one row per denial, none per 404, no content in `detail` | `test_denials.py`, `test_audit_and_permissions.py` |

@@ -152,7 +152,11 @@ class RequestContext:
 
     @classmethod
     def on_behalf_of(
-        cls, user_id: UUID, *, correlation_id: str | None = None
+        cls,
+        user_id: UUID,
+        *,
+        correlation_id: str | None = None,
+        team_ids: frozenset[UUID] = frozenset(),
     ) -> RequestContext:
         """The context background work acts under: a principal, delegated.
 
@@ -176,6 +180,7 @@ class RequestContext:
         return cls(
             user_id=user_id,
             email="",
+            team_ids=team_ids,
             correlation_id=(
                 get_correlation_id() if correlation_id is None else correlation_id
             ),

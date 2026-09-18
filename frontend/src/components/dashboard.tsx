@@ -27,6 +27,7 @@ import 'react-resizable/css/styles.css'
 
 import { dashboards as api } from '../api/client'
 import { Restricted } from './access'
+import { accessOf, useCan } from '../permissions'
 import { dueTileIds } from './dashboard-schedule'
 import type { Dashboard, DashboardSummary, DashboardTile, TileResult } from '../api/types'
 import { Chip, Dot, ErrorNote, Icon, Kpi, ResultTable, Spinner, glyphTint, relativeTime } from './ui'
@@ -186,12 +187,14 @@ const RESIZE_HANDLES: ('n' | 'e' | 's' | 'w' | 'ne' | 'nw' | 'se' | 'sw')[] =
   ['n', 'e', 's', 'w', 'ne', 'nw', 'se', 'sw']
 
 export function DashboardGrid({
-  dashboard, tiles, data, editing, width, onLayout, onTileAction,
+  dashboard, tiles, data, editing, readOnly = false, width, onLayout, onTileAction,
 }: {
   dashboard: Dashboard
   tiles: DashboardTile[]
   data: TileData
   editing: boolean
+  /** The reader may view this board, not change it: no tile edits offered. */
+  readOnly?: boolean
   width: number
   onLayout: (layout: Layout[]) => void
   onTileAction: (action: TileAction, tile: DashboardTile) => void
@@ -227,6 +230,7 @@ export function DashboardGrid({
               loading={data.pending.has(tile.id)}
               editing={editing}
               draggable={false}
+              readOnly={readOnly}
               onAction={(action) => onTileAction(action, tile)}
             />
           </div>
@@ -241,6 +245,7 @@ export function DashboardGrid({
       tiles={tiles}
       data={data}
       editing={editing}
+      readOnly={readOnly}
       width={width}
       onLayout={onLayout}
       onTileAction={onTileAction}
@@ -249,12 +254,13 @@ export function DashboardGrid({
 }
 
 function SizedGrid({
-  dashboard, tiles, data, editing, width, onLayout, onTileAction,
+  dashboard, tiles, data, editing, readOnly, width, onLayout, onTileAction,
 }: {
   dashboard: Dashboard
   tiles: DashboardTile[]
   data: TileData
   editing: boolean
+  readOnly: boolean
   width: number
   onLayout: (layout: Layout[]) => void
   onTileAction: (action: TileAction, tile: DashboardTile) => void
@@ -317,6 +323,7 @@ function SizedGrid({
               result={data.results[tile.id]}
               loading={data.pending.has(tile.id)}
               editing={editing}
+              readOnly={readOnly}
               onAction={(action) => onTileAction(action, tile)}
             />
           </div>
@@ -331,7 +338,8 @@ function SizedGrid({
 export type TileAction = 'expand' | 'refresh' | 'edit' | 'duplicate' | 'delete'
 
 export function TileShell({
-  tile, result, loading, editing, draggable = editing, focused = false, onAction,
+  tile, result, loading, editing, draggable = editing, focused = false, readOnly = false,
+  onAction,
 }: {
   tile: DashboardTile
   result?: TileResult
@@ -342,11 +350,16 @@ export function TileShell({
   draggable?: boolean
   /** Drawn inside the focus overlay: no expand button, no drag, no lift. */
   focused?: boolean
+  /** The reader may not change the board: expand and refresh only. */
+  readOnly?: boolean
   onAction: (action: TileAction) => void
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const rate = tile.effective_refresh_interval_seconds
-  const failed = result?.status === 'ERROR' || Boolean(result?.error)
+  // A tile withheld by the intersection rule is the system working, not a
+  // failure: no red frame — the placeholder inside already says why, in amber.
+  const withheld = result?.error?.code === 'E_NO_DATA_ACCESS'
+  const failed = !withheld && (result?.status === 'ERROR' || Boolean(result?.error))
 
   return (
     <div
@@ -508,6 +521,8 @@ export function TileShell({
             {menuOpen && (
               <TileMenu
                 focused={focused}
+                readOnly={readOnly}
+                restricted={Boolean(tile.restricted)}
                 onClose={() => setMenuOpen(false)}
                 onAction={(action) => {
                   setMenuOpen(false)
@@ -540,12 +555,16 @@ export function TileShell({
 }
 
 function TileMenu({
-  onAction, onClose, focused = false,
+  onAction, onClose, focused = false, readOnly = false, restricted = false,
 }: {
   onAction: (action: TileAction) => void
   onClose: () => void
   /** Inside the focus overlay there is nothing left to expand into. */
   focused?: boolean
+  /** View-only reader: nothing that changes the board. */
+  readOnly?: boolean
+  /** A tile on data this reader was not given: its query cannot be edited. */
+  restricted?: boolean
 }) {
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -560,12 +579,20 @@ function TileMenu({
   // duplicate, delete) belongs to the tile, reachable without a mode switch.
   // Expand is in the menu as well as on the header, because the header button
   // is revealed by hover and a touch device never produces one.
+  //
+  // A view-only reader gets the two that change nothing. A tile whose data
+  // this editor was not given offers Rename where Edit would be — the query is
+  // the one part of it they cannot change.
   const items: { action: TileAction; label: string; danger?: boolean }[] = [
     ...(focused ? [] : [{ action: 'expand' as const, label: 'Expand' }]),
     { action: 'refresh', label: 'Refresh now' },
-    { action: 'edit', label: 'Edit' },
-    { action: 'duplicate', label: 'Duplicate' },
-    { action: 'delete', label: 'Delete', danger: true },
+    ...(readOnly
+      ? []
+      : [
+          { action: 'edit' as const, label: restricted ? 'Rename…' : 'Edit' },
+          { action: 'duplicate' as const, label: 'Duplicate' },
+          { action: 'delete' as const, label: 'Delete', danger: true },
+        ]),
   ]
 
   return (
@@ -1122,6 +1149,13 @@ function DashboardGlyph({ hue, size = 34 }: { hue: number; size?: number }) {
   )
 }
 
+/** What a locked card says on hover: that it exists, and whom to ask. */
+function noAccessTitle(dashboard: DashboardSummary): string {
+  return dashboard.owner_name
+    ? `You can see this dashboard exists, but not open it. Ask ${dashboard.owner_name} to share it with you.`
+    : 'You can see this dashboard exists, but not open it.'
+}
+
 /** Rename / duplicate / export / archive / delete — shared by card and row. */
 function DashboardMenu({
   dashboard, onRename, onDuplicate, onExport, onArchive, onDelete, onShare,
@@ -1135,21 +1169,27 @@ function DashboardMenu({
   onShare: () => void
 }) {
   const [open, setOpen] = useState(false)
+  const may = accessOf(dashboard.privileges)
+  const can = useCan()
+  // Only what the server would allow. Every entry used to be offered on every
+  // card, so a board shared *to* you offered Rename, Archive and Delete — each
+  // a 403 after the click.
   const items = [
-    // First, and above Rename: from Phase 8 this is the verb that changes who
-    // else has the board, which is a bigger act than any of the four below it.
-    // Offered on every card rather than only on ones the viewer can share —
-    // the dialog itself renders a sentence instead of a form when they cannot,
-    // which teaches more than a menu entry that silently is not there.
-    { label: 'Share…', run: onShare },
-    { label: 'Rename', run: onRename },
-    { label: 'Duplicate', run: onDuplicate },
-    // Next to Duplicate on purpose: both answer "I want another one of these",
-    // and the only difference is whether the copy lands in this account.
-    { label: 'Export…', run: onExport },
-    { label: dashboard.status === 'ARCHIVED' ? 'Unarchive' : 'Archive', run: onArchive },
-    { label: 'Delete', run: onDelete, danger: true },
-  ]
+    // First: the verb that changes who else has the board.
+    may.share && { label: 'Share…', run: onShare },
+    may.edit && { label: 'Rename', run: onRename },
+    // A copy is a new board of your own, so it needs `dashboard.create` as
+    // well as being able to read this one.
+    may.view && can('dashboard.create') && { label: 'Duplicate', run: onDuplicate },
+    may.view && { label: 'Export…', run: onExport },
+    may.edit && {
+      label: dashboard.status === 'ARCHIVED' ? 'Unarchive' : 'Archive',
+      run: onArchive,
+    },
+    may.delete && { label: 'Delete', run: onDelete, danger: true },
+  ].filter((item): item is { label: string; run: () => void; danger?: boolean } => !!item)
+
+  if (items.length === 0) return null
 
   return (
     // Above the card-wide link overlay, so the kebab stays clickable.
@@ -1278,6 +1318,10 @@ export function DashboardCard({
 }) {
   const hue = cardHue(dashboard.id)
   const archived = dashboard.status === 'ARCHIVED'
+  // A board you may only know *exists* — a role like Auditor's reaches every
+  // board at `describe`. It is listed, honestly, but it cannot be opened, so
+  // it is not drawn as a link that answers "not permitted".
+  const locked = !accessOf(dashboard.privileges).view
 
   return (
     <div
@@ -1290,7 +1334,7 @@ export function DashboardCard({
         padding: '14px 15px 13px',
         background: 'var(--panel)',
         borderRadius: 14,
-        opacity: archived ? 0.66 : 1,
+        opacity: archived || locked ? 0.66 : 1,
       }}
     >
       {/* Title row: the glyph carries identity, the kebab sits opposite it, and
@@ -1298,8 +1342,10 @@ export function DashboardCard({
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
         <DashboardGlyph hue={hue} />
         <button
-          className="rm-dash-card-link"
-          onClick={onOpen}
+          className={locked ? undefined : 'rm-dash-card-link'}
+          onClick={locked ? undefined : onOpen}
+          disabled={locked}
+          title={locked ? noAccessTitle(dashboard) : undefined}
           dir="auto"
           style={{
             flex: 1,
@@ -1308,7 +1354,7 @@ export function DashboardCard({
             background: 'transparent',
             border: 'none',
             padding: 0,
-            cursor: 'pointer',
+            cursor: locked ? 'default' : 'pointer',
             color: 'var(--text-strong)',
             fontSize: 14.5,
             fontWeight: 650,
@@ -1334,10 +1380,11 @@ export function DashboardCard({
       {/* State worth acting on, and only when there is any: an empty dashboard
           is unfinished and a live one that has never run is misconfigured.
           Both were invisible on the old card, which showed a picture instead. */}
-      {(archived || dashboard.shared || dashboard.tile_count === 0
+      {(archived || locked || dashboard.shared || dashboard.tile_count === 0
         || (dashboard.default_refresh_interval_seconds > 0 && !dashboard.last_refreshed_at)) && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           {archived && <Chip tone="amber">Archived</Chip>}
+          {locked && <Chip tone="neutral">No access</Chip>}
           {/* Whose board this is, when it is not yours. A display name, never
               an address — the rule every list that became shareable follows. */}
           {dashboard.shared && (
@@ -1410,6 +1457,7 @@ export function DashboardRow({
 }) {
   const hue = cardHue(dashboard.id)
   const archived = dashboard.status === 'ARCHIVED'
+  const locked = !accessOf(dashboard.privileges).view
 
   return (
     <div
@@ -1430,8 +1478,10 @@ export function DashboardRow({
       <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
           <button
-            className="rm-dash-card-link"
-            onClick={onOpen}
+            className={locked ? undefined : 'rm-dash-card-link'}
+            onClick={locked ? undefined : onOpen}
+            disabled={locked}
+            title={locked ? noAccessTitle(dashboard) : undefined}
             dir="auto"
             style={{
               minWidth: 0,
@@ -1439,7 +1489,8 @@ export function DashboardRow({
               background: 'transparent',
               border: 'none',
               padding: 0,
-              cursor: 'pointer',
+              cursor: locked ? 'default' : 'pointer',
+              opacity: locked ? 0.7 : 1,
               color: 'var(--text-strong)',
               fontSize: 13.5,
               fontWeight: 600,
@@ -1451,6 +1502,7 @@ export function DashboardRow({
             {dashboard.name}
           </button>
           {archived && <Chip tone="amber">Archived</Chip>}
+          {locked && <Chip tone="neutral">No access</Chip>}
           {dashboard.shared && (
             <Chip tone="accent">
               {dashboard.owner_name ? `Shared by ${dashboard.owner_name}` : 'Shared'}

@@ -62,7 +62,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMatch, useNavigate } from 'react-router-dom'
 import { llmConfigs as api } from '../api/client'
-import { AccessPanel, TransferControl } from '../components/access'
+import { AccessPanel, ReachBadge, TransferControl } from '../components/access'
+import { useCan } from '../permissions'
 import type { LlmConfig, ParameterCatalog, TestResult } from '../api/types'
 import {
   Chip, DangerButton, EmptyState, ErrorNote, Field, GhostButton, GlyphBadge, Icon,
@@ -477,6 +478,14 @@ export default function LlmProvidersPage() {
     () => list.find((c) => c.id === selectedId) ?? null,
     [list, selectedId],
   )
+  // What this reader may do with the selected model. A model shared with them
+  // is shared to *use* — `describe` and `select` — so its page reads as a
+  // description of something they can pick in Chat, not a form whose Save,
+  // Test and Delete all answer 403. A new row is about to be the creator's.
+  const held = new Set(selected?.privileges ?? [])
+  const mayEdit = creating || held.has('modify')
+  const mayDelete = !creating && held.has('delete')
+  const mayCreate = useCan()('llm_config.create')
 
   const catalog = useMemo(
     () => catalogs?.find((entry) => entry.provider === draft.provider) ?? null,
@@ -860,7 +869,7 @@ export default function LlmProvidersPage() {
         loading={loading}
         query={query}
         onQuery={setQuery}
-        onNew={() => startCreate('chat')}
+        onNew={mayCreate ? () => startCreate('chat') : undefined}
         newLabel="Add a model"
         // "No models configured yet" implied a workspace someone else had
         // configured. They are per-account: a second person's first visit is
@@ -982,7 +991,9 @@ export default function LlmProvidersPage() {
                 // Access saves itself, so leaving Save up there would offer to
                 // save a form the reader cannot see — the rule Data sources
                 // already follows on its Schema and Semantic layer tabs.
-                tab === 'access' ? undefined : (
+                tab === 'access' ? undefined : !mayEdit ? (
+                  <ReachBadge privileges={selected?.privileges ?? []} owner={selected?.owner_name} />
+                ) : (
                 <>
                   {!creating && isDirty && <UnsavedNote />}
                   <GhostButton
@@ -1078,6 +1089,44 @@ export default function LlmProvidersPage() {
                 </StatusLine>
               )}
 
+              {!mayEdit && tab !== 'access' && (
+                <p
+                  style={{
+                    margin: 0,
+                    display: 'flex',
+                    gap: 10,
+                    padding: '11px 14px',
+                    borderRadius: 10,
+                    background: 'var(--panel-alt)',
+                    border: '1px solid var(--border)',
+                    fontSize: 12.5,
+                    lineHeight: 1.55,
+                    color: 'var(--text-dim)',
+                  }}
+                >
+                  <span aria-hidden style={{ color: 'var(--text-faint)' }}>
+                    <Icon.Lock size={14} />
+                  </span>
+                  <span>
+                    {held.has('select')
+                      ? 'You can use this model — pick it in Chat, on a tile or in a report. '
+                      : 'You can see that this model exists. '}
+                    Only its owner can change it
+                    {selected?.owner_name ? (
+                      <>: <strong style={{ color: 'var(--text-strong)' }}>{selected.owner_name}</strong>.</>
+                    ) : '.'}{' '}
+                    Its key is never shown to anyone.
+                  </span>
+                </p>
+              )}
+
+              <fieldset
+                disabled={!mayEdit && tab !== 'access'}
+                style={{
+                  border: 0, padding: 0, margin: 0, minWidth: 0,
+                  display: 'flex', flexDirection: 'column', gap: 16,
+                }}
+              >
               {tab === 'model' && creating && (
                 // Asked once, at the top, before anything below it makes
                 // sense: the fields under this differ by kind, and a form that
@@ -1248,13 +1297,15 @@ export default function LlmProvidersPage() {
                     transfer it to the person whose connections it should embed,
                     and the vectors already made with it keep being served.
                   </p>
-                  <div style={{ display: 'flex' }}>
-                    <TransferControl
-                      base={`llm-configs/${selected.id}`}
-                      title={selected.name}
-                      onTransferred={() => void refresh()}
-                    />
-                  </div>
+                  {held.has('manage') && (
+                    <div style={{ display: 'flex' }}>
+                      <TransferControl
+                        base={`llm-configs/${selected.id}`}
+                        title={selected.name}
+                        onTransferred={() => void refresh()}
+                      />
+                    </div>
+                  )}
                 </Section>
               )}
 
@@ -1280,11 +1331,11 @@ export default function LlmProvidersPage() {
                       lineHeight: 1.6,
                     }}
                   >
-                    Only <strong>select</strong> and <strong>describe</strong> can
-                    be given here. Anyone who could <em>edit</em> this
-                    configuration could repoint its endpoint at a server they
-                    control and read the stored key out of the next request, so
-                    editing stays with you and with whoever you transfer it to.
+                    People you share this with can <strong>use</strong> it to
+                    answer questions. They never see its key, and they can’t edit
+                    it — anyone who could change its endpoint could read the key
+                    from the next request — so editing stays with you and with
+                    whoever you transfer it to.
                   </p>
                   <AccessPanel
                     base={`llm-configs/${selected.id}`}
@@ -1421,7 +1472,7 @@ export default function LlmProvidersPage() {
               </Section>
               )}
 
-              {tab === 'model' && !creating && selected && (
+              {tab === 'model' && mayDelete && selected && (
                 <Section
                   title="Danger zone"
                   description="Conversations that already ran on this model keep their recorded snapshot."
@@ -1452,6 +1503,7 @@ export default function LlmProvidersPage() {
                   own side regardless of what a provider claims to support.
                 </p>
               )}
+              </fieldset>
             </DetailBody>
           </>
         )}

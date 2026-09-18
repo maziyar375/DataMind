@@ -161,6 +161,7 @@ def build_document(
     connections: dict[UUID, DatabaseConnection],
     *,
     now: datetime | None = None,
+    withheld: frozenset[UUID] = frozenset(),
 ) -> DashboardDocument:
     """Turn stored rows into the portable form. Pure: no I/O, no session.
 
@@ -169,6 +170,12 @@ def build_document(
     row loaded under a different owner is not here either. Either way the tile
     exports with no `connection_ref` and the importer is asked for one, which is
     the same conversation the tile editor would have had.
+
+    `withheld` names tiles whose **statement** stays out of the file: tiles on
+    a data source the exporter may not query. The statement is that source's
+    table and column names, which `describe` on a connection deliberately does
+    not include — so a person who was shared the board and not the database
+    exports the layout, the titles and the questions, and not the schema.
     """
     refs: dict[UUID, str] = {}
     listed: list[DocumentConnection] = []
@@ -212,7 +219,7 @@ def build_document(
                     tile.tile_type, ("CHART", "TABLE", "METRIC", "TEXT"), "CHART"
                 ),
                 question=tile.question,
-                sql=tile.sql,
+                sql="" if tile.id in withheld else tile.sql,
                 sql_origin=_one_of(
                     tile.sql_origin,
                     ("GENERATED", "GENERATED_EDITED", "HANDWRITTEN"),

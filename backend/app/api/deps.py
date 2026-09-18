@@ -193,14 +193,26 @@ def needs(capability: Capability) -> Callable[..., Awaitable[RequestContext]]:
     """
 
     async def guard(ctx: CtxDep) -> RequestContext:
-        if not ctx.can(capability):
-            raise ForbiddenError(
-                f"This action needs the “{capability}” permission, which none "
-                "of your roles carries."
-            )
+        demand(ctx, capability)
         return ctx
 
     return guard
+
+
+def demand(ctx: RequestContext, capability: Capability) -> None:
+    """`needs`, for the one case a dependency cannot express: a route whose
+    capability depends on the body.
+
+    The unsaved *Test connection* and *Test model* probes are that case — with
+    an id they test an edit of a row (a privilege on it), without one they test
+    a row about to be created (a capability). Same sentence as `needs`, so a
+    refusal reads the same whichever way it was reached.
+    """
+    if not ctx.can(capability):
+        raise ForbiddenError(
+            f"This action needs the “{capability}” permission, which none "
+            "of your roles carries."
+        )
 
 
 def on(
@@ -292,3 +304,23 @@ AccessReviewDep = Annotated[
 #: usage carries no dependency at all — the scope there is the caller, and a
 #: route that cannot be widened by any parameter has nothing to gate.
 UsageReadDep = Annotated[RequestContext, Depends(needs(Capability.USAGE_READ))]
+
+#: The five creation verbs. **Create is a capability, never a privilege** —
+#: nobody can hold a privilege on a row that does not exist yet — so each
+#: collection's `POST` names one of these, and the role table decides who may
+#: make what. They were declared, seeded and shown in the Roles tab for a long
+#: time before any route asked for them; `test_access_behaviour.py` is what
+#: keeps them asked.
+DashboardCreateDep = Annotated[
+    RequestContext, Depends(needs(Capability.DASHBOARD_CREATE))
+]
+ReportCreateDep = Annotated[RequestContext, Depends(needs(Capability.REPORT_CREATE))]
+ConnectionCreateDep = Annotated[
+    RequestContext, Depends(needs(Capability.CONNECTION_CREATE))
+]
+LlmConfigCreateDep = Annotated[
+    RequestContext, Depends(needs(Capability.LLM_CONFIG_CREATE))
+]
+ConversationCreateDep = Annotated[
+    RequestContext, Depends(needs(Capability.CONVERSATION_CREATE))
+]

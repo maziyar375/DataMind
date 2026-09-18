@@ -14,8 +14,11 @@ import type { Layout } from 'react-grid-layout'
 import { useLocation, useMatch, useNavigate } from 'react-router-dom'
 
 import { ApiError, access, dashboards as api } from '../api/client'
-import { AccessPanel, AccessPopover, ReachBadge, TransferControl } from '../components/access'
+import {
+  AccessPanel, AccessPopover, ReachBadge, TransferControl, type WarnFn,
+} from '../components/access'
 import { useThemeOverride } from '../shell'
+import { accessOf, useCan } from '../permissions'
 import type { Dashboard, DashboardSummary, DashboardTile } from '../api/types'
 import {
   DashboardCard, DashboardGrid, DashboardRow, DashboardSettings, STACK_BELOW_PX,
@@ -65,15 +68,12 @@ export default function DashboardsPage() {
  * Curried per dashboard so the identity is stable across renders of the
  * dialog, which polls it whenever the picked principal changes.
  */
-const WARN_CACHE = new Map<string, (p: { user_id?: string; team_id?: string }) => Promise<string[]>>()
+const WARN_CACHE = new Map<string, WarnFn>()
 
-function warnFor(dashboardId: string) {
+function warnFor(dashboardId: string): WarnFn {
   let fn = WARN_CACHE.get(dashboardId)
   if (!fn) {
-    fn = async (principal) => {
-      const check = await access.shareCheck(dashboardId, principal)
-      return check.unreadable.map((connection) => connection.name)
-    }
+    fn = async (principal) => (await access.shareCheck(dashboardId, principal)).unreadable
     WARN_CACHE.set(dashboardId, fn)
   }
   return fn
@@ -114,6 +114,7 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
   const [cards, setCards] = useState<DashboardSummary[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  const mayCreate = useCan()('dashboard.create')
   const [importing, setImporting] = useState(false)
   const [renaming, setRenaming] = useState<DashboardSummary | null>(null)
   /** The board whose access panel is open, from a card's kebab. */
@@ -185,7 +186,11 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
         theme_override: source.theme_override,
         default_refresh_interval_seconds: source.default_refresh_interval_seconds,
       })
-      for (const tile of source.tiles) {
+      // A tile on data you were not given arrives without its statement, and
+      // could not be saved into a board of yours anyway: it is left out, and
+      // said so, rather than failing the copy half-way through.
+      const skipped = source.tiles.filter((tile) => tile.restricted).length
+      for (const tile of source.tiles.filter((t) => !t.restricted)) {
         await api.addTile(copy.id, {
           title: tile.title,
           tile_type: tile.tile_type,
@@ -203,6 +208,12 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
           grid_h: tile.grid_h,
           position: tile.position,
         })
+      }
+      if (skipped > 0) {
+        setError(
+          `Copied. ${skipped} ${skipped === 1 ? 'tile was' : 'tiles were'} left out — ` +
+            'they use data that hasn’t been shared with you.',
+        )
       }
     },
     [],
@@ -278,16 +289,22 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
             {/* A ghost next to the primary: importing is how a dashboard arrives
                 from somewhere else, which is a real way to start — but creating
                 one is still the page's own verb. */}
-            <GhostButton style={{ padding: '10px 15px' }} onClick={() => setImporting(true)}>
-              <Icon.ArrowDown size={13} /> Import
-            </GhostButton>
-            <PrimaryButton
-              style={{ padding: '10px 17px' }}
-              onClick={() => setCreating(true)}
-              disabled={busy}
-            >
-              <Icon.Plus /> New dashboard
-            </PrimaryButton>
+            {/* Both make a board of your own, so both need `dashboard.create` —
+                a Viewer's role does not carry it, and the server refuses. */}
+            {mayCreate && (
+              <GhostButton style={{ padding: '10px 15px' }} onClick={() => setImporting(true)}>
+                <Icon.ArrowDown size={13} /> Import
+              </GhostButton>
+            )}
+            {mayCreate && (
+              <PrimaryButton
+                style={{ padding: '10px 17px' }}
+                onClick={() => setCreating(true)}
+                disabled={busy}
+              >
+                <Icon.Plus /> New dashboard
+              </PrimaryButton>
+            )}
           </>
         }
       />
@@ -375,8 +392,16 @@ function DashboardIndex({ onOpen }: { onOpen: (id: string) => void }) {
           <EmptyState
             icon={<Icon.Grid size={20} />}
             title="No dashboards yet"
-            body="A dashboard is a grid of saved queries. Create one, then add a tile by asking a question in plain language or writing the SQL yourself."
-            action={<PrimaryButton onClick={() => setCreating(true)}>New dashboard</PrimaryButton>}
+            body={
+              mayCreate
+                ? 'A dashboard is a grid of saved queries. Create one, then add a tile by asking a question in plain language or writing the SQL yourself.'
+                : 'Dashboards people share with you will appear here.'
+            }
+            action={
+              mayCreate ? (
+                <PrimaryButton onClick={() => setCreating(true)}>New dashboard</PrimaryButton>
+              ) : undefined
+            }
           />
         </div>
       ) : visible.length === 0 ? (
@@ -812,6 +837,12 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
 
   const tiles: DashboardTile[] = useMemo(() => dashboard?.tiles ?? [], [dashboard])
   const data = useTileScheduler(id, tiles)
+  // What this reader may do here, from the privileges the board arrived with.
+  // Every edit control below renders from it: a board shared for viewing is a
+  // reading surface, not an editor whose every button answers 403.
+  const may = accessOf(dashboard?.privileges)
+  /** A tile on data this editor was not given: title only — see `RenameTile`. */
+  const [renamingTile, setRenamingTile] = useState<DashboardTile | null>(null)
 
   // Which tile the editor is on, read off the URL: `undefined` = closed,
   // `null` = adding, a tile = editing that one — the same three states the
@@ -1013,6 +1044,10 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
         // behind it means the editor closes back onto a modal, not the grid.
         if (action === 'edit') {
           setFocusId(null)
+          // Its query runs on data this editor was not given, so the full
+          // editor could only show an empty statement and refuse the save.
+          // What they *can* change on it is its name.
+          if (tile.restricted) return setRenamingTile(tile)
           return openEditor(tile)
         }
         // Both of these apply the change locally rather than re-reading, for
@@ -1162,25 +1197,52 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
                 Escape. A drawer or dialog for renaming would be a longer road
                 to the same PATCH. The empty description's placeholder carries
                 the tile count, so the line is never blank. */}
-            <InlineEdit
-              ariaLabel="Dashboard name"
-              value={dashboard.name}
-              required
-              style={{
-                fontSize: 16.5,
-                fontWeight: 700,
-                letterSpacing: '-0.01em',
-                color: 'var(--text-strong)',
-              }}
-              onCommit={(name) => void patchDashboard({ name })}
-            />
-            <InlineEdit
-              ariaLabel="Dashboard description"
-              value={dashboard.description ?? ''}
-              placeholder={`${tiles.length} ${tiles.length === 1 ? 'tile' : 'tiles'} — add a description`}
-              style={{ fontSize: 12, color: 'var(--text-dim)' }}
-              onCommit={(description) => void patchDashboard({ description: description || null })}
-            />
+            {may.edit ? (
+              <>
+                <InlineEdit
+                  ariaLabel="Dashboard name"
+                  value={dashboard.name}
+                  required
+                  style={{
+                    fontSize: 16.5,
+                    fontWeight: 700,
+                    letterSpacing: '-0.01em',
+                    color: 'var(--text-strong)',
+                  }}
+                  onCommit={(name) => void patchDashboard({ name })}
+                />
+                <InlineEdit
+                  ariaLabel="Dashboard description"
+                  value={dashboard.description ?? ''}
+                  placeholder={`${tiles.length} ${tiles.length === 1 ? 'tile' : 'tiles'} — add a description`}
+                  style={{ fontSize: 12, color: 'var(--text-dim)' }}
+                  onCommit={(description) => void patchDashboard({ description: description || null })}
+                />
+              </>
+            ) : (
+              // The same two lines, as text: somebody who may only view this
+              // board should not find its name turning into a field on hover.
+              <>
+                <span
+                  dir="auto"
+                  style={{
+                    fontSize: 16.5,
+                    fontWeight: 700,
+                    letterSpacing: '-0.01em',
+                    color: 'var(--text-strong)',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {dashboard.name}
+                </span>
+                <span dir="auto" style={{ fontSize: 12, color: 'var(--text-dim)' }}>
+                  {dashboard.description
+                    || `${tiles.length} ${tiles.length === 1 ? 'tile' : 'tiles'}`}
+                </span>
+              </>
+            )}
           </div>
 
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1223,7 +1285,7 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
                     is the same answer the API will give the next request —
                     so a reader who was shared this board sees a header with
                     no share control rather than one that 403s. */}
-                <ReachBadge privileges={dashboard.privileges} />
+                <ReachBadge privileges={dashboard.privileges} owner={dashboard.owner_name} />
                 {/* A group of one, in the same shell as the toolgroup beside it
                     and the live chip before it — so the header reads as three
                     pills of one height and then the primary, rather than as a
@@ -1231,26 +1293,30 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
                     *in* the toolgroup because that group is this board's modes
                     plus its export, and who may reach the board is not a mode;
                     it is also the one label here that changes with the data. */}
-                <div className="rm-toolgroup">
-                  <AccessPopover
-                    base={`dashboards/${dashboard.id}`}
-                    resourceLabel={dashboard.name}
-                    warn={warnFor(dashboard.id)}
-                    buttonStyle={accessBtn}
-                    buttonHoverStyle={accessBtnHover}
-                    extraActions={
-                      <TransferControl
-                        base={`dashboards/${dashboard.id}`}
-                        title={dashboard.name}
-                        // Back to the index, not a re-read: a transfer leaves
-                        // the previous owner holding nothing, so staying here
-                        // would reload the board they can no longer open and
-                        // show them a 404 for their own transfer.
-                        onTransferred={onBack}
-                      />
-                    }
-                  />
-                </div>
+                {/* Only for someone who can share: an empty group still draws
+                    a pill, which read as a stray dot beside the badge. */}
+                {may.share && (
+                  <div className="rm-toolgroup">
+                    <AccessPopover
+                      base={`dashboards/${dashboard.id}`}
+                      resourceLabel={dashboard.name}
+                      warn={warnFor(dashboard.id)}
+                      buttonStyle={accessBtn}
+                      buttonHoverStyle={accessBtnHover}
+                      extraActions={
+                        <TransferControl
+                          base={`dashboards/${dashboard.id}`}
+                          title={dashboard.name}
+                          // Back to the index, not a re-read: a transfer leaves
+                          // the previous owner holding nothing, so staying here
+                          // would reload the board they can no longer open and
+                          // show them a 404 for their own transfer.
+                          onTransferred={onBack}
+                        />
+                      }
+                    />
+                  </div>
+                )}
                 {/* One control per verb was four ghost buttons of identical
                     weight — a row of equals with no shape. Presentation and
                     arrangement are both *modes*, so they read as one grouped
@@ -1265,21 +1331,25 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
                   >
                     <Icon.Play size={12} /> <span className="rm-toolgroup-text">Present</span>
                   </button>
-                  <button
-                    type="button"
-                    aria-pressed={editing}
-                    onClick={() => setEditing(true)}
-                  >
-                    <Icon.Grid size={13} /> <span className="rm-toolgroup-text">Edit grid</span>
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={showSettings}
-                    className={showSettings ? 'is-on' : undefined}
-                    onClick={() => setShowSettings((open) => !open)}
-                  >
-                    <Icon.Gear size={13} /> <span className="rm-toolgroup-text">Settings</span>
-                  </button>
+                  {may.edit && (
+                    <button
+                      type="button"
+                      aria-pressed={editing}
+                      onClick={() => setEditing(true)}
+                    >
+                      <Icon.Grid size={13} /> <span className="rm-toolgroup-text">Edit grid</span>
+                    </button>
+                  )}
+                  {may.edit && (
+                    <button
+                      type="button"
+                      aria-pressed={showSettings}
+                      className={showSettings ? 'is-on' : undefined}
+                      onClick={() => setShowSettings((open) => !open)}
+                    >
+                      <Icon.Gear size={13} /> <span className="rm-toolgroup-text">Settings</span>
+                    </button>
+                  )}
                   {/* The one action in a group of modes, and it earns the
                       place: "give me this dashboard as a file" is something
                       you want *while looking at the dashboard*, and it was a
@@ -1300,9 +1370,11 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
                     <Icon.ArrowDown size={13} /> <span className="rm-toolgroup-text">Export</span>
                   </button>
                 </div>
-                <PrimaryButton style={{ padding: '8px 14px' }} onClick={() => openEditor(null)}>
-                  <Icon.Plus /> Add tile
-                </PrimaryButton>
+                {may.edit && (
+                  <PrimaryButton style={{ padding: '8px 14px' }} onClick={() => openEditor(null)}>
+                    <Icon.Plus /> Add tile
+                  </PrimaryButton>
+                )}
               </>
             )}
           </div>
@@ -1328,11 +1400,17 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
             <EmptyState
               icon={<Icon.Grid size={20} />}
               title="This dashboard is empty"
-              body="A tile is a saved query on its own clock. Add one by asking a question in plain language, or by writing the SQL yourself."
+              body={
+                may.edit
+                  ? 'A tile is a saved query on its own clock. Add one by asking a question in plain language, or by writing the SQL yourself.'
+                  : 'Nothing has been added to it yet.'
+              }
               action={
-                <PrimaryButton onClick={() => openEditor(null)}>
-                  <Icon.Plus /> Add tile
-                </PrimaryButton>
+                may.edit ? (
+                  <PrimaryButton onClick={() => openEditor(null)}>
+                    <Icon.Plus /> Add tile
+                  </PrimaryButton>
+                ) : undefined
               }
             />
           ) : (
@@ -1356,7 +1434,8 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
                   dashboard={dashboard}
                   tiles={tiles}
                   data={data}
-                  editing={editing}
+                  editing={editing && may.edit}
+                  readOnly={!may.edit}
                   width={width}
                   onLayout={saveLayout}
                   onTileAction={(action, tile) => void onTileAction(action, tile)}
@@ -1367,7 +1446,7 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
         </div>
       </div>
 
-      {showSettings && (
+      {showSettings && may.edit && (
         <DashboardSettings
           dashboard={dashboard}
           onChange={(patch) => void patchDashboard(patch)}
@@ -1375,7 +1454,7 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
         />
       )}
 
-      {editorTile !== undefined && (
+      {editorTile !== undefined && may.edit && (
         <TileEditor
           dashboard={dashboard}
           tile={editorTile}
@@ -1453,6 +1532,22 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
           long table or a dense chart, and resizing the grid to read something
           then resizing it back is not a reading gesture — it is a layout edit
           with a layout write behind it. */}
+      {renamingTile && (
+        <RenameTile
+          dashboardId={id}
+          tile={renamingTile}
+          onClose={() => setRenamingTile(null)}
+          onSaved={(saved) => {
+            setRenamingTile(null)
+            setDashboard((current) =>
+              current
+                ? { ...current, tiles: current.tiles.map((t) => (t.id === saved.id ? saved : t)) }
+                : current,
+            )
+          }}
+        />
+      )}
+
       {focusTile && (
         <div
           className="rm-focus"
@@ -1482,6 +1577,7 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
                 editing={false}
                 draggable={false}
                 focused
+                readOnly={!may.edit}
                 onAction={(action) => void onTileAction(action, focusTile)}
               />
             </div>
@@ -1489,6 +1585,74 @@ function DashboardView({ id, onBack }: { id: string; onBack: () => void }) {
         </div>
       )}
     </>
+  )
+}
+
+/**
+ * The one edit a tile on somebody else's data allows: its title.
+ *
+ * An editor of a shared board who was not given one of its data sources may
+ * still move, resize and rename that tile — the server allows everything that
+ * does not change what it asks — but the full editor would open on an empty
+ * statement (it is withheld: it is that data source's schema) and refuse the
+ * save. So this is what Edit opens on such a tile, and it says why.
+ */
+function RenameTile({
+  dashboardId, tile, onClose, onSaved,
+}: {
+  dashboardId: string
+  tile: DashboardTile
+  onClose: () => void
+  onSaved: (tile: DashboardTile) => void
+}) {
+  const [title, setTitle] = useState(tile.title)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function submit() {
+    setBusy(true)
+    setError(null)
+    try {
+      onSaved(await api.updateTile(dashboardId, tile.id, { title: title.trim() }))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not rename this tile.')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      title="Rename tile"
+      onClose={onClose}
+      width={440}
+      footer={
+        <>
+          <GhostButton onClick={onClose}>Cancel</GhostButton>
+          <PrimaryButton disabled={busy || !title.trim()} onClick={() => void submit()}>
+            {busy ? <Spinner /> : <Icon.Check size={14} />}
+            Save
+          </PrimaryButton>
+        </>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        {error && <ErrorNote>{error}</ErrorNote>}
+        <TextInput
+          aria-label="Tile title"
+          value={title}
+          autoFocus
+          onChange={(event) => setTitle(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && title.trim()) void submit()
+          }}
+        />
+        <p style={{ margin: 0, fontSize: 12, color: 'var(--text-faint)', lineHeight: 1.55 }}>
+          Its query uses {tile.connection_name ? `“${tile.connection_name}”` : 'a data source'},
+          which hasn’t been shared with you — so you can rename, move and resize this tile,
+          but not change what it asks.
+        </p>
+      </div>
+    </Modal>
   )
 }
 

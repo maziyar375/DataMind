@@ -273,6 +273,13 @@ def test_every_module_that_selects_an_owned_table_scopes_the_result() -> None:
 
 
 # ── I5: the UI is an affordance, never a boundary ────────────────────────
+#: Dependencies that carry no authorization decision of their own.
+_PLUMBING = frozenset({
+    "CtxDep", "DbDep", "AuthzDep", "SettingsDep", "SecretBoxDep", "IdentityDep",
+    "ServiceIdentityDep",
+})
+
+
 def test_every_mutating_route_is_guarded() -> None:
     """I5, as a **route-table walk** rather than a hand-written list.
 
@@ -294,12 +301,11 @@ def test_every_mutating_route_is_guarded() -> None:
     exempt = {
         "/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/logout",
         "/api/v1/auth/me", "/api/v1/auth/me/password",
-        # Creating: gated by a `*.create` capability at the collection, or —
-        # for a conversation and a draft — by what they are bound to, which is
-        # checked when the first message names a connection.
-        "/api/v1/conversations", "/api/v1/drafts/sql",
-        "/api/v1/connections", "/api/v1/llm-configs", "/api/v1/dashboards",
-        "/api/v1/reports", "/api/v1/dashboards/import",
+        # A draft is bound to a connection, which is checked when it names
+        # one. (The collection `POST`s used to be listed here as "gated by a
+        # `*.create` capability" — they were not, and are now, by the
+        # capability `Dep` this test recognises.)
+        "/api/v1/sql/drafts",
         # Feedback is deliberately open to any signed-in user: the person best
         # placed to notice a wrong answer is usually not the person allowed to
         # fix it, and gating the report on the right to repair loses exactly
@@ -309,14 +315,24 @@ def test_every_mutating_route_is_guarded() -> None:
     unguarded = []
     for route in _routes(app):
         methods = set(route.methods or ())
-        if not methods & mutating or route.path in exempt:
+        # An included router reports its path without the app's prefix. The
+        # exempt list is written with it, so without this it matched nothing.
+        path = route.path if route.path.startswith("/api/v1") else "/api/v1" + route.path
+        if not methods & mutating or path in exempt:
             continue
         source = inspect.getsource(route.endpoint)
         module = inspect.getmodule(route.endpoint)
         module_source = inspect.getsource(module) if module else ""
-        guarded = any(
-            marker in source
-            for marker in ("Dep", "require(", "_authorized", "authz")
+        # A capability alias (`UserManageDep`, `DashboardCreateDep`) is a
+        # guard; the plumbing ones are not. This used to accept any `"Dep"` —
+        # which `ctx: CtxDep` always is — so it could not fail, and five
+        # creation routes that checked nothing passed it for months.
+        # `test_access_behaviour.py` is the behavioural half of this rule.
+        capability_dep = any(
+            name not in _PLUMBING for name in re.findall(r"\b(\w+Dep)\b", source)
+        )
+        guarded = capability_dep or any(
+            marker in source for marker in ("require(", "_authorized", "authz")
         ) or "attach_access_routes" in module_source
         if not guarded:
             unguarded.append(f"{sorted(methods)} {route.path}")
@@ -559,7 +575,12 @@ def test_there_is_no_god_context() -> None:
     the ones nobody could audit.
     """
     signature = inspect.signature(RequestContext.on_behalf_of)
-    assert set(signature.parameters) == {"user_id", "correlation_id"}
+    # `team_ids` is the principal's own reach — *their* answers include every
+    # team they are in, and without it data shared with a team was refused at
+    # execution (`team_service.delegated_context` resolves them). What may
+    # never appear is a way to hand a delegated context a verb.
+    assert set(signature.parameters) == {"user_id", "correlation_id", "team_ids"}
+    assert "capabilities" not in signature.parameters
 
     ctx = RequestContext.on_behalf_of(uuid4())
     assert ctx.capabilities == frozenset()

@@ -129,3 +129,46 @@ export const ADMIN_SECTION: Capability[] = [
   'service_user.manage',
   'audit.read',
 ]
+
+/**
+ * What the signed-in person may do to **one** thing, from the privileges the
+ * server sent with it.
+ *
+ * The four verbs are the backend's own `CAN` map (`api/v1/access.py`) — view
+ * is `select`, edit is `modify`, delete is `delete`, share is `manage` — and
+ * the list arrives already expanded through the lattice, so this is a
+ * membership test and not a second copy of the lattice. Every edit control on
+ * a dashboard, report, data source, model, knowledge store and semantic layer
+ * renders from this; before it existed most of them rendered for everybody and
+ * the refusal arrived as a 403 after the click.
+ */
+export interface Access {
+  view: boolean
+  edit: boolean
+  delete: boolean
+  share: boolean
+}
+
+export const FULL_ACCESS: Access = { view: true, edit: true, delete: true, share: true }
+export const NO_ACCESS: Access = { view: false, edit: false, delete: false, share: false }
+
+export function accessOf(privileges: readonly string[] | null | undefined): Access {
+  if (!privileges) return NO_ACCESS
+  const held = new Set(privileges)
+  return {
+    view: held.has('select'),
+    edit: held.has('modify'),
+    delete: held.has('delete'),
+    share: held.has('manage'),
+  }
+}
+
+/**
+ * Whether a data source can be **asked** — `select` on it. The pickers in
+ * Chat, the tile editor and the new-report form offer only these: the list
+ * endpoint also returns sources a person may merely know exist, and offering
+ * one of those is offering a refusal.
+ */
+export function queryable(row: { privileges?: string[] }): boolean {
+  return (row.privileges ?? []).includes('select')
+}

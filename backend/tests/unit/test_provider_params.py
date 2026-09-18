@@ -31,6 +31,7 @@ from litellm.utils import get_optional_params
 from app.api import deps
 from app.core.context import RequestContext
 from app.domain.ports.llm import ChatMessage, ResolvedLLM
+from app.domain.value_objects.authz import Capability
 from app.domain.value_objects.llm_params import (
     ANTHROPIC,
     OPENAI_COMPATIBLE,
@@ -441,7 +442,10 @@ def _client(db: FakeDb) -> TestClient:
     app.dependency_overrides[deps.get_db] = lambda: db
     app.dependency_overrides[deps.get_secret_box] = lambda: FakeSecretBox()
     app.dependency_overrides[deps.get_ctx] = lambda: RequestContext(
-        user_id=USER, email="user@test.local", correlation_id="test"
+        user_id=USER, email="user@test.local", correlation_id="test",
+        # Adding a provider is gated on this; the refusal without it is in
+        # `test_access_behaviour.py`.
+        capabilities=frozenset({Capability.LLM_CONFIG_CREATE}),
     )
     return TestClient(app, raise_server_exceptions=False)
 

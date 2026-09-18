@@ -22,6 +22,7 @@ Two claims here are not obvious, and both are decisions rather than mechanics:
 """
 from __future__ import annotations
 
+import inspect
 from typing import Any
 from uuid import uuid4
 
@@ -31,7 +32,7 @@ from app.core.context import RequestContext
 from app.core.errors import NotFoundError, ValidationError
 from app.domain.ports.database import ResultColumn
 from app.domain.value_objects import ReportFeasibility, SqlOrigin
-from app.services import report_service
+from app.services import report_service, sql_draft_service
 from app.services.query_service import TileResult
 from app.services.report_service import sql_fingerprint
 from app.services.sql_draft_service import SqlDraft
@@ -104,6 +105,11 @@ class _Validate:
         self.calls = 0
 
     async def __call__(self, _db: Any, _settings: Any, **kwargs: Any) -> SqlDraft:
+        # Bound against the real signature, so a caller passing an argument
+        # the real function no longer takes fails here rather than in
+        # production. A bare `**kwargs` fake is how `owner_id=` outlived the
+        # Phase 2 change to `ctx`/`authz` and shipped as a 500.
+        inspect.signature(sql_draft_service.validate_sql).bind(_db, _settings, **kwargs)
         self.calls += 1
         self.kwargs = kwargs
         return self.result

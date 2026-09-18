@@ -50,6 +50,7 @@ import type {
 } from '../api/types'
 import { ChartTypePicker } from './chart-picker'
 import { REFRESH_OPTIONS, rateLabel } from './dashboard'
+import { queryable } from '../permissions'
 import {
   Chip, Drawer, ErrorNote, Field, GhostButton, Icon, Kpi, PrimaryButton, ResultTable,
   Select, Spinner, TextArea, TextInput,
@@ -293,8 +294,11 @@ export function TileEditor({
   useEffect(() => {
     let cancelled = false
     Promise.all([connectionsApi.list(), llmConfigsApi.list('chat')])
-      .then(([loadedConnections, loadedModels]) => {
+      .then(([allConnections, loadedModels]) => {
         if (cancelled) return
+        // Only data sources this person can query — a tile over one they may
+        // only *see* would be refused at save.
+        const loadedConnections = allConnections.filter(queryable)
         setConnections(loadedConnections)
         setModels(loadedModels)
         // One connection and no choice to make: pick it, so the common case

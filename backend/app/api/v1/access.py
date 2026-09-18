@@ -38,6 +38,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Request, status
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import AuthzDep, CtxDep, DbDep
 from app.api.schemas import (
@@ -50,10 +51,13 @@ from app.api.schemas import (
 from app.core.context import RequestContext
 from app.domain.ports.authz import Authorizer, ResourceRef
 from app.domain.value_objects.authz import (
+    PRIVILEGE_LABELS,
     PRIVILEGE_MEANINGS,
+    SHARE_LEVELS,
     Privilege,
     ResourceType,
 )
+from app.infra.authz.owner_only import owned_table
 from app.infra.db.models import User
 from app.services.grant_service import GrantService, GrantView
 from app.services.policy import require
@@ -102,7 +106,10 @@ def _view(grant: GrantView) -> GrantRead:
 
 
 async def actions_for(
-    ctx: RequestContext, authz: Authorizer, ref: ResourceRef
+    ctx: RequestContext,
+    authz: Authorizer,
+    ref: ResourceRef,
+    db: AsyncSession | None = None,
 ) -> ActionsRead:
     """What this principal may do here, in the two shapes the UI needs.
 
@@ -113,11 +120,36 @@ async def actions_for(
     """
     held = await authz.privileges_on(ctx, ref)
     meanings = PRIVILEGE_MEANINGS[ref.type]
+    labels = PRIVILEGE_LABELS[ref.type]
+    owner_id = await _owner_of(db, ref) if db is not None else None
+    owner_name = (
+        (await owner_names(db, {owner_id})).get(owner_id)
+        if db is not None and owner_id is not None
+        else None
+    )
     return ActionsRead(
         privileges=sorted(str(p) for p in held),
         can={name: privilege in held for name, privilege in CAN.items()},
         meanings={str(p): meanings[p] for p in Privilege},
+        labels={str(p): labels[p] for p in Privilege},
+        levels=[str(p) for p in SHARE_LEVELS[ref.type]],
+        owner_name=owner_name,
+        is_owner=owner_id is not None and owner_id == ctx.user_id,  # authz-ok: a badge
     )
+
+
+async def _owner_of(db: AsyncSession, ref: ResourceRef) -> UUID | None:
+    """Whose this is — a *fact* for a sentence, never a decision.
+
+    Read here rather than inferred from `privileges`, because holding `manage`
+    and owning are different things and the sentence is about the second.
+    """
+    table = owned_table(ref.type)
+    if table is None:
+        return None
+    return (
+        await db.execute(select(table.owner_id).where(table.id == ref.id))
+    ).scalar_one_or_none()
 
 
 async def owner_names(db: DbDep, ids: set[UUID]) -> dict[UUID, str]:
@@ -249,7 +281,7 @@ def attach_access_routes(
         """
         ref = _ref(request)
         await require(ctx, authz, ref, Privilege.DESCRIBE, db=db)
-        return await actions_for(ctx, authz, ref)
+        return await actions_for(ctx, authz, ref, db)
 
     @router.post(
         f"{path}/grants/self",
