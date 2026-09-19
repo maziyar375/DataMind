@@ -228,6 +228,7 @@ export function applyTheme(name: ThemeName): void {
 export const NODE_META: Record<string, { label: string; detail: string }> = {
   route: { label: 'Route', detail: 'Classifying question type…' },
   match: { label: 'Match', detail: 'Looking for a saved question…' },
+  scope: { label: 'Scope', detail: 'Choosing which part of the database…' },
   clarify: { label: 'Clarify', detail: 'Checking for ambiguity…' },
   retrieve: { label: 'Retrieve', detail: 'Searching schema for relevant tables…' },
   describe: { label: 'Describe', detail: 'Answering from the schema and semantic layer…' },

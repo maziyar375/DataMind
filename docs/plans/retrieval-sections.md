@@ -800,14 +800,39 @@ Tick a box in the commit that lands the work, never ahead of it.
 > comma — it is the token the router replies with.
 
 ### Phase 2 — The `scope` node
-- [ ] `StepName.SCOPE` + both prompts
-- [ ] The node, with all six fail-open cases · *`test_scope_node.py`*
-- [ ] Wired into `CHAT_GRAPH` and `DRAFT_GRAPH` · *`test_pipeline_graph.py`*
-- [ ] `retrieve` honours `scope_tables`; `SECTION_SNAPSHOT` · *`test_retrieve_scope.py`*
-- [ ] FK hop inside the scope, before the cut
-- [ ] `NodeDeps.sections` loaded on both paths
-- [ ] **The guard is untouched** · *`test_section_guard_unaffected.py`*
-- [ ] The pick is in the step trail; `scope` usage is recorded
+- [x] `StepName.SCOPE` + both prompts
+- [x] The node, with all six fail-open cases · *`test_scope_node.py`*
+- [x] Wired into `CHAT_GRAPH` and `DRAFT_GRAPH` · *`test_pipeline_graph.py`*
+- [x] `retrieve` honours `scope_tables`; `SECTION_SNAPSHOT` · *`test_retrieve_scope.py`*
+- [x] FK hop inside the scope, before the cut
+- [x] `NodeDeps.sections` loaded on both paths
+- [x] **The guard is untouched** · *`test_section_guard_unaffected.py`*
+- [x] The pick is in the step trail; `scope` usage is recorded
+
+> Landed 2026-09-19. Decisions made while building it, each covered by a test:
+>
+> - **The join closure.** A section travels with every table outside it that
+>   has foreign keys to **two or more** members — a link table, a shared
+>   dimension — in both `SECTION_SNAPSHOT` and `RANKED_MATCH`; a table touching
+>   one member is the section's edge and stays out. That is how §3.4's "one hop"
+>   and §6.1's "a bridge outside the section is selected" are both true; the
+>   ranked hop runs over that set, so it never reaches past the section's
+>   closure.
+> - **Usage.** Recorded on every reply that came back, a `NONE` included — the
+>   call was paid for. Absent when no call was made (no sections, a METADATA
+>   question, nothing routable) or the provider failed.
+> - **No sections is a silent skip**: SKIPPED with no detail, and the chat trail
+>   hides exactly that case, so a connection without sections draws the trail
+>   it always did (§8.3). A fall-open *with* a reason still shows.
+> - **The ceiling did not move.** `RECURSION_LIMIT` stays 25 node executions;
+>   `scope` spends one on every run, so a runaway repair loop now gets nineteen
+>   rather than twenty — recorded in `test_pipeline_events.py`.
+> - **Unmeasured by the suite, as §6.3 says.** Checked live instead, once, on a
+>   scratch clone: Aurora with four hand-made sections and DeepSeek V4 Flash —
+>   *"Which store format had the highest average daily footfall?"* scoped to
+>   **Stores · 5 tables** in 2.8 s, and `retrieve` sent **6 tables via
+>   SECTION_SNAPSHOT** (the five, plus `orders`, which references two of
+>   them).
 
 ### Phase 3 — Make it trustworthy
 - [ ] Stickiness across a follow-up

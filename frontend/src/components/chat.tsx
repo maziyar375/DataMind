@@ -173,8 +173,19 @@ function useElapsed(key: number | undefined): number {
   return now
 }
 
+/**
+ * The steps worth a chip. Every step is, except one: a `scope` that SKIPPED
+ * with nothing to say is a connection without sections, and drawing it would
+ * change the trail every such connection has always had. A scope that fell
+ * open *with* a reason (a provider error, no section matched) still shows —
+ * that is a decision a reader may want to see.
+ */
+export function visibleSteps(steps: RunStep[]): RunStep[] {
+  return steps.filter((s) => !(s.name === 'scope' && s.status === 'SKIPPED' && !s.detail))
+}
+
 export function StepTrail({
-  steps, interrupted,
+  steps: allSteps, interrupted,
 }: {
   steps: RunStep[]
   /**
@@ -185,6 +196,7 @@ export function StepTrail({
    */
   interrupted?: boolean
 }) {
+  const steps = visibleSteps(allSteps)
   const waitingOn = steps.find((s) => s.status === 'RUNNING' && !interrupted)
   const elapsed = useElapsed(waitingOn?.seq)
   if (steps.length === 0) return null
@@ -293,6 +305,7 @@ function StepPanel({
   if (steps.length === 0) return null
 
   const failed = steps.some((s) => s.status === 'FAILED')
+  const shown = visibleSteps(steps)
   const active = steps.find((s) => s.status === 'RUNNING')
   const total = totalMs ?? steps.reduce((sum, s) => sum + (s.duration_ms ?? 0), 0)
   const seconds = (total / 1000).toFixed(total < 1000 ? 2 : 1)
@@ -304,8 +317,8 @@ function StepPanel({
       ? (NODE_META[active.name]?.detail ?? 'Working…')
       : 'Starting…'
     : failed
-      ? `Stopped after ${steps.length} steps · ${seconds}s`
-      : `All ${steps.length} steps passed · ${seconds}s`
+      ? `Stopped after ${shown.length} steps · ${seconds}s`
+      : `All ${shown.length} steps passed · ${seconds}s`
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

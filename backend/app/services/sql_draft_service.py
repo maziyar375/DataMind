@@ -61,6 +61,7 @@ from app.services.query_service import (
     resolve_llm,
     secret_box,
 )
+from app.services.section_service import load_sections
 from app.services.semantic_service import load_document
 from app.sqlguard import guard
 from app.sqlguard.validator import ValidationReport
@@ -263,6 +264,10 @@ async def draft_sql(
             emit=_no_emit,
             semantic=await _semantic(db, connection, snapshot),
             extra_rules=_sql_rules_for(extra_rules, tile_type),
+            # On exactly the run path's terms: a tile or a block drafted over a
+            # wide warehouse is scoped to the section it is about, and the
+            # statement it stores is guarded against the whole snapshot.
+            sections=await load_sections(db, connection.id),
         )
 
         # `[route →] retrieve → generate ⇄ validate`, walked by the same

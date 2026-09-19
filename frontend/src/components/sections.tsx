@@ -348,11 +348,13 @@ function Intro({
       <p
         style={{
           margin: 0, fontSize: 12.5, lineHeight: 1.55, color: 'var(--text-dim)',
-          display: 'flex', gap: 7, alignItems: 'flex-start',
+          display: 'flex', gap: 7, alignItems: 'flex-start', maxWidth: 720,
         }}
       >
         <span style={{ display: 'flex', marginTop: 2, color: 'var(--text-faint)' }}><Icon.Info size={13} /></span>
-        Sections are not used to answer questions yet — saving them changes no answer.
+        A section changes what the model is shown, never what it may query: an
+        answer or a saved tile over a table outside the section still runs.
+        When no section fits a question, it is answered from the whole schema.
       </p>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 12.5, color: 'var(--text-dim)' }}>

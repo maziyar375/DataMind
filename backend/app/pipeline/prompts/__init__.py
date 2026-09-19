@@ -191,6 +191,50 @@ Reply with the single word only."""
 # question of a conversation sends the bytes it sent before follow-ups were
 # understood — the eval suite is single-turn, and its baseline is this prompt.
 
+# ── scope ────────────────────────────────────────────────────────────────
+# Which *section* of a sectioned database a question is about
+# (`docs/plans/retrieval-sections.md` §3.2). Its own prompt rather than a line
+# in ROUTE_SYSTEM: route's prompt is deliberately tiny and frozen, and hanging
+# a per-connection list of section descriptions off it would make every
+# classification prompt vary with curation. Two decisions, two prompts, two
+# independent fail-opens.
+#
+# **`PROMPT_VERSION` does not move for this.** It names the generate prompt an
+# answer's SQL was written against; the schema block's *format* is untouched,
+# and only which tables are in it changes — the same convention `CLARIFY_SYSTEM`
+# and `DESCRIBE_SYSTEM` follow. A connection with no sections never sends it.
+_SCOPE_RULES = """You decide which part of a database a question is about.
+
+Each section below is a named group of tables, with a description of what it
+answers. Reply with the names of the sections needed, comma-separated, most
+relevant first — at most three. Reply NONE if no section fits, or if the
+question is about the database as a whole.
+
+Prefer one section. Name a second only when the question plainly needs both —
+when it compares, joins or reconciles two things that live in different
+sections."""
+
+SCOPE_SYSTEM = f"""{_SCOPE_RULES}
+
+Sections:
+{{sections}}
+
+Reply with section names only."""
+
+SCOPE_SYSTEM_WITH_CURRENT = f"""{_SCOPE_RULES}
+
+Sections:
+{{sections}}
+
+Currently answering from: {{current}}
+A follow-up that names nothing new keeps the current section.
+
+Reply with section names only."""
+# Two prompts rather than one with an empty `{current}`, for the reason
+# ROUTE_SYSTEM and ROUTE_SYSTEM_WITH_HISTORY are two: the first question of a
+# conversation sends the bytes the first question of a conversation was
+# measured on.
+
 CLARIFY_SYSTEM = """You decide one thing: whether a question can be answered \
 from this database as written, or whether it has to be asked back to the user \
 first.

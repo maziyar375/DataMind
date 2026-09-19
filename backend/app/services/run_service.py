@@ -79,6 +79,7 @@ from app.services.query_service import (
     policy_from_snapshot,
     resolve_llm,
 )
+from app.services.section_service import load_sections
 from app.services.semantic_service import LoadedLayer, load_layer, metric_use_of
 from app.services.team_service import delegated_context
 
@@ -584,6 +585,9 @@ class RunService:
                 bool(connection.knowledge_examples_enabled)
                 and not run.skip_templates
             ),
+            # The connection's sections, or None — which is the run exactly as
+            # it was before the `scope` node existed.
+            sections=await load_sections(self._db, connection.id),
         )
 
         pipeline = AnalyticsPipeline(

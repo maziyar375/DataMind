@@ -62,6 +62,17 @@ Fit = Literal["FITS", "TOO_LARGE", "EMPTY"]
 
 
 @dataclass(frozen=True, slots=True)
+class SectionSpec:
+    """A saved section as the ask path reads it — what `NodeDeps.sections`
+    carries, and all the `scope` node needs: the name the router replies with,
+    the sentence it chooses by, and the tables a pick narrows retrieval to."""
+
+    name: str
+    description: str
+    tables: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ProposedSection:
     name: str
     description: str

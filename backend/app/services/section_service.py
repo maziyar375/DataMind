@@ -6,9 +6,10 @@ transaction, and answers every read in one shape — the sections, the tables in
 none of them, and what each costs — so the screen draws a proposal and a saved
 set the same way.
 
-**Nothing on the ask path reads this module yet** (Phase 1). A connection with
-sections saved answers every question exactly as one without; the `scope` node
-that reads them is Phase 2.
+The ask path reads exactly one thing here, `load_sections`, through the two
+callers that build a run's `NodeDeps`. A connection with no sections gets
+None, and the `scope` node is then SKIPPED with no model call — the run it was
+before sections existed.
 
 Access is the connection's, decided by the router before any method here is
 called: a section is a leaf of its connection the way a semantic layer is, with
@@ -33,6 +34,31 @@ from app.pipeline.nodes import retrieve_budget_chars
 from app.services.semantic_service import load_layer
 
 _NO_SNAPSHOT = "This connection has no schema snapshot. Sync it, then try again."
+
+
+async def load_sections(db: AsyncSession, connection_id: UUID) -> list[algo.SectionSpec] | None:
+    """The connection's saved sections as a run reads them, or None when it
+    has none.
+
+    **None is what turns the `scope` node off**, and it is the only thing the
+    ask path reads from this module: the two callers that build a run's
+    `NodeDeps` — `run_service` and `sql_draft_service` — call this, and nothing
+    in the pipeline imports the store. What the router is told is the saved
+    text, whole; the node decides which sections are still routable against
+    the snapshot it is given.
+    """
+    result = await db.execute(
+        select(ConnectionSection)
+        .where(ConnectionSection.connection_id == connection_id)
+        .order_by(ConnectionSection.position, ConnectionSection.name)
+    )
+    rows = list(result.scalars())
+    if not rows:
+        return None
+    return [
+        algo.SectionSpec(name=row.name, description=row.description, tables=tuple(row.tables))
+        for row in rows
+    ]
 
 
 @dataclass(frozen=True, slots=True)

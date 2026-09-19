@@ -7,6 +7,7 @@ happens next beyond an optional `goto`. Ordering lives in the executor.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -52,7 +53,9 @@ from app.pipeline.prompts import (
     REVIEW_SYSTEM,
     ROUTE_SYSTEM,
     ROUTE_SYSTEM_WITH_HISTORY,
+    SCOPE_SYSTEM,
 )
+from app.pipeline.sections import SectionSpec
 from app.pipeline.state import (
     ClarificationRequest,
     ExecutionResult,
@@ -128,6 +131,14 @@ class NodeDeps:
     # `semantic_layer_enabled` and `clarify_enabled` follow, and there is a
     # test asserting it.
     extra_rules: str = ""
+    # The connection's saved sections, or None when it has none. **None is the
+    # pre-feature behaviour exactly**: `scope` reports SKIPPED, makes no model
+    # call, writes nothing to the state, and the prompt the generator receives
+    # is byte-identical to the one it received before the node existed. The
+    # `matcher` field above is the precedent, and the argument is the same: the
+    # eval runner leaves it None, so the suite's baseline stays comparable by
+    # construction rather than by care.
+    sections: list[SectionSpec] | None = None
 
 
 # ── route ────────────────────────────────────────────────────────────────
@@ -358,6 +369,158 @@ def _collect_examples(
     return len(state.examples)
 
 
+# ── scope ────────────────────────────────────────────────────────────────
+# At most this many sections per question: past three, a question is about the
+# database as a whole, and the whole snapshot is the honest answer to that.
+_SCOPE_MAX_PICKED = 3
+# One section's description in the routing prompt. The write limit is higher;
+# the router needs the first sentence or two, and sixty sections of the full
+# text would make this the largest prompt on the path for no gain.
+_SCOPE_DESCRIPTION_CHARS = 400
+_SCOPE_NOISE = "`*\"'.:;[]()•–—- \t"
+
+
+def _render_sections(sections: list[SectionSpec]) -> str:
+    lines = []
+    for section in sections:
+        about = _clip_line(section.description, _SCOPE_DESCRIPTION_CHARS)
+        lines.append(f"- {section.name} — {about}" if about else f"- {section.name}")
+    return "\n".join(lines)
+
+
+def _clip_line(text: str, limit: int) -> str:
+    text = " ".join(str(text or "").split())
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1]
+    space = cut.rfind(" ")
+    return (cut[:space] if space > limit // 2 else cut).rstrip(" ,;:-") + "…"
+
+
+def parse_scope_reply(reply: str, names: list[str]) -> list[str]:
+    """The sections a router's reply names, in its order, at most three.
+
+    Split on commas and line breaks, each piece stripped of the decoration a
+    model adds anyway (quotes, bullets, bold, a full stop) and matched to a
+    section name ignoring case. Anything that is not a section name —
+    `NONE`, an apology, a name that no longer exists — names nothing, and a
+    reply that names nothing is how this node falls open.
+    """
+    by_lower = {name.lower(): name for name in names}
+    picked: list[str] = []
+    for piece in re.split(r"[,\n]", reply or ""):
+        # As written first, so a name that ends in a full stop still matches.
+        name = by_lower.get(piece.strip().lower()) or by_lower.get(
+            piece.strip().strip(_SCOPE_NOISE).lower()
+        )
+        if name is not None and name not in picked:
+            picked.append(name)
+        if len(picked) == _SCOPE_MAX_PICKED:
+            break
+    return picked
+
+
+async def scope(state: RunState, deps: NodeDeps) -> NodeResult:
+    """Which part of the database is this question about?
+
+    Only on a connection with saved sections, and only for a question that
+    needs data: the router reads each section's name and description and
+    names up to three. Their members become `state.scope_tables`, which
+    `retrieve` narrows to — so a question on a 2,000-table warehouse is
+    answered from the section it is about, sent whole when it fits.
+
+    **A section is a hint, never a boundary.** Nothing here reaches the guard:
+    `policy_from_snapshot` builds the allowlist from the whole snapshot, and a
+    statement over a table outside the chosen section validates exactly as it
+    always did (plan D2).
+
+    **Every failure falls open to today's behaviour** (plan D3), and none of
+    them can widen anything — falling open widens what the model is *shown*
+    back to the whole snapshot, which is precisely what it is shown today:
+
+    * no sections — SKIPPED, no model call, nothing written, and **no detail**:
+      the step trail hides a scope step with nothing to say, so a connection
+      without sections looks exactly as it did before this node existed;
+    * a METADATA question — SKIPPED: it is about the whole database;
+    * a provider error — SKIPPED, like `route`;
+    * a reply that is `NONE`, empty, or names no section — SKIPPED.
+    """
+    if not deps.sections:
+        return NodeResult(status="SKIPPED")
+    if state.intent == "METADATA":
+        return NodeResult(
+            status="SKIPPED", detail="Skipped — a schema question is about the whole database"
+        )
+
+    tables = deps.snapshot.get("tables", [])
+    present = {_key(t) for t in tables}
+    # A section none of whose tables is still in the snapshot can never be
+    # routed to, and the router is not told about it (plan §1.3).
+    routable = [s for s in deps.sections if any(t in present for t in s.tables)]
+    if not routable:
+        return NodeResult(
+            status="SKIPPED", detail="Skipped — no section has a table in the current schema"
+        )
+
+    try:
+        completion = await deps.llm_gateway.complete(
+            deps.llm,
+            [
+                ChatMessage(
+                    role="system",
+                    content=SCOPE_SYSTEM.format(sections=_render_sections(routable)),
+                ),
+                ChatMessage(role="user", content=state.question),
+            ],
+        )
+    except LLMError:
+        return NodeResult(status="SKIPPED", detail="Skipped — provider error")
+    # Recorded on every reply, matched or not: the call was paid for either way.
+    state.record_usage("scope", Usage(
+        prompt_tokens=completion.prompt_tokens,
+        completion_tokens=completion.completion_tokens,
+        latency_ms=completion.latency_ms,
+        model=getattr(deps.llm, "model", "") or "",
+    ))
+
+    picked = parse_scope_reply(completion.text, [s.name for s in routable])
+    if not picked:
+        return NodeResult(status="SKIPPED", detail="No section matched")
+
+    members = {t for s in routable if s.name in picked for t in s.tables}
+    state.scope_sections = picked
+    state.scope_tables = [_key(t) for t in tables if _key(t) in members]
+    count = len(state.scope_tables)
+    return NodeResult(
+        detail=f"{', '.join(picked)} · {count} table{'' if count == 1 else 's'}"
+    )
+
+
+def _join_closure(
+    members: list[dict[str, Any]],
+    tables: list[dict[str, Any]],
+    relationships: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """A section's members plus every table outside it that joins two of them.
+
+    The join path a person did not think to put in the section — a link table
+    between two members, a dimension two members both reference — is part of
+    how the section is queried, so it travels with it. One hop, and only a
+    table touching **two or more** members: a neighbour of one member is the
+    edge of the section, not a path through it. Snapshot order.
+    """
+    inside = {_key(t) for t in members}
+    touches: dict[str, set[str]] = {}
+    for r in relationships:
+        a, b = r["from_table"], r["to_table"]
+        if a in inside and b not in inside:
+            touches.setdefault(b, set()).add(a)
+        if b in inside and a not in inside:
+            touches.setdefault(a, set()).add(b)
+    bridges = {k for k, ends in touches.items() if len(ends) >= 2}
+    return [t for t in tables if _key(t) in inside or _key(t) in bridges]
+
+
 def _tables_from_history(
     history: list[dict[str, str]], tables: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -565,22 +728,42 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
     bounded by `_RETRIEVE_BUDGET_CHARS`:
 
     * **FULL_SNAPSHOT** — every table, when the estimate fits.
+    * **SECTION_SNAPSHOT** — every table in the section `scope` chose, and the
+      tables that join two of its members, when that fits.
     * **SCHEMA_QUESTION** — a METADATA question over a snapshot too wide to
       send, selected by `metadata.select_tables`.
     * **RANKED_MATCH** — anything else over budget: what the question names
       (by table, then by column), what the conversation's SQL already queried,
-      one FK hop out from those, ranked and cut by `fit_to_budget`. What the
-      cut left out is counted in the step detail, so a thin answer on a wide
-      schema says why.
+      one FK hop out from those, ranked and cut by `fit_to_budget` — within
+      the section when there is one. What the cut left out is counted in the
+      step detail, so a thin answer on a wide schema says why.
+
+    A section narrows what the model is **shown**, never what it may query:
+    the guard's allowlist is built from the whole snapshot and does not know
+    sections exist.
     """
     tables = deps.snapshot.get("tables", [])
     relationships = deps.snapshot.get("relationships", [])
 
-    approx_chars = sum(table_chars(t) for t in tables)
+    # The section the question is about, when `scope` chose one: its members
+    # and the tables that join two of them. No scope is no narrowing — an
+    # empty scope is not a narrow scope, it is the whole snapshot, which is
+    # the entire fail-open in one `else`. A schema question never narrows: it
+    # is about the whole database, and `census` would start stating a wrong
+    # total if it did.
+    scope_keys = set(state.scope_tables) if state.intent != "METADATA" else set()
+    members = [t for t in tables if _key(t) in scope_keys]
+    scoped = _join_closure(members, tables, relationships) if members else tables
+
+    approx_chars = sum(table_chars(t) for t in scoped)
     dropped: list[str] = []
 
     if approx_chars <= _RETRIEVE_BUDGET_CHARS:
-        selected, strategy = tables, "FULL_SNAPSHOT"
+        # SECTION_SNAPSHOT is FULL_SNAPSHOT by another name — every column of
+        # every table in the section — and it is the point of the feature: the
+        # customer path gets the block the demo fixtures get.
+        selected = scoped
+        strategy = "SECTION_SNAPSHOT" if members else "FULL_SNAPSHOT"
     elif state.intent == "METADATA":
         # A schema question is *about* the snapshot, not answerable from a
         # corner of it, so the branch below is the wrong selector twice over:
@@ -601,22 +784,25 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
         # Token-boundary matching, the matcher `describe` already used: a
         # table named as a person would say it ("customer addresses"), or a
         # column named the same way ("by region").
-        named = match_tables(state.question, tables)
-        by_column = match_tables(state.question, tables, columns=True)
+        #
+        # Within the section when there is one, which is what a section too
+        # large to send whole falls back to.
+        named = match_tables(state.question, scoped)
+        by_column = match_tables(state.question, scoped, columns=True)
         # A follow-up names nothing: "and by month?" matches no table. The
         # tables the previous statement ran against are the subject it
         # inherits, so they seed retrieval alongside anything this question
         # named itself.
-        carried = _tables_from_history(deps.history, tables)
+        carried = _tables_from_history(deps.history, scoped)
         seed_keys = {_key(t) for t in [*named, *carried, *by_column]}
-        seed = [t for t in tables if _key(t) in seed_keys]
+        seed = [t for t in scoped if _key(t) in seed_keys]
         # A question names its entities ("orders", "products") but almost never
         # the junction/bridge tables that join them ("order_items",
         # "product_tags"). Pull in every table one foreign-key hop from a seed
         # so those bridges can reach the generator — *before* the cut, so a
         # bridge is ranked rather than lost before it was ever scored. Nothing
         # named at all ranks the whole snapshot instead.
-        candidates = _expand_by_fk(seed, tables, relationships) if seed else tables
+        candidates = _expand_by_fk(seed, scoped, relationships) if seed else scoped
         selected, dropped = fit_to_budget(
             candidates,
             named=named,

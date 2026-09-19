@@ -159,11 +159,13 @@ backend/app/
   pipeline/       the AI run: state.py (typed RunState), graph.py (the compiled
                   LangGraph + the node adapter), pipeline.py (the
                   AnalyticsPipeline facade over it),
-                  nodes/ (route→match→retrieve→describe→clarify→generate→
-                  validate→execute→inspect→present→chart — all eleven are
-                  functions in the single file nodes/__init__.py; there is no
-                  module per node. `match` is the short-circuit: a taught
-                  question skips four nodes and lands on the guard),
+                  nodes/ (route→match→scope→retrieve→describe→clarify→
+                  generate→validate→execute→inspect→present→chart — all twelve
+                  are functions in the single file nodes/__init__.py; there is
+                  no module per node. `match` is the short-circuit: a taught
+                  question skips five nodes and lands on the guard. `scope`
+                  picks the section of a sectioned database a question is
+                  about — SKIPPED, with no model call, when there are none),
                   contracts.py (the node signature),
                   metadata.py (which tables a schema question is about, and the
                   rendered fallback answer), sections.py (dividing a snapshot
@@ -551,7 +553,7 @@ answered by asking which posture the step belongs to.
 | Posture | Means | Where |
 |---|---|---|
 | **Fail closed** | the refusal *is* the answer | the guard, name resolution, an unsynced connection, `disclose*` defaulting to the narrowest policy, reports refusing `NONE`/`AGGREGATE` |
-| **Fail open** | the feature is dropped, the work continues | `route`, `clarify`, `inspect`, `chart`, the semantic layer, follow-up suggestions |
+| **Fail open** | the feature is dropped, the work continues | `route`, `scope`, `clarify`, `inspect`, `chart`, the semantic layer, follow-up suggestions |
 | **Fail backwards** | something computed replaces something generated | `describe` → `answer_metadata`, `present` → the fallback sentence, `plan_chart` → the shape heuristic |
 | **Fail as a value** | the failure is data, stored or returned, not raised | `TileResult(status="ERROR")`, `ReportBlockResult(FAILED)`, `feasibility_status = INFEASIBLE` |
 | **Fail the run** | stop, record, tell the user | `E_LLM`, a guard rejection out of budget, `E_TIMEOUT`, `E_NODE_FAILED`, `E_PIPELINE_LOOP`, `E_ORPHANED` |
@@ -585,8 +587,8 @@ LangGraph** (`pipeline/graph.py`) whose chain is linear with one bounded repair
 loop:
 
 ```
-route → match → retrieve → describe → clarify → generate → validate →
-execute → inspect → present → chart
+route → match → scope → retrieve → describe → clarify → generate →
+validate → execute → inspect → present → chart
 ```
 
 **Five edges are not the chain**, and they are why this is a graph and not a
@@ -603,7 +605,7 @@ Six facts that decide how a change lands:
   `test_pipeline_events.py` is that contract; `test_pipeline_graph.py` is the
   wiring's.
 - **`match` can end the run without a model call.** A taught question skips
-  four nodes and lands on the guard. See
+  five nodes and lands on the guard. See
   [knowledge-templates.md](docs/reference/knowledge-templates.md).
 - **`describe` halts before any SQL**, answering METADATA questions from the
   schema block and the semantic layer. Every other intent gets `SKIPPED`.

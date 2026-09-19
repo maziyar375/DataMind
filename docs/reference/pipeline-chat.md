@@ -17,7 +17,7 @@ run in full. The other two have files of their own, written to the same shape:
 Code: [`backend/app/pipeline/`](../../backend/app/pipeline) —
 `graph.py` (the compiled LangGraph, `ORDER`, and the node adapter),
 `pipeline.py` (the `AnalyticsPipeline` facade over it — a re-export since the
-port), `nodes/__init__.py` (all eleven nodes), `state.py` (typed state),
+port), `nodes/__init__.py` (all twelve nodes), `state.py` (typed state),
 `contracts.py` (the node signature), `prompts/` (versioned prompts),
 `checks.py`, `disclosure.py`, `metadata.py`.
 
@@ -82,7 +82,7 @@ product is a claim about one of them:
 
 ### 0.3 The reused nodes
 
-`retrieve`, `generate` and `validate` are called **directly**, outside the state
+`scope`, `retrieve`, `generate` and `validate` are called **directly**, outside the state
 machine, by `sql_draft_service.draft_sql` — which is how both a dashboard tile
 and a report block get their SQL. `route` joins them when the caller passes
 `classify=True` (report blocks only), and `propose_chart_intent` — the model
@@ -92,9 +92,9 @@ product was written against the same schema block, the same semantic layer, the
 same `_SQL_RULES` and the same guard as a chat answer:
 
 ```
-chat:    route → match → retrieve → describe → clarify → generate → validate → execute → inspect → present → chart
-draft:  [route] → retrieve →                     generate → validate            (then a 50-row preview)
-                                                     └── one repair ──┘          └─ [propose_chart_intent] ─┘
+chat:    route → match → scope → retrieve → describe → clarify → generate → validate → execute → inspect → present → chart
+draft:  [route] →         scope → retrieve →                     generate → validate            (then a 50-row preview)
+                                                                     └── one repair ──┘          └─ [propose_chart_intent] ─┘
 ```
 
 **The three opt-ins are deliberately not uniform**, and each is decided by where
@@ -144,6 +144,7 @@ enforced on the chat path and inert on the draft path until someone noticed.
 | 9 | report outline | `complete` | `REPORT_OUTLINE_SYSTEM` / `_USER` | user proposes an outline |
 | 10 | report section prose | `complete` | `REPORT_SECTION_SYSTEM` / `_USER` | once per section per generation |
 | 11 | report summary | `complete` | `REPORT_SUMMARY_SYSTEM` / `_USER` | once per generation |
+| 12 | `scope` | `complete` | `SCOPE_SYSTEM` (`SCOPE_SYSTEM_WITH_CURRENT` is written, not yet sent) | an analytical chat run **or draft** on a connection with saved sections — never otherwise |
 | — | capability probe | `complete` | fixed test prompt | saving an LLM config — **sends no customer data** |
 
 [security.md §2](security.md) analyses what each one *sends*. The two tables
@@ -218,6 +219,10 @@ see [langgraph-migration.md](../plans/langgraph-migration.md) Phase 3.
       │                                       │
       │ miss / unbound / stale / not analytical│
       ▼                                       │
+  scope    (only with saved sections: which  │
+      │     section is this about? — every    │
+      │     failure falls open to no scope)   │
+      ▼                                       │
   retrieve  (no LLM — schema block + semantic layer + history)
       │
       ▼
@@ -261,21 +266,24 @@ working for `run_service`, `app.eval.runner` and `tests/unit/test_clarify.py`.)
 |---|---|:--:|:--:|:--:|---|
 | 1 | `route` | ✅ `complete` | ✅ | – | `intent`, `answer`, **tokens** |
 | 2 | `match` | ❌ | – | ✅ `validate` | `matched_template_id`, `match_*`, `attempts[0]` |
-| 3 | `retrieve` | ❌ | – | – | `context` |
-| 4 | `describe` | ✅ `stream` | ✅ always | – | `answer` |
-| 5 | `clarify` | ✅ `structured` | ✅ | – | `clarification`, `answer` |
-| 6 | `generate` | ✅ `structured` | – | – | `attempts[]` |
-| 7 | `validate` | ❌ | – | ✅ `generate`/`present` | `attempt.report`, `.rewritten_sql` |
-| 8 | `execute` | ❌ | – | ✅ `generate`/`present` | `execution` |
-| 9 | `inspect` | ❌ | – | ✅ `generate` | `attempt.findings` |
-| 10 | `present` | ✅ `stream` | – | – | `disclosed`, `answer` |
-| 11 | `chart` | ✅ `structured` | – | – | `chart` |
+| 3 | `scope` | ✅ `complete`, **only with sections** | – | – | `scope_sections`, `scope_tables`, tokens |
+| 4 | `retrieve` | ❌ | – | – | `context` |
+| 5 | `describe` | ✅ `stream` | ✅ always | – | `answer` |
+| 6 | `clarify` | ✅ `structured` | ✅ | – | `clarification`, `answer` |
+| 7 | `generate` | ✅ `structured` | – | – | `attempts[]` |
+| 8 | `validate` | ❌ | – | ✅ `generate`/`present` | `attempt.report`, `.rewritten_sql` |
+| 9 | `execute` | ❌ | – | ✅ `generate`/`present` | `execution` |
+| 10 | `inspect` | ❌ | – | ✅ `generate` | `attempt.findings` |
+| 11 | `present` | ✅ `stream` | – | – | `disclosed`, `answer` |
+| 12 | `chart` | ✅ `structured` | – | – | `chart` |
 
 **Typical successful run = 4 model calls** (route, clarify, generate, present)
-**+ 1 if a chart survives the veto.** Five of the eleven nodes cost nothing, and
+**+ 1 if a chart survives the veto, + 1 on a connection with sections.** Five
+of the twelve nodes cost nothing, a sixth (`scope`) costs nothing without
+sections, and
 a sixth — `describe` — is skipped outright unless the question is about the
 schema, in which case it is the *last* node to run: a METADATA run is exactly
-route → match (skipped) → retrieve → describe, two model calls and no database
+route → match (skipped) → scope (skipped) → retrieve → describe, two model calls and no database
 access at all.
 
 **A short-circuited run costs one model call** — `route` — plus `present`,
@@ -377,12 +385,70 @@ whether the short-circuit is trusted.
 read, nothing logged, and a byte-identical prompt. The draft graph and the eval
 runner both take it.
 
+### 2b. `scope` — which part of the database is this about?
+
+**One `complete` call, and only on a connection with saved sections.**
+([nodes/__init__.py:423](../../backend/app/pipeline/nodes/__init__.py#L423),
+[retrieval-sections](../plans/retrieval-sections.md) §3.)
+
+Between `match` and `retrieve`, in **both** graphs. After `route`, so small
+talk halts before it; after `match`, so a stored answer — which needs no schema
+block — pays for no scope call (the hit exit jumps from `match` to `validate`,
+clean over it); before `retrieve`, because it produces retrieve's input. Not
+folded into `route`: that prompt is tiny and frozen, and a per-connection list
+of section descriptions would make every classification vary with curation.
+
+`SCOPE_SYSTEM` lists each **routable** section — one with at least one table
+still in the snapshot — as `- Name — description` (description clipped to 400
+characters) and asks for up to three names, comma-separated, or `NONE`. The
+user message is the question. `SCOPE_SYSTEM_WITH_CURRENT` (a `Currently
+answering from:` line, for follow-up stickiness) exists as its own prompt so
+the first question keeps its bytes; nothing sends it yet (Phase 3).
+
+The reply is split on commas and line breaks, each piece stripped of quotes,
+bullets and bold, and matched to a section name ignoring case; unknown pieces
+(`NONE` included) name nothing. The picked sections' members still in the
+snapshot become `state.scope_tables`, in snapshot order.
+
+**Every failure falls open to today's behaviour** — `scope` joins `route`,
+`clarify`, `inspect` and `chart` in the fail-open posture (§4.1):
+
+| Condition | Result | Step detail |
+|---|---|---|
+| `deps.sections` is None or empty | SKIPPED, **no model call** | none — the trail hides it, so a connection without sections looks as it always did |
+| `intent == METADATA` | SKIPPED, no call | *Skipped — a schema question is about the whole database* |
+| no section has a table in the snapshot | SKIPPED, no call | *Skipped — no section has a table in the current schema* |
+| `LLMError` | SKIPPED | *Skipped — provider error* |
+| reply `NONE`, empty, or no known name | SKIPPED (tokens recorded — the call was paid) | *No section matched* |
+| reply names sections | OK — `scope_sections`, `scope_tables` set | *Sales · 14 tables* |
+
+It can never widen anything: falling open widens what the model is *shown*
+back to the whole snapshot, which is what it is shown without sections, and the
+guard's allowlist is built from the whole snapshot either way. **A section is a
+hint, never a boundary** — `policy_from_snapshot` does not know sections exist
+(`tests/unit/test_section_guard_unaffected.py`). `PROMPT_VERSION` does not
+move: the schema block's format is unchanged, only which tables are in it.
+
+`NodeDeps.sections` is loaded by `run_service.execute_run` and
+`sql_draft_service.draft_sql` through `section_service.load_sections`; the eval
+runner leaves it None, so the suite's baseline is unchanged by construction —
+and so this node is **unmeasured by the suite** (the fixtures have no
+sections). `tests/unit/test_retrieve_scope.py` asserts recall against a
+known-correct section on a synthetic 500-table snapshot instead.
+
 ### 3. `retrieve` — build everything the generator is allowed to see
 
 **No LLM call.** Cost: zero tokens, sub-millisecond.
 
-**Logic** ([nodes/__init__.py:553-654](../../backend/app/pipeline/nodes/__init__.py#L553-L654)):
-1. `approx_chars = sum(60 + 40 * len(columns))` over all snapshot tables,
+**Logic** ([nodes/__init__.py](../../backend/app/pipeline/nodes/__init__.py), `retrieve`):
+0. **Scope first.** When `scope` chose sections, the candidate set is their
+   members plus the **join closure** — every table outside them that has
+   foreign keys to two or more members (a link table, a shared dimension).
+   Otherwise, and always for a METADATA question, it is the whole snapshot.
+   Everything below runs over that set, and a set that fits is
+   **`SECTION_SNAPSHOT`**: every column of every table in the section — the
+   block the demo fixtures get.
+1. `approx_chars = sum(60 + 40 * len(columns))` over the candidate tables,
    against `_RETRIEVE_BUDGET_CHARS = 50_000`. (The `sales` fixture sits at
    26,480 — under the ceiling, so it takes step 2.)
 2. **Under budget → `FULL_SNAPSHOT`**: send every table. This is the common
@@ -899,7 +965,7 @@ breaks?"* is answered by asking which posture the step belongs to.
 | Posture | Means | Where |
 |---|---|---|
 | **Fail closed** | the refusal *is* the answer; nothing proceeds | the guard (unknown AST node → rejection), name resolution against the snapshot, an unsynced connection, `disclose*` defaulting to the narrowest policy when an argument is missing, reports refusing `NONE`/`AGGREGATE` |
-| **Fail open** | the feature is dropped, the work continues | `route` (→ ANALYTICAL), `clarify` (→ proceed), `inspect` (→ leave the answer alone), `chart` (→ no chart), the semantic layer (→ no block), follow-up suggestions (→ empty list) |
+| **Fail open** | the feature is dropped, the work continues | `route` (→ ANALYTICAL), `scope` (→ the whole snapshot), `clarify` (→ proceed), `inspect` (→ leave the answer alone), `chart` (→ no chart), the semantic layer (→ no block), follow-up suggestions (→ empty list) |
 | **Fail backwards** | something computed replaces something generated | `describe` → `answer_metadata`, `present` → the fallback sentence, `plan_chart` → the shape heuristic, report prose → trimmed to its last sentence |
 | **Fail as a value** | the failure is data, returned or stored, not raised | `TileResult(status="ERROR")`, `ReportBlockResult(FAILED)`, `ReportSectionResult(FAILED)`, `feasibility_status = INFEASIBLE` |
 | **Fail the run** | stop, record, tell the user | `generate`'s `E_LLM`, a guard rejection out of budget, `E_TIMEOUT`, `E_NODE_FAILED`, `E_PIPELINE_LOOP`, `E_ORPHANED` |
