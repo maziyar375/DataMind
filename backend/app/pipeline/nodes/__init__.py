@@ -550,6 +550,13 @@ def _describe_schema(
 _RETRIEVE_BUDGET_CHARS = 50_000
 
 
+def retrieve_budget_chars() -> int:
+    """The ceiling above, read at call time — for the Sections screen, whose
+    sizing badge has to say what `retrieve` will decide, including under a
+    test or an eval run that lowered it."""
+    return _RETRIEVE_BUDGET_CHARS
+
+
 async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
     """Send the whole snapshot when it fits the budget; otherwise, choose.
 

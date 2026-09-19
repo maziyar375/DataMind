@@ -13,6 +13,7 @@ from app.api.v1 import (
     llm_configs,
     reports,
     roles,
+    sections,
     semantic,
     service_users,
     teams,
@@ -57,6 +58,10 @@ api_router.include_router(semantic.router)
 # the same reason: a template describes one connection's schema and dies with
 # it. Disjoint paths, so the mount order is free.
 api_router.include_router(knowledge.router)
+# The third router extending `connections`, and the only one of the three
+# asked about as the connection itself: a section has no audience apart from
+# its connection's (`docs/plans/retrieval-sections.md` §10). Disjoint paths.
+api_router.include_router(sections.router)
 api_router.include_router(conversations.router)
 # Drafting SQL is not scoped to a connection the way the semantic layer is —
 # the connection is an input to a draft, not its owner.

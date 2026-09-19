@@ -802,6 +802,58 @@ class SemanticJobRow(Base):
     )
 
 
+class ConnectionSection(Base, TimestampMixin):
+    """One named part of a connection's database — a name, a sentence, tables.
+
+    Nothing else hangs off it (`docs/plans/retrieval-sections.md` D1): no
+    semantic layer, no templates, no policy, no grant. A leaf of its
+    connection for access control, like a semantic layer, and it dies with it.
+
+    **A row per section rather than an array on the connection**: a section is
+    edited on its own and needs an id to address; `name` needs a uniqueness the
+    database enforces, because it is the token a model replies with and two
+    sections called *Sales* are an unresolvable reply; and `origin`,
+    `schema_version` and `position` are per-section facts.
+
+    **No foreign key from `tables` to anything** — the snapshot is one JSONB
+    document, so there is nothing to point at. A name that no longer resolves
+    is drift, shown and skipped, never a broken reference.
+    """
+
+    __tablename__ = "connection_sections"
+    __table_args__ = (
+        Index(
+            "uq_connection_sections_name",
+            "connection_id", func.lower(text("name")),
+            unique=True,
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("database_connections.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    #: What the router reads. The single highest-leverage field in the feature.
+    description: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
+    #: Qualified names, `["public.orders", …]`, as the snapshot spells them.
+    tables: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, default=list, server_default=text("'{}'")
+    )
+    #: PROPOSED until a person saves it, then CURATED.
+    origin: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="PROPOSED", server_default="PROPOSED"
+    )
+    #: The snapshot version this section was last saved against, for drift.
+    schema_version: Mapped[int | None] = mapped_column(Integer)
+    position: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
+
 # ── conversation ─────────────────────────────────────────────────────────
 class Conversation(Base, TimestampMixin):
     __tablename__ = "conversations"

@@ -671,6 +671,18 @@ path, so both inherit this with no change. The report **narration** prompt reads
 disclosed results, not the schema block, so it is untouched. No `extra_rules`
 change — the composition rule in `_sql_rules_for` stays as documented.
 
+### 4.7 Section proposals
+
+A connection's **sections** ([retrieval-sections](../plans/retrieval-sections.md))
+are proposed from the snapshot, and each proposed description is written from
+the semantic layer where it speaks — an entity's `label`, `grain`,
+`description` and `synonyms` — and otherwise from the **table name and its
+catalog comment** (`app/pipeline/sections.py`, `describe`). The comment is
+clipped to one line, as everywhere else, and a description never reads a row
+value: no `sample_values`, no ranges, nothing a `SELECT` produced. It is a
+proposal a person edits and saves; once saved the text is theirs, not the
+catalog's, and a later comment change does not rewrite it.
+
 ---
 
 ## 5. The semantic layer: comments as input, and as seed

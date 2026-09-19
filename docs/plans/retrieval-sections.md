@@ -768,13 +768,36 @@ Tick a box in the commit that lands the work, never ahead of it.
 > the estimate (`table_chars`) is what every branch is bounded by, as before.
 
 ### Phase 1 — Sections exist, and do nothing
-- [ ] `connection_sections` + `0035` · *`alembic upgrade head`*
-- [ ] `SectionService.propose` deterministic and total · *every table placed once*
-- [ ] Oversized components split by prefix · *no proposed section over budget unless the prefix is*
-- [ ] Descriptions from the semantic layer, else names + comments
-- [ ] Five endpoints, authorized · *`test_sections_api.py`*
-- [ ] The Sections tab, with sizing states · *Playwright*
-- [ ] **The ask path is unchanged** · *same nodes, same prompt bytes, sections saved*
+- [x] `connection_sections` + `0035` · *`alembic upgrade head`*
+- [x] `SectionService.propose` deterministic and total · *every table placed once*
+- [x] Oversized components split by prefix · *no proposed section over budget unless the prefix is*
+- [x] Descriptions from the semantic layer, else names + comments
+- [x] Five endpoints, authorized · *`test_sections_api.py`*
+- [x] The Sections tab, with sizing states · *Playwright*
+- [x] **The ask path is unchanged** · *same nodes, same prompt bytes, sections saved*
+
+> Landed 2026-09-19. How each box was proved:
+> `0035` ran `alembic upgrade head` on a clean database and on a clone of a
+> populated one (and `downgrade 0034` → `upgrade` again), with
+> `test_sections_models.py` holding the migration and the ORM to one shape.
+> The proposal algorithm is `app/pipeline/sections.py` (pure) under
+> `SectionService` — `test_sections_propose.py`. Endpoints ask about the
+> **connection** (`select` / `modify`), with no new resource type —
+> `test_sections_api.py` on the access `World`. The tab was driven with
+> Playwright against a scratch clone in both themes: propose → rename → drag a
+> table between cards → add one by name → save → reload shows it, and the
+> *Too large* badge and *Split this section* under a lowered budget. The ask
+> path check is structural (`test_pipeline_graph.py`): nothing that builds a
+> run's inputs imports the store, and `NodeDeps` has no field for it.
+>
+> Three things the plan left open, decided here: a component or prefix group
+> needs **3 tables** to stand alone (smaller goes to a name-prefix pool, then
+> `Unassigned`); a table whose prefix is too rare **joins the prefix group it
+> has the most foreign keys to**, if that group still fits; and *Split this
+> section* is `POST …/sections/propose` with `{"tables": [...]}` — the same
+> algorithm over one section's members, applied as a draft the person saves.
+> `NONE` and `Unassigned` are reserved names, and a name may not contain a
+> comma — it is the token the router replies with.
 
 ### Phase 2 — The `scope` node
 - [ ] `StepName.SCOPE` + both prompts

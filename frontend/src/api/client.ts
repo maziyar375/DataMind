@@ -22,7 +22,7 @@ import type {
   ReportBlockCheck, ReportChart, ReportRun, ReportRunDetail, ReportSection,
   ReportSectionResult,
   ReportSummary, Review, Role, RunDetail, RunEvent, RunKnowledge, SchemaSnapshot,
-  Reach, ScopedPrivilege, ServiceAccount, ServiceKey, ShareCheck, Team,
+  Reach, ScopedPrivilege, SectionSet, SectionWrite, ServiceAccount, ServiceKey, ShareCheck, Team,
   SemanticAttention, SemanticChange, SemanticChangeList, SemanticDocument,
   SemanticGenerationMode, SemanticHistoryEntry,
   SemanticImportResult, SemanticJob, SemanticLayerFile, SemanticMetricUse, SemanticVersionList,
@@ -557,6 +557,26 @@ export const connections = {
     post<TestResult>('/connections/test', payload),
   syncSchema: (id: string) => post<SchemaSnapshot>(`/connections/${id}/schema/sync`),
   schema: (id: string) => get<SchemaSnapshot>(`/connections/${id}/schema`),
+}
+
+// ── connection sections ───────────────────────────────────────────────────
+// Scoped to a connection and asked about *as* the connection: `select` to read
+// or propose, `modify` to change the division. `propose` writes nothing.
+export const sections = {
+  get: (connectionId: string) => get<SectionSet>(`/connections/${connectionId}/sections`),
+  // With `tables`, a division of just those — *Split this section*.
+  propose: (connectionId: string, tables?: string[]) =>
+    post<SectionSet>(
+      `/connections/${connectionId}/sections/propose`,
+      tables ? { tables } : undefined,
+    ),
+  // The whole set, in one transaction: a move between two sections is one edit.
+  save: (connectionId: string, payload: SectionWrite[]) =>
+    put<SectionSet>(`/connections/${connectionId}/sections`, { sections: payload }),
+  remove: (connectionId: string, sectionId: string) =>
+    del(`/connections/${connectionId}/sections/${sectionId}`),
+  // Every section — the feature off for this connection.
+  clear: (connectionId: string) => del(`/connections/${connectionId}/sections`),
 }
 
 // ── semantic layer ────────────────────────────────────────────────────────

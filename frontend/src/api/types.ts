@@ -566,6 +566,50 @@ export interface SchemaSnapshot {
   catalog_meta?: SchemaCatalogMeta
 }
 
+// ── connection sections ───────────────────────────────────────────────────
+// `docs/plans/retrieval-sections.md`. A section is a name, a sentence and a
+// list of tables; the rest is what the screen needs to draw it.
+export type SectionFit = 'FITS' | 'TOO_LARGE' | 'EMPTY'
+
+export interface ConnectionSection {
+  /** Null on a proposal nobody has saved. */
+  id: string | null
+  name: string
+  /** What the router reads to choose a section. */
+  description: string
+  /** Qualified names — `public.orders`. */
+  tables: string[]
+  origin: 'PROPOSED' | 'CURATED'
+  schema_version: number | null
+  position: number
+  /** `table_chars` over the members the snapshot still has. */
+  chars: number
+  fit: SectionFit
+  /** Members the current snapshot no longer has. */
+  missing: string[]
+}
+
+export interface SectionSet {
+  /** Whether this is what is saved, or a proposal. */
+  saved: boolean
+  sections: ConnectionSection[]
+  /** Every table in no section, in snapshot order. */
+  unassigned: string[]
+  /** Every table in the snapshot and its weight, in snapshot order. */
+  catalog: { table: string; chars: number }[]
+  /** A section at or under this is sent to the model whole. */
+  budget_chars: number
+  snapshot_version: number
+  has_snapshot: boolean
+}
+
+export interface SectionWrite {
+  id?: string
+  name: string
+  description: string
+  tables: string[]
+}
+
 // ── semantic layer ─────────────────────────────────────────────────────────
 // Mirrors `app/semantic/models.py`. `valid` and `issue` are written by the
 // backend validator on every read, never by this UI: the editor shows drift,

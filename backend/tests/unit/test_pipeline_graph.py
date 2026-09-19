@@ -308,3 +308,39 @@ async def _unused(
     _seq: int, _name: str, _status: str, _detail: str | None, _ms: int
 ) -> None:  # pragma: no cover - a placeholder, never called
     return None
+
+
+# ── sections exist, and do nothing (retrieval-sections Phase 1) ──────────
+def test_nothing_on_the_ask_path_reads_sections_yet() -> None:
+    """**Phase 1's gate.** A connection with sections saved answers every
+    question byte-for-byte as one without, because nothing that builds a run's
+    inputs or renders its prompts reads `connection_sections`.
+
+    Structural, because there is nothing to call: the pipeline takes no section
+    input at all yet — `NodeDeps` has no field for one — so the only way a
+    saved section could reach a prompt is an import added on this path. When
+    the `scope` node lands (Phase 2) this becomes a promise about
+    `NodeDeps.sections is None`, asserted on the rendered bytes.
+    """
+    import dataclasses
+    import pathlib
+
+    from app.pipeline.nodes import NodeDeps
+
+    app = pathlib.Path(__file__).resolve().parents[2] / "app"
+    ask_path = [
+        app / "pipeline" / "nodes" / "__init__.py",
+        app / "pipeline" / "graph.py",
+        app / "pipeline" / "pipeline.py",
+        app / "pipeline" / "state.py",
+        app / "pipeline" / "prompts" / "__init__.py",
+        app / "services" / "run_service.py",
+        app / "services" / "sql_draft_service.py",
+        app / "eval" / "runner.py",
+    ]
+    for path in ask_path:
+        source = path.read_text()
+        for word in ("section_service", "ConnectionSection", "connection_sections",
+                     "pipeline.sections", "pipeline import sections"):
+            assert word not in source, f"{path.name} reads sections: {word}"
+    assert "sections" not in {f.name for f in dataclasses.fields(NodeDeps)}
