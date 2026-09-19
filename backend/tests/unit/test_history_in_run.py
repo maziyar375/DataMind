@@ -9,6 +9,8 @@ noun. Two nodes used to read it alone:
 * `retrieve`, on a schema too large for the full snapshot, matched it against
   table and column names, matched nothing, and fell through to an arbitrary
   `tables[:20]` that need not contain the table the previous turn queried.
+  (Nothing named now ranks the whole snapshot by size instead — still not the
+  table the previous turn queried, which is why the history is read.)
 
 Both now read the turns before the question. The first turn of a conversation
 has no history and must behave exactly as it did before — the eval suite is
@@ -154,20 +156,25 @@ async def test_a_follow_up_inherits_the_tables_the_previous_turn_queried() -> No
     await retrieve(state, _deps(history=FOLLOW_UP, snapshot=BIG_SNAPSHOT))
 
     assert state.context is not None
-    assert state.context.strategy == "EXACT_MATCH"
+    assert state.context.strategy == "RANKED_MATCH"
     selected = {t["name"] for t in state.context.tables}
     assert {"orders", "order_items"} <= selected
 
 
 @pytest.mark.asyncio
-async def test_without_history_the_fallback_is_what_it_was() -> None:
+async def test_without_history_nothing_named_ranks_the_whole_snapshot() -> None:
+    """No seed used to mean an arbitrary `tables[:20]`. It now means every
+    table, ranked by size and cut at the budget — with equal sizes, as here,
+    that is snapshot order for as many as fit, and the rest counted."""
     state = _state()
     await retrieve(state, _deps(history=[], snapshot=BIG_SNAPSHOT))
 
     assert state.context is not None
+    kept = len(state.context.tables)
     assert [t["name"] for t in state.context.tables] == [
-        t["name"] for t in BIG_SNAPSHOT["tables"][:20]
+        t["name"] for t in BIG_SNAPSHOT["tables"][:kept]
     ]
+    assert kept + len(state.context.dropped_tables) == len(BIG_SNAPSHOT["tables"])
 
 
 @pytest.mark.asyncio

@@ -169,10 +169,18 @@ class RetrievedContext(BaseModel):
     # SCHEMA_QUESTION is the one strategy chosen by intent rather than by size:
     # a METADATA question over a snapshot too wide to send whole is selected
     # for by `metadata.select_tables`, not by the words it shares with a
-    # column name.
+    # column name. RANKED_MATCH replaced EXACT_MATCH as the analytical
+    # branch's name when it started to rank and cut; EXACT_MATCH and TRIGRAM
+    # are written by nothing now and stay so an older run still reads back.
     strategy: Literal[
-        "FULL_SNAPSHOT", "EXACT_MATCH", "TRIGRAM", "SCHEMA_QUESTION"
+        "FULL_SNAPSHOT", "RANKED_MATCH", "SCHEMA_QUESTION",
+        "EXACT_MATCH", "TRIGRAM",
     ] = "FULL_SNAPSHOT"
+    # Qualified names of the tables the budget cut, for the step detail's
+    # "· N not shown". Never rendered: a table name with no columns beside it
+    # is an invitation to the generator to guess them, and `census` already
+    # tells a schema question what it left out.
+    dropped_tables: list[str] = Field(default_factory=list)
     # The connection's semantic layer, serialised. None when the connection
     # has none or has switched it off — in which case `render` emits exactly
     # the bytes it emitted before this field existed, so the eval baseline

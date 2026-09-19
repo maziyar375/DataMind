@@ -406,6 +406,54 @@ async def test_a_clean_analytical_run_emits_the_eleven_node_trail() -> None:
     assert state.error is None
 
 
+# ── what the retrieve step says when the budget cut something ────────────
+def _retrieve_detail(recorder: Recorder) -> tuple[str | None, str | None]:
+    """The retrieve step's detail as persisted, and as it went out on the bus."""
+    persisted = next(
+        detail for _seq, name, status, detail, _ms in recorder.steps
+        if name == "retrieve" and status != StepStatus.RUNNING
+    )
+    live = next(
+        data.get("detail") for kind, data in recorder.events
+        if kind == "STEP_FINISHED" and data["name"] == "retrieve"
+    )
+    return persisted, live
+
+
+@pytest.mark.asyncio
+async def test_a_budget_cut_is_counted_in_the_retrieve_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`census` names what a schema question could not fit; an analytical
+    answer over a cut block says so too, in the step trail, in the same words
+    the `run_steps` row stores. Room for `orders` (the larger) and not both.
+
+    The trail itself does not move: same nodes, same `seq`s, same events.
+    """
+    from app.pipeline import nodes
+
+    monkeypatch.setattr(nodes, "_RETRIEVE_BUDGET_CHARS", 300)
+    gateway = ScriptedGateway(sql=[SQL_TOTAL])
+    recorder, state = await drive(gateway, ScriptedConnector([ONE_ROW]))
+
+    assert trail(recorder)[:10] == PREAMBLE
+    assert state.context is not None
+    assert [t["name"] for t in state.context.tables] == ["orders"]
+    assert state.context.dropped_tables == ["public.customers"]
+    assert _retrieve_detail(recorder) == (
+        "1 tables via RANKED_MATCH · 1 not shown",
+    ) * 2
+    assert state.error is None
+
+
+@pytest.mark.asyncio
+async def test_nothing_cut_says_nothing_about_a_cut() -> None:
+    gateway = ScriptedGateway(sql=[SQL_TOTAL])
+    recorder, _state = await drive(gateway, ScriptedConnector([ONE_ROW]))
+
+    assert _retrieve_detail(recorder) == ("2 tables via FULL_SNAPSHOT",) * 2
+
+
 # ── run 2: METADATA, the one path that ends at describe ──────────────────
 @pytest.mark.asyncio
 async def test_a_metadata_question_halts_at_describe() -> None:

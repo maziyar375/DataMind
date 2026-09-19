@@ -753,11 +753,19 @@ here**:
 Tick a box in the commit that lands the work, never ahead of it.
 
 ### Phase 0 — Repair the floor
-- [ ] `match_tables` extended to columns · *`test_retrieve_matcher.py` green*
-- [ ] Analytical branch calls it · *`'paid'` selects no `id` table*
-- [ ] `fit_to_budget` ranked and bounded · *500-table synthetic block ≤ budget*
-- [ ] Join paths survive the cut · *bridge outranks unconnected*
-- [ ] Drop reporting in the step detail · *`test_pipeline_events.py`*
+- [x] `match_tables` extended to columns · *`test_retrieve_matcher.py` green*
+- [x] Analytical branch calls it · *`'paid'` selects no `id` table*
+- [x] `fit_to_budget` ranked and bounded · *500-table synthetic block ≤ budget*
+- [x] Join paths survive the cut · *bridge outranks unconnected*
+- [x] Drop reporting in the step detail · *`test_pipeline_events.py`*
+
+> Landed 2026-09-19. One refinement to §4.2's ranking: **carried** tables rank
+> *above* tables the question named only **by a column**. "and by status?"
+> names a column half a warehouse has, and the table the follow-up continues
+> must not lose its place to every other table with a `status`. The order is
+> named-by-table → carried → named-by-column → FK hop (bridges first) → rest.
+> The rendered-block check is asserted under `NONE` on the synthetic snapshot;
+> the estimate (`table_chars`) is what every branch is bounded by, as before.
 
 ### Phase 1 — Sections exist, and do nothing
 - [ ] `connection_sections` + `0035` · *`alembic upgrade head`*

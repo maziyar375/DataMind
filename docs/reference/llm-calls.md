@@ -311,7 +311,7 @@ Question: {question}
 **Retrieval for this node is different.** When the snapshot exceeds
 `_RETRIEVE_BUDGET_CHARS = 50_000`, a METADATA question selects tables with
 `metadata.select_tables()` (what the question named, then the largest) rather
-than the substring/FK expansion an analytical question uses — strategy
+than the ranked FK expansion an analytical question uses — strategy
 `SCHEMA_QUESTION`.
 
 **Failure.** A stream error, or an empty stream, falls back to

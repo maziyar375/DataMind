@@ -381,7 +381,7 @@ runner both take it.
 
 **No LLM call.** Cost: zero tokens, sub-millisecond.
 
-**Logic** ([nodes/__init__.py:429-510](../../backend/app/pipeline/nodes/__init__.py#L429-L510)):
+**Logic** ([nodes/__init__.py:553-654](../../backend/app/pipeline/nodes/__init__.py#L553-L654)):
 1. `approx_chars = sum(60 + 40 * len(columns))` over all snapshot tables,
    against `_RETRIEVE_BUDGET_CHARS = 50_000`. (The `sales` fixture sits at
    26,480 — under the ceiling, so it takes step 2.)
@@ -394,27 +394,36 @@ runner both take it.
    `customer_addresses`), then the **largest** of the rest until the budget
    runs out, returned in snapshot order. The branch below is the wrong selector
    for this question: it seeds on words the question shares with a table name,
-   and *"what is in this database?"* shares none, so a schema question would
-   land on the arbitrary `tables[:20]` fallback. Nothing is hidden by the cut —
+   and *"what is in this database?"* shares none, so a schema question would be
+   described from whichever tables happen to be largest with no census of the
+   rest. Nothing is hidden by the cut —
    `describe` states the true table count and names every table left out (§3.3).
-4. **Over budget → `EXACT_MATCH`**:
-   - seed = tables whose *name*, or any of whose *column names*, appears as a
-     lowercase **substring of the question**;
-   - plus the tables the recent turns actually **queried** —
+4. **Over budget → `RANKED_MATCH`** (was `EXACT_MATCH` until
+   [retrieval-sections](../plans/retrieval-sections.md) Phase 0):
+   - **named** = `metadata.match_tables(question, tables)` — the token-boundary
+     matcher `describe` uses: snake_case spoken as words, singular/plural, a
+     single-word form must be a whole token, and a name of two letters is never
+     a form, so `id` no longer matches inside "paid";
+   - **by column** = the same matcher with `columns=True` — a table whose
+     column the question names ("revenue by *region*");
+   - **carried** = the tables the recent turns actually **queried** —
      `_tables_from_history` reads the qualified names out of the SQL behind an
      earlier answer, which is exact rather than approximate because
      `_SQL_RULES` requires every table to be schema-qualified. This is the
-     follow-up case: "and by month?" matches no table on its own and would
-     otherwise fall to the `tables[:20]` fallback, an arbitrary twenty that
-     need not contain the table the question it continues was answered from.
-     It reads the SQL and not the prose deliberately — "revenue rose in June"
-     names no table, and substring-searching narration matches `id` inside
-     "identify";
-   - `_expand_by_fk(seed, …)` grows it by **exactly one FK hop in either
+     follow-up case: "and by month?" names nothing on its own. It reads the SQL
+     and not the prose deliberately — "revenue rose in June" names no table;
+   - `_expand_by_fk(seed, …)` grows those by **exactly one FK hop in either
      direction** — a question names `orders` and `products` but never the
-     `order_items` bridge that joins them, and substring matching structurally
-     cannot find bridges;
-   - no seed at all → `tables[:20]` in snapshot order.
+     `order_items` bridge that joins them — *before* the cut, so a bridge is
+     ranked rather than lost unscored. No seed at all → every table is a
+     candidate;
+   - `fit_to_budget` ranks the candidates — named, then carried, then column
+     hits, then FK-hop tables (a bridge touching two seeds before a neighbour
+     of one), then the rest; ties to the larger `approx_row_count`, then
+     snapshot order — and takes them until `_RETRIEVE_BUDGET_CHARS` is spent,
+     always at least one. The selection is rendered in snapshot order. What
+     did not fit lands in `RetrievedContext.dropped_tables`, and the step
+     detail counts it: `"42 tables via RANKED_MATCH · 9 not shown"`.
 
    Retrieval reads the **raw** history, before the disclosure filter of §3.9:
    the selection never leaves the process, and what is rendered from it is
@@ -543,8 +552,8 @@ one figure that escaped `HintBudget`.
 
 **Selection changes for this intent too.** Over `_RETRIEVE_BUDGET_CHARS`,
 `retrieve` normally seeds on words the question shares with a table or column
-name — and *"what is in this database?"* shares none, which would land a schema
-question on the arbitrary `tables[:20]` fallback. For METADATA it calls
+name — and *"what is in this database?"* shares none, which would describe a
+schema question from whatever ranked first with no census of the rest. For METADATA it calls
 `metadata.select_tables` instead: every table the question **named**, then the
 **largest** of the rest until the budget runs out, rendered in snapshot order,
 under `strategy="SCHEMA_QUESTION"`.
@@ -1098,28 +1107,22 @@ optional, and [langgraph-migration.md](../plans/langgraph-migration.md) argues i
    `RetrievedContext` and never consulted for *selection*. Free recall, already
    in scope at that line.
 
-4. **`EXACT_MATCH` matches backwards and on the wrong granularity.** The test is
-   `table_name in question`, so **17 of the 42 fixture tables are snake_case
-   and structurally unmatchable** (a user types "order items", not
-   "order_items"). Meanwhile `id` is a column in **36 of 42 tables**, so any
-   question containing *paid*, *did*, *provide* matches nearly everything and
-   FK-expands to the whole schema. Too narrow on tables, far too loose on
-   columns. Tokenizing both sides with a 3-4 char minimum fixes both.
+4. ~~**`EXACT_MATCH` matches backwards and on the wrong granularity.**~~
+   **Fixed 2026-09-19** ([retrieval-sections](../plans/retrieval-sections.md)
+   Phase 0). The test was `table_name in question`, so **17 of the 42 fixture
+   tables were snake_case and structurally unmatchable** (a user types "order
+   items", not "order_items"), while `id` — a column in **36 of 42 tables** —
+   matched inside *paid*, *did* and *provide* and FK-expanded to the whole
+   schema. The branch now calls `metadata.match_tables`, extended to columns
+   (`columns=True`), and is named `RANKED_MATCH`;
+   `tests/unit/test_retrieve_matcher.py` pins both halves.
 
-   `_tables_from_history` narrows one case of this — a follow-up now inherits
-   the previous statement's tables instead of matching nothing — but it is not
-   a fix for the matcher. A *first* question is still matched exactly this way,
-   and it is the first question that decides what the follow-up inherits.
-
-   METADATA questions no longer take this branch at all
-   (`SCHEMA_QUESTION`, §3.2), and `metadata.match_tables` — which already
-   tokenizes, handles snake_case and singular/plural, and refuses to match a
-   short name inside a longer word — is the matcher this gap describes wanting.
-   It is right there in `pipeline/metadata.py`; the fix for `EXACT_MATCH` is
-   largely to call it.
-
-5. **No budget re-check after `_expand_by_fk`.** The branch that exists to
-   respect `_RETRIEVE_BUDGET_CHARS` can emit well past it, unbounded.
+5. ~~**No budget re-check after `_expand_by_fk`.**~~ **Fixed 2026-09-19**, same
+   change: `fit_to_budget` ranks the expanded set and cuts it at
+   `_RETRIEVE_BUDGET_CHARS`, and the step detail counts what it cut.
+   `tests/unit/test_retrieve_budget.py` holds every branch under the ceiling on
+   a synthetic 500-table snapshot with a 400-neighbour hub — the eval fixtures
+   both fit whole, so the suite still cannot see this path (gap 2).
 
 6. **v5 is shipped but unmeasured.** Two gaps were closed in one change:
    the repair prompts now carry the shared `_SQL_RULES` block and the

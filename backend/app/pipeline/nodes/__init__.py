@@ -31,6 +31,7 @@ from app.pipeline.disclosure import disclose_history
 from app.pipeline.metadata import (
     answer_metadata,
     census,
+    match_tables,
     select_tables,
     table_chars,
 )
@@ -410,6 +411,102 @@ def _expand_by_fk(
     return [t for t in tables if f"{t['schema']}.{t['name']}" in reachable]
 
 
+def _key(table: dict[str, Any]) -> str:
+    return f"{table['schema']}.{table['name']}"
+
+
+def fit_to_budget(
+    candidates: list[dict[str, Any]],
+    *,
+    named: list[dict[str, Any]],
+    carried: list[dict[str, Any]],
+    by_column: list[dict[str, Any]],
+    relationships: list[dict[str, Any]],
+    budget_chars: int,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Rank the candidates, take them until the budget is spent, name the rest.
+
+    Returns `(selected, dropped)`: the tables that go in, in snapshot order for
+    a stable prompt, and the qualified names of the candidates that did not
+    fit. At least one table always goes in, however wide — a block describing
+    nothing is worse than a block describing one thing, the rule
+    `select_tables` already follows.
+
+    The analytical branch used to skip this step: the FULL_SNAPSHOT test *is*
+    the budget, SCHEMA_QUESTION spends it explicitly, and this branch emitted
+    whatever the FK hop produced — a hub table's neighbourhood could be three
+    hundred tables. This caps it at exactly the ceiling the other two branches
+    already hold themselves to. It does not send less than they do.
+
+    The ranking, highest first:
+
+    1. tables the question **named** by their own name;
+    2. tables **carried** from the SQL behind the turns before it — ahead of
+       column hits, because "and by status?" names a column half the warehouse
+       has, and the table it is a follow-up about must not lose its place to
+       every other table with a `status`;
+    3. tables the question named **by a column**;
+    4. tables one **FK hop** from any of those, a bridge that joins two of
+       them before a neighbour of one — the join path a question implies but
+       never spells out, which is the whole reason the hop exists;
+    5. anything else (the whole candidate list, when nothing was named).
+
+    Ties go to the larger table (`approx_row_count`), then to snapshot order.
+    Size because the unasked half of an unnamed question is "where is the
+    data?", the same reason `select_tables` gives.
+    """
+    named_keys = {_key(t) for t in named}
+    carried_keys = {_key(t) for t in carried}
+    column_keys = {_key(t) for t in by_column}
+    seeds = named_keys | carried_keys | column_keys
+
+    # How many distinct seed tables each candidate joins to directly.
+    touches: dict[str, set[str]] = {}
+    for r in relationships:
+        a, b = r["from_table"], r["to_table"]
+        if b in seeds and a != b:
+            touches.setdefault(a, set()).add(b)
+        if a in seeds and a != b:
+            touches.setdefault(b, set()).add(a)
+
+    def tier(table: dict[str, Any]) -> int:
+        key = _key(table)
+        if key in named_keys:
+            return 0
+        if key in carried_keys:
+            return 1
+        if key in column_keys:
+            return 2
+        return 3 if key in touches else 4
+
+    order = {_key(t): i for i, t in enumerate(candidates)}
+    ranked = sorted(
+        candidates,
+        key=lambda t: (
+            tier(t),
+            -len(touches.get(_key(t), ())),
+            -(t.get("approx_row_count") or 0),
+            order[_key(t)],
+        ),
+    )
+
+    picked: set[str] = set()
+    dropped: list[str] = []
+    spent = 0
+    for table in ranked:
+        cost = table_chars(table)
+        # Keep walking past a table that does not fit: a smaller one further
+        # down may still, and stopping at the first miss would let one wide
+        # table shut out every narrow one behind it.
+        if picked and spent + cost > budget_chars:
+            dropped.append(_key(table))
+            continue
+        picked.add(_key(table))
+        spent += cost
+
+    return [t for t in candidates if _key(t) in picked], dropped
+
+
 def _describe_schema(
     tables: list[dict[str, Any]], policy: str = DisclosurePolicy.NONE
 ) -> str:
@@ -437,12 +534,15 @@ def _describe_schema(
 
 # ── retrieve ─────────────────────────────────────────────────────────────
 # How much estimated schema text may go to the model before retrieval starts
-# selecting. Raised 24k -> 50k, because the fallback below is the worse path
-# rather than the safer one: it seeds on raw substring matches against catalog
-# names, so it misses `order_items` for a user who typed "order items" while
-# matching every table carrying a column called `id`. Sending a whole schema
-# costs tokens; taking that branch costs answers. Roughly 12k tokens of schema
-# at the ceiling, before the semantic layer adds up to 8k chars more.
+# selecting. Raised 24k -> 50k while the fallback below was the worse path
+# rather than the safer one: it seeded on raw substring matches against
+# catalog names, missing `order_items` for a user who typed "order items" while
+# matching every table carrying a column called `id`, and nothing bounded what
+# it emitted. It now matches on token boundaries and is cut to this same
+# ceiling (`fit_to_budget`), but the ceiling stays where it is — the standing
+# constraint is that retrieval never sends *less* than it did. Roughly 12k
+# tokens of schema at the ceiling, before the semantic layer adds up to 8k
+# chars more.
 #
 # A module constant, not a local, so a test can lower it to exercise the
 # fallback without needing a schema larger than whatever the fixture happens
@@ -451,16 +551,26 @@ _RETRIEVE_BUDGET_CHARS = 50_000
 
 
 async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
-    """Naive by design: send the whole snapshot when it fits the budget.
+    """Send the whole snapshot when it fits the budget; otherwise, choose.
 
-    Exact-name matching is the fallback. Trigram, FTS, and embeddings are
-    later strategies behind the same `RetrievedContext` shape; the generator
-    never learns which one produced its context.
+    Three strategies, all behind the same `RetrievedContext` shape — the
+    generator never learns which one produced its context — and all three
+    bounded by `_RETRIEVE_BUDGET_CHARS`:
+
+    * **FULL_SNAPSHOT** — every table, when the estimate fits.
+    * **SCHEMA_QUESTION** — a METADATA question over a snapshot too wide to
+      send, selected by `metadata.select_tables`.
+    * **RANKED_MATCH** — anything else over budget: what the question names
+      (by table, then by column), what the conversation's SQL already queried,
+      one FK hop out from those, ranked and cut by `fit_to_budget`. What the
+      cut left out is counted in the step detail, so a thin answer on a wide
+      schema says why.
     """
     tables = deps.snapshot.get("tables", [])
     relationships = deps.snapshot.get("relationships", [])
 
     approx_chars = sum(table_chars(t) for t in tables)
+    dropped: list[str] = []
 
     if approx_chars <= _RETRIEVE_BUDGET_CHARS:
         selected, strategy = tables, "FULL_SNAPSHOT"
@@ -477,31 +587,38 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
             state.question, tables, budget_chars=_RETRIEVE_BUDGET_CHARS
         )
         strategy = "SCHEMA_QUESTION"
+        # `census` names these to the model; the count is for the step trail.
+        kept = {_key(t) for t in selected}
+        dropped = [_key(t) for t in tables if _key(t) not in kept]
     else:
-        needle = state.question.lower()
-        matched = [
-            t for t in tables
-            if t["name"].lower() in needle
-            or any(c["name"].lower() in needle for c in t.get("columns", []))
-        ]
-        # A follow-up names nothing: "and by month?" matches no table, and on
-        # its own would fall through to `tables[:20]` — an arbitrary twenty
-        # that need not include the table the question it continues was
-        # answered from. The tables the previous statement ran against are the
-        # subject it inherits, so they seed retrieval alongside anything this
-        # question named itself.
+        # Token-boundary matching, the matcher `describe` already used: a
+        # table named as a person would say it ("customer addresses"), or a
+        # column named the same way ("by region").
+        named = match_tables(state.question, tables)
+        by_column = match_tables(state.question, tables, columns=True)
+        # A follow-up names nothing: "and by month?" matches no table. The
+        # tables the previous statement ran against are the subject it
+        # inherits, so they seed retrieval alongside anything this question
+        # named itself.
         carried = _tables_from_history(deps.history, tables)
-        seen = {f"{t['schema']}.{t['name']}" for t in matched}
-        seed = matched + [
-            t for t in carried if f"{t['schema']}.{t['name']}" not in seen
-        ]
+        seed_keys = {_key(t) for t in [*named, *carried, *by_column]}
+        seed = [t for t in tables if _key(t) in seed_keys]
         # A question names its entities ("orders", "products") but almost never
         # the junction/bridge tables that join them ("order_items",
-        # "product_tags"). Pull in every table one foreign-key hop from a matched
-        # table so those bridges reach the generator; substring matching alone
-        # structurally cannot find them.
-        selected = _expand_by_fk(seed, tables, relationships) if seed else tables[:20]
-        strategy = "EXACT_MATCH"
+        # "product_tags"). Pull in every table one foreign-key hop from a seed
+        # so those bridges can reach the generator — *before* the cut, so a
+        # bridge is ranked rather than lost before it was ever scored. Nothing
+        # named at all ranks the whole snapshot instead.
+        candidates = _expand_by_fk(seed, tables, relationships) if seed else tables
+        selected, dropped = fit_to_budget(
+            candidates,
+            named=named,
+            carried=carried,
+            by_column=by_column,
+            relationships=relationships,
+            budget_chars=_RETRIEVE_BUDGET_CHARS,
+        )
+        strategy = "RANKED_MATCH"
 
     names = {f"{t['schema']}.{t['name']}" for t in selected}
     state.context = RetrievedContext(
@@ -520,6 +637,7 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
         # connection has the feature on *and* something scored above the
         # few-shot threshold *and* the run was not answered from the store.
         examples=list(state.examples),
+        dropped_tables=dropped,
     )
     described = (
         sum(
@@ -529,6 +647,8 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
         if deps.semantic else 0
     )
     detail = f"{len(selected)} tables via {strategy}"
+    if dropped:
+        detail += f" · {len(dropped)} not shown"
     return NodeResult(
         detail=detail + (f" · {described} described" if described else "")
     )

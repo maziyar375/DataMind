@@ -97,10 +97,11 @@ screen in front of the person who asked for it, while a block's is stored and
 read months later.
 
 **Node 2 — `retrieve`.** The chat node verbatim: `FULL_SNAPSHOT` under
-`_RETRIEVE_BUDGET_CHARS` (50,000), `EXACT_MATCH` + one FK hop above it. With
-`history=[]`, `_tables_from_history` contributes nothing, so a wide-schema draft
-leans entirely on substring matching against the question — see
-[pipeline-chat.md §7](pipeline-chat.md) gap 4 for what that gets wrong.
+`_RETRIEVE_BUDGET_CHARS` (50,000), `RANKED_MATCH` above it — token-boundary
+matching on table and column names, one FK hop, ranked and cut at the same
+ceiling ([pipeline-chat.md §3](pipeline-chat.md)). With `history=[]`,
+`_tables_from_history` contributes nothing, so a wide-schema draft leans
+entirely on what the question names.
 
 The connection's **semantic layer** is loaded on exactly the run path's terms
 (`load_document`, and `RetrievedContext.render` scopes and gates it). A draft is
