@@ -9,9 +9,12 @@
  *    past both edges of the window. It is the scene's spine: the mark sits on
  *    its crest, four cards hang off it at measured points, and slow motes
  *    travel it left to right — the path a question takes through the product.
- *  - **The waves.** Two dotted sheets growing out of the bottom corners, drawn
- *    on the same canvas. They flow on their own, part around the pointer, and
- *    carry a ring outward from a click anywhere on the page.
+ *  - **The waves.** Two dotted sheets, one inside each of the coloured glows
+ *    in the bottom corners, drawn on the same canvas. Each sheet is bounded by
+ *    its glow and by nothing else — it fills the ellipse and fades out inside
+ *    it, so there is never a dot on unlit ground. They flow on their own, part
+ *    around the pointer, and carry a ring outward from a click anywhere on the
+ *    page.
  *  - **The cards.** Four of them, one per thing this product actually does:
  *    the databases it reads, the question asked in plain language, the SQL
  *    checked before it runs, the answer that comes back. Left to right through
@@ -88,6 +91,45 @@ const FLOW_PERIOD = 78
 const FLOW_INK = 0.6
 
 /**
+ * Where a corner's glow is, in viewport fractions — centre and radii.
+ *
+ * **These are not new numbers.** They are the two bottom `radial-gradient`s of
+ * `.rm-auth::before` in `styles.css`, restated in this file's coordinates.
+ * That pseudo-element is `position: fixed; inset: -25%`, so it spans
+ * -25%..125% of the viewport: a background position `p` inside it lands at
+ * `p x 1.5 - 0.25` on screen, a radius `p` is `p x 1.5`, and the gradient's
+ * own `transparent 70%` stop is where the glow visibly ends. The CSS
+ * `radial-gradient(23.8% 23.8% at 21% 78%, ..., transparent 70%)` is therefore
+ * an ellipse centred at viewport (6.5%, 92%) whose edge is 25% of the viewport
+ * away, which is the first entry below.
+ *
+ * The halo decides one thing only: **where the sheet stops.** Where the sheet
+ * runs is still the four extents below, hand-placed, because the shape the two
+ * corners make — one swelling up out of the bottom-left, one rippling down to
+ * the bottom-right — is not a shape an ellipse would produce. What the halo
+ * fixes is what used to happen past those extents: the ends ran wider than the
+ * glow, so dots sat on unlit ground, and because the pointer *brightens* what
+ * it passes, moving it outside a glow lit up exactly those stray dots the
+ * depth fade had been hiding. A change to either the CSS gradient or this
+ * ellipse now has to be made in both places on purpose.
+ */
+type Halo = { cx: number; cy: number; rx: number; ry: number }
+
+/**
+ * Where inside the halo the sheet is at full strength, and where it is gone,
+ * as fractions of the ellipse's radius.
+ *
+ * The fade starts well inside the rim because the glow it sits in is itself a
+ * gradient: a sheet that held full density out to the edge would draw a hard
+ * disc of dots on a soft wash. Nothing at all is painted at or past
+ * `HALO_EDGE` — that is what "inside the glow" means here, and it is enforced
+ * after the pointer and the rings have had their say rather than before, so no
+ * wake can carry a particle out of its corner.
+ */
+const HALO_CORE = 0.42
+const HALO_EDGE = 0.97
+
+/**
  * One dotted wave field.
  *
  * A field is a stack of smooth curves, each sampled as loose particles rather
@@ -100,13 +142,17 @@ const FLOW_INK = 0.6
  * edge fade then happens where nobody can see it, and what remains on screen is
  * a surface cut by the window rather than a rectangle of particles with a
  * visible boundary. The inner end fades in view, which is what keeps the middle
- * of the page — where the card is — clear.
+ * of the page — where the card is — clear. Past all of that sits the halo,
+ * which trims whatever the extents would have put outside the glow.
  */
 type Wave = {
   /** Where the field runs. Outer end off-screen, inner end toward the middle. */
   x0: number; x1: number
   /** Baseline of the frontmost layer, and of the backmost. */
   y0: number; y1: number
+  /** The glow this sheet has to stay inside — the only thing the ellipse is
+      used for. It clips the field; it does not lay it out. */
+  halo: Halo
   /** Curves in the stack. Twenty each: the count is bounded from below by the
       brief and from above by the band, since neighbours closer than about
       12px stop reading as separate curves and start reading as a cloud. */
@@ -129,6 +175,7 @@ const WAVES: Wave[] = [
   // centre: the lower harmonic is the tallest, so this one reads as a swell.
   {
     x0: -0.18, x1: 0.34, y0: 1.04, y1: 0.80, layers: 20,
+    halo: { cx: 0.065, cy: 0.92, rx: 0.25, ry: 0.25 },
     freq: [1.9, 3.5, 6.1], amp: [0.027, 0.012, 0.0045],
     drift: [0.055, -0.084, 0.121], seed: 0.31, color: '--wave-a',
   },
@@ -136,6 +183,7 @@ const WAVES: Wave[] = [
   // second harmonic, so it ripples where the left one swells.
   {
     x0: 1.18, x1: 0.66, y0: 1.04, y1: 0.825, layers: 20,
+    halo: { cx: 0.935, cy: 0.935, rx: 0.25, ry: 0.25 },
     freq: [1.4, 4.4, 7.3], amp: [0.023, 0.016, 0.004],
     drift: [-0.069, 0.048, -0.095], seed: 2.74, color: '--wave-b',
   },
@@ -595,6 +643,9 @@ export default function AuthScene() {
         const fx0 = w.x0 * width, fx1 = w.x1 * width
         const wspan = fx1 - fx0
         const fy0 = w.y0 * height, fy1 = w.y1 * height
+        /* The glow this field has to stay inside, in pixels. */
+        const hx = w.halo.cx * width, hy = w.halo.cy * height
+        const hrx = w.halo.rx * width, hry = w.halo.ry * height
 
         /* Pass one solves every particle and files it under an opacity bucket;
            nothing is painted until pass two. */
@@ -666,6 +717,22 @@ export default function AuthScene() {
                 a += k * 0.55
                 r += k * 1.5
               }
+            }
+
+            /* The glow is the sheet's outer boundary, and this is where that
+               is enforced: normalised distance from the halo's centre, taken
+               from the particle's *final* position and multiplied into its
+               *final* opacity. Doing it last is the point. A wake may shove a
+               dot about inside its glow, but it cannot shove one out of it,
+               and the brightening a passing pointer hands out cannot
+               resurrect a dot the halo has already taken to nothing — which is
+               what used to scatter dots across bare ground beside each
+               corner. */
+            const q = Math.hypot((x - hx) / hrx, (y - hy) / hry)
+            if (q >= HALO_EDGE) continue
+            if (q > HALO_CORE) {
+              const k = (HALO_EDGE - q) / (HALO_EDGE - HALO_CORE)
+              a *= k * k * (3 - 2 * k)
             }
 
             if (a <= 1 / BUCKETS) continue
