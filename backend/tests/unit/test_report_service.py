@@ -800,6 +800,21 @@ async def test_an_unreadable_reply_is_a_502_and_writes_nothing(
     assert not [o for o in db.added if isinstance(o, ReportSection)]
 
 
+async def test_a_reply_cut_off_at_max_tokens_says_so_instead(
+    proposal: _Proposal,
+) -> None:
+    """Same empty proposal, different advice. "Try again, or say more" sends
+    the user to rewrite a request that was never the problem; a longer one
+    only makes an exhausted output budget likelier."""
+    proposal.proposal = OutlineProposal(truncated=True)
+    db = _outline_db()
+
+    with pytest.raises(LLMError, match="output budget"):
+        await _service(db).propose_outline(CTX, REPORT_ID)
+
+    assert not [o for o in db.added if isinstance(o, ReportSection)]
+
+
 async def test_an_unsynced_connection_is_refused_before_a_token_is_spent(
     proposal: _Proposal,
 ) -> None:

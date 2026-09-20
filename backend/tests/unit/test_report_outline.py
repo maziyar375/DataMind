@@ -68,13 +68,14 @@ GOOD = {
 class FakeGateway:
     """Returns one canned reply and records what it was asked."""
 
-    def __init__(self, text: str) -> None:
+    def __init__(self, text: str, truncated: bool = False) -> None:
         self.text = text
+        self.truncated = truncated
         self.messages: list[ChatMessage] = []
 
     async def complete(self, _llm: Any, messages: Any) -> Completion:
         self.messages = list(messages)
-        return Completion(text=self.text)
+        return Completion(text=self.text, truncated=self.truncated)
 
 
 # ── a good reply ─────────────────────────────────────────────────────────
@@ -256,6 +257,35 @@ def test_a_truncated_reply_does_not_promote_a_block_to_a_section() -> None:
     proposal = parse(truncated)
 
     assert [s.heading for s in proposal.sections] == ["Revenue"]
+
+
+async def test_a_reply_cut_off_before_any_content_says_the_budget_ran_out() -> None:
+    """What a reasoning model does when `max_tokens` is too low for it: the
+    whole allowance goes to the scratchpad, `content` comes back null, and the
+    text this parser is handed is the empty string. Indistinguishable from a
+    model that answered nonsense — except for `finish_reason`."""
+    gateway = FakeGateway("", truncated=True)
+
+    proposal = await propose(
+        gateway, LLM, request="a report", dialect="postgres", schema_block="", language="en"
+    )
+
+    assert proposal.is_empty
+    assert proposal.ran_out_of_budget
+
+
+async def test_a_partly_salvaged_reply_is_not_a_budget_failure() -> None:
+    """Truncated *and* readable is the case this module exists for: the
+    sections that arrived whole are kept, and the user adds the rest."""
+    whole = json.dumps({"sections": [_section("Revenue"), _section("Returns")]})
+    gateway = FakeGateway(whole[: whole.index('{"heading": "Returns"') + 40], truncated=True)
+
+    proposal = await propose(
+        gateway, LLM, request="a report", dialect="postgres", schema_block="", language="en"
+    )
+
+    assert [s.heading for s in proposal.sections] == ["Revenue"]
+    assert proposal.truncated and not proposal.ran_out_of_budget
 
 
 # ── a reply with a field nobody asked for ────────────────────────────────

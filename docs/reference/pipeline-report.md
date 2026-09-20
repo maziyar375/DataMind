@@ -162,12 +162,36 @@ Then, per candidate ([`_section`](../../backend/app/reports/outline.py#L256-L311
 | *fewer* sections than asked for | **kept as-is** | four good sections the user can add a fifth to beats a refusal |
 
 `dropped_sections` / `dropped_blocks` are counted and logged
-(`report_outline_salvaged`) — the only signal that a model is answering in a
-shape the parser keeps having to rescue.
+(`report_outline_salvaged`, with `truncated`) — the only signal that a model is
+answering in a shape the parser keeps having to rescue, and whether raising its
+output budget is what would stop it.
 
-**The single failure**: `proposal.is_empty` → `LLMError`, *"The model did not
-return an outline that could be read."* Nothing is written; the existing
-outline survives untouched.
+**The two failures**, both `proposal.is_empty` → `LLMError` → 502, both
+writing nothing and leaving the existing outline untouched — but told apart by
+`finish_reason`, because they are not fixed by the same thing:
+
+| | The reply could not be read | The reply never arrived |
+|---|---|---|
+| **Test** | `is_empty` | `ran_out_of_budget` — `is_empty` **and** `truncated` |
+| **What happened** | the model answered in a shape `_salvage` could recover nothing from | the provider stopped at `max_tokens` before any of the outline was written |
+| **Message** | *"…did not return an outline that could be read. Try again, or say more about what the report should cover."* | *"…ran out of output budget before it finished the outline. Raise this model's max tokens, or choose a model that spends less of its reply on reasoning."* |
+| **What fixes it** | the request, or another attempt | the model config |
+
+The second is a **reasoning model's** failure, and it is invisible without
+`finish_reason`: the model spends the whole allowance on its scratchpad and
+returns `content: null`, which reaches `parse` as the empty string. Observed on
+`deepseek-v4-flash` at `max_tokens = 8192` — `completion_tokens` back as
+exactly 8192, all of it `reasoning`, `finish_reason: "length"`, not one
+character of JSON. Telling that user to "say more about what the report should
+cover" is advice that makes the failure *likelier*, which is why the two are
+split. `OUTLINE_MIN_MAX_TOKENS` (6,144) is no protection: on a provider that
+counts reasoning against `max_tokens`, that floor is a floor on thinking plus
+answer, not on the answer.
+
+Truncated and *partly* readable stays a success: the sections that arrived
+whole are kept, `truncated` rides along on the proposal, and the user adds the
+rest. `ran_out_of_budget` exists rather than `is_empty and truncated` at the
+call site for exactly that reason.
 
 ### 2.4 What is written
 
@@ -828,7 +852,8 @@ compared with one generated after it.
    send. `OUTLINE_MIN_MAX_TOKENS` protects the *reply*, not the request; a
    context-length error surfaces as `LLMError` and the user sees "the model did
    not return an outline that could be read", which is a true statement about a
-   cause it does not name.
+   cause it does not name. The *output* side of that same complaint is named
+   now (§2.3); this sentence is only the input side.
 
 3. **`previous_block_hashes` compares against the last run that computed
    something**, not the last run. A cancelled run that wrote no rows is not a

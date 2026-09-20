@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -137,10 +137,29 @@ class OutlineProposal:
     sections: list[ProposedSection] = field(default_factory=list)
     dropped_sections: int = 0
     dropped_blocks: int = 0
+    #: The provider stopped at `max_tokens` rather than because the model had
+    #: finished. Carried because `is_empty` cannot tell two different failures
+    #: apart on its own — a reply this parser could make nothing of, and a
+    #: reply that never arrived — and only one of them is fixed by raising the
+    #: output budget. A reasoning model is the sharp case: it can spend the
+    #: whole allowance on its scratchpad and return `content: null`, which
+    #: reaches `parse` as the empty string and is indistinguishable from
+    #: silence without this flag.
+    truncated: bool = False
 
     @property
     def is_empty(self) -> bool:
         return not self.sections
+
+    @property
+    def ran_out_of_budget(self) -> bool:
+        """Nothing usable arrived, and the reply was cut off at `max_tokens`.
+
+        Not `is_empty and truncated` at the call site: a *partly* salvaged
+        reply is truncated too, and that one is a success — the sections that
+        arrived whole are kept and the user adds the rest.
+        """
+        return self.is_empty and self.truncated
 
 
 def build_messages(
@@ -210,7 +229,15 @@ async def propose(
             schema_block=schema_block,
         ),
     )
-    return parse(completion.text, limit=target)
+    # `parse` reads text and nothing else. Whether the reply was *cut off* is
+    # the provider's `finish_reason`, and it is the whole difference between
+    # "the model answered in a shape we could not read" and "the model never
+    # reached the answer" — same empty proposal, different thing to tell the
+    # user. Carried out rather than resolved here: this module does not know
+    # what the caller can offer to do about it.
+    return replace(
+        parse(completion.text, limit=target), truncated=completion.truncated
+    )
 
 
 def parse(text: str, *, limit: int = MAX_SECTIONS) -> OutlineProposal:

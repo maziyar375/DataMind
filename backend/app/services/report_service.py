@@ -579,6 +579,20 @@ class ReportService:
                 kept=len(proposal.sections),
                 dropped_sections=proposal.dropped_sections,
                 dropped_blocks=proposal.dropped_blocks,
+                truncated=proposal.truncated,
+            )
+        if proposal.ran_out_of_budget:
+            # A different failure from the one below, and not fixed by the same
+            # thing: the reply was cut off at `max_tokens`, so what the user
+            # can act on is the budget, not the wording of their request.
+            # Saying "try again, or say more" here sends them to rewrite a
+            # request that was never the problem — a reasoning model can spend
+            # the entire allowance on its scratchpad and return no content at
+            # all, and a longer request only makes that likelier.
+            raise LLMError(
+                "The model ran out of output budget before it finished the "
+                "outline. Raise this model's max tokens, or choose a model "
+                "that spends less of its reply on reasoning."
             )
         if proposal.is_empty:
             raise LLMError(
