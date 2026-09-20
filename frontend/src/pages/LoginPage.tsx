@@ -1,11 +1,13 @@
 /**
  * Login: the only screen an unauthenticated visitor can reach.
  *
- * A centred card over `AuthScene` — two dotted wave sheets in the bottom
- * corners that part around the pointer, and the product's own instruments
- * (charts, a result table, a database) drifting down both margins. The scene
- * is decorative and says so: every layer is `aria-hidden`, none of it takes a
- * pointer event, and the form works identically with the canvas dead.
+ * A centred card over `AuthScene` — five coloured lights that drift and change
+ * shape too slowly to catch, two dotted wave sheets in the bottom corners that
+ * part around the pointer and stay inside the lights they sit in, and the
+ * product's own instruments (charts, a result table, a database) drifting down
+ * both margins. The scene is decorative and says so: every layer is
+ * `aria-hidden`, none of it takes a pointer event, and the form works
+ * identically with the canvas dead.
  *
  * Five things worth keeping:
  *

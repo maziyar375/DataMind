@@ -2,9 +2,16 @@
  * The field behind the sign-in card — the one surface a visitor can play with
  * before they have an account.
  *
- * Three layers, all `aria-hidden` and none of them able to take a pointer
+ * Four layers, all `aria-hidden` and none of them able to take a pointer
  * event, so nothing here is ever between someone and the form:
  *
+ *  - **The lights.** Five coloured glows — one behind the mark, one in each
+ *    corner — that the rest of the scene is drawn over. They are elements in
+ *    `styles.css`, not anything this canvas paints, but their pose is written
+ *    from here: each one drifts, swells and dims on periods long enough that
+ *    nothing is ever caught moving, and the two in the bottom corners hand
+ *    their ellipse to the sheets below so the dots travel with the light they
+ *    sit in.
  *  - **The line.** One long curve that crests under the mark and falls away
  *    past both edges of the window. It is the scene's spine: the mark sits on
  *    its crest, four cards hang off it at measured points, and slow motes
@@ -27,10 +34,11 @@
  * `--wave-b` off `.rm-auth`, so both themes are decided in `styles.css` beside
  * the tokens, and a theme switch is picked up on the next frame.
  *
- * `prefers-reduced-motion` stops the clock — the sheets hold a still frame, the
- * motes hold their places, the cards stop drifting — but the pointer still
- * moves all three. What that setting asks us to stop is motion the visitor did
- * not cause; a wake that follows a hand already in flight is not that.
+ * `prefers-reduced-motion` stops the clock — the lights hold a pose, the sheets
+ * hold a still frame, the motes hold their places, the cards stop drifting —
+ * but the pointer still moves all four. What that setting asks us to stop is
+ * motion the visitor did not cause; a wake that follows a hand already in
+ * flight is not that.
  */
 import { useEffect, useRef } from 'react'
 
@@ -90,18 +98,73 @@ const FLOW_PERIOD = 78
     from `.rm-auth` at run time. */
 const FLOW_INK = 0.6
 
+/* ── the glows ─────────────────────────────────────────────────────────── */
+
+/**
+ * The five lights the page is lit by, in the order `.rm-auth-glows` renders
+ * them: the bloom behind the mark, then the four corners clockwise from the
+ * top left. `styles.css` owns where each one sits, how big it is and what
+ * colour it is; this file owns only where it is *this instant*.
+ */
+const GLOW_KEYS = ['bloom', 'tl', 'tr', 'bl', 'br'] as const
+
+/**
+ * How far a light wanders from where the stylesheet put it, as a fraction of
+ * the viewport; how far its two radii swell; how far it dims at the bottom of
+ * its pulse; and how far it leans with the pointer, in pixels at full grip.
+ *
+ * **The numbers are small on purpose, and the periods are long.** A glow that
+ * visibly moves is a screensaver — the eye locks onto it and the form behind
+ * it loses the argument. What these are tuned for is the second look: nothing
+ * appears to be moving, and yet the corner is not the shape it was a minute
+ * ago. At 1440×900 the wander is a little over 20px, and the slowest cycle
+ * takes a minute and forty seconds to come round.
+ */
+const GLOW_WANDER = 0.014
+const GLOW_SWELL = 0.055
+const GLOW_PULSE = 0.1
+const GLOW_LEAN = 10
+
+/**
+ * Where a glow is at `t`, relative to where the stylesheet put it.
+ *
+ * The same construction as a wave layer, for the same reason: sines whose
+ * periods share no common multiple — 77s, 47s, 134s and 91s here — so the five
+ * lights drift through each other's arrangements and never return to one. The
+ * two radii swell on *different* periods, which is what makes a glow change
+ * shape rather than merely breathe: it is fractionally taller than it was, a
+ * minute later fractionally wider, and never twice the same ellipse.
+ *
+ * Written into a shared buffer as `[dx, dy, sx, sy]` per glow rather than
+ * returned: the wave sheets read their own halo's pose out of it a few
+ * thousand particles later, and a fresh object per glow per frame is exactly
+ * the kind of allocation this loop is built to avoid.
+ */
+function glowPose(i: number, t: number, width: number, height: number, out: Float32Array) {
+  const s = 1.7 * i
+  const o = i * 4
+  const wx = (Math.sin(t * 0.082 + s) + 0.55 * Math.sin(t * 0.134 + s * 2.1)) / 1.55
+  const wy = (Math.sin(t * 0.069 + s * 1.3) + 0.55 * Math.sin(t * 0.115 + s * 0.7)) / 1.55
+  out[o] = wx * GLOW_WANDER * width
+  out[o + 1] = wy * GLOW_WANDER * height
+  out[o + 2] = 1 + GLOW_SWELL * Math.sin(t * 0.047 + s * 1.9)
+  out[o + 3] = 1 + GLOW_SWELL * Math.sin(t * 0.069 + s * 2.6)
+}
+
 /**
  * Where a corner's glow is, in viewport fractions — centre and radii.
  *
- * **These are not new numbers.** They are the two bottom `radial-gradient`s of
- * `.rm-auth::before` in `styles.css`, restated in this file's coordinates.
- * That pseudo-element is `position: fixed; inset: -25%`, so it spans
- * -25%..125% of the viewport: a background position `p` inside it lands at
- * `p x 1.5 - 0.25` on screen, a radius `p` is `p x 1.5`, and the gradient's
- * own `transparent 70%` stop is where the glow visibly ends. The CSS
- * `radial-gradient(23.8% 23.8% at 21% 78%, ..., transparent 70%)` is therefore
- * an ellipse centred at viewport (6.5%, 92%) whose edge is 25% of the viewport
- * away, which is the first entry below.
+ * **These are not new numbers.** They are `.rm-glow.is-bl` and `.rm-glow.is-br`
+ * in `styles.css`, restated in this file's coordinates: that box is centred at
+ * `left: 6.5vw; top: 92vh` and is 50vw by 50vh, and its gradient runs out to
+ * the box's own edge — so its radii are half of that, 25% of the viewport
+ * each, which is the first entry below. This is the one pair of figures the
+ * two files have to agree on, and both sides carry a comment saying so.
+ *
+ * The ellipse is then moved by whatever `glowPose` has done to that light this
+ * frame, so the dots follow the glow they live in: it drifts, they drift with
+ * it; it swells, the sheet spreads with it. Tying them together is the only
+ * reason a glow can be allowed to move at all.
  *
  * The halo decides one thing only: **where the sheet stops.** Where the sheet
  * runs is still the four extents below, hand-placed, because the shape the two
@@ -153,6 +216,9 @@ type Wave = {
   /** The glow this sheet has to stay inside — the only thing the ellipse is
       used for. It clips the field; it does not lay it out. */
   halo: Halo
+  /** Which light that is, as an index into `GLOW_KEYS`, so the clip can be
+      moved by the same pose the element itself is moved by. */
+  glow: number
   /** Curves in the stack. Twenty each: the count is bounded from below by the
       brief and from above by the band, since neighbours closer than about
       12px stop reading as separate curves and start reading as a cloud. */
@@ -175,7 +241,7 @@ const WAVES: Wave[] = [
   // centre: the lower harmonic is the tallest, so this one reads as a swell.
   {
     x0: -0.18, x1: 0.34, y0: 1.04, y1: 0.80, layers: 20,
-    halo: { cx: 0.065, cy: 0.92, rx: 0.25, ry: 0.25 },
+    halo: { cx: 0.065, cy: 0.92, rx: 0.25, ry: 0.25 }, glow: 3,
     freq: [1.9, 3.5, 6.1], amp: [0.027, 0.012, 0.0045],
     drift: [0.055, -0.084, 0.121], seed: 0.31, color: '--wave-a',
   },
@@ -183,7 +249,7 @@ const WAVES: Wave[] = [
   // second harmonic, so it ripples where the left one swells.
   {
     x0: 1.18, x1: 0.66, y0: 1.04, y1: 0.825, layers: 20,
-    halo: { cx: 0.935, cy: 0.935, rx: 0.25, ry: 0.25 },
+    halo: { cx: 0.935, cy: 0.935, rx: 0.25, ry: 0.25 }, glow: 4,
     freq: [1.4, 4.4, 7.3], amp: [0.023, 0.016, 0.004],
     drift: [-0.069, 0.048, -0.095], seed: 2.74, color: '--wave-b',
   },
@@ -426,6 +492,7 @@ function Matrix({ cols, rows }: { cols: number; rows: number }) {
 export default function AuthScene() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const glyphsRef = useRef<HTMLDivElement | null>(null)
+  const glowsRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -436,6 +503,12 @@ export default function AuthScene() {
 
     const calm = window.matchMedia('(prefers-reduced-motion: reduce)')
     const marks = host ? Array.from(host.children) as HTMLElement[] : []
+    const lights = glowsRef.current
+      ? Array.from(glowsRef.current.children) as HTMLElement[]
+      : []
+    /* `[dx, dy, sx, sy]` per light, rewritten in place each frame. The wave
+       loop reads its own halo's four numbers back out of it. */
+    const poses = new Float32Array(GLOW_KEYS.length * 4)
 
     /* The pointer is tracked twice: where it actually is, and where the scene
        currently believes it is. Everything reads the second one and it eases
@@ -551,6 +624,28 @@ export default function AuthScene() {
       const span = width * (0.5 + ARC_OVER)
       const drop = height * ARC_DROP
 
+      // ── the glows ──
+      /* Five `transform`s and an `opacity` a frame, which is the whole cost:
+         each light is a layer with nothing in it, so the compositor moves it
+         without repainting a pixel of what it lies over. That is also why the
+         drift lives here rather than in a CSS keyframe — the sheets in the
+         corners have to be clipped to exactly the ellipse these end up as, and
+         only one clock can be allowed to decide where that is. */
+      for (let i = 0; i < GLOW_KEYS.length; i++) {
+        glowPose(i, t, width, height, poses)
+        const light = lights[i]
+        if (!light) continue
+        const o = i * 4
+        light.style.setProperty('--gx', `${(poses[o] + px * GLOW_LEAN * grip).toFixed(1)}px`)
+        light.style.setProperty('--gy', `${(poses[o + 1] + py * GLOW_LEAN * grip).toFixed(1)}px`)
+        light.style.setProperty('--gsx', poses[o + 2].toFixed(3))
+        light.style.setProperty('--gsy', poses[o + 3].toFixed(3))
+        /* Down from full and back, never past it: an opacity over 1 is clamped,
+           and a pulse with a flat top reads as a flicker rather than a breath. */
+        const pulse = 1 - GLOW_PULSE * (0.5 + 0.5 * Math.sin(t * 0.053 + i * 5.2))
+        light.style.setProperty('--ga', pulse.toFixed(3))
+      }
+
       // ── the cards on it ──
       for (let i = 0; i < NODES.length; i++) {
         const mark = marks[i]
@@ -652,9 +747,18 @@ export default function AuthScene() {
         const fx0 = w.x0 * width, fx1 = w.x1 * width
         const wspan = fx1 - fx0
         const fy0 = w.y0 * height, fy1 = w.y1 * height
-        /* The glow this field has to stay inside, in pixels. */
-        const hx = w.halo.cx * width, hy = w.halo.cy * height
-        const hrx = w.halo.rx * width, hry = w.halo.ry * height
+        /* The glow this field has to stay inside, in pixels, carried by the
+           same pose the element itself is wearing this frame. The pointer lean
+           is deliberately *not* included: it is a few pixels, it is the one
+           part of a glow's motion that can change direction quickly, and a
+           sheet that lurched with it would undo the calm the rest of this is
+           tuned for. The fade at `HALO_CORE` is worth more than ten pixels of
+           agreement at the rim. */
+        const o = w.glow * 4
+        const hx = w.halo.cx * width + poses[o]
+        const hy = w.halo.cy * height + poses[o + 1]
+        const hrx = w.halo.rx * width * poses[o + 2]
+        const hry = w.halo.ry * height * poses[o + 3]
 
         /* Pass one solves every particle and files it under an opacity bucket;
            nothing is painted until pass two. */
@@ -819,6 +923,13 @@ export default function AuthScene() {
 
   return (
     <>
+      {/* First in the tree and lowest in the stack: the lights the rest of the
+          scene is drawn over. The frame loop walks this list by index, so the
+          order here is the order `GLOW_KEYS` is in. */}
+      <div ref={glowsRef} className="rm-auth-glows" aria-hidden="true">
+        {GLOW_KEYS.map((k) => <div key={k} className={`rm-glow is-${k}`} />)}
+      </div>
+
       <canvas ref={canvasRef} className="rm-auth-waves" aria-hidden="true" />
       {/* Cards first, motes after: the frame loop walks this list by index, and
           `NODES.length` is where it changes what it is placing. */}
