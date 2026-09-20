@@ -753,34 +753,137 @@ here**:
 Tick a box in the commit that lands the work, never ahead of it.
 
 ### Phase 0 — Repair the floor
-- [ ] `match_tables` extended to columns · *`test_retrieve_matcher.py` green*
-- [ ] Analytical branch calls it · *`'paid'` selects no `id` table*
-- [ ] `fit_to_budget` ranked and bounded · *500-table synthetic block ≤ budget*
-- [ ] Join paths survive the cut · *bridge outranks unconnected*
-- [ ] Drop reporting in the step detail · *`test_pipeline_events.py`*
+- [x] `match_tables` extended to columns · *`test_retrieve_matcher.py` green*
+- [x] Analytical branch calls it · *`'paid'` selects no `id` table*
+- [x] `fit_to_budget` ranked and bounded · *500-table synthetic block ≤ budget*
+- [x] Join paths survive the cut · *bridge outranks unconnected*
+- [x] Drop reporting in the step detail · *`test_pipeline_events.py`*
+
+> Landed 2026-09-19. One refinement to §4.2's ranking: **carried** tables rank
+> *above* tables the question named only **by a column**. "and by status?"
+> names a column half a warehouse has, and the table the follow-up continues
+> must not lose its place to every other table with a `status`. The order is
+> named-by-table → carried → named-by-column → FK hop (bridges first) → rest.
+> The rendered-block check is asserted under `NONE` on the synthetic snapshot;
+> the estimate (`table_chars`) is what every branch is bounded by, as before.
 
 ### Phase 1 — Sections exist, and do nothing
-- [ ] `connection_sections` + `0035` · *`alembic upgrade head`*
-- [ ] `SectionService.propose` deterministic and total · *every table placed once*
-- [ ] Oversized components split by prefix · *no proposed section over budget unless the prefix is*
-- [ ] Descriptions from the semantic layer, else names + comments
-- [ ] Five endpoints, authorized · *`test_sections_api.py`*
-- [ ] The Sections tab, with sizing states · *Playwright*
-- [ ] **The ask path is unchanged** · *same nodes, same prompt bytes, sections saved*
+- [x] `connection_sections` + `0035` · *`alembic upgrade head`*
+- [x] `SectionService.propose` deterministic and total · *every table placed once*
+- [x] Oversized components split by prefix · *no proposed section over budget unless the prefix is*
+- [x] Descriptions from the semantic layer, else names + comments
+- [x] Five endpoints, authorized · *`test_sections_api.py`*
+- [x] The Sections tab, with sizing states · *Playwright*
+- [x] **The ask path is unchanged** · *same nodes, same prompt bytes, sections saved*
+
+> Landed 2026-09-19. How each box was proved:
+> `0035` ran `alembic upgrade head` on a clean database and on a clone of a
+> populated one (and `downgrade 0034` → `upgrade` again), with
+> `test_sections_models.py` holding the migration and the ORM to one shape.
+> The proposal algorithm is `app/pipeline/sections.py` (pure) under
+> `SectionService` — `test_sections_propose.py`. Endpoints ask about the
+> **connection** (`select` / `modify`), with no new resource type —
+> `test_sections_api.py` on the access `World`. The tab was driven with
+> Playwright against a scratch clone in both themes: propose → rename → drag a
+> table between cards → add one by name → save → reload shows it, and the
+> *Too large* badge and *Split this section* under a lowered budget. The ask
+> path check is structural (`test_pipeline_graph.py`): nothing that builds a
+> run's inputs imports the store, and `NodeDeps` has no field for it.
+>
+> Three things the plan left open, decided here: a component or prefix group
+> needs **3 tables** to stand alone (smaller goes to a name-prefix pool, then
+> `Unassigned`); a table whose prefix is too rare **joins the prefix group it
+> has the most foreign keys to**, if that group still fits; and *Split this
+> section* is `POST …/sections/propose` with `{"tables": [...]}` — the same
+> algorithm over one section's members, applied as a draft the person saves.
+> `NONE` and `Unassigned` are reserved names, and a name may not contain a
+> comma — it is the token the router replies with.
 
 ### Phase 2 — The `scope` node
-- [ ] `StepName.SCOPE` + both prompts
-- [ ] The node, with all six fail-open cases · *`test_scope_node.py`*
-- [ ] Wired into `CHAT_GRAPH` and `DRAFT_GRAPH` · *`test_pipeline_graph.py`*
-- [ ] `retrieve` honours `scope_tables`; `SECTION_SNAPSHOT` · *`test_retrieve_scope.py`*
-- [ ] FK hop inside the scope, before the cut
-- [ ] `NodeDeps.sections` loaded on both paths
-- [ ] **The guard is untouched** · *`test_section_guard_unaffected.py`*
-- [ ] The pick is in the step trail; `scope` usage is recorded
+- [x] `StepName.SCOPE` + both prompts
+- [x] The node, with all six fail-open cases · *`test_scope_node.py`*
+- [x] Wired into `CHAT_GRAPH` and `DRAFT_GRAPH` · *`test_pipeline_graph.py`*
+- [x] `retrieve` honours `scope_tables`; `SECTION_SNAPSHOT` · *`test_retrieve_scope.py`*
+- [x] FK hop inside the scope, before the cut
+- [x] `NodeDeps.sections` loaded on both paths
+- [x] **The guard is untouched** · *`test_section_guard_unaffected.py`*
+- [x] The pick is in the step trail; `scope` usage is recorded
+
+> Landed 2026-09-19. Decisions made while building it, each covered by a test:
+>
+> - **The join closure.** A section travels with every table outside it that
+>   has foreign keys to **two or more** members — a link table, a shared
+>   dimension — in both `SECTION_SNAPSHOT` and `RANKED_MATCH`; a table touching
+>   one member is the section's edge and stays out. That is how §3.4's "one hop"
+>   and §6.1's "a bridge outside the section is selected" are both true; the
+>   ranked hop runs over that set, so it never reaches past the section's
+>   closure.
+> - **Usage.** Recorded on every reply that came back, a `NONE` included — the
+>   call was paid for. Absent when no call was made (no sections, a METADATA
+>   question, nothing routable) or the provider failed.
+> - **No sections is a silent skip**: SKIPPED with no detail, and the chat trail
+>   hides exactly that case, so a connection without sections draws the trail
+>   it always did (§8.3). A fall-open *with* a reason still shows.
+> - **The ceiling did not move.** `RECURSION_LIMIT` stays 25 node executions;
+>   `scope` spends one on every run, so a runaway repair loop now gets nineteen
+>   rather than twenty — recorded in `test_pipeline_events.py`.
+> - **Unmeasured by the suite, as §6.3 says.** Checked live instead, once, on a
+>   scratch clone: Aurora with four hand-made sections and DeepSeek V4 Flash —
+>   *"Which store format had the highest average daily footfall?"* scoped to
+>   **Stores · 5 tables** in 2.8 s, and `retrieve` sent **6 tables via
+>   SECTION_SNAPSHOT** (the five, plus `orders`, which references two of
+>   them).
 
 ### Phase 3 — Make it trustworthy
-- [ ] Stickiness across a follow-up
-- [ ] The section chip on an answer
-- [ ] *Ask within…* override, skipping the call
-- [ ] Drift: flagged members, `new` markers, Re-propose diff
-- [ ] Telemetry columns + `0036`, and the first distribution read off them
+- [x] Stickiness across a follow-up · *`test_scope_node.py`, and a live pair*
+- [x] The section chip on an answer · *Playwright, both themes*
+- [x] *Ask within…* override, skipping the call · *`test_scope_node.py` + live*
+- [x] Drift: flagged members, `new` markers, Re-propose diff · *`test_sections_drift.py`*
+- [x] Telemetry columns + `0036`, and the first distribution read off them
+
+> Landed 2026-09-20. What each box was proved with, and the five things the
+> plan left open:
+>
+> - **Stickiness reads the telemetry it just added.** `Currently answering
+>   from` is filled by `RunService._current_sections`: the last run on this
+>   conversation *and* this connection **that recorded a strategy**. A run that
+>   crashed before `retrieve` recorded none and says nothing about where the
+>   thread is; a run answered from the whole database recorded one and
+>   correctly clears the current section. Proved live on the clone: *"How many
+>   stores are there per region?"* within **Stores**, then *"and by format?"* —
+>   four words naming nothing — routed, one call, and stayed in Stores.
+> - **The override is `runs.scope_choice`, a fifth column in `0036`.** An
+>   input, not a measurement, and durable for the reason `skip_templates` is:
+>   the replica that executes a run is not the one that accepted it. `NONE` —
+>   already reserved as a section name — is *Whole database*, so the picker has
+>   one vocabulary with the router. A retry carries the choice; a schema
+>   question ignores it; a chosen section that has since been deleted **falls
+>   open and still makes no call**, because the choice was to narrow and we do
+>   not narrow somewhere else instead.
+> - **Where the picker went.** Not into the composer's hint line: that line is
+>   `opacity: 0` and `pointer-events: none` until the box is engaged — right
+>   for a keyboard tip, useless for a control somebody has to find. It sits in
+>   a row of its own above the box, and it is drawn only where the connection
+>   has sections, so an undivided database sees the composer it always saw.
+> - **Drift needed one number nothing stored.** "New since these sections were
+>   saved" is answered by reading the snapshot at `max(schema_version)` over
+>   the saved rows and diffing its table names. No stamp, no older snapshot, or
+>   sections already current → **nothing is marked**, because marking
+>   everything is an answer and a wrong one. A save re-stamps, so the markers
+>   clear.
+> - **Re-propose is a diff and applies nothing.** The comparison is pure and
+>   tested (`diffProposal` in `sections-model.ts`); adopting keeps the id *and*
+>   the description of any section whose name survives, so the one thing
+>   curation buys is the one thing a re-proposal does not take away.
+> - **The distribution, on a clone of a real database** — which is the number
+>   mvp2 §1.2 could not answer:
+>
+>   | strategy | runs | avg tables | avg chars | max chars |
+>   |---|--:|--:|--:|--:|
+>   | (not recorded) | 65 | – | – | – |
+>   | SECTION_SNAPSHOT | 5 | 5 | 4,430 | 8,344 |
+>
+>   Sixty-five runs predate the columns and read as *no measurement* rather
+>   than as zero, which is the whole reason they are nullable.
+> - **Still unmeasured by the eval suite**, as §6.3 says: the fixtures have no
+>   sections, and `NodeDeps.sections` stays None there by construction.

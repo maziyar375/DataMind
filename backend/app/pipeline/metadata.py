@@ -71,17 +71,39 @@ def _names_for(table: dict[str, Any]) -> set[str]:
     return {f for f in forms if len(f) > 2}
 
 
-def match_tables(question: str, tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Tables the question names explicitly, in snapshot order."""
+def match_tables(
+    question: str, tables: list[dict[str, Any]], *, columns: bool = False
+) -> list[dict[str, Any]]:
+    """Tables the question names explicitly, in snapshot order.
+
+    With `columns`, a table also counts as named when the question names one of
+    its columns, spelled any of the ways a table name may be — "orders by
+    region" names every table with a `region` column. That is what `retrieve`'s
+    analytical branch asks for, and it is why this matcher replaced the one it
+    had: that one was substring containment with no token boundary, so `id`
+    matched inside "paid" and "provide", and on a warehouse where nearly every
+    table has an `id` column one ordinary question selected all of them. Here a
+    single-word form is a whole token and a two-letter name is never a form at
+    all, so "paid" names nothing unless a column is called `paid`.
+
+    `describe` and `select_tables` leave `columns` off: a schema question is
+    about tables, and "which tables have a status?" is not a request to
+    describe each of them.
+    """
     asked = question.lower()
     tokens = _tokens(question)
 
-    hits: list[tuple[dict[str, Any], set[str]]] = []
-    for table in tables:
-        forms = _names_for(table)
+    def spoken(forms: set[str]) -> set[str]:
         # A single-word form must be a whole token — "id" must not match
         # inside "identity" — while a multi-word form is matched as a phrase.
-        found = {f for f in forms if (f in tokens) or (" " in f and f in asked)}
+        return {f for f in forms if (f in tokens) or (" " in f and f in asked)}
+
+    hits: list[tuple[dict[str, Any], set[str]]] = []
+    for table in tables:
+        found = spoken(_names_for(table))
+        if columns:
+            for column in table.get("columns") or []:
+                found |= spoken(_names_for(column))
         if found:
             hits.append((table, found))
 

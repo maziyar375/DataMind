@@ -33,7 +33,7 @@ def draft_edges() -> set[tuple[str, str]]:
 
 # The linear chain, as `ORDER` reads it.
 CHAIN = [
-    "route", "match", "retrieve", "describe", "clarify", "generate",
+    "route", "match", "scope", "retrieve", "describe", "clarify", "generate",
     "validate", "execute", "inspect", "present", "chart",
 ]
 
@@ -95,13 +95,14 @@ def test_the_chain_matches_order() -> None:
 
 
 # ── the short-circuit, and the promise it does not break ─────────────────
-def test_match_sits_between_route_and_retrieve() -> None:
+def test_match_sits_between_route_and_scope() -> None:
     """After `route`, because a taught question is about the data — and a
     CHITCHAT or UNSUPPORTED question halts before the store is ever read.
-    Before `retrieve`, because a hit makes retrieval unnecessary."""
+    Before `scope` and `retrieve`, because a hit makes both unnecessary."""
     assert ("route", "match") in edges()
-    assert ("match", "retrieve") in edges()
+    assert ("match", "scope") in edges()
     assert ("route", "retrieve") not in edges()
+    assert ("route", "scope") not in edges()
 
 
 def test_match_has_exactly_two_exits_plus_the_end() -> None:
@@ -112,7 +113,7 @@ def test_match_has_exactly_two_exits_plus_the_end() -> None:
     because a half-bound template is a confident wrong answer.
     """
     out = {target for source, target in edges() if source == "match"}
-    assert out == {"validate", "retrieve", END}
+    assert out == {"validate", "scope", END}
 
 
 async def test_a_miss_produces_the_prompt_it_produced_before_this_node_existed()\
@@ -268,8 +269,9 @@ def test_the_draft_graph_is_the_region_plus_what_a_draft_needs() -> None:
     are service calls through `execute_saved_sql`, and dragging them in here
     would put guarded execution in the pipeline layer."""
     assert set(DRAFT_GRAPH.get_graph().nodes) == {
-        START, "route", "refuse", "retrieve", "generate", "validate", END,
+        START, "route", "refuse", "scope", "retrieve", "generate", "validate", END,
     }
+    assert ("scope", "retrieve") in draft_edges()
     assert ("retrieve", "generate") in draft_edges()
     assert ("validate", END) in draft_edges()
 
@@ -279,7 +281,8 @@ def test_classify_is_a_conditional_entry_edge() -> None:
     exactly the calls it always sent — the classifier is a second model call
     and the tile editor did not ask for one per draft."""
     assert (START, "route") in draft_edges()
-    assert (START, "retrieve") in draft_edges()
+    assert (START, "scope") in draft_edges()
+    assert (START, "retrieve") not in draft_edges()
 
 
 def test_an_out_of_scope_question_is_refused_by_a_node() -> None:
@@ -290,6 +293,8 @@ def test_an_out_of_scope_question_is_refused_by_a_node() -> None:
     and a user reads it.
     """
     assert ("route", "refuse") in draft_edges()
+    assert ("route", "scope") in draft_edges()
+    assert ("scope", "refuse") not in draft_edges()
     assert ("retrieve", "refuse") not in draft_edges()
     assert ("generate", "refuse") not in draft_edges()
 
@@ -308,3 +313,102 @@ async def _unused(
     _seq: int, _name: str, _status: str, _detail: str | None, _ms: int
 ) -> None:  # pragma: no cover - a placeholder, never called
     return None
+
+
+# ── the scope node (retrieval-sections Phase 2) ──────────────────────────
+def test_scope_sits_between_match_and_retrieve_in_both_graphs() -> None:
+    """Chat and draft alike: a tile author asking a question of a wide
+    warehouse has the same problem a chat user has, and a difference between
+    the two paths has to be written rather than drifted into."""
+    assert ("match", "scope") in edges()
+    assert ("scope", "retrieve") in edges()
+    assert ("scope", "retrieve") in draft_edges()
+    for graph_edges in (edges(), draft_edges()):
+        out = {target for source, target in graph_edges if source == "scope"}
+        # No exit but the next node and the end: a scope never skips retrieval
+        # and never reaches the guard.
+        assert out == {"retrieve", END}
+
+
+def test_a_match_hit_jumps_over_scope() -> None:
+    """A stored answer needs no schema block, so it pays for no scope call:
+    the hit exit goes from `match` to `validate`, and nothing reaches
+    `validate` through `scope`."""
+    assert ("match", "validate") in edges()
+    assert ("scope", "validate") not in edges()
+
+
+async def test_no_sections_renders_the_prompt_it_rendered_before_scope_existed() -> None:
+    """**`NodeDeps.sections is None` is the pre-feature path exactly** — the
+    promise `PROMPT_VERSION` stays where it is on. `scope` reports SKIPPED,
+    calls nothing, writes nothing, and `retrieve` builds the same block from
+    the same snapshot, byte for byte; and saved sections a question was *not*
+    routed to (a provider error, a NONE) change nothing either."""
+    from app.pipeline import nodes
+    from app.pipeline.sections import SectionSpec
+
+    snapshot = {"tables": [
+        {"schema": "public", "name": n, "columns": [{"name": "id", "data_type": "bigint"}]}
+        for n in ("orders", "customers", "tags")
+    ], "relationships": []}
+
+    class Gateway:
+        calls = 0
+
+        async def complete(self, _llm: Any, _messages: Any) -> Any:
+            Gateway.calls += 1
+
+            class Reply:
+                text = "NONE"
+                prompt_tokens = completion_tokens = latency_ms = 1
+
+            return Reply()
+
+    async def emit(_t: str, _d: Any) -> None:
+        return None
+
+    def deps(sections: Any) -> Any:
+        return nodes.NodeDeps(
+            llm_gateway=Gateway(), llm=None, connector=None, snapshot=snapshot,
+            history=[], policy=None, emit=emit, sections=sections,
+        )
+
+    rendered = []
+    for sections in (None, [SectionSpec("Sales", "Orders.", ("public.orders",))]):
+        state = _state()
+        state.intent = "ANALYTICAL"
+        await nodes.scope(state, deps(sections))
+        assert state.scope_sections == [] and state.scope_tables == []
+        await nodes.retrieve(state, deps(sections))
+        assert state.context is not None
+        rendered.append(state.context.render(state.disclosure_policy))
+    assert rendered[0] == rendered[1]
+    assert Gateway.calls == 1  # only the run that had sections asked
+
+
+def test_the_ask_path_reads_sections_only_through_nodedeps() -> None:
+    """The store is read in exactly two places — the two callers that build a
+    run's `NodeDeps` — and nothing in the pipeline imports it. The guard's
+    allowlist (`query_service.policy_from_snapshot`) is built from the whole
+    snapshot and does not know sections exist."""
+    import pathlib
+
+    app = pathlib.Path(__file__).resolve().parents[2] / "app"
+    pipeline = [
+        app / "pipeline" / "nodes" / "__init__.py",
+        app / "pipeline" / "graph.py",
+        app / "pipeline" / "pipeline.py",
+        app / "pipeline" / "state.py",
+        app / "pipeline" / "prompts" / "__init__.py",
+        app / "services" / "query_service.py",
+    ]
+    for path in pipeline:
+        source = path.read_text()
+        for word in ("section_service", "ConnectionSection", "connection_sections"):
+            assert word not in source, f"{path.name} reads the store: {word}"
+    for caller in ("run_service.py", "sql_draft_service.py"):
+        source = (app / "services" / caller).read_text()
+        assert "sections=await load_sections(" in source, caller
+    # The eval runner leaves `sections` None, so the suite's baseline stays
+    # comparable by construction: no fixture has sections, and none is loaded.
+    assert "sections" not in (app / "eval" / "runner.py").read_text()

@@ -41,6 +41,7 @@
 | 18 | Embed the taught questions | `services/knowledge_service` · `index_embeddings()` | `embed` | **no prompt** — masked question text |
 | 19 | Embed the asked question | `knowledge/embed` · `EmbeddingMatcher.match()` | `embed` | **no prompt** — masked question text |
 | 20 | Embedding capability probe | `services/knowledge_service` · `set_embeddings()` | `probe_embedding` | fixed test string |
+| 21 | Choose a section | `pipeline/nodes` · `scope()` | `complete` | `SCOPE_SYSTEM`, or `SCOPE_SYSTEM_WITH_CURRENT` after a turn that retrieved something |
 
 Two *rule blocks* are not calls of their own — they are appended to calls 4–6
 by a caller that needs them, and they are documented in §14:
@@ -258,6 +259,79 @@ model call). `METADATA` falls through to `describe`; it must never reach
 
 ---
 
+## 2b. Call 21 — Choose a section (`scope`)
+
+| | |
+|---|---|
+| **Site** | `app/pipeline/nodes/__init__.py` · `scope()` |
+| **Trigger** | an analytical chat run **or draft** on a connection with **saved sections**, after `match` misses. Never on a connection without sections, never for a METADATA question, never after a `match` hit — and **never when the asker chose a section themselves** (*Ask within…*), which is this decision made by a person |
+| **Method** | `complete` |
+| **Prompt** | `SCOPE_SYSTEM` on a first question; `SCOPE_SYSTEM_WITH_CURRENT` once the thread has a section, so a follow-up that names nothing keeps it |
+| **Cost shape** | small — section names and one-line descriptions, no schema. It *removes* schema from the generate prompt when a section fits |
+
+**System:**
+
+```text
+You decide which part of a database a question is about.
+
+Each section below is a named group of tables, with a description of what it
+answers. Reply with the names of the sections needed, comma-separated, most
+relevant first — at most three. Reply NONE if no section fits, or if the
+question is about the database as a whole.
+
+Prefer one section. Name a second only when the question plainly needs both —
+when it compares, joins or reconciles two things that live in different
+sections.
+
+Sections:
+{sections}
+
+Reply with section names only.
+```
+
+**System — with a current section:**
+
+```text
+You decide which part of a database a question is about.
+
+Each section below is a named group of tables, with a description of what it
+answers. Reply with the names of the sections needed, comma-separated, most
+relevant first — at most three. Reply NONE if no section fits, or if the
+question is about the database as a whole.
+
+Prefer one section. Name a second only when the question plainly needs both —
+when it compares, joins or reconciles two things that live in different
+sections.
+
+Sections:
+{sections}
+
+Currently answering from: {current}
+A follow-up that names nothing new keeps the current section.
+
+Reply with section names only.
+```
+
+**User:** the raw `state.question`.
+
+**What fills the placeholders**
+
+| Placeholder | Filled with |
+|---|---|
+| `{sections}` | one line per **routable** section — at least one of its tables still in the snapshot — `- Name — description`, the description whitespace-collapsed and clipped to 400 characters |
+| `{current}` | the sections the previous turn was answered from, comma-separated — `runs.retrieval_sections` of the last run on this conversation and connection that recorded a strategy, filtered to what is still routable. Empty means the first prompt is sent instead |
+
+**Reply handling.** Split on commas and line breaks; each piece is stripped of
+quotes, bullets, bold and a trailing full stop, then matched to a section name
+ignoring case. At most three, in the reply's order; anything that is not a
+section name (`NONE` included) names nothing. Nothing named — or an `LLMError`
+— is SKIPPED, and the run continues with **no scope**, which is the whole
+snapshot: **scope fails open**. Its tokens are recorded under `scope` on every
+reply that came back, matched or not — and on no run where the asker chose,
+since no call was made.
+
+---
+
 ## 3. Call 2 — Describe the schema (METADATA)
 
 | | |
@@ -311,7 +385,7 @@ Question: {question}
 **Retrieval for this node is different.** When the snapshot exceeds
 `_RETRIEVE_BUDGET_CHARS = 50_000`, a METADATA question selects tables with
 `metadata.select_tables()` (what the question named, then the largest) rather
-than the substring/FK expansion an analytical question uses — strategy
+than the ranked FK expansion an analytical question uses — strategy
 `SCHEMA_QUESTION`.
 
 **Failure.** A stream error, or an empty stream, falls back to
@@ -1510,9 +1584,10 @@ SQL (which would break `sql_hash` comparison).
 
 ```text
 route (1) ──CHITCHAT/UNSUPPORTED──> HALT, canned sentence, no more calls
-  │ METADATA ──> retrieve ──> describe (2) ──> HALT
+  │ METADATA ──> scope (skipped) ──> retrieve ──> describe (2) ──> HALT
   │ ANALYTICAL
   ▼
+scope (21)          ── only with saved sections, and only when nobody chose one
 retrieve (no call)
 clarify (3)         ── asks? ──> HALT
 generate (4)
@@ -1524,7 +1599,8 @@ chart (8)           ── skipped entirely when unchartable_reason() fires
 ```
 
 **Typical clean run: 4 calls** — route, clarify, generate, present — **plus**
-chart when the result is chartable. A repair adds one. `suggest_followups` (10)
+chart when the result is chartable, **plus** scope on a connection with
+sections. A repair adds one. `suggest_followups` (10)
 fires separately when the SPA opens the thread.
 
 ### 15.2 A dashboard tile draft (`POST /drafts`)
@@ -1535,6 +1611,7 @@ fires separately when the SPA opens the thread.
 
 ```text
 draft_sql(classify=False, compose_chart=True, tile_type="METRIC")
+  scope (21, only with saved sections)
   retrieve ──> generate (4)  + METRIC_SQL_RULES when tile_type == METRIC
              ⇄ validate ──> generate (5) on rejection
   preview (runs the SQL, no model)

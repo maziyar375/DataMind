@@ -173,8 +173,19 @@ function useElapsed(key: number | undefined): number {
   return now
 }
 
+/**
+ * The steps worth a chip. Every step is, except one: a `scope` that SKIPPED
+ * with nothing to say is a connection without sections, and drawing it would
+ * change the trail every such connection has always had. A scope that fell
+ * open *with* a reason (a provider error, no section matched) still shows —
+ * that is a decision a reader may want to see.
+ */
+export function visibleSteps(steps: RunStep[]): RunStep[] {
+  return steps.filter((s) => !(s.name === 'scope' && s.status === 'SKIPPED' && !s.detail))
+}
+
 export function StepTrail({
-  steps, interrupted,
+  steps: allSteps, interrupted,
 }: {
   steps: RunStep[]
   /**
@@ -185,6 +196,7 @@ export function StepTrail({
    */
   interrupted?: boolean
 }) {
+  const steps = visibleSteps(allSteps)
   const waitingOn = steps.find((s) => s.status === 'RUNNING' && !interrupted)
   const elapsed = useElapsed(waitingOn?.seq)
   if (steps.length === 0) return null
@@ -293,6 +305,7 @@ function StepPanel({
   if (steps.length === 0) return null
 
   const failed = steps.some((s) => s.status === 'FAILED')
+  const shown = visibleSteps(steps)
   const active = steps.find((s) => s.status === 'RUNNING')
   const total = totalMs ?? steps.reduce((sum, s) => sum + (s.duration_ms ?? 0), 0)
   const seconds = (total / 1000).toFixed(total < 1000 ? 2 : 1)
@@ -304,8 +317,8 @@ function StepPanel({
       ? (NODE_META[active.name]?.detail ?? 'Working…')
       : 'Starting…'
     : failed
-      ? `Stopped after ${steps.length} steps · ${seconds}s`
-      : `All ${steps.length} steps passed · ${seconds}s`
+      ? `Stopped after ${shown.length} steps · ${seconds}s`
+      : `All ${shown.length} steps passed · ${seconds}s`
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -612,10 +625,38 @@ function TablesChip({ names }: { names: string[] }) {
   )
 }
 
+/**
+ * *Answered from **Sales*** — which part of the database this turn was
+ * routed to.
+ *
+ * The one chip here that is about a decision rather than a measurement, and
+ * the reason it is shown at all: a router that picks the wrong section fails
+ * by answering confidently from the wrong tables, which is the worst shape a
+ * failure can have. Showing the pick is what turns that into something a
+ * reader can notice — and *Ask within…* in the composer is what they do about
+ * it. Absent on a connection with no sections, so nothing changes there.
+ */
+function SectionChip({ names }: { names: string[] }) {
+  const label =
+    names.length === 1
+      ? names[0]
+      : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
+  return (
+    <Chip>
+      Answered from{' '}
+      <span style={{ color: 'var(--text)', fontWeight: 600 }}>{label}</span>
+    </Chip>
+  )
+}
+
 export function RunMetadata({ run }: { run: RunDetail }) {
   const tables = run.queries.at(-1)?.referenced_tables ?? []
+  const sections = run.retrieval_sections ?? []
   const chips: React.ReactNode[] = []
 
+  if (sections.length > 0) {
+    chips.push(<SectionChip key="section" names={sections} />)
+  }
   if (tables.length > 0) {
     chips.push(
       <TablesChip key="tables" names={tables.map((t) => t.split('.').pop() ?? t)} />,

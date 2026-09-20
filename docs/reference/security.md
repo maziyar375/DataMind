@@ -55,7 +55,7 @@ Stated plainly so nobody assumes otherwise:
 
 ## 2. Every place data leaves for a model provider
 
-There are **thirteen use cases**, across fifteen call sites, and no others. The
+There are **fourteen use cases**, across sixteen call sites, and no others. The
 dependency rule forbids importing `litellm` outside `app/infra/llm/`, and CI
 greps for violations, so this list cannot silently grow.
 
@@ -74,8 +74,9 @@ greps for violations, so this list cannot silently grow.
 | 11 | Write a report section | once per section, per generation; **also a per-section retry** | `workers/report.py` — `_narrate()`:687 |
 | 12 | Write the executive summary | once per generation | `workers/report.py` — `_summarise()`:782 |
 | 13 | Embed a question | the six-hourly index pass; **every analytical question**, on a connection with an embedding model pinned | `services/knowledge_service.py` — `_embedder()`:708, `index_embeddings()`:839 |
+| 14 | Choose a section | every analytical question — chat **and** a tile or block draft — on a connection with **saved sections**, unless the asker chose one themselves (*Ask within…*, which makes no call); never otherwise | `pipeline/nodes/__init__.py` — `scope()`:423 |
 
-**Thirteen and not fourteen** because #8 is a use case without a call site: a
+**Fourteen and not fifteen** because #8 is a use case without a call site: a
 draft reuses the *node* that would have made the call anyway, which is the whole
 point of §0.3 in [pipeline-chat.md](pipeline-chat.md) — a tile's statement is written
 against the same prompt, the same guard and the same budget as a chat answer.
@@ -180,13 +181,14 @@ Common building blocks, both governed by the disclosure policy (§3):
 | 11 | Report section | ✅ per block | ❌ | ❌ | **✅ per policy** | Plus figures computed from those same rows |
 | 12 | Report summary | ✅ the request | ❌ | ❌ | ❌ | **Prose only** — the sections' own paragraphs |
 | 13 | Embed a question | ✅ **masked** | ❌ | ❌ | ❌ | **No prompt at all.** Table names, column names, declared values and literals are replaced with `<table>`/`<column>`/`<value>` before the text leaves (§4.7) |
+| 14 | Choose a section | ✅ | ❌ section names and descriptions only | ❌ | ❌ | Text a person wrote (or accepted from a proposal) about the schema — the same rung as a catalog comment (§2.5) |
 
 The single most important row is **#4**. The node that writes SQL never
 receives result data under any policy — it works from schema, question, and
 transcript alone. That holds for every caller of it, including a tile draft and
 a report block.
 
-**Result values reach exactly two of the thirteen**: `present` (#5) and a report
+**Result values reach exactly two of the fourteen**: `present` (#5) and a report
 section (#11). Both go through the same `disclose()`, and neither is reachable
 without it — a report additionally refuses to run at all under `NONE` or
 `AGGREGATE` (§2.3). Everything else works from structure, shape, or prose.
@@ -397,6 +399,53 @@ is the same text through a second door, under the same policy, and a person can
 edit it in the layer editor — which is the only place any of this becomes
 reviewable before it is used again.
 
+
+### 2.5 Section text travels with structure
+
+A connection's **sections** ([retrieval-sections](../plans/retrieval-sections.md))
+add one prompt (#14) and change what #4 is shown — never what it may query.
+
+**What #14 sends:** the question, and each routable section's name and
+description (a description clipped to 400 characters, whitespace collapsed).
+No schema block, no transcript, no rows. A name and a description are prose a
+person or the semantic layer wrote about the *shape* of the database — the same
+rung as a catalog comment (§2.4), which `RetrievedContext.render` already sends
+under every policy including `NONE`. So section text is **not** gated by the
+disclosure policy either, and two rules keep that honest:
+
+- **A proposed description is never derived from row values.** The proposal
+  (`app/pipeline/sections.py`) reads table names, catalog comments and the
+  semantic layer's labels, grain, descriptions and synonyms — nothing that came
+  out of a `SELECT`: no sample values, no ranges, no counts.
+- **A person may type anything into a description, including a literal.** That
+  is the same bet a hand-authored knowledge template's literals already take
+  (§3.3), and it is theirs to take — but the field's help text says where the
+  text goes: *to the model, with the schema, under every disclosure policy*.
+
+**The guard gets no new entry point and no exemption.** `policy_from_snapshot`
+builds the allowlist from the whole snapshot and is not passed a section; a
+statement over a table outside the chosen section validates exactly as before,
+and a saved tile or report block never reads sections at all
+(`tests/unit/test_section_guard_unaffected.py`). Narrowing the guard to a
+section would break saved artifacts silently, days later, and is deliberately
+not built. **Access follows the connection**: reading or proposing sections is
+`select` on it, changing them is `modify`, and there is no new resource type.
+
+**A section name on a past turn is withheld with the rest of the database.**
+`runs.retrieval_sections` records which sections answered a question, and it
+is what the *Answered from* chip reads. A turn in a **shared thread** whose
+reader holds no `select` on the connection is already stripped of its rows,
+its chart and its statement (§6, the intersection rule); the section names go
+with them, because a name is something somebody called part of a database this
+reader was never given. The step trail stays, as it does for every other node
+— it is what makes a withheld turn still read as a turn.
+
+Like a catalog comment, a description is untrusted text inside a system prompt,
+and bounded the same way: one line, capped, and whatever it persuades the
+router to pick only changes which tables the generator is *shown* — every one
+of which the guard would have allowed anyway. A section a question was wrongly
+routed to degrades recall; it cannot produce a statement the guard would not
+have accepted without it.
 ---
 
 ## 3. The disclosure policy

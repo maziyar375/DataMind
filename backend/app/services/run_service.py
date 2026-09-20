@@ -79,6 +79,7 @@ from app.services.query_service import (
     policy_from_snapshot,
     resolve_llm,
 )
+from app.services.section_service import load_sections
 from app.services.semantic_service import LoadedLayer, load_layer, metric_use_of
 from app.services.team_service import delegated_context
 
@@ -178,6 +179,7 @@ class RunService:
         connection_id: UUID | None,
         llm_config_id: UUID | None,
         skip_templates: bool = False,
+        scope_choice: str | None = None,
     ) -> Run:
         conversation = await self._conversation(
             ctx, conversation_id, Privilege.MODIFY
@@ -256,6 +258,11 @@ class RunService:
             # in-memory because the replica that executes this run is not
             # necessarily the one that created it.
             skip_templates=skip_templates,
+            # *Ask within…*, set before the question was sent. Stored as the
+            # asker gave it and resolved at execution: a section deleted in
+            # between falls open there, and this row still says what was
+            # asked for, which is what makes the control measurable.
+            scope_choice=(scope_choice or "").strip() or None,
             status=RunStatus.QUEUED,
         )
         self._db.add(run)
@@ -323,6 +330,9 @@ class RunService:
             # time. See "Prompt changes" in CLAUDE.md.
             prompt_version=self._prompt_version(),
             skip_templates=run.skip_templates,
+            # A retry reproduces the conditions of the attempt it replaces,
+            # and the section the reader chose is one of them.
+            scope_choice=run.scope_choice,
             status=RunStatus.QUEUED,
         )
         self._db.add(retried)
@@ -584,6 +594,15 @@ class RunService:
                 bool(connection.knowledge_examples_enabled)
                 and not run.skip_templates
             ),
+            # The connection's sections, or None — which is the run exactly as
+            # it was before the `scope` node existed.
+            sections=await load_sections(self._db, connection.id),
+            # The reader's own choice of section, and what the previous turn
+            # was answered from. The first makes the routing call unnecessary;
+            # the second is what keeps "and by month?" in the section the
+            # question before it was answered from.
+            scope_choice=run.scope_choice,
+            current_sections=await self._current_sections(run),
         )
 
         pipeline = AnalyticsPipeline(
@@ -813,6 +832,20 @@ class RunService:
                 if state.clarification is not None
                 else RunStatus.SUCCEEDED
             )
+
+        # ── what retrieval did (retrieval-sections §2.2) ──
+        #
+        # Four facts, written only where a schema block was actually built: a
+        # run answered from the knowledge store never reaches `retrieve`, and
+        # NULL there is "no retrieval happened", which a zero would deny.
+        # `retrieval_chars` is the block as the model received it, rendered
+        # under the policy this run ran with — the same call `generate` makes,
+        # so the number is the cost and not an estimate of it.
+        if state.context is not None:
+            run.retrieval_strategy = state.context.strategy
+            run.retrieval_sections = list(state.scope_sections)
+            run.retrieval_tables = len(state.context.tables)
+            run.retrieval_chars = len(state.context.render(state.disclosure_policy))
 
         run.finished_at = utcnow()
         run.attempt_count = len(state.attempts)
@@ -1208,6 +1241,39 @@ class RunService:
             "under that answer.)"
         )
         return "\n".join(parts)
+
+    async def _current_sections(self, run: Run) -> list[str]:
+        """What the previous turn of this thread was answered from.
+
+        The router is told it as `Currently answering from`, because a
+        follow-up carries almost none of its own subject: "and by month?"
+        names no table and no section, and routing it alone lands it wherever
+        nine characters happen to point.
+
+        The **previous turn that retrieved anything**, not the previous turn:
+        a run that failed before `retrieve` recorded no strategy and is not
+        evidence of anything, while a run that was answered from the whole
+        database recorded one and *is* — it says the thread has left its
+        section, and an empty list here is how that is carried.
+
+        Same connection, same conversation, same fail-closed reading as
+        `_recent_history`: a turn against another database is not context for
+        this one.
+        """
+        if run.connection_id is None:  # pragma: no cover - `_prepare` refuses
+            return []
+        result = await self._db.execute(
+            select(Run.retrieval_sections)
+            .where(
+                Run.conversation_id == run.conversation_id,
+                Run.connection_id == run.connection_id,
+                Run.id != run.id,
+                Run.retrieval_strategy.is_not(None),
+            )
+            .order_by(Run.created_at.desc())
+            .limit(1)
+        )
+        return list(result.scalars().first() or [])
 
     async def _recent_history(
         self,

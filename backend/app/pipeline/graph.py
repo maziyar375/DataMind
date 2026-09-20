@@ -25,8 +25,9 @@ skipping `execute` and `inspect`). That one expression carries all five, because
 a node names where it wants to go and the adapter does not care which way that
 is. No edge needs special-casing, and none can be left out.
 
-**`match` is the only node that can skip four others.** It sits between
-`route` and `retrieve` and its hit exit names `validate` — the repair region's
+**`match` is the only node that can skip others** — five of them, `scope`
+through `generate`. It sits between `route` and `scope` and its hit exit names
+`validate` — the repair region's
 guard, which already feeds `execute`. A stored template therefore reuses every
 guarantee the generated path has (re-validation against the current snapshot,
 the rewriter, the row cap) and gets no exemption. Its miss exit is the ordinary
@@ -109,6 +110,7 @@ Router = Callable[[str, RunState], str]
 
 ROUTE = str(StepName.ROUTE)
 MATCH = str(StepName.MATCH)
+SCOPE = str(StepName.SCOPE)
 RETRIEVE = str(StepName.RETRIEVE)
 DESCRIBE = str(StepName.DESCRIBE)
 CLARIFY = str(StepName.CLARIFY)
@@ -130,10 +132,15 @@ REFUSE = "refuse"
 ORDER: list[tuple[str, NodeFn]] = [
     (StepName.ROUTE, nodes.route),
     # Between route and retrieve, and it is the one node in this list that can
-    # leave the chain: a hit jumps to `validate` and the four nodes below it
+    # leave the chain: a hit jumps to `validate` and the five nodes below it
     # never run. A miss changes nothing — no state written, no prompt altered —
     # which is the promise `PROMPT_VERSION` stays at v8 on.
     (StepName.MATCH, nodes.match),
+    # Which section of a sectioned database the question is about. After
+    # `match`, so a stored answer — which needs no schema block — pays for no
+    # scope call; before `retrieve`, because it produces retrieve's input.
+    # SKIPPED with no model call on a connection without sections.
+    (StepName.SCOPE, nodes.scope),
     (StepName.RETRIEVE, nodes.retrieve),
     # A schema question ends here, answered from the block retrieve just built
     # — schema plus semantic layer — and never reaching generate, where it
@@ -300,7 +307,7 @@ def _refuse_unless_analytical(_label: str, run: RunState) -> str:
     """
     if run.intent is not None and run.intent != "ANALYTICAL":
         return REFUSE
-    return RETRIEVE
+    return SCOPE
 
 
 @lru_cache(maxsize=64)
@@ -563,8 +570,12 @@ def _build_chat() -> Any:
     # The short-circuit's two exits. A hit names `validate` and lands in the
     # repair region's guard; a miss falls through to `retrieve` and the run is
     # indistinguishable from one taken before this node existed.
-    graph.add_node(MATCH, _adapt(MATCH, nodes.match, successor=RETRIEVE),
-                   destinations=(RETRIEVE, VALIDATE, END))
+    graph.add_node(MATCH, _adapt(MATCH, nodes.match, successor=SCOPE),
+                   destinations=(SCOPE, VALIDATE, END))
+    # Between the short-circuit and retrieval, and only ever on the chain: a
+    # hit jumps from `match` straight to `validate`, clean over this node.
+    graph.add_node(SCOPE, _adapt(SCOPE, nodes.scope, successor=RETRIEVE),
+                   destinations=(RETRIEVE, END))
     graph.add_node(RETRIEVE, _adapt(RETRIEVE, nodes.retrieve, successor=DESCRIBE),
                    destinations=(DESCRIBE, END))
     graph.add_node(DESCRIBE, _adapt(DESCRIBE, nodes.describe, successor=CLARIFY),
@@ -592,8 +603,12 @@ def _build_chat() -> Any:
 
 
 # ── the draft graph ──────────────────────────────────────────────────────
-# `retrieve → generate ⇄ validate`, with `route` in front when the caller
-# asked for it. No `describe` (a draft has nowhere to put a schema answer), no
+# `scope → retrieve → generate ⇄ validate`, with `route` in front when the
+# caller asked for it. `scope` is here for the reason it is in chat: a tile
+# author asking a question of a 2,000-table warehouse has exactly the problem
+# sections exist for, and a difference between the two paths has to be
+# written rather than drifted into — there is no reason to write one here.
+# No `describe` (a draft has nowhere to put a schema answer), no
 # `clarify` (nobody to ask), and nothing after `validate` — the preview and the
 # chart ask are service calls through `execute_saved_sql`, and dragging them in
 # here to make the picture tidy would put guarded execution in the pipeline
@@ -622,7 +637,7 @@ def _entry(state: DraftState) -> str:
     the classifier is a second model call, and the tile editor did not ask for
     one per draft.
     """
-    return ROUTE if state["classify"] else RETRIEVE
+    return ROUTE if state["classify"] else SCOPE
 
 
 def _build_draft() -> Any:
@@ -630,17 +645,19 @@ def _build_draft() -> Any:
 
     graph.add_node(
         ROUTE,
-        _adapt(ROUTE, nodes.route, successor=RETRIEVE,
+        _adapt(ROUTE, nodes.route, successor=SCOPE,
                router=_refuse_unless_analytical),
-        destinations=(RETRIEVE, REFUSE, END),
+        destinations=(SCOPE, REFUSE, END),
     )
     graph.add_node(REFUSE, _refuse, destinations=(END,))
+    graph.add_node(SCOPE, _adapt(SCOPE, nodes.scope, successor=RETRIEVE),
+                   destinations=(RETRIEVE, END))
     graph.add_node(RETRIEVE, _adapt(RETRIEVE, nodes.retrieve, successor=GENERATE),
                    destinations=(GENERATE, END))
 
     _add_repair_region(graph, _DRAFT_EXITS, deadline_before_validate=False)
 
-    graph.add_conditional_edges(START, _entry, {ROUTE: ROUTE, RETRIEVE: RETRIEVE})
+    graph.add_conditional_edges(START, _entry, {ROUTE: ROUTE, SCOPE: SCOPE})
     return graph
 
 
@@ -718,7 +735,7 @@ async def draft_statement(
     check_deadline: DeadlineCheck,
     out_of_scope: Mapping[str, str],
 ) -> RunState:
-    """The draft's walk: `[route →] retrieve → generate ⇄ validate`.
+    """The draft's walk: `[route →] scope → retrieve → generate ⇄ validate`.
 
     Everything a draft is *not* travels in through the config rather than being
     reimplemented: no step trail (`on_step` is a no-op, and `deps.emit` is the

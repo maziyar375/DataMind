@@ -195,6 +195,7 @@ async def test_a_draft_writes_no_steps_and_emits_no_events() -> None:
     # `emit` is the caller's; a draft passes `_no_emit`, and this recorder
     # stands in for it to prove the adapter still calls what it is given.
     assert [t for t, _d in recorder.events] == [
+        "STEP_STARTED", "STEP_FINISHED",      # scope, SKIPPED: no sections
         "STEP_STARTED", "STEP_FINISHED",      # retrieve
         "STEP_STARTED", "SQL_GENERATED", "STEP_FINISHED",
         "STEP_STARTED", "SQL_VALIDATED", "STEP_FINISHED",
@@ -366,7 +367,8 @@ async def test_the_chat_run_still_walks_every_node() -> None:
     assert [name for _seq, name, _status in rows(recorder)] == [
         # `match` sits between `route` and `retrieve` from Phase 2 of the
         # learning loop, and is SKIPPED here because these deps carry no
-        # matcher — the pre-feature path, which has to stay free.
-        "route", "match", "retrieve", "describe", "clarify", "generate",
+        # matcher — the pre-feature path, which has to stay free. `scope`
+        # likewise, with no sections (retrieval-sections Phase 2).
+        "route", "match", "scope", "retrieve", "describe", "clarify", "generate",
         "validate", "execute", "inspect", "present", "chart",
     ]

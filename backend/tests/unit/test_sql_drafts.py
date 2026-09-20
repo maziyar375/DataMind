@@ -193,11 +193,15 @@ class FakeConnector:
 
 
 class FakeResult:
-    def __init__(self, row: Any) -> None:
+    def __init__(self, row: Any, rows: list[Any] | None = None) -> None:
         self._row = row
+        self._rows = rows or []
 
     def scalar_one_or_none(self) -> Any:
         return self._row
+
+    def scalars(self) -> list[Any]:
+        return list(self._rows)
 
 
 class FakeSnapshotRow:
@@ -223,6 +227,9 @@ class FakeDb:
     ) -> None:
         self.entities = entities or {}
         self.snapshot = snapshot
+        #: `connection_sections` rows the draft loads — none unless a test
+        #: gives the connection some.
+        self.sections: list[Any] = []
         self.added: list[Any] = []
         self.flushes = 0
         self.commits = 0
@@ -236,6 +243,8 @@ class FakeDb:
         text = str(statement).lower()
         if "semantic_layers" in text:
             return FakeResult(None)
+        if "connection_sections" in text:
+            return FakeResult(None, self.sections)
         if self.snapshot is None:
             return FakeResult(None)
         return FakeResult(FakeSnapshotRow(self.snapshot))

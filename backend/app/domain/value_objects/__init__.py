@@ -88,6 +88,10 @@ class StepName(StrEnum):
     # A hit jumps straight to `validate`; a miss changes nothing, which is what
     # keeps the generated path's prompt byte-identical.
     MATCH = "match"
+    # Between `match` and `retrieve`: "which section of the database is this
+    # about?". SKIPPED on a connection with no sections, which is then exactly
+    # the run it was before the node existed.
+    SCOPE = "scope"
     CLARIFY = "clarify"
     RETRIEVE = "retrieve"
     DESCRIBE = "describe"

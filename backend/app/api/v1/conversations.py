@@ -309,6 +309,10 @@ async def post_message(
         connection_id=payload.connection_id,
         llm_config_id=payload.llm_config_id,
         skip_templates=payload.skip_templates,
+        # *Ask within…*: a section name, or NONE for the whole database.
+        # Recorded on the run rather than held here, because the replica that
+        # executes it is not necessarily this one.
+        scope_choice=payload.scope,
     )
     await db.commit()
 
@@ -446,6 +450,11 @@ async def _hydrate_run(
         data.restricted_reason = restricted.no_access_message(
             run.model_snapshot.get("connection_name")
         )
+        # A section name is a name somebody gave part of a database this
+        # reader may not see, so it goes with the rows and the statement. The
+        # step trail stays, as it does for every other node: it is what makes
+        # a withheld turn still read as a turn.
+        data.retrieval_sections = []
         return data
 
     artifacts = await db.execute(

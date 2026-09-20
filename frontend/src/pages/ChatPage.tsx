@@ -43,7 +43,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { useLocation, useMatch, useNavigate } from 'react-router-dom'
 import {
   conversations, connections as connectionsApi, llmConfigs,
-  isRunInFlight, runs, streamRun,
+  isRunInFlight, runs, sections as sectionsApi, streamRun,
 } from '../api/client'
 import type {
   Connection, ConversationSummary, LlmConfig, MessageWithRun, RunDetail, RunStep,
@@ -166,6 +166,12 @@ export default function ChatPage() {
   const [connectionId, setConnectionId] = useState<string>('')
   const [modelId, setModelId] = useState<string>('')
   const [draft, setDraft] = useState('')
+  // *Ask within…* — the sections this connection has, and the one the reader
+  // has chosen to ask within. `null` is nobody having chosen, which routes
+  // exactly as it did before the control existed; `WHOLE_DATABASE` is them
+  // choosing not to narrow at all. Both skip the routing call.
+  const [sectionNames, setSectionNames] = useState<string[]>([])
+  const [scope, setScope] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   // Model-proposed follow-ups, refreshed after each answered turn. This is a
@@ -683,6 +689,9 @@ export default function ChatPage() {
         connection_id: connectionId,
         llm_config_id: modelId,
         skip_templates: options?.skipTemplates,
+        // Nobody having chosen sends nothing, so a run routes as it always
+        // did; a choice is sent on every question until it is changed.
+        scope: scope ?? undefined,
       })
       attachStream(accepted.run_id, conversationId)
     } catch (err) {
@@ -813,6 +822,28 @@ export default function ChatPage() {
     const id = conversation ? conversation.default_connection_id : connectionId
     return connections.find((c) => c.id === id) ?? null
   }, [activeId, connectionId, connections, conversationList])
+
+  // The sections this thread's database has, for *Ask within…*.
+  //
+  // One read per connection, and a failure is simply no picker: the control
+  // corrects a routing decision, it never gates a question. A connection with
+  // no sections offers nothing here, which is the composer exactly as it was.
+  useEffect(() => {
+    const id = threadConnection?.id
+    setSectionNames([])
+    setScope(null)
+    if (!id) return
+    let alive = true
+    sectionsApi
+      .get(id)
+      .then((set) => {
+        if (alive && set.saved) setSectionNames(set.sections.map((s) => s.name))
+      })
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [threadConnection?.id])
 
   // Why an answer cannot be sent onward, in a sentence. Memoised because it is
   // handed to every memoised turn in the transcript, and a fresh object each
@@ -1170,6 +1201,9 @@ export default function ChatPage() {
           busy={!!activeRunId}
           stopping={stopping}
           ready={ready}
+          sections={sectionNames}
+          scope={scope}
+          onScope={setScope}
         />
       </div>
 
@@ -2153,6 +2187,7 @@ function iconBtnStyle(color: string, hoverBg: string): React.CSSProperties {
 
 function Composer({
   value, onChange, onSubmit, onStop, busy, stopping, ready,
+  sections, scope, onScope,
 }: {
   value: string
   onChange: (value: string) => void
@@ -2164,6 +2199,12 @@ function Composer({
   stopping: boolean
   /** Both a database and a model are chosen — required before a first send. */
   ready: boolean
+  /** This database's sections. Empty means no picker, which is every
+   * connection that has not been divided. */
+  sections: string[]
+  /** The chosen section, `WHOLE_DATABASE`, or null for "let it choose". */
+  scope: string | null
+  onScope: (scope: string | null) => void
 }) {
   const [focus, setFocus] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
@@ -2190,6 +2231,15 @@ function Composer({
         className={`rm-composer${active ? ' is-active' : ''}${busy ? ' is-busy' : ''}`}
         style={{ maxWidth: 780, margin: '0 auto' }}
       >
+        {/* Above the box rather than in the hint line below it: that line
+            fades in only once the composer is engaged and is click-through
+            until then, which is right for a keyboard tip and wrong for a
+            control somebody has to find. */}
+        {sections.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: 7, paddingLeft: 6 }}>
+            <ScopePicker value={scope} onChange={onScope} options={sections} />
+          </div>
+        )}
         <div
           style={{
             display: 'flex',
@@ -2335,6 +2385,188 @@ function Composer({
         </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * *Ask within…* — the reader's own answer to the question the `scope` node
+ * asks a model.
+ *
+ * The research matrix marks *"the user can correct the retrieval decision"*
+ * as the one thing this product had no answer to, and once a database is
+ * divided it is a dropdown. Three states, and the difference between the
+ * first two is the whole point:
+ *
+ * - **Any section** — nobody has chosen, and the router picks as it does now;
+ * - **a section** — answered from that one, with no routing call at all;
+ * - **Whole database** — narrowed by nothing, also with no call.
+ *
+ * It sits under the composer rather than beside the header's two pickers
+ * because it is a property of *this question*, not of the thread: the
+ * database and the model are fixed once a thread starts, and this changes
+ * between one question and the next.
+ */
+const WHOLE_DATABASE = 'NONE'
+
+function ScopePicker({
+  value, onChange, options,
+}: {
+  value: string | null
+  onChange: (value: string | null) => void
+  options: string[]
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function onDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDown)
+    // Capture, so closing this menu does not also reach the page-level Escape
+    // that stops a run.
+    document.addEventListener('keydown', onKey, true)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey, true)
+    }
+  }, [open])
+
+  const rows: { value: string | null; label: string; hint?: string }[] = [
+    { value: null, label: 'Any section', hint: 'Chosen for each question' },
+    ...options.map((name) => ({ value: name as string | null, label: name })),
+    { value: WHOLE_DATABASE, label: 'Whole database', hint: 'Nothing narrowed' },
+  ]
+  const current = rows.find((r) => r.value === value) ?? rows[0]
+
+  return (
+    <span ref={ref} style={{ position: 'relative', display: 'inline-flex' }}>
+      <button
+        type="button"
+        className="rm-scope-btn"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title={`Ask within: ${current.label}`}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 5,
+          maxWidth: 260,
+          padding: '2px 7px',
+          borderRadius: 999,
+          border: `1px solid ${open ? 'var(--accent)' : 'var(--border)'}`,
+          background: 'transparent',
+          font: 'inherit',
+          // `--text-dim`, not `--text-faint`: at 11px the faint grey measured
+          // 4.0:1 here, under the floor, and this is a control rather than a
+          // decoration. Quiet is carried by the size and the hairline border.
+          color: 'var(--text-dim)',
+          cursor: 'pointer',
+        }}
+      >
+        <Icon.Grid size={11} />
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          Ask within:{' '}
+          <span style={{ color: value === null ? 'inherit' : 'var(--text-strong)', fontWeight: 600 }}>
+            {current.label}
+          </span>
+        </span>
+        <Icon.Chevron open={open} size={11} stroke="currentColor" />
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          aria-label="Ask within"
+          style={{
+            position: 'absolute',
+            bottom: 'calc(100% + 6px)',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            minWidth: 230,
+            maxWidth: 300,
+            maxHeight: 300,
+            overflowY: 'auto',
+            background: 'var(--panel)',
+            border: '1px solid var(--border-strong)',
+            borderRadius: 10,
+            padding: 5,
+            boxShadow: 'inset 0 1px 0 0 var(--sheen), var(--elev-3)',
+            zIndex: 50,
+            textAlign: 'left',
+          }}
+        >
+          {rows.map((row) => {
+            const chosen = row.value === current.value
+            return (
+              <button
+                key={row.value ?? '__auto__'}
+                type="button"
+                role="option"
+                aria-selected={chosen}
+                className="rm-menu-item"
+                onClick={() => {
+                  onChange(row.value)
+                  setOpen(false)
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  width: '100%',
+                  padding: '7px 9px',
+                  borderRadius: 7,
+                  border: 'none',
+                  background: 'transparent',
+                  color: 'var(--text)',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <span
+                  aria-hidden
+                  style={{
+                    width: 13,
+                    display: 'flex',
+                    color: chosen ? 'var(--accent)' : 'transparent',
+                  }}
+                >
+                  <Icon.Check size={12} />
+                </span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span
+                    dir={dirOf(row.label)}
+                    style={{
+                      display: 'block',
+                      fontSize: 12.5,
+                      fontWeight: chosen ? 650 : 500,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {row.label}
+                  </span>
+                  {row.hint && (
+                    <span style={{ display: 'block', fontSize: 11, color: 'var(--text-faint)' }}>
+                      {row.hint}
+                    </span>
+                  )}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </span>
   )
 }
 

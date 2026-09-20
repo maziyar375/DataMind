@@ -52,6 +52,7 @@ import { AccessPanel, ReachBadge, TransferControl } from '../components/access'
 import { useCan } from '../permissions'
 import { ListScrim, ListToggle, useListDrawer } from '../components/list-drawer'
 import { forConnection } from '../components/knowledge-queue'
+import { SectionsTab } from '../components/sections'
 import { SemanticLayerTab } from '../components/semantic'
 import { DATABASE_TYPES } from '../theme/tokens'
 
@@ -104,8 +105,11 @@ const BLANK = {
 // a result may leave through it, and both are decisions about *other people*
 // rather than about the database. Schema and Semantic layer are about the
 // database.
+// `sections` sits between Schema and Semantic layer deliberately: sections are
+// read *from* the schema and described *by* the semantic layer, and the strip
+// is the order somebody sets them up in (`docs/plans/retrieval-sections.md`).
 const TABS = [
-  'connection', 'policy', 'access', 'schema', 'semantic', 'knowledge',
+  'connection', 'policy', 'access', 'schema', 'sections', 'semantic', 'knowledge',
 ] as const
 type Tab = (typeof TABS)[number]
 
@@ -985,6 +989,7 @@ export default function DataSourcesPage() {
                   { value: 'policy', label: 'Policy' },
                   { value: 'access', label: 'Access' },
                   { value: 'schema', label: 'Schema', count: schema?.tables.length },
+                  { value: 'sections', label: 'Sections' },
                   ...(derived?.semantic === false
                     ? []
                     : [{ value: 'semantic', label: 'Semantic layer' }]),
@@ -1365,6 +1370,10 @@ export default function DataSourcesPage() {
                   </>
                 )}
               </DetailBody>
+            )}
+
+            {!creating && tab === 'sections' && (
+              <SectionsTab key={selected!.id} connection={selected!} />
             )}
 
             {!creating && tab === 'semantic' && (

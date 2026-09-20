@@ -802,6 +802,58 @@ class SemanticJobRow(Base):
     )
 
 
+class ConnectionSection(Base, TimestampMixin):
+    """One named part of a connection's database — a name, a sentence, tables.
+
+    Nothing else hangs off it (`docs/plans/retrieval-sections.md` D1): no
+    semantic layer, no templates, no policy, no grant. A leaf of its
+    connection for access control, like a semantic layer, and it dies with it.
+
+    **A row per section rather than an array on the connection**: a section is
+    edited on its own and needs an id to address; `name` needs a uniqueness the
+    database enforces, because it is the token a model replies with and two
+    sections called *Sales* are an unresolvable reply; and `origin`,
+    `schema_version` and `position` are per-section facts.
+
+    **No foreign key from `tables` to anything** — the snapshot is one JSONB
+    document, so there is nothing to point at. A name that no longer resolves
+    is drift, shown and skipped, never a broken reference.
+    """
+
+    __tablename__ = "connection_sections"
+    __table_args__ = (
+        Index(
+            "uq_connection_sections_name",
+            "connection_id", func.lower(text("name")),
+            unique=True,
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("database_connections.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    #: What the router reads. The single highest-leverage field in the feature.
+    description: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
+    #: Qualified names, `["public.orders", …]`, as the snapshot spells them.
+    tables: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, default=list, server_default=text("'{}'")
+    )
+    #: PROPOSED until a person saves it, then CURATED.
+    origin: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="PROPOSED", server_default="PROPOSED"
+    )
+    #: The snapshot version this section was last saved against, for drift.
+    schema_version: Mapped[int | None] = mapped_column(Integer)
+    position: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
+
 # ── conversation ─────────────────────────────────────────────────────────
 class Conversation(Base, TimestampMixin):
     __tablename__ = "conversations"
@@ -925,6 +977,37 @@ class Run(Base, TimestampMixin):
     skip_templates: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false()
     )
+    # ── what retrieval did (retrieval-sections Phase 3) ──────────────────
+    #
+    # Four facts about the schema block this turn was answered from, written
+    # once in `_finalise`. They are what turns an argument about retrieval
+    # into arithmetic: the distribution of strategies over real questions, and
+    # what the block actually cost, are not otherwise answerable from any
+    # table here — the step trail holds a sentence, not a number.
+    #
+    # All nullable with no backfill, because a run from before this genuinely
+    # has no answer and a zero would be a lie.
+    #
+    # FULL_SNAPSHOT | SECTION_SNAPSHOT | RANKED_MATCH | SCHEMA_QUESTION.
+    retrieval_strategy: Mapped[str | None] = mapped_column(String(30))
+    #: The section names `scope` chose, in its order; empty when it did not
+    #: run or fell open. **Names, not ids**: deleting a section must not
+    #: rewrite the history of the runs it answered, and
+    #: `semantic_layer_version` above is the precedent for recording which
+    #: artifact a run used as a value rather than as a reference.
+    retrieval_sections: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    #: How many tables reached the block, and what it cost rendered — under
+    #: the disclosure policy this run ran with, which is the string the model
+    #: was actually sent.
+    retrieval_tables: Mapped[int | None] = mapped_column(Integer)
+    retrieval_chars: Mapped[int | None] = mapped_column(Integer)
+    #: "Ask within…" — the section the person chose before sending, or
+    #: `NONE` for *Whole database*. An **input**, unlike the four above:
+    #: durable for the same reason `skip_templates` is, since the replica
+    #: that executes this run is not necessarily the one that created it. A
+    #: choice skips the routing call entirely, and `retrieval_sections`
+    #: records what it produced.
+    scope_choice: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

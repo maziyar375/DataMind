@@ -1246,6 +1246,76 @@ class SemanticExpressionResult(BaseModel):
     issue: str = ""
 
 
+# ── connection sections ──────────────────────────────────────────────────
+# `docs/plans/retrieval-sections.md`. A section is a name, a sentence and a
+# list of tables; everything else here is what the screen needs to draw it —
+# its weight in the units `retrieve` decides with, whether it fits, and what
+# the snapshot no longer has.
+class SectionRead(BaseModel):
+    id: UUID | None = None
+    name: str
+    description: str
+    tables: list[str]
+    #: PROPOSED (computed, never saved) or CURATED (a person saved it).
+    origin: Literal["PROPOSED", "CURATED"]
+    schema_version: int | None = None
+    position: int
+    #: `table_chars` over the members still in the snapshot.
+    chars: int
+    fit: Literal["FITS", "TOO_LARGE", "EMPTY"]
+    #: Members the current snapshot no longer has — kept, shown, never routed.
+    missing: list[str] = Field(default_factory=list)
+
+
+class SectionCatalogEntry(BaseModel):
+    table: str
+    chars: int
+
+
+class SectionSetRead(BaseModel):
+    """What is saved, or a proposal — one shape, so the screen draws both."""
+
+    saved: bool
+    sections: list[SectionRead]
+    #: Every table in no section, in snapshot order. With the sections' members
+    #: this is every table in the snapshot, each exactly once.
+    unassigned: list[str]
+    catalog: list[SectionCatalogEntry]
+    #: `_RETRIEVE_BUDGET_CHARS`: a section at or under this is sent whole.
+    budget_chars: int
+    snapshot_version: int
+    has_snapshot: bool
+    #: Unassigned tables the snapshot gained since these sections were saved —
+    #: drift, marked rather than silently piled up. Empty on a proposal and
+    #: whenever the sections are current.
+    new_tables: list[str] = Field(default_factory=list)
+    #: When the snapshot being measured against landed, for the sentence a
+    #: member the schema no longer has carries.
+    synced_at: datetime | None = None
+
+
+class SectionWriteItem(BaseModel):
+    #: The section's id when it is one the connection already has; omitted
+    #: for a new one.
+    id: UUID | None = None
+    name: str = Field(max_length=200)
+    description: str = Field(default="", max_length=4_000)
+    tables: list[str] = Field(default_factory=list, max_length=5_000)
+
+
+class SectionSaveRequest(BaseModel):
+    """The whole set. Sections partition tables, so a move between two of them
+    is one edit and cannot half-apply."""
+
+    sections: list[SectionWriteItem] = Field(max_length=500)
+
+
+class SectionProposeRequest(BaseModel):
+    #: Propose a division of just these tables — *Split this section*. Omitted,
+    #: the whole snapshot.
+    tables: list[str] | None = Field(default=None, max_length=5_000)
+
+
 # ── knowledge templates ──────────────────────────────────────────────────
 # The store the learning loop fills. `TemplateParam` and `ParamProposal` are
 # `app.knowledge`'s own models, used directly rather than restated: the editor
@@ -2714,6 +2784,12 @@ class MessageCreate(BaseModel):
     # fresh answer instead* sends after recording the override — the one
     # control that makes a Verified badge safe to show.
     skip_templates: bool = False
+    #: *Ask within…* — the name of the section to answer from, or `NONE` for
+    #: the whole database. Either way the routing call is skipped: this is a
+    #: person answering the question that call asks. Omitted is nobody having
+    #: chosen, which routes as before. A name no section has falls open to
+    #: the whole database, so a stale picker can never narrow wrongly.
+    scope: str | None = Field(default=None, max_length=60)
 
 
 class RunStepRead(BaseModel):
@@ -2835,6 +2911,12 @@ class RunRead(BaseModel):
     #: Which semantic layer version answered: `0` when none reached the prompt,
     #: `None` on a run from before versions were recorded (migration `0032`).
     semantic_layer_version: int | None = None
+    #: The sections this turn was answered from, in the order the pick named
+    #: them — what the *Answered from* chip shows. Empty when the connection
+    #: has no sections, when the question was about the database as a whole,
+    #: and on every run from before `0036`. Withheld on a restricted turn
+    #: with the rest of what names the database.
+    retrieval_sections: list[str] = Field(default_factory=list)
     steps: list[RunStepRead] = Field(default_factory=list)
     artifacts: list[ArtifactRead] = Field(default_factory=list)
     queries: list[GeneratedQueryRead] = Field(default_factory=list)
@@ -2845,6 +2927,15 @@ class RunRead(BaseModel):
     # `conversations.py`; `artifacts` and `queries` arrive empty beside it.
     restricted: bool = False
     restricted_reason: str | None = None
+
+    @field_validator("retrieval_sections", mode="before")
+    @classmethod
+    def _sections_or_empty(cls, value: object) -> object:
+        """NULL on the column is "nothing was recorded", and that is an empty
+        list on the wire: the chip draws nothing either way, and no client
+        should have to tell a run from before `0036` from one answered from
+        the whole database."""
+        return value or []
 
 
 class MessageRead(BaseModel):

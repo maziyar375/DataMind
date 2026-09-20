@@ -242,11 +242,11 @@ turns a node function into a graph node while keeping the old executor's duties
 calls). `pipeline.py` is now a 21-line facade re-exporting `AnalyticsPipeline`
 and `ORDER` so nothing above the pipeline had to change.
 
-`nodes/__init__.py` holds all **eleven** nodes:
+`nodes/__init__.py` holds all **twelve** nodes:
 
 ```
-route → match → retrieve → describe → clarify → generate → validate → execute →
-inspect → present → chart
+route → match → scope → retrieve → describe → clarify → generate → validate →
+execute → inspect → present → chart
 ```
 
 linear with **six non-chain edges**: three repairs *back* into `generate` (from
@@ -414,7 +414,7 @@ every way they can be wrong is quiet: `dashboard-schedule.ts`, `table-format.ts`
 | Group | Tables |
 | --- | --- |
 | Identity | `users`, `sessions`, `audit_logs` |
-| Configuration | `llm_configs`, `database_connections`, `schema_snapshots` |
+| Configuration | `llm_configs`, `database_connections`, `schema_snapshots`, `connection_sections` |
 | Semantic layer | `semantic_layers`, `semantic_jobs` |
 | Chat | `conversations`, `messages`, `runs`, `run_steps`, `generated_queries`, `query_executions`, `artifacts`, `run_events` |
 | Dashboards | `dashboards`, `dashboard_tiles`, `dashboard_tile_cache` |

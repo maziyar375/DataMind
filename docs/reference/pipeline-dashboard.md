@@ -27,7 +27,7 @@ forever**. That split is the whole design:
 ```
    AUTHORING  (a person is watching, a model is involved, nothing is scheduled)
    ┌──────────────────────────────────────────────────────────────────┐
-   │  question ─► route? ─► retrieve ─► generate ─► validate ─► preview│──► save
+   │  question ─► route? ─► scope ─► retrieve ─► generate ─► validate ─► preview│──► save
    │      or     SQL typed by hand ────► validate ────────────► preview│    (guard again)
    └──────────────────────────────────────────────────────────────────┘
                                      │  dashboard_tiles.sql
@@ -96,11 +96,21 @@ draft sends exactly the calls it always sent. The report block path passes
 screen in front of the person who asked for it, while a block's is stored and
 read months later.
 
+**Node 1½ — `scope`.** The chat node verbatim, and on the same terms: on a
+connection with saved sections one small model call names the section the
+question is about, and `retrieve` narrows to it (`SECTION_SNAPSHOT` when it
+fits). No sections, a provider error or a `NONE` — SKIPPED, and the draft is
+exactly what it was. **The statement it stores is still guarded against the
+whole snapshot**, and a tile refresh never reads sections at all, so a tile
+over a table outside every section keeps working
+([security.md §2.5](security.md)).
+
 **Node 2 — `retrieve`.** The chat node verbatim: `FULL_SNAPSHOT` under
-`_RETRIEVE_BUDGET_CHARS` (50,000), `EXACT_MATCH` + one FK hop above it. With
-`history=[]`, `_tables_from_history` contributes nothing, so a wide-schema draft
-leans entirely on substring matching against the question — see
-[pipeline-chat.md §7](pipeline-chat.md) gap 4 for what that gets wrong.
+`_RETRIEVE_BUDGET_CHARS` (50,000), `RANKED_MATCH` above it — token-boundary
+matching on table and column names, one FK hop, ranked and cut at the same
+ceiling ([pipeline-chat.md §3](pipeline-chat.md)). With `history=[]`,
+`_tables_from_history` contributes nothing, so a wide-schema draft leans
+entirely on what the question names.
 
 The connection's **semantic layer** is loaded on exactly the run path's terms
 (`load_document`, and `RetrievedContext.render` scopes and gates it). A draft is
@@ -126,7 +136,7 @@ graph builds** — `_add_repair_region` in
 [graph.py](../../backend/app/pipeline/graph.py) — reached through `DRAFT_GRAPH`:
 
 ```python
-await draft_statement(                    # [route →] retrieve → generate ⇄ validate
+await draft_statement(                    # [route →] scope → retrieve → generate ⇄ validate
     state, deps,
     classify=classify,                    # a conditional entry edge
     check_deadline=_deadline_gate,        # this caller's rule, not chat's

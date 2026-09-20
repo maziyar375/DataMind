@@ -17,7 +17,7 @@ run in full. The other two have files of their own, written to the same shape:
 Code: [`backend/app/pipeline/`](../../backend/app/pipeline) —
 `graph.py` (the compiled LangGraph, `ORDER`, and the node adapter),
 `pipeline.py` (the `AnalyticsPipeline` facade over it — a re-export since the
-port), `nodes/__init__.py` (all eleven nodes), `state.py` (typed state),
+port), `nodes/__init__.py` (all twelve nodes), `state.py` (typed state),
 `contracts.py` (the node signature), `prompts/` (versioned prompts),
 `checks.py`, `disclosure.py`, `metadata.py`.
 
@@ -82,7 +82,7 @@ product is a claim about one of them:
 
 ### 0.3 The reused nodes
 
-`retrieve`, `generate` and `validate` are called **directly**, outside the state
+`scope`, `retrieve`, `generate` and `validate` are called **directly**, outside the state
 machine, by `sql_draft_service.draft_sql` — which is how both a dashboard tile
 and a report block get their SQL. `route` joins them when the caller passes
 `classify=True` (report blocks only), and `propose_chart_intent` — the model
@@ -92,9 +92,9 @@ product was written against the same schema block, the same semantic layer, the
 same `_SQL_RULES` and the same guard as a chat answer:
 
 ```
-chat:    route → match → retrieve → describe → clarify → generate → validate → execute → inspect → present → chart
-draft:  [route] → retrieve →                     generate → validate            (then a 50-row preview)
-                                                     └── one repair ──┘          └─ [propose_chart_intent] ─┘
+chat:    route → match → scope → retrieve → describe → clarify → generate → validate → execute → inspect → present → chart
+draft:  [route] →         scope → retrieve →                     generate → validate            (then a 50-row preview)
+                                                                     └── one repair ──┘          └─ [propose_chart_intent] ─┘
 ```
 
 **The three opt-ins are deliberately not uniform**, and each is decided by where
@@ -144,6 +144,7 @@ enforced on the chat path and inert on the draft path until someone noticed.
 | 9 | report outline | `complete` | `REPORT_OUTLINE_SYSTEM` / `_USER` | user proposes an outline |
 | 10 | report section prose | `complete` | `REPORT_SECTION_SYSTEM` / `_USER` | once per section per generation |
 | 11 | report summary | `complete` | `REPORT_SUMMARY_SYSTEM` / `_USER` | once per generation |
+| 12 | `scope` | `complete` | `SCOPE_SYSTEM`, or `SCOPE_SYSTEM_WITH_CURRENT` after a turn that retrieved something | an analytical chat run **or draft** on a connection with saved sections — and **not** when the asker chose a section themselves |
 | — | capability probe | `complete` | fixed test prompt | saving an LLM config — **sends no customer data** |
 
 [security.md §2](security.md) analyses what each one *sends*. The two tables
@@ -218,6 +219,10 @@ see [langgraph-migration.md](../plans/langgraph-migration.md) Phase 3.
       │                                       │
       │ miss / unbound / stale / not analytical│
       ▼                                       │
+  scope    (only with saved sections: which  │
+      │     section is this about? — every    │
+      │     failure falls open to no scope)   │
+      ▼                                       │
   retrieve  (no LLM — schema block + semantic layer + history)
       │
       ▼
@@ -261,21 +266,24 @@ working for `run_service`, `app.eval.runner` and `tests/unit/test_clarify.py`.)
 |---|---|:--:|:--:|:--:|---|
 | 1 | `route` | ✅ `complete` | ✅ | – | `intent`, `answer`, **tokens** |
 | 2 | `match` | ❌ | – | ✅ `validate` | `matched_template_id`, `match_*`, `attempts[0]` |
-| 3 | `retrieve` | ❌ | – | – | `context` |
-| 4 | `describe` | ✅ `stream` | ✅ always | – | `answer` |
-| 5 | `clarify` | ✅ `structured` | ✅ | – | `clarification`, `answer` |
-| 6 | `generate` | ✅ `structured` | – | – | `attempts[]` |
-| 7 | `validate` | ❌ | – | ✅ `generate`/`present` | `attempt.report`, `.rewritten_sql` |
-| 8 | `execute` | ❌ | – | ✅ `generate`/`present` | `execution` |
-| 9 | `inspect` | ❌ | – | ✅ `generate` | `attempt.findings` |
-| 10 | `present` | ✅ `stream` | – | – | `disclosed`, `answer` |
-| 11 | `chart` | ✅ `structured` | – | – | `chart` |
+| 3 | `scope` | ✅ `complete`, **only with sections** | – | – | `scope_sections`, `scope_tables`, tokens |
+| 4 | `retrieve` | ❌ | – | – | `context` |
+| 5 | `describe` | ✅ `stream` | ✅ always | – | `answer` |
+| 6 | `clarify` | ✅ `structured` | ✅ | – | `clarification`, `answer` |
+| 7 | `generate` | ✅ `structured` | – | – | `attempts[]` |
+| 8 | `validate` | ❌ | – | ✅ `generate`/`present` | `attempt.report`, `.rewritten_sql` |
+| 9 | `execute` | ❌ | – | ✅ `generate`/`present` | `execution` |
+| 10 | `inspect` | ❌ | – | ✅ `generate` | `attempt.findings` |
+| 11 | `present` | ✅ `stream` | – | – | `disclosed`, `answer` |
+| 12 | `chart` | ✅ `structured` | – | – | `chart` |
 
 **Typical successful run = 4 model calls** (route, clarify, generate, present)
-**+ 1 if a chart survives the veto.** Five of the eleven nodes cost nothing, and
+**+ 1 if a chart survives the veto, + 1 on a connection with sections.** Five
+of the twelve nodes cost nothing, a sixth (`scope`) costs nothing without
+sections, and
 a sixth — `describe` — is skipped outright unless the question is about the
 schema, in which case it is the *last* node to run: a METADATA run is exactly
-route → match (skipped) → retrieve → describe, two model calls and no database
+route → match (skipped) → scope (skipped) → retrieve → describe, two model calls and no database
 access at all.
 
 **A short-circuited run costs one model call** — `route` — plus `present`,
@@ -377,12 +385,118 @@ whether the short-circuit is trusted.
 read, nothing logged, and a byte-identical prompt. The draft graph and the eval
 runner both take it.
 
+### 2b. `scope` — which part of the database is this about?
+
+**One `complete` call, and only on a connection with saved sections.**
+([nodes/__init__.py:423](../../backend/app/pipeline/nodes/__init__.py#L423),
+[retrieval-sections](../plans/retrieval-sections.md) §3.)
+
+Between `match` and `retrieve`, in **both** graphs. After `route`, so small
+talk halts before it; after `match`, so a stored answer — which needs no schema
+block — pays for no scope call (the hit exit jumps from `match` to `validate`,
+clean over it); before `retrieve`, because it produces retrieve's input. Not
+folded into `route`: that prompt is tiny and frozen, and a per-connection list
+of section descriptions would make every classification vary with curation.
+
+`SCOPE_SYSTEM` lists each **routable** section — one with at least one table
+still in the snapshot — as `- Name — description` (description clipped to 400
+characters) and asks for up to three names, comma-separated, or `NONE`. The
+user message is the question.
+
+**A follow-up keeps its section.** `SCOPE_SYSTEM_WITH_CURRENT` adds one line —
+`Currently answering from: Sales` — and is sent whenever the previous turn of
+this thread retrieved something, because "and by month?" names no table and no
+section and would otherwise route on nine characters. What that previous turn
+was answered from is read from `runs.retrieval_sections` by
+`RunService._current_sections`: the last run **on this conversation and this
+connection that recorded a strategy**, so a crash before `retrieve` says
+nothing and a turn answered from the whole database correctly clears it. The
+model may still move — stickiness is a line in a prompt, not a lock. A first
+question sends `SCOPE_SYSTEM`, byte for byte as before, which is why the two
+prompts are two.
+
+**A person outranks the router.** *Ask within…* under the chat composer sets
+`runs.scope_choice`, carried to `NodeDeps.scope_choice`, and a choice is taken
+as made: the section is used, or — for `NONE`, which is *Whole database* —
+nothing is narrowed. **Either way no call is made at all**, and the trail says
+whose decision it was (*Stores · 4 tables — your choice*). It is the control
+the research matrix marks `○` for this product — *the user can correct the
+retrieval decision* — and once a database is divided it is a dropdown. A retry
+carries the choice, because a retry reproduces the conditions of the attempt
+it replaces.
+
+The reply is split on commas and line breaks, each piece stripped of quotes,
+bullets and bold, and matched to a section name ignoring case; unknown pieces
+(`NONE` included) name nothing. The picked sections' members still in the
+snapshot become `state.scope_tables`, in snapshot order.
+
+**Every failure falls open to today's behaviour** — `scope` joins `route`,
+`clarify`, `inspect` and `chart` in the fail-open posture (§4.1):
+
+| Condition | Result | Step detail |
+|---|---|---|
+| `deps.sections` is None or empty | SKIPPED, **no model call** | none — the trail hides it, so a connection without sections looks as it always did |
+| `intent == METADATA` | SKIPPED, no call | *Skipped — a schema question is about the whole database* |
+| no section has a table in the snapshot | SKIPPED, no call | *Skipped — no section has a table in the current schema* |
+| `LLMError` | SKIPPED | *Skipped — provider error* |
+| reply `NONE`, empty, or no known name | SKIPPED (tokens recorded — the call was paid) | *No section matched* |
+| a chosen section the connection no longer has | SKIPPED, **no call** | *Skipped — the section you chose is no longer in this database* |
+| reply names sections | OK — `scope_sections`, `scope_tables` set | *Sales · 14 tables* |
+
+The chosen-section row is the one worth arguing about, and it is decided the
+same way as the rest: the choice was to *narrow*, so when it cannot be honoured
+we fall open to the whole snapshot rather than route to a section nobody asked
+for. A schema question ignores a choice entirely — `census` states a total, and
+a total over one section is a wrong one.
+
+It can never widen anything: falling open widens what the model is *shown*
+back to the whole snapshot, which is what it is shown without sections, and the
+guard's allowlist is built from the whole snapshot either way. **A section is a
+hint, never a boundary** — `policy_from_snapshot` does not know sections exist
+(`tests/unit/test_section_guard_unaffected.py`). `PROMPT_VERSION` does not
+move: the schema block's format is unchanged, only which tables are in it.
+
+`NodeDeps.sections` is loaded by `run_service.execute_run` and
+`sql_draft_service.draft_sql` through `section_service.load_sections`; the eval
+runner leaves it None, so the suite's baseline is unchanged by construction —
+and so this node is **unmeasured by the suite** (the fixtures have no
+sections). `tests/unit/test_retrieve_scope.py` asserts recall against a
+known-correct section on a synthetic 500-table snapshot instead.
+
+**What retrieval did is recorded per run** (`0036`): `retrieval_strategy`,
+`retrieval_sections` (names, never ids — deleting a section must not rewrite
+the history of the runs it answered), `retrieval_tables`, and
+`retrieval_chars`, the rendered block under the policy in force. All four are
+written once, in `_finalise`, and only where a block was built: a run answered
+from the knowledge store never reaches `retrieve`, and **null is not zero**.
+`retrieval_sections` is also what the *Answered from* chip on an answer reads,
+and it is withheld from a restricted turn with the rest of what names the
+database. The distribution nobody could read before:
+
+```sql
+select coalesce(retrieval_strategy, '(not recorded)') as strategy,
+       count(*) as runs,
+       round(100.0 * count(*) / sum(count(*)) over (), 1) as pct,
+       round(avg(retrieval_tables)) as avg_tables,
+       round(avg(retrieval_chars)) as avg_chars,
+       max(retrieval_chars) as max_chars
+from runs
+group by 1 order by runs desc;
+```
+
 ### 3. `retrieve` — build everything the generator is allowed to see
 
 **No LLM call.** Cost: zero tokens, sub-millisecond.
 
-**Logic** ([nodes/__init__.py:429-510](../../backend/app/pipeline/nodes/__init__.py#L429-L510)):
-1. `approx_chars = sum(60 + 40 * len(columns))` over all snapshot tables,
+**Logic** ([nodes/__init__.py](../../backend/app/pipeline/nodes/__init__.py), `retrieve`):
+0. **Scope first.** When `scope` chose sections, the candidate set is their
+   members plus the **join closure** — every table outside them that has
+   foreign keys to two or more members (a link table, a shared dimension).
+   Otherwise, and always for a METADATA question, it is the whole snapshot.
+   Everything below runs over that set, and a set that fits is
+   **`SECTION_SNAPSHOT`**: every column of every table in the section — the
+   block the demo fixtures get.
+1. `approx_chars = sum(60 + 40 * len(columns))` over the candidate tables,
    against `_RETRIEVE_BUDGET_CHARS = 50_000`. (The `sales` fixture sits at
    26,480 — under the ceiling, so it takes step 2.)
 2. **Under budget → `FULL_SNAPSHOT`**: send every table. This is the common
@@ -394,27 +508,36 @@ runner both take it.
    `customer_addresses`), then the **largest** of the rest until the budget
    runs out, returned in snapshot order. The branch below is the wrong selector
    for this question: it seeds on words the question shares with a table name,
-   and *"what is in this database?"* shares none, so a schema question would
-   land on the arbitrary `tables[:20]` fallback. Nothing is hidden by the cut —
+   and *"what is in this database?"* shares none, so a schema question would be
+   described from whichever tables happen to be largest with no census of the
+   rest. Nothing is hidden by the cut —
    `describe` states the true table count and names every table left out (§3.3).
-4. **Over budget → `EXACT_MATCH`**:
-   - seed = tables whose *name*, or any of whose *column names*, appears as a
-     lowercase **substring of the question**;
-   - plus the tables the recent turns actually **queried** —
+4. **Over budget → `RANKED_MATCH`** (was `EXACT_MATCH` until
+   [retrieval-sections](../plans/retrieval-sections.md) Phase 0):
+   - **named** = `metadata.match_tables(question, tables)` — the token-boundary
+     matcher `describe` uses: snake_case spoken as words, singular/plural, a
+     single-word form must be a whole token, and a name of two letters is never
+     a form, so `id` no longer matches inside "paid";
+   - **by column** = the same matcher with `columns=True` — a table whose
+     column the question names ("revenue by *region*");
+   - **carried** = the tables the recent turns actually **queried** —
      `_tables_from_history` reads the qualified names out of the SQL behind an
      earlier answer, which is exact rather than approximate because
      `_SQL_RULES` requires every table to be schema-qualified. This is the
-     follow-up case: "and by month?" matches no table on its own and would
-     otherwise fall to the `tables[:20]` fallback, an arbitrary twenty that
-     need not contain the table the question it continues was answered from.
-     It reads the SQL and not the prose deliberately — "revenue rose in June"
-     names no table, and substring-searching narration matches `id` inside
-     "identify";
-   - `_expand_by_fk(seed, …)` grows it by **exactly one FK hop in either
+     follow-up case: "and by month?" names nothing on its own. It reads the SQL
+     and not the prose deliberately — "revenue rose in June" names no table;
+   - `_expand_by_fk(seed, …)` grows those by **exactly one FK hop in either
      direction** — a question names `orders` and `products` but never the
-     `order_items` bridge that joins them, and substring matching structurally
-     cannot find bridges;
-   - no seed at all → `tables[:20]` in snapshot order.
+     `order_items` bridge that joins them — *before* the cut, so a bridge is
+     ranked rather than lost unscored. No seed at all → every table is a
+     candidate;
+   - `fit_to_budget` ranks the candidates — named, then carried, then column
+     hits, then FK-hop tables (a bridge touching two seeds before a neighbour
+     of one), then the rest; ties to the larger `approx_row_count`, then
+     snapshot order — and takes them until `_RETRIEVE_BUDGET_CHARS` is spent,
+     always at least one. The selection is rendered in snapshot order. What
+     did not fit lands in `RetrievedContext.dropped_tables`, and the step
+     detail counts it: `"42 tables via RANKED_MATCH · 9 not shown"`.
 
    Retrieval reads the **raw** history, before the disclosure filter of §3.9:
    the selection never leaves the process, and what is rendered from it is
@@ -543,8 +666,8 @@ one figure that escaped `HintBudget`.
 
 **Selection changes for this intent too.** Over `_RETRIEVE_BUDGET_CHARS`,
 `retrieve` normally seeds on words the question shares with a table or column
-name — and *"what is in this database?"* shares none, which would land a schema
-question on the arbitrary `tables[:20]` fallback. For METADATA it calls
+name — and *"what is in this database?"* shares none, which would describe a
+schema question from whatever ranked first with no census of the rest. For METADATA it calls
 `metadata.select_tables` instead: every table the question **named**, then the
 **largest** of the rest until the budget runs out, rendered in snapshot order,
 under `strategy="SCHEMA_QUESTION"`.
@@ -890,7 +1013,7 @@ breaks?"* is answered by asking which posture the step belongs to.
 | Posture | Means | Where |
 |---|---|---|
 | **Fail closed** | the refusal *is* the answer; nothing proceeds | the guard (unknown AST node → rejection), name resolution against the snapshot, an unsynced connection, `disclose*` defaulting to the narrowest policy when an argument is missing, reports refusing `NONE`/`AGGREGATE` |
-| **Fail open** | the feature is dropped, the work continues | `route` (→ ANALYTICAL), `clarify` (→ proceed), `inspect` (→ leave the answer alone), `chart` (→ no chart), the semantic layer (→ no block), follow-up suggestions (→ empty list) |
+| **Fail open** | the feature is dropped, the work continues | `route` (→ ANALYTICAL), `scope` (→ the whole snapshot), `clarify` (→ proceed), `inspect` (→ leave the answer alone), `chart` (→ no chart), the semantic layer (→ no block), follow-up suggestions (→ empty list) |
 | **Fail backwards** | something computed replaces something generated | `describe` → `answer_metadata`, `present` → the fallback sentence, `plan_chart` → the shape heuristic, report prose → trimmed to its last sentence |
 | **Fail as a value** | the failure is data, returned or stored, not raised | `TileResult(status="ERROR")`, `ReportBlockResult(FAILED)`, `ReportSectionResult(FAILED)`, `feasibility_status = INFEASIBLE` |
 | **Fail the run** | stop, record, tell the user | `generate`'s `E_LLM`, a guard rejection out of budget, `E_TIMEOUT`, `E_NODE_FAILED`, `E_PIPELINE_LOOP`, `E_ORPHANED` |
@@ -1098,28 +1221,22 @@ optional, and [langgraph-migration.md](../plans/langgraph-migration.md) argues i
    `RetrievedContext` and never consulted for *selection*. Free recall, already
    in scope at that line.
 
-4. **`EXACT_MATCH` matches backwards and on the wrong granularity.** The test is
-   `table_name in question`, so **17 of the 42 fixture tables are snake_case
-   and structurally unmatchable** (a user types "order items", not
-   "order_items"). Meanwhile `id` is a column in **36 of 42 tables**, so any
-   question containing *paid*, *did*, *provide* matches nearly everything and
-   FK-expands to the whole schema. Too narrow on tables, far too loose on
-   columns. Tokenizing both sides with a 3-4 char minimum fixes both.
+4. ~~**`EXACT_MATCH` matches backwards and on the wrong granularity.**~~
+   **Fixed 2026-09-19** ([retrieval-sections](../plans/retrieval-sections.md)
+   Phase 0). The test was `table_name in question`, so **17 of the 42 fixture
+   tables were snake_case and structurally unmatchable** (a user types "order
+   items", not "order_items"), while `id` — a column in **36 of 42 tables** —
+   matched inside *paid*, *did* and *provide* and FK-expanded to the whole
+   schema. The branch now calls `metadata.match_tables`, extended to columns
+   (`columns=True`), and is named `RANKED_MATCH`;
+   `tests/unit/test_retrieve_matcher.py` pins both halves.
 
-   `_tables_from_history` narrows one case of this — a follow-up now inherits
-   the previous statement's tables instead of matching nothing — but it is not
-   a fix for the matcher. A *first* question is still matched exactly this way,
-   and it is the first question that decides what the follow-up inherits.
-
-   METADATA questions no longer take this branch at all
-   (`SCHEMA_QUESTION`, §3.2), and `metadata.match_tables` — which already
-   tokenizes, handles snake_case and singular/plural, and refuses to match a
-   short name inside a longer word — is the matcher this gap describes wanting.
-   It is right there in `pipeline/metadata.py`; the fix for `EXACT_MATCH` is
-   largely to call it.
-
-5. **No budget re-check after `_expand_by_fk`.** The branch that exists to
-   respect `_RETRIEVE_BUDGET_CHARS` can emit well past it, unbounded.
+5. ~~**No budget re-check after `_expand_by_fk`.**~~ **Fixed 2026-09-19**, same
+   change: `fit_to_budget` ranks the expanded set and cuts it at
+   `_RETRIEVE_BUDGET_CHARS`, and the step detail counts what it cut.
+   `tests/unit/test_retrieve_budget.py` holds every branch under the ceiling on
+   a synthetic 500-table snapshot with a 400-neighbour hub — the eval fixtures
+   both fit whole, so the suite still cannot see this path (gap 2).
 
 6. **v5 is shipped but unmeasured.** Two gaps were closed in one change:
    the repair prompts now carry the shared `_SQL_RULES` block and the

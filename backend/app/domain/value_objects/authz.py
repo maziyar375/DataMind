@@ -243,7 +243,12 @@ PRIVILEGE_MEANINGS: Mapping[ResourceType, Mapping[Privilege, str]] = MappingProx
         # sentence no longer claims it: a query-only reader was promised the
         # layer here and shown "Connection not found." on its tab.
         Privilege.SELECT: "Ask questions through it and read its schema.",
-        Privilege.MODIFY: "Edit its host and credentials, re-sync the schema, test it.",
+        # Sections divide the schema this privilege re-syncs, and carry no
+        # grant of their own (`docs/plans/retrieval-sections.md` §10).
+        Privilege.MODIFY: (
+            "Edit its host and credentials, re-sync the schema, divide it "
+            "into sections, test it."
+        ),
         Privilege.DELETE: "Delete the connection.",
         Privilege.MANAGE: (
             "Grant and revoke access, change the disclosure policy, "

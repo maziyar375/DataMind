@@ -90,7 +90,7 @@ make authz-check  # prove no module decides access for itself
 make up / down / logs / secrets / migrate / fixtures / db-repair
 ```
 
-From `frontend/`: `npm run typecheck`, `npm run build`, `npm test` (twenty
+From `frontend/`: `npm run typecheck`, `npm run build`, `npm test` (twenty-one
 suites). **`npm run lint` is a dead script** — eslint is neither a devDependency
 nor configured.
 
@@ -115,7 +115,7 @@ backend/app/
   main.py         ASGI factory: lifespan (bootstrap admin, reconcile orphans,
                   start reconciler), CORS, correlation-id middleware, health.
   api/            HTTP shape ONLY — no business logic.
-    v1/           auth, users, connections, llm_configs, semantic, knowledge,
+    v1/           auth, users, connections, llm_configs, semantic, knowledge, sections,
                   conversations, dashboards, drafts (SQL), reports, usage
                   (three read routes: your own needs no capability because the
                   scope IS the caller; the other two need `usage.read`)
@@ -140,6 +140,9 @@ backend/app/
                   file in, to the draft),
                   query_service (execute_saved_sql — the tile/report entry point
                   into guarded execution), sql_draft_service,
+                  section_service (a connection's sections: read, propose —
+                  computed and never written — and save the whole set in one
+                  transaction; docs/plans/retrieval-sections.md),
                   usage_service (how many tokens the models used: one union
                   over runs, report_runs and semantic_jobs, bucketed in time —
                   the server picks the width from the window, 5 minutes for an
@@ -156,14 +159,20 @@ backend/app/
   pipeline/       the AI run: state.py (typed RunState), graph.py (the compiled
                   LangGraph + the node adapter), pipeline.py (the
                   AnalyticsPipeline facade over it),
-                  nodes/ (route→match→retrieve→describe→clarify→generate→
-                  validate→execute→inspect→present→chart — all eleven are
-                  functions in the single file nodes/__init__.py; there is no
-                  module per node. `match` is the short-circuit: a taught
-                  question skips four nodes and lands on the guard),
+                  nodes/ (route→match→scope→retrieve→describe→clarify→
+                  generate→validate→execute→inspect→present→chart — all twelve
+                  are functions in the single file nodes/__init__.py; there is
+                  no module per node. `match` is the short-circuit: a taught
+                  question skips five nodes and lands on the guard. `scope`
+                  picks the section of a sectioned database a question is
+                  about — SKIPPED, with no model call, when there are none,
+                  and no call either when the asker picked one themselves in
+                  the composer; what it chose is on `runs.retrieval_*`),
                   contracts.py (the node signature),
                   metadata.py (which tables a schema question is about, and the
-                  rendered fallback answer),
+                  rendered fallback answer), sections.py (dividing a snapshot
+                  into named sections — schema, FK components, name prefixes —
+                  and sizing one in `retrieve`'s own units; pure),
                   prompts/, disclosure.py (result gate), checks.py (free result checks)
   sqlguard/       policy, validator, rewriter — self-contained, dialect-aware
   knowledge/      what somebody already answered: models.py (the template,
@@ -319,6 +328,16 @@ frontend/src/
                             dashboard-transfer.tsx (the download and the import
                             dialog), tile-editor.tsx
                             (ask or write the SQL; one guard check for both),
+                            sections.tsx (a connection's Sections tab: the
+                            proposal, table chips dragged between cards, the
+                            fits-whole / too-large badge, and drift after a
+                            sync — a member the schema lost struck through, a
+                            table it gained marked *new*, and Re-propose shown
+                            as a diff that never applies itself) +
+                            sections-model.ts
+                            (its arithmetic — every table in one place, sizes
+                            in `retrieve`'s units, and that diff — DOM-free,
+                            `npm run test:sections`),
                             knowledge-queue.ts (how much curation work is
                             waiting, per connection and in total — DOM-free,
                             `npm run test:queue`), usage-chart.ts (the token
@@ -540,7 +559,7 @@ answered by asking which posture the step belongs to.
 | Posture | Means | Where |
 |---|---|---|
 | **Fail closed** | the refusal *is* the answer | the guard, name resolution, an unsynced connection, `disclose*` defaulting to the narrowest policy, reports refusing `NONE`/`AGGREGATE` |
-| **Fail open** | the feature is dropped, the work continues | `route`, `clarify`, `inspect`, `chart`, the semantic layer, follow-up suggestions |
+| **Fail open** | the feature is dropped, the work continues | `route`, `scope`, `clarify`, `inspect`, `chart`, the semantic layer, follow-up suggestions |
 | **Fail backwards** | something computed replaces something generated | `describe` → `answer_metadata`, `present` → the fallback sentence, `plan_chart` → the shape heuristic |
 | **Fail as a value** | the failure is data, stored or returned, not raised | `TileResult(status="ERROR")`, `ReportBlockResult(FAILED)`, `feasibility_status = INFEASIBLE` |
 | **Fail the run** | stop, record, tell the user | `E_LLM`, a guard rejection out of budget, `E_TIMEOUT`, `E_NODE_FAILED`, `E_PIPELINE_LOOP`, `E_ORPHANED` |
@@ -574,8 +593,8 @@ LangGraph** (`pipeline/graph.py`) whose chain is linear with one bounded repair
 loop:
 
 ```
-route → match → retrieve → describe → clarify → generate → validate →
-execute → inspect → present → chart
+route → match → scope → retrieve → describe → clarify → generate →
+validate → execute → inspect → present → chart
 ```
 
 **Five edges are not the chain**, and they are why this is a graph and not a
@@ -592,7 +611,7 @@ Six facts that decide how a change lands:
   `test_pipeline_events.py` is that contract; `test_pipeline_graph.py` is the
   wiring's.
 - **`match` can end the run without a model call.** A taught question skips
-  four nodes and lands on the guard. See
+  five nodes and lands on the guard. See
   [knowledge-templates.md](docs/reference/knowledge-templates.md).
 - **`describe` halts before any SQL**, answering METADATA questions from the
   schema block and the semantic layer. Every other intent gets `SKIPPED`.
@@ -757,7 +776,7 @@ at commit time and shows up as drift a release later. Full tour:
   allowlist, and the Danger zone) and `/sources/:id/policy` opens **Policy**
   (disclosure, DB comments, taught examples, clarify, conflict checks, row cap,
   timeout — the set is `POLICY_KEYS` in `DataSourcesPage.tsx`). The strip's
-  fifth entry, Knowledge, is a **door**: it navigates to `/knowledge/:id`,
+  last entry, Knowledge, is a **door**: it navigates to `/knowledge/:id`,
   where the console actually lives, and `/sources/:id/knowledge` redirects
   there. Each of the two forms has its
   own dirty state and its own Save, and each Save sends **only its own half**,
@@ -785,15 +804,15 @@ at commit time and shows up as drift a release later. Full tour:
   A literal hex or `oklch()` in a component is a bug in both themes — one of
   them just has not been looked at yet. Chart colours are the one exception and
   they live in `components/palette.ts`, tested apart from React.
-- **The nineteen DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
+- **The twenty DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
   `table-format.ts`, `dashboard-document.ts`, `palette.ts`, `chat-format.ts`,
   `report-document.ts`, `report-readiness.ts`, `report-print.ts`,
   `semantic-drift.ts`, `semantic-metrics.ts`, `semantic-changes.ts`,
   `semantic-score.ts`, `semantic-file.ts`, `semantic-attention.ts`,
   `knowledge-template.ts`, `thinking.ts`, `knowledge-queue.ts`,
-  `provider-params.ts`, `usage-chart.ts` — they hold the
+  `provider-params.ts`, `usage-chart.ts`, `sections-model.ts` — they hold the
   logic whose failures are quiet, they are (with `scripts/permissions.test.ts`,
-  the twentieth suite) the *only* tested code in the frontend, and their suites
+  the twenty-first suite) the *only* tested code in the frontend, and their suites
   are plain `node --experimental-strip-types` scripts. **One React import turns
   a suite into a thing that cannot run.**
 - **Text a person wrote gets `dir={dirOf(value)}`.** The product ships Persian.

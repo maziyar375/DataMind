@@ -395,6 +395,11 @@ code, pre, .mono {
    transparent background. */
 .rm-menu-item:hover { background: var(--panel-hover) !important; }
 
+/* *Ask within…* under the composer. Quiet until it is reached for — it is a
+   correction, offered beside a hint line, not a setting the eye has to clear
+   on the way to the question. */
+.rm-scope-btn:hover { border-color: var(--border-strong) !important; color: var(--text) !important; }
+
 /* A finished answer stays quiet until you reach for it. Kept visible for
    keyboard users, who never generate a hover. */
 .rm-turn-actions { opacity: 0; transition: opacity .15s ease; }
@@ -4618,4 +4623,25 @@ code, pre, .mono {
 /* On paper there is no viewport, so there is no off-canvas either. */
 @media print {
   .rm-list-toggle, .rm-list-scrim { display: none !important; }
+}
+
+/* ── Sections tab ─────────────────────────────────────────────────────────
+   A table chip is dragged between section cards; the card it would land in
+   says so with the accent edge, and the name field reads as a heading until
+   it is reached for. */
+.rm-table-chip { transition: border-color .12s ease; }
+.rm-table-chip[draggable="true"]:hover { border-color: var(--accent-border) !important; }
+.rm-table-chip[draggable="true"]:active { cursor: grabbing; }
+.rm-chip-x:hover { background: var(--red-bg) !important; color: var(--red) !important; }
+.rm-chip-x:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rm-section-card { transition: border-color .12s ease, box-shadow .12s ease; }
+.rm-section-card[data-drop="true"] {
+  border-color: var(--accent) !important;
+  border-style: solid !important;
+  box-shadow: 0 0 0 3px var(--accent-bg), inset 0 1px 0 0 var(--sheen) !important;
+}
+.rm-section-name:hover { border-color: var(--border-strong) !important; }
+.rm-section-name:focus { border-color: var(--accent) !important; background: var(--input-bg) !important; }
+@media (prefers-reduced-motion: reduce) {
+  .rm-table-chip, .rm-section-card { transition: none; }
 }
