@@ -4701,6 +4701,28 @@ code, pre, .mono {
 }
 .rm-section-name:hover { border-color: var(--border-strong) !important; }
 .rm-section-name:focus { border-color: var(--accent) !important; background: var(--input-bg) !important; }
+
+/* A chip is draggable and nothing on it says so. The grip holds its space
+   always — a row of 36 chips that reflows under the pointer is worse than a
+   mark nobody notices — and lights up as the pointer arrives. */
+.rm-chip-grip { opacity: 0; transition: opacity .12s ease; }
+.rm-table-chip[draggable="true"]:hover .rm-chip-grip { opacity: 0.7; }
+
+/* While a table is in the air, every card says it will take it. The card
+   under the pointer is `[data-drop]` above and stays louder than this. */
+.rm-section-card[data-droppable="true"] {
+  border-color: var(--accent-border) !important;
+  border-style: dashed !important;
+}
+
+/* Followed the "4 unassigned" count down the page: say which card answered. */
+.rm-section-card[data-flash="true"] { animation: rm-section-flash 1.6s ease-out; }
+@keyframes rm-section-flash {
+  0%, 55% { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+  100% { border-color: var(--border-strong); box-shadow: none; }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .rm-table-chip, .rm-section-card { transition: none; }
+  .rm-table-chip, .rm-section-card, .rm-chip-grip { transition: none; }
+  .rm-section-card[data-flash="true"] { animation: none; border-color: var(--accent) !important; }
 }

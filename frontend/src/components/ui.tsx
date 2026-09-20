@@ -270,6 +270,11 @@ export const Icon = {
       <path d="M12 5v14M19 12l-7 7-7-7" />
     </svg>
   ),
+  ArrowUp: ({ size = 14, stroke = 'currentColor', strokeWidth = 2.2 }: IconProps) => (
+    <svg {...iconBase(size, stroke, strokeWidth)}>
+      <path d="M12 19V5M5 12l7-7 7 7" />
+    </svg>
+  ),
   Alert: ({ size = 14, stroke = 'currentColor', strokeWidth = 2 }: IconProps) => (
     <svg {...iconBase(size, stroke, strokeWidth)}>
       <circle cx="12" cy="12" r="10" />

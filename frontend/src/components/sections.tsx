@@ -19,15 +19,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError, sections as api } from '../api/client'
 import type { Connection, ConnectionSection, SectionSet } from '../api/types'
 import {
-  EmptyState, ErrorNote, GhostButton, Icon, Modal, PrimaryButton, QuietAction, Spinner,
-  TextArea, TextInput, DangerButton, dirOf,
+  ActionDivider, EmptyState, ErrorNote, GhostButton, Icon, Modal, PrimaryButton, QuietAction,
+  Spinner, TextArea, TextInput, DangerButton, dirOf,
 } from './ui'
 import { DetailBody } from './settings'
 import { useUnsavedWork } from '../shell'
 import {
-  UNASSIGNED, UNASSIGNED_KEY, adoptProposal, applySplit, diffProposal, fitOf, formatChars,
-  freshKey, homeOf, moveTable, newName, problems, reorder, sameDivision, sameSet, sizeOf,
-  toDrafts, toWrite, unassignedOf,
+  MAX_DESCRIPTION_CHARS, UNASSIGNED, UNASSIGNED_KEY, adoptProposal, applySplit, diffProposal,
+  fitOf, formatChars, freshKey, homeOf, moveTable, newName, problems, reorder, sameDivision,
+  sameSet, sizeOf, toDrafts, toWrite, unassignedOf,
 } from './sections-model'
 import type { Fit, ProposalDiff, SectionDraft } from './sections-model'
 
@@ -59,6 +59,27 @@ export function SectionsTab({ connection }: { connection: Connection }) {
   >(null)
   const [askClear, setAskClear] = useState(false)
   const [focusKey, setFocusKey] = useState<string | null>(null)
+  // Where a table may be dropped is invisible until one is in the air. A drag
+  // anywhere in the set marks every card as a target, so the gesture is
+  // discoverable rather than folklore.
+  const [dragging, setDragging] = useState(false)
+  // The pile a question is never routed to sits at the bottom of a page as
+  // long as the schema; the count at the top is what people read, so it is
+  // what takes them there.
+  const [flash, setFlash] = useState(false)
+  // A section holding tables or a description is somebody's work: deleting it
+  // is recoverable only by discarding everything else they just did.
+  const [askDelete, setAskDelete] = useState<SectionDraft | null>(null)
+  const flashTimer = useRef<number | null>(null)
+  useEffect(() => () => { if (flashTimer.current) window.clearTimeout(flashTimer.current) }, [])
+
+  const showUnassigned = useCallback(() => {
+    document.getElementById(`rm-unassigned-${connection.id}`)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setFlash(true)
+    if (flashTimer.current) window.clearTimeout(flashTimer.current)
+    flashTimer.current = window.setTimeout(() => setFlash(false), 1600)
+  }, [connection.id])
 
   const adopt = useCallback((next: SectionSet, { proposal }: { proposal: SectionSet | null }) => {
     setSet(next)
@@ -250,6 +271,8 @@ export function SectionsTab({ connection }: { connection: Connection }) {
           placed={sectionsTables}
           unassigned={unassigned.length}
           budget={budget}
+          teach={firstRun}
+          onShowUnassigned={showUnassigned}
           action={mayEdit ? (
             <span style={{ display: 'inline-flex', gap: 8 }}>
               {set?.saved && (
@@ -324,12 +347,26 @@ export function SectionsTab({ connection }: { connection: Connection }) {
               }
             }}
             onReorder={(delta) => setDrafts((prev) => reorder(prev, draft.key, delta))}
-            onDelete={() => setDrafts((prev) => prev.filter((d) => d.key !== draft.key))}
+            onDelete={() => {
+              if (draft.tables.length > 0 || draft.description.trim()) setAskDelete(draft)
+              else setDrafts((prev) => prev.filter((d) => d.key !== draft.key))
+            }}
             onSplit={() => split(draft)}
+            dragging={dragging}
+            onDragState={setDragging}
           />
         ))}
 
-        <UnassignedCard tables={unassigned} fresh={fresh} mayEdit={mayEdit} onMove={move} />
+        <UnassignedCard
+          id={`rm-unassigned-${connection.id}`}
+          tables={unassigned}
+          fresh={fresh}
+          mayEdit={mayEdit}
+          onMove={move}
+          dragging={dragging}
+          onDragState={setDragging}
+          flash={flash}
+        />
 
         {mayEdit && set?.saved && (
           <div
@@ -377,6 +414,40 @@ export function SectionsTab({ connection }: { connection: Connection }) {
         />
       )}
 
+      {askDelete && (
+        <Modal
+          title={`Delete “${askDelete.name}”?`}
+          onClose={() => setAskDelete(null)}
+          footer={
+            <>
+              <GhostButton onClick={() => setAskDelete(null)}>Keep it</GhostButton>
+              <DangerButton
+                onClick={() => {
+                  setDrafts((prev) => prev.filter((d) => d.key !== askDelete.key))
+                  setAskDelete(null)
+                }}
+              >
+                Delete section
+              </DangerButton>
+            </>
+          }
+        >
+          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: 'var(--text)' }}>
+            {askDelete.tables.length > 0 && (
+              <>
+                Its <strong>{askDelete.tables.length} table
+                {askDelete.tables.length === 1 ? '' : 's'}</strong> move to {UNASSIGNED}, where no
+                question is routed to them.{' '}
+              </>
+            )}
+            {askDelete.description.trim()
+              ? 'The description written for it is lost. '
+              : ''}
+            Nothing is saved until you press Save.
+          </p>
+        </Modal>
+      )}
+
       {askClear && (
         <Modal
           title="Turn off sections?"
@@ -400,16 +471,30 @@ export function SectionsTab({ connection }: { connection: Connection }) {
 }
 
 // ── the top of the tab ────────────────────────────────────────────────────
+/**
+ * The explanation, then the state of the division.
+ *
+ * Two paragraphs of prose is what somebody meeting sections needs and what
+ * somebody returning to fix one has to scroll past, so the second — the one
+ * answering "will this break my dashboards" — is open on the first visit and
+ * folded away once the set is saved. The line under it is the only place the
+ * whole division is counted, and the tables in no section are counted there as
+ * a way to reach them rather than as a number to remember.
+ */
 function Intro({
-  sections, tables, placed, unassigned, budget, action,
+  sections, tables, placed, unassigned, budget, teach, onShowUnassigned, action,
 }: {
   sections: number
   tables: number
   placed: number
   unassigned: number
   budget: number
+  /** First open, nothing saved: the caveat is read rather than found. */
+  teach: boolean
+  onShowUnassigned: () => void
   action?: React.ReactNode
 }) {
+  const [open, setOpen] = useState(false)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: 'var(--text-dim)', maxWidth: 720 }}>
@@ -419,25 +504,109 @@ function Intro({
         sent whole — every column of every table in it. The description is
         what the model reads to choose.
       </p>
-      <p
-        style={{
-          margin: 0, fontSize: 12.5, lineHeight: 1.55, color: 'var(--text-dim)',
-          display: 'flex', gap: 7, alignItems: 'flex-start', maxWidth: 720,
-        }}
-      >
-        <span style={{ display: 'flex', marginTop: 2, color: 'var(--text-faint)' }}><Icon.Info size={13} /></span>
-        A section changes what the model is shown, never what it may query: an
-        answer or a saved tile over a table outside the section still runs.
-        When no section fits a question, it is answered from the whole schema.
-      </p>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
-          <strong style={{ color: 'var(--text-strong)' }}>{sections}</strong>{' '}
-          section{sections === 1 ? '' : 's'} · {placed} of {tables} tables placed
-          {unassigned > 0 && <> · {unassigned} unassigned</>}
-        </span>
-        {action && <span style={{ marginLeft: 'auto' }}>{action}</span>}
+      {teach ? (
+        <Caveat />
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 7, alignItems: 'flex-start' }}>
+          <QuietAction
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            style={{ marginInlineStart: -7 }}
+          >
+            <Icon.Chevron open={open} size={12} stroke="var(--text-dim)" />
+            What a section does not change
+          </QuietAction>
+          {open && <Caveat entering />}
+        </div>
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12.5, color: 'var(--text-dim)', fontVariantNumeric: 'tabular-nums' }}>
+            <strong style={{ color: 'var(--text-strong)' }}>{sections}</strong>{' '}
+            section{sections === 1 ? '' : 's'} ·{' '}
+            <strong style={{ color: 'var(--text-strong)' }}>{placed}</strong> of {tables} tables placed
+          </span>
+          {unassigned > 0 && (
+            <QuietAction
+              onClick={onShowUnassigned}
+              title={`Show the ${unassigned} table${unassigned === 1 ? '' : 's'} in no section`}
+              style={{ fontVariantNumeric: 'tabular-nums' }}
+            >
+              <span
+                aria-hidden
+                style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--amber)' }}
+              />
+              {unassigned} unassigned
+            </QuietAction>
+          )}
+          {action && <span style={{ marginLeft: 'auto' }}>{action}</span>}
+        </div>
+        <Meter
+          share={tables > 0 ? placed / tables : 0}
+          ink="var(--accent)"
+          label={`${placed} of ${tables} tables are in a section`}
+          style={{ maxWidth: 720 }}
+        />
       </div>
+    </div>
+  )
+}
+
+/** The sentence that answers "will this break what I already have". */
+function Caveat({ entering = false }: { entering?: boolean }) {
+  return (
+    <p
+      className={entering ? 'rm-enter' : undefined}
+      style={{
+        margin: 0, fontSize: 12.5, lineHeight: 1.55, color: 'var(--text-dim)',
+        display: 'flex', gap: 7, alignItems: 'flex-start', maxWidth: 720,
+      }}
+    >
+      <span style={{ display: 'flex', marginTop: 2, color: 'var(--text-faint)' }}><Icon.Info size={13} /></span>
+      A section changes what the model is shown, never what it may query: an
+      answer or a saved tile over a table outside the section still runs.
+      When no section fits a question, it is answered from the whole schema.
+    </p>
+  )
+}
+
+/**
+ * A share of something, as a line rather than a number.
+ *
+ * Both numbers this screen turns on — how much of the schema is placed, and
+ * what a section costs against the budget — are already written beside it in
+ * full. The line is what makes "nearly all of it" and "half of it" different
+ * at a glance, and it is 3px because that is all that job needs.
+ */
+function Meter({
+  share, ink, label, title, style,
+}: {
+  share: number
+  ink: string
+  label: string
+  title?: string
+  style?: React.CSSProperties
+}) {
+  return (
+    <div
+      role="img"
+      aria-label={label}
+      title={title ?? label}
+      style={{
+        height: 3, borderRadius: 999, background: 'var(--border-strong)',
+        overflow: 'hidden', ...style,
+      }}
+    >
+      <div
+        style={{
+          height: '100%', width: '100%', background: ink,
+          // Scaled rather than width-animated, as ProgressBar is: width is a
+          // layout property and this sits above a page of cards.
+          transformOrigin: 'left center',
+          transform: `scaleX(${Math.max(0, Math.min(1, share))})`,
+          transition: 'transform 240ms ease',
+        }}
+      />
     </div>
   )
 }
@@ -512,7 +681,7 @@ function DriftNote({
         background: 'var(--amber-bg)', border: '1px solid var(--amber-border)',
       }}
     >
-      <span aria-hidden style={{ color: 'var(--amber)', display: 'flex' }}>⚠</span>
+      <span aria-hidden style={{ color: 'var(--amber)', display: 'flex' }}><Icon.Alert size={15} /></span>
       <span style={{ flex: 1, minWidth: 240, fontSize: 12.5, lineHeight: 1.55, color: 'var(--text)' }}>
         The schema changed{synced && <> — re-synced {synced}</>}.{' '}
         {missing > 0 && (
@@ -637,10 +806,10 @@ function DiffRow({
 }
 
 // ── one section ───────────────────────────────────────────────────────────
-const FIT_LOOK: Record<Fit, { glyph: string; word: string; ink: string; bg: string }> = {
-  FITS: { glyph: '✓', word: 'Fits whole', ink: 'var(--green)', bg: 'var(--green-bg)' },
-  TOO_LARGE: { glyph: '⚠', word: 'Too large', ink: 'var(--amber)', bg: 'var(--amber-bg)' },
-  EMPTY: { glyph: '○', word: 'Empty', ink: 'var(--text-dim)', bg: 'var(--panel-alt)' },
+const FIT_LOOK: Record<Fit, { icon: React.ReactNode; word: string; ink: string; bg: string }> = {
+  FITS: { icon: <Icon.Check size={11} />, word: 'Fits whole', ink: 'var(--green)', bg: 'var(--green-bg)' },
+  TOO_LARGE: { icon: <Icon.Alert size={12} />, word: 'Too large', ink: 'var(--amber)', bg: 'var(--amber-bg)' },
+  EMPTY: { icon: <Icon.Minus size={12} />, word: 'Empty', ink: 'var(--text-dim)', bg: 'var(--panel-alt)' },
 }
 
 function FitBadge({ fit }: { fit: Fit }) {
@@ -654,7 +823,7 @@ function FitBadge({ fit }: { fit: Fit }) {
         color: look.ink, background: look.bg, whiteSpace: 'nowrap',
       }}
     >
-      <span aria-hidden>{look.glyph}</span>
+      <span aria-hidden style={{ display: 'flex' }}>{look.icon}</span>
       {look.word}
     </span>
   )
@@ -694,7 +863,7 @@ function useDrop(onDrop: (table: string) => void, enabled: boolean) {
 
 function SectionCard({
   draft, index, count, weights, budget, synced, problem, mayEdit, splitting, autoFocus,
-  listId, onEdit, onMove, onAdd, onReorder, onDelete, onSplit,
+  listId, onEdit, onMove, onAdd, onReorder, onDelete, onSplit, dragging, onDragState,
 }: {
   draft: SectionDraft
   index: number
@@ -714,12 +883,16 @@ function SectionCard({
   onReorder: (delta: -1 | 1) => void
   onDelete: () => void
   onSplit: () => void
+  /** A table is in the air somewhere in the set: say that this is a target. */
+  dragging: boolean
+  onDragState: (dragging: boolean) => void
 }) {
   const fit = fitOf(draft.tables, weights, budget)
   const chars = sizeOf(draft.tables, weights)
   const gone = draft.tables.filter((t) => !weights.has(t))
   const [adding, setAdding] = useState('')
   const [open, setOpen] = useState(false)
+  const written = draft.description.trim().length
   const drop = useDrop((table) => onMove(table, draft.key), mayEdit)
   const shownTables = open ? draft.tables : draft.tables.slice(0, CHIPS_SHOWN)
 
@@ -734,6 +907,7 @@ function SectionCard({
     <section
       className="rm-section-card"
       data-drop={drop.over ? 'true' : undefined}
+      data-droppable={dragging && mayEdit ? 'true' : undefined}
       aria-label={`Section ${draft.name}`}
       {...drop.handlers}
       style={{
@@ -773,6 +947,14 @@ function SectionCard({
           <FitBadge fit={fit} />
         </span>
       </div>
+      {fit !== 'EMPTY' && budget > 0 && (
+        <Meter
+          share={chars / budget}
+          ink={fit === 'TOO_LARGE' ? 'var(--amber)' : 'var(--green)'}
+          label={`${formatChars(chars)} of the ${formatChars(budget)} character budget`}
+          style={{ marginTop: -4 }}
+        />
+      )}
       {problem && (
         <span role="alert" style={{ fontSize: 12, color: 'var(--red)', marginTop: -4 }}>{problem}</span>
       )}
@@ -789,8 +971,23 @@ function SectionCard({
             rows={3}
             style={{ minHeight: 78, fontSize: 13, lineHeight: 1.55 }}
           />
-          <span style={{ fontSize: 11.5, color: 'var(--text-dim)' }}>
-            Sent to the model with the schema, under every disclosure policy — describe the tables, never paste values from them.
+          <span style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}>
+            <span style={{ flex: 1, fontSize: 11.5, lineHeight: 1.5, color: 'var(--text-dim)' }}>
+              Sent to the model with the schema, under every disclosure policy — describe the tables, never paste values from them.
+            </span>
+            {/* Only near the limit: a counter under every description is a
+                number nobody needs until the one time they do. */}
+            {written > MAX_DESCRIPTION_CHARS * 0.8 && (
+              <span
+                className="mono"
+                style={{
+                  flexShrink: 0, fontSize: 11.5, fontVariantNumeric: 'tabular-nums',
+                  color: written > MAX_DESCRIPTION_CHARS ? 'var(--red)' : 'var(--text-dim)',
+                }}
+              >
+                {written}/{MAX_DESCRIPTION_CHARS}
+              </span>
+            )}
           </span>
         </label>
       ) : (
@@ -808,7 +1005,7 @@ function SectionCard({
             background: 'var(--amber-bg)', border: '1px solid var(--amber-border)',
           }}
         >
-          <span aria-hidden style={{ color: 'var(--amber)' }}>⚠</span>
+          <span aria-hidden style={{ color: 'var(--amber)', display: 'flex' }}><Icon.Alert size={14} /></span>
           <span style={{ flex: 1, minWidth: 200 }}>
             Too large to send whole ({formatChars(chars)} of {formatChars(budget)}) — a
             question here falls back to matching within the section.
@@ -828,16 +1025,22 @@ function SectionCard({
         mayEdit={mayEdit}
         synced={synced}
         onRemove={(table) => onMove(table, UNASSIGNED_KEY)}
+        onDragState={onDragState}
+        from={draft.name}
         empty={mayEdit ? 'Drag tables here, or add one by name below.' : 'No tables.'}
       />
       {gone.length > 0 && (
-        <span style={{ fontSize: 12, lineHeight: 1.55, color: 'var(--text-dim)' }}>
-          <span aria-hidden style={{ color: 'var(--amber)' }}>⚠ </span>
+        <span style={{ display: 'flex', gap: 7, fontSize: 12, lineHeight: 1.55, color: 'var(--text-dim)' }}>
+          <span aria-hidden style={{ color: 'var(--amber)', display: 'flex', marginTop: 2, flexShrink: 0 }}>
+            <Icon.Alert size={13} />
+          </span>
+          <span>
           {gone.length} table{gone.length === 1 ? '' : 's'} here{' '}
           {gone.length === 1 ? 'is' : 'are'} not in the current schema
           {synced && <> — re-synced {synced}</>}. Kept, struck through, and never
           sent: a table the snapshot does not have cannot be retrieved and
           cannot pass the guard.
+          </span>
         </span>
       )}
       {draft.tables.length > CHIPS_SHOWN && (
@@ -869,13 +1072,26 @@ function SectionCard({
             }}
             style={{ flex: '1 1 220px', maxWidth: 320, fontSize: 12.5, padding: '5px 9px' }}
           />
-          <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 2 }}>
-            <QuietAction onClick={() => onReorder(-1)} disabled={index === 0} aria-label="Move section up">
-              ↑ Up
+          <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+            <QuietAction
+              onClick={() => onReorder(-1)}
+              disabled={index === 0}
+              aria-label="Move section up"
+              title="Move section up"
+            >
+              <Icon.ArrowUp size={12} /> Up
             </QuietAction>
-            <QuietAction onClick={() => onReorder(1)} disabled={index === count - 1} aria-label="Move section down">
-              ↓ Down
+            <QuietAction
+              onClick={() => onReorder(1)}
+              disabled={index === count - 1}
+              aria-label="Move section down"
+              title="Move section down"
+            >
+              <Icon.ArrowDown size={12} /> Down
             </QuietAction>
+            {/* A hairline before the one action here that destroys something:
+                reordering and deleting are one keystroke apart otherwise. */}
+            <ActionDivider />
             <QuietAction tone="red" onClick={onDelete}>
               <Icon.Trash size={12} /> Delete section
             </QuietAction>
@@ -887,7 +1103,7 @@ function SectionCard({
 }
 
 function TableChips({
-  tables, weights, mayEdit, onRemove, empty, synced = '', fresh,
+  tables, weights, mayEdit, onRemove, empty, synced = '', fresh, onDragState, from,
 }: {
   tables: string[]
   weights: Map<string, number>
@@ -898,6 +1114,10 @@ function TableChips({
   synced?: string
   /** Tables the schema has gained since these sections were saved. */
   fresh?: Set<string>
+  /** Raised while one of these is being dragged, so the cards light up. */
+  onDragState?: (dragging: boolean) => void
+  /** The card these sit in, for the button that takes one out of it. */
+  from?: string
 }) {
   if (tables.length === 0) {
     return <span style={{ fontSize: 12.5, color: 'var(--text-faint)' }}>{empty}</span>
@@ -916,7 +1136,9 @@ function TableChips({
               e.dataTransfer.setData(DRAG_TYPE, table)
               e.dataTransfer.setData('text/plain', table)
               e.dataTransfer.effectAllowed = 'move'
+              onDragState?.(true)
             }}
+            onDragEnd={() => onDragState?.(false)}
             title={
               missing
                 ? `Not in the current schema${synced ? ` — re-synced ${synced}` : ''}. `
@@ -929,7 +1151,7 @@ function TableChips({
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 4,
               fontSize: 12,
-              padding: mayEdit ? '3px 4px 3px 8px' : '3px 8px',
+              padding: mayEdit ? '3px 4px 3px 5px' : '3px 8px',
               borderRadius: 6,
               border: '1px solid var(--border)',
               background: 'var(--panel-alt)',
@@ -939,6 +1161,15 @@ function TableChips({
               maxWidth: '100%',
             }}
           >
+            {mayEdit && (
+              <span
+                aria-hidden
+                className="rm-chip-grip"
+                style={{ display: 'flex', color: 'var(--text-faint)', flexShrink: 0 }}
+              >
+                {!missing && <Icon.Grip size={11} />}
+              </span>
+            )}
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{table}</span>
             {isNew && (
               <span
@@ -956,7 +1187,8 @@ function TableChips({
               <button
                 type="button"
                 className="rm-chip-x"
-                aria-label={`Remove ${table}`}
+                aria-label={from ? `Move ${table} out of ${from}, to ${UNASSIGNED}` : `Remove ${table}`}
+                title={`Move to ${UNASSIGNED}`}
                 onClick={() => onRemove(table)}
                 style={{
                   display: 'grid', placeItems: 'center', width: 18, height: 18,
@@ -975,13 +1207,18 @@ function TableChips({
 }
 
 function UnassignedCard({
-  tables, fresh, mayEdit, onMove,
+  id, tables, fresh, mayEdit, onMove, dragging, onDragState, flash,
 }: {
+  id: string
   tables: string[]
   /** Tables the schema has gained since the sections were saved. */
   fresh: Set<string>
   mayEdit: boolean
   onMove: (table: string, to: string) => void
+  dragging: boolean
+  onDragState: (dragging: boolean) => void
+  /** Somebody followed the count at the top of the tab down to here. */
+  flash: boolean
 }) {
   const drop = useDrop((table) => onMove(table, UNASSIGNED_KEY), mayEdit)
   const [open, setOpen] = useState(false)
@@ -995,8 +1232,11 @@ function UnassignedCard({
   const weights = useMemo(() => new Map(tables.map((t) => [t, 1] as const)), [tables])
   return (
     <section
+      id={id}
       className="rm-section-card"
       data-drop={drop.over ? 'true' : undefined}
+      data-droppable={dragging && mayEdit ? 'true' : undefined}
+      data-flash={flash ? 'true' : undefined}
       aria-label={UNASSIGNED}
       {...drop.handlers}
       style={{
@@ -1011,15 +1251,28 @@ function UnassignedCard({
     >
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 14, fontWeight: 650, color: 'var(--text-strong)' }}>{UNASSIGNED}</span>
-        <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>
-          {tables.length} table{tables.length === 1 ? '' : 's'} · never chosen for a question on their own
+        <span style={{ fontSize: 12, color: 'var(--text-dim)', fontVariantNumeric: 'tabular-nums' }}>
+          <strong style={{ color: tables.length > 0 ? 'var(--text)' : 'var(--text-dim)', fontWeight: 600 }}>
+            {tables.length}
+          </strong>{' '}
+          table{tables.length === 1 ? '' : 's'} · never chosen for a question on their own
         </span>
       </div>
+      {/* The pile is the one card with no way out of it: its chips have no
+          remove button, because there is nowhere further to remove them to.
+          So it says what the way out is. */}
+      {mayEdit && tables.length > 0 && (
+        <span style={{ fontSize: 12, lineHeight: 1.55, color: 'var(--text-dim)' }}>
+          Drag one onto a section, or type its name into that section’s
+          “Add a table by name” box.
+        </span>
+      )}
       <TableChips
         tables={shownTables}
         weights={weights}
         mayEdit={mayEdit}
         fresh={fresh}
+        onDragState={onDragState}
         empty="Every table is in a section."
       />
       {tables.length > CHIPS_SHOWN && (
