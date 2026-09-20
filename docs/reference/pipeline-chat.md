@@ -144,7 +144,7 @@ enforced on the chat path and inert on the draft path until someone noticed.
 | 9 | report outline | `complete` | `REPORT_OUTLINE_SYSTEM` / `_USER` | user proposes an outline |
 | 10 | report section prose | `complete` | `REPORT_SECTION_SYSTEM` / `_USER` | once per section per generation |
 | 11 | report summary | `complete` | `REPORT_SUMMARY_SYSTEM` / `_USER` | once per generation |
-| 12 | `scope` | `complete` | `SCOPE_SYSTEM` (`SCOPE_SYSTEM_WITH_CURRENT` is written, not yet sent) | an analytical chat run **or draft** on a connection with saved sections — never otherwise |
+| 12 | `scope` | `complete` | `SCOPE_SYSTEM`, or `SCOPE_SYSTEM_WITH_CURRENT` after a turn that retrieved something | an analytical chat run **or draft** on a connection with saved sections — and **not** when the asker chose a section themselves |
 | — | capability probe | `complete` | fixed test prompt | saving an LLM config — **sends no customer data** |
 
 [security.md §2](security.md) analyses what each one *sends*. The two tables
@@ -401,9 +401,29 @@ of section descriptions would make every classification vary with curation.
 `SCOPE_SYSTEM` lists each **routable** section — one with at least one table
 still in the snapshot — as `- Name — description` (description clipped to 400
 characters) and asks for up to three names, comma-separated, or `NONE`. The
-user message is the question. `SCOPE_SYSTEM_WITH_CURRENT` (a `Currently
-answering from:` line, for follow-up stickiness) exists as its own prompt so
-the first question keeps its bytes; nothing sends it yet (Phase 3).
+user message is the question.
+
+**A follow-up keeps its section.** `SCOPE_SYSTEM_WITH_CURRENT` adds one line —
+`Currently answering from: Sales` — and is sent whenever the previous turn of
+this thread retrieved something, because "and by month?" names no table and no
+section and would otherwise route on nine characters. What that previous turn
+was answered from is read from `runs.retrieval_sections` by
+`RunService._current_sections`: the last run **on this conversation and this
+connection that recorded a strategy**, so a crash before `retrieve` says
+nothing and a turn answered from the whole database correctly clears it. The
+model may still move — stickiness is a line in a prompt, not a lock. A first
+question sends `SCOPE_SYSTEM`, byte for byte as before, which is why the two
+prompts are two.
+
+**A person outranks the router.** *Ask within…* under the chat composer sets
+`runs.scope_choice`, carried to `NodeDeps.scope_choice`, and a choice is taken
+as made: the section is used, or — for `NONE`, which is *Whole database* —
+nothing is narrowed. **Either way no call is made at all**, and the trail says
+whose decision it was (*Stores · 4 tables — your choice*). It is the control
+the research matrix marks `○` for this product — *the user can correct the
+retrieval decision* — and once a database is divided it is a dropdown. A retry
+carries the choice, because a retry reproduces the conditions of the attempt
+it replaces.
 
 The reply is split on commas and line breaks, each piece stripped of quotes,
 bullets and bold, and matched to a section name ignoring case; unknown pieces
@@ -420,7 +440,14 @@ snapshot become `state.scope_tables`, in snapshot order.
 | no section has a table in the snapshot | SKIPPED, no call | *Skipped — no section has a table in the current schema* |
 | `LLMError` | SKIPPED | *Skipped — provider error* |
 | reply `NONE`, empty, or no known name | SKIPPED (tokens recorded — the call was paid) | *No section matched* |
+| a chosen section the connection no longer has | SKIPPED, **no call** | *Skipped — the section you chose is no longer in this database* |
 | reply names sections | OK — `scope_sections`, `scope_tables` set | *Sales · 14 tables* |
+
+The chosen-section row is the one worth arguing about, and it is decided the
+same way as the rest: the choice was to *narrow*, so when it cannot be honoured
+we fall open to the whole snapshot rather than route to a section nobody asked
+for. A schema question ignores a choice entirely — `census` states a total, and
+a total over one section is a wrong one.
 
 It can never widen anything: falling open widens what the model is *shown*
 back to the whole snapshot, which is what it is shown without sections, and the
@@ -435,6 +462,27 @@ runner leaves it None, so the suite's baseline is unchanged by construction —
 and so this node is **unmeasured by the suite** (the fixtures have no
 sections). `tests/unit/test_retrieve_scope.py` asserts recall against a
 known-correct section on a synthetic 500-table snapshot instead.
+
+**What retrieval did is recorded per run** (`0036`): `retrieval_strategy`,
+`retrieval_sections` (names, never ids — deleting a section must not rewrite
+the history of the runs it answered), `retrieval_tables`, and
+`retrieval_chars`, the rendered block under the policy in force. All four are
+written once, in `_finalise`, and only where a block was built: a run answered
+from the knowledge store never reaches `retrieve`, and **null is not zero**.
+`retrieval_sections` is also what the *Answered from* chip on an answer reads,
+and it is withheld from a restricted turn with the rest of what names the
+database. The distribution nobody could read before:
+
+```sql
+select coalesce(retrieval_strategy, '(not recorded)') as strategy,
+       count(*) as runs,
+       round(100.0 * count(*) / sum(count(*)) over (), 1) as pct,
+       round(avg(retrieval_tables)) as avg_tables,
+       round(avg(retrieval_chars)) as avg_chars,
+       max(retrieval_chars) as max_chars
+from runs
+group by 1 order by runs desc;
+```
 
 ### 3. `retrieve` — build everything the generator is allowed to see
 

@@ -414,7 +414,7 @@ every way they can be wrong is quiet: `dashboard-schedule.ts`, `table-format.ts`
 | Group | Tables |
 | --- | --- |
 | Identity | `users`, `sessions`, `audit_logs` |
-| Configuration | `llm_configs`, `database_connections`, `schema_snapshots` |
+| Configuration | `llm_configs`, `database_connections`, `schema_snapshots`, `connection_sections` |
 | Semantic layer | `semantic_layers`, `semantic_jobs` |
 | Chat | `conversations`, `messages`, `runs`, `run_steps`, `generated_queries`, `query_executions`, `artifacts`, `run_events` |
 | Dashboards | `dashboards`, `dashboard_tiles`, `dashboard_tile_cache` |

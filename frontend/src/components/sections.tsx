@@ -17,7 +17,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError, sections as api } from '../api/client'
-import type { Connection, SectionSet } from '../api/types'
+import type { Connection, ConnectionSection, SectionSet } from '../api/types'
 import {
   EmptyState, ErrorNote, GhostButton, Icon, Modal, PrimaryButton, QuietAction, Spinner,
   TextArea, TextInput, DangerButton, dirOf,
@@ -25,10 +25,11 @@ import {
 import { DetailBody } from './settings'
 import { useUnsavedWork } from '../shell'
 import {
-  UNASSIGNED, UNASSIGNED_KEY, applySplit, fitOf, formatChars, freshKey, homeOf, moveTable,
-  newName, problems, reorder, sameSet, sizeOf, toDrafts, toWrite, unassignedOf,
+  UNASSIGNED, UNASSIGNED_KEY, adoptProposal, applySplit, diffProposal, fitOf, formatChars,
+  freshKey, homeOf, moveTable, newName, problems, reorder, sameDivision, sameSet, sizeOf,
+  toDrafts, toWrite, unassignedOf,
 } from './sections-model'
-import type { Fit, SectionDraft } from './sections-model'
+import type { Fit, ProposalDiff, SectionDraft } from './sections-model'
 
 /** How many chips a card shows before it asks to be opened. A 300-table
  * section drawn in full is a wall nobody reads. */
@@ -49,6 +50,13 @@ export function SectionsTab({ connection }: { connection: Connection }) {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [splitting, setSplitting] = useState<string | null>(null)
+  const [proposing, setProposing] = useState(false)
+  // A fresh proposal waiting to be looked at. Held rather than applied: a
+  // re-proposal is the one action here that can discard somebody's
+  // descriptions, which are the thing the router actually reads.
+  const [pending, setPending] = useState<
+    { sections: ConnectionSection[]; diff: ProposalDiff } | null
+  >(null)
   const [askClear, setAskClear] = useState(false)
   const [focusKey, setFocusKey] = useState<string | null>(null)
 
@@ -89,6 +97,16 @@ export function SectionsTab({ connection }: { connection: Connection }) {
   const budget = set?.budget_chars ?? 0
   const unassigned = useMemo(() => unassignedOf(drafts, catalog), [drafts, catalog])
   const found = useMemo(() => problems(drafts), [drafts])
+  // Drift, in both directions. A member the snapshot no longer has can only
+  // lose recall — it cannot be rendered and cannot pass the guard — while a
+  // table nobody has placed is in nothing the router can pick, so it is
+  // marked rather than left in the pile unremarked.
+  const missing = useMemo(
+    () => drafts.flatMap((d) => d.tables.filter((t) => !weights.has(t))),
+    [drafts, weights],
+  )
+  const fresh = useMemo(() => new Set(set?.new_tables ?? []), [set])
+  const synced = shortDate(set?.synced_at ?? null)
   const changed = !sameSet(drafts, saved)
   const touched = !sameSet(drafts, shown)
   const firstRun = !!set && !set.saved && drafts.length > 0
@@ -150,6 +168,23 @@ export function SectionsTab({ connection }: { connection: Connection }) {
       setError(err instanceof ApiError ? err.message : 'Could not split this section.')
     } finally {
       setSplitting(null)
+    }
+  }
+
+  async function rePropose() {
+    setProposing(true)
+    setError(null)
+    setNotice(null)
+    try {
+      const result = await api.propose(connection.id)
+      setPending({
+        sections: result.sections,
+        diff: diffProposal(drafts, result.sections, catalog),
+      })
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not propose a division.')
+    } finally {
+      setProposing(false)
     }
   }
 
@@ -216,11 +251,37 @@ export function SectionsTab({ connection }: { connection: Connection }) {
           unassigned={unassigned.length}
           budget={budget}
           action={mayEdit ? (
-            <GhostButton onClick={addSection} style={{ padding: '6px 11px', fontSize: 12.5 }}>
-              <Icon.Plus size={13} /> Add section
-            </GhostButton>
+            <span style={{ display: 'inline-flex', gap: 8 }}>
+              {set?.saved && (
+                <GhostButton
+                  onClick={rePropose}
+                  disabled={proposing}
+                  style={{ padding: '6px 11px', fontSize: 12.5 }}
+                >
+                  {proposing ? <Spinner size={12} /> : <Icon.Sparkle size={13} />}
+                  Re-propose
+                </GhostButton>
+              )}
+              <GhostButton onClick={addSection} style={{ padding: '6px 11px', fontSize: 12.5 }}>
+                <Icon.Plus size={13} /> Add section
+              </GhostButton>
+            </span>
           ) : undefined}
         />
+
+        {set?.saved && (missing.length > 0 || fresh.size > 0) && (
+          <DriftNote
+            missing={missing.length}
+            fresh={fresh.size}
+            synced={synced}
+            action={mayEdit ? (
+              <GhostButton onClick={rePropose} disabled={proposing} style={{ padding: '5px 10px', fontSize: 12 }}>
+                {proposing && <Spinner size={12} />}
+                Re-propose
+              </GhostButton>
+            ) : undefined}
+          />
+        )}
 
         {firstRun && (
           <Banner
@@ -247,6 +308,7 @@ export function SectionsTab({ connection }: { connection: Connection }) {
             count={drafts.length}
             weights={weights}
             budget={budget}
+            synced={synced}
             problem={found.get(draft.key) ?? null}
             mayEdit={mayEdit}
             splitting={splitting === draft.key}
@@ -267,7 +329,7 @@ export function SectionsTab({ connection }: { connection: Connection }) {
           />
         ))}
 
-        <UnassignedCard tables={unassigned} mayEdit={mayEdit} onMove={move} />
+        <UnassignedCard tables={unassigned} fresh={fresh} mayEdit={mayEdit} onMove={move} />
 
         {mayEdit && set?.saved && (
           <div
@@ -300,6 +362,18 @@ export function SectionsTab({ connection }: { connection: Connection }) {
             setNotice(null)
           }}
           onDismiss={() => setNotice(null)}
+        />
+      )}
+
+      {pending && (
+        <ProposalDialog
+          diff={pending.diff}
+          onClose={() => setPending(null)}
+          onAdopt={() => {
+            setDrafts((prev) => adoptProposal(prev, pending.sections))
+            setPending(null)
+            setNotice('Adopted the new division. Check it, then save.')
+          }}
         />
       )}
 
@@ -406,6 +480,162 @@ function Banner({
   )
 }
 
+/** "12 Sept" — the date a struck-through member is explained by. */
+function shortDate(iso: string | null): string {
+  if (!iso) return ''
+  const when = new Date(iso)
+  if (Number.isNaN(when.getTime())) return ''
+  return when.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+}
+
+/**
+ * What a sync moved under these sections.
+ *
+ * Flag it, never delete it. The two halves fail differently and the sentence
+ * says so: a member the schema no longer has can only cost recall, while a
+ * table in no section is a table no question is ever routed to — which is
+ * silent, and is the one worth acting on.
+ */
+function DriftNote({
+  missing, fresh, synced, action,
+}: {
+  missing: number
+  fresh: number
+  synced: string
+  action?: React.ReactNode
+}) {
+  return (
+    <div
+      style={{
+        display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+        padding: '10px 12px 10px 14px', borderRadius: 10,
+        background: 'var(--amber-bg)', border: '1px solid var(--amber-border)',
+      }}
+    >
+      <span aria-hidden style={{ color: 'var(--amber)', display: 'flex' }}>⚠</span>
+      <span style={{ flex: 1, minWidth: 240, fontSize: 12.5, lineHeight: 1.55, color: 'var(--text)' }}>
+        The schema changed{synced && <> — re-synced {synced}</>}.{' '}
+        {missing > 0 && (
+          <>
+            <strong>{missing} table{missing === 1 ? '' : 's'}</strong> named here{' '}
+            {missing === 1 ? 'is' : 'are'} no longer in it, struck through below
+            and never sent.{' '}
+          </>
+        )}
+        {fresh > 0 && (
+          <>
+            <strong>{fresh} new table{fresh === 1 ? '' : 's'}</strong> {fresh === 1 ? 'is' : 'are'} in
+            no section, marked <em>new</em> in {UNASSIGNED} — a question is never
+            routed to a table in none.
+          </>
+        )}
+      </span>
+      {action}
+    </div>
+  )
+}
+
+/**
+ * A fresh proposal, shown as a diff. **It never applies itself.**
+ *
+ * The proposal is deterministic and complete, which is exactly why adopting
+ * one has to be a decision: it is computed from names and foreign keys, and
+ * it knows nothing about the sentence somebody wrote under a section. A
+ * section whose name survives keeps both its id and that sentence
+ * (`adoptProposal`); everything else here is what would change.
+ */
+const MOVES_SHOWN = 10
+
+function ProposalDialog({
+  diff, onClose, onAdopt,
+}: {
+  diff: ProposalDiff
+  onClose: () => void
+  onAdopt: () => void
+}) {
+  const nothing = sameDivision(diff)
+  const shown = diff.moved.slice(0, MOVES_SHOWN)
+  return (
+    <Modal
+      title={nothing ? 'Nothing would change' : 'A fresh division of this schema'}
+      onClose={onClose}
+      footer={
+        nothing ? (
+          <GhostButton onClick={onClose}>Close</GhostButton>
+        ) : (
+          <>
+            <GhostButton onClick={onClose}>Keep what I have</GhostButton>
+            <PrimaryButton onClick={onAdopt}>Use this division</PrimaryButton>
+          </>
+        )
+      }
+    >
+      {nothing ? (
+        <p style={{ margin: 0, fontSize: 13, lineHeight: 1.6, color: 'var(--text)' }}>
+          Proposing again over the current schema produces the division you
+          already have. Nothing to adopt.
+        </p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontSize: 13, lineHeight: 1.6 }}>
+          <p style={{ margin: 0, color: 'var(--text-dim)' }}>
+            Adopting this replaces the division on screen. A section whose name
+            survives keeps the description you wrote; the rest take a generated
+            one. Nothing is saved until you press Save.
+          </p>
+          {diff.added.length > 0 && (
+            <DiffRow glyph="+" word="New sections" ink="var(--green)">
+              {diff.added.map((a) => `${a.name} (${a.tables})`).join(', ')}
+            </DiffRow>
+          )}
+          {diff.removed.length > 0 && (
+            <DiffRow glyph="−" word="Gone" ink="var(--red)">
+              {diff.removed.map((r) => `${r.name} (${r.tables})`).join(', ')}
+            </DiffRow>
+          )}
+          {diff.moved.length > 0 && (
+            <DiffRow glyph="→" word={`${diff.moved.length} table${diff.moved.length === 1 ? '' : 's'} move`} ink="var(--accent)">
+              <span style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {shown.map((m) => (
+                  <span key={m.table} className="mono" dir="ltr" style={{ fontSize: 12 }}>
+                    {m.table}: {m.from} → {m.to}
+                  </span>
+                ))}
+                {diff.moved.length > shown.length && (
+                  <span style={{ color: 'var(--text-dim)' }}>
+                    and {diff.moved.length - shown.length} more
+                  </span>
+                )}
+              </span>
+            </DiffRow>
+          )}
+          <p style={{ margin: 0, color: 'var(--text-dim)' }}>
+            {diff.unchanged} table{diff.unchanged === 1 ? '' : 's'} stay where they are.
+          </p>
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+function DiffRow({
+  glyph, word, ink, children,
+}: {
+  glyph: string
+  word: string
+  ink: string
+  children: React.ReactNode
+}) {
+  return (
+    <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
+      <span aria-hidden style={{ color: ink, fontWeight: 700, width: 12, flexShrink: 0 }}>{glyph}</span>
+      <span style={{ minWidth: 0 }}>
+        <span style={{ fontWeight: 650, color: 'var(--text-strong)' }}>{word}</span>
+        <span style={{ display: 'block', color: 'var(--text)' }}>{children}</span>
+      </span>
+    </div>
+  )
+}
+
 // ── one section ───────────────────────────────────────────────────────────
 const FIT_LOOK: Record<Fit, { glyph: string; word: string; ink: string; bg: string }> = {
   FITS: { glyph: '✓', word: 'Fits whole', ink: 'var(--green)', bg: 'var(--green-bg)' },
@@ -463,14 +693,16 @@ function useDrop(onDrop: (table: string) => void, enabled: boolean) {
 }
 
 function SectionCard({
-  draft, index, count, weights, budget, problem, mayEdit, splitting, autoFocus, listId,
-  onEdit, onMove, onAdd, onReorder, onDelete, onSplit,
+  draft, index, count, weights, budget, synced, problem, mayEdit, splitting, autoFocus,
+  listId, onEdit, onMove, onAdd, onReorder, onDelete, onSplit,
 }: {
   draft: SectionDraft
   index: number
   count: number
   weights: Map<string, number>
   budget: number
+  /** When the current snapshot landed, for a member that is not in it. */
+  synced: string
   problem: string | null
   mayEdit: boolean
   splitting: boolean
@@ -485,6 +717,7 @@ function SectionCard({
 }) {
   const fit = fitOf(draft.tables, weights, budget)
   const chars = sizeOf(draft.tables, weights)
+  const gone = draft.tables.filter((t) => !weights.has(t))
   const [adding, setAdding] = useState('')
   const [open, setOpen] = useState(false)
   const drop = useDrop((table) => onMove(table, draft.key), mayEdit)
@@ -593,9 +826,20 @@ function SectionCard({
         tables={shownTables}
         weights={weights}
         mayEdit={mayEdit}
+        synced={synced}
         onRemove={(table) => onMove(table, UNASSIGNED_KEY)}
         empty={mayEdit ? 'Drag tables here, or add one by name below.' : 'No tables.'}
       />
+      {gone.length > 0 && (
+        <span style={{ fontSize: 12, lineHeight: 1.55, color: 'var(--text-dim)' }}>
+          <span aria-hidden style={{ color: 'var(--amber)' }}>⚠ </span>
+          {gone.length} table{gone.length === 1 ? '' : 's'} here{' '}
+          {gone.length === 1 ? 'is' : 'are'} not in the current schema
+          {synced && <> — re-synced {synced}</>}. Kept, struck through, and never
+          sent: a table the snapshot does not have cannot be retrieved and
+          cannot pass the guard.
+        </span>
+      )}
       {draft.tables.length > CHIPS_SHOWN && (
         <QuietAction onClick={() => setOpen((v) => !v)} style={{ alignSelf: 'flex-start' }}>
           {open ? 'Show fewer' : `Show all ${draft.tables.length}`}
@@ -643,13 +887,17 @@ function SectionCard({
 }
 
 function TableChips({
-  tables, weights, mayEdit, onRemove, empty,
+  tables, weights, mayEdit, onRemove, empty, synced = '', fresh,
 }: {
   tables: string[]
   weights: Map<string, number>
   mayEdit: boolean
   onRemove?: (table: string) => void
   empty: string
+  /** When the snapshot landed, for the member it no longer holds. */
+  synced?: string
+  /** Tables the schema has gained since these sections were saved. */
+  fresh?: Set<string>
 }) {
   if (tables.length === 0) {
     return <span style={{ fontSize: 12.5, color: 'var(--text-faint)' }}>{empty}</span>
@@ -658,6 +906,7 @@ function TableChips({
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
       {tables.map((table) => {
         const missing = !weights.has(table)
+        const isNew = !missing && !!fresh?.has(table)
         return (
           <span
             key={table}
@@ -668,7 +917,14 @@ function TableChips({
               e.dataTransfer.setData('text/plain', table)
               e.dataTransfer.effectAllowed = 'move'
             }}
-            title={missing ? 'Not in the current schema — kept, never sent' : table}
+            title={
+              missing
+                ? `Not in the current schema${synced ? ` — re-synced ${synced}` : ''}. `
+                  + 'Kept, never sent.'
+                : isNew
+                  ? `${table} — new since these sections were saved, and in no section`
+                  : table
+            }
             dir="ltr"
             style={{
               display: 'inline-flex', alignItems: 'center', gap: 4,
@@ -684,6 +940,18 @@ function TableChips({
             }}
           >
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{table}</span>
+            {isNew && (
+              <span
+                style={{
+                  fontSize: 9.5, fontWeight: 700, letterSpacing: '0.04em',
+                  textTransform: 'uppercase', padding: '1px 5px', borderRadius: 4,
+                  color: 'var(--accent)', background: 'var(--accent-bg)',
+                  flexShrink: 0,
+                }}
+              >
+                new
+              </span>
+            )}
             {mayEdit && onRemove && (
               <button
                 type="button"
@@ -707,15 +975,23 @@ function TableChips({
 }
 
 function UnassignedCard({
-  tables, mayEdit, onMove,
+  tables, fresh, mayEdit, onMove,
 }: {
   tables: string[]
+  /** Tables the schema has gained since the sections were saved. */
+  fresh: Set<string>
   mayEdit: boolean
   onMove: (table: string, to: string) => void
 }) {
   const drop = useDrop((table) => onMove(table, UNASSIGNED_KEY), mayEdit)
   const [open, setOpen] = useState(false)
-  const shownTables = open ? tables : tables.slice(0, CHIPS_SHOWN)
+  // New tables first. The card shows the first `CHIPS_SHOWN` of what can be a
+  // very long list, and a marker nobody scrolls to is a marker nobody sees.
+  const ordered = useMemo(
+    () => [...tables].sort((a, b) => Number(fresh.has(b)) - Number(fresh.has(a))),
+    [tables, fresh],
+  )
+  const shownTables = open ? ordered : ordered.slice(0, CHIPS_SHOWN)
   const weights = useMemo(() => new Map(tables.map((t) => [t, 1] as const)), [tables])
   return (
     <section
@@ -743,6 +1019,7 @@ function UnassignedCard({
         tables={shownTables}
         weights={weights}
         mayEdit={mayEdit}
+        fresh={fresh}
         empty="Every table is in a section."
       />
       {tables.length > CHIPS_SHOWN && (

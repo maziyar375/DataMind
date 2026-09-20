@@ -20,6 +20,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -94,6 +95,17 @@ class SectionSet:
     budget_chars: int
     snapshot_version: int
     has_snapshot: bool
+    #: Tables the current snapshot has, in no section, and **not in the
+    #: snapshot these sections were last saved against** — the other half of
+    #: drift. A section can only be wrong about a table it was never shown,
+    #: so the screen marks them rather than quietly leaving them in the pile.
+    #: Empty on a proposal, and whenever the saved snapshot version is the
+    #: current one.
+    new_tables: list[str] = field(default_factory=list)
+    #: When the snapshot being measured against landed, for the sentence a
+    #: struck-through member carries: *"not in the current schema — re-synced
+    #: 12 Sept"*. None when there is no snapshot.
+    synced_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +134,7 @@ class SectionService:
                 for row in rows
             ],
             saved=bool(rows),
+            since=await self._tables_at(connection.id, rows, snapshot),
         )
 
     async def propose(
@@ -277,6 +290,7 @@ class SectionService:
         *,
         saved: bool,
         universe: set[str] | None = None,
+        since: set[str] | None = None,
     ) -> SectionSet:
         tables = snapshot["tables"]
         by_key = {algo.key(t): t for t in tables}
@@ -294,18 +308,21 @@ class SectionService:
                 missing=[m for m in members if m not in by_key],
             ))
 
+        unassigned = [
+            algo.key(t) for t in tables
+            if algo.key(t) not in placed
+            and (universe is None or algo.key(t) in universe)
+        ]
         return SectionSet(
             saved=saved,
             sections=views,
-            unassigned=[
-                algo.key(t) for t in tables
-                if algo.key(t) not in placed
-                and (universe is None or algo.key(t) in universe)
-            ],
+            unassigned=unassigned,
             catalog=[(algo.key(t), table_chars(t)) for t in tables],
             budget_chars=budget,
             snapshot_version=snapshot["version"],
             has_snapshot=bool(tables),
+            new_tables=[] if since is None else [t for t in unassigned if t not in since],
+            synced_at=snapshot["synced_at"],
         )
 
     async def _rows(self, connection_id: UUID) -> list[ConnectionSection]:
@@ -316,6 +333,37 @@ class SectionService:
         )
         return list(result.scalars())
 
+    async def _tables_at(
+        self,
+        connection_id: UUID,
+        rows: Sequence[ConnectionSection],
+        current: dict[str, Any],
+    ) -> set[str] | None:
+        """The tables the snapshot held when these sections were last saved.
+
+        `None` when the question cannot be answered — nothing saved, no
+        version stamped, the sections are current, or the snapshot they were
+        saved against has since been pruned — and the screen then marks
+        nothing rather than marking everything. The newest stamp among the
+        sections, not the oldest: a set saved in two sittings is as new as its
+        last edit, and the older halves were looked at then too.
+        """
+        stamps = [row.schema_version for row in rows if row.schema_version]
+        if not stamps or max(stamps) >= current["version"]:
+            return None
+        result = await self._db.execute(
+            select(SchemaSnapshotRow.tables)
+            .where(
+                SchemaSnapshotRow.connection_id == connection_id,
+                SchemaSnapshotRow.version == max(stamps),
+            )
+            .limit(1)
+        )
+        was = result.scalar_one_or_none()
+        if was is None:
+            return None
+        return {algo.key(t) for t in was}
+
     async def _snapshot(self, connection_id: UUID) -> dict[str, Any]:
         result = await self._db.execute(
             select(SchemaSnapshotRow)
@@ -325,10 +373,17 @@ class SectionService:
         )
         row = result.scalar_one_or_none()
         if row is None:
-            return {"tables": [], "relationships": [], "dialect": "postgres", "version": 0}
+            return {
+                "tables": [], "relationships": [], "dialect": "postgres",
+                "version": 0, "synced_at": None,
+            }
         return {
             "tables": row.tables or [],
             "relationships": row.relationships or [],
             "dialect": row.dialect,
             "version": row.version,
+            # When *this* snapshot landed, which is the date a struck-through
+            # member is explained by. `connections.last_synced_at` is the same
+            # moment for the newest one and says nothing about an older.
+            "synced_at": row.created_at,
         }

@@ -625,10 +625,38 @@ function TablesChip({ names }: { names: string[] }) {
   )
 }
 
+/**
+ * *Answered from **Sales*** — which part of the database this turn was
+ * routed to.
+ *
+ * The one chip here that is about a decision rather than a measurement, and
+ * the reason it is shown at all: a router that picks the wrong section fails
+ * by answering confidently from the wrong tables, which is the worst shape a
+ * failure can have. Showing the pick is what turns that into something a
+ * reader can notice — and *Ask within…* in the composer is what they do about
+ * it. Absent on a connection with no sections, so nothing changes there.
+ */
+function SectionChip({ names }: { names: string[] }) {
+  const label =
+    names.length === 1
+      ? names[0]
+      : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`
+  return (
+    <Chip>
+      Answered from{' '}
+      <span style={{ color: 'var(--text)', fontWeight: 600 }}>{label}</span>
+    </Chip>
+  )
+}
+
 export function RunMetadata({ run }: { run: RunDetail }) {
   const tables = run.queries.at(-1)?.referenced_tables ?? []
+  const sections = run.retrieval_sections ?? []
   const chips: React.ReactNode[] = []
 
+  if (sections.length > 0) {
+    chips.push(<SectionChip key="section" names={sections} />)
+  }
   if (tables.length > 0) {
     chips.push(
       <TablesChip key="tables" names={tables.map((t) => t.split('.').pop() ?? t)} />,

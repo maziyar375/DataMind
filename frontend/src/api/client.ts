@@ -922,6 +922,10 @@ export const conversations = {
       // "Answer this without consulting the knowledge store." Sent by
       // *Generate a fresh answer instead*, after the override is recorded.
       skip_templates?: boolean
+      // *Ask within…* — a section name, or `NONE` for the whole database.
+      // Either way the run skips its routing call: this is the reader
+      // answering the question that call asks.
+      scope?: string
     },
   ) => post<{ run_id: string; message_id: string }>(`/conversations/${id}/messages`, payload),
   suggestions: (id: string) =>

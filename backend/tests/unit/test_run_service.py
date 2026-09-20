@@ -64,6 +64,9 @@ def test_a_chat_run_passes_them_to_the_pipeline() -> None:
     `execute_run` needs a connector, a gateway and a live snapshot to call."""
     source = inspect.getsource(run_service.RunService.execute_run)
     assert "sections=await load_sections(self._db, connection.id)" in source
+    # Phase 3: the reader's own choice, and where the thread already is.
+    assert "scope_choice=run.scope_choice" in source
+    assert "current_sections=await self._current_sections(run)" in source
 
 
 # ── the draft path, called ───────────────────────────────────────────────

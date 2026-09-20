@@ -165,7 +165,9 @@ backend/app/
                   no module per node. `match` is the short-circuit: a taught
                   question skips five nodes and lands on the guard. `scope`
                   picks the section of a sectioned database a question is
-                  about — SKIPPED, with no model call, when there are none),
+                  about — SKIPPED, with no model call, when there are none,
+                  and no call either when the asker picked one themselves in
+                  the composer; what it chose is on `runs.retrieval_*`),
                   contracts.py (the node signature),
                   metadata.py (which tables a schema question is about, and the
                   rendered fallback answer), sections.py (dividing a snapshot
@@ -328,9 +330,13 @@ frontend/src/
                             (ask or write the SQL; one guard check for both),
                             sections.tsx (a connection's Sections tab: the
                             proposal, table chips dragged between cards, the
-                            fits-whole / too-large badge) + sections-model.ts
+                            fits-whole / too-large badge, and drift after a
+                            sync — a member the schema lost struck through, a
+                            table it gained marked *new*, and Re-propose shown
+                            as a diff that never applies itself) +
+                            sections-model.ts
                             (its arithmetic — every table in one place, sizes
-                            in `retrieve`'s units — DOM-free,
+                            in `retrieve`'s units, and that diff — DOM-free,
                             `npm run test:sections`),
                             knowledge-queue.ts (how much curation work is
                             waiting, per connection and in total — DOM-free,

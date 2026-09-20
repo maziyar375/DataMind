@@ -191,6 +191,16 @@ class AsyncSessionShim:
     async def delete(self, obj: Any) -> None:
         self._session.delete(obj)
 
+    # A service that owns its transaction ends it — `run_service._finalise` is
+    # the first caller here that does. The `db` fixture rolls back and empties
+    # the tables afterwards either way, so a test that commits is as isolated
+    # as one that does not.
+    async def commit(self) -> None:
+        self._session.commit()
+
+    async def rollback(self) -> None:
+        self._session.rollback()
+
 
 @pytest.fixture(scope="module")
 def engine() -> sa.Engine:

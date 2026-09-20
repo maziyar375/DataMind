@@ -229,3 +229,99 @@ export function reorder(drafts: SectionDraft[], key: string, delta: -1 | 1): Sec
   next.splice(to, 0, moved)
   return next
 }
+
+
+// ── re-proposing over a saved set ─────────────────────────────────────────
+/**
+ * What adopting a fresh proposal would change, against what is on screen.
+ *
+ * A re-proposal after a sync is the only way back to a complete division once
+ * the schema has moved, and it is also the one action here that can throw
+ * away somebody's curation — the descriptions above all, which are what the
+ * router actually reads. So it is shown as a diff and applied only if asked:
+ * *"it never applies itself"* (`docs/plans/retrieval-sections.md` §1.4).
+ */
+export interface ProposalDiff {
+  /** Sections the proposal has and this set does not, with their size. */
+  added: { name: string; tables: number }[]
+  /** Sections this set has and the proposal does not. Their tables are in
+   * `moved`, so nothing disappears silently. */
+  removed: { name: string; tables: number }[]
+  /** Every table that would change home, in catalog order. */
+  moved: { table: string; from: string; to: string }[]
+  /** How many tables would stay exactly where they are. */
+  unchanged: number
+}
+
+function homes(sets: SectionLike[]): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const section of sets) {
+    for (const table of section.tables) out.set(table, section.name)
+  }
+  return out
+}
+
+export function diffProposal(
+  current: SectionLike[],
+  proposed: SectionLike[],
+  catalog: string[],
+): ProposalDiff {
+  const before = homes(current)
+  const after = homes(proposed)
+  const names = new Set(current.map((s) => s.name.trim().toLowerCase()))
+  const proposedNames = new Set(proposed.map((s) => s.name.trim().toLowerCase()))
+
+  const moved: ProposalDiff['moved'] = []
+  let unchanged = 0
+  // The catalog is every table the snapshot has, in its order. A member of a
+  // section that the schema no longer has is in neither map and is not part
+  // of this comparison: it is drift, and a proposal has nothing to say about
+  // a table it cannot see.
+  for (const table of catalog) {
+    const from = before.get(table) ?? UNASSIGNED
+    const to = after.get(table) ?? UNASSIGNED
+    if (from === to) unchanged += 1
+    else moved.push({ table, from, to })
+  }
+
+  return {
+    added: proposed
+      .filter((s) => !names.has(s.name.trim().toLowerCase()))
+      .map((s) => ({ name: s.name, tables: s.tables.length })),
+    removed: current
+      .filter((s) => !proposedNames.has(s.name.trim().toLowerCase()))
+      .map((s) => ({ name: s.name, tables: s.tables.length })),
+    moved,
+    unchanged,
+  }
+}
+
+/** Whether a proposal would change anything at all. */
+export function sameDivision(diff: ProposalDiff): boolean {
+  return diff.added.length === 0 && diff.removed.length === 0 && diff.moved.length === 0
+}
+
+/**
+ * The proposal, as drafts, keeping what the current set can lend it.
+ *
+ * A section the proposal names the same thing keeps its **id** — so adopting
+ * one is an edit to that row rather than a delete and a create, and its
+ * `created_at` survives — and keeps a **description somebody wrote**, because
+ * the generated sentence is the one thing a curator's is always better than.
+ */
+export function adoptProposal(
+  current: SectionDraft[],
+  proposed: SectionLike[],
+): SectionDraft[] {
+  const byName = new Map(current.map((d) => [d.name.trim().toLowerCase(), d]))
+  return proposed.map((section) => {
+    const existing = byName.get(section.name.trim().toLowerCase())
+    return {
+      key: existing?.key ?? freshKey(),
+      id: existing?.id ?? null,
+      name: section.name,
+      description: existing?.description.trim() || section.description,
+      tables: [...section.tables],
+    }
+  })
+}

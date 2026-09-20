@@ -84,6 +84,8 @@ def _world(
         connection_id=None if released == "connection" else conn_id,
         llm_config_id=None if released == "llm" else llm_id,
         status=status, skip_templates=True,
+        # *Ask within…*, as the reader set it before the attempt that failed.
+        scope_choice="Sales",
     )
 
     rows: dict[Any, Any] = {run.id: run, conn_id: connection, llm_id: llm}
@@ -125,6 +127,9 @@ async def test_the_attempt_is_reproduced_not_re_resolved() -> None:
     assert retried.connection_id == run.connection_id
     assert retried.llm_config_id == run.llm_config_id
     assert retried.skip_templates == run.skip_templates
+    # The section the reader chose is one of those conditions: retrying with
+    # the whole database, after they asked within Sales, is a different run.
+    assert retried.scope_choice == run.scope_choice
     assert retried.model_snapshot["connection_name"] == "Aurora"
 
 

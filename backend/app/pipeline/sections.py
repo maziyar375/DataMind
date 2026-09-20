@@ -51,9 +51,13 @@ _ITEM_CHARS = 140
 #: The bucket every table in no section is shown in. Not a section — never
 #: routed to — so a person may not call a section by its name.
 UNASSIGNED = "Unassigned"
+#: The word the router replies with when no section fits — and the value
+#: *Ask within…* sends for **Whole database**, which is the same decision made
+#: by a person instead of a model. A section may not be called this.
+WHOLE_DATABASE = "NONE"
 #: Names a section may not take: the bucket above, and the word the router
 #: replies with when no section fits.
-RESERVED_NAMES = frozenset({UNASSIGNED.lower(), "none"})
+RESERVED_NAMES = frozenset({UNASSIGNED.lower(), WHOLE_DATABASE.lower()})
 
 #: Schema names that say nothing about what is in them.
 _GENERIC_SCHEMAS = frozenset({"public", "dbo", "main", "default", ""})

@@ -87,14 +87,21 @@ def _state(question: str = "revenue by customer", intent: str = "ANALYTICAL") ->
     return state
 
 
-def _deps(gateway: Any, sections: list[SectionSpec] | None = SECTIONS) -> NodeDeps:
+def _deps(
+    gateway: Any,
+    sections: list[SectionSpec] | None = SECTIONS,
+    *,
+    choice: str | None = None,
+    current: list[str] | None = None,
+) -> NodeDeps:
     async def emit(_t: str, _d: Any) -> None:
         return None
 
     return NodeDeps(
         llm_gateway=gateway, llm=None, connector=None,  # type: ignore[arg-type]
         snapshot=SNAPSHOT, history=[], policy=None,  # type: ignore[arg-type]
-        emit=emit, sections=sections,
+        emit=emit, sections=sections, scope_choice=choice,
+        current_sections=current or [],
     )
 
 
@@ -152,12 +159,138 @@ async def test_a_long_description_is_clipped_in_the_prompt() -> None:
     assert len(line) < 420 and line.endswith("…")
 
 
-def test_the_follow_up_prompt_names_the_current_section() -> None:
-    """Stickiness is Phase 3; the prompt it will send exists now, as a second
-    prompt rather than an empty slot in the first."""
-    rendered = SCOPE_SYSTEM_WITH_CURRENT.format(sections="- Sales — x", current="Sales")
-    assert "Currently answering from: Sales" in rendered
-    assert "Currently answering" not in SCOPE_SYSTEM.format(sections="- Sales — x")
+# ── stickiness: a follow-up keeps its section ────────────────────────────
+async def test_a_follow_up_is_told_where_the_thread_is() -> None:
+    """"And by month?" names no table and no section. Without the line below
+    it routes on nine characters; with it, the thread stays where it was."""
+    gateway = Router("Sales")
+    state = _state("and by month?")
+    await scope(state, _deps(gateway, current=["Sales"]))
+
+    (system, _user), = gateway.messages
+    assert system.content == SCOPE_SYSTEM_WITH_CURRENT.format(
+        sections="\n".join([
+            "- Sales — Orders and their lines.",
+            "- People — Customers and where they live.",
+            "- Catalog — Products and their tags.",
+        ]),
+        current="Sales",
+    )
+    assert state.scope_sections == ["Sales"]
+
+
+async def test_a_first_question_sends_the_prompt_it_always_sent() -> None:
+    """Two prompts rather than one with an empty slot: the first question of a
+    conversation sends the bytes the first question of a conversation sends."""
+    gateway = Router("Sales")
+    await scope(_state(), _deps(gateway))
+    assert "Currently answering" not in gateway.messages[0][0].content
+
+
+async def test_a_current_section_that_is_gone_is_not_mentioned() -> None:
+    """Deleted between two questions, or emptied by a re-sync. The follow-up
+    is routed as a first question rather than pointed at nothing."""
+    gateway = Router("Sales")
+    await scope(_state("and by month?"), _deps(gateway, current=["Archive", "Gone"]))
+    assert "Currently answering" not in gateway.messages[0][0].content
+
+
+async def test_the_thread_may_still_leave_its_section() -> None:
+    """Stickiness is a line in a prompt, not a lock: a follow-up that plainly
+    changes subject changes section."""
+    state = _state("which products are tagged seasonal?")
+    await scope(state, _deps(Router("Catalog"), current=["Sales"]))
+    assert state.scope_sections == ["Catalog"]
+
+
+async def test_a_reply_of_none_still_falls_open_with_a_current_section() -> None:
+    """The fail-open table is unchanged by stickiness. A router that says no
+    section fits is answered from the whole database, not from the last one."""
+    state = _state("how many rows are in this database?")
+    result = await scope(state, _deps(Router("NONE"), current=["Sales"]))
+
+    assert (result.status, result.detail) == ("SKIPPED", "No section matched")
+    assert state.scope_sections == [] and state.scope_tables == []
+
+
+# ── the override: a person outranks the router ───────────────────────────
+async def test_a_chosen_section_is_used_and_costs_nothing() -> None:
+    """*Ask within… People*. The call this node exists to make is the one
+    thing the choice replaces."""
+    gateway = Router("Sales")  # would pick something else, and is never asked
+    state = _state()
+    result = await scope(state, _deps(gateway, choice="People", current=["Sales"]))
+
+    assert result.status == "OK"
+    assert result.detail == "People · 2 tables — your choice"
+    assert state.scope_sections == ["People"]
+    assert state.scope_tables == ["public.customers", "public.customer_addresses"]
+    assert gateway.messages == [], "a choice makes no model call"
+    assert "scope" not in state.node_usage, "and so costs nothing"
+
+    await retrieve(state, _deps(gateway))
+    assert state.context is not None
+    assert state.context.strategy == "SECTION_SNAPSHOT"
+
+
+async def test_the_choice_is_read_the_way_a_reply_is() -> None:
+    """Case is not a second section: the picker sends what it was given, and
+    a name differing only in case is one section (`uq_connection_sections_name`)."""
+    state = _state()
+    await scope(state, _deps(Router("Sales"), choice=" people "))
+    assert state.scope_sections == ["People"]
+
+
+async def test_choosing_the_whole_database_narrows_nothing() -> None:
+    """The other half of the control, and the reason it is worth having: a
+    reader who can see the router picked wrongly can turn it off for one
+    question."""
+    gateway = Router("Sales")
+    state = _state()
+    result = await scope(state, _deps(gateway, choice="NONE"))
+
+    assert (result.status, result.detail) == ("SKIPPED", "Whole database — your choice")
+    assert state.scope_sections == [] and state.scope_tables == []
+    assert gateway.messages == []
+
+    await retrieve(state, _deps(gateway))
+    assert state.context is not None
+    assert [f"public.{t['name']}" for t in state.context.tables] == ALL
+    assert state.context.strategy == "FULL_SNAPSHOT"
+
+
+async def test_a_chosen_section_that_is_gone_falls_open_rather_than_guessing() -> None:
+    """Deleted, renamed, or every table in it left the schema, between the
+    picker being drawn and the question being executed. The choice was to
+    narrow; we do not narrow somewhere else instead."""
+    gateway = Router("Sales")
+    state = _state()
+    result = await scope(state, _deps(gateway, choice="Marketing"))
+
+    assert result.status == "SKIPPED"
+    assert result.detail == (
+        "Skipped — the section you chose is no longer in this database"
+    )
+    assert state.scope_sections == []
+    assert gateway.messages == [], "still no call: the reader had already decided"
+
+
+async def test_a_schema_question_ignores_the_choice() -> None:
+    """A METADATA question is about the whole database however it was sent —
+    `census` states a total, and a total over one section is a wrong one."""
+    state = _state(intent="METADATA")
+    result = await scope(state, _deps(Router("Sales"), choice="People"))
+
+    assert result.status == "SKIPPED"
+    assert result.detail == "Skipped — a schema question is about the whole database"
+    assert state.scope_tables == []
+
+
+async def test_a_choice_on_a_connection_without_sections_is_still_silent() -> None:
+    gateway = Router("Sales")
+    result = await scope(_state(), _deps(gateway, None, choice="People"))
+    assert result.status == "SKIPPED" and result.detail is None
+    assert gateway.messages == []
 
 
 @pytest.mark.parametrize(("reply", "picked"), [

@@ -977,6 +977,37 @@ class Run(Base, TimestampMixin):
     skip_templates: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false()
     )
+    # ── what retrieval did (retrieval-sections Phase 3) ──────────────────
+    #
+    # Four facts about the schema block this turn was answered from, written
+    # once in `_finalise`. They are what turns an argument about retrieval
+    # into arithmetic: the distribution of strategies over real questions, and
+    # what the block actually cost, are not otherwise answerable from any
+    # table here — the step trail holds a sentence, not a number.
+    #
+    # All nullable with no backfill, because a run from before this genuinely
+    # has no answer and a zero would be a lie.
+    #
+    # FULL_SNAPSHOT | SECTION_SNAPSHOT | RANKED_MATCH | SCHEMA_QUESTION.
+    retrieval_strategy: Mapped[str | None] = mapped_column(String(30))
+    #: The section names `scope` chose, in its order; empty when it did not
+    #: run or fell open. **Names, not ids**: deleting a section must not
+    #: rewrite the history of the runs it answered, and
+    #: `semantic_layer_version` above is the precedent for recording which
+    #: artifact a run used as a value rather than as a reference.
+    retrieval_sections: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    #: How many tables reached the block, and what it cost rendered — under
+    #: the disclosure policy this run ran with, which is the string the model
+    #: was actually sent.
+    retrieval_tables: Mapped[int | None] = mapped_column(Integer)
+    retrieval_chars: Mapped[int | None] = mapped_column(Integer)
+    #: "Ask within…" — the section the person chose before sending, or
+    #: `NONE` for *Whole database*. An **input**, unlike the four above:
+    #: durable for the same reason `skip_templates` is, since the replica
+    #: that executes this run is not necessarily the one that created it. A
+    #: choice skips the routing call entirely, and `retrieval_sections`
+    #: records what it produced.
+    scope_choice: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

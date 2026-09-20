@@ -601,6 +601,10 @@ export interface SectionSet {
   budget_chars: number
   snapshot_version: number
   has_snapshot: boolean
+  /** Unassigned tables the schema has gained since these sections were saved. */
+  new_tables?: string[]
+  /** When the snapshot being measured against landed. */
+  synced_at?: string | null
 }
 
 export interface SectionWrite {
@@ -1370,6 +1374,16 @@ export interface RunDetail {
    */
   prompt_tokens?: number | null
   completion_tokens?: number | null
+  /**
+   * The sections this turn was answered from, in the order the pick named
+   * them — what the *Answered from* chip shows.
+   *
+   * Empty on a connection with no sections, on a question about the database
+   * as a whole, on a turn from before the columns existed, and on a withheld
+   * one: a section name is a name somebody gave part of a database this
+   * reader may not see.
+   */
+  retrieval_sections?: string[]
   steps: RunStep[]
   artifacts: Artifact[]
   queries: GeneratedQuery[]

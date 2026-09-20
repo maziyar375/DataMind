@@ -8,8 +8,9 @@
  * the person has finished editing.
  */
 import {
-  applySplit, fitOf, formatChars, homeOf, moveTable, nameProblem, newName, problems,
-  reorder, sameSet, sizeOf, toDrafts, toWrite, unassignedOf,
+  adoptProposal, applySplit, diffProposal, fitOf, formatChars, homeOf, moveTable,
+  nameProblem, newName, problems, reorder, sameDivision, sameSet, sizeOf, toDrafts,
+  toWrite, unassignedOf,
 } from './sections-model.ts'
 import type { SectionDraft } from './sections-model.ts'
 
@@ -120,6 +121,50 @@ check('what the proposal could not place stays in the original',
     [null, 'Order 2', ['public.orders', 'public.order_items']],
     ['b', 'Order', ['public.customers']],
   ])
+
+console.log('\n— re-proposing over a saved set —')
+const PROPOSED = [
+  // Same name, one table more: `public.tags` would move in from Unassigned.
+  { id: null, name: 'Sales', description: 'Generated.', tables: ['public.orders', 'public.order_items', 'public.tags'] },
+  // A section nobody has, holding a table that is in People today.
+  { id: null, name: 'Audit', description: 'Logs.', tables: ['public.audit', 'public.customers'] },
+]
+const diff = diffProposal(drafts(), PROPOSED, CATALOG)
+check('a section the set does not have is added', diff.added, [{ name: 'Audit', tables: 2 }])
+check('a section the proposal does not have is removed', diff.removed, [{ name: 'People', tables: 1 }])
+check('every table that changes home is named, in catalog order', diff.moved, [
+  { table: 'public.customers', from: 'People', to: 'Audit' },
+  { table: 'public.tags', from: 'Unassigned', to: 'Sales' },
+  { table: 'public.audit', from: 'Unassigned', to: 'Audit' },
+])
+check('and the rest are counted, not listed', diff.unchanged, 2)
+check('a proposal that changes nothing says so',
+  sameDivision(diffProposal(drafts(), [
+    { id: null, name: 'Sales', description: 'x', tables: ['public.orders', 'public.order_items'] },
+    { id: null, name: 'People', description: 'y', tables: ['public.customers'] },
+  ], CATALOG)), true)
+check('a diff with a move does not', sameDivision(diff), false)
+// A member the schema no longer has is drift, not a move: a proposal reads
+// the current snapshot and has nothing to say about a table it cannot see.
+const withGhost = toDrafts([
+  { id: 'a', name: 'Sales', description: '', tables: ['public.orders', 'public.gone'] },
+])
+const ghostDiff = diffProposal(
+  withGhost,
+  [{ id: null, name: 'Sales', description: '', tables: ['public.orders'] }],
+  CATALOG,
+)
+check('a table the snapshot lost is not reported as moving',
+  ghostDiff.moved.map((m) => m.table), [])
+check('and dropping it is not reported as a change at all', sameDivision(ghostDiff), true)
+
+const adopted = adoptProposal(drafts(), PROPOSED)
+check('a section with the same name keeps its id, so a save edits its row',
+  [adopted[0].id, adopted[0].key], ['a', 'a'])
+check('and keeps the description somebody wrote', adopted[0].description, 'Orders.')
+check('a section nobody wrote takes the generated one',
+  [adopted[1].id, adopted[1].description], [null, 'Logs.'])
+check('adopting places every table exactly once', unassignedOf(adopted, CATALOG), [])
 
 console.log(failures === 0 ? '\nall passed' : `\n${failures} failed`)
 // `throw`, not `process.exit` — see the note at the end of every other suite.

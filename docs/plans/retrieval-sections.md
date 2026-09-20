@@ -835,8 +835,55 @@ Tick a box in the commit that lands the work, never ahead of it.
 >   them).
 
 ### Phase 3 — Make it trustworthy
-- [ ] Stickiness across a follow-up
-- [ ] The section chip on an answer
-- [ ] *Ask within…* override, skipping the call
-- [ ] Drift: flagged members, `new` markers, Re-propose diff
-- [ ] Telemetry columns + `0036`, and the first distribution read off them
+- [x] Stickiness across a follow-up · *`test_scope_node.py`, and a live pair*
+- [x] The section chip on an answer · *Playwright, both themes*
+- [x] *Ask within…* override, skipping the call · *`test_scope_node.py` + live*
+- [x] Drift: flagged members, `new` markers, Re-propose diff · *`test_sections_drift.py`*
+- [x] Telemetry columns + `0036`, and the first distribution read off them
+
+> Landed 2026-09-20. What each box was proved with, and the five things the
+> plan left open:
+>
+> - **Stickiness reads the telemetry it just added.** `Currently answering
+>   from` is filled by `RunService._current_sections`: the last run on this
+>   conversation *and* this connection **that recorded a strategy**. A run that
+>   crashed before `retrieve` recorded none and says nothing about where the
+>   thread is; a run answered from the whole database recorded one and
+>   correctly clears the current section. Proved live on the clone: *"How many
+>   stores are there per region?"* within **Stores**, then *"and by format?"* —
+>   four words naming nothing — routed, one call, and stayed in Stores.
+> - **The override is `runs.scope_choice`, a fifth column in `0036`.** An
+>   input, not a measurement, and durable for the reason `skip_templates` is:
+>   the replica that executes a run is not the one that accepted it. `NONE` —
+>   already reserved as a section name — is *Whole database*, so the picker has
+>   one vocabulary with the router. A retry carries the choice; a schema
+>   question ignores it; a chosen section that has since been deleted **falls
+>   open and still makes no call**, because the choice was to narrow and we do
+>   not narrow somewhere else instead.
+> - **Where the picker went.** Not into the composer's hint line: that line is
+>   `opacity: 0` and `pointer-events: none` until the box is engaged — right
+>   for a keyboard tip, useless for a control somebody has to find. It sits in
+>   a row of its own above the box, and it is drawn only where the connection
+>   has sections, so an undivided database sees the composer it always saw.
+> - **Drift needed one number nothing stored.** "New since these sections were
+>   saved" is answered by reading the snapshot at `max(schema_version)` over
+>   the saved rows and diffing its table names. No stamp, no older snapshot, or
+>   sections already current → **nothing is marked**, because marking
+>   everything is an answer and a wrong one. A save re-stamps, so the markers
+>   clear.
+> - **Re-propose is a diff and applies nothing.** The comparison is pure and
+>   tested (`diffProposal` in `sections-model.ts`); adopting keeps the id *and*
+>   the description of any section whose name survives, so the one thing
+>   curation buys is the one thing a re-proposal does not take away.
+> - **The distribution, on a clone of a real database** — which is the number
+>   mvp2 §1.2 could not answer:
+>
+>   | strategy | runs | avg tables | avg chars | max chars |
+>   |---|--:|--:|--:|--:|
+>   | (not recorded) | 65 | – | – | – |
+>   | SECTION_SNAPSHOT | 5 | 5 | 4,430 | 8,344 |
+>
+>   Sixty-five runs predate the columns and read as *no measurement* rather
+>   than as zero, which is the whole reason they are nullable.
+> - **Still unmeasured by the eval suite**, as §6.3 says: the fixtures have no
+>   sections, and `NodeDeps.sections` stays None there by construction.

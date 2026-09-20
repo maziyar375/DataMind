@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from app.core.clock import utcnow
@@ -54,8 +54,9 @@ from app.pipeline.prompts import (
     ROUTE_SYSTEM,
     ROUTE_SYSTEM_WITH_HISTORY,
     SCOPE_SYSTEM,
+    SCOPE_SYSTEM_WITH_CURRENT,
 )
-from app.pipeline.sections import SectionSpec
+from app.pipeline.sections import WHOLE_DATABASE, SectionSpec
 from app.pipeline.state import (
     ClarificationRequest,
     ExecutionResult,
@@ -139,6 +140,26 @@ class NodeDeps:
     # eval runner leaves it None, so the suite's baseline stays comparable by
     # construction rather than by care.
     sections: list[SectionSpec] | None = None
+    # *Ask within…* — the section this asker chose before sending, or
+    # `WHOLE_DATABASE` for "the whole database, and do not route". A person's
+    # answer to the question `scope` asks a model, so the node takes it and
+    # makes no call: the one row the research matrix marks `○` for this
+    # product is *the user can correct the retrieval decision*, and once
+    # sections exist it is a dropdown (plan §7).
+    #
+    # None is nobody having chosen, which is every run before this and every
+    # run from the draft path.
+    scope_choice: str | None = None
+    # The sections the previous turn of this conversation was answered from,
+    # passed to the router as `Currently answering from`. A follow-up carries
+    # almost none of its own subject — "and by month?" names no table and no
+    # section — so without this the second question of a thread routes on nine
+    # characters and lands somewhere else than the first.
+    #
+    # Empty on a first question, on the draft path, and whenever the previous
+    # turn was answered from the whole database: each of those sends the
+    # prompt the first question of a conversation sends.
+    current_sections: list[str] = field(default_factory=list)
 
 
 # ── route ────────────────────────────────────────────────────────────────
@@ -434,6 +455,19 @@ async def scope(state: RunState, deps: NodeDeps) -> NodeResult:
     statement over a table outside the chosen section validates exactly as it
     always did (plan D2).
 
+    **A person outranks the router.** *Ask within…* in the composer sets
+    `deps.scope_choice`, and a choice is taken as made: the section is used
+    and **no call is made at all**, or, for *Whole database*, nothing is
+    narrowed and no call is made either. It is the one control that lets
+    somebody correct a retrieval decision instead of rephrasing the question
+    until it lands (plan §7).
+
+    **A follow-up keeps its section.** The sections the previous turn was
+    answered from are passed as `Currently answering from`, because "and by
+    month?" names no table and no section and would otherwise route on nine
+    characters. The model may still move: a follow-up that plainly changes
+    subject is a follow-up that changes section.
+
     **Every failure falls open to today's behaviour** (plan D3), and none of
     them can widen anything — falling open widens what the model is *shown*
     back to the whole snapshot, which is precisely what it is shown today:
@@ -443,7 +477,9 @@ async def scope(state: RunState, deps: NodeDeps) -> NodeResult:
       without sections looks exactly as it did before this node existed;
     * a METADATA question — SKIPPED: it is about the whole database;
     * a provider error — SKIPPED, like `route`;
-    * a reply that is `NONE`, empty, or names no section — SKIPPED.
+    * a reply that is `NONE`, empty, or names no section — SKIPPED;
+    * a chosen section that no longer exists — SKIPPED, and still no call:
+      the choice was to narrow, and we do not guess a different narrowing.
     """
     if not deps.sections:
         return NodeResult(status="SKIPPED")
@@ -462,14 +498,27 @@ async def scope(state: RunState, deps: NodeDeps) -> NodeResult:
             status="SKIPPED", detail="Skipped — no section has a table in the current schema"
         )
 
+    names = [s.name for s in routable]
+    if deps.scope_choice:
+        return _chosen(state, deps.scope_choice, routable, tables)
+
+    # What the previous turn of this thread was answered from, as the router
+    # is told it. Filtered against what is routable *now*, so a section
+    # deleted between two questions is simply not mentioned.
+    current = [name for name in deps.current_sections if name in set(names)]
+    rendered = _render_sections(routable)
+    system = (
+        SCOPE_SYSTEM_WITH_CURRENT.format(
+            sections=rendered, current=", ".join(current)
+        )
+        if current
+        else SCOPE_SYSTEM.format(sections=rendered)
+    )
     try:
         completion = await deps.llm_gateway.complete(
             deps.llm,
             [
-                ChatMessage(
-                    role="system",
-                    content=SCOPE_SYSTEM.format(sections=_render_sections(routable)),
-                ),
+                ChatMessage(role="system", content=system),
                 ChatMessage(role="user", content=state.question),
             ],
         )
@@ -483,17 +532,54 @@ async def scope(state: RunState, deps: NodeDeps) -> NodeResult:
         model=getattr(deps.llm, "model", "") or "",
     ))
 
-    picked = parse_scope_reply(completion.text, [s.name for s in routable])
+    picked = parse_scope_reply(completion.text, names)
     if not picked:
         return NodeResult(status="SKIPPED", detail="No section matched")
+    return _narrow(state, picked, routable, tables)
 
+
+def _chosen(
+    state: RunState,
+    choice: str,
+    routable: list[SectionSpec],
+    tables: list[dict[str, Any]],
+) -> NodeResult:
+    """The person's own answer to the question this node asks — no call.
+
+    Reported as theirs in the trail, because a pick somebody made and a pick a
+    model made are different facts about the same run, and the second is the
+    one worth doubting.
+    """
+    if choice.strip().lower() == WHOLE_DATABASE.lower():
+        return NodeResult(status="SKIPPED", detail="Whole database — your choice")
+    by_lower = {s.name.lower(): s.name for s in routable}
+    name = by_lower.get(choice.strip().lower())
+    if name is None:
+        # Deleted, renamed, or every table in it has left the schema since the
+        # picker was drawn. Falling open shows the whole snapshot, which is
+        # what a question with no section chosen is shown — never less.
+        return NodeResult(
+            status="SKIPPED",
+            detail="Skipped — the section you chose is no longer in this database",
+        )
+    return _narrow(state, [name], routable, tables, chosen=True)
+
+
+def _narrow(
+    state: RunState,
+    picked: list[str],
+    routable: list[SectionSpec],
+    tables: list[dict[str, Any]],
+    *,
+    chosen: bool = False,
+) -> NodeResult:
+    """Write the pick to the state, and say what it came to in the trail."""
     members = {t for s in routable if s.name in picked for t in s.tables}
     state.scope_sections = picked
     state.scope_tables = [_key(t) for t in tables if _key(t) in members]
     count = len(state.scope_tables)
-    return NodeResult(
-        detail=f"{', '.join(picked)} · {count} table{'' if count == 1 else 's'}"
-    )
+    detail = f"{', '.join(picked)} · {count} table{'' if count == 1 else 's'}"
+    return NodeResult(detail=f"{detail} — your choice" if chosen else detail)
 
 
 def _join_closure(

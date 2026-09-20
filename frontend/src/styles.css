@@ -395,6 +395,11 @@ code, pre, .mono {
    transparent background. */
 .rm-menu-item:hover { background: var(--panel-hover) !important; }
 
+/* *Ask within…* under the composer. Quiet until it is reached for — it is a
+   correction, offered beside a hint line, not a setting the eye has to clear
+   on the way to the question. */
+.rm-scope-btn:hover { border-color: var(--border-strong) !important; color: var(--text) !important; }
+
 /* A finished answer stays quiet until you reach for it. Kept visible for
    keyboard users, who never generate a hover. */
 .rm-turn-actions { opacity: 0; transition: opacity .15s ease; }

@@ -70,6 +70,8 @@ def _read(result: SectionSet) -> SectionSetRead:
         budget_chars=result.budget_chars,
         snapshot_version=result.snapshot_version,
         has_snapshot=result.has_snapshot,
+        new_tables=result.new_tables,
+        synced_at=result.synced_at,
     )
 
 

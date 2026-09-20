@@ -74,7 +74,7 @@ greps for violations, so this list cannot silently grow.
 | 11 | Write a report section | once per section, per generation; **also a per-section retry** | `workers/report.py` — `_narrate()`:687 |
 | 12 | Write the executive summary | once per generation | `workers/report.py` — `_summarise()`:782 |
 | 13 | Embed a question | the six-hourly index pass; **every analytical question**, on a connection with an embedding model pinned | `services/knowledge_service.py` — `_embedder()`:708, `index_embeddings()`:839 |
-| 14 | Choose a section | every analytical question — chat **and** a tile or block draft — on a connection with **saved sections**; never otherwise | `pipeline/nodes/__init__.py` — `scope()`:423 |
+| 14 | Choose a section | every analytical question — chat **and** a tile or block draft — on a connection with **saved sections**, unless the asker chose one themselves (*Ask within…*, which makes no call); never otherwise | `pipeline/nodes/__init__.py` — `scope()`:423 |
 
 **Fourteen and not fifteen** because #8 is a use case without a call site: a
 draft reuses the *node* that would have made the call anyway, which is the whole
@@ -430,6 +430,15 @@ and a saved tile or report block never reads sections at all
 section would break saved artifacts silently, days later, and is deliberately
 not built. **Access follows the connection**: reading or proposing sections is
 `select` on it, changing them is `modify`, and there is no new resource type.
+
+**A section name on a past turn is withheld with the rest of the database.**
+`runs.retrieval_sections` records which sections answered a question, and it
+is what the *Answered from* chip reads. A turn in a **shared thread** whose
+reader holds no `select` on the connection is already stripped of its rows,
+its chart and its statement (§6, the intersection rule); the section names go
+with them, because a name is something somebody called part of a database this
+reader was never given. The step trail stays, as it does for every other node
+— it is what makes a withheld turn still read as a turn.
 
 Like a catalog comment, a description is untrusted text inside a system prompt,
 and bounded the same way: one line, capped, and whatever it persuades the
