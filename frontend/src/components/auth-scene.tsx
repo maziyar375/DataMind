@@ -193,6 +193,15 @@ const WAVES: Wave[] = [
     back one. Spacing is what makes the surface dense low and sparse high. */
 const STEP_FRONT = 6
 const STEP_BACK = 2.1
+/** Particle radius on the frontmost layer and on the backmost, before the
+    theme's own `--wave-dot` multiplier. Both are up about a sixth from 1.7 and
+    0.85: these are the only dots on the page a pointer can push around, and at
+    the old size the sheets read as grain — a surface that answers to the hand
+    has to be made of marks big enough to be seen answering. They keep their
+    ratio, so depth still reads the same way. Spacing is untouched, so the gaps
+    widen no faster than the dots do. */
+const DOT_FRONT = 2
+const DOT_BACK = 1
 /**
  * How the layers distribute up the band. This was 1.25 — crowding them toward
  * the bottom — and it was wrong: at that bias the lowest curves sat 4px apart
@@ -673,7 +682,7 @@ export default function AuthScene() {
           const step = STEP_FRONT * (1 + STEP_BACK * d)
           const count = Math.max(2, Math.ceil(Math.abs(wspan) / step))
           const fade = (1 - d) ** 0.8
-          const rad = (1.7 - 0.85 * d) * dotWeight
+          const rad = (DOT_FRONT + (DOT_BACK - DOT_FRONT) * d) * dotWeight
 
           for (let i = 0; i <= count; i++) {
             const u = i / count
