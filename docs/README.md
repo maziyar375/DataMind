@@ -101,7 +101,7 @@ against, and carrying a dated record of what changed while it was. Read
 
 ## `research/` — arguments, not descriptions
 
-Seven notes. Each reads what other products do and proposes what DataMind should
+Eight notes. Each reads what other products do and proposes what DataMind should
 take from it. **Where a research note and a reference doc disagree, the
 reference doc is what the code does.**
 
@@ -114,6 +114,7 @@ reference doc is what the code does.**
 | [semantic-layer.md](research/semantic-layer.md) | Not yet a plan — mvp2 §1.3 and Theme B. Its §5 carries three corrections to that section |
 | [data-surface.md](research/data-surface.md) | Not yet a plan — mvp2 Theme E |
 | [competitive-matrix.md](research/competitive-matrix.md) | Not a plan — a scoreboard. mvp2 §2.6's matrix re-run on 2026-09-17 against Power BI, Wren AI, Genie, **Superset and Metabase**, with the DataMind column updated to the tree. Its §3 lists the nine rows that moved since August; its §4 argues that dashboard filters unblock more of the gap than anything else |
+| [deep-analysis-mode.md](research/deep-analysis-mode.md) | Not yet a plan — mvp2 Theme F (**F3** bounded multi-step analysis, **F4** root-cause/key drivers), both still Tier 3. Reads Genie Agent mode, Fabric data agents, Wren, Metabase and Superset for the *second answer mode*, and the decomposition / TAG / deep-research-agent literature for the technique. Its §4 is an inventory of what this product already has for it; its §6.1 is the one measurement to take before building any of it |
 
 ## `history/` — superseded, and kept
 
