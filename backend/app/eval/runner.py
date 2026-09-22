@@ -817,6 +817,7 @@ async def persist(
     records_by_id: dict[str, GoldRecord],
     started_at: Any,
     finished_at: Any,
+    git_sha: str | None,
 ) -> UUID:
     sm = get_sessionmaker()
     async with sm() as session:
@@ -828,7 +829,7 @@ async def persist(
             llm_config_id=llm_config_id,
             model_snapshot=model_snapshot,
             prompt_version=prompt_version,
-            git_sha=_git_sha(),
+            git_sha=git_sha,
             total=len(outcomes),
             metrics=report_dict,
             started_at=started_at,
@@ -879,6 +880,17 @@ async def persist(
 
 
 def _git_sha() -> str | None:
+    """The tree this process is about to run, read **before** it runs.
+
+    Called at start and carried to `persist`, never called from inside it. A
+    suite run is two hours long and the repository it reads is one somebody is
+    working in, so a sha read at write time names whatever was committed while
+    the run was in flight — which is how the 2026-09-22 Phase 0 arm 1 came to
+    claim a commit made thirty minutes after its own first model call
+    (`reports/sales_v1_deepseek_2026-09-22_phase0.md`). A scorecard attributed
+    to code it did not execute is worse than one with no sha at all, because
+    the first is quoted.
+    """
     try:
         return subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"],  # noqa: S607 - git on PATH, dev tooling
@@ -977,6 +989,8 @@ async def _amain(args: argparse.Namespace) -> int:
     budget_chars = nodes._RETRIEVE_BUDGET_CHARS
 
     started_at = utcnow()
+    # Read here rather than at persist time: see `_git_sha`.
+    git_sha = _git_sha()
     # The templates arm. Built from the suite's own records so the two arms
     # differ in exactly one thing — whether the prompt carried examples — and
     # split into held-out and taught, because only the first number is worth
@@ -1142,6 +1156,7 @@ async def _amain(args: argparse.Namespace) -> int:
         records_by_id={r.id: r for r in records} if not negative else {},
         started_at=started_at,
         finished_at=finished_at,
+        git_sha=git_sha,
     )
     await dispose_engine()
 

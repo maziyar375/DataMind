@@ -243,11 +243,12 @@ guard that already parses the statement — which is why they are cheap here and
 expensive everywhere else.
 
 **Two caveats on our own `●`s, so nobody quotes them too hard.** Few-shot
-injection and the embedding matcher are **built and shipped off**, both waiting
-on a provider key rather than on code, and the layer-on/layer-off accuracy
-baselines have not been run. Execution accuracy is still **0.36** on the messy
-`sales` fixture at `PROMPT_VERSION` v2 — model- and version-specific, and read
-[../status.md](../status.md) §6 before repeating it. **No competitor in this
+injection and the embedding matcher are **built and shipped off**, each waiting
+on a gate run of its own rather than on code. The layer-on/layer-off accuracy
+baselines **were run on 2026-09-22**: execution accuracy is **0.42** on the messy
+`sales` fixture at `PROMPT_VERSION` v10, layer on *and* layer off — model- and
+version-specific, measured on a suite that cannot resolve a difference under
+about ±14 points, and read [../status.md](../status.md) §6 before repeating it. **No competitor in this
 table publishes a comparable number at all**, which cuts both ways: we cannot
 claim to beat them, and they cannot claim to beat us.
 

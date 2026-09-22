@@ -436,19 +436,44 @@ rather than in the tool output.
 ### The Phase 0 baselines — the ruler, before anything is measured with it
 
 [learning-loop.md §3.1](../plans/learning-loop.md#31-phase-0--fix-the-ruler)
-blocks its Phase 5 on three numbers being on paper here. The instruments exist
-as of 2026-08-31; **the three runs have not been made** — each calls a real
-provider and needs an `llm_configs` row with a working key. Fill this table from
-the runs, not from memory, and record the `eval_run` UUID beside each.
+blocks its Phase 5 on three numbers being on paper here. The instruments existed
+from 2026-08-31 and the runs waited on a provider key. **They were made on
+2026-09-22**, all three back to back on one model, and the write-up is
+[`sales_v1_deepseek_2026-09-22_phase0.md`](../../backend/app/eval/reports/sales_v1_deepseek_2026-09-22_phase0.md)
+— read it before quoting any cell below.
+
+All three: `openai/deepseek/deepseek-v4-pro` via OpenRouter, **temperature 0.0**,
+`max_tokens` 8192, llm_config `2e896025-6077-40dd-87f5-672d52341ccd`, confirmed
+against each run's persisted `model_snapshot`. Golden set byte-identical
+throughout (`sha256` `3f4a9091…f692`).
 
 | # | Arm | Command | Execution accuracy | Retrieval recall | `eval_run` |
 |---|---|---|---|---|---|
-| 1 | v10, layer **off** | `--suite sales_v1` | *not yet run* | 1.0 by construction | — |
-| 2 | v10, layer **on** | `--suite sales_v1 --semantic on` | *not yet run* | 1.0 by construction | — |
+| 1 | v10, layer **off** | `--suite sales_v1` | **42.0 %** (21/50) | 1.0 by construction | `d8c1035d-a03b-4526-8345-dfb82bc7fde9` |
+| 2 | v10, layer **on** | `--suite sales_v1 --semantic on` | **42.0 %** (21/50) | 1.0 by construction | `5df63738-43a9-4b45-8e6d-b0b68e7ba9b6` |
+| 3 | recall at a budget that can miss | `--suite sales_v1 --retrieve-budget 8000` | 30.0 % (15/50) | **mean 80.2 % · full-hit 62.0 %** | `dc2ea4fd-9164-4524-9b51-bc74d992c8ff` |
 
-Rows 1 and 2 also give the definition-use pair: record both cards'
-`definition_use.used_rate` beside them, and their difference, when they are run.
-| 3 | recall at a budget that can miss | `--suite sales_v1 --retrieve-budget 12000` | *not yet run* | *not yet run* | — |
+The definition-use pair rows 1 and 2 exist for: **0.1885 layer-off, 0.2441
+layer-on, difference +0.0556.** That difference is the number
+[semantic-layer-model.md §4.4](../plans/semantic-layer-model.md) asks for; one
+card's rate alone includes coincidence.
+
+**Row 3's budget is 8,000, not the 12,000 this table was written with.** The run
+was driven from
+[deep-analysis-mode.md §3.1](../plans/deep-analysis-mode.md#31-phase-0--the-gate--size-s--blocking),
+which specifies 8,000, and the command above is now the one that was actually
+executed rather than the one originally sketched. 8,000 is the harsher setting
+and it did what the row exists to do — recall fell off its ceiling, which is the
+only condition under which a retrieval claim is falsifiable here. Nothing was
+run at 12,000; that cell has never existed and is not being quietly reused.
+
+**Equal headlines are not equal arms.** Rows 1 and 2 both read 42.0 %, and share
+only fourteen of their twenty-one correct answers: **fourteen questions changed
+verdict, seven in each direction.** At n=50 the standard error is about 7 points, so this
+suite cannot resolve a difference smaller than roughly ±14 points. Treat any
+future claim that a change moved accuracy by five points on `sales_v1` as
+unfalsifiable, and read the report's section on it before running a comparison
+you intend to act on.
 
 **Relabelled v8 → v10 on 2026-09-15, before any of them was run.** v10 changed
 no wording and no byte of what this harness renders: it moved because the

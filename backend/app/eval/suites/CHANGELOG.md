@@ -112,6 +112,47 @@ Format per entry:
 
 ---
 
+### 2026-09-22 — the three Phase 0 baselines were run, and what they say about this suite
+
+- **What changed:** nothing in `suites/`. No gold answer, no record, no fixture
+  and no tolerance moved; `sha256(sales_v1.json)` is unchanged and
+  `git log` over this directory shows no commit touching it. This entry exists
+  because the runs are the ones
+  [docs/reference/eval.md §6](../../../../docs/reference/eval.md) has held empty
+  cells for since 2026-08-31, and because two of their findings are about the
+  *suite* rather than about the model.
+- **The numbers:** DeepSeek V4 Pro, temperature 0.0, `PROMPT_VERSION` v10, three
+  arms back to back. Layer off **42.0 %** (`d8c1035d-a03b-4526-8345-dfb82bc7fde9`),
+  layer on **42.0 %** (`5df63738-43a9-4b45-8e6d-b0b68e7ba9b6`), and at
+  `--retrieve-budget 8000` recall **mean 80.2 % / full-hit 62.0 %**
+  (`dc2ea4fd-9164-4524-9b51-bc74d992c8ff`). Write-up in
+  [`../reports/sales_v1_deepseek_2026-09-22_phase0.md`](../reports/sales_v1_deepseek_2026-09-22_phase0.md).
+- **Finding 1 — this suite cannot resolve a five-point difference, and that is a
+  property of its size.** The layer-on and layer-off arms printed the same
+  42.0 % over **different questions**: fourteen changed verdict, seven each way.
+  At n=50 and p ≈ 0.42 the standard error is about 7 points, so anything under
+  roughly ±14 points is noise. **This is not a reason to edit the set.** It is a
+  reason to state the resolution limit wherever its numbers are quoted, which is
+  now done in eval.md §6 and status.md §6. Growing `sales_v1` to chase power
+  would break every number ever measured on it, for a gain that a second,
+  separate suite can deliver without that cost.
+- **Finding 2 — `retrieval_recall` scores the annotation, not the model.** At
+  budget 8,000, `sales-003` and `sales-004` both scored recall **0.000** and both
+  answered **correctly**: the model reached `employees` without being shown it,
+  and answered `sales-004` from `products.category` rather than the `categories`
+  table the record's `expected_tables` names. Both executed because the guard's
+  allowlist is the whole snapshot, never the retrieved subset. **Neither record
+  is wrong and neither is being changed** — `expected_tables` records the tables
+  a careful analyst would use, which is what makes it a retrieval target — but
+  recall@k on this suite is a retrieval diagnostic and must never be read as a
+  ceiling on accuracy.
+- **What would justify an edit here, and did not happen:** a record whose gold is
+  demonstrably wrong, with evidence. Neither finding is that. Recorded under the
+  same standard the charter sets for `gold_sql`: *an eval you are allowed to edit
+  measures your willingness to edit it.*
+
+---
+
 ## Gold corrections
 
 <!-- No corrections. The set as authored in Task 2 stands. -->

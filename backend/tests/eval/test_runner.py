@@ -374,3 +374,42 @@ async def test_a_lowered_budget_is_what_makes_recall_measurable(
         lowered = await _eval(rec, FakeGateway(plan={rec.question: [rec.gold_sql]}), env)
     assert full.retrieval_recall == 1.0
     assert lowered.retrieval_recall < 1.0
+
+
+# ── the scorecard names the code that ran ────────────────────────────────────
+#
+# `eval_runs.git_sha` used to be read inside `persist`, i.e. after a two-hour
+# suite run had finished, so it recorded whatever HEAD was at *write* time. On
+# 2026-09-22 that filed Phase 0's arm 1 under a commit made thirty minutes
+# after its own first model call
+# (`app/eval/reports/sales_v1_deepseek_2026-09-22_phase0.md`). A scorecard
+# attributed to code it did not execute is worse than one with no sha, because
+# the first gets quoted.
+
+
+def test_persist_is_told_the_commit_rather_than_looking_it_up() -> None:
+    """The parameter is the fix: `persist` cannot read HEAD, so it cannot read
+    it late."""
+    import inspect
+
+    params = inspect.signature(runner.persist).parameters
+    assert "git_sha" in params, "persist must be handed the sha it records"
+    source = inspect.getsource(runner.persist)
+    assert "_git_sha(" not in source, (
+        "persist reads HEAD itself again — that is the bug this test exists for"
+    )
+
+
+def test_the_sha_is_read_before_the_suite_runs() -> None:
+    """In `_amain`, the read sits with `started_at` and above the run, not
+    below it. Asserted on source order because the alternative — running a real
+    suite and committing to the repo underneath it — is not a test."""
+    import inspect
+
+    source = inspect.getsource(runner._amain)
+    read_at = source.index("git_sha = _git_sha()")
+    passed_at = source.index("git_sha=git_sha")
+    started_at = source.index("started_at = utcnow()")
+    finished_at = source.index("finished_at = utcnow()")
+    assert started_at < read_at < finished_at, "the sha must be read before the run"
+    assert read_at < passed_at

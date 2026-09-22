@@ -10,16 +10,18 @@
 > **Four decisions were taken before writing this** (§0.2). They are recorded
 > here rather than re-argued: everything below assumes them.
 >
-> **82 of 85 items.** **Every phase is built.** Phases 1–4, 6 and 8 are complete
+> **83 of 85 items.** **Every phase is built.** Phases 1–4, 6 and 8 are complete
 > and on — the store is built, filled by hand *and* from traffic, read on the
 > ask path, kept from rotting, measurable by its owner, audited, and the loop
 > closes back to the person who flagged an answer — and the documentation is
-> landed. **Phases 5 and 7 are built and shipped *off***: `PROMPT_VERSION` is
-> v9 and the empty slot renders v8's bytes, `knowledge_examples_enabled`
-> defaults to false, and `embedding_model` defaults to empty, because both
-> switches are gated on measurements that need a provider key this environment
-> does not have — which is also why Phase 0's three baselines are still unmade.
-> **All three open boxes are that one blocker**, and none of them is code.
+> landed. **Phase 0's three baselines were made on 2026-09-22** and are in
+> [eval.md §6](../reference/eval.md): 42.0 % layer-off, 42.0 % layer-on,
+> recall 80.2 %/62.0 % at budget 8,000. **Phases 5 and 7 are built and shipped
+> *off***: `PROMPT_VERSION` is v10 and the empty slot renders v8's bytes,
+> `knowledge_examples_enabled` defaults to false, and `embedding_model`
+> defaults to empty, because both switches are gated on measurements of their
+> own that have not been run. **The two open boxes are that one blocker**, and
+> neither is code.
 > **The built feature is described in
 > [reference/knowledge-templates.md](../reference/knowledge-templates.md)** —
 > read that for *what it does*, and this document for *what was built, in
@@ -1601,15 +1603,16 @@ it is not, no amount of Phase 5 will help.
 > reading the code, not by memory; every ❌ was confirmed absent the same way.
 > The verification note beside each item is what to re-run to check it again.
 >
-> **Status: 82 of 85 plan items complete.** Phase 0's instruments are built (its
-> three measurements are not — see §13.2), and **Phases 1–8 have landed in
-> full**: the store, the curation surface, the guard's fifth entry point, the
-> short-circuit, the badge, feedback, the review queue, the ranked backlog,
-> staleness and conflict detection, few-shot injection, the in-product
-> benchmark, the embedding matcher, the permissions flip and the audit log.
-> **The three boxes still open are the same box three times** — a run against a
-> real provider — and each is written so the number, not an argument, decides
-> what ships.
+> **Status: 83 of 85 plan items complete.** Phase 0 is closed — its instruments
+> were built on 2026-08-31 and **its three measurements were made on
+> 2026-09-22** (§13.2) — and **Phases 1–8 have landed in full**: the store, the
+> curation surface, the guard's fifth entry point, the short-circuit, the badge,
+> feedback, the review queue, the ranked backlog, staleness and conflict
+> detection, few-shot injection, the in-product benchmark, the embedding
+> matcher, the permissions flip and the audit log. **The two boxes still open
+> are the same box twice** — the §6.1 few-shot gate and the §6.3 matcher arm,
+> each a pair of runs against a real provider — and each is written so the
+> number, not an argument, decides what ships.
 >
 > **§13.11 was wrong in the other direction, and that is worth naming.** It read
 > `0 / 7` while five of its six boxes were already substantially true: each phase
@@ -1649,18 +1652,21 @@ one, and because the plan would be much larger if any were missing.
 | ⚠️ | **`audit_logs` table exists — and nothing writes to it.** Phase 8 turns it on | `grep -rn AuditLog backend/app` returns only the model |
 | ⚠️ | **`eval_runs` / `eval_results` exist — written only by the dev CLI.** Phase 6 deliberately does *not* reuse them | [eval/runner.py:494](../../backend/app/eval/runner.py#L494) |
 
-### 13.2 Phase 0 — Fix the ruler · **5 / 6** ⚠️ instruments built, the three runs not made
+### 13.2 Phase 0 — Fix the ruler · **6 / 6** ✅ the three runs were made on 2026-09-22
 
 - [x] `runs.prompt_version` records the constant that rendered the prompt, not `settings.prompt_version` — `RunService._prompt_version()` returns `prompts.PROMPT_VERSION` unless the setting overrides it, and `execute_run` re-stamps the row in the process that renders the bytes; `core/config.py` now defaults the setting to `None`
 - [x] A test that fails on today's code and asserts the run row equals `prompts.PROMPT_VERSION` — `tests/unit/test_prompt_version.py`, six tests; four of them fail against `HEAD~` (verified by stashing the two source files and re-running)
 - [x] The eval runner can lower `_RETRIEVE_BUDGET_CHARS` from the command line — `--retrieve-budget CHARS`, recorded on the scorecard as `retrieve_budget_chars`; `tests/eval/test_runner.py` pins that recall is 1.0 at the shipped ceiling and misses beneath it
 - [x] The budget decision recorded in `app/eval/suites/CHANGELOG.md` — with the reason the fixture was *not* widened instead, and the comparability trap stated once
 - [x] A `--semantic on|off` arm — plus the thing it needs to switch on: `backend/fixtures/sales_semantic.json` (21 entities, 14 metrics), bound to the live snapshot by `runner.load_semantic`, which aborts the run rather than render a half-binding layer
-- [ ] The three Phase 0 baselines written into [eval.md](../reference/eval.md): accuracy layer-off, accuracy layer-on, recall at a budget that can miss — **the table is in [eval.md §6](../reference/eval.md) with the three commands and empty cells.** Each run calls a real provider and needs an `llm_configs` row with a working key; there is none in this environment, so the numbers are not on paper and this box stays open
+- [x] The three Phase 0 baselines written into [eval.md](../reference/eval.md): accuracy layer-off, accuracy layer-on, recall at a budget that can miss — **run 2026-09-22, DeepSeek V4 Pro at temperature 0.0, `PROMPT_VERSION` v10, 2h 13m for the three arms back to back.** Layer off **42.0 %** (`d8c1035d-a03b-4526-8345-dfb82bc7fde9`), layer on **42.0 %** (`5df63738-43a9-4b45-8e6d-b0b68e7ba9b6`), recall at `--retrieve-budget 8000` **mean 80.2 % / full-hit 62.0 %** (`dc2ea4fd-9164-4524-9b51-bc74d992c8ff`). The definition-use pair this phase also wanted: **0.1885 → 0.2441, difference +0.0556.** Write-up: [`sales_v1_deepseek_2026-09-22_phase0.md`](../../backend/app/eval/reports/sales_v1_deepseek_2026-09-22_phase0.md) — read it before quoting any of them, because the two 42 % arms are **not the same 21 questions** and the suite cannot resolve a difference under ±14 points
 
 > **This is the gate on everything else.** Phase 5 is not allowed to start until
 > the last box here is ticked — and it is the *numbers* that tick it, not the
-> instruments that produce them.
+> instruments that produce them. **Ticked 2026-09-22.** Phase 5's own gate
+> ([§6.1](../reference/eval.md#61-the-few-shot-gate--the-one-arm-that-can-fail))
+> is a separate pair of runs and is still unmade; what this unblocks is Phase 5
+> *starting*, not few-shot injection shipping.
 
 ### 13.3 Phase 1 — The store and the curation surface · **22 / 22** ✅ landed
 
@@ -1962,6 +1968,7 @@ document.
 
 | Date | What landed | Boxes ticked |
 |---|---|---|
+| 2026-09-22 | **Phase 0's last box, ticked by the numbers rather than by the instruments.** The three baselines ran back to back on DeepSeek V4 Pro at temperature 0.0, `PROMPT_VERSION` v10, 2h 13m: **42.0 % layer-off** (`d8c1035d`), **42.0 % layer-on** (`5df63738`), **recall mean 80.2 % / full-hit 62.0 %** at `--retrieve-budget 8000` (`dc2ea4fd`); definition use **0.1885 → 0.2441, +0.0556**. Driven from `plans/deep-analysis-mode.md` Phase 0, whose gate the layer-on number then failed to open. **The two 42 % arms are not the same 21 questions** — 14 moved, 7 each way — so this suite cannot resolve a difference under about ±14 points, and that is now written into eval.md §6 and status.md before anyone quotes a five-point win off it. One defect in the ruler found and fixed: `eval_runs.git_sha` was read at persist time, filing a two-hour run under a commit made 30 minutes into it. Write-up: `backend/app/eval/reports/sales_v1_deepseek_2026-09-22_phase0.md`. | 83 of 85 (§13.2 box 6) |
 | 2026-08-31 | This plan written; the tree audited to establish the starting position | — (0 of 86) |
 | 2026-09-01 | **Documentation — and most of it was already written.** §13.11 read `0 / 7`; the tree said otherwise. CLAUDE.md's Knowledge templates section (331 lines) and its *"the guard has five entry points and none is privileged"*, pipeline.md's `match` node in the §0 map and §3.2, eval.md's baseline table, few-shot gate and matcher arm, and docs/README.md's index of all three unindexed documents had each landed **with the phase that needed them**, per this repo's convention — nobody came back to tick the line. So the pass was a re-check against the tree rather than a write-up, and it found five stale or false claims a write-up would have missed. **security.md §3.3 still closed with *"Phase 1 renders no template into any prompt"*, false since Phase 5**; it now names `render_examples` as the reader, says the gate runs at *render* time so a tightened policy takes effect on the next question, and says the withholding is **whole examples, not stripped literals**. More usefully it now records a **hole**: a Phase 2 short-circuit sends the stored SQL to the narration call (#5) like any other statement, so a `MODEL_DERIVED` template's literals reach a provider on a path the few-shot gate does not cover — the same residual §3.5 already recorded for kept SQL, now written in both places and pointed at `present` as the one place to fix both at once, rather than discovered later by somebody reading the code. **security.md §2 claimed *"twelve use cases, across thirteen call sites, and no others"* — Phase 7's embedding calls made that false**; the table gains #13, the *no customer data at all* sentence gains `probe_embedding`, and §4.7's dangling `(§5.2)` now points at `(§3.3)`, a section that exists in that document. **docs/README.md** still described the plan as *"Phases 1–3 are in the tree"*. **plans/mvp2.md was the one genuinely untouched box**: A1–A4 now carry a *built* banner naming the phase that built each, §A3's *"the two features share a table"* carries the [§1.3](#13-the-three-roles) correction directly beneath the sentence it corrects — they share a table, not a row's purpose — and §D4 says which half of the audit log exists. Its pointer to `mvp2-plan.fa.md`, a file not in the repo, is gone, and with it §13.11's seventh box: **denominator 7 → 6, plan total 86 → 85.** Three smaller repairs found on the way: §13.13's own instruction said *"newest last"* while nine rows below it ran newest first; the Phase 5 row's `--templates on\|off` was splitting its own table cell on an unescaped pipe; and `RetrievedContext.render_examples`' docstring said *"Two gates, in this order:"* twice — the only line of code in this commit. | 82 of 85 (§13.11, all 6) |
 | 2026-09-01 | **Phase 8 — permissions hardening, and the audit hole closed.** `curation_admin_only` flipped to **true**, and `can_curate` grew a resource argument so the rule is *administrator **or** the owner of the connection*. That second half is the whole of the change: `_owned()` already scopes every knowledge endpoint to `owner_id == ctx.user_id`, so the blunt flip would have meant **the person who owns a connection cannot curate their own store** — a lockout that takes rights from members and grants none to anybody. Nobody can observe a difference today; it starts mattering the moment [mvp2 §D1](mvp2.md) lets a connection be shared, which is the argument for having it on before that rather than after. Omitting the resource asks the strict question, because the fail-closed reading of *"I cannot establish who owns this"* is no. `app/services/audit.py`: the table defined in migration `0001` and written by **nothing** since — mvp2 §D4's *"best ratio in the document"* — now takes a row from all nine curation writes, asserted on the parse rather than by counting call sites. Three rules, each a way this kind of log rots: the row **joins the caller's transaction** (a log that commits while its action rolls back invents history), **failing to log never fails the action** (the opposite posture to the guard's, and right for the same reason the guard's is right), and **`detail` carries identifiers and counts, never content** — no SQL, no question text, no rows, enforced in one function because a log that became a second copy of the store is a second thing to secure. `GET /audit` for administrators only, actor as a display name and never an address; `actor_ip` reads `X-Real-IP` and **never `X-Forwarded-For`**, since a log holding an address the actor chose is worse than one holding none. `AnswerFeedbackRead.routed_to` names whose queue a flag landed in, from the server, so §4.6's promise stays true when ownership moves. 16 new backend tests. **Also fixed, and found by exercising the endpoints over HTTP rather than by reading the code: `PATCH` and `DELETE` on a template returned 500 in production from the day Phase 1 shipped.** `updated_at` is `onupdate=func.now()`, so the flush expired it and serialising the row afterwards raised `MissingGreenlet` — CLAUDE.md's own documented gotcha, invisible to every unit test because the fake session never expired anything. The fakes model `refresh` now, and a regression test names the reason. | 76 of 86 (§13.10, all 4) |

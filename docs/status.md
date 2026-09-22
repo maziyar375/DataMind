@@ -126,7 +126,7 @@ when the trigger fires, the deferral is reopened rather than re-argued.
 | Row-level security | Named in a deal; **needs dashboard filters first** | [plans/user-management-and-access-control.md](plans/user-management-and-access-control.md) §0.2 |
 | Workspaces / folders, nested teams, delegated granting, time-boxed grants | Each has a written trigger | [plans/user-management-and-access-control.md](plans/user-management-and-access-control.md) §0.2 |
 | Warehouse connectors | A named customer, not a roadmap slot | [plans/mvp2.md](plans/mvp2.md) E4 |
-| Multi-step "deep dive" analysis, root-cause / key drivers, proactive digests | Tier 1 accuracy is credible and users start asking *why* | [plans/mvp2.md](plans/mvp2.md) Tier 3 |
+| Multi-step "deep dive" analysis, root-cause / key drivers, proactive digests | **Trigger tested 2026-09-22 and it did not fire — 0.42, the middle band of [plans/deep-analysis-mode.md](plans/deep-analysis-mode.md) §0.3.** Its Phases 1–3 shipped anyway because they stand alone; Phases 4–9 wait on A1/A5/B2 | [plans/mvp2.md](plans/mvp2.md) Tier 3, [plans/deep-analysis-mode.md](plans/deep-analysis-mode.md) |
 | Scheduled reports | Needs sharing first — a delivered report is a shared report | [plans/mvp2.md](plans/mvp2.md) F2 |
 | Entity/value dictionaries | Needs its own disclosure-ladder decision in [reference/security.md](reference/security.md) | [plans/mvp2.md](plans/mvp2.md) B3 |
 | Rename the `raymand` package → `datamind` | Before an open-source push; **never** incidentally | [plans/mvp2.md](plans/mvp2.md) §1.11 |
@@ -138,11 +138,33 @@ treated as security.
 
 ## 6. The numbers, and how to read them
 
-- **Execution accuracy 0.36** — DeepSeek V4 Pro, temperature 0.2,
-  `PROMPT_VERSION` **v2**, 2026-07-26, on the deliberately-messy `sales`
-  fixture. This is the number MVP2 exists to move. It is **model-specific and
-  version-specific**: read `sales_v1.baseline.json`'s `_README` before quoting
-  it, and never put two numbers from different models in one sentence.
+- **Execution accuracy 0.42** — DeepSeek V4 Pro, temperature 0.0,
+  `PROMPT_VERSION` **v10**, 2026-09-22, semantic layer **on**, on the
+  deliberately-messy `sales` fixture; `eval_run`
+  `5df63738-43a9-4b45-8e6d-b0b68e7ba9b6`. The layer-**off** arm scored the same
+  42.0 % (`d8c1035d-…`) — **and not on the same questions: fourteen changed
+  verdict, seven each way.** This is the number MVP2 exists to move. It is
+  **model-specific and version-specific**: read
+  [reference/eval.md §6](reference/eval.md) and the write-up
+  [`sales_v1_deepseek_2026-09-22_phase0.md`](../backend/app/eval/reports/sales_v1_deepseek_2026-09-22_phase0.md)
+  before quoting it, and never put two numbers from different models in one
+  sentence.
+- **The old 0.36 was v2 at temperature 0.2, 2026-07-26.** It stood as the
+  product's only accuracy figure for two months. Superseded, not deleted:
+  `sales_v1.baseline.json` still records it as a CI tripwire keyed to a model,
+  which is a different job from being the number anyone quotes.
+- **`sales_v1` cannot resolve a five-point difference.** 50 questions at
+  p ≈ 0.42 carry a standard error near 7 points, so anything under roughly
+  ±14 points is noise. The layer-on/layer-off pair above is the demonstration:
+  28 % of the suite changed answer and the aggregate did not move.
+- **The deep-analysis gate was applied on 2026-09-22, and it did not open.**
+  [plans/deep-analysis-mode.md §0.3](plans/deep-analysis-mode.md) wrote three
+  thresholds down before the number existed. The number it names — execution
+  accuracy at v10 with the layer on — came back **0.42**, which is the middle
+  band: **Phases 1–3 ship, Phases 4–9 wait.** Phases 1, 2 and 3 have landed
+  (cache-token accounting, `app/analysis/`, claim→SQL citations); Phase 4
+  onward is blocked until [plans/mvp2.md](plans/mvp2.md) A1/A5/B2 move the
+  number, at which point that plan is **re-read, not re-argued**.
 - **Catalog comments: 40.0% uncommented vs 36.0% commented**, 50 questions,
   DeepSeek V4 Flash. Two questions inside a twelve-question variance.
   **Do not write "comments improved accuracy" anywhere** — no run says so. What
@@ -154,8 +176,13 @@ treated as security.
   is not better here.
 - **Retrieval recall is 1.0 by construction at the shipped ceiling.** The
   budget is 50k and the fixture estimates 26,480, so a default run takes
-  `FULL_SNAPSHOT` on every question. Lower it with `--retrieve-budget` to
-  measure it, and never compare a lowered-budget figure to a full-snapshot one.
+  `FULL_SNAPSHOT` on every question. Lowered to 8,000 on 2026-09-22 it reads
+  **mean 80.2 % / full-hit 62.0 %** (`dc2ea4fd-…`), which is the only setting
+  under which a retrieval claim on this suite is falsifiable. Never compare a
+  lowered-budget accuracy figure to a full-snapshot one. And note what that run
+  also showed: **two questions scored recall 0.000 and answered correctly** —
+  recall@k measures whether retrieval picked the tables the *annotator*
+  expected, not whether the model could answer.
 - **`runs.prompt_version` lied between 2026-07-26 and 2026-08-31.** It was
   stamped from a config default that had drifted. Fixed 2026-08-31; historical
   rows were **deliberately not rewritten**, so a version on a run from that

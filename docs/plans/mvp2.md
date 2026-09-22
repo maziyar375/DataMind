@@ -40,11 +40,15 @@ row by AAD. That work is real and it is not the problem.
 The danger that actually decides whether a BI tool is adopted is different:
 **the model returns a plausible, well-formatted, confidently-worded wrong
 answer, and nobody notices.** The guard cannot catch that — a wrong query is a
-perfectly legal query. The only measurement the repo has of that failure mode is
-the eval baseline, and it says **0.36 execution accuracy** (DeepSeek V4 Pro,
-temperature 0.2, `PROMPT_VERSION` v2, 2026-07-26, on the deliberately-messy
-`sales` fixture). Roughly two questions in three come back wrong on a hard
-schema.
+perfectly legal query. The measurement the repo has of that failure mode is the
+eval suite, and as of **2026-09-22** it says **0.42 execution accuracy**
+(DeepSeek V4 Pro, temperature 0.0, `PROMPT_VERSION` v10, semantic layer on, on
+the deliberately-messy `sales` fixture; `eval_run 5df63738-…`). Better than
+three questions in five still come back wrong on a hard schema.
+
+*Written against the 0.36 at v2 / temperature 0.2 from 2026-07-26, which stood
+as the only number for two months. The re-measurement moved it six points and
+did not change the argument below.*
 
 That number is the product. And the structural problem is not that it is low —
 it is that **there is no mechanism in the running product that can raise it.**

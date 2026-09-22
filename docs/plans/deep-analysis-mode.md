@@ -1,6 +1,8 @@
 # Deep analysis in chat — build plan
 
-> **Status: a plan, not a proposal, and not yet started.** Written 2026-09-22
+> **Status: the gate was run on 2026-09-22 and it did not open.** Phases 0–3 are
+> complete (**31 of 85**); **Phases 4–9 are blocked** by §0.3's own rule — the
+> number it names came back **0.42**, the middle band. Written 2026-09-22
 > against `main`. The argument for *why* lives in
 > [research/deep-analysis-mode.md](../research/deep-analysis-mode.md) — read it
 > first; this document does not re-argue it. The feature is
@@ -9,11 +11,12 @@
 > [status.md §5](../status.md#5-deferred-on-purpose-with-triggers).
 >
 > **Phase 0 is a gate, not a warm-up.** Its trigger is F3's own written one —
-> *"Tier 1 accuracy is credible and users start asking why"* — and the only
-> number this repo has is **0.36 execution accuracy at `PROMPT_VERSION` v2,
-> July 2026**, on the deliberately-messy `sales` fixture. `PROMPT_VERSION` is
-> now **v10**. That number is stale, not necessarily wrong, and nobody has
-> re-measured it. **A deep mode over a generator that is wrong two times in
+> *"Tier 1 accuracy is credible and users start asking why"*. When this was
+> written the only number the repo had was **0.36 at `PROMPT_VERSION` v2, July
+> 2026** — stale, not necessarily wrong, and never re-measured. **It has now
+> been re-measured: 0.42 at v10 with the semantic layer on**
+> (`5df63738-43a9-4b45-8e6d-b0b68e7ba9b6`, 2026-09-22), which lands in §0.3's
+> middle band and closes Phases 4–9 until A1/A5/B2 move it. **A deep mode over a generator that is wrong two times in
 > three does not produce a better answer; it produces a longer, more confident,
 > more expensive wrong answer with eight queries' worth of surface area for the
 > error to hide in.** §3.1 says what measurement opens the gate and what to
@@ -858,19 +861,29 @@ The plan would be several times larger if any of these were missing.
 | ⚠️ | **`generated_queries` is unique on `(run_id, attempt_no)`** — safe only while deep keeps `attempts` run-global. §2.4 | [models.py:1052](../../backend/app/infra/db/models.py#L1052) |
 | ❌ | **No planner, no run-level budget, no contribution module, no claim citations, no *Answer now*, no multi-query scorer** | the six things this plan builds |
 
-### 12.2 Phase 0 — The gate · **1 / 5** · blocking
+### 12.2 Phase 0 — The gate · **5 / 5** · blocking ✅ **and the gate did not open**
 
-- [ ] Execution accuracy at v10, **layer off**, written into [eval.md §6](../reference/eval.md) with its `eval_run` UUID — `--suite sales_v1`
-- [ ] Execution accuracy at v10, **layer on**, same table, same rule — `--suite sales_v1 --semantic on`
-- [ ] Retrieval recall at a budget that can actually miss — `--suite sales_v1 --retrieve-budget 8000`
+- [x] Execution accuracy at v10, **layer off**, written into [eval.md §6](../reference/eval.md) with its `eval_run` UUID — `--suite sales_v1` → **42.0 %**, `d8c1035d-a03b-4526-8345-dfb82bc7fde9`
+- [x] Execution accuracy at v10, **layer on**, same table, same rule — `--suite sales_v1 --semantic on` → **42.0 %**, `5df63738-43a9-4b45-8e6d-b0b68e7ba9b6`. Same headline as the arm above and **not the same questions**: fourteen changed verdict, seven each way, which is what a 50-question suite can and cannot see
+- [x] Retrieval recall at a budget that can actually miss — `--suite sales_v1 --retrieve-budget 8000` → **mean 80.2 % / full-hit 62.0 %**, `dc2ea4fd-9164-4524-9b51-bc74d992c8ff`. eval.md's row 3 said 12,000; **8,000 was run** — the divergence and why are recorded in §6 rather than smoothed over
 - [x] `backend/app/eval/suites/deep_v1.json` — twenty *why* questions, frozen the day it is written, with a `_README` recording the freeze date and why each question is in it — frozen 2026-09-22, **no `gold_sql` and none intended**; `tests/eval/test_golden_set.py` fails if one appears. **§11 Q3 answered in the same commit:** it reuses `sales`, because the fixture has no planted movement anywhere — see `suites/CHANGELOG.md` for the evidence and for what this set therefore cannot score
-- [ ] §0.3's rule applied **out loud**: a sentence in [status.md](../status.md) naming which branch was taken and on what number
+- [x] §0.3's rule applied **out loud**: a sentence in [status.md](../status.md) naming which branch was taken and on what number — §6 bullet 4, and §5's Tier 3 row now says the trigger was tested and did not fire
 
-> **This is the gate on Phases 4–9.** Phases 1–3 may start regardless; nothing
-> from Phase 4 onward may. The numbers tick this, not the instruments that
-> produce them — and the run that fills this table also closes
+> **The gate was applied on 2026-09-22 and it did not open.** The number §0.3
+> names — execution accuracy at v10 with the layer on — is **0.42**, the middle
+> band: *"the gate opens for Phases 1–3 only. Phases 4–9 wait on
+> [mvp2](mvp2.md) A1/A5/B2 moving the number, and this plan is re-read, not
+> re-argued."* Phases 1–3 have landed. **Nothing from Phase 4 onward may
+> start.** 0.42 is 13 points under the opening threshold and 6 over the closing
+> one, so the verdict is not close enough to be worth arguing about.
+>
+> The write-up is
+> [`app/eval/reports/sales_v1_deepseek_2026-09-22_phase0.md`](../../backend/app/eval/reports/sales_v1_deepseek_2026-09-22_phase0.md).
+> The same run closed
 > [learning-loop.md §13.2](learning-loop.md#132-phase-0--fix-the-ruler)'s last
-> open box.
+> open box, and it caught a bug in the ruler itself: `eval_runs.git_sha` was
+> read at *write* time, so arm 1 was filed under a commit made thirty minutes
+> into its own run. Fixed, with two tests that fail on the old code.
 
 ### 12.3 Phase 1 — Cache tokens · **8 / 8** · stands alone ✅
 
@@ -1005,7 +1018,7 @@ evidence **that says so**.
 
 | Phase | Done | Total |
 |---|:--:|:--:|
-| 0 — The gate | 1 | 5 |
+| 0 — The gate | 5 | 5 |
 | 1 — Cache tokens | 8 | 8 |
 | 2 — `app/analysis/` | 10 | 10 |
 | 3 — Citations | 8 | 8 |
@@ -1015,13 +1028,14 @@ evidence **that says so**.
 | 7 — Scoring | 0 | 7 |
 | 8 — Governance | 0 | 6 |
 | 9 — Documentation | 0 | 6 |
-| **Total** | **27** | **85** |
+| **Total** | **31** | **85** |
 
 ### 12.13 Change log
 
 | Date | What changed |
 |---|---|
 | 2026-09-22 | Written. No phase started. |
+| 2026-09-22 | **Phase 0 complete, 5/5 — and the gate did not open.** The three arms ran back to back on one model (DeepSeek V4 Pro, temp 0.0, v10, 2h 13m): **42.0 % layer off** (`d8c1035d`), **42.0 % layer on** (`5df63738`), **recall 80.2 % / 62.0 % at budget 8,000** (`dc2ea4fd`). 0.42 is §0.3's middle band, so **Phases 4–9 wait**; §0.3's rule is now written out loud in `status.md` §6 and its Tier 3 deferral row. Three findings the headline hides: the two 42 % arms share only 14 of their 21 correct answers (14 questions moved, 7 each way — this suite cannot see a difference under ±14 points); two budget-8,000 questions scored recall 0.000 and answered **correctly**, so recall@k scores the annotation rather than the model; and `eval_runs.git_sha` was read at write time, filing arm 1 under a commit made 30 minutes into its own run — **fixed, with two tests that fail on the old code**. Cache tokens came out of the same logs: **60.4 % of a layer-on prompt served from cache**, which is Phase 1's §6 measurement. Write-up: `app/eval/reports/sales_v1_deepseek_2026-09-22_phase0.md`. | 31 of 85 |
 | 2026-09-22 | **Phase 3 complete, 8/8.** `REPORT_PROMPT_VERSION` r4 → r5: the section's results are numbered and every sentence stating a figure cites the one it came from. The markers never reach a reader — `parse_claims` lifts them into `Claim` rows on `report_section_results.claims` (`0038`, **JSONB**, §11 Q1 closed), and the numeric check now matches each sentence against **its own** result instead of the union of the section's. A figure borrowed from another result is flagged where it used to pass, and the test asserts both halves. A footnote opens the statement behind the figure; an **edited** paragraph is rendered without footnotes, because the claims describe what the model wrote. `make test` 3,196 green, `npm test` + build green, `0038` applied and rolled back against a throwaway database. | 27 of 85 |
 | 2026-09-22 | **Phase 2 complete, 10/10.** `app/analysis/` — five modules, the three SpotIQ algorithms chosen by measure class, period alignment that reports per calendar day, and z-scores at a cardinality-chosen threshold. Refusals are values; `NO_CHANGE` is the commonest one and the honest answer on this fixture. The **ninth** import-linter contract (there were eight, not nine) keeps it unable to reach a model or a database, and was proven to break on a deliberate violation. 39 new tests, no provider anywhere. **Nothing in the product calls it** — the package ships inert, exactly as the phase asks. | 19 of 85 |
 | 2026-09-22 | **Phase 1 complete, 8/8.** `Usage` and `Completion` gained `cache_read_tokens` / `cache_write_tokens` as `int | None`; the gateway reads them from the four places providers and LiteLLM put them and **records nothing where they are absent**; `add_reported()` is the one piece of nullable arithmetic, shared by the pipeline and the usage service; migration `0037` on `runs` and `run_steps`, nullable and applied against a real database both ways. The chart **subdivides** the input bar rather than stacking on it, because a cached token is part of the prompt it arrived with. `make test` 3,145 green, `lint-imports` 8/8, `npm test` + build green. | 9 of 85 |
