@@ -227,6 +227,8 @@ class LiteLLMGateway:
             completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
             latency_ms=latency_ms,
             truncated=_finish_reason(response) == "length",
+            cache_read_tokens=_cache_read(usage),
+            cache_write_tokens=_cache_write(usage),
         )
 
     async def stream(
@@ -892,6 +894,11 @@ def _usage_of(response: Any, *, model: str, latency_ms: int) -> Usage:
     endpoint obliges, and a reassembled `_StreamedReply` carries whatever the
     trailing chunk had. Nothing here estimates — a missing count reads as zero
     and the caller records it as it stands.
+
+    The two cache counts are the exception to *"a missing count reads as
+    zero"*, and `Usage` says why: `None` is what an endpoint that reports no
+    caching leaves behind, and `0` is what one that reports caching and served
+    none does. Both are read here, neither is ever computed.
     """
     usage = getattr(response, "usage", None)
     return Usage(
@@ -899,7 +906,57 @@ def _usage_of(response: Any, *, model: str, latency_ms: int) -> Usage:
         completion_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
         latency_ms=latency_ms,
         model=model,
+        cache_read_tokens=_cache_read(usage),
+        cache_write_tokens=_cache_write(usage),
     )
+
+
+#: Where each provider family puts its cache counts once LiteLLM has
+#: normalised the response, most-normalised first. OpenAI-compatible endpoints
+#: report reads under `prompt_tokens_details.cached_tokens`; Anthropic's two
+#: separate figures arrive either folded into the same details object or
+#: passed through on the usage block itself, and LiteLLM's `Usage` allows the
+#: extra attributes, so both are looked for rather than assumed.
+_CACHE_READ_FIELDS = (
+    ("prompt_tokens_details", "cached_tokens"),
+    ("prompt_tokens_details", "cache_read_tokens"),
+    (None, "cache_read_input_tokens"),
+)
+_CACHE_WRITE_FIELDS = (
+    ("prompt_tokens_details", "cache_creation_tokens"),
+    ("prompt_tokens_details", "cache_write_tokens"),
+    (None, "cache_creation_input_tokens"),
+)
+
+
+def _cache_read(usage: Any) -> int | None:
+    return _first_reported(usage, _CACHE_READ_FIELDS)
+
+
+def _cache_write(usage: Any) -> int | None:
+    return _first_reported(usage, _CACHE_WRITE_FIELDS)
+
+
+def _first_reported(
+    usage: Any, fields: tuple[tuple[str | None, str], ...]
+) -> int | None:
+    """The first of these the provider actually reported, or `None`.
+
+    `None` is a finding, not a failure: it is how a run against an endpoint
+    that says nothing about caching stays distinguishable from a run against
+    one that cached nothing. So a field that is absent, `None`, or not a
+    number is skipped rather than coerced — `or 0` here would collapse exactly
+    the distinction these two columns exist to keep.
+    """
+    for container, name in fields:
+        holder = usage if container is None else getattr(usage, container, None)
+        if holder is None:
+            continue
+        value = getattr(holder, name, None)
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            continue
+        return int(value)
+    return None
 
 
 def _log_call(usage: Usage, *, provider: str, operation: str) -> None:
@@ -923,6 +980,16 @@ def _log_call(usage: Usage, *, provider: str, operation: str) -> None:
     just below: this observes, it does not authorise.
     """
     try:
+        cached = {
+            name: value
+            for name, value in (
+                ("cache_read_tokens", usage.cache_read_tokens),
+                ("cache_write_tokens", usage.cache_write_tokens),
+            )
+            # Omitted rather than logged as null, so a line from an endpoint
+            # that reports no caching does not read as one that cached nothing.
+            if value is not None
+        }
         log.info(
             "llm_call",
             operation=operation,
@@ -931,6 +998,7 @@ def _log_call(usage: Usage, *, provider: str, operation: str) -> None:
             prompt_tokens=usage.prompt_tokens,
             completion_tokens=usage.completion_tokens,
             latency_ms=usage.latency_ms,
+            **cached,
         )
     except Exception as err:  # pragma: no cover - defensive
         log.warning("llm_call_log_failed", error=type(err).__name__)

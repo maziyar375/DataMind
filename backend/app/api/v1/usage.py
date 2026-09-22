@@ -47,6 +47,8 @@ def _bucket(bucket: usage.Bucket) -> UsageBucket:
         prompt_tokens=bucket.prompt_tokens,
         completion_tokens=bucket.completion_tokens,
         runs=bucket.runs,
+        cache_read_tokens=bucket.cache_read_tokens,
+        cache_write_tokens=bucket.cache_write_tokens,
     )
 
 
@@ -65,6 +67,9 @@ def _series(series: usage.Series) -> UsageSeries:
         completion_tokens=series.completion_tokens,
         runs=series.runs,
         unmeasured=series.unmeasured,
+        cache_read_tokens=series.cache_read_tokens,
+        cache_write_tokens=series.cache_write_tokens,
+        cache_measured=series.cache_measured,
         since=series.since,
         until=series.until,
         bucket_seconds=series.bucket_seconds,
@@ -76,6 +81,9 @@ def _series(series: usage.Series) -> UsageSeries:
                 completion_tokens=model.completion_tokens,
                 runs=model.runs,
                 unmeasured=model.unmeasured,
+                cache_read_tokens=model.cache_read_tokens,
+                cache_write_tokens=model.cache_write_tokens,
+                cache_measured=model.cache_measured,
                 buckets=[_bucket(bucket) for bucket in model.buckets],
             )
             for model in series.models

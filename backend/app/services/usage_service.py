@@ -24,6 +24,16 @@ Three rules govern every figure below, and each is a way a usage screen lies:
   answer that is wrong. The total reports the size of that gap rather than
   hiding it.
 
+* **The two cache counts are `None`, never `0`, when nothing reported them.**
+  `0037` added `cache_read_tokens` and `cache_write_tokens` to `runs` and
+  `run_steps` alone, and every aggregate over them here is deliberately *not*
+  coalesced — a scope nothing measured and a scope that cached nothing are the
+  two facts the columns exist to keep apart, and `coalesce(…, 0)` spells the
+  first as the second. `cache_measured` is the count beside them, so a screen
+  can say what fraction of a scope the figure covers. They are also a
+  **subset** of `prompt_tokens` rather than an addition to it, so nothing here
+  adds them into a total.
+
 * **The window is clamped server-side, and so is its resolution.** The union
   carries no `LIMIT`, and an unbounded range over three growing tables is an
   outage waiting for its first busy installation. The bucket width is chosen
@@ -49,6 +59,7 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql.expression import ColumnElement, FunctionElement
 from sqlalchemy.types import BigInteger
 
+from app.domain.ports.llm import add_reported
 from app.infra.db.models import ReportRun, Run, RunStep, SemanticJobRow, User
 
 #: The widest window a caller may ask for. A year and a day — wide enough for
@@ -181,6 +192,13 @@ class Bucket:
     #: How many operations are behind the figures above. An hour with 400 runs
     #: and one with 4 are different facts about the same token count.
     runs: int = 0
+    #: What of `prompt_tokens` the provider served from, or wrote into, its
+    #: cache. **A subset of `prompt_tokens`**, so a screen subdivides the input
+    #: figure rather than stacking on top of it. `None` where nothing in this
+    #: scope reported a cache figure at all, which is a different fact from a
+    #: scope that reported `0` — see `0037`.
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,6 +219,16 @@ class ModelUsage:
     runs: int = 0
     #: As on `Series`: operations on this model that reported no token count.
     unmeasured: int = 0
+    #: What of `prompt_tokens` the provider served from, or wrote into, its
+    #: cache. **A subset of `prompt_tokens`**, so a screen subdivides the input
+    #: figure rather than stacking on top of it. `None` where nothing in this
+    #: scope reported a cache figure at all, which is a different fact from a
+    #: scope that reported `0` — see `0037`.
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    #: How many operations reported a cache figure. A model whose endpoint
+    #: says nothing about caching has this at zero and both counts at `None`.
+    cache_measured: int = 0
     #: This model's own buckets, so a screen can chart one model on its own
     #: without a second request. Sparse, like `Series.buckets`.
     buckets: list[Bucket] = field(default_factory=list)
@@ -235,6 +263,16 @@ class Series:
     #: How many of those operations reported no token count at all. Non-zero
     #: means every figure above understates, and the screen says so.
     unmeasured: int = 0
+    #: What of `prompt_tokens` the provider served from, or wrote into, its
+    #: cache. **A subset of `prompt_tokens`**, so a screen subdivides the input
+    #: figure rather than stacking on top of it. `None` where nothing in this
+    #: scope reported a cache figure at all, which is a different fact from a
+    #: scope that reported `0` — see `0037`.
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    #: How many operations reported a cache figure at all — the denominator
+    #: the screen needs before it says "62% of input was served from cache".
+    cache_measured: int = 0
     since: datetime | None = None
     until: datetime | None = None
     bucket_seconds: int = DAY_SECONDS
@@ -276,6 +314,13 @@ class NodeUsage:
     completion_tokens: int = 0
     llm_calls: int = 0
     llm_latency_ms: int = 0
+    #: What of `prompt_tokens` the provider served from, or wrote into, its
+    #: cache. **A subset of `prompt_tokens`**, so a screen subdivides the input
+    #: figure rather than stacking on top of it. `None` where nothing in this
+    #: scope reported a cache figure at all, which is a different fact from a
+    #: scope that reported `0` — see `0037`.
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
 
     @property
     def total_tokens(self) -> int:
@@ -339,7 +384,7 @@ _SOURCES = (Run, ReportRun, SemanticJobRow)
 
 
 def _arm(model: Any, window: Window) -> sa.Select[Any]:
-    """One table's contribution to the union, as the five columns it shares.
+    """One table's contribution to the union, as the seven columns it shares.
 
     The model is read out of `model_snapshot` — the frozen copy of the config
     each row was run with — rather than joined through `llm_config_id`, which
@@ -347,6 +392,14 @@ def _arm(model: Any, window: Window) -> sa.Select[Any]:
     tokens under whatever the config is renamed or repointed to later.
     Coalesced to `""` so a row without one groups with the others that lack it
     instead of splitting into a NULL group and an empty-string group.
+
+    **`report_runs` and `semantic_jobs` contribute a typed NULL for the two
+    cache counts**, because `0037` put those columns on `runs` alone. That is
+    not a gap being papered over: NULL is precisely what those rows have to
+    say — *nothing here measured caching* — and summing it as `0` would claim
+    a report generation was measured and found to cache nothing. Widening the
+    other two tables is the change to make when a report's cache cost is worth
+    a number; until then the column is honest about who it covers.
     """
     return sa.select(
         model.actor_id.label("actor_id"),
@@ -358,10 +411,20 @@ def _arm(model: Any, window: Window) -> sa.Select[Any]:
         sa.func.coalesce(model.model_snapshot["model"].as_string(), "").label("model"),
         model.prompt_tokens.label("prompt_tokens"),
         model.completion_tokens.label("completion_tokens"),
+        _cache_column(model, "cache_read_tokens"),
+        _cache_column(model, "cache_write_tokens"),
     ).where(
         model.created_at >= window.since,
         model.created_at < window.until,
     )
+
+
+def _cache_column(model: Any, name: str) -> ColumnElement[Any]:
+    """This table's cache column, or a typed NULL where it has none."""
+    column = getattr(model, name, None)
+    if column is None:
+        return sa.cast(sa.null(), sa.Integer).label(name)
+    return column.label(name)
 
 
 def _operations(window: Window) -> sa.Subquery:
@@ -391,6 +454,17 @@ def _aggregates(source: Any) -> list[ColumnElement[Any]]:
         sa.func.coalesce(sa.func.sum(source.c.completion_tokens), 0).label(
             "completion_tokens"
         ),
+        # **Not** coalesced to 0, unlike the two above. A scope where nothing
+        # reported a cache figure has to stay distinguishable from one where
+        # everything reported zero, and `coalesce` here would spell the first
+        # as the second — the same distinction `0037` made the columns
+        # nullable to keep, carried through the aggregation rather than lost
+        # in it. The count beside them says how many rows are behind a figure.
+        sa.func.sum(source.c.cache_read_tokens).label("cache_read_tokens"),
+        sa.func.sum(source.c.cache_write_tokens).label("cache_write_tokens"),
+        sa.func.count()
+        .filter(source.c.cache_read_tokens.isnot(None))
+        .label("cache_measured"),
         sa.func.count().label("runs"),
         # Measured by the absence of *both* counts: a row reporting prompt
         # tokens and no completion tokens is measured, just oddly.
@@ -403,21 +477,39 @@ def _aggregates(source: Any) -> list[ColumnElement[Any]]:
 
 
 class _Tally:
-    """A running sum of one group's four aggregates."""
+    """A running sum of one group's aggregates."""
 
-    __slots__ = ("completion", "prompt", "runs", "unmeasured")
+    __slots__ = (
+        "cache_measured", "cache_read", "cache_write",
+        "completion", "prompt", "runs", "unmeasured",
+    )
 
     def __init__(self) -> None:
         self.prompt = 0
         self.completion = 0
         self.runs = 0
         self.unmeasured = 0
+        #: `None` until some row reports a cache figure — never `0`, because a
+        #: scope nothing measured and a scope that cached nothing are the two
+        #: facts these columns exist to keep apart.
+        self.cache_read: int | None = None
+        self.cache_write: int | None = None
+        #: How many operations reported a cache figure at all, so a screen can
+        #: say what fraction of a scope the cache numbers cover.
+        self.cache_measured = 0
 
     def add(self, row: Any) -> None:
         self.prompt += int(row.prompt_tokens or 0)
         self.completion += int(row.completion_tokens or 0)
         self.runs += int(row.runs or 0)
         self.unmeasured += int(row.unmeasured or 0)
+        self.cache_read = add_reported(
+            self.cache_read, _optional_int(getattr(row, "cache_read_tokens", None))
+        )
+        self.cache_write = add_reported(
+            self.cache_write, _optional_int(getattr(row, "cache_write_tokens", None))
+        )
+        self.cache_measured += int(getattr(row, "cache_measured", 0) or 0)
 
     def bucket(self, start: datetime) -> Bucket:
         return Bucket(
@@ -425,7 +517,14 @@ class _Tally:
             prompt_tokens=self.prompt,
             completion_tokens=self.completion,
             runs=self.runs,
+            cache_read_tokens=self.cache_read,
+            cache_write_tokens=self.cache_write,
         )
+
+
+def _optional_int(value: Any) -> int | None:
+    """A nullable SQL count as an `int | None`, with NULL kept as `None`."""
+    return None if value is None else int(value)
 
 
 def _series(
@@ -460,6 +559,9 @@ def _series(
             completion_tokens=tally.completion,
             runs=tally.runs,
             unmeasured=tally.unmeasured,
+            cache_read_tokens=tally.cache_read,
+            cache_write_tokens=tally.cache_write,
+            cache_measured=tally.cache_measured,
             buckets=buckets(model_buckets[name]),
         )
         for name, tally in by_model.items()
@@ -476,6 +578,9 @@ def _series(
         completion_tokens=total.completion,
         runs=total.runs,
         unmeasured=total.unmeasured,
+        cache_read_tokens=total.cache_read,
+        cache_write_tokens=total.cache_write,
+        cache_measured=total.cache_measured,
         since=window.since,
         until=window.until,
         bucket_seconds=window.bucket_seconds,
@@ -599,6 +704,9 @@ async def installation(db: AsyncSession, *, window: Window) -> InstallationSerie
         completion_tokens=base.completion_tokens,
         runs=base.runs,
         unmeasured=base.unmeasured,
+        cache_read_tokens=base.cache_read_tokens,
+        cache_write_tokens=base.cache_write_tokens,
+        cache_measured=base.cache_measured,
         since=base.since,
         until=base.until,
         bucket_seconds=base.bucket_seconds,
@@ -640,6 +748,11 @@ async def by_node(db: AsyncSession, run_id: UUID) -> list[NodeUsage]:
             sa.func.coalesce(sa.func.sum(RunStep.llm_latency_ms), 0).label(
                 "llm_latency_ms"
             ),
+            # Uncoalesced, unlike every aggregate above it: a node whose
+            # provider reports no caching must read as NULL here, not as a
+            # node measured and found to cache nothing.
+            sa.func.sum(RunStep.cache_read_tokens).label("cache_read_tokens"),
+            sa.func.sum(RunStep.cache_write_tokens).label("cache_write_tokens"),
             sa.func.min(RunStep.seq).label("first_seq"),
         )
         .where(RunStep.run_id == run_id)
@@ -656,6 +769,8 @@ async def by_node(db: AsyncSession, run_id: UUID) -> list[NodeUsage]:
             completion_tokens=int(row.completion_tokens or 0),
             llm_calls=int(row.llm_calls or 0),
             llm_latency_ms=int(row.llm_latency_ms or 0),
+            cache_read_tokens=_optional_int(row.cache_read_tokens),
+            cache_write_tokens=_optional_int(row.cache_write_tokens),
         )
         for row in (await db.execute(grouped)).all()
         if row.llm_calls

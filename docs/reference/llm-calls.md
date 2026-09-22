@@ -61,7 +61,7 @@ to import `litellm`. Six methods:
 
 | Method | Returns | Used by |
 |---|---|---|
-| `complete` | `Completion(text, prompt_tokens, completion_tokens, latency_ms, truncated)` | 1, 10, 14, 15, 16 |
+| `complete` | `Completion(text, prompt_tokens, completion_tokens, latency_ms, truncated, cache_read_tokens, cache_write_tokens)` | 1, 10, 14, 15, 16 |
 | `stream` | `AsyncIterator[str]` of deltas | 2, 7 |
 | `structured` | a validated pydantic instance | 3, 4, 5, 6, 8, 9, 11, 12, 13 |
 | `probe` | `ProviderCapabilities` | 17 |
@@ -82,6 +82,19 @@ timeout          # settings.llm_request_timeout_seconds
 api_key          # only if set
 api_base         # only if base_url is set
 ```
+
+**The two cache counts are `None`, never `0`, where the provider reports
+nothing.** They are read off `prompt_tokens_details` (`cached_tokens`,
+`cache_creation_tokens`) or off the usage block itself
+(`cache_read_input_tokens`, `cache_creation_input_tokens`), whichever the
+provider and LiteLLM's normalisation put them in, and nothing computes them.
+Three facts have to stay apart — *cached nothing*, *reports no caching*, and a
+real figure — and two `int` columns could only hold two of them; the first two
+drive opposite decisions about whether a prompt-heavy workload is affordable.
+They are also **a subset of `prompt_tokens`, never an addition to it**, so any
+screen that adds them to the input figure double-counts. `Usage` in
+`domain/ports/llm.py` states both rules; migration `0037` carries them to
+`runs` and `run_steps`.
 
 `ResolvedLLM` carries the decrypted key and **never enters pipeline state and is
 never logged** — its `__repr__` redacts. `resolve_llm()`

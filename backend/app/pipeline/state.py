@@ -23,7 +23,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.domain.ports.database import ResultColumn
-from app.domain.ports.llm import Usage
+from app.domain.ports.llm import Usage, add_reported
 from app.domain.value_objects import DisclosurePolicy, HintBudget
 from app.pipeline.checks import Finding
 from app.sqlguard.validator import ValidationReport
@@ -590,6 +590,14 @@ class RunState(BaseModel):
     db_latency_ms: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    #: What of `prompt_tokens` the provider served from, or wrote into, its
+    #: cache. `None` until some call reports a figure, and it stays `None` for
+    #: a whole run against an endpoint that reports no caching — which is a
+    #: different fact from a run that cached nothing, and the reason these two
+    #: are not `int = 0` like the pair above them. `Usage` states the rule and
+    #: the subset relationship; this only accumulates.
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
 
     # ── what each node spent ─────────────────────────────────────────────
     # The run's totals above are the sum of this, and the sum is asserted in
@@ -621,12 +629,24 @@ class RunState(BaseModel):
         bucket.completion_tokens += usage.completion_tokens
         bucket.latency_ms += usage.latency_ms
         bucket.calls += 1
+        bucket.cache_read_tokens = add_reported(
+            bucket.cache_read_tokens, usage.cache_read_tokens
+        )
+        bucket.cache_write_tokens = add_reported(
+            bucket.cache_write_tokens, usage.cache_write_tokens
+        )
         if usage.model and not bucket.model:
             bucket.model = usage.model
 
         self.prompt_tokens += usage.prompt_tokens
         self.completion_tokens += usage.completion_tokens
         self.llm_latency_ms += usage.latency_ms
+        self.cache_read_tokens = add_reported(
+            self.cache_read_tokens, usage.cache_read_tokens
+        )
+        self.cache_write_tokens = add_reported(
+            self.cache_write_tokens, usage.cache_write_tokens
+        )
 
     def usage_sink(self, node: str) -> Callable[[Usage], None]:
         """`record_usage` with the node name already bound, for `on_usage=`.
@@ -675,6 +695,10 @@ class NodeUsage(BaseModel):
     latency_ms: int = 0
     calls: int = 0
     model: str = ""
+    #: A subset of `prompt_tokens`, summed over the calls that reported one.
+    #: `None` where none of them did — `add_reported` is the whole of the rule.
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
 
 
 class NodeResult(BaseModel):

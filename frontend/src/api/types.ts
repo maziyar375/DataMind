@@ -271,6 +271,20 @@ export interface UsageBucket {
   completion_tokens: number
   /** How many operations are behind the figures above. */
   runs: number
+  /**
+   * What of `prompt_tokens` the provider served from, or wrote into, its cache.
+   *
+   * **A subset of `prompt_tokens`, never an addition to it** — a provider
+   * reports cache reads as the part of the prompt it did not have to read
+   * again, so a chart that stacks these on top of input double-counts. The
+   * input bar is subdivided instead.
+   *
+   * `null` is *this scope reported no cache figure at all*, which is a
+   * different fact from a reported `0` (measured, and cached nothing). The two
+   * drive opposite decisions about whether a multi-step mode is affordable.
+   */
+  cache_read_tokens: number | null
+  cache_write_tokens: number | null
 }
 
 /**
@@ -287,6 +301,22 @@ export interface UsageModel {
   completion_tokens: number
   runs: number
   unmeasured: number
+  /**
+   * What of `prompt_tokens` the provider served from, or wrote into, its cache.
+   *
+   * **A subset of `prompt_tokens`, never an addition to it** — a provider
+   * reports cache reads as the part of the prompt it did not have to read
+   * again, so a chart that stacks these on top of input double-counts. The
+   * input bar is subdivided instead.
+   *
+   * `null` is *this scope reported no cache figure at all*, which is a
+   * different fact from a reported `0` (measured, and cached nothing). The two
+   * drive opposite decisions about whether a multi-step mode is affordable.
+   */
+  cache_read_tokens: number | null
+  cache_write_tokens: number | null
+  /** How many operations reported a cache figure at all. */
+  cache_measured: number
   /** This model's own buckets — sparse, like `UsageSeries.buckets`. */
   buckets: UsageBucket[]
 }
@@ -316,6 +346,22 @@ export interface UsageSeries {
   completion_tokens: number
   runs: number
   unmeasured: number
+  /**
+   * What of `prompt_tokens` the provider served from, or wrote into, its cache.
+   *
+   * **A subset of `prompt_tokens`, never an addition to it** — a provider
+   * reports cache reads as the part of the prompt it did not have to read
+   * again, so a chart that stacks these on top of input double-counts. The
+   * input bar is subdivided instead.
+   *
+   * `null` is *this scope reported no cache figure at all*, which is a
+   * different fact from a reported `0` (measured, and cached nothing). The two
+   * drive opposite decisions about whether a multi-step mode is affordable.
+   */
+  cache_read_tokens: number | null
+  cache_write_tokens: number | null
+  /** How many operations reported a cache figure at all. */
+  cache_measured: number
   /** The first bucket's start — aligned, so a little before what was asked. */
   since: string
   /** The window's exclusive end: now, for a period that ends now. */

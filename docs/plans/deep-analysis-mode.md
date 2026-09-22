@@ -872,16 +872,16 @@ The plan would be several times larger if any of these were missing.
 > [learning-loop.md §13.2](learning-loop.md#132-phase-0--fix-the-ruler)'s last
 > open box.
 
-### 12.3 Phase 1 — Cache tokens · **0 / 8** · stands alone
+### 12.3 Phase 1 — Cache tokens · **8 / 8** · stands alone ✅
 
-- [ ] `Usage` gains `cache_read_tokens` and `cache_write_tokens` — [ports/llm.py](../../backend/app/domain/ports/llm.py)
-- [ ] The gateway reads them where the provider sends them, and **records nothing where it does not** — no estimate in a measurement's column
-- [ ] `NodeUsage` + `RunState.record_usage` accumulate both
-- [ ] Migration `0037` — two columns on `runs`, two on `run_steps`, **nullable, no `0` default**
-- [ ] `RunStepRead` and `usage_service`'s series carry them
-- [ ] `usage-chart.ts` gains two series; `usage-chart.test.ts` updated
-- [ ] `test_token_accounting.py` — per-node sums still equal run totals across four columns
-- [ ] `test_token_accounting_schema.py` — the NULL-vs-0 distinction holds for the new columns
+- [x] `Usage` gains `cache_read_tokens` and `cache_write_tokens` — [ports/llm.py](../../backend/app/domain/ports/llm.py), `int | None` and **not** `int = 0`; `Completion` carries them too, or `route`'s row is null for ever
+- [x] The gateway reads them where the provider sends them, and **records nothing where it does not** — no estimate in a measurement's column. Four places are looked in (`prompt_tokens_details.cached_tokens` / `.cache_creation_tokens`, and the usage block's own `cache_read_input_tokens` / `cache_creation_input_tokens`), because LiteLLM normalises Anthropic's pair to different places on different paths. `test_token_accounting.py` pins **both** halves: an unreported count is `None`, a reported `0` stays `0`
+- [x] `NodeUsage` + `RunState.record_usage` accumulate both, through `add_reported()` in `ports/llm.py` — one call reporting nothing does not erase a figure another call measured, and the first call of a run does not raise
+- [x] Migration `0037` — two columns on `runs`, two on `run_steps`, **nullable, no `0` default**, no backfill. Applied and rolled back against a throwaway database, not only replayed against a recorder
+- [x] `RunStepRead` and `usage_service`'s series carry them — and **no aggregate over them is coalesced to `0`**, unlike every aggregate beside them, or the whole distinction dies in the `SUM`. `report_runs` and `semantic_jobs` contribute a typed NULL, which is what those rows actually have to say
+- [x] `usage-chart.ts` gains two series; `usage-chart.test.ts` updated — as a **subdivision of the input bar, not a fourth and fifth thing stacked on it**. A cache read is part of the prompt it arrived with, so stacking would draw a column taller than the tokens it stands for; `stackSegments` cuts input into cached / written / read and the column's height is unchanged
+- [x] `test_token_accounting.py` — per-node sums still equal run totals across four columns. The invariant lives in `test_run_token_accounting.py` (where the run-vs-steps assertions are) and is asserted **separately** from the two-column one, because the nullable arithmetic is genuinely different and a build using `(x or 0)` would pass the old test and fail only the new one
+- [x] `test_token_accounting_schema.py` — the NULL-vs-0 distinction holds for the new columns, and a test asserts the columns are **only** where `0037` put them, so a later widening is a migration rather than a quiet ORM edit
 
 ### 12.4 Phase 2 — `app/analysis/` · **0 / 10** · stands alone
 
@@ -1006,7 +1006,7 @@ evidence **that says so**.
 | Phase | Done | Total |
 |---|:--:|:--:|
 | 0 — The gate | 1 | 5 |
-| 1 — Cache tokens | 0 | 8 |
+| 1 — Cache tokens | 8 | 8 |
 | 2 — `app/analysis/` | 0 | 10 |
 | 3 — Citations | 0 | 8 |
 | 4 — The plan and the graph | 0 | 12 |
@@ -1015,13 +1015,14 @@ evidence **that says so**.
 | 7 — Scoring | 0 | 7 |
 | 8 — Governance | 0 | 6 |
 | 9 — Documentation | 0 | 6 |
-| **Total** | **1** | **85** |
+| **Total** | **9** | **85** |
 
 ### 12.13 Change log
 
 | Date | What changed |
 |---|---|
 | 2026-09-22 | Written. No phase started. |
+| 2026-09-22 | **Phase 1 complete, 8/8.** `Usage` and `Completion` gained `cache_read_tokens` / `cache_write_tokens` as `int | None`; the gateway reads them from the four places providers and LiteLLM put them and **records nothing where they are absent**; `add_reported()` is the one piece of nullable arithmetic, shared by the pipeline and the usage service; migration `0037` on `runs` and `run_steps`, nullable and applied against a real database both ways. The chart **subdivides** the input bar rather than stacking on it, because a cached token is part of the prompt it arrived with. `make test` 3,145 green, `lint-imports` 8/8, `npm test` + build green. | 9 of 85 |
 | 2026-09-22 | **Phase 0, the frozen set.** `deep_v1.json` — twenty questions, no gold answers, frozen the day it was written; five static checks in `tests/eval/test_golden_set.py` hold the freeze, one of them failing if a `gold_sql` ever appears. §11 **Q3 answered**: reuse `sales`, because it has no planted movement and a fabricated driver is therefore detectable — evidence in `suites/CHANGELOG.md`. The three measurements were still running when this landed. | 1 of 85 |
 
 ---

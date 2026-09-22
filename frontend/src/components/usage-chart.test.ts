@@ -13,10 +13,11 @@
  * of the machine running it.
  */
 import {
-  bucketLabel, denseSlots, formatCompact, formatInstant, formatShare, formatSlot,
-  formatTokens, fromLocalInput, isPeriodKey, localOffsetMinutes, modelRows, presetRange,
-  PRESETS, rankedRow, scopeView, selectionLabel, splitModelName, timeTicks, toggleModel,
-  toLocalInput, UNRECORDED_MODEL, usageTotals, valueTicks,
+  addReported, bucketLabel, denseSlots, formatCompact, formatInstant, formatShare,
+  formatSlot, formatTokens, fromLocalInput, isPeriodKey, localOffsetMinutes, modelRows,
+  presetRange, PRESETS, rankedRow, scopeView, selectionLabel, splitModelName,
+  stackSegments, timeTicks, toggleModel, toLocalInput, UNRECORDED_MODEL, usageTotals,
+  valueTicks,
 } from './usage-chart.ts'
 import type { UsageBucket, UsageModel, UsageSeries } from '../api/types.ts'
 
@@ -36,12 +37,20 @@ const HOUR = 3_600_000
 const DAY = 24 * HOUR
 
 function bucket(over: Partial<UsageBucket> = {}): UsageBucket {
-  return { start: '2026-09-13T00:00:00Z', prompt_tokens: 0, completion_tokens: 0, runs: 1, ...over }
+  return {
+    start: '2026-09-13T00:00:00Z', prompt_tokens: 0, completion_tokens: 0, runs: 1,
+    // The default is a provider that says nothing about caching, because that
+    // is what most of them do — a fixture defaulting to `0` would make every
+    // test below assert against a measurement nobody took.
+    cache_read_tokens: null, cache_write_tokens: null,
+    ...over,
+  }
 }
 
 function model(over: Partial<UsageModel> = {}): UsageModel {
   return {
     model: 'gpt-4o-mini', prompt_tokens: 0, completion_tokens: 0, runs: 1, unmeasured: 0,
+    cache_read_tokens: null, cache_write_tokens: null, cache_measured: 0,
     buckets: [], ...over,
   }
 }
@@ -54,6 +63,9 @@ function series(over: Partial<UsageSeries> = {}): UsageSeries {
     completion_tokens: 0,
     runs: 0,
     unmeasured: 0,
+    cache_read_tokens: null,
+    cache_write_tokens: null,
+    cache_measured: 0,
     since: '2026-09-13T00:00:00Z',
     until: '2026-09-13T06:00:00Z',
     bucket_seconds: 3600,
@@ -144,7 +156,15 @@ check('the unrecorded row is a model the filter can choose', scopeView(scoped, [
 check(
   'a model the window does not hold is a zero view, not a throw',
   scopeView(scoped, ['gone']),
-  { figures: { prompt_tokens: 0, completion_tokens: 0, runs: 0, unmeasured: 0 }, buckets: [] },
+  {
+    figures: {
+      prompt_tokens: 0, completion_tokens: 0, runs: 0, unmeasured: 0,
+      // Null rather than 0: a selection nothing matched measured no caching,
+      // which is not the same as one that cached nothing.
+      cache_read_tokens: null, cache_write_tokens: null, cache_measured: 0,
+    },
+    buckets: [],
+  },
 )
 const pair = series({
   models: [
@@ -161,6 +181,7 @@ const pair = series({
 const both = scopeView(pair, ['b', 'a'])
 check('several models sum their figures, and leave the rest out', both.figures, {
   prompt_tokens: 150, completion_tokens: 15, runs: 3, unmeasured: 1,
+  cache_read_tokens: null, cache_write_tokens: null, cache_measured: 0,
 })
 check(
   'and merge their buckets by instant, however the start was spelled',
@@ -274,6 +295,97 @@ check(
 )
 check('a narrow chart says less', timeTicks(dayStart, dayStart + DAY, TEHRAN, 3).length <= 3, true)
 check('an empty span has no ticks', timeTicks(dayStart, dayStart, TEHRAN, 6), [])
+
+console.log('\n— cache tokens: a subset of input, and three states not two —')
+// The whole of this section is one arithmetic claim and one nullability
+// claim. A provider reports cached tokens as the part of the prompt it did
+// not read again, so they are INSIDE the input figure; and `null` is "this
+// provider says nothing about caching", which is not "it cached nothing".
+const cacheSlot = denseSlots(
+  [bucket({
+    start: '2026-09-13T01:00:00Z', prompt_tokens: 1000, completion_tokens: 100, runs: 2,
+    cache_read_tokens: 800, cache_write_tokens: 50,
+  })],
+  '2026-09-13T00:00:00Z', '2026-09-13T03:00:00Z', 3600,
+)[1]
+check('the cached figures reach the slot', [cacheSlot.cacheRead, cacheSlot.cacheWrite], [800, 50])
+check(
+  'a slot nothing ran in reports no caching rather than none cached',
+  [denseSlots([], '2026-09-13T00:00:00Z', '2026-09-13T01:00:00Z', 3600)[0].cacheRead],
+  [null],
+)
+
+const pieces = stackSegments(cacheSlot)
+check('the column is cut into cache, cache-write, the rest of input, and output',
+  pieces.map((p) => [p.key, p.tokens]),
+  [['cacheRead', 800], ['cacheWrite', 50], ['input', 150], ['output', 100]])
+check(
+  'and the pieces still sum to input + output — the bar does not grow',
+  pieces.reduce((n, p) => n + p.tokens, 0),
+  cacheSlot.input + cacheSlot.output,
+)
+check(
+  'a bucket with no cache figure is the two segments it always was',
+  stackSegments({ start: 0, end: 1, input: 90, output: 10, runs: 1, cacheRead: null, cacheWrite: null })
+    .map((p) => [p.key, p.tokens]),
+  [['input', 90], ['output', 10]],
+)
+check(
+  'a provider reporting more cached than prompt is clamped, never drawn negative',
+  stackSegments({ start: 0, end: 1, input: 100, output: 10, runs: 1, cacheRead: 400, cacheWrite: 0 })
+    .reduce((n, p) => n + p.tokens, 0),
+  110,
+)
+check(
+  'a reported zero draws no cache segment but is still a measurement',
+  stackSegments({ start: 0, end: 1, input: 100, output: 10, runs: 1, cacheRead: 0, cacheWrite: 0 })
+    .map((p) => p.key),
+  ['input', 'output'],
+)
+
+const cached = usageTotals({
+  prompt_tokens: 1000, completion_tokens: 100, runs: 4, unmeasured: 0,
+  cache_read_tokens: 800, cache_write_tokens: 50, cache_measured: 4,
+})
+check('the cached share is against input, not against the total', cached.cachedShare, 0.8)
+check('and it is written as a sentence naming what it is', cached.cacheNote,
+  '80% of input was served from cache; 50 written to it')
+check('a scope whose provider reports caching and served none says so', usageTotals({
+  prompt_tokens: 1000, completion_tokens: 100, runs: 4, unmeasured: 0,
+  cache_read_tokens: 0, cache_write_tokens: 0, cache_measured: 4,
+}).cacheNote, 'Nothing was served from cache, though this provider reports it')
+check('a scope whose provider says nothing about caching says nothing', [
+  usageTotals({ prompt_tokens: 1000, completion_tokens: 100, runs: 4, unmeasured: 0 }).cacheNote,
+  usageTotals({ prompt_tokens: 1000, completion_tokens: 100, runs: 4, unmeasured: 0 }).cachedShare,
+], [null, null])
+check('and neither does an empty scope', usageTotals({
+  prompt_tokens: 0, completion_tokens: 0, runs: 0, unmeasured: 0,
+}).cacheNote, null)
+
+check('adding an unreported count leaves the total unreported', addReported(null, null), null)
+check('the first reported count becomes the total', addReported(null, 0), 0)
+check('a later quiet call does not erase it', addReported(80, null), 80)
+check('and two reported counts add', addReported(80, 20), 100)
+
+const mixedScope = scopeView(series({
+  prompt_tokens: 300, completion_tokens: 30, runs: 2,
+  models: [
+    model({ model: 'a', prompt_tokens: 200, completion_tokens: 20, cache_read_tokens: 150, cache_measured: 1 }),
+    model({ model: 'b', prompt_tokens: 100, completion_tokens: 10 }),
+  ],
+}), ['a', 'b'])
+check(
+  'a selection mixing a caching provider with a quiet one reports the measured part',
+  [mixedScope.figures.cache_read_tokens, mixedScope.figures.cache_measured],
+  [150, 1],
+)
+check(
+  'and a selection of only quiet providers reports nothing, not zero',
+  scopeView(series({
+    models: [model({ model: 'b', prompt_tokens: 100, completion_tokens: 10 })],
+  }), ['b']).figures.cache_read_tokens,
+  null,
+)
 
 console.log(failures === 0 ? '\nall passed' : `\n${failures} failed`)
 // `throw`, not `process.exit`: `@types/node` is not a dependency here, and

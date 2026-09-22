@@ -46,7 +46,7 @@ import {
   type PeriodKey, type RankedRow, type Slot, type UsageTotals,
 } from '../components/usage-chart'
 import {
-  SEGMENTS, UsageSlotTable, UsageTimeline, useSegmentColors,
+  presentSegments, UsageSlotTable, UsageTimeline, useSegmentColors,
 } from '../components/usage-timeline'
 
 /**
@@ -631,13 +631,29 @@ function Summary({
           <dt>Tokens per operation</dt>
           <dd>{totals.perOperation === null ? '—' : formatTokens(totals.perOperation)}</dd>
         </div>
+        {/* Shown only where something reported a cache figure. An em dash here
+            would read as "nothing was cached", and most providers report
+            nothing at all — two facts a blank row cannot tell apart, so the
+            row is absent instead. */}
+        {totals.cacheRead !== null && (
+          <div>
+            <dt>Served from cache</dt>
+            <dd>{totals.cacheRead}</dd>
+          </div>
+        )}
       </dl>
-      {(totals.unmeasuredNote || children) && (
+      {(totals.unmeasuredNote || totals.cacheNote || children) && (
         <div className="rm-usage-notes">
           {totals.unmeasuredNote && (
             <p className="rm-usage-note">
               <Icon.Info size={13} />
               <span>{totals.unmeasuredNote}</span>
+            </p>
+          )}
+          {totals.cacheNote && (
+            <p className="rm-usage-note">
+              <Icon.Info size={13} />
+              <span>{totals.cacheNote}. These tokens are part of the input figure, not additional to it.</span>
             </p>
           )}
           {children}
@@ -711,7 +727,10 @@ function Timeline({
         <div className="rm-usage-panel-tools">
           {!asTable && (
             <div className="rm-usage-legend">
-              {SEGMENTS.map((segment) => (
+              {/* Only the series these columns contain: most providers report
+                  no caching, and a legend naming a colour that never appears
+                  teaches a distinction the chart is not making. */}
+              {presentSegments(slots).map((segment) => (
                 <span key={segment.key} className="rm-usage-key">
                   <span className="rm-usage-swatch" style={{ background: colors[segment.key] }} aria-hidden="true" />
                   <span className="rm-usage-key-label">{segment.label}</span>

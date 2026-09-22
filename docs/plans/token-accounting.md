@@ -533,6 +533,21 @@ Named so nobody assumes otherwise:
   unit, and the worker's sweep is the only caller) and worth a follow-up.
 - **Historical rows stay null.** Not backfilled, for the reason §2 gives.
 
+> **One of these was closed on 2026-09-22.** `Usage` could not say what a
+> *cached* prompt cost, which made a workload that re-sends the same schema
+> block once per node unmeasurable — precisely the workload prompt caching
+> exists for. Phase 1 of
+> [deep-analysis-mode.md](deep-analysis-mode.md) added `cache_read_tokens` and
+> `cache_write_tokens` to `Usage`, `Completion`, `NodeUsage`, `RunState`,
+> `RunStepRead` and the usage series, with migration `0037` on `runs` and
+> `run_steps`. It follows §2's nullability rule and needs it more sharply:
+> these two have **three** states, because *"this provider reports no
+> caching"* and *"this provider cached nothing"* are different answers to the
+> affordability question. `report_runs` and `semantic_jobs` were deliberately
+> left out — `usage_service` contributes a typed NULL for those arms rather
+> than a zero, and widening them is a migration when a report's cache cost is
+> worth a number.
+
 ---
 
 ## 6. Reading the numbers

@@ -135,6 +135,66 @@ class CountingGateway:
         return gen()
 
 
+#: What a caching provider reports, per method. `structured` serves most of
+#: its prompt from cache and writes nothing; `stream` writes and reads
+#: nothing; `complete` reports **no cache block at all**, which is the third
+#: state and the one a run must be able to show beside the other two.
+STRUCTURED_CACHE = (250, 0)
+STREAM_CACHE = (0, 60)
+
+
+class CachingGateway(CountingGateway):
+    """`CountingGateway` against an endpoint that reports caching.
+
+    A subclass rather than a flag on the original so every test already
+    written against the plain one keeps measuring a provider that says nothing
+    about caching — which is still the common case, and the case the nulls are
+    for.
+    """
+
+    async def structured(
+        self, _llm: Any, _messages: Any, schema: Any, **kwargs: Any
+    ) -> Any:
+        sink = kwargs.get("on_usage")
+        kwargs = dict(kwargs)
+        kwargs["on_usage"] = lambda usage: (
+            sink(
+                Usage(
+                    prompt_tokens=usage.prompt_tokens,
+                    completion_tokens=usage.completion_tokens,
+                    latency_ms=usage.latency_ms,
+                    model=usage.model,
+                    cache_read_tokens=STRUCTURED_CACHE[0],
+                    cache_write_tokens=STRUCTURED_CACHE[1],
+                )
+            )
+            if sink is not None
+            else None
+        )
+        return await super().structured(_llm, _messages, schema, **kwargs)
+
+    def stream(
+        self, _llm: Any, _messages: Any, **kwargs: Any
+    ) -> AsyncIterator[StreamChunk]:
+        sink = kwargs.get("on_usage")
+        kwargs = dict(kwargs)
+        kwargs["on_usage"] = lambda usage: (
+            sink(
+                Usage(
+                    prompt_tokens=usage.prompt_tokens,
+                    completion_tokens=usage.completion_tokens,
+                    latency_ms=usage.latency_ms,
+                    model=usage.model,
+                    cache_read_tokens=STREAM_CACHE[0],
+                    cache_write_tokens=STREAM_CACHE[1],
+                )
+            )
+            if sink is not None
+            else None
+        )
+        return super().stream(_llm, _messages, **kwargs)
+
+
 class ScriptedConnector:
     dialect = "postgres"
 
@@ -441,3 +501,130 @@ async def test_no_tokens_reach_the_run_total_without_a_step_row_claiming_them() 
             f"{node} spent {bucket.prompt_tokens} and its rows claim "
             f"{claimed.get(node)}"
         )
+
+
+# ── 0037: the same invariant, over four columns ──────────────────────────
+def _bare_state() -> RunState:
+    """A run with nothing in it, for the two tests that drive `record_usage`
+    directly rather than through the graph."""
+    return RunState(
+        run_id=uuid4(), conversation_id=uuid4(), owner_id=uuid4(),
+        connection_id=uuid4(), question="q",
+        deadline_at=utcnow() + timedelta(seconds=120),
+    )
+
+
+
+@pytest.mark.asyncio
+async def test_a_runs_cache_totals_are_the_sum_of_its_steps_too() -> None:
+    """The invariant above, restated for the two columns `0037` added.
+
+    It is asserted separately rather than folded into the first test because
+    the arithmetic is genuinely different: these two are nullable, so the sum
+    is over *the steps that reported one* and `None` is not a zero on either
+    side. A run whose totals were accumulated with `(x or 0) + (y or 0)` would
+    pass the first test and fail this one only where a provider went quiet —
+    which is the case nobody runs locally.
+    """
+    gateway = CachingGateway(sql=[SQL], prose=["Revenue rose."], chart=_chart_intent())
+    recorder, state = await drive(gateway, ScriptedConnector([_result()]))
+
+    measured = [u for u in recorder.settled().values() if u is not None]
+    reported = [u for u in measured if u.cache_read_tokens is not None]
+    assert reported, "no step reported a cache figure at all"
+
+    assert state.cache_read_tokens == sum(u.cache_read_tokens or 0 for u in reported)
+    assert state.cache_write_tokens == sum(u.cache_write_tokens or 0 for u in reported)
+
+
+@pytest.mark.asyncio
+async def test_cached_tokens_are_a_subset_of_the_prompt_never_an_addition() -> None:
+    """The arithmetic that makes a stacked chart lie.
+
+    A provider reports cache reads as *part of* the prompt it was sent, so a
+    screen adding them to the input figure double-counts. Nothing in the
+    pipeline may make them exceed it.
+    """
+    gateway = CachingGateway(sql=[SQL], prose=["Revenue rose."], chart=_chart_intent())
+    _recorder, state = await drive(gateway, ScriptedConnector([_result()]))
+
+    for name, bucket in state.node_usage.items():
+        read = bucket.cache_read_tokens
+        if read is not None:
+            assert read <= bucket.prompt_tokens, name
+    assert (state.cache_read_tokens or 0) <= state.prompt_tokens
+
+
+@pytest.mark.asyncio
+async def test_a_provider_that_reports_no_caching_leaves_nulls_not_zeroes() -> None:
+    """The third state, and the reason these columns are not `int = 0`.
+
+    `CountingGateway` reports tokens and says nothing about caching, which is
+    what most endpoints do. Every cache figure on that run must be `None` —
+    a `0` would read as *measured, and cached nothing*, and the two drive
+    opposite decisions about whether a multi-step mode is affordable.
+    """
+    gateway = CountingGateway(sql=[SQL], prose=["Revenue rose."], chart=_chart_intent())
+    recorder, state = await drive(gateway, ScriptedConnector([_result()]))
+
+    assert state.prompt_tokens > 0, "the run measured nothing at all"
+    assert state.cache_read_tokens is None
+    assert state.cache_write_tokens is None
+    for name, usage in recorder.settled().items():
+        if usage is not None:
+            assert usage.cache_read_tokens is None, name
+            assert usage.cache_write_tokens is None, name
+
+
+@pytest.mark.asyncio
+async def test_one_quiet_call_does_not_erase_a_bucket_another_call_measured() -> None:
+    """A node calling a model twice, one call reporting caching and one not.
+
+    The bucket must hold the figure that *was* reported rather than falling
+    back to `None`, and must not invent a zero for the call that reported
+    nothing — the same arithmetic SQL's `SUM` does over a nullable column,
+    which is what lets the read side and the write side mean one thing.
+    """
+    state = _bare_state()
+    state.record_usage("generate", Usage(prompt_tokens=100, completion_tokens=5))
+    assert state.node_usage["generate"].cache_read_tokens is None
+
+    state.record_usage(
+        "generate",
+        Usage(prompt_tokens=100, completion_tokens=5, cache_read_tokens=80),
+    )
+    state.record_usage("generate", Usage(prompt_tokens=100, completion_tokens=5))
+
+    bucket = state.node_usage["generate"]
+    assert bucket.calls == 3
+    assert bucket.prompt_tokens == 300
+    assert bucket.cache_read_tokens == 80
+    assert bucket.cache_write_tokens is None
+    assert state.cache_read_tokens == 80
+
+
+@pytest.mark.asyncio
+async def test_a_second_generate_row_does_not_restate_the_first_rows_cache_figure() -> None:
+    """The adapter diffs against what has been *reported*, and the two new
+    columns have to be diffed the same way or a repaired `generate` writes its
+    cache reads twice — once in each row — and the step rows stop summing to
+    the run."""
+    from app.pipeline.graph import _usage_unreported
+
+    state = _bare_state()
+    reported: dict[str, NodeUsage] = {}
+
+    state.record_usage(
+        "generate", Usage(prompt_tokens=100, completion_tokens=5, cache_read_tokens=80)
+    )
+    first = _usage_unreported(state, "generate", reported)
+    assert first is not None and first.cache_read_tokens == 80
+
+    state.record_usage(
+        "generate", Usage(prompt_tokens=120, completion_tokens=6, cache_read_tokens=30)
+    )
+    second = _usage_unreported(state, "generate", reported)
+    assert second is not None
+    assert second.prompt_tokens == 120
+    assert second.cache_read_tokens == 30, "the repair row restated the first row's cache"
+    assert second.cache_write_tokens is None

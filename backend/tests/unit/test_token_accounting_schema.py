@@ -15,6 +15,13 @@ that are easy to "tidy" into a bug, and every one of them is about a **null**:
   is precisely why it is written now rather than invented later;
 * and no historical row is given a token count it never had, because that is
   the `prompt_version` mistake this tree already carries in five weeks of rows.
+
+The last section covers `0037`, which adds `cache_read_tokens` and
+`cache_write_tokens` under the same rule — and needs it more sharply. These
+two have **three** states where the pair above have two: the provider cached
+nothing (`0`), the provider reports no caching at all (NULL), and the provider
+served the prompt from cache. A `0` default would collapse the first two, and
+they drive opposite decisions about whether a multi-step mode is affordable.
 """
 from __future__ import annotations
 
@@ -63,6 +70,16 @@ RUN_TABLES = ("runs", "report_runs", "semantic_jobs")
 #: them rather than pretending `0023` never added them.
 DROP_COST = importlib.import_module("app.infra.db.migrations.versions.0031_drop_cost")
 DROPPED_LATER = {"cost_usd"}
+
+CACHE = importlib.import_module("app.infra.db.migrations.versions.0037_cache_tokens")
+
+#: What `0037` adds, per table — written out for `ADDED`'s reason: an
+#: expectation derived from the migration agrees with whatever the migration
+#: does, including its bugs.
+CACHE_ADDED = {
+    "runs": {"cache_read_tokens", "cache_write_tokens"},
+    "run_steps": {"cache_read_tokens", "cache_write_tokens"},
+}
 
 
 class OpRecorder:
@@ -365,3 +382,89 @@ def test_the_orm_and_the_migration_agree_on_the_index_name() -> None:
     }
 
     assert recorded == declared
+
+
+# ── 0037: the same rule, and a third state it has to hold ────────────────
+def _replay_cache(direction: str = "upgrade") -> OpRecorder:
+    recorder = OpRecorder()
+    original = CACHE.op
+    try:
+        CACHE.op = recorder
+        getattr(CACHE, direction)()
+    finally:
+        CACHE.op = original
+    return recorder
+
+
+def test_the_cache_revision_hangs_off_0036() -> None:
+    assert CACHE.revision == "0037"
+    assert CACHE.down_revision == "0036"
+
+
+def test_0037_adds_exactly_two_columns_to_each_of_two_tables() -> None:
+    recorded = {
+        table: {c.name for c in columns}
+        for table, columns in _replay_cache().added.items()
+    }
+
+    assert recorded == CACHE_ADDED
+
+
+def test_the_cache_columns_exist_in_the_orm_with_the_same_type() -> None:
+    for table, columns in _replay_cache().added.items():
+        orm = Base.metadata.tables[table]
+        for column in columns:
+            assert column.name in orm.c, f"{table}.{column.name}"
+            assert type(orm.c[column.name].type) is type(column.type), (
+                f"{table}.{column.name}"
+            )
+
+
+def test_no_cache_column_is_defaulted_to_zero() -> None:
+    """The rule `0023` wrote, and the one `0037` needs more than `0023` did.
+
+    A node whose provider reports no caching and a node whose provider cached
+    nothing are the two facts `NULL` and `0` keep apart here, and the second
+    is the evidence that caching is not paying for itself. A default would
+    make every run against every provider claim the second.
+    """
+    for table, names in CACHE_ADDED.items():
+        orm = Base.metadata.tables[table]
+        for name in names:
+            column = orm.c[name]
+            assert column.nullable, f"{table}.{name}"
+            assert column.default is None, f"{table}.{name}"
+            assert column.server_default is None, f"{table}.{name}"
+
+    for table, columns in _replay_cache().added.items():
+        for column in columns:
+            assert column.nullable, f"{table}.{column.name}"
+            assert column.server_default is None, f"{table}.{column.name}"
+
+
+def test_the_cache_downgrade_drops_exactly_what_it_added() -> None:
+    up, down = _replay_cache("upgrade"), _replay_cache("downgrade")
+
+    added = {(t, c.name) for t, cols in up.added.items() for c in cols}
+    assert set(down.dropped_columns) == added
+    assert not up.statements and not down.statements
+
+
+def test_no_cache_column_is_backfilled() -> None:
+    """A run from before `0037` has no cache figure, and inventing a zero for
+    it would put a fabricated measurement in the column the whole phase exists
+    to make trustworthy."""
+    for statement in _replay_cache().statements:
+        for name in ("cache_read_tokens", "cache_write_tokens"):
+            assert name not in statement, statement
+
+
+def test_the_cache_columns_sit_only_where_0037_put_them() -> None:
+    """`report_runs` and `semantic_jobs` deliberately do **not** have them, and
+    `usage_service` contributes a typed NULL for those arms rather than a zero.
+    A later widening is a migration, not a quiet ORM edit — this is what would
+    notice."""
+    for table in ("report_runs", "semantic_jobs"):
+        columns = Base.metadata.tables[table].c
+        assert "cache_read_tokens" not in columns, table
+        assert "cache_write_tokens" not in columns, table

@@ -1470,6 +1470,13 @@ class UsageBucket(BaseModel):
     #: How many operations are behind the figures above. An hour with 400 runs
     #: and one with 4 are different facts about the same token count.
     runs: int = 0
+    #: What of `prompt_tokens` the provider served from, or wrote into, its
+    #: cache. **A subset of `prompt_tokens`** — a screen subdivides the input
+    #: figure rather than stacking on top of it. `None` where nothing in this
+    #: scope reported a cache figure at all, which is a different fact from a
+    #: reported `0`.
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
 
 
 class UsageModel(BaseModel):
@@ -1482,6 +1489,16 @@ class UsageModel(BaseModel):
     runs: int = 0
     #: Operations on this model that reported no token count at all.
     unmeasured: int = 0
+    #: What of `prompt_tokens` the provider served from, or wrote into, its
+    #: cache. **A subset of `prompt_tokens`** — a screen subdivides the input
+    #: figure rather than stacking on top of it. `None` where nothing in this
+    #: scope reported a cache figure at all, which is a different fact from a
+    #: reported `0`.
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    #: How many operations reported a cache figure at all — the denominator a
+    #: screen needs before it says "62% of input was served from cache".
+    cache_measured: int = 0
     #: Sparse, like `UsageSeries.buckets`: a bucket this model did not run in
     #: is absent.
     buckets: list[UsageBucket] = Field(default_factory=list)
@@ -1515,6 +1532,15 @@ class UsageSeries(BaseModel):
     #: rather than a flag, because a reader needs to know *how* partial a total
     #: is before deciding whether to act on it.
     unmeasured: int = 0
+    #: What of `prompt_tokens` the provider served from, or wrote into, its
+    #: cache. **A subset of `prompt_tokens`** — a screen subdivides the input
+    #: figure rather than stacking on top of it. `None` where nothing in this
+    #: scope reported a cache figure at all, which is a different fact from a
+    #: reported `0`.
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    #: How many operations reported a cache figure at all.
+    cache_measured: int = 0
     #: The start of the first bucket. Aligned, so it may be a little earlier
     #: than the `since` that was asked for — see `usage_service.clamp_window`.
     since: datetime | None = None
@@ -2804,6 +2830,11 @@ class RunStepRead(BaseModel):
 
     `llm_calls` is not derivable from the step existing: `generate` repairs,
     and a repaired call is two calls that were both paid for.
+
+    The two cache counts carry the same rule one step further: `None` there is
+    *this provider reports no caching*, `0` is *it reports caching and served
+    none*, and both are **a subset of `prompt_tokens`** rather than an
+    addition to it, so a reader adding them to the input figure double-counts.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -2815,6 +2846,8 @@ class RunStepRead(BaseModel):
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     llm_calls: int | None = None
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
 
 
 class ArtifactRead(BaseModel):

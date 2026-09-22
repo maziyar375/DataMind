@@ -959,6 +959,20 @@ class Run(Base, TimestampMixin):
     total_latency_ms: Mapped[int | None] = mapped_column(Integer)
     prompt_tokens: Mapped[int | None] = mapped_column(Integer)
     completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    # What of `prompt_tokens` the provider served from, or wrote into, its
+    # cache — added in `0037`. **A subset of `prompt_tokens`, never an
+    # addition to it**, so a screen that stacks either on top of the input
+    # figure double-counts.
+    #
+    # Nullable for a sharper reason than the pair above: three facts have to
+    # stay apart and two `int` columns can only hold two of them — the
+    # provider cached nothing (`0`), the provider reports no caching at all
+    # (NULL), and the provider served the prompt from cache. The first two
+    # drive opposite decisions about whether a workload that re-sends the same
+    # schema block once per step is affordable, which is why
+    # `docs/plans/deep-analysis-mode.md` Phase 1 comes before its Phase 4.
+    cache_read_tokens: Mapped[int | None] = mapped_column(Integer)
+    cache_write_tokens: Mapped[int | None] = mapped_column(Integer)
     worker_id: Mapped[str | None] = mapped_column(String(100))
     fencing_token: Mapped[int | None] = mapped_column(BigInteger)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -1039,6 +1053,20 @@ class RunStep(Base):
     # tokens*.
     prompt_tokens: Mapped[int | None] = mapped_column(Integer)
     completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    # What of `prompt_tokens` the provider served from, or wrote into, its
+    # cache — added in `0037`. **A subset of `prompt_tokens`, never an
+    # addition to it**, so a screen that stacks either on top of the input
+    # figure double-counts.
+    #
+    # Nullable for a sharper reason than the pair above: three facts have to
+    # stay apart and two `int` columns can only hold two of them — the
+    # provider cached nothing (`0`), the provider reports no caching at all
+    # (NULL), and the provider served the prompt from cache. The first two
+    # drive opposite decisions about whether a workload that re-sends the same
+    # schema block once per step is affordable, which is why
+    # `docs/plans/deep-analysis-mode.md` Phase 1 comes before its Phase 4.
+    cache_read_tokens: Mapped[int | None] = mapped_column(Integer)
+    cache_write_tokens: Mapped[int | None] = mapped_column(Integer)
     # Provider time only, and deliberately not `duration_ms` above: a node
     # spending 200ms of its four seconds at the provider is a different
     # problem from one spending 3.9s there, and one column cannot say which.

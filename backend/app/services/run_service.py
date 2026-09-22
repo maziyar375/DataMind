@@ -854,6 +854,10 @@ class RunService:
         run.db_latency_ms = state.db_latency_ms
         run.prompt_tokens = state.prompt_tokens
         run.completion_tokens = state.completion_tokens
+        # Left NULL where no call reported a figure, which is what a run
+        # against an endpoint that says nothing about caching must read as.
+        run.cache_read_tokens = state.cache_read_tokens
+        run.cache_write_tokens = state.cache_write_tokens
         if run.started_at:
             run.total_latency_ms = int(
                 (run.finished_at - run.started_at).total_seconds() * 1000
@@ -1075,6 +1079,11 @@ class RunService:
             step.completion_tokens = usage.completion_tokens
             step.llm_latency_ms = usage.latency_ms
             step.llm_calls = usage.calls
+            # None where this node's calls reported no cache figure at all —
+            # a third fact beside "measured" and "never called a model", and
+            # the one `0` here would erase.
+            step.cache_read_tokens = usage.cache_read_tokens
+            step.cache_write_tokens = usage.cache_write_tokens
         await self._db.commit()
 
     async def _authority(self, run_id: UUID) -> tuple[str | None, int | None]:

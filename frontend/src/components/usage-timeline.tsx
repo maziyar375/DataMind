@@ -2,6 +2,13 @@
  * Tokens over time: one stacked column per bucket, input under output, from
  * the window's start to its end — which, for a period that ends now, is now.
  *
+ * **The input segment is subdivided, never added to.** A provider reports
+ * cached tokens as the part of the prompt it did not have to read again, so
+ * the two cache counts live *inside* `input`; stacking them on top would draw
+ * a column taller than the tokens it stands for. `stackSegments` does that
+ * arithmetic and is tested; a column's height is identical to what it was
+ * before caching was measured at all.
+ *
  * Drawn as plain SVG rather than through `VegaChart`, and the reason is the
  * axis. The usage response is sparse and its buckets are variable-width (five
  * minutes to a day, chosen by the server), and this chart has to lay every
@@ -19,24 +26,59 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { PALETTES } from './palette.ts'
 import { useThemeName } from './theme-name.ts'
 import {
-  formatCompact, formatSlot, formatTokens, timeTicks, valueTicks, type Slot,
+  formatCompact, formatSlot, formatTokens, stackSegments, timeTicks, valueTicks,
+  type Segment, type Slot,
 } from './usage-chart.ts'
 
 const MARGIN = { top: 14, right: 6, bottom: 30, left: 46 }
 const GAP = 2
 const MAX_BAR = 24
 
-/** The two series, in stack order, with the palette slot each one paints from. */
+/**
+ * The four series, in stack order, with the palette slot each one paints from.
+ *
+ * Bottom to top: what the provider served from cache, what it charged to write
+ * into the cache, the input it actually read, and the output. The first three
+ * are **one bar between them** — they are the parts of `prompt_tokens`, not
+ * three things added to it.
+ *
+ * `input` keeps slot 0 and `output` slot 1, so a screen that has never seen a
+ * caching provider looks exactly as it did. The cache pair take the next two
+ * slots rather than tints of slot 0: a tint says *less important*, and a
+ * cached token is the same token at a different price.
+ */
 export const SEGMENTS = [
+  { key: 'cacheRead', label: 'From cache', slot: 2 },
+  { key: 'cacheWrite', label: 'Written to cache', slot: 3 },
   { key: 'input', label: 'Input', slot: 0 },
   { key: 'output', label: 'Output', slot: 1 },
 ] as const
 
-/** The input and output colours for the theme in force. */
-export function useSegmentColors(): { input: string; output: string } {
+export type SegmentColors = Record<Segment['key'], string>
+
+/** Each series' colour for the theme in force. */
+export function useSegmentColors(): SegmentColors {
   const theme = useThemeName()
   const palette = PALETTES[theme]
-  return { input: palette.category[0], output: palette.category[1] }
+  return {
+    input: palette.category[0],
+    output: palette.category[1],
+    cacheRead: palette.category[2],
+    cacheWrite: palette.category[3],
+  }
+}
+
+/**
+ * Which series these columns actually contain, in stack order.
+ *
+ * The legend is drawn from this rather than from `SEGMENTS`, because most
+ * providers report no caching at all and a legend naming two colours that
+ * never appear teaches a distinction the chart is not making.
+ */
+export function presentSegments(slots: readonly Slot[]): typeof SEGMENTS[number][] {
+  const seen = new Set<Segment['key']>()
+  for (const slot of slots) for (const segment of stackSegments(slot)) seen.add(segment.key)
+  return SEGMENTS.filter((segment) => seen.has(segment.key))
 }
 
 /** A column segment with its top corners rounded and its base square. */
@@ -67,7 +109,12 @@ export function UsageTimeline({
 }) {
   const theme = useThemeName()
   const palette = PALETTES[theme]
-  const colors = { input: palette.category[0], output: palette.category[1] }
+  const colors: SegmentColors = {
+    input: palette.category[0],
+    output: palette.category[1],
+    cacheRead: palette.category[2],
+    cacheWrite: palette.category[3],
+  }
 
   const boxRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(0)
@@ -229,32 +276,45 @@ export function UsageTimeline({
           {slots.map((slot, index) => {
             const total = slot.input + slot.output
             if (total <= 0) return null
+            const pieces = stackSegments(slot)
             const x = MARGIN.left + index * slotW + (slotW - barW) / 2
             const fullH = Math.max(1, (total / scale.max) * plotH)
-            const inputH = total > 0 ? (slot.input / total) * fullH : 0
-            const outputH = fullH - inputH
-            const split = slot.input > 0 && slot.output > 0 && fullH > GAP + 2
-            const inputTop = baseline - inputH
             const dim = activeSlot !== null && active !== index
+            // Laid bottom-up from the baseline, so the pieces of `input` sit
+            // under `output` in `stackSegments`' order and the column's height
+            // is still `input + output` — the cache pieces subdivide the input
+            // rather than adding to it.
+            let bottom = baseline
             return (
               <g key={slot.start} opacity={dim ? 0.55 : 1}>
-                {slot.input > 0 && (
-                  slot.output > 0
-                    ? <rect x={x} y={inputTop} width={barW} height={Math.max(1, inputH)} fill={colors.input} />
-                    : <path d={roundedTop(x, inputTop, barW, inputH, 4)} fill={colors.input} />
-                )}
-                {slot.output > 0 && (
-                  <path
-                    d={roundedTop(
-                      x,
-                      baseline - fullH,
-                      barW,
-                      Math.max(1, outputH - (split ? GAP : 0)),
-                      4,
-                    )}
-                    fill={colors.output}
-                  />
-                )}
+                {pieces.map((piece, at) => {
+                  const h = (piece.tokens / total) * fullH
+                  const top = bottom - h
+                  const last = at === pieces.length - 1
+                  // The surface gap goes between input and output only: the
+                  // three parts of the input bar are one bar, and gaps inside
+                  // it would read as three separate measurements.
+                  const gap = last && pieces.length > 1 && fullH > GAP + 2 ? GAP : 0
+                  bottom = top
+                  return last
+                    ? (
+                      <path
+                        key={piece.key}
+                        d={roundedTop(x, top + gap, barW, Math.max(1, h - gap), 4)}
+                        fill={colors[piece.key]}
+                      />
+                    )
+                    : (
+                      <rect
+                        key={piece.key}
+                        x={x}
+                        y={top}
+                        width={barW}
+                        height={Math.max(1, h)}
+                        fill={colors[piece.key]}
+                      />
+                    )
+                })}
               </g>
             )
           })}
@@ -325,11 +385,14 @@ export function UsageTimeline({
                 {formatTokens(activeSlot.input + activeSlot.output)}
                 <span> tokens</span>
               </div>
-              {SEGMENTS.map((segment) => (
-                <div key={segment.key} className="rm-usage-tip-row">
-                  <span className="rm-usage-tip-key" style={{ background: colors[segment.key] }} />
-                  <span>{segment.label}</span>
-                  <strong>{formatTokens(activeSlot[segment.key])}</strong>
+              {/* The pieces the column is actually drawn from, so the tip and
+                  the bar cannot disagree — and so the cached part is named
+                  rather than folded silently into the input figure. */}
+              {stackSegments(activeSlot).map((piece) => (
+                <div key={piece.key} className="rm-usage-tip-row">
+                  <span className="rm-usage-tip-key" style={{ background: colors[piece.key] }} />
+                  <span>{piece.label}</span>
+                  <strong>{formatTokens(piece.tokens)}</strong>
                 </div>
               ))}
               <div className="rm-usage-tip-row">

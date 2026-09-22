@@ -65,6 +65,17 @@ export interface UsageFigures {
   completion_tokens: number
   runs: number
   unmeasured: number
+  /**
+   * What of `prompt_tokens` the provider served from, or wrote into, its
+   * cache — **a subset of it, never an addition**, so nothing here adds them
+   * into a total. `null` is *nothing in this scope reported a cache figure*,
+   * which is a different fact from a reported `0`; optional so every caller
+   * that has no opinion about caching is unchanged.
+   */
+  cache_read_tokens?: number | null
+  cache_write_tokens?: number | null
+  /** How many operations reported a cache figure at all. */
+  cache_measured?: number
 }
 
 /**
@@ -96,6 +107,27 @@ export interface UsageTotals {
   perOperation: number | null
   /** Why every token figure above understates. `null` when none does. */
   unmeasuredNote: string | null
+  /**
+   * The cached share of input: what the provider did not have to read again.
+   *
+   * `null` where nothing reported a cache figure, which is most providers —
+   * and it must read as *unknown*, never as `0%`. The two answer opposite
+   * questions about whether re-sending a schema block once per step is
+   * affordable, which is the reason these columns exist at all.
+   */
+  cachedShare: number | null
+  /** The cache figures, grouped. `null` where nothing reported one. */
+  cacheRead: string | null
+  cacheWrite: string | null
+  /**
+   * The cache in one sentence, or `null` where nothing reported it.
+   *
+   * A sentence rather than a percentage on its own, for `unmeasuredNote`'s
+   * reason: `0%` from a provider that reports caching and served none is a
+   * finding, and it reads identically to a missing measurement unless the
+   * screen spells the difference out.
+   */
+  cacheNote: string | null
 }
 
 export function usageTotals(figures: UsageFigures): UsageTotals {
@@ -105,6 +137,8 @@ export function usageTotals(figures: UsageFigures): UsageTotals {
   const totalTokens = promptTokens + completionTokens
   const unmeasured = Math.max(0, figures.unmeasured)
   const measuredRuns = Math.max(0, runs - unmeasured)
+
+  const cache = cacheFigures(figures, promptTokens)
 
   if (runs <= 0) {
     return {
@@ -117,6 +151,7 @@ export function usageTotals(figures: UsageFigures): UsageTotals {
       inputShare: null,
       perOperation: null,
       unmeasuredNote: null,
+      ...cache,
     }
   }
 
@@ -144,6 +179,45 @@ export function usageTotals(figures: UsageFigures): UsageTotals {
           ? 'This operation reported no token count, so the figures here understate.'
           : `${unmeasured} of ${operations(runs)} reported no token count, `
             + 'so every figure here understates.',
+    ...cache,
+  }
+}
+
+/**
+ * The four cache fields of `UsageTotals`, from a scope's figures.
+ *
+ * Split out because the empty branch above needs them too, and because the
+ * arithmetic has exactly one trap in it: **a cache read is part of the prompt
+ * it was sent with**, so the share is against `prompt_tokens` and never
+ * against the total. Anything else states a number larger than the thing it
+ * is a share of.
+ */
+function cacheFigures(
+  figures: UsageFigures,
+  promptTokens: number,
+): Pick<UsageTotals, 'cachedShare' | 'cacheRead' | 'cacheWrite' | 'cacheNote'> {
+  const read = figures.cache_read_tokens
+  const write = figures.cache_write_tokens
+  // `null` **and** `undefined`, because the field is optional: a caller that
+  // predates caching passes neither, and it means the same thing the server's
+  // null means — nothing measured this.
+  if (read === null || read === undefined) {
+    return { cachedShare: null, cacheRead: null, cacheWrite: null, cacheNote: null }
+  }
+
+  const share = promptTokens > 0 ? Math.min(1, read / promptTokens) : null
+  const written = write === null || write === undefined ? null : formatTokens(write)
+  const note = share === null
+    ? null
+    : read > 0
+      ? `${formatShare(share)} of input was served from cache`
+      : 'Nothing was served from cache, though this provider reports it'
+
+  return {
+    cachedShare: share,
+    cacheRead: formatTokens(read),
+    cacheWrite: written,
+    cacheNote: written && write ? `${note}; ${written} written to it` : note,
   }
 }
 
@@ -191,7 +265,13 @@ export function scopeView(
 ): { figures: UsageFigures; buckets: UsageBucket[] } {
   if (models.length === 0) return { figures: series, buckets: series.buckets }
   const chosen = new Set(models)
-  const figures: UsageFigures = { prompt_tokens: 0, completion_tokens: 0, runs: 0, unmeasured: 0 }
+  const figures: UsageFigures = {
+    prompt_tokens: 0, completion_tokens: 0, runs: 0, unmeasured: 0,
+    // `null` until a chosen model reports one, so a selection of models that
+    // all run on a provider reporting no caching reads as unknown rather than
+    // as zero — `addReported` is the whole of the rule.
+    cache_read_tokens: null, cache_write_tokens: null, cache_measured: 0,
+  }
   const merged = new Map<string, UsageBucket>()
   for (const model of series.models) {
     if (!chosen.has(model.model)) continue
@@ -199,6 +279,13 @@ export function scopeView(
     figures.completion_tokens += model.completion_tokens
     figures.runs += model.runs
     figures.unmeasured += model.unmeasured
+    figures.cache_read_tokens = addReported(
+      figures.cache_read_tokens ?? null, model.cache_read_tokens,
+    )
+    figures.cache_write_tokens = addReported(
+      figures.cache_write_tokens ?? null, model.cache_write_tokens,
+    )
+    figures.cache_measured = (figures.cache_measured ?? 0) + (model.cache_measured ?? 0)
     for (const bucket of model.buckets) {
       const key = String(Date.parse(bucket.start))
       const into = merged.get(key)
@@ -208,12 +295,28 @@ export function scopeView(
           prompt_tokens: into.prompt_tokens + bucket.prompt_tokens,
           completion_tokens: into.completion_tokens + bucket.completion_tokens,
           runs: into.runs + bucket.runs,
+          cache_read_tokens: addReported(into.cache_read_tokens, bucket.cache_read_tokens),
+          cache_write_tokens: addReported(into.cache_write_tokens, bucket.cache_write_tokens),
         }
         : { ...bucket })
     }
   }
   const buckets = [...merged.values()].sort((a, b) => Date.parse(a.start) - Date.parse(b.start))
   return { figures, buckets }
+}
+
+/**
+ * Add a count that may not have been reported, keeping *unreported* intact.
+ *
+ * The browser half of `add_reported` in `app/domain/ports/llm.py`, and it has
+ * to mean the same thing or a merged selection disagrees with the same
+ * selection computed by the server. `null` is *never reported*, not zero: the
+ * obvious `(a ?? 0) + (b ?? 0)` turns a scope nothing measured into a scope
+ * that cached nothing, which are the two facts the column exists to separate.
+ */
+export function addReported(total: number | null, reported: number | null | undefined): number | null {
+  if (reported === null || reported === undefined) return total
+  return total === null ? reported : total + reported
 }
 
 /**
@@ -389,6 +492,59 @@ export interface Slot {
   input: number
   output: number
   runs: number
+  /**
+   * The cached part of `input`, and the part written into the cache — **both
+   * inside `input`, never beside it**. `null` where the bucket reported no
+   * cache figure, which is what a provider that says nothing about caching
+   * leaves behind.
+   */
+  cacheRead: number | null
+  cacheWrite: number | null
+}
+
+/** One drawn piece of a column, bottom to top. */
+export interface Segment {
+  key: 'cacheRead' | 'cacheWrite' | 'input' | 'output'
+  label: string
+  tokens: number
+}
+
+/**
+ * A column's pieces, bottom to top, with the input bar **subdivided**.
+ *
+ * This is the one piece of arithmetic on this screen that a reasonable person
+ * gets wrong. A provider reports cache reads as the part of the prompt it did
+ * not have to read again, and LiteLLM folds Anthropic's separate figures into
+ * `prompt_tokens` for the same reason — so both cache counts are already
+ * *inside* `input`. Stacking them on top would draw a column taller than the
+ * tokens it represents and inflate the axis with numbers nobody spent.
+ *
+ * So the input bar is cut into three: served from cache, written to cache, and
+ * the rest — which is the part that was actually read. The column's height is
+ * unchanged from before this existed, and a bucket that reported no cache
+ * figure yields the same two segments it always did.
+ *
+ * The two cache figures are clamped to `input` together. A provider that
+ * reports more cached tokens than prompt tokens is reporting something this
+ * screen cannot draw, and the right response is a bar that still adds up
+ * rather than a negative remainder that renders as an upside-down rectangle.
+ */
+export function stackSegments(slot: Slot): Segment[] {
+  const read = Math.max(0, slot.cacheRead ?? 0)
+  const write = Math.max(0, slot.cacheWrite ?? 0)
+  const scale = read + write > slot.input && read + write > 0
+    ? slot.input / (read + write)
+    : 1
+  const cached = Math.round(read * scale)
+  const written = Math.round(write * scale)
+  const fresh = Math.max(0, slot.input - cached - written)
+
+  const segments: Segment[] = []
+  if (cached > 0) segments.push({ key: 'cacheRead', label: 'From cache', tokens: cached })
+  if (written > 0) segments.push({ key: 'cacheWrite', label: 'Written to cache', tokens: written })
+  if (fresh > 0) segments.push({ key: 'input', label: 'Input', tokens: fresh })
+  if (slot.output > 0) segments.push({ key: 'output', label: 'Output', tokens: slot.output })
+  return segments
 }
 
 /**
@@ -426,6 +582,11 @@ export function denseSlots(
       input: bucket?.prompt_tokens ?? 0,
       output: bucket?.completion_tokens ?? 0,
       runs: bucket?.runs ?? 0,
+      // `null` rather than `0` for a bucket the server did not send: nothing
+      // ran in it, so nothing measured its caching either — and the empty
+      // slots must not read as a provider that cached nothing.
+      cacheRead: bucket?.cache_read_tokens ?? null,
+      cacheWrite: bucket?.cache_write_tokens ?? null,
     })
   }
   return slots

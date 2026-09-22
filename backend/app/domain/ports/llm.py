@@ -102,6 +102,26 @@ class StreamChunk:
     reasoning: str = ""
 
 
+def add_reported(total: int | None, reported: int | None) -> int | None:
+    """Add a count that may not have been reported, keeping *unreported* intact.
+
+    The arithmetic `Usage`'s two cache counts need, written once here beside
+    the rule it serves rather than in each of the four places that accumulate
+    them. `None` is *never reported*, not zero: a total stays `None` until
+    some call reports a figure, and thereafter sums only the calls that
+    reported one — which is exactly what SQL's `SUM` does over a nullable
+    column, and why the read side in `usage_service` can rely on both halves
+    meaning the same thing.
+
+    The two obvious inline forms are both wrong, which is why this exists:
+    `(total or 0) + (reported or 0)` turns *never reported* into `0`, and
+    `total + reported` raises on the first call of every run.
+    """
+    if reported is None:
+        return total
+    return reported if total is None else total + reported
+
+
 @dataclass(frozen=True, slots=True)
 class Usage:
     """What one provider call spent, as the provider reported it.
@@ -116,12 +136,35 @@ class Usage:
     streamed reply reports nothing, and that is recorded as it stands rather
     than estimated, because an estimate in the same column as a measurement is
     indistinguishable from one.
+
+    **The two cache counts take that rule one step further, and are `None`
+    rather than `0`.** Three facts have to stay apart here, and two columns of
+    `int` can only hold two of them: the provider cached nothing (`0`), the
+    provider does not report caching at all (`None`), and the provider served
+    the whole prompt from cache. The first two drive opposite decisions about
+    whether a workload that re-sends the same schema block per step is
+    affordable — see `docs/plans/deep-analysis-mode.md` §2.1 — so a default of
+    `0` would quietly turn *"this endpoint says nothing"* into *"this endpoint
+    cached nothing"*.
+
+    **Both are a subset of `prompt_tokens`, never an addition to it.** OpenAI
+    reports `cached_tokens` as the part of the prompt it did not have to read
+    again; LiteLLM folds Anthropic's separate cache figures into
+    `prompt_tokens` for the same reason. So a screen adding either to the input
+    figure double-counts, and the only honest rendering subdivides the input
+    rather than stacking on top of it.
     """
 
     prompt_tokens: int = 0
     completion_tokens: int = 0
     latency_ms: int = 0
     model: str = ""
+    #: Prompt tokens the provider served from its cache — a subset of
+    #: `prompt_tokens`. `None` where the provider said nothing about caching.
+    cache_read_tokens: int | None = None
+    #: Prompt tokens the provider charged to *write* into its cache — also a
+    #: subset of `prompt_tokens`. `None` where nothing was reported.
+    cache_write_tokens: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +180,10 @@ class Completion:
     #: so. `structured` already reads the same signal for its repair path; this
     #: exposes it to `complete` callers rather than leaving them to guess.
     truncated: bool = False
+    #: The provider's own cache counts, `None` where it reported none — the
+    #: rule and the subset relationship are `Usage`'s, stated once there.
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
 
     def usage(self, model: str = "") -> Usage:
         """The same numbers, in the shape a sink hands out.
@@ -152,6 +199,8 @@ class Completion:
             completion_tokens=self.completion_tokens,
             latency_ms=self.latency_ms,
             model=model,
+            cache_read_tokens=self.cache_read_tokens,
+            cache_write_tokens=self.cache_write_tokens,
         )
 
 

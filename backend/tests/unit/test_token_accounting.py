@@ -17,6 +17,13 @@ Four properties are worth pinning, and each is a way this goes quietly wrong:
 * a stream whose provider sends no usage chunk reports zero and **never
   estimates** — a tokenizer guess in the same column as a measurement is
   indistinguishable from one.
+
+The last section is `0037`'s pair, and it is the same rule sharpened. A cache
+count has **three** states where the two above have two — the provider cached
+nothing, the provider does not report caching, and the provider served the
+prompt from cache — so `None` and `0` have to survive the whole way from the
+provider's response to the column. Every assertion there is about which of the
+two a given response produces.
 """
 from __future__ import annotations
 
@@ -56,6 +63,22 @@ def _gateway() -> LiteLLMGateway:
 
 def _usage(prompt: int, completion: int) -> Any:
     return type("_U", (), {"prompt_tokens": prompt, "completion_tokens": completion})()
+
+
+def _details(**fields: Any) -> Any:
+    """A `prompt_tokens_details` block carrying exactly these fields.
+
+    Exactly these, and no others — the absence of a field is the signal under
+    test, so a stub that defaulted the rest to `0` or to `None` would answer
+    the question for the code.
+    """
+    return type("_D", (), fields)()
+
+
+def _usage_with(prompt: int, completion: int, **fields: Any) -> Any:
+    return type(
+        "_U", (), {"prompt_tokens": prompt, "completion_tokens": completion, **fields}
+    )()
 
 
 def _reply(content: str, *, usage: Any = None, finish_reason: str = "stop") -> Any:
@@ -326,3 +349,157 @@ async def test_nothing_changes_for_a_caller_that_passes_no_sink() -> None:
     assert out.label == "orders"
     assert "stream" not in seen[0]
     assert "stream_options" not in seen[0]
+
+
+# ── 0037: a cache count has three states, not two ─────────────────────────
+@pytest.mark.asyncio
+async def test_an_openai_style_reply_reports_the_tokens_it_served_from_cache() -> None:
+    """`prompt_tokens_details.cached_tokens` is where an OpenAI-compatible
+    endpoint puts it, and it is a **subset** of `prompt_tokens` — 800 of the
+    1,000 below were not read again, they were not 800 extra."""
+    seen: list[Usage] = []
+
+    async def once(**_: Any) -> Any:
+        return _reply(
+            '{"label": "orders"}',
+            usage=_usage_with(1000, 8, prompt_tokens_details=_details(cached_tokens=800)),
+        )
+
+    with patch("litellm.acompletion", side_effect=once):
+        await _gateway().structured(_llm(), _MSG, _Answer, on_usage=seen.append)
+
+    assert seen[0].cache_read_tokens == 800
+    assert seen[0].prompt_tokens == 1000
+    assert seen[0].cache_read_tokens <= seen[0].prompt_tokens
+    assert seen[0].cache_write_tokens is None
+
+
+@pytest.mark.asyncio
+async def test_a_cache_write_is_read_from_either_place_a_provider_puts_it() -> None:
+    """LiteLLM normalises Anthropic's `cache_creation_input_tokens` into the
+    details block on some paths and passes it through on the usage object on
+    others. Both are read, because a number found in only one of them is a
+    number this repo cannot see on half its providers."""
+    for usage in (
+        _usage_with(900, 5, prompt_tokens_details=_details(cache_creation_tokens=400)),
+        _usage_with(900, 5, cache_creation_input_tokens=400),
+    ):
+        seen: list[Usage] = []
+
+        async def once(_u: Any = usage, **_: Any) -> Any:
+            return _reply('{"label": "orders"}', usage=_u)
+
+        with patch("litellm.acompletion", side_effect=once):
+            await _gateway().structured(_llm(), _MSG, _Answer, on_usage=seen.append)
+
+        assert seen[0].cache_write_tokens == 400
+
+
+@pytest.mark.asyncio
+async def test_a_provider_that_says_nothing_about_caching_reports_none() -> None:
+    """The distinction the columns exist for, at the point it is created.
+
+    `None` here and `0` in the test below drive opposite decisions about
+    whether a workload that re-sends the same schema block once per step is
+    affordable, and a defensive `or 0` anywhere on this path collapses them.
+    """
+    seen: list[Usage] = []
+
+    async def once(**_: Any) -> Any:
+        return _reply('{"label": "orders"}', usage=_usage(1000, 8))
+
+    with patch("litellm.acompletion", side_effect=once):
+        await _gateway().structured(_llm(), _MSG, _Answer, on_usage=seen.append)
+
+    assert seen[0].prompt_tokens == 1000
+    assert seen[0].cache_read_tokens is None
+    assert seen[0].cache_write_tokens is None
+
+
+@pytest.mark.asyncio
+async def test_a_reported_zero_stays_a_zero() -> None:
+    """The other half, and the one a truthy check would break: an endpoint
+    that reports caching and served none is **measured**, and it is the
+    measurement that says the cache is not paying for itself."""
+    seen: list[Usage] = []
+
+    async def once(**_: Any) -> Any:
+        return _reply(
+            '{"label": "orders"}',
+            usage=_usage_with(1000, 8, prompt_tokens_details=_details(cached_tokens=0)),
+        )
+
+    with patch("litellm.acompletion", side_effect=once):
+        await _gateway().structured(_llm(), _MSG, _Answer, on_usage=seen.append)
+
+    assert seen[0].cache_read_tokens == 0
+    assert seen[0].cache_read_tokens is not None
+
+
+@pytest.mark.asyncio
+async def test_a_completion_carries_its_cache_counts_into_the_usage_it_hands_out() -> None:
+    """`route` is a `complete()` caller, so a count that stopped at the
+    gateway's own log line would leave that node's row null for ever."""
+
+    async def once(**_: Any) -> Any:
+        return _reply(
+            "ANALYTICAL",
+            usage=_usage_with(300, 2, prompt_tokens_details=_details(cached_tokens=250)),
+        )
+
+    with patch("litellm.acompletion", side_effect=once):
+        completion = await _gateway().complete(_llm(), _MSG)
+
+    assert completion.cache_read_tokens == 250
+    assert completion.usage(model="m").cache_read_tokens == 250
+
+
+@pytest.mark.asyncio
+async def test_a_stream_reports_the_cache_counts_on_its_usage_chunk() -> None:
+    """The reassembled reply is response-shaped precisely so one helper reads
+    both transports; this is the assertion that keeps it that way."""
+    seen: list[Usage] = []
+    chunks = [
+        _chunk(content="hello"),
+        _chunk(usage=_usage_with(
+            1200, 30, prompt_tokens_details=_details(cached_tokens=900)
+        )),
+    ]
+
+    with patch("litellm.acompletion", return_value=_stream(chunks)):
+        async for _ in _gateway().stream(_llm(), _MSG, on_usage=seen.append):
+            pass
+
+    assert len(seen) == 1
+    assert (seen[0].cache_read_tokens, seen[0].prompt_tokens) == (900, 1200)
+
+
+def test_the_call_log_omits_a_cache_count_the_provider_never_sent() -> None:
+    """A null in the log reads as "cached nothing" to everyone who greps it.
+
+    So an unreported count is **absent from the line**, not logged as `None` —
+    the same decision the column made, at the other end of the same path.
+    """
+    from app.infra.llm.litellm_gateway import _log_call
+
+    lines: list[dict[str, Any]] = []
+    with patch("app.infra.llm.litellm_gateway.log") as logger:
+        logger.info.side_effect = lambda _event, **kw: lines.append(kw)
+        _log_call(
+            Usage(prompt_tokens=10, completion_tokens=1, model="m"),
+            provider="OpenAI-compatible",
+            operation="complete",
+        )
+        _log_call(
+            Usage(
+                prompt_tokens=10, completion_tokens=1, model="m",
+                cache_read_tokens=0, cache_write_tokens=7,
+            ),
+            provider="OpenAI-compatible",
+            operation="complete",
+        )
+
+    assert "cache_read_tokens" not in lines[0]
+    assert "cache_write_tokens" not in lines[0]
+    assert lines[1]["cache_read_tokens"] == 0
+    assert lines[1]["cache_write_tokens"] == 7

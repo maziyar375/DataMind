@@ -413,9 +413,31 @@ def _usage_unreported(
         latency_ms=total.latency_ms - seen.latency_ms,
         calls=total.calls - seen.calls,
         model=total.model,
+        # Subtracted the same way they were added: a `None` on either side is
+        # *not reported*, never zero, so a node whose provider says nothing
+        # about caching writes nulls here rather than a fabricated 0 — and a
+        # second `generate` row does not restate the first row's figure.
+        cache_read_tokens=_unreported_delta(
+            total.cache_read_tokens, seen.cache_read_tokens
+        ),
+        cache_write_tokens=_unreported_delta(
+            total.cache_write_tokens, seen.cache_write_tokens
+        ),
     )
     reported[name] = total.model_copy()
     return delta
+
+
+def _unreported_delta(total: int | None, seen: int | None) -> int | None:
+    """What of a nullable count this row may claim.
+
+    `None` on the left is *nothing was ever reported*, and stays `None`
+    however many calls have been claimed. `None` on the right is *the previous
+    row claimed nothing*, which makes the whole of the left side new.
+    """
+    if total is None:
+        return None
+    return total - (seen or 0)
 
 
 # ── the adapter ──────────────────────────────────────────────────────────
