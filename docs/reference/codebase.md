@@ -312,6 +312,24 @@ token-free, Persian and Latin numerals), `prompts.py`
 (`REPORT_PROMPT_VERSION`, currently **r4**). Self-contained, and below the
 pipeline for the reason in §2.
 
+### `backend/app/analysis` — the arithmetic behind a *why*
+`measures.py` (which of three classes a measure column is), `contribution.py`
+(the three algorithms, one per class), `periods.py` (two periods made
+comparable, and declared not to be when their spans differ), `outliers.py`
+(z-scores at a threshold chosen by cardinality). Root-cause attribution **is
+not one algorithm**: a sum decomposes and has real shares, an average does not
+and has only a hypothetical, and a distinct count has neither because segments
+overlap. Getting that wrong returns a confident number with no referent, which
+is why the classifier is load-bearing.
+
+Every refusal is a **returned value, never an exception** — a *why* question
+the data cannot answer is the ordinary case, and `NO_CHANGE` is the commonest
+true answer to one. Self-contained by the ninth import-linter contract, so it
+cannot reach a model, a session or an HTTP client: that is what makes "no
+number here was produced by a model" checkable rather than a comment. Phase 2
+of [deep-analysis-mode.md](../plans/deep-analysis-mode.md); **inert**, nothing
+in the product calls it yet.
+
 ### `backend/app/charts` — presentation
 One 2.1k-line module. `profile_result` → `unchartable_reason` (the free veto,
 run *before* the model call) → `plan_chart` (fit and repair) →
@@ -577,7 +595,7 @@ The eval harness is separate and calls a real provider, so it is not part of
 `make test` — see [eval.md](eval.md).
 
 **CI's non-negotiables** (`.github/workflows/ci.yml`): the hostile SQL corpus
-passes with zero bypasses; the eight import-linter contracts hold; `import
+passes with zero bypasses; the nine import-linter contracts hold; `import
 litellm` appears only under `infra/llm/`; and `import langgraph` /
 `langchain_core` appear only under `app/pipeline/` and `app/workers/`. The
 frontend job runs `tsc --noEmit` and `vite build`.

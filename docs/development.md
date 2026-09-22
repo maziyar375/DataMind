@@ -18,7 +18,7 @@ make logs      # follow api logs
 
 make test         # full backend suite (cd backend && pytest -q)
 make guard        # the hostile SQL corpus alone — the hard CI gate
-make lint         # ruff + the eight import-linter contracts
+make lint         # ruff + the nine import-linter contracts
 make authz-check  # prove no module decides access for itself
 make fmt          # ruff format
 make migrate      # alembic upgrade head

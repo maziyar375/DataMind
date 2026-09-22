@@ -91,7 +91,7 @@ include_external_packages = true
 [[tool.importlinter.contracts]]
 name = "Layered architecture: api -> services -> domain <- infra"
 type = "layers"
-layers = ["app.api", "app.services", "app.pipeline", "app.reports", "app.semantic", "app.knowledge", "app.domain"]
+layers = ["app.api", "app.services", "app.pipeline", "app.reports", "app.analysis", "app.semantic", "app.knowledge", "app.domain"]
 # Services may reach into infra (adapters). infra is not a layer here, so this
 # is unconstrained anyway; keep the note but do not error if it matches nothing.
 ignore_imports = ["app.services.* -> app.infra.*"]
@@ -139,6 +139,25 @@ forbidden_modules = ["fastapi", "sqlalchemy", "litellm", "app.infra", "app.api",
 name = "reports is self-contained"
 type = "forbidden"
 source_modules = ["app.reports"]
+forbidden_modules = ["fastapi", "sqlalchemy", "litellm", "app.infra", "app.api", "app.services"]
+
+[[tool.importlinter.contracts]]
+# The ninth, and the reason this package can be trusted at all. `app/analysis/`
+# computes the arithmetic behind a "why did this change" answer — contribution,
+# period alignment, outliers — over rows that have ALREADY been executed
+# through the guarded path. The claim it makes to a reader is that no number in
+# it was produced by a model and none of it went near a database, and this is
+# what makes that claim checkable rather than a comment: the package cannot
+# reach a session, a setting, a provider or an HTTP client, so it cannot
+# acquire one later without this contract going red.
+#
+# `app.pipeline` and `app.reports` are absent from the forbidden list for the
+# same reason `app.sqlguard` is absent from `knowledge`'s: they sit ABOVE this
+# in the layered contract, so the direction is already fixed there and
+# restating it here would say nothing. What this adds is the floor.
+name = "analysis is self-contained"
+type = "forbidden"
+source_modules = ["app.analysis"]
 forbidden_modules = ["fastapi", "sqlalchemy", "litellm", "app.infra", "app.api", "app.services"]
 
 [[tool.importlinter.contracts]]

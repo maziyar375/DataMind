@@ -70,7 +70,7 @@ Three surfaces sit on one guarded path: **Chat** (one question), **Dashboards**
   Vega-Lite for charts, `react-grid-layout` for the dashboard grid. That is the
   whole dependency list — the design system is custom, on oklch CSS variables,
   with **no component library**.
-- **Dev/CI:** pytest + pytest-asyncio, ruff, mypy, **import-linter** (eight
+- **Dev/CI:** pytest + pytest-asyncio, ruff, mypy, **import-linter** (nine
   contracts), Docker Compose.
 
 > **LiteLLM and LangGraph are different layers and neither replaced the other.**
@@ -85,7 +85,7 @@ Three surfaces sit on one guarded path: **Chat** (one question), **Dashboards**
 ```bash
 make test         # full backend suite, ~1,790 tests, well under a minute
 make guard        # the hostile SQL corpus alone — the hard CI gate
-make lint         # ruff + the eight import-linter contracts
+make lint         # ruff + the nine import-linter contracts
 make authz-check  # prove no module decides access for itself
 make up / down / logs / secrets / migrate / fixtures / db-repair
 ```
@@ -211,6 +211,17 @@ backend/app/
                   *disclosed* results), checks.py (the numeric consistency check
                   — pure, token-free, Persian and Latin numerals), prompts.py
                   (REPORT_PROMPT_VERSION) — self-contained, below the pipeline
+  analysis/       the arithmetic a *why* question needs, computed instead of
+                  narrated: measures.py (which of three classes a measure is —
+                  SUM, AVG, COUNT(DISTINCT) — because the class picks the
+                  algorithm), contribution.py (the three, from SpotIQ),
+                  periods.py (two periods made comparable, per calendar day —
+                  the commonest false driver is a shorter month), outliers.py
+                  (z-scores at a threshold chosen by cardinality). **Refusals
+                  are values, never exceptions**, and `NO_CHANGE` is the
+                  commonest true answer to a *why*. Self-contained by the ninth
+                  contract, so it cannot reach a model or a database. Inert:
+                  nothing in the product calls it yet
   charts/         ChartIntent → result profile → shape fit → Vega-Lite. One file
                   (__init__.py), like pipeline/prompts/ — the budget constants
                   live at its top and `aurora` is seeded against them

@@ -883,18 +883,18 @@ The plan would be several times larger if any of these were missing.
 - [x] `test_token_accounting.py` — per-node sums still equal run totals across four columns. The invariant lives in `test_run_token_accounting.py` (where the run-vs-steps assertions are) and is asserted **separately** from the two-column one, because the nullable arithmetic is genuinely different and a build using `(x or 0)` would pass the old test and fail only the new one
 - [x] `test_token_accounting_schema.py` — the NULL-vs-0 distinction holds for the new columns, and a test asserts the columns are **only** where `0037` put them, so a later widening is a migration rather than a quiet ORM edit
 
-### 12.4 Phase 2 — `app/analysis/` · **0 / 10** · stands alone
+### 12.4 Phase 2 — `app/analysis/` · **10 / 10** · stands alone ✅
 
-- [ ] `app/analysis/measures.py` — classify a measure column `SIMPLE` / `RATIO` / `COMPLEX`
-- [ ] `contribution.py` — **SIMPLE**: threshold outlier detection over the top ten absolute changes, stopping at a 50% single-timestamp contribution
-- [ ] `contribution.py` — **RATIO**: hypothetical percentage change per dimension value; smaller hypothetical ⇒ stronger explanation
-- [ ] `contribution.py` — **COMPLEX**: z-score with N ∈ [2.0, 5.0] chosen by dimension cardinality
-- [ ] `periods.py` — period-over-period alignment
-- [ ] `outliers.py` — z-score over a change distribution
-- [ ] `__init__.py` — the public surface, with SpotIQ's documented limits copied as **typed refusals, not exceptions**
-- [ ] A **tenth import-linter contract**, *"analysis is self-contained"* — `lint-imports` green
-- [ ] `test_contribution.py` — the three classes on fixtures with answers known by construction, **no provider**
-- [ ] `test_analysis_refusals.py` — every documented refusal, refused
+- [x] `app/analysis/measures.py` — classify a measure column `SIMPLE` / `RATIO` / `COMPLEX`, by **name**, because a name is all a result column carries: every one of these comes back `numeric` from the database and `quantitative` from the connector. The precedence is asymmetric on purpose — a strong ratio word beats an additive one (`avg_total_revenue` is an average), because calling a sum a ratio costs an answer and calling a ratio a sum costs a *wrong* one
+- [x] `contribution.py` — **SIMPLE**: threshold outlier detection over the top ten absolute changes, stopping at a 50% single-timestamp contribution. Shares are signed and sum to 1.0, asserted rather than assumed
+- [x] `contribution.py` — **RATIO**: hypothetical percentage change per dimension value; smaller hypothetical ⇒ stronger explanation. The hypothetical replaces the segment's **ratio and its weight together**, so a pure mix shift is found — a segment whose own average never moved but which tripled in volume is the whole of the change, and a difference analysis would report that nothing happened. That case is the phase's headline test
+- [x] `contribution.py` — **COMPLEX**: z-score with N ∈ [2.0, 5.0] chosen by dimension cardinality, and `contribution` is `None` on every driver because a distinct count has no share to give
+- [x] `periods.py` — period-over-period alignment, reporting **per calendar day beside the total** and saying which to read. The commonest false driver in the product is a shorter month: January-to-February on the `sales` fixture is −9.7% in total and **0.0% per trading day**, which is `deep_v1`'s first question
+- [x] `outliers.py` — z-score over a change distribution, with `discriminating` naming the ceiling nobody mentions: |z| can be at most `(n-1)/√n`, so on a four-value dimension **nothing can ever be flagged whatever the data does**. Without that flag an empty result reads as a finding
+- [x] `__init__.py` — the public surface, with SpotIQ's documented limits copied as **typed refusals, not exceptions**. `Refusal` is falsey and carries a sentence written for a reader, so `if not result: return result.reason` is the whole calling convention
+- [x] A **ninth** import-linter contract, *"analysis is self-contained"* — `lint-imports` 9/9 green, and proven to go red on a deliberately-added `import sqlalchemy` rather than assumed. (The plan said *tenth*, and §12.1 said nine already existed; there were eight. Counted, not remembered)
+- [x] `test_contribution.py` — the three classes on fixtures with answers known by construction, **no provider**, no database, no fixtures directory. 16 tests
+- [x] `test_analysis_refusals.py` — every documented refusal, refused, plus one test asserting over every entry point that **nothing is ever raised**. Writing them found two real defects: a non-finite cell propagated to `mean=inf` and every z-score `nan`, so the module reported a quiet distribution in which nothing stood out; and the `max(scale, 1.0)` floor made "flat" an *absolute* test below 1.0, calling a conversion rate that doubled from 0.002 to 0.004 unchanged. 23 tests
 
 **Done when:** the module names the top three drivers of a known change, and
 **no answer in the product behaves differently.**
@@ -1007,7 +1007,7 @@ evidence **that says so**.
 |---|:--:|:--:|
 | 0 — The gate | 1 | 5 |
 | 1 — Cache tokens | 8 | 8 |
-| 2 — `app/analysis/` | 0 | 10 |
+| 2 — `app/analysis/` | 10 | 10 |
 | 3 — Citations | 0 | 8 |
 | 4 — The plan and the graph | 0 | 12 |
 | 5 — The loop | 0 | 11 |
@@ -1015,13 +1015,14 @@ evidence **that says so**.
 | 7 — Scoring | 0 | 7 |
 | 8 — Governance | 0 | 6 |
 | 9 — Documentation | 0 | 6 |
-| **Total** | **9** | **85** |
+| **Total** | **19** | **85** |
 
 ### 12.13 Change log
 
 | Date | What changed |
 |---|---|
 | 2026-09-22 | Written. No phase started. |
+| 2026-09-22 | **Phase 2 complete, 10/10.** `app/analysis/` — five modules, the three SpotIQ algorithms chosen by measure class, period alignment that reports per calendar day, and z-scores at a cardinality-chosen threshold. Refusals are values; `NO_CHANGE` is the commonest one and the honest answer on this fixture. The **ninth** import-linter contract (there were eight, not nine) keeps it unable to reach a model or a database, and was proven to break on a deliberate violation. 39 new tests, no provider anywhere. **Nothing in the product calls it** — the package ships inert, exactly as the phase asks. | 19 of 85 |
 | 2026-09-22 | **Phase 1 complete, 8/8.** `Usage` and `Completion` gained `cache_read_tokens` / `cache_write_tokens` as `int | None`; the gateway reads them from the four places providers and LiteLLM put them and **records nothing where they are absent**; `add_reported()` is the one piece of nullable arithmetic, shared by the pipeline and the usage service; migration `0037` on `runs` and `run_steps`, nullable and applied against a real database both ways. The chart **subdivides** the input bar rather than stacking on it, because a cached token is part of the prompt it arrived with. `make test` 3,145 green, `lint-imports` 8/8, `npm test` + build green. | 9 of 85 |
 | 2026-09-22 | **Phase 0, the frozen set.** `deep_v1.json` — twenty questions, no gold answers, frozen the day it was written; five static checks in `tests/eval/test_golden_set.py` hold the freeze, one of them failing if a `gold_sql` ever appears. §11 **Q3 answered**: reuse `sales`, because it has no planted movement and a fabricated driver is therefore detectable — evidence in `suites/CHANGELOG.md`. The three measurements were still running when this landed. | 1 of 85 |
 

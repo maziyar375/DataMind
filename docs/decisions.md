@@ -21,7 +21,7 @@ force, but its terms changed; the row says how.
 | --- | --- | --- |
 | **A modular monolith, not microservices.** One FastAPI backend, one PostgreSQL app database, one SPA. No broker, no service mesh | Standing | [history/architecture-proposal.md](history/architecture-proposal.md) §3 |
 | **Ports and adapters at exactly four seams** — LLM, target database, secrets, run execution — because those are the four things most likely to be replaced | Standing | [history/architecture-proposal.md](history/architecture-proposal.md) §6 |
-| **The dependency rule is enforced, not documented.** `api → services → pipeline → reports → semantic → domain ← infra`, with eight import-linter contracts failing CI on violation | Standing | [reference/codebase.md](reference/codebase.md) §2 |
+| **The dependency rule is enforced, not documented.** `api → services → pipeline → reports → analysis → semantic → domain ← infra`, with nine import-linter contracts failing CI on violation | Standing | [reference/codebase.md](reference/codebase.md) §2 |
 | **LiteLLM is the only provider adapter, and only `infra/llm/` may import it.** A CI grep decides whether the abstraction is real or decorative | Standing | [reference/llm-providers.md](reference/llm-providers.md) §1 |
 | **LangGraph was deferred, then adopted** — nodes built LangGraph-shaped from the start made adoption a wiring change rather than a rewrite. Confined to `app/pipeline/` and `app/workers/`, held by a contract and a grep | Standing | [plans/langgraph-migration.md](plans/langgraph-migration.md) |
 | **LangGraph checkpointing** | **Declined** — 88 KB of state per node, 97% of it the schema block, for a run of 5–60 seconds | [plans/langgraph-migration.md](plans/langgraph-migration.md) Phase 4 |
