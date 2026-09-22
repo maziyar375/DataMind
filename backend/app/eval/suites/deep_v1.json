@@ -1,0 +1,492 @@
+{
+  "suite": "deep",
+  "version": "v1",
+  "kind": "deep",
+  "frozen_on": "2026-09-22",
+  "description": "Twenty why / what-drove-it questions for the deep analysis mode. Written before any of the mode exists (docs/plans/deep-analysis-mode.md Phase 0), against the same `sales` fixture the golden set uses. There is no `gold_sql` here and there is not meant to be: every metric Phase 7 declares — guard pass rate, execution success rate, claim traceability, plan adherence, cost per answer — is computed from the run itself and needs no reference answer.",
+  "_README": "FROZEN 2026-09-22, the day it was written, before a planner, a loop or a contribution module existed. That is the only moment a set like this can be written without being fitted to the implementation it grades, which is the same reason `sales_v1.json` was frozen the day it was authored.\n\nTHE RULE, identical to the golden set's: questions are never edited to make a score go up. A question is removed or reworded only when it is demonstrably wrong — it presupposes a fact the fixture does not contain, or it cannot be expressed against the schema at all — and every such edit is logged in `suites/CHANGELOG.md` with the evidence, exactly as a `gold_sql` correction is. Convenience is never a reason. Neither is 'the mode does badly on it'.\n\nWHAT MAKES A QUESTION BELONG HERE: `why_deep` on each record names the thing a single SELECT cannot say. A question whose answer is one statement belongs in `sales_v1.json`, not here.\n\nQ3 IS ANSWERED, AND THE ANSWER IS NOT THE ONE THE PLAN EXPECTED. deep-analysis-mode.md §11 Q3 asks whether this set reuses the `sales` fixture or needs a messier one with a real drop in it. It reuses `sales`, because the fixture has NO planted movement anywhere and that turns out to be the more valuable property. Measured 2026-09-22 against the fixture at backend/fixtures/sales_seed.sql: monthly orders sit at 248-259 for every full month from 2024-10 to 2026-08, revenue tracks them at ~$957 per order, February dips only because it is three days shorter, returns run 82-85 a month with the four reasons split 136/136/136/137, and `order_items.unit_price` has exactly ONE distinct value across all 18,000 rows. Nothing in it moved.\n\nSo on this fixture the true answer to most of these questions is 'nothing drove it — here is why the number looked like it did', and a mode that instead names a driver has fabricated one. That is a sharper test than a planted drop would have been, and it is the same bet `sales_v1_negative.json` makes: the cheapest failure to detect is a confident answer to a question with no answer. Fifteen of the twenty carry a `known_by_construction` string recording the fact that makes the honest answer checkable, each verified against the live fixture on the freeze date.\n\nWHAT THIS SET CANNOT DO, STATED NOW SO NOBODY CLAIMS IT LATER: it cannot score driver accuracy, because there is no driver to find. Scoring 'did the module name the right top-three contributors' needs a fixture with a movement planted in it and its decomposition known in advance. That is a second fixture (`sales_drop_v1`), it is not built, and the trigger to build it is the first time a number is wanted for top-three driver accuracy on real data rather than on the constructed unit fixtures of `test_contribution.py`.\n\nFIELDS: `why_deep` is why one statement is not enough. `shallow_answer` is what the single-shot path returns today — the thing that looks like an answer and is not. `expected_tables` is the union the sub-queries must collectively reach, and it is a retrieval diagnostic, never a gate. `min_steps` is a floor on a defensible plan, not a target. `traps` names the fixture's planted hazards in reach of the question; every one of them is documented in the header of `backend/fixtures/sales_seed.sql`.",
+  "trap_legend": {
+    "partial_period": "the fixture's data ends 2026-09-22, so the current month is incomplete and any month-over-month comparison including it is an artifact",
+    "calendar_length": "months differ in trading days; an unnormalised month-over-month comparison reads the calendar as a business change",
+    "rollup_window": "`sales_daily_rollup` covers only 2026-06-24 to 2026-09-22, so a full-history question answered from it is wrong — $609,369 against the orders table's $2,113,968.53 for 2026",
+    "soft_delete": "`customers.is_deleted` is true for 115 of 1,500 customers; a count that does not filter it is not a count of customers",
+    "nullable_fk": "`orders.employee_id` is NULL on 3,600 of 6,000 orders and `customers.referred_by_id` on 1,293 of 1,500; an INNER join silently drops them",
+    "status_mix": "6,000 orders split 3,000 completed and 750 each of returned / cancelled / pending / shipped; revenue that does not say which statuses it counts is not comparable to revenue that does",
+    "seed_timestamp": "`returns.created_at` and `refunds.created_at` are row-creation times from the seed run, all on one day; the business times are `returns.returned_at` and `refunds.processed_at`",
+    "hidden_rows": "`reviews.is_hidden` is true for 103 of 3,000 reviews; an average that includes them is not the published average",
+    "bridge_table": "the attribution path runs through a junction table the question never names (product_suppliers, order_promotions, product_tags, employee_teams)",
+    "near_duplicate_table": "`product` is a deprecated singular leftover beside the real `products`; fuzzy retrieval can pick the wrong one",
+    "presupposition": "the question asserts a change the fixture does not contain; the honest answer refuses the premise before it attributes anything"
+  },
+  "records": [
+    {
+      "id": "deep-001",
+      "question": "Revenue in February 2026 came in below January. What drove that?",
+      "connection_fixture": "sales_pg",
+      "why_deep": "The premise has to be tested before it can be attributed. Confirming the drop, normalising it for trading days and only then decomposing it by dimension is three statements, and the second one changes the answer to the third.",
+      "shallow_answer": "One SELECT grouping revenue by month, which shows February lower and says nothing about why — leaving the reader to assume a business cause.",
+      "expected_tables": [
+        "orders"
+      ],
+      "min_steps": 3,
+      "known_by_construction": "January 2026 has 259 orders over 31 days and February 233 over 28 — 8.355 and 8.321 orders per day. Per trading day nothing moved; the entire gap is the calendar.",
+      "traps": [
+        "calendar_length",
+        "presupposition"
+      ],
+      "tags": [
+        "period_over_period",
+        "normalisation",
+        "premise_check"
+      ],
+      "difficulty": "medium"
+    },
+    {
+      "id": "deep-002",
+      "question": "Sales have fallen off a cliff this month. What happened?",
+      "connection_fixture": "sales_pg",
+      "why_deep": "Answering it requires establishing the data's coverage before comparing anything — a step no single-statement path has a reason to take.",
+      "shallow_answer": "A month-over-month total showing September far below August, which is true and is not what the reader asked.",
+      "expected_tables": [
+        "orders"
+      ],
+      "min_steps": 2,
+      "known_by_construction": "The latest order_date in the fixture is 2026-09-22. September holds 183 orders over 22 days — 8.318 per day, against August's 8.323. The month is incomplete, not bad.",
+      "traps": [
+        "partial_period",
+        "presupposition"
+      ],
+      "tags": [
+        "coverage",
+        "period_over_period",
+        "premise_check"
+      ],
+      "difficulty": "medium"
+    },
+    {
+      "id": "deep-003",
+      "question": "Our average order value — did it move between the first and second half of 2025, and if so what moved it?",
+      "connection_fixture": "sales_pg",
+      "why_deep": "An average is a ratio, so a per-segment difference does not decompose it. Establishing the change, then testing each dimension for what the overall change would have been without it, is the ratio case and it is several statements.",
+      "shallow_answer": "Two averages and a subtraction, with no way to say which dimension is responsible for a difference that may be noise.",
+      "expected_tables": [
+        "orders",
+        "customers",
+        "regions"
+      ],
+      "min_steps": 3,
+      "known_by_construction": "Order value is ~$957 throughout; channel AOVs sit at $952.09 web, $960.41 phone, $970.41 partner across the whole history. There is no material change to attribute.",
+      "traps": [
+        "presupposition"
+      ],
+      "tags": [
+        "ratio_measure",
+        "period_over_period",
+        "contribution"
+      ],
+      "difficulty": "hard"
+    },
+    {
+      "id": "deep-004",
+      "question": "Which regions are responsible for February's shortfall?",
+      "connection_fixture": "sales_pg",
+      "why_deep": "It asks for an attribution of a quantity that has to be shown to exist first. A plan that goes straight to the regional breakdown produces a ranked list of contributions to a shortfall that is a calendar artifact.",
+      "shallow_answer": "Revenue by region for February minus January, ranked — an authoritative-looking ranking of nothing.",
+      "expected_tables": [
+        "orders",
+        "customers",
+        "regions"
+      ],
+      "min_steps": 3,
+      "known_by_construction": "February 2026's gap against January is three trading days; per-day order rates are 8.355 and 8.321. Any regional split of it apportions the calendar.",
+      "traps": [
+        "calendar_length",
+        "presupposition"
+      ],
+      "tags": [
+        "contribution",
+        "premise_check",
+        "join"
+      ],
+      "difficulty": "hard"
+    },
+    {
+      "id": "deep-005",
+      "question": "Web is our biggest channel. Is that because it takes more orders, or bigger ones?",
+      "connection_fixture": "sales_pg",
+      "why_deep": "A volume-versus-rate decomposition is two measures that must be computed separately and then set against each other; one grouped statement gives the total and hides the answer.",
+      "shallow_answer": "Revenue by channel, which confirms web is largest and answers neither half of the question.",
+      "expected_tables": [
+        "orders"
+      ],
+      "min_steps": 2,
+      "known_by_construction": "Web has 3,600 orders at $952.09 average; phone 1,200 at $960.41; partner 1,200 at $970.41. Web leads on volume alone — its orders are the smallest of the three.",
+      "traps": [],
+      "tags": [
+        "mix_vs_rate",
+        "decomposition"
+      ],
+      "difficulty": "easy"
+    },
+    {
+      "id": "deep-006",
+      "question": "How concentrated is our revenue across suppliers, and is that a risk?",
+      "connection_fixture": "sales_pg",
+      "why_deep": "Attributing revenue to a supplier crosses a bridge table the question never names, and 'concentrated' is a second computation over the first result rather than a column in it.",
+      "shallow_answer": "Revenue by supplier, ranked — the input to the question, not the answer to it.",
+      "expected_tables": [
+        "suppliers",
+        "product_suppliers",
+        "products",
+        "order_items",
+        "orders"
+      ],
+      "min_steps": 3,
+      "known_by_construction": null,
+      "traps": [
+        "bridge_table"
+      ],
+      "tags": [
+        "attribution",
+        "concentration",
+        "bridge"
+      ],
+      "difficulty": "hard"
+    },
+    {
+      "id": "deep-007",
+      "question": "Break last quarter's revenue down by category and tell me which category moved most against the quarter before.",
+      "connection_fixture": "sales_pg",
+      "why_deep": "Two aligned periods, a per-category delta, and a contribution ranking over it — the period alignment is its own step and getting it wrong changes every number downstream.",
+      "shallow_answer": "One statement grouping by category and quarter, leaving the deltas and their ranking to the reader.",
+      "expected_tables": [
+        "orders",
+        "order_items",
+        "products",
+        "categories"
+      ],
+      "min_steps": 3,
+      "known_by_construction": "Category revenue tracks order volume, which is flat quarter to quarter; the largest movement is within the per-month 248-259 order band.",
+      "traps": [
+        "partial_period",
+        "near_duplicate_table"
+      ],
+      "tags": [
+        "period_over_period",
+        "contribution",
+        "join"
+      ],
+      "difficulty": "medium"
+    },
+    {
+      "id": "deep-008",
+      "question": "Do our higher loyalty tiers actually order more, and is the difference worth what the tiers cost us?",
+      "connection_fixture": "sales_pg",
+      "why_deep": "Orders per customer is a ratio of two counts from different tables, and the second half of the question is a comparison across tiers of that ratio rather than of either count.",
+      "shallow_answer": "Order counts by tier, which are a function of how many customers each tier has.",
+      "expected_tables": [
+        "customers",
+        "loyalty_tiers",
+        "orders"
+      ],
+      "min_steps": 3,
+      "known_by_construction": null,
+      "traps": [
+        "soft_delete"
+      ],
+      "tags": [
+        "ratio_measure",
+        "cohort",
+        "join"
+      ],
+      "difficulty": "medium"
+    },
+    {
+      "id": "deep-009",
+      "question": "Which of our promotions paid for themselves?",
+      "connection_fixture": "sales_pg",
+      "why_deep": "It needs discount given, revenue on the discounted orders, and the promotion's own budget — three quantities from three places, combined by a rule the question implies rather than states.",
+      "shallow_answer": "Total discount by promotion, which ranks what each cost and says nothing about what each returned.",
+      "expected_tables": [
+        "promotions",
+        "order_promotions",
+        "orders",
+        "coupons"
+      ],
+      "min_steps": 3,
+      "known_by_construction": null,
+      "traps": [
+        "bridge_table",
+        "nullable_fk"
+      ],
+      "tags": [
+        "attribution",
+        "bridge",
+        "ratio_measure"
+      ],
+      "difficulty": "hard"
+    },
+    {
+      "id": "deep-010",
+      "question": "Partner revenue looks steadier than phone. Is it, and why?",
+      "connection_fixture": "sales_pg",
+      "why_deep": "Steadiness is a property of a series, not a row: it needs the monthly series per channel and then a dispersion measure over each, which no single grouped statement produces.",
+      "shallow_answer": "Revenue by channel and month — the series the question is about, with the comparison left undone.",
+      "expected_tables": [
+        "orders"
+      ],
+      "min_steps": 2,
+      "known_by_construction": "Across 2026-01 to 2026-08 partner's monthly order count is 50 in seven of eight months (58 in August); phone's ranges 41 to 59. Partner is steadier, and the reason is that its volume is fixed rather than that its customers behave differently.",
+      "traps": [
+        "partial_period"
+      ],
+      "tags": [
+        "variance",
+        "time_series",
+        "comparison"
+      ],
+      "difficulty": "medium"
+    },
+    {
+      "id": "deep-011",
+      "question": "Returns are up. Which reasons and which products are driving it?",
+      "connection_fixture": "sales_pg",
+      "why_deep": "The table carries two timestamps that mean different things, so the first step is choosing the right one — and then the premise still has to be tested before anything is attributed to it.",
+      "shallow_answer": "Returns grouped by `created_at`, which is the seed run's timestamp and puts every one of the 545 returns in a single day.",
+      "expected_tables": [
+        "returns",
+        "order_items",
+        "products",
+        "orders"
+      ],
+      "min_steps": 3,
+      "known_by_construction": "On `returned_at`, returns run 83, 85, 82, 85, 84 for 2026-04 through 2026-08, and the four reasons split 137 / 136 / 136 / 136 across the whole history. Nothing is rising and no reason leads.",
+      "traps": [
+        "seed_timestamp",
+        "presupposition",
+        "partial_period"
+      ],
+      "tags": [
+        "premise_check",
+        "time_series",
+        "contribution"
+      ],
+      "difficulty": "hard"
+    },
+    {
+      "id": "deep-012",
+      "question": "We changed prices in March. What did that do to what customers actually paid?",
+      "connection_fixture": "sales_pg",
+      "why_deep": "The price a catalogue records and the price a line item charges are different facts in different tables; connecting them and comparing before against after is several statements, and the answer lives in whether they agree at all.",
+      "shallow_answer": "The 40 rows of `product_price_history`, which show the changes and nothing about their effect.",
+      "expected_tables": [
+        "product_price_history",
+        "products",
+        "order_items",
+        "orders"
+      ],
+      "min_steps": 3,
+      "known_by_construction": "`order_items.unit_price` has exactly one distinct value — 88.70 — across all 18,000 rows. The March 2026 catalogue changes did not reach a single line item, so the correct answer is that the two tables do not agree.",
+      "traps": [
+        "near_duplicate_table"
+      ],
+      "tags": [
+        "period_over_period",
+        "reconciliation",
+        "join"
+      ],
+      "difficulty": "hard"
+    },
+    {
+      "id": "deep-013",
+      "question": "Is our revenue number real, or are we counting orders that were cancelled and returned?",
+      "connection_fixture": "sales_pg",
+      "why_deep": "It asks for the same measure computed under two definitions and for the gap between them to be explained — two statements minimum, and the explanation is a third.",
+      "shallow_answer": "Total revenue, which is exactly the number the reader is questioning.",
+      "expected_tables": [
+        "orders",
+        "order_status_history"
+      ],
+      "min_steps": 2,
+      "known_by_construction": "6,000 orders split 3,000 completed and 750 each of returned, cancelled, pending and shipped. Half of them never completed, and the $5,744,496 headline counts all six thousand; the mix holds constant month to month.",
+      "traps": [
+        "status_mix"
+      ],
+      "tags": [
+        "definition",
+        "reconciliation",
+        "premise_check"
+      ],
+      "difficulty": "medium"
+    },
+    {
+      "id": "deep-014",
+      "question": "My customer count dropped when I asked for active customers only. Where did they go?",
+      "connection_fixture": "sales_pg",
+      "why_deep": "The answer is a difference between two populations and then a description of the difference — the second step is what the question is actually asking for.",
+      "shallow_answer": "A filtered count, which restates the drop the reader already saw.",
+      "expected_tables": [
+        "customers",
+        "regions",
+        "loyalty_tiers"
+      ],
+      "min_steps": 2,
+      "known_by_construction": "115 of 1,500 customers carry `is_deleted`, 7.67% of the base. They are the whole of the difference.",
+      "traps": [
+        "soft_delete"
+      ],
+      "tags": [
+        "definition",
+        "decomposition"
+      ],
+      "difficulty": "easy"
+    },
+    {
+      "id": "deep-015",
+      "question": "The daily sales rollup and the orders table disagree about this year's revenue. Which is right, and why do they differ?",
+      "connection_fixture": "sales_pg",
+      "why_deep": "Reconciliation is definitionally multi-step: each source computed separately, the gap quantified, and the gap's cause found in the coverage of one of them. No single statement can hold both sides.",
+      "shallow_answer": "Whichever of the two tables retrieval happened to select, reported as the answer with no indication that a second source exists.",
+      "expected_tables": [
+        "sales_daily_rollup",
+        "orders",
+        "regions"
+      ],
+      "min_steps": 3,
+      "known_by_construction": "`sales_daily_rollup` spans 2026-06-24 to 2026-09-22 only. For 2026 it totals $609,369.00 against the orders table's $2,113,968.53 — the rollup is not wrong, it is short, and the orders table is the source of truth.",
+      "traps": [
+        "rollup_window",
+        "partial_period"
+      ],
+      "tags": [
+        "reconciliation",
+        "coverage",
+        "premise_check"
+      ],
+      "difficulty": "hard"
+    },
+    {
+      "id": "deep-016",
+      "question": "Which brands are over-represented in our strongest region compared with the rest of the business?",
+      "connection_fixture": "sales_pg",
+      "why_deep": "Over-representation is a comparison of two mixes, so the region has to be identified, then its brand mix computed, then the complement's — and the answer is the difference between two shares rather than either one.",
+      "shallow_answer": "Revenue by brand and region, which is the raw material and leaves the mix comparison undone.",
+      "expected_tables": [
+        "brands",
+        "products",
+        "order_items",
+        "orders",
+        "customers",
+        "regions"
+      ],
+      "min_steps": 4,
+      "known_by_construction": null,
+      "traps": [
+        "bridge_table",
+        "near_duplicate_table"
+      ],
+      "tags": [
+        "mix_shift",
+        "comparison",
+        "join"
+      ],
+      "difficulty": "hard"
+    },
+    {
+      "id": "deep-017",
+      "question": "Our top salespeople — is it the person, the team they are on, or the accounts they were given?",
+      "connection_fixture": "sales_pg",
+      "why_deep": "Three competing explanations, each needing its own measurement before any of them can be ranked. That is the shape the mode exists for.",
+      "shallow_answer": "Revenue by employee, ranked — one of the three explanations presented as all of them.",
+      "expected_tables": [
+        "employees",
+        "teams",
+        "employee_teams",
+        "orders",
+        "customers"
+      ],
+      "min_steps": 4,
+      "known_by_construction": null,
+      "traps": [
+        "nullable_fk",
+        "bridge_table"
+      ],
+      "tags": [
+        "attribution",
+        "competing_hypotheses",
+        "bridge"
+      ],
+      "difficulty": "hard"
+    },
+    {
+      "id": "deep-018",
+      "question": "A lot of our orders have no salesperson on them. How many, and does it change the per-rep numbers?",
+      "connection_fixture": "sales_pg",
+      "why_deep": "The size of the hole and its effect are different measurements, and the second one requires computing a figure both with and without the unattributed rows.",
+      "shallow_answer": "Revenue per employee joined to orders, which drops the unattributed rows silently and reports a total that does not reconcile to the business's own revenue.",
+      "expected_tables": [
+        "orders",
+        "employees"
+      ],
+      "min_steps": 2,
+      "known_by_construction": "3,600 of 6,000 orders have a NULL `employee_id`. Attributed revenue is $2,316,984.00 of $5,744,496.00 — 40.3%. An INNER join loses the other 59.7% without saying so.",
+      "traps": [
+        "nullable_fk"
+      ],
+      "tags": [
+        "data_quality",
+        "reconciliation",
+        "join"
+      ],
+      "difficulty": "medium"
+    },
+    {
+      "id": "deep-019",
+      "question": "Do customers who arrived through a referral spend more than the ones who did not?",
+      "connection_fixture": "sales_pg",
+      "why_deep": "Two cohorts defined by a nullable self-reference, each needing its own per-customer spend, and a comparison that is meaningless unless both cohort sizes are reported with it.",
+      "shallow_answer": "Total spend for referred customers, with no comparison group and no per-customer normalisation.",
+      "expected_tables": [
+        "customers",
+        "orders"
+      ],
+      "min_steps": 3,
+      "known_by_construction": "207 of 1,500 customers have a `referred_by_id`; the other 1,293 are NULL rather than a second cohort in a column. A comparison that joins on the self-reference tests only the referred side.",
+      "traps": [
+        "nullable_fk",
+        "soft_delete"
+      ],
+      "tags": [
+        "cohort",
+        "comparison",
+        "ratio_measure"
+      ],
+      "difficulty": "medium"
+    },
+    {
+      "id": "deep-020",
+      "question": "Which product tags have the best reviews, and does that still hold once moderated reviews are left out?",
+      "connection_fixture": "sales_pg",
+      "why_deep": "The question contains its own robustness check: the same ranking computed twice under two definitions, and an answer about whether the difference matters.",
+      "shallow_answer": "Average rating by tag over every review row, including the ones moderation removed from the site.",
+      "expected_tables": [
+        "tags",
+        "product_tags",
+        "products",
+        "reviews"
+      ],
+      "min_steps": 3,
+      "known_by_construction": "103 of 3,000 reviews are hidden. Mean rating is 3.000 over all reviews and 2.999 over the visible ones — excluding them changes nothing, so the honest answer is that the ranking is robust and that this was checked.",
+      "traps": [
+        "hidden_rows",
+        "bridge_table"
+      ],
+      "tags": [
+        "robustness",
+        "bridge",
+        "ratio_measure"
+      ],
+      "difficulty": "medium"
+    }
+  ]
+}

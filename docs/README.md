@@ -98,6 +98,7 @@ against, and carrying a dated record of what changed while it was. Read
 | [semantic-layer-model.md](plans/semantic-layer-model.md) | **Built**, 61/63 items. The semantic layer as a model rather than a blob: one binder for every reader, numbered versions with typed changes and a revision check, draft and publish, metric attribution, export and import, and upkeep — all six phases landed by 2026-09-17. Two Phase 3 measurements wait on a provider key and real runs. §14 is the ledger |
 | [token-accounting.md](plans/token-accounting.md) | **Built** — all six phases, migration `0023`. Usage travels by sink; tokens and cost are counted rather than assumed, per node, per operation, per user |
 | [langgraph-migration.md](plans/langgraph-migration.md) | **Live.** Phases 0–3 and 6 done; Phases 4 (checkpointing) and 5 (durable clarification) argued and **declined**, each with the measurement that decided it. Read it before moving anything else onto LangGraph |
+| [deep-analysis-mode.md](plans/deep-analysis-mode.md) | **In progress** — 1/85 items. A second, opt-in answer mode in chat: a declared plan, several guarded queries, deterministic contribution arithmetic, and a report whose every claim resolves to its SQL. **Phase 0 is a gate** — one accuracy measurement decides whether Phases 4–9 are built at all; Phases 1–3 (cache tokens, `app/analysis/`, claim citations) stand alone either way. §12 is the ledger. Argued in [research/deep-analysis-mode.md](research/deep-analysis-mode.md) |
 
 ## `research/` — arguments, not descriptions
 
@@ -114,7 +115,7 @@ reference doc is what the code does.**
 | [semantic-layer.md](research/semantic-layer.md) | Not yet a plan — mvp2 §1.3 and Theme B. Its §5 carries three corrections to that section |
 | [data-surface.md](research/data-surface.md) | Not yet a plan — mvp2 Theme E |
 | [competitive-matrix.md](research/competitive-matrix.md) | Not a plan — a scoreboard. mvp2 §2.6's matrix re-run on 2026-09-17 against Power BI, Wren AI, Genie, **Superset and Metabase**, with the DataMind column updated to the tree. Its §3 lists the nine rows that moved since August; its §4 argues that dashboard filters unblock more of the gap than anything else |
-| [deep-analysis-mode.md](research/deep-analysis-mode.md) | Not yet a plan — mvp2 Theme F (**F3** bounded multi-step analysis, **F4** root-cause/key drivers), both still Tier 3. Reads Genie Agent mode, Fabric data agents, Wren, Metabase and Superset for the *second answer mode*, and the decomposition / TAG / deep-research-agent literature for the technique. Its §4 is an inventory of what this product already has for it; its §6.1 is the one measurement to take before building any of it |
+| [deep-analysis-mode.md](research/deep-analysis-mode.md) | [plans/deep-analysis-mode.md](plans/deep-analysis-mode.md) — read this for *why*, the plan for *what*. mvp2 Theme F (**F3** bounded multi-step analysis, **F4** root-cause/key drivers), both still Tier 3. Reads Genie Agent mode, Fabric data agents, Wren, Metabase and Superset for the *second answer mode*, and the decomposition / TAG / deep-research-agent literature for the technique. Its §4 is an inventory of what this product already has for it; its §6.1 is the one measurement to take before building any of it |
 
 ## `history/` — superseded, and kept
 

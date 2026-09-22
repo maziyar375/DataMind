@@ -148,6 +148,67 @@ def test_negative_set_never_expects_sql(negative: dict[str, Any]) -> None:
     assert "metadata" in cats and "chitchat" in cats and "write_request" in cats
 
 
+# ── the deep set (static; no gold answers, on purpose) ──────────────────────
+#
+# `deep_v1.json` is the frozen set of why / what-drove-it questions for the
+# deep analysis mode (docs/plans/deep-analysis-mode.md §3.1). It was written
+# 2026-09-22, before a planner or a loop existed, and it deliberately carries
+# **no `gold_sql`**: every metric that plan's Phase 7 declares is computed from
+# the run itself. The checks below are what make "frozen" mechanical rather
+# than a promise — in particular the last one, because the quiet way this set
+# stops measuring anything is somebody adding a reference answer to it once the
+# implementation exists.
+
+
+@pytest.fixture(scope="module")
+def deep() -> dict[str, Any]:
+    return _load("deep_v1.json")
+
+
+def test_deep_set_has_20_unique_records(deep: dict[str, Any]) -> None:
+    ids = [r["id"] for r in deep["records"]]
+    assert len(ids) == 20
+    assert len(set(ids)) == 20
+    assert deep["frozen_on"] == "2026-09-22"
+
+
+def test_deep_records_carry_no_reference_answer(deep: dict[str, Any]) -> None:
+    """The freeze, enforced. A `gold_sql` here would be written by whoever had
+    just built the loop, against the loop they had just built."""
+    for r in deep["records"]:
+        assert "gold_sql" not in r, f"{r['id']} has grown a gold_sql"
+        assert "result_equivalence" not in r, f"{r['id']} has grown a result_equivalence"
+
+
+def test_deep_record_shape_and_vocabulary(deep: dict[str, Any]) -> None:
+    required = {
+        "id", "question", "connection_fixture", "why_deep", "shallow_answer",
+        "expected_tables", "min_steps", "known_by_construction", "traps",
+        "tags", "difficulty",
+    }
+    for r in deep["records"]:
+        assert required <= set(r), f"{r['id']} missing {required - set(r)}"
+        assert r["connection_fixture"] == "sales_pg"
+        assert r["difficulty"] in {"easy", "medium", "hard"}
+        assert r["tags"], f"{r['id']} has no tags"
+        assert r["why_deep"].strip(), f"{r['id']} does not say why it is deep"
+        assert r["min_steps"] >= 2, f"{r['id']} is answerable in one step"
+
+
+def test_deep_expected_tables_are_real(deep: dict[str, Any]) -> None:
+    for r in deep["records"]:
+        exp = set(r["expected_tables"])
+        assert exp, f"{r['id']} lists no expected_tables"
+        assert exp <= FIXTURE_TABLES, f"{r['id']} names unknown tables {exp - FIXTURE_TABLES}"
+
+
+def test_every_deep_trap_is_in_the_legend(deep: dict[str, Any]) -> None:
+    legend = set(deep["trap_legend"])
+    for r in deep["records"]:
+        unknown = set(r["traps"]) - legend
+        assert not unknown, f"{r['id']} names undocumented traps {unknown}"
+
+
 # ── the comments overlay (static; the commented arm of the A/B) ──────────────
 #
 # `sales_comments.sql` is loaded on top of the seed by `--comments`. A misspelt

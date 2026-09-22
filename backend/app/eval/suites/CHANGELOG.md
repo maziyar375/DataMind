@@ -71,6 +71,45 @@ Format per entry:
   documentation, the layer-on arm loses that point. That is a finding about the
   layer, not a licence to edit the gold set.
 
+### 2026-09-22 — `deep_v1` is frozen, it has no gold answers, and it reuses the flat fixture on purpose
+
+- **What changed:** `deep_v1.json` — twenty *why* / *what-drove-it* questions for
+  the deep analysis mode ([docs/plans/deep-analysis-mode.md](../../../../docs/plans/deep-analysis-mode.md)
+  Phase 0), frozen the day they were written, before a planner, a loop or a
+  contribution module existed. No gold SQL, no `result_equivalence`, and
+  `tests/eval/test_golden_set.py` now fails if either appears.
+- **Why no gold:** every metric that plan's Phase 7 declares — guard pass rate
+  and execution success rate across sub-queries, claim traceability, plan
+  adherence, cost per answer — is computed from the run itself. A reference
+  answer would buy nothing and would be written, when it came, by whoever had
+  just built the loop it grades.
+- **§11 Q3, answered, and not the way the plan expected.** The question was
+  whether this set reuses `sales` or needs a messier fixture with a real drop in
+  it. It reuses `sales`, because the fixture turns out to have **no planted
+  movement at all** — and that is the more valuable property, not a shortfall.
+- **Evidence,** measured against the live fixture on the freeze date:
+
+  ```
+  orders/month, 2024-10 .. 2026-08 : 248 .. 259 every full month
+  revenue                          : tracks it at ~$957/order throughout
+  2026-01 vs 2026-02               : 8.355 vs 8.321 orders per trading day
+  returns/month on returned_at     : 82 .. 85, reasons split 137/136/136/136
+  order_items.unit_price           : ONE distinct value (88.70) over 18,000 rows
+  ```
+
+  So the true answer to most of these questions is *"nothing drove it — here is
+  why the number looked like it did"*, and a mode that names a driver has
+  fabricated one. That is the same bet `sales_v1_negative.json` makes, and it is
+  a sharper test than a planted drop: fifteen of the twenty records carry a
+  `known_by_construction` string recording the fact that makes the honest answer
+  checkable.
+- **What this set therefore cannot do, written down before anyone claims it:**
+  it cannot score driver accuracy, because there is no driver. That needs a
+  second fixture with a movement planted in it and its decomposition known in
+  advance (`sales_drop_v1`, not built). The trigger to build it is the first
+  time a top-three-driver number is wanted against real data rather than the
+  constructed unit fixtures of `test_contribution.py`.
+
 ---
 
 ## Gold corrections
