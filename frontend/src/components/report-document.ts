@@ -27,7 +27,7 @@
  * order, because the worker enumerates sections then blocks) and any section
  * that has no blocks is inserted at the index its own `position` claims.
  */
-import type { ReportBlockResult, ReportRunDetail, ReportSectionResult } from '../api/types'
+import type { ReportBlockResult, ReportClaim, ReportRunDetail, ReportSectionResult } from '../api/types'
 
 export interface DocumentSection {
   /**
@@ -332,4 +332,63 @@ export function renderKindOf(block: ReportBlockResult): 'error' | 'kpi' | 'chart
   if (block.kpi) return 'kpi'
   if (block.vega_spec) return 'chart'
   return 'table'
+}
+
+/**
+ * A paragraph split into the sentences it was written as, each with its source.
+ *
+ * `REPORT_PROMPT_VERSION` r5 asks the writer to mark every sentence stating a
+ * figure with the result it drew from. The markers are stripped server-side
+ * before the prose is stored, and the sentences come back beside it as claims
+ * — so this is a *join*, not a parse: the text is reassembled from the claims
+ * in order, and each piece knows which result to open.
+ *
+ * ## The one rule that matters, and why it is here rather than in the renderer
+ *
+ * **A paragraph the reader has edited has no claims.** The claims were parsed
+ * from what the model wrote; an edit rewrites that text, and a citation still
+ * attached to a sentence somebody has since rephrased is a footnote pointing
+ * at a source the sentence no longer draws on. That is worse than no footnote,
+ * because it looks checked.
+ *
+ * So the join is verified rather than assumed: the claims' sentences must
+ * reassemble into the prose being rendered, and where they do not, the whole
+ * paragraph comes back as one uncited span. It renders exactly as it did
+ * before citations existed, which is the correct behaviour for text the model
+ * did not write.
+ *
+ * `npm run test:report`.
+ */
+export interface ClaimSpan {
+  text: string
+  /** The result to open, or null where this sentence cites none. */
+  blockResultId: string | null
+  /** The cited result's 1-based ordinal, for the marker's label. */
+  cites: number | null
+  /** This sentence states a figure its cited result does not support. */
+  unsupported: boolean
+}
+
+export function claimSpans(
+  prose: string,
+  claims: readonly ReportClaim[] | null | undefined,
+): ClaimSpan[] {
+  const whole: ClaimSpan[] = [
+    { text: prose, blockResultId: null, cites: null, unsupported: false },
+  ]
+  if (!claims || claims.length === 0) return whole
+
+  // Whitespace-insensitive, because the join inserts single spaces where the
+  // original may have had a newline or two. Anything beyond that — a word
+  // changed, a sentence added or removed — means this is not the text the
+  // claims were parsed from.
+  const flat = (text: string) => text.replace(/\s+/g, ' ').trim()
+  if (flat(claims.map((c) => c.text).join(' ')) !== flat(prose)) return whole
+
+  return claims.map((claim) => ({
+    text: claim.text,
+    blockResultId: claim.block_result_id,
+    cites: claim.cites,
+    unsupported: (claim.unsupported ?? []).length > 0,
+  }))
 }

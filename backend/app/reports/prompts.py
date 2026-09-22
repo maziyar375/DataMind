@@ -42,7 +42,17 @@ from __future__ import annotations
 #: read as one document, tells each section what its neighbours already said so
 #: it stops repeating them, and hands the writer figures computed by `facts.py`
 #: rather than leaving it to do arithmetic over a text table.
-REPORT_PROMPT_VERSION = "r4"
+#: r5 asks for a **citation per sentence**. Each result in the section is
+#: numbered in the prompt, and a sentence that states a figure ends with the
+#: number of the result it drew from — `[2]`. The markers never reach a reader:
+#: `checks.parse_claims` lifts them out into `Claim` rows beside the prose, and
+#: the numeric check then matches each sentence's figures against **its own**
+#: result rather than against the union of the section's. That is strictly
+#: stricter, and it is the edge claim → result → SQL that
+#: `docs/plans/deep-analysis-mode.md` Phase 3 is for. Nothing else in the
+#: prompt moved, so an r4 document and an r5 one differ in what can be checked
+#: about them rather than in what they say.
+REPORT_PROMPT_VERSION = "r5"
 
 # What a language code means to a model. The code alone ("fa") is understood by
 # the strong models and guessed at by the rest; the endonym removes the guess.
@@ -285,7 +295,18 @@ sentence. Name the period the way the results name it.
 - No hedging without a reason. "May suggest", "could potentially" and "it \
 appears" are filler; if the evidence is thin, say the evidence is thin.
 - Do not repeat what other sections of this report already said. You are told \
-below what they cover and what they have already established."""
+below what they cover and what they have already established.
+
+CITE YOUR NUMBERS — this part is mechanical, and it is not optional:
+- The results below are numbered. **Every sentence that states a figure ends \
+with the number of the result that figure came from, in square brackets**, \
+before the full stop: `Revenue fell 12% in the north [2].`
+- One number per sentence. If a sentence genuinely needs two results, split \
+it into two sentences, each citing its own.
+- A sentence that states no figure carries no citation.
+- Cite the result the figure is *in*. A figure you worked out from a computed \
+figure carries the number of the result that figure was computed from.
+- Never cite a result number that is not listed below."""
 
 REPORT_SECTION_USER = """Write this section in: {language}
 

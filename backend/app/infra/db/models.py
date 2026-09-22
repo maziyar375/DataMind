@@ -1663,6 +1663,19 @@ class ReportSectionResult(Base):
     # result row supports. NULL = the check did not run. It **flags, never
     # blocks** — a finding is a suspicion, never a verdict.
     numeric_check: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # One row per sentence: the claim, the figures it states, the result it
+    # cites and that result's id — the edge claim → result → SQL, added in
+    # `0038`. **JSONB rather than a `report_claims` table**, which is the plan's
+    # own §11 Q1 answered by its own rule: a table the moment something queries
+    # across claims, and nothing does. Traceability is computed per run, and a
+    # claim is only ever read with the prose it belongs to. A table would add a
+    # join, a cascade and a migration to the one read path that has them all
+    # already, and buy an index nobody would use.
+    #
+    # NULL is "this run predates claims", empty is "the writer cited nothing" —
+    # the same distinction `numeric_check` beside it already carries, and the
+    # second is a finding about the provider rather than about the report.
+    claims: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="OK")
     error_message: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(

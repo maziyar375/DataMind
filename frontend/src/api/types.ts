@@ -1939,10 +1939,43 @@ export interface ReportSectionResult {
   /** What the user wrote over it. **null = not edited**, and reverting sends null. */
   edited_prose: string | null
   /** null means the check did not run; `findings: []` means it ran and found nothing. */
-  numeric_check: { checked: number; findings: NumericFinding[] } | null
+  numeric_check: {
+    checked: number
+    findings: NumericFinding[]
+    claims?: ReportClaim[]
+    /** How many sentences carried no citation, so were checked against every
+     *  result rather than against one. Non-zero means the check is weaker than
+     *  it looks. */
+    uncited?: number
+  } | null
+  /**
+   * One entry per sentence of `prose`: the sentence, the figures it states,
+   * and the result it was drawn from.
+   *
+   * **null means this run predates citations**; `[]` means the writer cited
+   * nothing, which is a finding about the provider and not about the report.
+   * The claim carries no SQL of its own — `block_result_id` resolves against
+   * `blocks` in the same response, which is what keeps a reader who may not
+   * see a block from reaching its statement through a footnote.
+   */
+  claims: ReportClaim[] | null
   status: 'OK' | 'FAILED' | 'SKIPPED_NO_DATA'
   error_message: string | null
   created_at: string
+}
+
+/** One sentence of a report, and the result it is drawn from. */
+export interface ReportClaim {
+  /** The sentence as the reader sees it — the citation marker already removed. */
+  text: string
+  /** 1-based ordinal of the cited result within its section; null = uncited. */
+  cites: number | null
+  /** The cited result's id, resolved when the run was written. */
+  block_result_id: string | null
+  /** Every figure this sentence states. */
+  figures: number[]
+  /** Figures in this sentence its cited result does not support. */
+  unsupported: NumericFinding[]
 }
 
 /** The poll target: the run, and everything written so far. */

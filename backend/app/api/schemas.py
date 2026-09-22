@@ -2722,6 +2722,17 @@ class ReportSectionResultRead(BaseModel):
     # Figures in the prose that no result row supports. A finding is a
     # suspicion, never a verdict — it flags, it never blocks.
     numeric_check: dict[str, Any] | None = None
+    # One entry per sentence: the sentence, the figures it states, the result
+    # it cites (`block_result_id`), and any figure that result does not
+    # support. **The edge claim → result → SQL**, and it carries no SQL of its
+    # own: the reader resolves `block_result_id` against `blocks` in the same
+    # response, which is what keeps the intersection rule intact for free — a
+    # reader who may not see a block gets a `restricted` block with no
+    # `sql_text`, and the claim pointing at it resolves to nothing rather than
+    # to a statement naming columns of a database they were not given.
+    #
+    # NULL means the run predates claims; `[]` means the writer cited nothing.
+    claims: list[dict[str, Any]] | None = None
     status: str = "OK"
     error_message: str | None = None
     created_at: datetime

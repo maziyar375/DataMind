@@ -345,7 +345,7 @@ money — so it is not in `make test`, and an import-linter contract keeps it of
 the request path entirely. See [eval.md](eval.md).
 
 ### `backend/app/infra` — the adapters
-- `db/` — SQLAlchemy models (**33 tables**, §4), 21 Alembic migrations, async
+- `db/` — SQLAlchemy models (**33 tables**, §4), 38 Alembic migrations, async
   session factory.
 - `repositories/` — query helpers over the ORM models.
 - `connectors/` — `factory.py` maps each `DatabaseKind` to a connector; each of

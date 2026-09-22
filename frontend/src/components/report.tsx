@@ -62,8 +62,8 @@ import {
 import { accessOf } from '../permissions'
 import { ChartGlyph, ChartTypePicker } from './chart-picker'
 import {
-  assembleDocument, captionOf, chartTypeOf, figureNumbers, isCallout, isEdited,
-  keyFigures, proseOf, renderKindOf, summaryParts,
+  assembleDocument, captionOf, chartTypeOf, claimSpans, figureNumbers, isCallout,
+  isEdited, keyFigures, proseOf, renderKindOf, summaryParts,
   type DocumentSection, type KeyFigure,
 } from './report-document'
 // One vocabulary for a run's status across the two screens that show one.
@@ -3472,6 +3472,10 @@ function SectionView({
 }) {
   const failed = section.prose?.status === 'FAILED'
   const summary = section.isSummary
+  // Which figure a footnote in this section's paragraph asked to see. Held
+  // here rather than in the block, because the paragraph and the figure are
+  // siblings and the footnote is the only thing that connects them.
+  const [cited, setCited] = useState<string | null>(null)
 
   return (
     <section
@@ -3558,6 +3562,7 @@ function SectionView({
           t={t}
           editable={section.sectionId !== null}
           onSave={onProse}
+          onCite={setCited}
         />
       )}
 
@@ -3573,6 +3578,12 @@ function SectionView({
           t={t}
           onBlock={onBlock}
           connectionId={connectionId}
+          // A footnote asked for this one. Passed as the id rather than a
+          // boolean so pressing the same footnote twice re-opens it: the block
+          // clears the request once it has honoured it, and a second press is
+          // a new value rather than the same `true` React will not re-render.
+          cited={cited === block.id}
+          onCited={() => setCited(null)}
         />
       ))}
     </section>
@@ -3588,7 +3599,7 @@ function SectionView({
  * destroying this one's writing.
  */
 function ProseView({
-  result, summary, t, editable, onSave,
+  result, summary, t, editable, onSave, onCite,
 }: {
   result: ReportSectionResult
   /**
@@ -3602,6 +3613,8 @@ function ProseView({
   t: Record<string, string>
   editable: boolean
   onSave: (text: string | null) => Promise<void>
+  /** A footnote was pressed: show the statement behind that result. */
+  onCite?: (blockResultId: string) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -3671,6 +3684,12 @@ function ProseView({
 
   const quiet = result.status === 'SKIPPED_NO_DATA'
   const parts = summary ? summaryParts(text) : { lead: text, findings: [] }
+  // The sentences this paragraph was written as, each knowing its source.
+  // `claimSpans` returns the whole paragraph as one uncited span when the
+  // claims do not reassemble into it — which is every edited paragraph, and
+  // is the right answer: a footnote on a sentence somebody has rephrased
+  // points at a source that sentence no longer draws on.
+  const spans = summary ? [] : claimSpans(parts.lead, result.claims)
 
   return (
     <div
@@ -3691,7 +3710,21 @@ function ProseView({
             whiteSpace: 'pre-wrap',
           }}
         >
-          {parts.lead}
+          {summary || spans.length <= 1
+            ? parts.lead
+            : spans.map((span, index) => (
+                <span key={index}>
+                  {index > 0 && ' '}
+                  {span.text}
+                  {span.blockResultId && onCite && (
+                    <Footnote
+                      cites={span.cites}
+                      unsupported={span.unsupported}
+                      onOpen={() => onCite(span.blockResultId!)}
+                    />
+                  )}
+                </span>
+              ))}
         </p>
       )}
 
@@ -3768,6 +3801,71 @@ function ProseView({
         )}
       </div>
     </div>
+  )
+}
+
+/**
+ * The mark after a sentence that says which figure it came from.
+ *
+ * Set as a footnote rather than as a link on the number itself, and the reason
+ * is the sentence: a claim is an assertion made from one result, not a digit
+ * lifted out of one, and underlining "1,200,000" would say the number is
+ * sourced while leaving the claim around it unsourced. The whole sentence is
+ * what was drawn from the figure, so the whole sentence carries the mark.
+ *
+ * Amber where the cited result does not support a figure in the sentence —
+ * the same tone `NumericMarker` uses, and the same posture: **a finding is a
+ * suspicion, never a verdict**. It does not stop anyone reading the sentence.
+ *
+ * Hidden on paper. The appendix carries every statement in full, and a printed
+ * document cannot open anything.
+ */
+function Footnote({
+  cites, unsupported, onOpen,
+}: {
+  cites: number | null
+  unsupported: boolean
+  onOpen: () => void
+}) {
+  const label = cites === null ? '?' : String(cites)
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="rm-report-hide-in-print"
+      title={
+        unsupported
+          ? `Figure ${label} is cited here, and does not carry every number in this sentence. Open its statement.`
+          : `Drawn from figure ${label}. Open the statement behind it.`
+      }
+      aria-label={`Open the statement behind figure ${label}`}
+      style={{
+        verticalAlign: 'super',
+        marginInlineStart: 2,
+        padding: '0 3px',
+        minWidth: 14,
+        borderRadius: 4,
+        border: '1px solid transparent',
+        background: 'transparent',
+        color: unsupported ? 'var(--amber-text)' : 'var(--text-faint)',
+        fontSize: 9.5,
+        fontVariantNumeric: 'tabular-nums',
+        lineHeight: 1.4,
+        cursor: 'pointer',
+      }}
+      onMouseEnter={(event) => {
+        event.currentTarget.style.borderColor = 'var(--border)'
+        event.currentTarget.style.color = 'var(--accent)'
+      }}
+      onMouseLeave={(event) => {
+        event.currentTarget.style.borderColor = 'transparent'
+        event.currentTarget.style.color = unsupported
+          ? 'var(--amber-text)'
+          : 'var(--text-faint)'
+      }}
+    >
+      {label}
+    </button>
   )
 }
 
@@ -3858,11 +3956,15 @@ function NumericMarker({
  * to a statement is a number nobody should act on.
  */
 function BlockView({
-  reportId, runId, block, figure, t, onBlock, connectionId,
+  reportId, runId, block, figure, t, onBlock, connectionId, cited, onCited,
 }: {
   reportId: string
   runId: string
   block: ReportBlockResult
+  /** A footnote in the paragraph above asked to see this figure's statement. */
+  cited?: boolean
+  /** Honoured — clear the request, so pressing the same footnote again works. */
+  onCited?: () => void
   /** The database this document was built over, for a withheld figure's
    *  "Why?" link. Null once that connection has been deleted. */
   connectionId: string | null
@@ -3939,7 +4041,15 @@ function BlockView({
     // The caption *is* the label. `plan_kpi` labels the number with its column
     // (`total_rev`), which beside a written caption is the same thing said
     // twice and worse the second time.
-    return <BlockCallout block={block} spec={{ ...block.kpi, label: caption }} t={t} />
+    return (
+      <BlockCallout
+        block={block}
+        spec={{ ...block.kpi, label: caption }}
+        t={t}
+        cited={cited}
+        onCited={onCited}
+      />
+    )
   }
 
   return (
@@ -4011,7 +4121,7 @@ function BlockView({
         </>
       )}
 
-      <BlockFoot block={block} t={t} />
+      <BlockFoot block={block} t={t} cited={cited} onCited={onCited} />
     </figure>
   )
 }
@@ -4031,12 +4141,15 @@ function BlockView({
  * document.
  */
 function BlockCallout({
-  block, spec, t,
+  block, spec, t, cited, onCited,
 }: {
   block: ReportBlockResult
   /** The block's own KPI, labelled with the document's caption for it. */
   spec: KpiSpec
   t: Record<string, string>
+  /** A footnote asked for this one — a callout is cited like any exhibit. */
+  cited?: boolean
+  onCited?: () => void
 }) {
   return (
     <aside
@@ -4056,7 +4169,7 @@ function BlockCallout({
       }}
     >
       <Kpi spec={spec} compact />
-      <BlockFoot block={block} t={t} />
+      <BlockFoot block={block} t={t} cited={cited} onCited={onCited} />
     </aside>
   )
 }
@@ -4071,12 +4184,32 @@ function BlockCallout({
  * was obtained — provenance, like the SQL it sits above and the row count
  * beside it — and a reader who wants it is already looking in this line.
  */
-function BlockFoot({ block, t }: { block: ReportBlockResult; t: Record<string, string> }) {
+function BlockFoot({
+  block, t, cited, onCited,
+}: {
+  block: ReportBlockResult
+  t: Record<string, string>
+  cited?: boolean
+  onCited?: () => void
+}) {
   const [showSql, setShowSql] = useState(false)
+  const box = useRef<HTMLDivElement>(null)
+
+  // A footnote was pressed: open the statement and bring it into view. The
+  // request is cleared as it is honoured, so pressing the same footnote twice
+  // works — a boolean that stayed true would be the same value on the second
+  // press and React would do nothing.
+  useEffect(() => {
+    if (!cited) return
+    setShowSql(true)
+    box.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    onCited?.()
+  }, [cited, onCited])
 
   return (
     <>
       <div
+        ref={box}
         className="rm-report-figfoot"
         style={{
           display: 'flex',

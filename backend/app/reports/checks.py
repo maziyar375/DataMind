@@ -25,6 +25,33 @@ token-free check can tell. Tier 3 — the model emitting `{{b2.revenue}}` and th
 renderer substituting the value — is what makes that class impossible rather
 than detected, and the findings this module produces are the evidence for
 whether the prompt is reliable enough to try it.
+
+## Claims — and why checking one against its own result is strictly stricter
+
+`docs/plans/deep-analysis-mode.md` Phase 3. Everything above matches a figure
+against **the union of every result in the section**, which is as much as a
+paragraph with no internal structure allows. But a section carrying four
+blocks has four pools merged into one, and a sentence about *last quarter's
+revenue* quoting a number that only appears in the *headcount by team* result
+passes that check — the figure is in the pool, and the pool cannot say which
+result it came from.
+
+So the prose is now emitted with a citation per sentence (`narrate.py` numbers
+the results; the writer marks each sentence it draws from one), `parse_claims`
+lifts those markers back out, and `check_claims` matches each claim's figures
+against **its own cited result and nothing else**. The pool a claim is checked
+against shrinks from four results to one, which is what makes a
+cross-referenced figure visible.
+
+Two failure modes are handled rather than assumed away, because the citation
+comes from a model:
+
+* **An uncited sentence** falls back to the union, exactly as before, and is
+  recorded as `uncited`. A writer that ignores the instruction degrades this
+  check to what it was; it never breaks it.
+* **A citation to a result that does not exist** — `[7]` where there are three
+  — is treated as uncited rather than dropped, because a fabricated citation
+  is itself worth seeing and silently discarding it would hide it.
 """
 from __future__ import annotations
 
@@ -119,6 +146,41 @@ class NumericFinding(BaseModel):
     kind: str = "figure"
 
 
+class Claim(BaseModel):
+    """One sentence of a report, the figures it states, and the result it cites.
+
+    The edge `docs/plans/deep-analysis-mode.md` §3.4 asks for — **claim → step
+    → SQL → result** — with `cites` as the middle link. It is the ordinal of a
+    result *within its section*, 1-based, as the prompt numbered it; `None`
+    means the writer marked no result and this sentence is checked against the
+    union, the way every sentence used to be.
+
+    `supported` is the per-claim verdict: false when a figure in this sentence
+    appears in no cited result. It is a **suspicion, never a verdict** — the
+    same posture the module has always had, for the reason its docstring gives.
+    """
+
+    #: The sentence as the reader will see it, with the citation marker already
+    #: removed. Stored rather than re-derived, because the prose is editable and
+    #: a claim that pointed at an offset would be wrong the moment it was.
+    text: str
+    #: 1-based ordinal of the result this sentence was drawn from, as the
+    #: prompt numbered them. `None` where the writer cited nothing.
+    cites: int | None = None
+    #: Every figure the sentence states, with scale words applied.
+    figures: list[float] = Field(default_factory=list)
+    #: Figures in this sentence that its cited result does not support.
+    unsupported: list[NumericFinding] = Field(default_factory=list)
+
+    @property
+    def supported(self) -> bool:
+        return not self.unsupported
+
+    @property
+    def uncited(self) -> bool:
+        return self.cites is None
+
+
 class NumericCheck(BaseModel):
     """What the check looked at, and what it could not account for.
 
@@ -129,10 +191,33 @@ class NumericCheck(BaseModel):
 
     checked: int = 0
     findings: list[NumericFinding] = Field(default_factory=list)
+    #: The sentences this section was broken into, each with the result it
+    #: cites. Empty on a run from before claims existed, and on a section whose
+    #: writer emitted no citation at all — `uncited` below says which.
+    claims: list[Claim] = Field(default_factory=list)
+    #: How many claims carried no citation. Non-zero means the check fell back
+    #: to the union for that many sentences, and is therefore weaker than it
+    #: looks — a number the traceability metric needs as its denominator.
+    uncited: int = 0
 
     @property
     def ok(self) -> bool:
         return not self.findings
+
+    @property
+    def traceable(self) -> float | None:
+        """The share of claims stating a figure that resolve to one result.
+
+        The metric `docs/plans/deep-analysis-mode.md` §12.9 scores, computed
+        here so it means the same thing in a report and in the eval. `None`
+        where no claim states a figure — a section of pure prose has nothing
+        to trace, which is not the same as tracing nothing.
+        """
+        stating = [c for c in self.claims if c.figures]
+        if not stating:
+            return None
+        resolved = [c for c in stating if c.cites is not None and c.supported]
+        return len(resolved) / len(stating)
 
 
 def numeric_values(rows: Iterable[Sequence[Any]]) -> list[float]:
@@ -319,3 +404,150 @@ def _close(value: float, candidate: float, unit: float) -> bool:
     orders of magnitude or absent from the data entirely.
     """
     return abs(value - candidate) <= max(unit, abs(candidate) * REL_TOLERANCE)
+
+
+# ── claims: the sentence, its figures, and the result it cites ───────────
+#: The citation a writer appends to a sentence: `[2]`, `[۲]`, or `[1,3]` where
+#: one sentence genuinely draws on two results. Anchored to the end of the
+#: sentence, before its full stop or after it, because that is where a writer
+#: puts one and because a bracket mid-sentence is far more likely to be an
+#: aside than a citation.
+_CITE_RE = re.compile(r"\s*\[\s*(\d+(?:\s*[,،]\s*\d+)*)\s*\]\s*(?=[.!?؟]?\s*|$)")
+
+#: Sentence boundaries, in both scripts. Deliberately simple: the alternative
+#: is a sentence tokeniser, and a wrong split costs a claim boundary rather
+#: than a figure — every figure is still checked, against a slightly wider or
+#: narrower sentence.
+_SENTENCE_RE = re.compile(r"(?<=[.!?؟])\s+|\n+")
+
+#: Claims parsed from one section. A paragraph is 4–7 sentences by the house
+#: style; this is the ceiling past which something has gone wrong with the
+#: split rather than with the writing.
+MAX_CLAIMS = 60
+
+
+def parse_claims(prose: str, *, results: int) -> tuple[str, list[Claim]]:
+    """Lift the citation markers out of the prose, into claims beside it.
+
+    Returns the prose **as the reader will see it** — markers removed — and one
+    `Claim` per sentence. Removing them here rather than in the renderer is the
+    decision worth defending: the prose is editable, an edit will not preserve
+    a marker, and a citation stored as an offset into text somebody may rewrite
+    is a citation that will be wrong by next week. So the sentence travels with
+    its claim and the stored prose is clean.
+
+    `results` is how many results the section had. A citation past it is a
+    fabricated one: kept as uncited rather than dropped, because a writer
+    inventing a source is exactly the behaviour worth being able to see.
+
+    Never raises — it runs on every section of every run, and a parse failure
+    must cost citations rather than the paragraph.
+    """
+    try:
+        return _parse_claims(prose, results)
+    except Exception:  # noqa: BLE001 — see the docstring
+        return prose, []
+
+
+def _parse_claims(prose: str, results: int) -> tuple[str, list[Claim]]:
+    if not (prose or "").strip():
+        return prose, []
+
+    claims: list[Claim] = []
+    clean_parts: list[str] = []
+    for sentence in _SENTENCE_RE.split(prose):
+        if not sentence.strip():
+            continue
+        cited: list[int] = []
+
+        def take(match: re.Match[str], into: list[int] = cited) -> str:
+            into.extend(
+                int(n) for n in re.split(r"[,،]", match.group(1)) if n.strip().isdigit()
+            )
+            return ""
+
+        clean = _CITE_RE.sub(take, sentence).strip()
+        if not clean:
+            continue
+        clean_parts.append(clean)
+        # The first citation wins where a sentence names several: the check
+        # needs one pool, and widening it to the union of two results is the
+        # weakening this whole change exists to undo.
+        first = next((n for n in cited if 1 <= n <= results), None)
+        claims.append(
+            Claim(text=clean, cites=first, figures=figures_in(clean))
+        )
+        if len(claims) >= MAX_CLAIMS:
+            break
+
+    return " ".join(clean_parts), claims
+
+
+def check_claims(
+    claims: Sequence[Claim],
+    pools: Sequence[Sequence[float]],
+    *,
+    context: str = "",
+) -> NumericCheck:
+    """Each claim against **its own cited result**, and nothing else.
+
+    `pools` is one pool per result, in the order the prompt numbered them, so
+    `claims[i].cites` indexes into it. A claim citing nothing falls back to the
+    union of every pool — which is exactly what `check_prose` has always done,
+    so a writer that ignores the citation instruction leaves this check no
+    weaker than it was.
+
+    The union is built once rather than per claim: a section with eight results
+    and seven sentences would otherwise concatenate eight lists seven times,
+    and these pools run to thousands of values.
+
+    Never raises, for `check_prose`'s reason.
+    """
+    try:
+        return _check_claims(claims, pools, context)
+    except Exception:  # noqa: BLE001
+        return NumericCheck()
+
+
+def _check_claims(
+    claims: Sequence[Claim], pools: Sequence[Sequence[float]], context: str
+) -> NumericCheck:
+    union = [value for pool in pools for value in pool][:MAX_POOL]
+
+    checked = 0
+    findings: list[NumericFinding] = []
+    uncited = 0
+    settled: list[Claim] = []
+
+    for claim in claims:
+        if claim.cites is None:
+            uncited += 1
+            pool: Sequence[float] = union
+        else:
+            at = claim.cites - 1
+            pool = pools[at] if 0 <= at < len(pools) else union
+
+        one = _check(claim.text, pool, context)
+        checked += one.checked
+        settled.append(
+            claim.model_copy(update={"unsupported": list(one.findings)})
+        )
+        for finding in one.findings:
+            # De-duplicated across claims, so a figure a writer repeated in two
+            # sentences is one marker rather than two — the same rule `_check`
+            # already applies within a sentence.
+            if not any(
+                f.value == finding.value and f.kind == finding.kind for f in findings
+            ):
+                findings.append(finding)
+            if len(findings) >= MAX_FINDINGS:
+                break
+        if len(findings) >= MAX_FINDINGS:
+            break
+
+    return NumericCheck(
+        checked=checked,
+        findings=findings[:MAX_FINDINGS],
+        claims=settled,
+        uncited=uncited,
+    )

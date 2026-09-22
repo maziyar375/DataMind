@@ -46,7 +46,7 @@ import os
 import re
 import socket
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict
 from datetime import timedelta
 from typing import Any
@@ -792,18 +792,51 @@ async def _narrate(
     # like its cheapest.
     _spend(spent, completion, llm)
 
-    row.prose = _prose(completion, run_id=run.id, what=section.heading)
-    if not row.prose:
+    written = _prose(completion, run_id=run.id, what=section.heading)
+    if not written:
         row.status = ReportSectionResultStatus.FAILED
         row.error_message = (
             _TRUNCATED if completion.truncated else "The model returned an empty paragraph."
         )
         return row
 
-    row.numeric_check = _numeric_check(row.prose, section, blocks).model_dump(
-        mode="json"
-    )
+    # r5's citation markers come out here, before the prose is stored: the
+    # reader never sees them, and a claim carries its own sentence rather than
+    # an offset into text the user may edit.
+    row.prose, claims = checks.parse_claims(written, results=len(blocks))
+    if not row.prose:
+        row.status = ReportSectionResultStatus.FAILED
+        row.error_message = "The model returned an empty paragraph."
+        return row
+
+    check = _numeric_check(row.prose, section, blocks, claims=claims)
+    row.numeric_check = check.model_dump(mode="json")
+    # The resolved edge: each claim's cited result, as the id and SQL an API
+    # can hand a reader. Resolved now rather than on read, because `results` is
+    # the ordering the prompt numbered and nothing else reproduces it.
+    row.claims = _cited(check.claims, results)
     return row
+
+
+def _cited(
+    claims: Sequence[checks.Claim], results: list[ReportBlockResult]
+) -> list[dict[str, Any]]:
+    """Each claim with the block result it cites resolved beside it.
+
+    The stored edge is **claim → result → SQL**, and the result's id is what
+    carries it: a claim holding only the ordinal `[2]` would point at whichever
+    block happens to be second next time the report is edited, and a document
+    is supposed to stay readable after its blocks change. `position` and
+    `sql_text` are already snapshotted on the result row for that same reason.
+    """
+    stored: list[dict[str, Any]] = []
+    for claim in claims:
+        row = claim.model_dump(mode="json")
+        at = (claim.cites or 0) - 1
+        cited = results[at] if 0 <= at < len(results) else None
+        row["block_result_id"] = str(cited.id) if cited is not None else None
+        stored.append(row)
+    return stored
 
 
 async def _summarise(
@@ -1085,32 +1118,55 @@ def _kpi_line(kpi: dict[str, Any] | None) -> str | None:
     return line
 
 
-def _numeric_check(
-    prose: str, section: ReportSection, blocks: list[BlockNarration]
-) -> checks.NumericCheck:
-    """Tier 2: every figure in the paragraph, looked for in what was disclosed.
+def _pool(block: BlockNarration) -> list[float]:
+    """Every figure one result can legitimately support.
 
     The pool is what the model was **given**, not what the query returned. A
     figure matched against a row the model never saw would be excused for a
     coincidence, which is the opposite of what this check is for.
     """
-    pool = checks.numeric_values(
-        [row for block in blocks for row in block.rows]
-    )
+    pool = checks.numeric_values(block.rows)
     # A row count is a fact about the result that no cell holds, and "across 13
     # months" is the most natural sentence in the world to write from it.
-    pool.extend(float(block.row_count) for block in blocks)
+    pool.append(float(block.row_count))
     # And the computed figures, which are the check's known false-positive
     # class: a growth rate or a share appears in no cell, so before `facts.py`
     # every correctly-derived number in the report wore a marker. These were
     # calculated from the same rows the model was handed, so a paragraph
     # quoting one is quoting the result — which is exactly what the check is
     # asking about.
-    pool.extend(value for block in blocks for value in block.facts.values())
+    pool.extend(block.facts.values())
+    return pool
+
+
+def _numeric_check(
+    prose: str,
+    section: ReportSection,
+    blocks: list[BlockNarration],
+    *,
+    claims: Sequence[checks.Claim] = (),
+) -> checks.NumericCheck:
+    """Tier 2: every figure in the paragraph, looked for in what was disclosed.
+
+    **Per claim where the writer cited one**, against the union where it did
+    not. The pools are built per result rather than merged, which is the whole
+    of Phase 3: a section with four results used to check every sentence
+    against all four merged, so a figure from the headcount result passed in a
+    sentence about revenue. A claim narrows that pool to one.
+
+    A section whose writer emitted no citations at all falls back to
+    `check_prose` over the union — identical to what this did before r5, so a
+    provider that ignores the instruction costs citations and nothing else.
+    """
+    pools = [_pool(block) for block in blocks]
     context = " ".join(
         [section.heading, section.intent, *(block.question for block in blocks)]
     )
-    return checks.check_prose(prose, pool, context=context)
+    if claims:
+        return checks.check_claims(claims, pools, context=context)
+    return checks.check_prose(
+        prose, [value for pool in pools for value in pool], context=context
+    )
 
 
 # ── the run row ──────────────────────────────────────────────────────────

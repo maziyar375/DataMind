@@ -814,7 +814,7 @@ Each with a written trigger, from
 
 | # | Question | Who decides, and when |
 |:--:|---|---|
-| Q1 | A `report_claims` table, or JSONB on `report_blocks`? | Phase 3's first commit. JSONB if nothing ever queries across claims; a table the moment something does |
+| Q1 | ~~A `report_claims` table, or JSONB on `report_blocks`?~~ **Answered 2026-09-22: JSONB, on `report_section_results` rather than `report_blocks`** — a claim is a property of the prose, not of a figure. Nothing queries across claims (traceability is per run), and a table would add a join, a cascade and an ordering column to the one read path that has all three. `jsonb_to_recordset` is the migration when something does | closed |
 | Q2 | Does a deep run get its own `llm_config`, so the planner can be a stronger model than the generator? | Phase 4. It is cheap to allow and awkward to retrofit |
 | Q3 | Does `deep_v1` reuse the `sales` fixture, or need a messier one with a real drop in it? | Phase 0, and it must be answered before the set is frozen |
 | Q4 | Is *Answer now* available before the first step finishes? | Phase 6. Probably yes, and it synthesizes a refusal that says why |
@@ -899,16 +899,16 @@ The plan would be several times larger if any of these were missing.
 **Done when:** the module names the top three drivers of a known change, and
 **no answer in the product behaves differently.**
 
-### 12.5 Phase 3 — Citations as structure · **0 / 8** · stands alone
+### 12.5 Phase 3 — Citations as structure · **8 / 8** · stands alone ✅
 
-- [ ] A `Claim` type in `app/reports/` — sentence, figures quoted, query cited
-- [ ] `narrate.py` emits claims rather than only prose
-- [ ] `checks.py` checks each claim against **its own cited result**, not the union
-- [ ] Migration `0038` — §11 Q1 decides table vs JSONB, in this commit
-- [ ] The API exposes the SQL behind a claim
-- [ ] `report.tsx` — a claim's number opens its statement
-- [ ] `test_report_citations.py` — a figure drawn from a different section's result is **flagged**, where today it passes
-- [ ] `report-document.test.ts` updated
+- [x] A `Claim` type in `app/reports/checks.py` — sentence, figures quoted, result cited, and the figures that result does not support. It lives in `checks.py` rather than `narrate.py` because parsing a citation needs `figures_in`, and putting it the other way round would make `narrate` import `checks`
+- [x] `narrate.py` **numbers** the results, `REPORT_SECTION_SYSTEM` asks for a citation per sentence, and `parse_claims` lifts the markers out before the prose is stored. `REPORT_PROMPT_VERSION` r4 → r5 — the wording moved, so the constant did
+- [x] `checks.py` checks each claim against **its own cited result**, not the union — the pool shrinks from every result in the section to one. An uncited sentence falls back to the union and is counted in `uncited`, so a provider that ignores the instruction leaves the check exactly as strong as it was; a citation to a result that does not exist is kept as uncited rather than dropped, because a fabricated source is worth seeing
+- [x] Migration `0038` — **§11 Q1 answered: JSONB**, by the question's own rule. A table the moment something queries across claims, and nothing does: traceability is per run, and a claim is only ever read with the prose it belongs to. NULL = predates citations, `[]` = the writer cited nothing. Applied and rolled back against a throwaway database
+- [x] The API exposes the SQL behind a claim — as `block_result_id`, resolved against the `blocks` already in the same response rather than as SQL on the claim itself. That is what keeps the intersection rule intact for free: a reader who may not see a figure gets a `restricted` block with no `sql_text`, and the footnote pointing at it resolves to nothing instead of to a statement naming a database they were never given
+- [x] `report.tsx` — a claim's footnote opens its statement and scrolls to it. A footnote after the **sentence**, not a link on the digit: a claim is an assertion made from a result, and underlining the number would say the number is sourced while leaving the claim around it unsourced
+- [x] `test_report_citations.py` — a figure drawn from a different result is **flagged**, and the same test asserts the old union check **passes** it, because "stricter" is a claim about the difference. 12 tests, both numeral systems, no provider
+- [x] `report-document.test.ts` — `claimSpans`, and the rule it exists for: **an edited paragraph loses its footnotes.** The claims record what the model wrote, and a citation still attached to a sentence somebody has rephrased points at a source that sentence no longer draws on — worse than no footnote, because it looks checked
 
 ### 12.6 Phase 4 — The plan, and a graph that stops · **0 / 12**
 
@@ -1008,20 +1008,21 @@ evidence **that says so**.
 | 0 — The gate | 1 | 5 |
 | 1 — Cache tokens | 8 | 8 |
 | 2 — `app/analysis/` | 10 | 10 |
-| 3 — Citations | 0 | 8 |
+| 3 — Citations | 8 | 8 |
 | 4 — The plan and the graph | 0 | 12 |
 | 5 — The loop | 0 | 11 |
 | 6 — The surface | 0 | 12 |
 | 7 — Scoring | 0 | 7 |
 | 8 — Governance | 0 | 6 |
 | 9 — Documentation | 0 | 6 |
-| **Total** | **19** | **85** |
+| **Total** | **27** | **85** |
 
 ### 12.13 Change log
 
 | Date | What changed |
 |---|---|
 | 2026-09-22 | Written. No phase started. |
+| 2026-09-22 | **Phase 3 complete, 8/8.** `REPORT_PROMPT_VERSION` r4 → r5: the section's results are numbered and every sentence stating a figure cites the one it came from. The markers never reach a reader — `parse_claims` lifts them into `Claim` rows on `report_section_results.claims` (`0038`, **JSONB**, §11 Q1 closed), and the numeric check now matches each sentence against **its own** result instead of the union of the section's. A figure borrowed from another result is flagged where it used to pass, and the test asserts both halves. A footnote opens the statement behind the figure; an **edited** paragraph is rendered without footnotes, because the claims describe what the model wrote. `make test` 3,196 green, `npm test` + build green, `0038` applied and rolled back against a throwaway database. | 27 of 85 |
 | 2026-09-22 | **Phase 2 complete, 10/10.** `app/analysis/` — five modules, the three SpotIQ algorithms chosen by measure class, period alignment that reports per calendar day, and z-scores at a cardinality-chosen threshold. Refusals are values; `NO_CHANGE` is the commonest one and the honest answer on this fixture. The **ninth** import-linter contract (there were eight, not nine) keeps it unable to reach a model or a database, and was proven to break on a deliberate violation. 39 new tests, no provider anywhere. **Nothing in the product calls it** — the package ships inert, exactly as the phase asks. | 19 of 85 |
 | 2026-09-22 | **Phase 1 complete, 8/8.** `Usage` and `Completion` gained `cache_read_tokens` / `cache_write_tokens` as `int | None`; the gateway reads them from the four places providers and LiteLLM put them and **records nothing where they are absent**; `add_reported()` is the one piece of nullable arithmetic, shared by the pipeline and the usage service; migration `0037` on `runs` and `run_steps`, nullable and applied against a real database both ways. The chart **subdivides** the input bar rather than stacking on it, because a cached token is part of the prompt it arrived with. `make test` 3,145 green, `lint-imports` 8/8, `npm test` + build green. | 9 of 85 |
 | 2026-09-22 | **Phase 0, the frozen set.** `deep_v1.json` — twenty questions, no gold answers, frozen the day it was written; five static checks in `tests/eval/test_golden_set.py` hold the freeze, one of them failing if a `gold_sql` ever appears. §11 **Q3 answered**: reuse `sales`, because it has no planted movement and a fabricated driver is therefore detectable — evidence in `suites/CHANGELOG.md`. The three measurements were still running when this landed. | 1 of 85 |

@@ -11,10 +11,12 @@
  * section deleted from the outline since the run — not invented ones.
  */
 import {
-  assembleDocument, captionOf, chartTypeOf, figureNumbers, isCallout, isEdited,
-  keyFigures, proseOf, renderKindOf, summaryParts,
+  assembleDocument, captionOf, chartTypeOf, claimSpans, figureNumbers, isCallout,
+  isEdited, keyFigures, proseOf, renderKindOf, summaryParts,
 } from './report-document.ts'
-import type { ReportBlockResult, ReportRunDetail, ReportSectionResult } from '../api/types.ts'
+import type {
+  ReportBlockResult, ReportClaim, ReportRunDetail, ReportSectionResult,
+} from '../api/types.ts'
 
 const AT = '2026-08-01T12:00:00Z'
 
@@ -69,6 +71,9 @@ function prose(
     prose: 'The model wrote this.',
     edited_prose: null,
     numeric_check: null,
+    // null, not [] — the default fixture is a run from before citations,
+    // which is a different thing from a run whose writer cited nothing.
+    claims: null,
     status: 'OK',
     error_message: null,
     created_at: AT,
@@ -370,6 +375,83 @@ check(
     ),
   ).length,
   4,
+)
+
+// ── claims: a sentence and the figure it was drawn from ──────────────────
+// The join has one rule and it is the only thing worth testing here: a claim
+// may only be rendered against the prose it was parsed from. An edited
+// paragraph keeps its claims in the database — they are the record of what the
+// MODEL wrote — and a footnote still attached to a sentence somebody has since
+// rephrased points at a source that sentence no longer draws on. That is worse
+// than no footnote, because it looks checked.
+console.log('\n— claims —')
+
+function claim(
+  text: string,
+  cites: number | null,
+  blockResultId: string | null,
+  unsupported = false,
+): ReportClaim {
+  return {
+    text,
+    cites,
+    block_result_id: blockResultId,
+    figures: [],
+    unsupported: unsupported
+      ? [{ text: '47', value: 47, kind: 'figure' as const }]
+      : [],
+  }
+}
+
+const CLAIMS = [
+  claim('Revenue reached 1,200,000 in March.', 1, 'b1'),
+  claim('Headcount stood at 47.', 2, 'b2'),
+  claim('Both bear watching.', null, null),
+]
+const PARAGRAPH = 'Revenue reached 1,200,000 in March. Headcount stood at 47. Both bear watching.'
+
+check(
+  'a paragraph splits into its sentences, each knowing its figure',
+  claimSpans(PARAGRAPH, CLAIMS).map((s) => [s.cites, s.blockResultId]),
+  [[1, 'b1'], [2, 'b2'], [null, null]],
+)
+check(
+  'a run from before citations is one uncited span',
+  claimSpans(PARAGRAPH, null).map((s) => [s.text, s.blockResultId]),
+  [[PARAGRAPH, null]],
+)
+check(
+  'and so is a paragraph whose writer cited nothing',
+  claimSpans(PARAGRAPH, []).length,
+  1,
+)
+check(
+  'AN EDITED PARAGRAPH LOSES ITS FOOTNOTES — the rule this function exists for',
+  claimSpans('Revenue actually fell sharply in March. Headcount stood at 47. Both bear watching.', CLAIMS)
+    .map((s) => s.blockResultId),
+  [null],
+)
+check(
+  'a sentence deleted by an edit drops them too',
+  claimSpans('Revenue reached 1,200,000 in March.', CLAIMS).length,
+  1,
+)
+check(
+  'whitespace the join normalised is not an edit',
+  claimSpans(
+    'Revenue reached 1,200,000 in March.\n  Headcount stood at 47.  Both bear watching. ',
+    CLAIMS,
+  ).length,
+  3,
+)
+check(
+  'a sentence whose cited figure does not support it is marked',
+  claimSpans(PARAGRAPH, [
+    claim('Revenue reached 1,200,000 in March.', 1, 'b1', true),
+    claim('Headcount stood at 47.', 2, 'b2'),
+    claim('Both bear watching.', null, null),
+  ]).map((s) => s.unsupported),
+  [true, false, false],
 )
 
 if (failures > 0) {

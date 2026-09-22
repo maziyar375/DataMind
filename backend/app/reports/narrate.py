@@ -100,9 +100,17 @@ class BlockNarration:
         """No rows to narrate. A failure is not empty — it is a failure."""
         return not self.failed and self.row_count == 0
 
-    def render(self) -> str:
-        """This block, as the model reads it."""
-        head = f"Question: {self.question.strip()}"
+    def render(self, index: int | None = None) -> str:
+        """This block, as the model reads it.
+
+        `index` is the result's 1-based ordinal within its section, and it is
+        what makes a citation possible: the writer is asked to mark each
+        sentence with the number of the result it drew from, and `[2]` means
+        nothing unless the results are numbered in front of it. Optional so
+        every existing caller — and every test — renders as it always did.
+        """
+        label = f"Result {index}" if index is not None else "Result"
+        head = f"{label} — question: {self.question.strip()}"
         if self.failed:
             # Named rather than hidden: a paragraph written as if the section
             # had four results when one of them failed is a paragraph that
@@ -115,7 +123,7 @@ class BlockNarration:
         lines = [head]
         if self.kpi:
             lines.append(f"Headline figure (already computed and shown): {self.kpi}")
-        lines.append(f"Result ({self.row_count} rows):")
+        lines.append(f"{self.row_count} rows:")
         lines.append(" | ".join(self.columns))
         for row in self.rows[:MAX_PROMPT_ROWS]:
             lines.append(" | ".join(_cell(value) for value in row))
@@ -189,7 +197,12 @@ def section_messages(
     running context turns the last section of a long report into the most
     expensive call in the run.
     """
-    results = "\n\n".join(block.render() for block in blocks) or "No results."
+    results = (
+        "\n\n".join(
+            block.render(index) for index, block in enumerate(blocks, start=1)
+        )
+        or "No results."
+    )
     return [
         ChatMessage(role="system", content=REPORT_SECTION_SYSTEM),
         ChatMessage(

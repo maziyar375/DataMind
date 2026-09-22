@@ -112,7 +112,9 @@ def test_the_disclosed_values_are_what_reaches_the_prompt() -> None:
 
     assert "month | revenue" in user.content
     assert "2026-05 | 1234567" in user.content
-    assert "Question: revenue by month" in user.content
+    # r5 numbers the results, because a citation of `[2]` means nothing unless
+    # the writer can see which result is which.
+    assert "Result 1 — question: revenue by month" in user.content
 
 
 def test_a_withheld_result_carries_its_note_and_no_values() -> None:

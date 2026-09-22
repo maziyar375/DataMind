@@ -275,7 +275,9 @@ def test_the_check_is_a_record_not_a_verdict() -> None:
 
     assert check.checked == 2
     assert check.findings == []
-    assert check.model_dump(mode="json") == {"checked": 2, "findings": []}
+    assert check.model_dump(mode="json") == {
+        "checked": 2, "findings": [], "claims": [], "uncited": 0,
+    }
 
 
 # ── the pool ─────────────────────────────────────────────────────────────

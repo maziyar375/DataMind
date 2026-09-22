@@ -8,7 +8,7 @@
 > dumped from the live constants in `app/pipeline/prompts/__init__.py`,
 > `app/reports/prompts.py` and `app/semantic/prompts.py`, so what you read here
 > is byte-for-byte what leaves the process. Prompt versions at time of writing:
-> pipeline **v9**, reports **r4**,
+> pipeline **v9**, reports **r5**,
 > semantic **s4**.
 >
 > Companion documents: [security.md §2](security.md) owns the *inventory* of
@@ -1160,7 +1160,7 @@ each tagged `Provenance(source="llm")`. An `LLMError` sets
 | **Trigger** | the user proposes an outline for a report (synchronous request) |
 | **Method** | **`complete`, not `structured`** |
 | **Token floor** | `OUTLINE_MIN_MAX_TOKENS = 6144` |
-| **Version** | `REPORT_PROMPT_VERSION = r4` |
+| **Version** | `REPORT_PROMPT_VERSION = r5` |
 
 **Why `complete`.** The gateway's structured path fails the whole reply when the
 JSON will not parse, and a reply this long usually means "was cut off after four
@@ -1261,6 +1261,27 @@ raises. Stored blocks land as `feasibility_status = UNCHECKED` with no SQL.
 `ANSWER_SYSTEM` (call 7) is deliberately **not** reused: it is tuned for a
 two-sentence chat bubble, and reusing it is exactly how a report ends up reading
 like a chat transcript with headings on top.
+
+**r5 asks for a citation per sentence.** The section's results are numbered in
+the prompt, and every sentence that states a figure ends with the number of the
+result it drew from — `Revenue fell 12% in the north [2].` The markers never
+reach a reader: `checks.parse_claims` lifts them out before the prose is
+stored, into `Claim` rows carried on `report_section_results.claims`
+(migration `0038`).
+
+What that buys is a **strictly stricter numeric check**. Before it, every
+figure in a section was matched against the union of every result in that
+section, so a sentence about revenue quoting a number that appears only in the
+headcount result passed — the figure was in the pool, and the pool could not
+say which result it came from. Now each sentence is matched against its own
+cited result and nothing else. Expect it to fail sections that used to pass,
+and expect some of those to be the check being right.
+
+A sentence with no citation falls back to the union, exactly as before, and is
+counted in `uncited` — so a provider that ignores the instruction costs
+citations and never the paragraph. A citation to a result that does not exist
+is treated as uncited rather than dropped, because a fabricated source is worth
+seeing.
 
 **Three outcomes before a token is spent:**
 
@@ -1753,7 +1774,7 @@ drifted before, both times because a refactor moved a function nobody changed.
 | Constant | Value | Moves when |
 |---|---|---|
 | `PROMPT_VERSION` | `v9` | the **rendered SQL-producing prompt** changes — including how much of the schema or semantic block survives its cap (v7 → v8), and whether it carries the connection's taught questions as few-shot examples (v8 → v9, empty renders v8's bytes). Recorded on every run |
-| `REPORT_PROMPT_VERSION` | `r4` | any report prompt changes. Recorded on every report run |
+| `REPORT_PROMPT_VERSION` | `r5` | any report prompt changes. Recorded on every report run |
 | `SEMANTIC_PROMPT_VERSION` | `s4` | any semantic prompt changes. Recorded on the document |
 
 `PROMPT_VERSION` deliberately does **not** move for changes to `CLARIFY_*`,

@@ -132,13 +132,15 @@ async def test_propose_sends_the_language_the_schema_and_the_request() -> None:
 def test_the_prompt_forbids_the_summary_the_service_adds() -> None:
     """Otherwise every report opens with two summaries, one of them empty."""
     assert "executive summary" in REPORT_OUTLINE_SYSTEM.lower()
-    # r4 asks each block for a `title` — the statement a figure is captioned
+    # r5 numbers the results and asks for a citation per sentence, so the
+    # numeric check can match a figure against the one result it came from.
+    # r4 asked each block for a `title` — the statement a figure is captioned
     # with, as against the question it was produced from. r3 took the number of
     # sections from the request instead of asserting a range. The version moves
     # with the wording because a document generated under an earlier one is a
     # different artefact, and the run row is the only thing that says which one
     # a reader is holding.
-    assert REPORT_PROMPT_VERSION == "r4"
+    assert REPORT_PROMPT_VERSION == "r5"
 
 
 def test_the_prompt_states_no_section_count_of_its_own() -> None:

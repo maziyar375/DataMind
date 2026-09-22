@@ -319,11 +319,37 @@ module from widening disclosure: every value it states comes from rows the
 model already holds in full.
 
 **`app/reports/checks.py`** is the Tier-2 check: after generation, every
-numeral in the paragraph is matched against that section's rows *and its fact
-sheet*, allowing for rounding, truncation-to-written-precision, and unit
-scaling (`1.2M` against `1,234,567`), in Persian (`۱۲۳`) and Latin numerals.
-Unmatched figures are recorded in `report_section_results.numeric_check` and
-marked in the UI.
+numeral in the paragraph is matched against the result it was drawn from *and
+its fact sheet*, allowing for rounding, truncation-to-written-precision, and
+unit scaling (`1.2M` against `1,234,567`), in Persian (`۱۲۳`) and Latin
+numerals. Unmatched figures are recorded in
+`report_section_results.numeric_check` and marked in the UI.
+
+**Since r5 that is per claim, not per section, and the difference is the
+point.** The prompt numbers the section's results and asks for a citation on
+every sentence stating a figure; `parse_claims` lifts the markers out before
+the prose is stored and `check_claims` matches each sentence against its own
+cited result. Before it, a section with four results merged four pools into
+one, so a sentence about revenue quoting a number that appears only in the
+headcount result **passed** — the figure was in the pool, and the pool could
+not say which result it came from. That is the ordinary shape of a multi-block
+section, not an edge case.
+
+The claims land in `report_section_results.claims` (JSONB, migration `0038`),
+each carrying its sentence, its figures, the cited result's ordinal and that
+result's id — the edge **claim → result → SQL**. The API exposes no SQL on the
+claim itself: a reader resolves `block_result_id` against the blocks in the
+same response, so a reader who may not see a figure cannot reach its statement
+through a footnote either. `NumericCheck.traceable` is the share of
+figure-stating sentences that resolve to exactly one result, and it is the
+metric `docs/plans/deep-analysis-mode.md` Phase 7 scores.
+
+A sentence the writer did not cite falls back to the union, exactly as before,
+and is counted in `uncited` — so a provider that ignores the instruction leaves
+this check no weaker than it was. And **an edited paragraph is rendered without
+footnotes at all**: the claims describe what the model wrote, and a citation
+still attached to a sentence somebody has rephrased points at a source that
+sentence no longer draws on.
 
 It **flags, never blocks** — `pipeline/checks.py`'s posture, *"a finding is a
 suspicion, never a verdict."* A check that refused to save a section over a
@@ -379,7 +405,7 @@ what is asked of the database, the title is what the document calls the figure
 month?". Captioning a report with its questions makes it read as a transcript
 of the session that produced it, so the caption is the statement and the
 question moves to where provenance belongs: the query panel and the appendix.
-The outline prompt writes both (r4); the user edits both in the outline; and
+The outline prompt writes both (since r4); the user edits both in the outline; and
 **an empty title means "caption me with my question"**, which is what every
 block written before r4 carries and what clearing the field restores. Unlike
 the question, editing a title changes a label only — it never resets the
@@ -419,8 +445,15 @@ a different answer from `false`.
 ### `report_section_results` — the prose
 
 `run_id` (CASCADE) · `section_id` (SET NULL) · `heading_snapshot` · `prose` ·
-`edited_prose` (**NULL = not edited**) · `numeric_check` · `status` (`OK` |
-`FAILED` | `SKIPPED_NO_DATA`) · `error_message`.
+`edited_prose` (**NULL = not edited**) · `numeric_check` · `claims` · `status`
+(`OK` | `FAILED` | `SKIPPED_NO_DATA`) · `error_message`.
+
+`claims` is JSONB rather than a `report_claims` table, and the rule that
+decided it is the plan's own: a table the moment something queries *across*
+claims, and nothing does — traceability is computed per run, and a claim is
+only ever read with the prose it belongs to. **NULL means the run predates
+citations; `[]` means the writer cited nothing**, which is a finding about a
+provider rather than about a report.
 
 **Two prose columns, not one.** A regeneration writes `prose` on the *new* run
 and leaves `edited_prose` NULL; the previous run keeps both. Editing never
@@ -717,13 +750,14 @@ self-contained` import-linter contract, not by discipline.
 
 ```
 app/reports/
-  prompts.py    REPORT_PROMPT_VERSION (r4) + the four prompts
+  prompts.py    REPORT_PROMPT_VERSION (r5) + the four prompts
   outline.py    the proposed-outline document: parse, validate, bind, and the
                 section-count bounds the API and the prompt both read
   language.py   which language the request is written in — pure, token-free
   facts.py      the arithmetic a paragraph needs, computed from the rows
   narrate.py    the per-section prose prompt, from disclosed results
-  checks.py     the numeric consistency check — pure, DOM-free, token-free
+  checks.py     the numeric consistency check, per claim — pure, DOM-free,
+                token-free; `Claim`, `parse_claims`, `check_claims`
 
 app/services/report_service.py   CRUD, the disclosure gate, feasibility,
                                  the SQL editor, run creation

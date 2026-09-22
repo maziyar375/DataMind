@@ -69,6 +69,9 @@ MIGRATIONS = [
     # And `0031` takes the cost back off `report_runs` (and the other run
     # tables, which the recorder ignores here for the same reason).
     importlib.import_module("app.infra.db.migrations.versions.0031_drop_cost"),
+    # `0038` puts the claims — sentence, figures, cited result — on
+    # `report_section_results`.
+    importlib.import_module("app.infra.db.migrations.versions.0038_report_claims"),
 ]
 
 TABLES = (
@@ -251,10 +254,12 @@ def test_the_downgrade_drops_exactly_what_the_upgrade_created() -> None:
     # the upgrade's `add_column` for that table *is* skipped, since `runs` was
     # never created here to add it to.
     assert down.dropped_columns == [
-        # 0023, whose downgrade runs first because downgrades run in reverse.
-        # `runs` and `semantic_jobs` are here for the same reason `runs`
-        # appears below: a revision that adds a column to three tables in one
-        # loop is recorded whole, and only the report table was created here.
+        # 0038, first: downgrades run in reverse and it is the newest.
+        ("report_section_results", "claims"),
+        # 0023, and `runs` and `semantic_jobs` are here for the same reason
+        # `runs` appears below: a revision that adds a column to three tables
+        # in one loop is recorded whole, and only the report table was created
+        # here.
         ("semantic_jobs", "actor_id"),
         ("report_runs", "actor_id"),
         ("runs", "actor_id"),
