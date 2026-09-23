@@ -975,6 +975,40 @@ they arrive as more `record()` calls and no new machinery when they arrive.
 
 ---
 
+### 4.9 The schema index sends documentation, and no data at all
+
+mvp2 **B2 Phase 2** (`docs/plans/hybrid-retrieval.md`) puts a *second* index on
+the same credentials and the same endpoint: one vector per table, over the text
+somebody has written **about** that table. Everything in §4.7 carries over, and
+three things are specific to this one.
+
+* **What is embedded is documentation, not content.** A table's `COMMENT ON`
+  and its columns', plus the semantic layer's `description`, `grain`, metric
+  descriptions, glossary meanings, and a column's `value_meanings` — which are
+  a curator's gloss on a stored code (*"C — the customer cancelled"*), written
+  by hand. **No values, no samples, no rows**, and there is no path from
+  `disclose()`'s output to this embedder. `value_meanings` is the only entry on
+  that list a reader should stop at, and it is on the layer's side of the line
+  §2.2 already draws: it is a person's sentence about the schema, not a probe
+  of the data. Entity/value **dictionaries** (mvp2 B3) would be a probe, are a
+  different feature, and are deliberately not anticipated here.
+* **`include_db_comments` governs it.** The flag has always decided whether DDL
+  comments are *rendered* into a prompt; since v12 it also decides whether they
+  are **read** — for ranking, and therefore for embedding. A connection with
+  comments off embeds the layer's prose alone. Ranking sends nothing by itself,
+  but a comment that decides which tables the provider sees has reached the
+  provider's answer by another road, and a rule with an exception in it is a
+  rule somebody gets wrong in six months.
+* **The question is embedded once more per analytical run**, on the
+  `RANKED_MATCH` branch only, under `embedding_match_timeout_seconds`. Same
+  argument as §4.7's second bullet: the asked question already reaches the
+  provider verbatim as the generate call's user message. This adds a recipient
+  of nothing.
+
+Availability is a capability rather than a switch — no pinned model is no index
+— and every failure path is the lexical score, six of them, each with a test in
+`tests/unit/test_retrieval_vectors.py`. No rung of §3's ladder moves.
+
 ## 5. Containment underneath correctness
 
 The guard can be wrong. Containment assumes it will be.

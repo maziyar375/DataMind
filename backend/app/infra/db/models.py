@@ -2189,3 +2189,52 @@ class BenchmarkResult(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class SchemaTableVector(Base):
+    """One table's prose, embedded — retrieval's half of the vector story.
+
+    `docs/plans/hybrid-retrieval.md` Phase 2, migration `0039`. The text is
+    what `pipeline.relevance.table_text` builds: the table's DDL comment, its
+    columns' comments, and whatever the semantic layer says about it. Phase 1
+    scores that text against a question by word overlap; this is what lets a
+    question that shares no word with it reach the table anyway.
+
+    A plain `double precision[]` and not a pgvector column, for
+    `knowledge_templates.embedding`'s reasons exactly — the base image does not
+    carry the extension, the store is a schema's worth of rows, and the cosine
+    is computed in `app/pipeline/relevance.py` where the rest of the score is.
+
+    **Staleness is derived, never tracked.** `embedding_fingerprint` hashes the
+    prose, the model id and the dimension together, so a re-synced comment, an
+    edited description and a re-pinned model each invalidate exactly what they
+    should and there is no invalidation call anybody can forget to make. A
+    vector that fails the check is *ignored*, not deleted: the next pass
+    overwrites it, and until then the lexical score answers alone.
+    """
+
+    __tablename__ = "schema_table_vectors"
+    __table_args__ = (
+        UniqueConstraint(
+            "connection_id", "qualified_name",
+            name="uq_schema_table_vectors_table",
+        ),
+        Index("ix_schema_table_vectors_connection", "connection_id"),
+    )
+
+    id: Mapped[uuid.UUID] = _pk()
+    # CASCADE, like `semantic_layers`: a vector describes exactly one
+    # connection's table and has no life without it.
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("database_connections.id", ondelete="CASCADE"), nullable=False
+    )
+    #: "schema.name", as the snapshot spells it (`metadata.qualified`). A row
+    #: whose table a re-sync dropped is never read again rather than deleted —
+    #: the snapshot is the authority on what exists.
+    qualified_name: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: NULL is *not measured*, never the zero vector.
+    embedding: Mapped[list[float] | None] = mapped_column(ARRAY(Float))
+    embedding_fingerprint: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default=""
+    )
+    embedded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

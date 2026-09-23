@@ -420,10 +420,15 @@ recorded as owed in [eval.md §6](../reference/eval.md).
 | `tests/unit/test_retrieval_prose.py` | 1 | **new** — the bag, the IDF, the floor, the tier, the node |
 | `app/infra/db/models.py` | 2 | `SchemaTableVector` |
 | `…/migrations/versions/0039_schema_table_vectors.py` | 2 | **new** |
-| `app/pipeline/relevance.py` | 2 | `fingerprint`, `blend` — still no I/O |
-| `app/services/retrieval_index.py` | 2 | **new** — build, read, staleness |
-| `app/workers/schema_index.py` | 2 | **new** — the bounded pass |
-| `app/pipeline/nodes/__init__.py` | 2 | the question vector, the timeout, the blend |
+| `app/pipeline/relevance.py` | 2 | `prose_fingerprint`, `VectorIndex`, `cosines`, `rescale`, `blend` — still no I/O |
+| `app/services/retrieval_index.py` | 2 | **new** — build, read, staleness, the bounded embedder |
+| `app/workers/schema_index.py` | 2 | **new** — its own loop, its own population, its own cadence |
+| `app/core/config.py` | 2 | `schema_index_interval_seconds` |
+| `app/main.py` | 2 | the loop, started and cancelled with the others |
+| `app/services/run_service.py`, `sql_draft_service.py` | 2 | the index on both build paths |
+| `app/pipeline/nodes/__init__.py` | 2 | `NodeDeps.vectors`, `_vector_scores`, the six fail-opens |
+| `app/eval/runner.py` | 2 | `--schema-vectors` and `embed_schema` — **additive**, default off |
+| `tests/unit/test_retrieval_vectors.py` | 2 | **new** — the store, the fingerprint, the blend, the six |
 | `app/infra/db/models.py` + `0040` | 3 | `runs.retrieval_signals` |
 | `frontend/src/…/connections` | 3 | freshness |
 
@@ -494,13 +499,52 @@ Tick a box in the commit that lands the work, never ahead of it.
 >   same tables it selected at v11).
 
 ### Phase 2 — Vectors over the same text, blended
-- [ ] `schema_table_vectors` + `0039` · *`alembic upgrade head` on a populated clone*
-- [ ] `fingerprint` derived from (prose, model, dimension) · *edit invalidates*
-- [ ] The indexing pass, bounded, off the request path
-- [ ] The question vector under `embedding_match_timeout_seconds`
-- [ ] `max(lexical, rescaled cosine)` · *and the argument for `max` in the code*
-- [ ] Every failure path is lexical · *six of them, one test each*
-- [ ] The embedding model id in the reproducibility record
+- [x] `schema_table_vectors` + `0039` · *`alembic upgrade head` on a clean database and on a clone of the populated one, `downgrade 0038` → `upgrade` again, and the migration and ORM replayed against one recorder*
+- [x] `fingerprint` derived from (prose, model, dimension) · *edit, re-pin and re-width each invalidate*
+- [x] The indexing pass, bounded, off the request path · *`workers/schema_index.py`*
+- [x] The question vector under `embedding_match_timeout_seconds`
+- [x] `max(lexical, rescaled cosine)` · *and the argument for `max` in the code*
+- [x] Every failure path is lexical · *six of them, one parametrised test each*
+- [x] The embedding model id in the reproducibility record · *`--schema-vectors`, on the scorecard*
+
+> Landed 2026-09-23. `tests/unit/test_retrieval_vectors.py`, 29 tests. What was
+> decided while building it:
+>
+> - **The arm exists.** This was going to be the phase whose claim could not be
+>   measured at all — the eval builds its own `NodeDeps` and pins no embedding
+>   model — so `--schema-vectors` was added to the runner beside `--comments`
+>   and `--matcher`: one call to embed the schema's prose before the run, one
+>   per question during it, and `embed_schema` builds its bags with
+>   `relevance.prose_by_table`, the same function the node calls. That last
+>   detail is the whole arm: an index whose every fingerprint is stale reports
+>   *"embedded 42"* and changes nothing, which is the one failure here with no
+>   symptom. The runner **refuses** to report a lexical run under a vector
+>   label, exactly as the template arm does.
+> - **Its own worker, not a fourth step in `knowledge_maintenance`.** That loop
+>   runs over connections that *have templates*, which is precisely the wrong
+>   population: a connection with a documented schema and no curated questions
+>   is the one this helps most.
+> - **One function builds the prose on both sides.** `retrieval_index`
+>   `prose_for_connection` and the node both go through `prose_by_table`, and
+>   the service says why in its docstring: if they drift by one field, no
+>   fingerprint ever matches, nothing is ever fresh, and the feature silently
+>   does nothing while reporting success.
+> - **`load_vector_index` returns empty without touching the store**, so a
+>   connection with no embedding model — which is every one of them today —
+>   makes no query it did not already make.
+> - **The sweep query lives in the worker, not the service.** A `select` over
+>   an owned table inside `app/services/` has to compose `visible(...)` or ask
+>   `require`, and `test_authz_conformance.py` enforces it — correctly, because
+>   a service reads on somebody's behalf. A sweep has no behalf. The answer was
+>   not to invent a god context but to put the unscoped query where the
+>   codebase already puts this exact one (`knowledge_maintenance`), leaving the
+>   service with per-connection work whose callers all hand it a connection
+>   somebody was already allowed to reach. The conformance test caught this,
+>   which is the whole reason it greps per module rather than per statement.
+> - **The step trail does not yet tell a word hit from a vector hit.** Both
+>   read `by description`. That is Phase 3's `retrieval_signals`, and until it
+>   lands the honest statement is that the trail says prose chose the table,
+>   not which half of prose did.
 
 ### Phase 3 — The index says what it knows
 - [ ] `runs.retrieval_signals` + `0040`, nullable

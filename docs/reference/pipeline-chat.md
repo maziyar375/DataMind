@@ -562,6 +562,27 @@ group by 1 order by runs desc;
      ranks exactly as it did at v11. Only the top `PROSE_MAX_SEEDS = 20` seed
      the FK hop: prose is the weakest of the five signals and ranks below all
      of them, so a table past the twentieth could not survive the cut anyway;
+   - **by meaning** — where the connection has an **embedding model pinned**
+     and a stored vector that still stands for the prose above, the question is
+     embedded once and the tier-5 score becomes
+     `max(lexical, rescale(cosine))` (mvp2 **B2 Phase 2**,
+     `services/retrieval_index.py` + `relevance.blend`). That is what reaches a
+     table whose prose shares **no word** with the question — *"how many people
+     stopped paying?"* against *"a cancellation the customer chose, not a
+     failed payment"*. **`max`, not a weighted sum**, deliberately: a sum needs
+     a weight nobody can derive without the measurement this still owes, and
+     `max` means a table the words already found can never be *demoted* by a
+     vector that disagrees — turning embeddings on adds tables to the block and
+     removes none. Vectors are written by `workers/schema_index.py`, never on a
+     request; **staleness is derived** from a fingerprint over (prose, model,
+     dimension), so a re-synced comment or an edited description invalidates
+     exactly one table's vector and nothing has to remember to do it. **Six
+     ways it does nothing, all of them the lexical score unchanged**: no model
+     pinned, no fresh vector, the question embeds to nothing, a timeout
+     (`embedding_match_timeout_seconds`), a provider error, or a stored width
+     that disagrees with the question's. **Availability is a capability, not a
+     switch** — there is no setting, because a setting would imply it could be
+     on where it cannot work;
    - **`include_db_comments` governs this as well as rendering.** The flag
      exists so a connection can refuse to send its DDL comments to a provider,
      and a comment that decides *which* tables are sent has reached the

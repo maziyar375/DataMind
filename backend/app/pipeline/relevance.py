@@ -42,8 +42,11 @@ the corpus says which words discriminate and nobody has to.
 from __future__ import annotations
 
 import math
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
+from app.knowledge.embed import cosine, fingerprint
 from app.pipeline.metadata import qualified, question_tokens
 
 #: Shorter than this is not a word anybody weighed a question with. The floor
@@ -102,12 +105,33 @@ def table_text(
     return tuple(out)
 
 
+def prose_by_table(
+    tables: list[dict[str, Any]],
+    *,
+    layer: dict[str, tuple[str, ...]] | None = None,
+    include_comments: bool = True,
+) -> dict[str, tuple[str, ...]]:
+    """`table_text` for every table, keyed by `qualified`.
+
+    The bag is wanted twice on the vector path — once to score and once to
+    recompute the fingerprint a stored vector is checked against — and building
+    it twice would be building it twice.
+    """
+    return {
+        qualified(table): table_text(
+            table, layer=layer, include_comments=include_comments
+        )
+        for table in tables
+    }
+
+
 def rank_tables(
     question: str,
     tables: list[dict[str, Any]],
     *,
     layer: dict[str, tuple[str, ...]] | None = None,
     include_comments: bool = True,
+    texts: dict[str, tuple[str, ...]] | None = None,
 ) -> dict[str, float]:
     """How much of the question each table's prose accounts for, in [0, 1].
 
@@ -132,19 +156,28 @@ def rank_tables(
 
     Deterministic, pure, and no I/O: the caller supplies the layer's sentences
     (`semantic.table_prose`) already parsed, exactly as `match_by_terms` is
-    handed `table_terms`.
+    handed `table_terms`. `texts` lets a caller that already built the bags —
+    the vector path does, for the fingerprint check — hand them over instead of
+    having them built again; it must be `prose_by_table`'s own output or the
+    two halves of the score stop describing one document.
     """
     asked = {t for t in question_tokens(question) if len(t) >= MIN_TOKEN_CHARS}
     if not asked or not tables:
         return {}
 
+    prose = (
+        texts
+        if texts is not None
+        else prose_by_table(tables, layer=layer, include_comments=include_comments)
+    )
     bags: list[tuple[str, set[str]]] = []
     df: dict[str, int] = {}
     for table in tables:
+        key = qualified(table)
         bag: set[str] = set()
-        for sentence in table_text(table, layer=layer, include_comments=include_comments):
+        for sentence in prose.get(key, ()):
             bag |= {t for t in question_tokens(sentence) if len(t) >= MIN_TOKEN_CHARS}
-        bags.append((qualified(table), bag))
+        bags.append((key, bag))
         # Only the question's own words can ever score, so the rest of a
         # comment is counted no further than this.
         for token in bag & asked:
@@ -183,3 +216,152 @@ def prose_seeds(
         for t in sorted(over, key=lambda t: -scores[qualified(t)])[:PROSE_MAX_SEEDS]
     }
     return [t for t in over if qualified(t) in keep]
+
+
+# ── vectors (Phase 2) ────────────────────────────────────────────────────
+#
+# The same bag, embedded. Phase 1 asks whether a table's prose uses the
+# question's words; this asks whether it *means* what the question means, which
+# is the one thing no lexical score can do. Everything here is still pure — the
+# store, the provider and the timeout live in `app/services/retrieval_index.py`
+# and in the node.
+
+#: Cosine below this is not evidence. Two unrelated English sentences score
+#: around 0.3 on most embedding models, so the bottom of the range carries no
+#: information and a floor near zero would filter nothing. The same constant
+#: and the same argument as `knowledge.embed.SIMILARITY_FLOOR`; kept separate
+#: because these are sentences about tables and those are questions, and one
+#: number moving for one of them must not move the other.
+VECTOR_FLOOR = 0.5
+
+
+def rescale(similarity: float) -> float:
+    """A cosine in `[VECTOR_FLOOR, 1]`, read as a share in `[0, 1]`.
+
+    So a vector hit and a lexical hit are on one scale and `blend` can compare
+    them without a weight nobody could derive. Below the floor is 0.0 — not
+    "slightly relevant", because at that end of the range the number is noise.
+    """
+    if similarity <= VECTOR_FLOOR:
+        return 0.0
+    return min(1.0, (similarity - VECTOR_FLOOR) / (1.0 - VECTOR_FLOOR))
+
+
+def blend(lexical: dict[str, float], cosines: dict[str, float]) -> dict[str, float]:
+    """One score per table: whichever kind of evidence is stronger.
+
+    **`max`, not a weighted sum**, and this is the one number in Phase 2 worth
+    arguing about. A weighted sum needs a weight, and the only honest way to
+    choose one is the measurement this feature still owes — so a sum would be
+    two unfalsifiable claims instead of one. `max` says *either kind of
+    evidence is enough*, which is what a **recall** step is for: precision is
+    the budget cut's job, not the scorer's.
+
+    It also keeps Phase 1 whole. A table the words already found cannot be
+    demoted by a vector that disagrees, so turning embeddings on can add a
+    table to the block and never remove one — which is what makes the arm a
+    reader can interpret.
+    """
+    if not cosines:
+        return lexical
+    out = dict(lexical)
+    for key, similarity in cosines.items():
+        scaled = rescale(similarity)
+        if scaled > out.get(key, 0.0):
+            out[key] = scaled
+    return out
+
+
+#: `(texts) -> vectors`. Batched, and the same shape `knowledge.embed` uses,
+#: because it is the same port underneath and a second convention would be a
+#: second thing to get wrong.
+Embedder = Callable[[Sequence[str]], Awaitable[list[list[float]]]]
+
+
+def prose_fingerprint(sentences: Sequence[str], model: str, dimension: int) -> str:
+    """What a stored table vector was computed from, in 64 hex characters.
+
+    The three things that can invalidate it, hashed together: the prose (which
+    moves when a DDL comment is re-synced *or* a curator edits a description),
+    the model id, and the dimension. Asking whether a vector is still valid is
+    recomputing this and comparing — there is no invalidation call for anybody
+    to forget. `knowledge.embed.fingerprint` is the hash, shared rather than
+    copied: two indexes in one product with two ideas of what a fingerprint is
+    would be a bug waiting for whoever changes one of them.
+    """
+    return fingerprint("\n".join(sentences), model, dimension)
+
+
+@dataclass(frozen=True, slots=True)
+class TableVector:
+    """One stored vector and the fingerprint it was written with."""
+
+    vector: tuple[float, ...] = ()
+    stored_fingerprint: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class VectorIndex:
+    """A connection's schema vectors, as `retrieve` needs to see them.
+
+    Built by `services/retrieval_index.load_vector_index` and carried on
+    `NodeDeps`, so `app.pipeline` never learns that a database is involved —
+    the same seam `NodeDeps.matcher` uses for the knowledge store.
+
+    **Availability is a capability, not a preference.** No pinned embedding
+    model is `is_available is False`, and that is a *state*: the lexical score
+    answers alone, which is the whole feature on most connections. There is no
+    switch, because a switch implies it could be on where it cannot work.
+    """
+
+    #: The model id pinned on the connection. Empty means there is no index.
+    model: str = ""
+    dimension: int = 0
+    tables: dict[str, TableVector] = field(default_factory=dict)
+    #: `None` when nothing can embed the question, which makes the whole path
+    #: skip rather than fail.
+    embed: Embedder | None = None
+
+    @property
+    def is_available(self) -> bool:
+        return bool(self.model) and self.dimension > 0 and self.embed is not None
+
+    def usable(self, texts: dict[str, tuple[str, ...]]) -> dict[str, tuple[float, ...]]:
+        """The vectors that still stand for the prose they were made from.
+
+        A row whose fingerprint does not recompute is **ignored, not deleted** —
+        the next indexing pass overwrites it, and until then this table is
+        scored lexically like any other. So a schema re-sync degrades the index
+        table by table rather than all at once, and never wrongly: a vector is
+        either current or absent, never quietly describing an older comment.
+
+        A table with no prose at all has no vector and wants none: there is
+        nothing to embed, and a vector of the empty string would match every
+        question equally.
+        """
+        if not self.is_available:
+            return {}
+        out: dict[str, tuple[float, ...]] = {}
+        for key, sentences in texts.items():
+            entry = self.tables.get(key)
+            if entry is None or not sentences or len(entry.vector) != self.dimension:
+                continue
+            current = prose_fingerprint(sentences, self.model, self.dimension)
+            if entry.stored_fingerprint and entry.stored_fingerprint == current:
+                out[key] = entry.vector
+        return out
+
+
+def cosines(
+    question_vector: Sequence[float], vectors: dict[str, tuple[float, ...]]
+) -> dict[str, float]:
+    """How close each table's prose is to the question, in `[0, 1]`.
+
+    `knowledge.embed.cosine` does the arithmetic — clamped, and 0.0 on anything
+    degenerate, because two vectors of different width are a bug upstream and
+    the honest answer to "how similar are they" is *not at all*, not an
+    exception thrown at somebody asking about revenue.
+    """
+    if not question_vector:
+        return {}
+    return {key: cosine(question_vector, vector) for key, vector in vectors.items()}

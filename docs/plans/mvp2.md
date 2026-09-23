@@ -1257,7 +1257,7 @@ evaluated until this is done.** Record the decision in
 `suites/CHANGELOG.md` — post-change recall numbers are not comparable to
 pre-change ones and someone will try.
 
-### B2. Hybrid retrieval behind `RetrievedContext` · **M** · *Phase 1 built 2026-09-23*
+### B2. Hybrid retrieval behind `RetrievedContext` · **M** · *Phases 1–2 built 2026-09-23*
 
 > **Planned as [hybrid-retrieval.md](hybrid-retrieval.md), and its first phase
 > is built.** The schema's **prose** now ranks tables on the `RANKED_MATCH`
@@ -1278,10 +1278,17 @@ pre-change ones and someone will try.
 > provider's answer by another road; and **the sentence half is disjoint from
 > A5's name half** — nothing is read by both, or a word would be weighted twice.
 >
-> **The remaining phases are the embeddings**: vectors over the same text,
-> blended `max(lexical, cosine)`, capability-gated on a pinned embedding model,
-> with every failure path falling back to the lexical score. Plus the arm all
-> of it owes — see below.
+> **The embeddings landed the same day** (Phase 2, `0039`): one vector per
+> table over the *same* text, blended `max(lexical, rescaled cosine)`,
+> capability-gated on a pinned embedding model, written by a worker and never
+> on a request, with six failure paths that all fall back to the lexical score.
+> `max` rather than a weighted sum, because a weight needs the measurement this
+> still owes — and because `max` means turning embeddings on can add a table to
+> the block and never remove one.
+>
+> **What is left is Phase 3**: which signal chose each table, recorded per run;
+> index freshness in the product; and the names of the tables the cut dropped,
+> where a curator can read them. Plus the arm all of it owes — see below.
 
 Embeddings over table names + column names + catalog comments + semantic-layer
 business names and descriptions, blended with the existing exact-match and FK
@@ -1298,7 +1305,10 @@ execution accuracy — a result worth remembering before over-claiming.
 > moved it is unrun. It is **four cells of one grid** with the arm A5 owes —
 > neither / `--semantic on` / `--comments` / both, at budget 8,000 on one model
 > — because the two features move the same branch and the same ranking
-> function. The flags all exist. Until it is run, *no claim that either
+> function, plus a fifth adding `--schema-vectors` for Phase 2. Every flag
+> exists; `--schema-vectors` was added to the runner for exactly this, because
+> a phase whose claim cannot be measured is a phase nobody can argue with.
+> Until it is run, *no claim that any of it
 > improved retrieval is falsifiable*: the rule B1 was written under, applied to
 > the two features B1 unblocked. [reference/eval.md §6](../reference/eval.md).
 

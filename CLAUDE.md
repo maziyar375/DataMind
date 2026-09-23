@@ -173,8 +173,11 @@ backend/app/
                   rendered fallback answer),
                   relevance.py (which tables the schema's *prose* is about —
                   DDL comments and the layer's descriptions, IDF-weighted
-                  against the question, mvp2 B2; pure, and 0.0 everywhere on a
-                  connection that has neither), sections.py (dividing a snapshot
+                  against the question, and blended `max(…)` with the cosine
+                  of a stored table vector where the connection can embed;
+                  mvp2 B2. Pure — the store, the provider and the timeout are
+                  `services/retrieval_index.py` — and 0.0 everywhere on a
+                  connection with neither prose nor vectors), sections.py (dividing a snapshot
                   into named sections — schema, FK components, name prefixes —
                   and sizing one in `retrieve`'s own units; pure),
                   prompts/, disclosure.py (result gate), checks.py (free result checks)
@@ -259,7 +262,10 @@ backend/app/
                   knowledge_maintenance.py (store health: the staleness sweep,
                   and the conflict checker that runs two near-duplicate
                   templates and compares the rows — never on a request path,
-                  switchable off per connection) + benchmark.py (the customer's
+                  switchable off per connection) + schema_index.py (the schema
+                  **vector** index, on its own loop over its own population:
+                  every connection with an embedding model pinned, whether or
+                  not anybody has taught it a question. mvp2 B2) + benchmark.py (the customer's
                   own accuracy number: the real pipeline per question, the gold
                   executed through the guard, labels from the comparator and
                   from no model)

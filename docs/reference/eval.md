@@ -339,12 +339,24 @@ python -m app.eval.runner --suite sales_v1 --json        # machine-readable
 python -m app.eval.runner --suite sales_v1 --comments    # with catalog comments
 python -m app.eval.runner --suite sales_v1 --semantic on # with the semantic layer
 python -m app.eval.runner --suite sales_v1 --retrieve-budget 12000   # recall can miss
+python -m app.eval.runner --suite sales_v1 --schema-vectors \
+    --retrieve-budget 8000 --comments                    # rank tables by meaning
 ```
 
 **Every arm is off by default**, which is what keeps a bare `--suite sales_v1`
-the run every earlier number was measured on. Three of them are recorded on the
-scorecard — `catalog_comments`, `semantic_layer`, `retrieve_budget_chars` — so a
-report can be attributed afterwards rather than remembered.
+the run every earlier number was measured on. Five of them are recorded on the
+scorecard — `catalog_comments`, `semantic_layer`, `retrieve_budget_chars`,
+`schema_vectors` and `schema_vectors_indexed` — so a report can be attributed
+afterwards rather than remembered.
+
+**`--schema-vectors` needs two other flags to mean anything**, and the runner
+says so rather than assuming it. It embeds every table's prose once before the
+run and the question once per record, then blends the cosine into the ranking
+(mvp2 B2 Phase 2) — so it does nothing at the shipped budget, where every
+question takes `FULL_SNAPSHOT` and nothing is ranked, and it has **nothing to
+embed** without `--comments` or `--semantic on`, because the prose is exactly
+what those two load. It refuses to run rather than report a lexical arm under a
+vector label, the way the `--matcher embedding` arm already does.
 
 **Behind a rate-limiting provider, use the wrapper instead:**
 
@@ -500,6 +512,14 @@ re-measure the first's arm to stay comparable. The honest design is **four cells
 at budget 8,000** — neither, `--semantic on`, `--comments`, both — on **one
 model**, read as within-run deltas only. Four cells at roughly the cost of the
 2026-09-22 three-arm run, and it retires both of the owed arms above.
+
+**A fifth cell, once B2's second phase is in play.** `--schema-vectors` adds
+the vector blend on top of whichever prose the other flags loaded, so the
+honest read of it is *both* plus `--schema-vectors` against *both* — one
+variable, one delta. It costs a second provider, an embedding one, and
+`EVAL_EMBEDDING_MODEL` pins which; a run that changes the embedding model is
+not comparable to one that did not, on exactly the rule §5 states for the chat
+model. **Nothing in the grid has been run.**
 
 **Equal headlines are not equal arms.** Rows 1 and 2 both read 42.0 %, and share
 only fourteen of their twenty-one correct answers: **fourteen questions changed

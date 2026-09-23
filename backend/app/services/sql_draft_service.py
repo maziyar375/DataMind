@@ -61,6 +61,7 @@ from app.services.query_service import (
     resolve_llm,
     secret_box,
 )
+from app.services.retrieval_index import load_vector_index
 from app.services.section_service import load_sections
 from app.services.semantic_service import load_document
 from app.sqlguard import guard
@@ -268,6 +269,9 @@ async def draft_sql(
             # wide warehouse is scoped to the section it is about, and the
             # statement it stores is guarded against the whole snapshot.
             sections=await load_sections(db, connection.id),
+            # And on the same terms again: a draft over a wide warehouse ranks
+            # on what the schema's prose means, where the connection can embed.
+            vectors=await load_vector_index(db, settings, connection),
         )
 
         # `[route →] retrieve → generate ⇄ validate`, walked by the same

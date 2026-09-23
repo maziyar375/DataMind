@@ -145,6 +145,18 @@ class Settings(BaseSettings):
     # off per connection (`connections.conflict_checks_enabled`).
     knowledge_maintenance_interval_seconds: int = 21_600
 
+    # How often the schema **vector** index is brought back in line with the
+    # prose it was built from (`docs/plans/hybrid-retrieval.md` Phase 2). Its
+    # own number, and shorter than the one above, because the two move for
+    # different reasons: a template store moves when a person edits it, while
+    # this moves when a schema sync or a layer publish changes a comment or a
+    # description — and the window between that happening and retrieval knowing
+    # about it is a window where a table is ranked on words alone. Every pass
+    # is idempotent against the fingerprint and costs one query when nothing
+    # moved, so a shorter interval is cheap; nothing here calls a provider
+    # unless something actually changed.
+    schema_index_interval_seconds: int = 3_600
+
     # ── llm ──────────────────────────────────────────────────────────────
     llm_request_timeout_seconds: int = 60
     # What the *matcher* will wait for one question's vector, as opposed to

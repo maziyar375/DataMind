@@ -79,6 +79,7 @@ from app.services.query_service import (
     policy_from_snapshot,
     resolve_llm,
 )
+from app.services.retrieval_index import load_vector_index
 from app.services.section_service import load_sections
 from app.services.semantic_service import LoadedLayer, load_layer, metric_use_of
 from app.services.team_service import delegated_context
@@ -593,6 +594,13 @@ class RunService:
             examples_enabled=(
                 bool(connection.knowledge_examples_enabled)
                 and not run.skip_templates
+            ),
+            # The schema vector index, or an empty one. Empty on every
+            # connection with no embedding model pinned — which is the shipped
+            # state and costs one attribute read, not a query — and empty is
+            # the run exactly as it was before Phase 2 existed.
+            vectors=await load_vector_index(
+                self._db, self._settings, connection
             ),
             # The connection's sections, or None — which is the run exactly as
             # it was before the `scope` node existed.

@@ -115,5 +115,10 @@ Do **not** confuse this with `database_connections.embedding_model` /
 `.embedding_dimension`: those are a record of *an index* — what the vectors in
 a knowledge store were actually made with, measured from a real reply — and
 `.embedding_llm_config_id` (migration `0022`) names the provider that made
-them. **LangChain is not a dependency**: the one `langchain_core` import is
+them. Since 2026-09-23 those three fields govern **two** indexes, not one:
+`knowledge_templates.embedding` (taught questions, matched) and
+`schema_table_vectors` (tables, ranked — migration `0039`, mvp2 B2). One pin,
+one model, one dimension, deliberately: two widths in one deployment would be
+two staleness rules and two ways to mispin, and the second index reuses the
+first's fingerprint scheme rather than inventing a second. **LangChain is not a dependency**: the one `langchain_core` import is
 `RunnableConfig`, a type LangGraph pulls in, used in `pipeline/graph.py` and

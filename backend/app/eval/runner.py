@@ -64,6 +64,7 @@ from app.pipeline import nodes
 from app.pipeline.nodes import NodeDeps
 from app.pipeline.pipeline import AnalyticsPipeline
 from app.pipeline.prompts import PROMPT_VERSION
+from app.pipeline.relevance import VectorIndex as SchemaVectorIndex
 from app.pipeline.state import RunState
 from app.sqlguard import GuardPolicy
 
@@ -159,6 +160,7 @@ async def evaluate_record(
     templates: list[Any] | None = None,
     held_out: set[str] | None = None,
     vectors: dict[str, list[float]] | None = None,
+    schema_vectors: SchemaVectorIndex | None = None,
     attribution_layer: dict[str, Any] | None = None,
 ) -> RecordOutcome:
     # The arm's split rides on `tags`, so `aggregate`'s per-tag breakdown
@@ -210,6 +212,10 @@ async def evaluate_record(
         ),
         templates_enabled=templates is not None,
         examples_enabled=templates is not None,
+        # **Empty unless `--schema-vectors` is on**, and empty is the path
+        # every earlier baseline was measured on: `retrieve` makes no embedding
+        # call, scores on words, and ranks exactly as it did at v12 without it.
+        vectors=schema_vectors or SchemaVectorIndex(),
     )
     pipeline = AnalyticsPipeline(on_step=on_step)
 
@@ -345,6 +351,7 @@ async def run_suite(
     templates: list[Any] | None = None,
     held_out: set[str] | None = None,
     vectors: dict[str, list[float]] | None = None,
+    schema_vectors: SchemaVectorIndex | None = None,
     attribution_layer: dict[str, Any] | None = None,
 ) -> list[RecordOutcome]:
     outcomes: list[RecordOutcome] = []
@@ -354,7 +361,7 @@ async def run_suite(
             policy=policy, settings=settings, model_name=model_name,
             include_db_comments=include_db_comments, semantic=semantic,
             templates=templates, held_out=held_out, vectors=vectors,
-            attribution_layer=attribution_layer,
+            schema_vectors=schema_vectors, attribution_layer=attribution_layer,
         )
         outcomes.append(outcome)
         if progress:
@@ -711,8 +718,82 @@ def matcher_over(
 #: The embedding model the arm uses. Named here rather than taken from a flag
 #: because the *recall delta* is only meaningful between two runs that embedded
 #: with the same thing, and a flag is one more way for two scorecards to differ
-#: in a way nobody notices.
+#: in a way nobody notices. Shared by both embedding arms — the knowledge
+#: matcher's and the schema index's — for the same reason.
 EVAL_EMBEDDING_MODEL = "text-embedding-3-small"
+
+
+async def embed_schema(
+    snapshot: dict[str, Any],
+    semantic: dict[str, Any] | None,
+    *,
+    gateway: Any,
+    llm: Any,
+    include_comments: bool,
+) -> SchemaVectorIndex:
+    """The schema vector index, for mvp2 B2's arm — one call for the whole schema.
+
+    Stands in for `services/retrieval_index.index_schema_vectors`, which is a
+    worker writing rows; here the index is built in memory before the first
+    question, for `embed_store`'s reasons exactly: made *before* the run so a
+    provider that cannot embed fails the arm rather than silently measuring the
+    lexical score under a vector label.
+
+    **The prose is built by `relevance.prose_by_table`**, the same function the
+    node calls, so the fingerprints match by construction rather than by care —
+    the one failure this arm could have that would leave no trace is an index
+    every entry of which is stale, which reports "embedded" and changes nothing.
+
+    The ask-time embedder is a real provider call per question, because that is
+    what the product pays and an arm that skipped it would measure a
+    configuration nobody runs.
+    """
+    from app.pipeline.relevance import TableVector, prose_by_table, prose_fingerprint
+
+    tables = snapshot.get("tables") or []
+    layer: dict[str, tuple[str, ...]] = {}
+    if semantic:
+        from app.semantic import SemanticDocument, table_prose
+
+        try:
+            layer = table_prose(SemanticDocument.model_validate(semantic))
+        except ValueError:
+            layer = {}
+    prose = {
+        key: text
+        for key, text in prose_by_table(
+            tables, layer=layer, include_comments=include_comments
+        ).items()
+        if text
+    }
+    if not prose:
+        return SchemaVectorIndex()
+
+    keys = sorted(prose)
+    vectors = await gateway.embed(
+        llm, ["\n".join(prose[k]) for k in keys], model=EVAL_EMBEDDING_MODEL
+    )
+    if len(vectors) != len(keys) or not vectors[0]:
+        return SchemaVectorIndex()
+    dimension = len(vectors[0])
+
+    async def embed(texts: Any) -> list[list[float]]:
+        return await gateway.embed(llm, list(texts), model=EVAL_EMBEDDING_MODEL)
+
+    return SchemaVectorIndex(
+        model=EVAL_EMBEDDING_MODEL,
+        dimension=dimension,
+        tables={
+            key: TableVector(
+                vector=tuple(vector),
+                stored_fingerprint=prose_fingerprint(
+                    prose[key], EVAL_EMBEDDING_MODEL, dimension
+                ),
+            )
+            for key, vector in zip(keys, vectors, strict=True)
+        },
+        embed=embed,
+    )
 
 
 async def embed_store(
@@ -998,6 +1079,10 @@ async def _amain(args: argparse.Namespace) -> int:
     held_out: set[str] = set()
     templates: list[Any] | None = None
     vectors: dict[str, list[float]] | None = None
+    # mvp2 B2's arm, and a different index for a different question: this one
+    # ranks *tables*, the one above matches taught questions. `None` is the
+    # lexical prose score alone, which is v12 as it ships.
+    schema_vectors: SchemaVectorIndex | None = None
     if args.templates == "on":
         held_out = held_out_ids(records)
         templates = build_template_store(records, held_out)
@@ -1060,6 +1145,25 @@ async def _amain(args: argparse.Namespace) -> int:
                     )
                     return 2
 
+            # The *schema* vector arm — mvp2 B2 Phase 2, a different index for
+            # a different question: this one ranks tables, that one matches
+            # taught questions. Built here for the same reason and refused the
+            # same way, because an arm labelled `schema_vectors` that silently
+            # scored on words is the one failure with no symptom.
+            if args.schema_vectors:
+                schema_vectors = await embed_schema(
+                    snap, semantic,
+                    gateway=gateway, llm=llm, include_comments=args.comments,
+                )
+                if not schema_vectors.is_available:
+                    print(
+                        "The schema-vector arm produced no index — refusing to "
+                        "report a lexical run as a vector one. (Nothing has "
+                        "prose to embed? Try --comments or --semantic on.)",
+                        file=sys.stderr,
+                    )
+                    return 2
+
             print(
                 f"Running {len(records)} question(s) through the real pipeline …",
                 file=sys.stderr,
@@ -1081,6 +1185,7 @@ async def _amain(args: argparse.Namespace) -> int:
                     policy=policy, settings=settings, model_name=model_name, progress=True,
                     include_db_comments=args.comments, semantic=semantic,
                     templates=templates, held_out=held_out, vectors=vectors,
+                    schema_vectors=schema_vectors,
                     attribution_layer=attribution_layer,
                 )
                 report = metrics.aggregate(outcomes)
@@ -1094,6 +1199,12 @@ async def _amain(args: argparse.Namespace) -> int:
             # differing only in this are otherwise indistinguishable in
             # `eval_runs`, which is the whole comparison Phase 6 exists to make.
             report_dict["catalog_comments"] = bool(args.comments)
+            # mvp2 B2: which half of the ranking ran. `False` is the lexical
+            # prose score alone (v12's default); `True` adds the vector blend.
+            report_dict["schema_vectors"] = bool(args.schema_vectors)
+            report_dict["schema_vectors_indexed"] = (
+                len(schema_vectors.tables) if schema_vectors else 0
+            )
             report_dict["catalog_meta"] = snap.get("catalog_meta") or {}
             report_dict["semantic_layer"] = semantic is not None
             # Which arm, and how the split fell. Recorded on the scorecard
@@ -1285,6 +1396,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--semantic", choices=("on", "off"), default="off",
         help="render the fixture's semantic layer into the prompt (the layer-on "
         "arm; off is byte-identical to every run before the layer existed)",
+    )
+    parser.add_argument(
+        "--schema-vectors", action="store_true",
+        help="rank tables on what their prose *means* as well as on the words "
+             "it shares with the question (mvp2 B2 Phase 2). Embeds every "
+             "table's comments and semantic-layer descriptions once, then one "
+             "question per record. **Only `RANKED_MATCH` can see it**, so pair "
+             "it with --retrieve-budget or it will correctly report no change; "
+             "and it has nothing to embed without --comments or --semantic on.",
     )
     parser.add_argument(
         "--retrieve-budget", type=int, default=None, metavar="CHARS",

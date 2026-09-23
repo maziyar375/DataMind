@@ -22,6 +22,7 @@ from app.workers.knowledge_maintenance import maintenance_loop
 from app.workers.reconciler import reconcile_once, reconciler_loop
 from app.workers.report import ReportRunExecutor
 from app.workers.report import stranded_runs as stranded_report_runs
+from app.workers.schema_index import schema_index_loop
 from app.workers.semantic import SemanticJobExecutor, sweep_orphans
 
 log = get_logger(__name__)
@@ -90,11 +91,16 @@ async def lifespan(app: FastAPI):
     # connector to every customer database in the same second, and a schema
     # sync already sweeps staleness inline on the request that caused it.
     knowledge_maintenance = asyncio.create_task(maintenance_loop(settings))
+    # The schema vector index, on its own cadence and over its own population:
+    # every connection with an embedding model pinned, whether or not anybody
+    # has taught it a question. A pass costs one query when nothing moved.
+    schema_index = asyncio.create_task(schema_index_loop(settings))
     log.info("raymand_started", environment=settings.environment)
 
     try:
         yield
     finally:
+        schema_index.cancel()
         knowledge_maintenance.cancel()
         reconciler.cancel()
         await app.state.run_executor.stop_claiming()

@@ -104,6 +104,12 @@ class FakeConnection:
         self.statement_timeout_ms = 30_000
         self.disclosure_policy = disclosure_policy
         self.semantic_layer_enabled = semantic_layer_enabled
+        # No embedding model pinned, which is the shipped state and the one
+        # this file's drafts run under: `load_vector_index` returns an empty
+        # index without touching the store, so a draft ranks on words exactly
+        # as it did before B2 Phase 2.
+        self.embedding_model = ""
+        self.embedding_dimension = 0
 
 
 class FakeLlmConfig:

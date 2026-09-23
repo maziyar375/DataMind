@@ -58,7 +58,15 @@ from app.pipeline.prompts import (
     SCOPE_SYSTEM,
     SCOPE_SYSTEM_WITH_CURRENT,
 )
-from app.pipeline.relevance import PROSE_FLOOR, prose_seeds, rank_tables
+from app.pipeline.relevance import (
+    PROSE_FLOOR,
+    VectorIndex,
+    blend,
+    cosines,
+    prose_by_table,
+    prose_seeds,
+    rank_tables,
+)
 from app.pipeline.sections import WHOLE_DATABASE, SectionSpec
 from app.pipeline.state import (
     ClarificationRequest,
@@ -163,6 +171,13 @@ class NodeDeps:
     # turn was answered from the whole database: each of those sends the
     # prompt the first question of a conversation sends.
     current_sections: list[str] = field(default_factory=list)
+    # The connection's schema **vector** index, or an empty one. Empty is the
+    # shipped state on every connection without an embedding model pinned, and
+    # it is a *state* rather than a switch: `VectorIndex.is_available` is
+    # False, `retrieve` makes no embedding call, and the run is byte-identical
+    # to one before Phase 2 existed. `matcher` is the precedent — same seam,
+    # same reason `app.pipeline` never learns a database is involved.
+    vectors: VectorIndex = field(default_factory=VectorIndex)
 
 
 # ── route ────────────────────────────────────────────────────────────────
@@ -880,6 +895,48 @@ def _layer_index(semantic: dict[str, Any] | None) -> _LayerIndex:
     return _LayerIndex(terms=table_terms(doc), prose=table_prose(doc))
 
 
+async def _vector_scores(
+    question: str,
+    lexical: dict[str, float],
+    texts: dict[str, tuple[str, ...]],
+    deps: NodeDeps,
+) -> dict[str, float]:
+    """The lexical score, raised wherever a vector says the table is closer.
+
+    `docs/plans/hybrid-retrieval.md` Phase 2. Phase 1 asks whether a table's
+    prose uses the question's words; this asks whether it *means* what the
+    question means, which is the one thing no lexical score can do — *"how many
+    people stopped paying?"* against *"a cancellation the customer chose, not a
+    failed payment"*.
+
+    **Six ways this does nothing, and all six return the lexical score
+    unchanged**: no embedding model pinned on the connection; no stored vector
+    that still matches the prose it was made from; the question embeds to
+    nothing; the endpoint times out (`embedding_match_timeout_seconds`, which
+    the embedder imposes on itself); the endpoint errors; a stored vector whose
+    width disagrees with the question's, which `cosines` reads as *not similar
+    at all* rather than as an exception thrown at somebody asking about
+    revenue. A retrieval feature that can fail a question is worse than one
+    that is absent.
+
+    The blend is `max`, argued in `relevance.blend`: a table the words already
+    found cannot be demoted by a vector that disagrees, so turning embeddings
+    on can add a table to the block and never remove one.
+    """
+    usable = deps.vectors.usable(texts)
+    if not usable or deps.vectors.embed is None:
+        return lexical
+    try:
+        asked = await deps.vectors.embed([question])
+    except Exception:
+        # The embedder's own contract is `[]` on failure; this is the second
+        # door, for a caller that ever hands over one without it.
+        return lexical
+    if not asked or not asked[0]:
+        return lexical
+    return blend(lexical, cosines(asked[0], usable))
+
+
 async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
     """Send the whole snapshot when it fits the budget; otherwise, choose.
 
@@ -969,12 +1026,17 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
         # table's weight does not depend on which seeds happened to pull their
         # neighbours in. Empty with no comments and no layer, and a connection
         # that refuses to send its comments does not have them read (D4).
-        scores = rank_tables(
-            state.question,
+        texts = prose_by_table(
             scoped,
             layer=layer.prose,
             include_comments=deps.include_db_comments,
         )
+        scores = rank_tables(state.question, scoped, texts=texts)
+        # And what those sentences *mean*, where the connection can embed and
+        # the stored vectors still stand for the prose above. Absent on every
+        # connection with no embedding model pinned, which is the shipped
+        # state, and absent on every failure — see `_vector_scores`.
+        scores = await _vector_scores(state.question, scores, texts, deps)
         # A follow-up names nothing: "and by month?" matches no table. The
         # tables the previous statement ran against are the subject it
         # inherits, so they seed retrieval alongside anything this question
