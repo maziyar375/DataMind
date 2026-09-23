@@ -1,8 +1,12 @@
 # Deep analysis in chat — build plan
 
-> **Status: the gate was run on 2026-09-22 and it did not open.** Phases 0–3 are
-> complete (**31 of 85**); **Phases 4–9 are blocked** by §0.3's own rule — the
-> number it names came back **0.42**, the middle band. Written 2026-09-22
+> **Status: the gate was run on 2026-09-22 and it did not open — and Phases 4–7
+> were started on 2026-09-23 anyway, on the project owner's direct instruction.**
+> §0.3's number is still **0.42**, the middle band; nothing has moved it. The
+> override is recorded here rather than the gate being re-read as open: the mode
+> stays behind `deep_enabled = False`, and no deep number may be quoted as
+> evidence the mode *works* until §0.3's threshold is met. Phase 4 is complete
+> (**43 of 85**). Written 2026-09-22
 > against `main`. The argument for *why* lives in
 > [research/deep-analysis-mode.md](../research/deep-analysis-mode.md) — read it
 > first; this document does not re-argue it. The feature is
@@ -923,20 +927,20 @@ The plan would be several times larger if any of these were missing.
 - [x] `test_report_citations.py` — a figure drawn from a different result is **flagged**, and the same test asserts the old union check **passes** it, because "stricter" is a claim about the difference. 12 tests, both numeral systems, no provider
 - [x] `report-document.test.ts` — `claimSpans`, and the rule it exists for: **an edited paragraph loses its footnotes.** The claims record what the model wrote, and a citation still attached to a sentence somebody has rephrased points at a source that sentence no longer draws on — worse than no footnote, because it looks checked
 
-### 12.6 Phase 4 — The plan, and a graph that stops · **0 / 12**
+### 12.6 Phase 4 — The plan, and a graph that stops · **12 / 12** ✅ *(started over the gate — see the status banner)*
 
-- [ ] `AnalysisPlan` / `PlanStep` / `StepEvidence` in `pipeline/state.py`
-- [ ] `DeepState` — `RunState` plus plan, evidence, budget; `attempts` stays the **run-global concatenation** (§2.4)
-- [ ] `DEEP_PROMPT_VERSION = "d1"`, its own constant beside `PROMPT_VERSION` and `REPORT_PROMPT_VERSION`
-- [ ] The planner prompt in `pipeline/prompts/deep.py`
-- [ ] `nodes.plan` — one `structured()` call
-- [ ] `DeepBudget` in `domain/value_objects/` — five bounds, frozen, slots
-- [ ] `_check_budget` before every step, on the `_run_deadline` pattern
-- [ ] Four new `StepName`s — `PLAN`, `STEP`, `COMPUTE`, `SYNTHESIZE`
-- [ ] `_build_deep()` in `graph.py`, **reusing `_adapt` and `_add_repair_region`** — its third caller
-- [ ] Budget exhaustion routes to `synthesize`; it is a normal termination, never an error
-- [ ] `deep_enabled: bool = False` in `core/config.py`, and nothing in the product reaches the graph
-- [ ] `test_deep_graph.py` + `test_deep_plan.py` — the edges, the ceiling, exhaustion-synthesizes, and a plan longer than `max_steps` truncated rather than honoured
+- [x] `AnalysisPlan` / `PlanStep` / `StepEvidence` in `pipeline/state.py` — every `PlanStep` field **required in the schema** and filled by a `before` validator, `ClarificationProposal`'s lesson: a defaulted `tool` drops out of `required` and every step would silently become plain SQL. `test_deep_plan.py` asserts the `required` set
+- [x] `DeepState` — `RunState` plus plan, evidence, budget; `attempts` stays the **run-global concatenation** (§2.4). `repair_count` is overridden to count **the current step's** attempts only, so `validate`/`execute`/`inspect` run unmodified and each sub-question gets a chat question's repair allowance — asserted by a run where both steps need a repair
+- [x] `DEEP_PROMPT_VERSION = "d1"`, its own constant beside `PROMPT_VERSION` and `REPORT_PROMPT_VERSION`
+- [x] The planner prompt in `pipeline/prompts/deep.py` — the planner sees **the generator's own schema block under the policy in force** (a value list reaches it under SAMPLE and not under NONE, asserted), narrowed like a schema question above the retrieve budget
+- [x] `nodes.plan` — one `structured()` call. Lives in `pipeline/nodes/deep.py` beside the other three deep nodes rather than in `nodes/__init__.py`, which is 2,200 lines of chat nodes the deep graph reuses unchanged
+- [x] `DeepBudget` in `domain/value_objects/` — five bounds, frozen, slots. Its docstring says which bounds are refused **before** they are spent (steps, queries, rows) and which are checked before each call and so can be overrun by the one call in flight (tokens, time)
+- [x] `_check_budget` before every step — **on the edges rather than in the adapter's deadline hook**, because the hook raises and exhaustion must route. Every way into `step` goes through `_next_step`, every way back into `generate` through `may_repair`, and `step` narrows each query's row cap to what the run's row budget has left
+- [x] Four new `StepName`s — `PLAN`, `STEP`, `COMPUTE`, `SYNTHESIZE`; `test_pipeline_graph.py`'s name test now pins both graphs rather than the chat chain alone
+- [x] `_build_deep()` in `graph.py`, **reusing `_adapt` and `_add_repair_region`** — its third caller. The region gained a `failed` exit and a `may_repair` gate; chat and draft take the defaults (`END`, no gate), and `test_pipeline_graph.py` / `test_pipeline_events.py` pass unedited on that
+- [x] Budget exhaustion routes to `synthesize`; it is a normal termination, never an error — one test per bound, each crossing it on purpose. A **failed step** is evidence too: the region's give-ups lead to `compute`, not `END`. A node *crash* still ends the run
+- [x] `deep_enabled: bool = False` in `core/config.py`, and nothing in the product reaches the graph — asserted by walking every import under `app/` outside `app/pipeline/`
+- [x] `test_deep_graph.py` + `test_deep_plan.py` — the edges, the ceiling, exhaustion-synthesizes, and a plan longer than `max_steps` truncated rather than honoured. 27 tests, no provider; the worst-case path (every statement refused by the database) is driven to the query ceiling and fits `deep_recursion_limit`
 
 **Done when:** the budget cannot be exceeded by any path through the graph, and
 **nothing in the product can start a deep run.**
@@ -1022,19 +1026,20 @@ evidence **that says so**.
 | 1 — Cache tokens | 8 | 8 |
 | 2 — `app/analysis/` | 10 | 10 |
 | 3 — Citations | 8 | 8 |
-| 4 — The plan and the graph | 0 | 12 |
+| 4 — The plan and the graph | 12 | 12 |
 | 5 — The loop | 0 | 11 |
 | 6 — The surface | 0 | 12 |
 | 7 — Scoring | 0 | 7 |
 | 8 — Governance | 0 | 6 |
 | 9 — Documentation | 0 | 6 |
-| **Total** | **31** | **85** |
+| **Total** | **43** | **85** |
 
 ### 12.13 Change log
 
 | Date | What changed |
 |---|---|
 | 2026-09-22 | Written. No phase started. |
+| 2026-09-23 | **Phase 4 complete, 12/12 — started over the gate, on the owner's instruction.** §0.3 still reads 0.42 and still says Phases 4–9 wait; the owner asked for 4–7 regardless, and that is recorded in the status banner rather than the gate being re-read. `DEEP_GRAPH` is compiled at import and reachable from nothing: `route → plan → [step → scope → retrieve → generate ⇄ validate → execute → inspect → compute] → synthesize → chart`. The budget is read **on the edges** — into `step` and back into `generate` — so exhaustion routes to `synthesize` rather than raising, and a failed sub-question closes its step as evidence instead of ending the run. `compute` and `synthesize` are their Phase 4 minimum (record the step; list what ran); Phase 5 fills them. `make test` 3,318 green, `lint-imports` 9/9. | 43 of 85 |
 | 2026-09-22 | **Phase 0 complete, 5/5 — and the gate did not open.** The three arms ran back to back on one model (DeepSeek V4 Pro, temp 0.0, v10, 2h 13m): **42.0 % layer off** (`d8c1035d`), **42.0 % layer on** (`5df63738`), **recall 80.2 % / 62.0 % at budget 8,000** (`dc2ea4fd`). 0.42 is §0.3's middle band, so **Phases 4–9 wait**; §0.3's rule is now written out loud in `status.md` §6 and its Tier 3 deferral row. Three findings the headline hides: the two 42 % arms share only 14 of their 21 correct answers (14 questions moved, 7 each way — this suite cannot see a difference under ±14 points); two budget-8,000 questions scored recall 0.000 and answered **correctly**, so recall@k scores the annotation rather than the model; and `eval_runs.git_sha` was read at write time, filing arm 1 under a commit made 30 minutes into its own run — **fixed, with two tests that fail on the old code**. Cache tokens came out of the same logs: **60.4 % of a layer-on prompt served from cache**, which is Phase 1's §6 measurement. Write-up: `app/eval/reports/sales_v1_deepseek_2026-09-22_phase0.md`. | 31 of 85 |
 | 2026-09-22 | **Phase 3 complete, 8/8.** `REPORT_PROMPT_VERSION` r4 → r5: the section's results are numbered and every sentence stating a figure cites the one it came from. The markers never reach a reader — `parse_claims` lifts them into `Claim` rows on `report_section_results.claims` (`0038`, **JSONB**, §11 Q1 closed), and the numeric check now matches each sentence against **its own** result instead of the union of the section's. A figure borrowed from another result is flagged where it used to pass, and the test asserts both halves. A footnote opens the statement behind the figure; an **edited** paragraph is rendered without footnotes, because the claims describe what the model wrote. `make test` 3,196 green, `npm test` + build green, `0038` applied and rolled back against a throwaway database. | 27 of 85 |
 | 2026-09-22 | **Phase 2 complete, 10/10.** `app/analysis/` — five modules, the three SpotIQ algorithms chosen by measure class, period alignment that reports per calendar day, and z-scores at a cardinality-chosen threshold. Refusals are values; `NO_CHANGE` is the commonest one and the honest answer on this fixture. The **ninth** import-linter contract (there were eight, not nine) keeps it unable to reach a model or a database, and was proven to break on a deliberate violation. 39 new tests, no provider anywhere. **Nothing in the product calls it** — the package ships inert, exactly as the phase asks. | 19 of 85 |

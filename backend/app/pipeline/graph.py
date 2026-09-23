@@ -55,7 +55,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from inspect import Parameter, signature
-from typing import Any, Protocol, TypedDict
+from typing import Any, Protocol, TypedDict, cast
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.errors import GraphRecursionError
@@ -68,7 +68,8 @@ from app.core.logging import get_logger
 from app.domain.value_objects import StepName, StepStatus
 from app.pipeline import nodes
 from app.pipeline.nodes import NodeDeps
-from app.pipeline.state import NodeResult, NodeUsage, RunError, RunState
+from app.pipeline.nodes import deep as deep_nodes
+from app.pipeline.state import DeepState, NodeResult, NodeUsage, RunError, RunState
 
 log = get_logger(__name__)
 
@@ -120,6 +121,10 @@ EXECUTE = str(StepName.EXECUTE)
 INSPECT = str(StepName.INSPECT)
 PRESENT = str(StepName.PRESENT)
 CHART = str(StepName.CHART)
+PLAN = str(StepName.PLAN)
+STEP = str(StepName.STEP)
+COMPUTE = str(StepName.COMPUTE)
+SYNTHESIZE = str(StepName.SYNTHESIZE)
 
 #: The draft graph's refusal. Not a `StepName` — it is not a step, it writes no
 #: row, and it exists only to raise.
@@ -284,15 +289,6 @@ def _configurable(
 def _straight(label: str, _run: RunState) -> str:
     """The label names a node in this graph. The chat graph's whole story."""
     return label
-
-
-def _remap(mapping: Mapping[str, str]) -> Router:
-    """…except for these labels, which this graph spells differently."""
-
-    def router(label: str, _run: RunState) -> str:
-        return mapping.get(label, label)
-
-    return router
 
 
 def _refuse_unless_analytical(_label: str, run: RunState) -> str:
@@ -540,6 +536,35 @@ class _RepairExits:
     #: no `superseded_execution` to restore — but it is wired rather than
     #: assumed, because "unreachable" is a claim that rots.
     restore: str
+    #: Where giving up leads. `END` for chat and draft, whose give-up ends the
+    #: run; the deep graph's leads to `compute`, because one failed
+    #: sub-question is evidence and not a failed analysis.
+    failed: str = END
+    #: Whether another statement may be drafted, asked on every edge back into
+    #: `generate`. None is "the state's own `max_repairs` decides", which is
+    #: all chat and draft have ever had. The deep graph's reads its run-level
+    #: query budget, so a repair can never be the query that crosses it.
+    may_repair: Callable[[RunState], bool] | None = None
+
+
+def _region_router(exits: _RepairExits) -> Router:
+    """The labels a repair region's nodes produce, as this caller spells them.
+
+    With the defaults this maps `PRESENT` to `exits.restore` and nothing else —
+    the router chat and draft always had — which is what keeps both graphs
+    byte-for-byte what they were.
+    """
+
+    def router(label: str, run: RunState) -> str:
+        if label == PRESENT:
+            return exits.restore
+        if label == END:
+            return exits.failed
+        if label == GENERATE and exits.may_repair is not None and not exits.may_repair(run):
+            return exits.failed
+        return label
+
+    return router
 
 
 def _add_repair_region(
@@ -557,10 +582,11 @@ def _add_repair_region(
     failed run; a draft returns the rejected statement with its report, which
     the editor renders inline — a rejection there is an answer, not an error.
     """
+    router = _region_router(exits)
     graph.add_node(
         GENERATE,
-        _adapt(GENERATE, nodes.generate, successor=VALIDATE),
-        destinations=(VALIDATE, END),
+        _adapt(GENERATE, nodes.generate, successor=VALIDATE, router=router),
+        destinations=tuple({VALIDATE, exits.failed}),
     )
     graph.add_node(
         VALIDATE,
@@ -568,7 +594,7 @@ def _add_repair_region(
             VALIDATE,
             nodes.validate,
             successor=exits.ok,
-            router=_remap({PRESENT: exits.restore}),
+            router=router,
             # The chat executor has always checked before every node. The
             # draft checks before each `generate` and nowhere else, on purpose:
             # `validate` is the guard, it costs microseconds, and stopping a
@@ -576,7 +602,7 @@ def _add_repair_region(
             # accepted throws away work the user already waited for.
             deadline=deadline_before_validate,
         ),
-        destinations=tuple({exits.ok, GENERATE, exits.restore, END}),
+        destinations=tuple({exits.ok, GENERATE, exits.restore, exits.failed}),
     )
 
 
@@ -688,8 +714,149 @@ def _build_draft() -> Any:
 # per-request `.compile()` would turn a sub-second authoring step into a
 # measurable one. Neither holds anything run-specific: that all travels in the
 # config.
+# ── the deep graph ───────────────────────────────────────────────────────
+# route → plan → [ step → scope → retrieve → generate ⇄ validate → execute
+#                  → inspect → compute ] → synthesize → chart
+#
+# The chat road between `step` and `compute` is the chat graph's own nodes
+# through the same adapter — `_add_repair_region`'s third caller, not a second
+# implementation. What differs is written in the routers, never in a node:
+#
+# * **a give-up is the end of a step, not of the run.** Every label that would
+#   have ended a chat run (`END` from a FAILED guard, a refused statement, a
+#   provider error) and the chat restore (`PRESENT`) lead to `compute`, which
+#   files the step as evidence and moves on. A node *crash* still ends the run:
+#   `_adapt` sends that straight to `END` without asking a router, which is
+#   right — a crash is a bug, not a finding.
+# * **the budget is read on the edges.** Into the next step (from `plan` and
+#   `compute`) through `_next_step`, and back into `generate` through
+#   `may_repair`. There is no other way into either, so there is no path
+#   through this graph that spends past a bound it could have checked.
+#
+# No `match` (a stored answer is one statement, and a deep run is a plan), no
+# `describe` (a schema question is not an analysis), no `clarify` (a plan
+# states what it understood instead, and the reader sees it first), no
+# `present` (the prose is `synthesize`'s).
+
+
+def _check_budget(run: DeepState) -> str:
+    """The verdict before a step, recorded where `synthesize` will read it.
+
+    "" is "go on". The same discipline `_run_deadline` applies before a node,
+    applied before a step — but a spent budget is a *normal* ending, so this
+    routes rather than raising.
+    """
+    reason = run.exhausted(utcnow())
+    if reason and not run.stop_reason:
+        run.stop_reason = reason
+    return reason
+
+
+def _next_step(label: str, run: RunState) -> str:
+    """After `plan` and after `compute`: another step, or the answer."""
+    assert isinstance(run, DeepState)
+    if label == END:
+        return END
+    # A finished plan first: five steps planned under a five-step ceiling is
+    # a plan that completed, and must not be reported as one that was cut.
+    if run.current_step is None or _check_budget(run):
+        return SYNTHESIZE
+    return STEP
+
+
+def _in_step(label: str, run: RunState) -> str:
+    """`scope`, `retrieve`, `execute` and `inspect` inside a step.
+
+    `END` and the chat restore both close the step; everything else — the
+    successor, a repair back into `generate` — is the chat graph's label and
+    means what it means there. A repair from `execute` or `inspect` is gated
+    like one from `validate`, by `_deep_may_repair`.
+    """
+    if label in (END, PRESENT):
+        return COMPUTE
+    if label == GENERATE and not _deep_may_repair(run):
+        return COMPUTE
+    return label
+
+
+def _deep(fn: Callable[[DeepState, NodeDeps], Awaitable[NodeResult]]) -> NodeFn:
+    """A deep node, as the adapter types a node.
+
+    The one cast in the file, and it is sound by construction: the only state
+    the deep graph ever carries is the `DeepState` `DeepPipeline.run` put in.
+    """
+    return cast(NodeFn, fn)
+
+
+def _deep_may_repair(run: RunState) -> bool:
+    assert isinstance(run, DeepState)
+    return run.may_repair(utcnow())
+
+
+_DEEP_EXITS = _RepairExits(
+    ok=EXECUTE, restore=COMPUTE, failed=COMPUTE, may_repair=_deep_may_repair
+)
+
+
+def _build_deep() -> Any:
+    graph: Any = StateGraph(GraphState)
+
+    # `route` halts small talk exactly as chat does; anything with data in it
+    # goes on to be planned.
+    graph.add_node(ROUTE, _adapt(ROUTE, nodes.route, successor=PLAN),
+                   destinations=(PLAN, END))
+    graph.add_node(PLAN, _adapt(PLAN, _deep(deep_nodes.plan), successor=STEP,
+                                router=_next_step),
+                   destinations=(STEP, SYNTHESIZE, END))
+    graph.add_node(STEP, _adapt(STEP, _deep(deep_nodes.step), successor=SCOPE),
+                   destinations=(SCOPE, SYNTHESIZE, END))
+    graph.add_node(SCOPE, _adapt(SCOPE, nodes.scope, successor=RETRIEVE,
+                                 router=_in_step),
+                   destinations=(RETRIEVE, COMPUTE))
+    graph.add_node(RETRIEVE, _adapt(RETRIEVE, nodes.retrieve, successor=GENERATE,
+                                    router=_in_step),
+                   destinations=(GENERATE, COMPUTE))
+
+    _add_repair_region(graph, _DEEP_EXITS, deadline_before_validate=True)
+
+    graph.add_node(EXECUTE, _adapt(EXECUTE, nodes.execute, successor=INSPECT,
+                                   router=_in_step),
+                   destinations=(INSPECT, GENERATE, COMPUTE))
+    graph.add_node(INSPECT, _adapt(INSPECT, nodes.inspect, successor=COMPUTE,
+                                   router=_in_step),
+                   destinations=(COMPUTE, GENERATE))
+    graph.add_node(COMPUTE, _adapt(COMPUTE, _deep(deep_nodes.compute), successor=STEP,
+                                   router=_next_step),
+                   destinations=(STEP, SYNTHESIZE, END))
+    graph.add_node(SYNTHESIZE, _adapt(SYNTHESIZE, _deep(deep_nodes.synthesize),
+                                      successor=CHART),
+                   destinations=(CHART, END))
+    graph.add_node(CHART, _adapt(CHART, nodes.chart, successor=END),
+                   destinations=(END,))
+
+    graph.add_edge(START, ROUTE)
+    return graph
+
+
+def deep_recursion_limit(run: DeepState) -> int:
+    """Node executions the budget allows, plus one — never the other way round.
+
+    Counted rather than guessed, because a limit below the budget's own
+    ceiling would turn a legitimately long analysis into `E_PIPELINE_LOOP`:
+    `route` and `plan`; per step `step`, `scope`, `retrieve`, `compute`; per
+    statement at most `generate`, `validate`, `execute`, `inspect`; then
+    `synthesize` and `chart`. `test_deep_graph.py` drives the worst case.
+    """
+    budget = run.budget
+    return 2 + 4 * budget.max_steps + 4 * budget.max_queries + 2 + 1
+
+
 CHAT_GRAPH = _build_chat().compile(name="chat")
 DRAFT_GRAPH = _build_draft().compile(name="draft")
+#: Compiled at import like the other two, and reachable from nothing in the
+#: product until Phase 6 — `settings.deep_enabled` is False and no caller
+#: outside this package names `DeepPipeline`.
+DEEP_GRAPH = _build_deep().compile(name="deep")
 
 
 # ── the two facades ──────────────────────────────────────────────────────
@@ -795,3 +962,35 @@ async def draft_statement(
         raise LLMError("Drafting SQL did not converge and was stopped.") from err
 
     return state
+
+
+class DeepPipeline:
+    """A deep run, with `AnalyticsPipeline`'s contract: `run(state, deps)`.
+
+    Same step persistence, same events, same hard deadline — `_run_deadline`
+    before every node, against `state.deadline_at`. The *soft* deadline is
+    the budget's and is read on the edges, so running out of time writes an
+    answer and running past the hard one is a timeout, exactly as in chat.
+    """
+
+    def __init__(self, *, on_step: OnStep) -> None:
+        self._on_step = on_step
+
+    async def run(self, state: DeepState, deps: NodeDeps) -> DeepState:
+        try:
+            await DEEP_GRAPH.ainvoke(
+                {"run": state},
+                config={
+                    "configurable": _configurable(deps, on_step=self._on_step),
+                    "recursion_limit": deep_recursion_limit(state),
+                },
+            )
+        except GraphRecursionError:
+            log.warning("deep_pipeline_loop", run_id=str(state.run_id))
+            state.error = RunError(
+                code="E_PIPELINE_LOOP",
+                message="The analysis did not converge and was stopped.",
+            )
+        finally:
+            nodes.cancel_chart_ahead(state)
+        return state

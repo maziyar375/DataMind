@@ -20,11 +20,11 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.domain.ports.database import ResultColumn
 from app.domain.ports.llm import Usage, add_reported
-from app.domain.value_objects import DisclosurePolicy, HintBudget
+from app.domain.value_objects import DeepBudget, DisclosurePolicy, HintBudget
 from app.pipeline.checks import Finding
 from app.sqlguard.validator import ValidationReport
 
@@ -721,3 +721,201 @@ class NodeResult(BaseModel):
     status: Literal["OK", "SKIPPED", "HALT", "FAILED"] = "OK"
     detail: str | None = None
     goto: str | None = None
+
+
+# ── deep analysis (docs/plans/deep-analysis-mode.md §1) ──────────────────
+#: What a step is *for*. The routing key for `compute`, and what the plan
+#: panel shows beside each step so a reader can tell a check from a drill.
+StepIntent = Literal["CONFIRM", "DECOMPOSE", "COMPARE", "DRILL", "CHECK"]
+#: Which closed function reads the step's rows. **The planner selects one; it
+#: never writes one** (plan D4) — SQL is "the rows are the answer".
+StepTool = Literal["SQL", "CONTRIBUTION", "COMPARE_PERIODS", "OUTLIERS"]
+
+
+class PlanStep(BaseModel):
+    """One sub-question, in the reader's language, and why it is being asked.
+
+    **Every field is required in the schema**, for the reason
+    `ClarificationProposal` gives: a defaulted field drops out of `required`,
+    and under a strict `json_schema` a model takes that as licence to omit it.
+    An omitted `tool` would silently turn every step into plain SQL and
+    `compute` would never run. `_fill` keeps the parse forgiving anyway.
+    """
+
+    question: str = Field(max_length=400)
+    intent: StepIntent
+    why: str = Field(max_length=300)
+    tool: StepTool
+    #: Earlier steps' 0-based indices. A reference forward or out of range is
+    #: dropped by `plan`, never honoured.
+    depends_on: list[int]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fill(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            data = {"intent": "CONFIRM", "why": "", "tool": "SQL",
+                    "depends_on": [], **data}
+        return data
+
+
+class AnalysisPlan(BaseModel):
+    """The planner's structured output, and what the reader watches.
+
+    `steps` is unbounded in the schema because a provider's constrained
+    decoder ignores `maxItems` (see `SqlProposal`); the ceiling is applied by
+    `plan`, which **truncates rather than honours** a longer list.
+    """
+
+    restatement: str = Field(max_length=500)
+    steps: list[PlanStep]
+    stop_when: str = Field(max_length=300)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fill(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            data = {"restatement": "", "stop_when": "", **data}
+        return data
+
+
+class StepEvidence(BaseModel):
+    """What one step produced, and the only thing `synthesize` reads.
+
+    `execution` is kept for the record — the trail, the artifacts, the SQL a
+    claim opens — and **never reaches a prompt**: `synthesize` is handed
+    `disclosed` and `computed` and nothing else (plan §1.2).
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    index: int
+    step: PlanStep
+    #: `attempts[first_attempt:last_attempt]` are this step's statements, in
+    #: the run-global list. A range rather than a copy so `generated_queries`
+    #: keeps exactly one row per statement.
+    first_attempt: int = 0
+    last_attempt: int = 0
+    execution: ExecutionResult | None = None
+    disclosed: DisclosedResult | None = None
+    #: A rendering of `app/analysis/`'s output — a sentence-shaped summary and
+    #: the figures in it — or None when `tool` is SQL or the function refused.
+    computed: dict[str, Any] | None = None
+    status: Literal["DONE", "SKIPPED", "FAILED"] = "DONE"
+    #: Why a step is FAILED or SKIPPED, in words a reader can act on.
+    note: str = ""
+
+    @property
+    def repairs(self) -> int:
+        return max(0, self.last_attempt - self.first_attempt - 1)
+
+
+#: Why a deep run stopped short of its plan. "" is "it did not": every step
+#: that was planned ran.
+StopReason = Literal["", "steps", "queries", "rows", "tokens", "time", "answer_now"]
+
+
+class DeepState(RunState):
+    """`RunState`, plus a plan, the evidence so far, and a budget.
+
+    The chat nodes run on this unchanged — `scope`, `retrieve`, `generate`,
+    `validate`, `execute`, `inspect` — because it *is* a `RunState`: `step`
+    points `question` at the current sub-question and clears the per-question
+    fields, and the nodes answer that question the way they answer any other.
+
+    **`attempts` is the run-global concatenation** (plan §2.4), never reset per
+    step, so every sub-query lands in `generated_queries` as an ordinary row
+    under the existing `(run_id, attempt_no)` constraint. What that would break
+    — the repair budget — is `repair_count` below, which counts only the
+    current step's attempts.
+    """
+
+    #: The question the reader asked. `question` moves from step to step.
+    asked: str
+    budget: DeepBudget
+    plan: AnalysisPlan | None = None
+    evidence: list[StepEvidence] = Field(default_factory=list)
+    #: Index of the step `step` will start next.
+    cursor: int = 0
+    #: Where the current step's statements begin in `attempts`.
+    step_first_attempt: int = 0
+    #: Rows executed across every step, against `budget.max_rows_total`.
+    rows_spent: int = 0
+    #: The connection's per-query row cap, before `step` narrows it to what the
+    #: run-level row budget has left.
+    base_max_rows: int = 1000
+    stop_reason: StopReason = ""
+
+    @property
+    def repair_count(self) -> int:
+        """This step's repairs — what `validate`, `execute` and `inspect` ask.
+
+        Per step, so each sub-question gets the repair allowance a chat
+        question gets. `len(attempts) - 1` would report the seventh step's
+        first draft as its sixth repair and refuse to repair it at all.
+        """
+        return max(0, len(self.attempts) - self.step_first_attempt - 1)
+
+    @property
+    def current_step(self) -> PlanStep | None:
+        if self.plan is None or self.cursor >= len(self.plan.steps):
+            return None
+        return self.plan.steps[self.cursor]
+
+    def exhausted(self, now: datetime) -> StopReason:
+        """Which bound, if any, forbids starting another step. "" is none.
+
+        Pure over the state and a clock, so the router, the tests and
+        `synthesize`'s explanation all read the same verdict. Order is the
+        order a reader would want to be told: a step ceiling is the plan's own
+        shape, time is the budget they will feel.
+        """
+        if len(self.evidence) >= self.budget.max_steps:
+            return "steps"
+        if len(self.attempts) >= self.budget.max_queries:
+            return "queries"
+        if self.rows_spent >= self.budget.max_rows_total:
+            return "rows"
+        if self.prompt_tokens >= self.budget.max_prompt_tokens:
+            return "tokens"
+        if now >= self.budget.deadline_at:
+            return "time"
+        return ""
+
+    def may_repair(self, now: datetime) -> bool:
+        """Whether one more statement may be drafted inside the current step.
+
+        A repair is a query, so it spends the query budget; tokens and time
+        are checked here as well because a repair is a model call.
+        """
+        return (
+            len(self.attempts) < self.budget.max_queries
+            and self.prompt_tokens < self.budget.max_prompt_tokens
+            and now < self.budget.deadline_at
+        )
+
+    def begin_step(self) -> PlanStep | None:
+        """Point the chat nodes at the next sub-question. None when none is left.
+
+        Clears exactly the fields a chat run starts without, so nothing from
+        step two's result can reach step three's prompt except through the
+        evidence — which is `disclose()`d. The row cap narrows to what the
+        run's row budget has left, which is what makes that bound one the
+        graph cannot cross rather than one it notices afterwards.
+        """
+        current = self.current_step
+        if current is None:
+            return None
+        self.question = current.question
+        self.step_first_attempt = len(self.attempts)
+        self.context = None
+        self.execution = None
+        self.superseded_execution = None
+        self.check_repair_used = False
+        self.disclosed = None
+        self.scope_sections = []
+        self.scope_tables = []
+        self.error = None
+        remaining = max(0, self.budget.max_rows_total - self.rows_spent)
+        self.max_rows = max(1, min(self.base_max_rows, remaining))
+        return current

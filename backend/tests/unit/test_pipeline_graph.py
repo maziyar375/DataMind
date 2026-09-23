@@ -245,8 +245,16 @@ def test_both_graphs_are_compiled_once() -> None:
 
 def test_step_names_are_the_node_names() -> None:
     """The graph's labels are `StepName`, which is what `run_steps.name` holds
-    and what the SPA matches on to draw the trail."""
-    assert {str(s) for s in StepName} == set(CHAIN)
+    and what the SPA matches on to draw the trail.
+
+    Every name belongs to a graph: the chat chain, plus the deep graph's four
+    (docs/plans/deep-analysis-mode.md Phase 4) — and every node of the deep
+    graph is one of these, so its trail is drawn from the same vocabulary."""
+    from app.pipeline.graph import DEEP_GRAPH
+
+    deep_nodes = {n for edge in edges(DEEP_GRAPH) for n in edge} - {START, END}
+    assert {str(s) for s in StepName} == set(CHAIN) | {"plan", "step", "compute", "synthesize"}
+    assert deep_nodes <= {str(s) for s in StepName}
 
 
 # ── the draft graph, and the region both graphs share ────────────────────

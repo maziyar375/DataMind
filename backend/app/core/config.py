@@ -106,6 +106,15 @@ class Settings(BaseSettings):
     # it, so it is deliberately slower than the heartbeat — the normal path is
     # the direct hand-off in `post_message`, which costs nothing.
     run_claim_interval_seconds: int = 15
+    # ── deep analysis (docs/plans/deep-analysis-mode.md) ─────────────────
+    # Off until the gate in that plan's §0.3 opens. While off, nothing in the
+    # product can start a deep run: the graph is compiled and tested, and no
+    # request reaches it.
+    deep_enabled: bool = False
+    # The hard deadline of a deep run, in place of `run_deadline_seconds`. The
+    # budget's own soft deadline is set a fifth earlier, so an analysis that
+    # runs out of time still has time to write its answer.
+    deep_deadline_seconds: int = 600
 
     # ── report generation ────────────────────────────────────────────────
     # How many section paragraphs are written at once. A generation's wall

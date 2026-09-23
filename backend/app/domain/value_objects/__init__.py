@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 
 
@@ -101,6 +102,43 @@ class StepName(StrEnum):
     INSPECT = "inspect"
     PRESENT = "present"
     CHART = "chart"
+    # The deep graph's own four (docs/plans/deep-analysis-mode.md Phase 4).
+    # Everything else a deep run records is one of the names above, repeated
+    # once per step — which `run_steps`' uniqueness on `(run_id, seq)` already
+    # allows, because the repair region has always re-run `generate`.
+    PLAN = "plan"
+    STEP = "step"
+    COMPUTE = "compute"
+    SYNTHESIZE = "synthesize"
+
+
+@dataclass(frozen=True, slots=True)
+class DeepBudget:
+    """What one deep run may spend, checked before every step and every repair.
+
+    **Everything else in this product fails open; this fails closed.** And
+    running out is not an error: an exhausted budget routes to `synthesize`,
+    which answers from the evidence already collected — the same road *Answer
+    now* takes.
+
+    Five bounds, and they are not equally hard. Steps, queries and rows are
+    known before they are spent, so the graph's routers refuse the one that
+    would cross a line (and `step` narrows each query's row cap to what is
+    left). Tokens and time are only known *after* a call returns, so they are
+    checked before every call and can be overrun by at most the one call in
+    flight when they ran out. `test_deep_graph.py` pins both halves.
+
+    `deadline_at` is the soft deadline — stop planning, start writing. The
+    run's own `deadline_at` stays the hard one, and must sit far enough after
+    this that `synthesize` has time to run.
+    """
+
+    deadline_at: datetime
+    max_steps: int = 5
+    #: Every statement generated, repairs included — a repair is a query.
+    max_queries: int = 12
+    max_rows_total: int = 20_000
+    max_prompt_tokens: int = 400_000
 
 
 class StepStatus(StrEnum):
