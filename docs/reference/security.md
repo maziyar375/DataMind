@@ -55,7 +55,7 @@ Stated plainly so nobody assumes otherwise:
 
 ## 2. Every place data leaves for a model provider
 
-There are **fourteen use cases**, across sixteen call sites, and no others. The
+There are **fifteen use cases**, across eighteen call sites, and no others. The
 dependency rule forbids importing `litellm` outside `app/infra/llm/`, and CI
 greps for violations, so this list cannot silently grow.
 
@@ -75,8 +75,16 @@ greps for violations, so this list cannot silently grow.
 | 12 | Write the executive summary | once per generation | `workers/report.py` — `_summarise()`:782 |
 | 13 | Embed a question | the six-hourly index pass; **every analytical question**, on a connection with an embedding model pinned | `services/knowledge_service.py` — `_embedder()`:708, `index_embeddings()`:839 |
 | 14 | Choose a section | every analytical question — chat **and** a tile or block draft — on a connection with **saved sections**, unless the asker chose one themselves (*Ask within…*, which makes no call); never otherwise | `pipeline/nodes/__init__.py` — `scope()`:423 |
+| 15 | Embed a table's prose, and a question against it | the hourly schema-index pass; and **every analytical question that reaches `RANKED_MATCH`** — over budget, so not on a database that fits — on a connection with an embedding model pinned *and* a current vector to compare against | `services/retrieval_index.py` — `index_schema_vectors()`, `question_embedder()` |
 
-**Fourteen and not fifteen** because #8 is a use case without a call site: a
+**#15 is a different index from #13, on the same credentials.** That one
+embeds *questions somebody taught*; this one embeds *what is written about a
+table*, so retrieval can rank by meaning (mvp2 B2, §4.9). Both are gated by the
+same `database_connections.embedding_model` pin, so turning one on turns on the
+other — which is stated here because it is the kind of thing a reader would
+otherwise have to discover from a bill.
+
+**Fifteen and not sixteen** because #8 is a use case without a call site: a
 draft reuses the *node* that would have made the call anyway, which is the whole
 point of §0.3 in [pipeline-chat.md](pipeline-chat.md) — a tile's statement is written
 against the same prompt, the same guard and the same budget as a chat answer.
@@ -90,8 +98,14 @@ where to start scrolling. The list is verifiable in one command, which is the
 check that actually matters:
 
 ```bash
-grep -rn --include='*.py' 'llm_gateway\.\|gateway\.complete\|gateway\.structured\|gateway\.stream' backend/app
+grep -rn --include='*.py' 'llm_gateway\.\|gateway\.complete\|gateway\.structured\|gateway\.stream\|gateway\.embed' backend/app
 ```
+
+`gateway.embed` is in that pattern as of 2026-09-23 and was not before, which
+means **#13 was never covered by the one command this section calls the check
+that matters**. Three of the hits it now returns are `app/eval/runner.py`'s,
+which is the offline harness and not the request path — the import-linter
+contract that keeps `app.eval` off it is the reason they can be read past.
 
 Two model interactions send **no customer data at all**: the capability probe
 in `api/v1/llm_configs.py`, a fixed test prompt, and `probe_embedding` in
@@ -188,7 +202,7 @@ receives result data under any policy — it works from schema, question, and
 transcript alone. That holds for every caller of it, including a tile draft and
 a report block.
 
-**Result values reach exactly two of the fourteen**: `present` (#5) and a report
+**Result values reach exactly two of the fifteen**: `present` (#5) and a report
 section (#11). Both go through the same `disclose()`, and neither is reachable
 without it — a report additionally refuses to run at all under `NONE` or
 `AGGREGATE` (§2.3). Everything else works from structure, shape, or prose.

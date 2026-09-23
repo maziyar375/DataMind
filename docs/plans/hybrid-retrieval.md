@@ -362,7 +362,11 @@ model id belongs beside `model_snapshot`, and Phase 2 owes that.
   and it is the same content the chat prompt already sends under
   `include_db_comments`, to the same class of provider — but to a *different
   configured row*, so D4's rule is what keeps it honest: a connection with
-  comments off embeds the layer's prose only. `security.md` gets the paragraph.
+  comments off embeds the layer's prose only. Written up as
+  [security.md §4.9](../reference/security.md), and as a **fifteenth row** in
+  its §2 inventory of every place data leaves for a provider — which also
+  turned up that §2's own verification grep never covered `gateway.embed`, so
+  #13 had been outside it since Phase 7. The grep now includes it.
 - **No customer *data* is embedded** — no values, no samples, no rows.
   `value_meanings` is a curator's gloss on a code, written by hand, not a
   probed value; `B3`'s value dictionaries are a different feature with a
