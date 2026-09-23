@@ -170,7 +170,11 @@ backend/app/
                   the composer; what it chose is on `runs.retrieval_*`),
                   contracts.py (the node signature),
                   metadata.py (which tables a schema question is about, and the
-                  rendered fallback answer), sections.py (dividing a snapshot
+                  rendered fallback answer),
+                  relevance.py (which tables the schema's *prose* is about —
+                  DDL comments and the layer's descriptions, IDF-weighted
+                  against the question, mvp2 B2; pure, and 0.0 everywhere on a
+                  connection that has neither), sections.py (dividing a snapshot
                   into named sections — schema, FK components, name prefixes —
                   and sizing one in `retrieve`'s own units; pure),
                   prompts/, disclosure.py (result gate), checks.py (free result checks)
@@ -193,9 +197,11 @@ backend/app/
                   (bind it to a snapshot, parse metric SQL), bind.py (the one
                   binder every reader goes through — stored `valid` flags are
                   never trusted), terms.py (the words it speaks — for the
-                  backlog, and `table_terms` for *retrieval*: the layer's
-                  labels, synonyms, metric names and glossary index which
-                  tables a question reaches, mvp2 A5), diff.py (the one
+                  backlog, and for *retrieval* in two registers: `table_terms`
+                  is the names — labels, synonyms, metric names, glossary
+                  terms, mvp2 A5 — and `table_prose` is the sentences —
+                  descriptions, grains, value meanings, glossary meanings,
+                  mvp2 B2. Nothing is read by both), diff.py (the one
                   differ: typed changes keyed by
                   entry, which versions store and the UI only words),
                   attribute.py (whether an answer's SQL used a metric's
@@ -947,7 +953,7 @@ at commit time and shows up as drift a release later. Full tour:
   the pipeline — the pipeline reads a layer, a report reads a node, and
   neither a layer nor a node knows anything about the thing above it.
 
-  **The three constants as they stand: `PROMPT_VERSION` = `"v11"`,
+  **The three constants as they stand: `PROMPT_VERSION` = `"v12"`,
   `SEMANTIC_PROMPT_VERSION` = `"s4"`, `REPORT_PROMPT_VERSION` = `"r5"`.** Move
   the one whose prompts you changed — and note that "prompts" means everything
   the model ends up reading, not only wording: a change to how much of the

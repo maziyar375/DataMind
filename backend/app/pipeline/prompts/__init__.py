@@ -11,7 +11,42 @@ from app.charts import (
     MIN_HISTOGRAM_ROWS,
 )
 
-PROMPT_VERSION = "v11"
+PROMPT_VERSION = "v12"
+# v12: **no wording changed, and on a connection with neither DDL comments nor
+# a semantic layer no byte changed either.** What moved, again, is *which
+# tables reach the schema block* when retrieval has to choose.
+#
+# On the `RANKED_MATCH` branch the schema's **prose** now ranks tables
+# (`docs/plans/hybrid-retrieval.md` Phase 1, mvp2 B2): the DBA's `COMMENT ON`
+# and the curator's `description`, `grain`, value meanings and glossary
+# meanings are scored against the question by IDF-weighted overlap, and a table
+# carrying at least `relevance.PROSE_FLOOR` of the question's weight enters a
+# tier above "everything else". The score is also the tiebreak *inside* every
+# tier, ahead of row count. So a question phrased in none of the words the
+# schema spells — "anything to do with refunds" — now reaches the table whose
+# comment says it handles them, instead of falling to "take the biggest
+# tables".
+#
+# **What is byte-identical at v12**, and is tested rather than assumed
+# (`tests/unit/test_retrieval_prose.py`):
+#
+# * every run on a connection with no DDL comments and no semantic layer — all
+#   scores are 0.0, the new tier is empty, and the sort key is constant where
+#   it was inserted, so the ranking is the one v11 performed;
+# * every run on a connection with `include_db_comments` off *and* no layer —
+#   the flag governs ranking as well as rendering (plan §0.2 D4);
+# * FULL_SNAPSHOT, SECTION_SNAPSHOT and SCHEMA_QUESTION, for the reason v11
+#   gives below: they send everything, send the section, or spend the budget by
+#   `select_tables`' own rule. Only one of four branches can see this.
+#
+# **No measurement taken at v10 or v11 is invalidated.** The three Phase 0 arms
+# of 2026-09-22 ran FULL_SNAPSHOT (rows 1 and 2) or layer-off (row 3); none
+# could have taken this path, and row 3's fixture has no DDL comments.
+#
+# **The measurement this owes** is the same arm v11 owes and for the same
+# reason — the suite at a lowered `--retrieve-budget` with comments and a layer
+# present, against the same budget without them. At the shipped ceiling the
+# branch never runs. Both are recorded as owed in `docs/reference/eval.md` §6.
 # v11: **no wording changed, and on most runs no byte changed either.** What
 # moved is *which tables reach the schema block* when retrieval has to choose.
 #

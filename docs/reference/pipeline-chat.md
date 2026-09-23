@@ -541,6 +541,32 @@ group by 1 order by runs desc;
      a table chosen by a word the model was never shown is the failure this
      avoids. **Empty without a layer**, which is why a connection that has none
      retrieves exactly as it did at v10;
+   - **by description** = `relevance.rank_tables(question, tables, …)` — a
+     table whose **prose** is about the question, scored rather than matched
+     (mvp2 **B2**). The bag is the DBA's `COMMENT ON` for the table and its
+     columns, plus the layer's `description`, `grain`, column descriptions,
+     `value_meanings` *meanings* and the `meaning` of every glossary term that
+     resolves to it (`semantic.table_prose`). Each token is weighted
+     `ln((N + 1) / df)` over the tables being ranked — so a word in every
+     comment weighs about nothing and a word in one weighs about `ln(N)`, with
+     `df` counted on **this** customer's prose rather than from a stopword list
+     that would be wrong per language and per customer. The score is the
+     matched share of the question's own weight, counting only question tokens
+     the corpus has ever seen, and a table carrying at least
+     `PROSE_FLOOR = 0.2` of it joins the tier. *"Which tables hold refunds?"*
+     reaches `order_items` because somebody wrote `negative quantities are
+     refunds` in the DDL. **Names, labels, synonyms, metric names and glossary
+     terms are deliberately not in this bag** — the two tiers above own them,
+     and a word scored twice is weighted twice for no reason. **Every score is
+     0.0 with no DDL comments and no layer**, which is why such a connection
+     ranks exactly as it did at v11. Only the top `PROSE_MAX_SEEDS = 20` seed
+     the FK hop: prose is the weakest of the five signals and ranks below all
+     of them, so a table past the twentieth could not survive the cut anyway;
+   - **`include_db_comments` governs this as well as rendering.** The flag
+     exists so a connection can refuse to send its DDL comments to a provider,
+     and a comment that decides *which* tables are sent has reached the
+     provider's answer by another road. Comments off, comments unread — the
+     layer's prose still scores, because that is the customer's own document;
    - **carried** = the tables the recent turns actually **queried** —
      `_tables_from_history` reads the qualified names out of the SQL behind an
      earlier answer, which is exact rather than approximate because
@@ -554,16 +580,25 @@ group by 1 order by runs desc;
      candidate;
    - `fit_to_budget` ranks the candidates — named, then **business-term hits**,
      then carried, then column hits, then FK-hop tables (a bridge touching two
-     seeds before a neighbour of one), then the rest; ties to the larger
-     `approx_row_count`, then snapshot order — and takes them until
-     `_RETRIEVE_BUDGET_CHARS` is spent, always at least one. A term hit sits
-     above `carried` because a curator naming *this* table is a statement about
-     this question while a carried table is inherited from the last one, and
-     below `named` because a physical name is the user's own word and a label
-     is somebody else's. The selection is rendered in snapshot order. What did
-     not fit lands in `RetrievedContext.dropped_tables`, and the step detail
-     counts both: `"42 tables via RANKED_MATCH · 1 by business term · 9 not
-     shown"`.
+     seeds before a neighbour of one), then **description hits**, then the
+     rest; ties to the higher prose score, then the larger `approx_row_count`,
+     then snapshot order — and takes them until `_RETRIEVE_BUDGET_CHARS` is
+     spent, always at least one. A term hit sits above `carried` because a
+     curator naming *this* table is a statement about this question while a
+     carried table is inherited from the last one, and below `named` because a
+     physical name is the user's own word and a label is somebody else's. A
+     description hit sits **below the FK hop**, because the hop is structural —
+     dropping a bridge does not make the answer worse, it makes the query
+     impossible — and **above the rest**, because "this table is described in
+     the words you used" beats "this table is big". Score before size demotes
+     size to the last resort, for when nothing written down has anything to
+     say. The selection is rendered in snapshot order. What did not fit lands
+     in `RetrievedContext.dropped_tables`, and the step detail counts all of
+     it: `"42 tables via RANKED_MATCH · 1 by business term · 2 by description ·
+     9 not shown"` — where **`by description` counts what prose *added***, not
+     what it matched, since a table's own comment usually contains its own name
+     and a table the question already named did not need a description to be
+     chosen.
 
    Retrieval reads the **raw** history, before the disclosure filter of §3.9:
    the selection never leaves the process, and what is rendered from it is

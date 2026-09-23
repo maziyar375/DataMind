@@ -647,6 +647,17 @@ rendered.
 | Fixes business language ("churn") | no | no | no | no | no | ◐ | ◐ | **yes** | **yes** |
 | Helps at 2,000 tables | ◐ | **yes** | ◐ | **yes** | **yes** | ◐ | ◐ | **yes** | **yes** |
 
+> **Correction, 2026-09-23: the `PROMPT_VERSION` row is wrong.** A5 (v10 → v11)
+> and B2 Phase 1 (v11 → v12) both moved it, and both are options on this table.
+> CLAUDE.md's rule is that prompts means *"everything the model ends up reading,
+> not only wording: a change to how much of the schema block survives moves it
+> too"* — and a ranking change moves exactly that. The paragraph's **conclusion**
+> survives, for a better reason than the one given: a retrieval change is inert
+> on a connection with no comments and no semantic layer, so arms that measured
+> the prompt stay comparable to each other. That is comparability across
+> *configurations*, not across versions.
+> [plans/hybrid-retrieval.md §6](../plans/hybrid-retrieval.md) is the argument.
+
 **Note the two all-`no` rows.** Nothing in this document changes the prompt
 *format* or moves `PROMPT_VERSION`. Retrieval decides *which tables* go in the
 block; the block's shape is unchanged. That is a real advantage over Theme A's

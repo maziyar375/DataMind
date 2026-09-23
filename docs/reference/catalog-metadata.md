@@ -550,6 +550,23 @@ content reaching a provider and the doc currently enumerates the old set.
 The question the whole design turns on: **once a semantic layer exists, should
 the raw DDL comments still be sent?**
 
+> **Since 2026-09-23, a comment also decides *which tables* are sent** — mvp2
+> **B2**, `docs/plans/hybrid-retrieval.md` Phase 1. On `retrieve`'s
+> `RANKED_MATCH` branch a table's comment and its columns' comments are scored
+> against the question by `app/pipeline/relevance.py`, and a table carrying
+> enough of the question's weight is ranked above tables with nothing to say.
+> *"Which tables hold refunds?"* reaches `order_items` because a DBA wrote
+> `negative quantities are refunds` in the DDL — the largest body of schema
+> prose most real databases have, and until then unread by retrieval.
+>
+> **`include_db_comments` governs that too.** The flag has always decided
+> whether comments are *rendered*; it now also decides whether they are
+> **read**. Ranking sends nothing — but a comment that chooses which tables the
+> provider sees has reached the provider's answer by another road, and a rule
+> with an exception in it is a rule somebody gets wrong in six months. Comments
+> off, comments unread. §4.3's decision table is unchanged: it is about
+> rendering, and nothing below this line moved.
+
 ### 4.1 The answer: the layer wins per entity, not per connection
 
 The instinct in the request — *"if we have a semantic layer we shouldn't pass

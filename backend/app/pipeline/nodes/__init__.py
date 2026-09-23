@@ -10,7 +10,7 @@ import asyncio
 import re
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from app.core.clock import utcnow
 from app.core.errors import ConnectorError, LLMError
@@ -34,6 +34,7 @@ from app.pipeline.metadata import (
     census,
     match_by_terms,
     match_tables,
+    qualified,
     select_tables,
     table_chars,
 )
@@ -57,6 +58,7 @@ from app.pipeline.prompts import (
     SCOPE_SYSTEM,
     SCOPE_SYSTEM_WITH_CURRENT,
 )
+from app.pipeline.relevance import PROSE_FLOOR, prose_seeds, rank_tables
 from app.pipeline.sections import WHOLE_DATABASE, SectionSpec
 from app.pipeline.state import (
     ClarificationRequest,
@@ -662,7 +664,7 @@ def _expand_by_fk(
 
 
 def _key(table: dict[str, Any]) -> str:
-    return f"{table['schema']}.{table['name']}"
+    return qualified(table)
 
 
 def fit_to_budget(
@@ -674,6 +676,7 @@ def fit_to_budget(
     relationships: list[dict[str, Any]],
     budget_chars: int,
     by_term: list[dict[str, Any]] | None = None,
+    scores: dict[str, float] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Rank the candidates, take them until the budget is spent, name the rest.
 
@@ -708,16 +711,27 @@ def fit_to_budget(
     5. tables one **FK hop** from any of those, a bridge that joins two of
        them before a neighbour of one — the join path a question implies but
        never spells out, which is the whole reason the hop exists;
-    6. anything else (the whole candidate list, when nothing was named).
+    6. tables whose **prose** is about the question — a DDL comment or a
+       semantic-layer description carrying at least `PROSE_FLOOR` of the
+       question's own weight (`pipeline.relevance`). Below the FK hop because
+       the hop is structural: dropping a bridge does not make the answer worse,
+       it makes the query impossible. Above the rest because "this table is
+       described in the words you used" beats "this table is big". **Always
+       empty with no DDL comments and no semantic layer**, which is what keeps
+       a bare connection ranking exactly as it did before this tier existed;
+    7. anything else (the whole candidate list, when nothing was named).
 
-    Ties go to the larger table (`approx_row_count`), then to snapshot order.
-    Size because the unasked half of an unnamed question is "where is the
-    data?", the same reason `select_tables` gives.
+    Ties go to the higher prose score, then to the larger table
+    (`approx_row_count`), then to snapshot order. Score **before** size demotes
+    size to what it always should have been — the last resort, for when nothing
+    written down has anything to say. With no prose every score is 0.0, that
+    key is constant, and the sort is the one this function has always done.
     """
     named_keys = {_key(t) for t in named}
     term_keys = {_key(t) for t in by_term or ()}
     carried_keys = {_key(t) for t in carried}
     column_keys = {_key(t) for t in by_column}
+    rank = scores or {}
     seeds = named_keys | term_keys | carried_keys | column_keys
 
     # How many distinct seed tables each candidate joins to directly.
@@ -739,7 +753,9 @@ def fit_to_budget(
             return 2
         if key in column_keys:
             return 3
-        return 4 if key in touches else 5
+        if key in touches:
+            return 4
+        return 5 if rank.get(key, 0.0) >= PROSE_FLOOR else 6
 
     order = {_key(t): i for i, t in enumerate(candidates)}
     ranked = sorted(
@@ -747,6 +763,7 @@ def fit_to_budget(
         key=lambda t: (
             tier(t),
             -len(touches.get(_key(t), ())),
+            -rank.get(_key(t), 0.0),
             -(t.get("approx_row_count") or 0),
             order[_key(t)],
         ),
@@ -819,8 +836,20 @@ def retrieve_budget_chars() -> int:
     return _RETRIEVE_BUDGET_CHARS
 
 
-def _term_index(semantic: dict[str, Any] | None) -> dict[str, frozenset[str]]:
-    """The layer's business vocabulary, keyed by table, or empty without one.
+class _LayerIndex(NamedTuple):
+    """What retrieval reads a semantic layer for, in its two registers."""
+
+    #: Table to the business phrases that **name** it — `match_by_terms` (A5).
+    terms: dict[str, frozenset[str]]
+    #: Table to the sentences written **about** it — `rank_tables` (B2).
+    prose: dict[str, tuple[str, ...]]
+
+
+_NO_LAYER = _LayerIndex(terms={}, prose={})
+
+
+def _layer_index(semantic: dict[str, Any] | None) -> _LayerIndex:
+    """The layer as retrieval reads it, or two empty maps without one.
 
     Import is local for the reason `RetrievedContext._semantic` gives: a
     connection with no layer must not pay for `app.semantic` on every run. A
@@ -829,6 +858,11 @@ def _term_index(semantic: dict[str, Any] | None) -> dict[str, frozenset[str]]:
     existed, which is the same fail-open the renderer takes on the same input,
     and a malformed layer is not a reason to fail a question.
 
+    **Both registers come out of one parse.** The names steer `match_by_terms`
+    and the sentences feed `rank_tables`; reading them in two functions would
+    parse the same document twice per run, and the parse is already the cost
+    this docstring used to apologise for.
+
     Rebuilt per run rather than cached: the layer is edited from the product,
     and a cache keyed by connection would serve yesterday's vocabulary until
     something evicted it. The cost is parsing a document that the same run is
@@ -836,14 +870,14 @@ def _term_index(semantic: dict[str, Any] | None) -> dict[str, frozenset[str]]:
     otherwise, and `_semantic` is where to fix it if one does.
     """
     if not semantic:
-        return {}
-    from app.semantic import SemanticDocument, table_terms
+        return _NO_LAYER
+    from app.semantic import SemanticDocument, table_prose, table_terms
 
     try:
         doc = SemanticDocument.model_validate(semantic)
     except ValueError:
-        return {}
-    return table_terms(doc)
+        return _NO_LAYER
+    return _LayerIndex(terms=table_terms(doc), prose=table_prose(doc))
 
 
 async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
@@ -860,9 +894,10 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
       send, selected by `metadata.select_tables`.
     * **RANKED_MATCH** — anything else over budget: what the question names
       (by table, then by column), what the conversation's SQL already queried,
-      one FK hop out from those, ranked and cut by `fit_to_budget` — within
-      the section when there is one. What the cut left out is counted in the
-      step detail, so a thin answer on a wide schema says why.
+      what the schema's own prose is *about*, one FK hop out from those,
+      ranked and cut by `fit_to_budget` — within the section when there is
+      one. What the cut left out is counted in the step detail, so a thin
+      answer on a wide schema says why.
 
     A section narrows what the model is **shown**, never what it may query:
     the guard's allowlist is built from the whole snapshot and does not know
@@ -870,10 +905,12 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
     """
     tables = deps.snapshot.get("tables", [])
     relationships = deps.snapshot.get("relationships", [])
-    # Only the RANKED_MATCH branch can consult the layer's vocabulary; the
-    # others send everything or spend the budget by their own rule. Declared
-    # here so the step detail below can say so without knowing which ran.
+    # Only the RANKED_MATCH branch can consult the layer's vocabulary or the
+    # schema's prose; the others send everything or spend the budget by their
+    # own rule. Declared here so the step detail below can say so without
+    # knowing which ran.
     by_term: list[dict[str, Any]] = []
+    by_prose: list[dict[str, Any]] = []
 
     # The section the question is about, when `scope` chose one: its members
     # and the tables that join two of them. No scope is no narrowing — an
@@ -919,18 +956,39 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
         # large to send whole falls back to.
         named = match_tables(state.question, scoped)
         by_column = match_tables(state.question, scoped, columns=True)
+        layer = _layer_index(deps.semantic)
         # What the connection's own vocabulary names. "Churn" reaches
         # `subscription_events` because a curator wrote that down once, on the
         # one branch where retrieval has to choose at all — the other three
         # either send everything or spend the budget explicitly, so a business
         # word cannot change what they select. Empty without a layer.
-        by_term = match_by_terms(state.question, scoped, _term_index(deps.semantic))
+        by_term = match_by_terms(state.question, scoped, layer.terms)
+        # What the schema's *sentences* are about — the DBA's `COMMENT ON` and
+        # the curator's descriptions, weighed against the question rather than
+        # matched against it. Scored over `scoped` and before the FK hop, so a
+        # table's weight does not depend on which seeds happened to pull their
+        # neighbours in. Empty with no comments and no layer, and a connection
+        # that refuses to send its comments does not have them read (D4).
+        scores = rank_tables(
+            state.question,
+            scoped,
+            layer=layer.prose,
+            include_comments=deps.include_db_comments,
+        )
         # A follow-up names nothing: "and by month?" matches no table. The
         # tables the previous statement ran against are the subject it
         # inherits, so they seed retrieval alongside anything this question
         # named itself.
         carried = _tables_from_history(deps.history, scoped)
-        seed_keys = {_key(t) for t in [*named, *by_term, *carried, *by_column]}
+        # A table found only in prose is still a subject, so its bridges are
+        # still needed — it seeds the hop like every other signal, capped
+        # because prose is the weakest of them. Counted as what prose *added*:
+        # a table the question already named does not need a description to be
+        # chosen, and a trail that counted it twice would say the layer is
+        # doing more than it is.
+        spoken = {_key(t) for t in [*named, *by_term, *carried, *by_column]}
+        by_prose = [t for t in prose_seeds(scoped, scores) if _key(t) not in spoken]
+        seed_keys = spoken | {_key(t) for t in by_prose}
         seed = [t for t in scoped if _key(t) in seed_keys]
         # A question names its entities ("orders", "products") but almost never
         # the junction/bridge tables that join them ("order_items",
@@ -945,6 +1003,7 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
             carried=carried,
             by_column=by_column,
             by_term=by_term,
+            scores=scores,
             relationships=relationships,
             budget_chars=_RETRIEVE_BUDGET_CHARS,
         )
@@ -979,6 +1038,8 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
     detail = f"{len(selected)} tables via {strategy}"
     if by_term:
         detail += f" · {len(by_term)} by business term"
+    if by_prose:
+        detail += f" · {len(by_prose)} by description"
     if dropped:
         detail += f" · {len(dropped)} not shown"
     return NodeResult(

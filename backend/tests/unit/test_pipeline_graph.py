@@ -160,14 +160,15 @@ def test_the_prompt_version_moved_for_few_shot_and_then_for_the_bound_layer() ->
     whether the connection's taught questions were in the prompt.
 
     v10 changed no wording: the layer is bound on load, and the benchmark reads
-    it (`docs/plans/semantic-layer-model.md` Phase 0, D11). Neither did v11 —
-    it moved because the layer's vocabulary now indexes retrieval, so which
-    tables reach the block can differ on the `RANKED_MATCH` branch (mvp2 A5).
-    Both are *what the model reads*, which CLAUDE.md's rule counts.
+    it (`docs/plans/semantic-layer-model.md` Phase 0, D11). Neither did v11 or
+    v12 — they moved because the layer's vocabulary (A5) and then the schema's
+    prose (B2) index retrieval, so which tables reach the block can differ on
+    the `RANKED_MATCH` branch. All three are *what the model reads*, which
+    CLAUDE.md's rule counts.
     """
     from app.pipeline import prompts
 
-    assert prompts.PROMPT_VERSION == "v11"
+    assert prompts.PROMPT_VERSION == "v12"
 
 
 def test_an_empty_examples_slot_renders_the_v8_prompt_byte_for_byte() -> None:

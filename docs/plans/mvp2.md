@@ -1257,7 +1257,32 @@ evaluated until this is done.** Record the decision in
 `suites/CHANGELOG.md` — post-change recall numbers are not comparable to
 pre-change ones and someone will try.
 
-### B2. Hybrid retrieval behind `RetrievedContext` · **M**
+### B2. Hybrid retrieval behind `RetrievedContext` · **M** · *Phase 1 built 2026-09-23*
+
+> **Planned as [hybrid-retrieval.md](hybrid-retrieval.md), and its first phase
+> is built.** The schema's **prose** now ranks tables on the `RANKED_MATCH`
+> branch: a table's DDL comment and its columns' comments, plus the semantic
+> layer's descriptions, grains, value meanings and glossary meanings, scored
+> against the question by IDF-weighted overlap (`app/pipeline/relevance.py`).
+> *"Which tables hold refunds?"* reaches `order_items` because a DBA wrote that
+> in the DDL — the largest body of schema prose most real databases have, and
+> until now unread by retrieval. `PROMPT_VERSION` → **v12**.
+>
+> **Three things this item did not anticipate**, and the plan had to decide:
+> **`pgvector` is not being used** — the tree already answered that question
+> for the same kind of index in [learning-loop.md](learning-loop.md) Phase 7
+> (`double precision[]`, cosine in Python, *"the index narrows, the matcher
+> decides"*), and a second, different answer to one question is worse than
+> either; **`include_db_comments` governs ranking as well as rendering**,
+> because a comment that decides which tables are *sent* has reached the
+> provider's answer by another road; and **the sentence half is disjoint from
+> A5's name half** — nothing is read by both, or a word would be weighted twice.
+>
+> **The remaining phases are the embeddings**: vectors over the same text,
+> blended `max(lexical, cosine)`, capability-gated on a pinned embedding model,
+> with every failure path falling back to the lexical score. Plus the arm all
+> of it owes — see below.
+
 Embeddings over table names + column names + catalog comments + semantic-layer
 business names and descriptions, blended with the existing exact-match and FK
 expansion. `pgvector` in the app database adds no deployment unit; the
@@ -1267,6 +1292,15 @@ produced its context."
 *Measure it:* B1 first, then this, and report the recall delta. The last time
 retrieval changed (FK-neighbour expansion) it lifted recall 70→86% with **flat**
 execution accuracy — a result worth remembering before over-claiming.
+
+> **And it has not been measured.** B1 is done (row 3, recall 80.2 % / 62.0 %
+> at `--retrieve-budget 8000`), but the arm that would show whether Phase 1
+> moved it is unrun. It is **four cells of one grid** with the arm A5 owes —
+> neither / `--semantic on` / `--comments` / both, at budget 8,000 on one model
+> — because the two features move the same branch and the same ranking
+> function. The flags all exist. Until it is run, *no claim that either
+> improved retrieval is falsifiable*: the rule B1 was written under, applied to
+> the two features B1 unblocked. [reference/eval.md §6](../reference/eval.md).
 
 ### B3. Entity/value dictionaries · **M**
 *From: Genie entity matching + value dictionaries.*

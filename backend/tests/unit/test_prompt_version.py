@@ -205,6 +205,6 @@ def test_the_benchmark_worker_records_the_same_constant_at_v10() -> None:
     from app.workers import benchmark
 
     assert benchmark.PROMPT_VERSION is PROMPT_VERSION
-    # v11 is current; the claim this test makes is about v10 being the *first*
+    # v12 is current; the claim this test makes is about v10 being the *first*
     # such version, which a later constant does not weaken.
-    assert PROMPT_VERSION == "v11"
+    assert PROMPT_VERSION == "v12"

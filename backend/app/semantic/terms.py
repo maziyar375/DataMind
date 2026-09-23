@@ -158,3 +158,88 @@ def table_terms(doc: SemanticDocument) -> dict[str, frozenset[str]]:
         for table, phrases in by_table.items()
         if (kept := phrases - too_wide)
     }
+
+
+def table_prose(doc: SemanticDocument) -> dict[str, tuple[str, ...]]:
+    """What the layer *says* about each table — the other register of the same read.
+
+    `table_terms` above collects the layer's **names**; this collects its
+    **sentences**. The split is the whole design: a name is matched by a rule
+    that demands the question repeat it (`metadata._spoken`), and a sentence is
+    scored by how much of the question's weight it carries
+    (`pipeline.relevance`). Matching a description the way a label is matched
+    would put a table in retrieval's business tier because its description
+    happens to contain the word "order", which is how a scorer becomes a
+    substring search again.
+
+    Keyed like `table_terms` — `entity.table` lower-cased, "schema.name" as the
+    snapshot spells it — and returned in a fixed order so two runs over one
+    document produce one bag.
+
+    **Descriptions only. No names, no labels, no synonyms, no metric names, no
+    glossary terms** — every one of those belongs to a tier that already reads
+    it, and a word scored twice is a word weighted twice for no reason anybody
+    could defend. This is the same disjointness `table_terms` keeps against
+    `match_tables`, pointed the other way.
+
+    What is here, per entity: `description`, `grain`, each valid column's
+    `description` and the *meanings* of its `value_meanings` (the keys are the
+    stored codes — `M`, `1`, `CA` — and matching a question against those is
+    matching it against data), each valid metric's `description`, and the
+    `meaning` of every glossary term that resolves to this table or to a metric
+    it owns. `vocabulary_terms` deliberately drops those meanings because it is
+    building vocabulary; this is deliberately built from them, because a
+    sentence explaining what churn is, is exactly what a question about churn
+    should find.
+
+    **`business_context` and `default_exclusions` are absent.** They describe
+    the whole connection, so they say nothing about which table to choose —
+    and a phrase every table carries weighs nothing under the IDF the caller
+    computes anyway. Kept out rather than left to cancel, because an index that
+    contains what it must not use is an index somebody will use.
+
+    Binding is respected exactly as the two functions above respect it: an
+    excluded or invalid entity contributes nothing, nor does an invalid column
+    or metric. A sentence the renderer keeps out of the prompt must not choose
+    the table either.
+    """
+    by_table: dict[str, list[str]] = {}
+
+    def add(table: str, *sentences: str) -> None:
+        if not table:
+            return
+        bucket = by_table.setdefault(table.lower(), [])
+        for sentence in sentences:
+            cleaned = " ".join(str(sentence).split())
+            if cleaned:
+                bucket.append(cleaned)
+
+    # Where a metric name points, so a glossary term that maps to one lands on
+    # the table it is measured over — `table_terms`' rule, so the two halves of
+    # one glossary entry never land on different tables.
+    metric_home: dict[str, str] = {}
+
+    for entity in doc.entities:
+        if entity.exclude or not entity.valid:
+            continue
+        add(entity.table, entity.description, entity.grain)
+        for column in entity.columns:
+            if column.valid:
+                add(entity.table, column.description, *column.value_meanings.values())
+        for metric in entity.metrics:
+            if not metric.valid:
+                continue
+            add(entity.table, metric.description)
+            metric_home.setdefault(metric.name.lower(), entity.table.lower())
+
+    # Entities with nothing written about them are present as empty buckets
+    # above; a glossary term may still be the only prose one of them has.
+    live = {e.table.lower() for e in doc.entities if not e.exclude and e.valid}
+    for term in doc.glossary:
+        for target in term.maps_to:
+            key = str(target).lower()
+            home = key if key in live else metric_home.get(key)
+            if home:
+                add(home, term.meaning)
+
+    return {table: tuple(sentences) for table, sentences in by_table.items() if sentences}

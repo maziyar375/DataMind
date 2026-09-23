@@ -24,7 +24,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.pipeline.metadata import match_by_terms, match_tables
-from app.pipeline.nodes import _term_index, fit_to_budget
+from app.pipeline.nodes import _layer_index, fit_to_budget
 from app.semantic import (
     TERM_MAX_TABLES,
     GlossaryTerm,
@@ -236,18 +236,18 @@ def test_a_layer_naming_a_table_the_snapshot_lost_selects_nothing() -> None:
 
 def test_no_layer_is_an_empty_index_and_no_work() -> None:
     assert match_by_terms("churn", SNAPSHOT, {}) == []
-    assert _term_index(None) == {}
-    assert _term_index({}) == {}
+    assert _layer_index(None).terms == {}
+    assert _layer_index({}).terms == {}
 
 
 def test_a_malformed_layer_degrades_rather_than_raising() -> None:
     """A document that will not parse is not a reason to fail a question — the
     renderer takes the same fail-open on the same input."""
-    assert _term_index({"entities": "not a list"}) == {}
+    assert _layer_index({"entities": "not a list"}).terms == {}
 
 
 def test_the_index_is_built_from_a_plain_dict_as_deps_carries_it() -> None:
-    index = _term_index(LAYER.model_dump(mode="json"))
+    index = _layer_index(LAYER.model_dump(mode="json")).terms
     assert "churn" in index["public.subscription_events"]
 
 
@@ -449,6 +449,6 @@ DISCLOSURE = "SAMPLE"
 
 
 def test_the_node_helper_is_not_accidentally_async() -> None:
-    """`_term_index` parses a document; it must not become something that has
+    """`_layer_index` parses a document; it must not become something that has
     to be awaited inside the node's hot path without anyone noticing."""
-    assert not asyncio.iscoroutinefunction(_term_index)
+    assert not asyncio.iscoroutinefunction(_layer_index)

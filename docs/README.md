@@ -1,6 +1,6 @@
 # Documentation
 
-Thirty-seven documents, in five groups. **Which group a document is in tells
+Thirty-eight documents, in five groups. **Which group a document is in tells
 you how to read it**, and that is the whole point of the arrangement:
 
 | Folder | What it is | How to read it |
@@ -98,6 +98,7 @@ against, and carrying a dated record of what changed while it was. Read
 | [semantic-layer-model.md](plans/semantic-layer-model.md) | **Built**, 61/63 items. The semantic layer as a model rather than a blob: one binder for every reader, numbered versions with typed changes and a revision check, draft and publish, metric attribution, export and import, and upkeep — all six phases landed by 2026-09-17. Two Phase 3 measurements wait on a provider key and real runs. §14 is the ledger |
 | [token-accounting.md](plans/token-accounting.md) | **Built** — all six phases, migration `0023`. Usage travels by sink; tokens and cost are counted rather than assumed, per node, per operation, per user |
 | [langgraph-migration.md](plans/langgraph-migration.md) | **Live.** Phases 0–3 and 6 done; Phases 4 (checkpointing) and 5 (durable clarification) argued and **declined**, each with the measurement that decided it. Read it before moving anything else onto LangGraph |
+| [hybrid-retrieval.md](plans/hybrid-retrieval.md) | **Live — Phase 1 of 3 done.** mvp2 **B2**, the last unbuilt Tier 1 row. Phase 1 (2026-09-23) made the schema's *prose* rank tables — DDL comments and the semantic layer's descriptions, IDF-weighted against the question — on the one branch that has to choose; `PROMPT_VERSION` → v12. Phases 2–3 are the vectors over the same text and what the index says about itself. Two divergences from mvp2 §B2 are argued in §0.2: **no `pgvector`**, and `include_db_comments` governing ranking as well as rendering. §11 is the ledger, and **the arm it owes is unrun** |
 | [deep-analysis-mode.md](plans/deep-analysis-mode.md) | **Phases 0–3 done, 31/85 — and the gate did not open.** A second, opt-in answer mode in chat: a declared plan, several guarded queries, deterministic contribution arithmetic, and a report whose every claim resolves to its SQL. **Phase 0 was the gate** — it ran on 2026-09-22 and returned **0.42**, §0.3's middle band, so Phases 1–3 (cache tokens, `app/analysis/`, claim citations) shipped and **Phases 4–9 are blocked** until [mvp2](plans/mvp2.md) A1/A5/B2 move the number. §12 is the ledger. Argued in [research/deep-analysis-mode.md](research/deep-analysis-mode.md) |
 
 ## `research/` — arguments, not descriptions
@@ -111,8 +112,8 @@ reference doc is what the code does.**
 | [learning-loop.md](research/learning-loop.md) | [plans/learning-loop.md](plans/learning-loop.md) — read this for *why*, the plan for *what* |
 | [access-control.md](research/access-control.md) | [plans/user-management-and-access-control.md](plans/user-management-and-access-control.md). Reads Lakekeeper's Keycloak-plus-OpenFGA design down to its `.fga` files, calibrated against Metabase, Superset and Grafana. Its §0 and §5.2 correct two things this repo believed about its own authorization |
 | [llm-observability.md](research/llm-observability.md) | [plans/token-accounting.md](plans/token-accounting.md). Four options for LLM observability, and why fixing the usage-reporting gap comes first |
-| [retrieval-at-scale.md](research/retrieval-at-scale.md) | Not yet a plan — mvp2 Theme B |
-| [semantic-layer.md](research/semantic-layer.md) | Not yet a plan — mvp2 §1.3 and Theme B. Its §5 carries three corrections to that section |
+| [retrieval-at-scale.md](research/retrieval-at-scale.md) | [plans/retrieval-sections.md](plans/retrieval-sections.md) (its §O4+§O5, *shrink the haystack*) and [plans/hybrid-retrieval.md](plans/hybrid-retrieval.md) (its §O7+§O8, *search it better*). One row of its §4.10 matrix is **wrong** and the second plan's §6 says why: a ranking change does move `PROMPT_VERSION`, because what the model reads includes which tables survive the cut |
+| [semantic-layer.md](research/semantic-layer.md) | [plans/semantic-layer-model.md](plans/semantic-layer-model.md), and mvp2 §1.3 and Theme B. Its §5 carries three corrections to that section |
 | [data-surface.md](research/data-surface.md) | Not yet a plan — mvp2 Theme E |
 | [competitive-matrix.md](research/competitive-matrix.md) | Not a plan — a scoreboard. mvp2 §2.6's matrix re-run on 2026-09-17 against Power BI, Wren AI, Genie, **Superset and Metabase**, with the DataMind column updated to the tree. Its §3 lists the nine rows that moved since August; its §4 argues that dashboard filters unblock more of the gap than anything else |
 | [deep-analysis-mode.md](research/deep-analysis-mode.md) | [plans/deep-analysis-mode.md](plans/deep-analysis-mode.md) — read this for *why*, the plan for *what*. mvp2 Theme F (**F3** bounded multi-step analysis, **F4** root-cause/key drivers), both still Tier 3. Reads Genie Agent mode, Fabric data agents, Wren, Metabase and Superset for the *second answer mode*, and the decomposition / TAG / deep-research-agent literature for the technique. Its §4 is an inventory of what this product already has for it; its §6.1 is the one measurement to take before building any of it |

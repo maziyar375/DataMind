@@ -52,7 +52,13 @@ MAX_CENSUS_NAMES = 200
 _WORD = re.compile(r"[a-z0-9_]+")
 
 
-def _tokens(question: str) -> set[str]:
+def question_tokens(question: str) -> set[str]:
+    """Every word a question is made of, lower-cased.
+
+    Public because `pipeline.relevance` scores against the same tokens this
+    module matches against, and two tokenisers would let a word name a table
+    on one tier and not on another.
+    """
     return set(_WORD.findall(question.lower()))
 
 
@@ -91,7 +97,7 @@ def match_tables(
     describe each of them.
     """
     asked = question.lower()
-    tokens = _tokens(question)
+    tokens = question_tokens(question)
 
     def spoken(forms: set[str]) -> set[str]:
         return _spoken(forms, asked, tokens)
@@ -150,11 +156,11 @@ def match_by_terms(
     if not index:
         return []
     asked = question.lower()
-    tokens = _tokens(question)
+    tokens = question_tokens(question)
     return [
         table
         for table in tables
-        if _spoken(index.get(_qualified(table).lower(), frozenset()), asked, tokens)
+        if _spoken(index.get(qualified(table).lower(), frozenset()), asked, tokens)
     ]
 
 
@@ -168,7 +174,8 @@ def _spoken(forms: set[str] | frozenset[str], asked: str, tokens: set[str]) -> s
     return {f for f in forms if (f in tokens) or (" " in f and f in asked)}
 
 
-def _qualified(table: dict[str, Any]) -> str:
+def qualified(table: dict[str, Any]) -> str:
+    """A snapshot table's key, "schema.name" — the one spelling of it."""
     return f"{table.get('schema', '')}.{table.get('name', '')}"
 
 
@@ -200,9 +207,9 @@ def select_tables(
     silently dropped — `census` names what did not fit.
     """
     named = match_tables(question, tables)
-    named_keys = {_qualified(t) for t in named}
+    named_keys = {qualified(t) for t in named}
     rest = sorted(
-        (t for t in tables if _qualified(t) not in named_keys),
+        (t for t in tables if qualified(t) not in named_keys),
         key=lambda t: (-(t.get("approx_row_count") or 0), str(t.get("name", ""))),
     )
 
@@ -214,10 +221,10 @@ def select_tables(
         # nothing is worse than a block describing one thing.
         if picked and spent + cost > budget_chars:
             break
-        picked.add(_qualified(table))
+        picked.add(qualified(table))
         spent += cost
 
-    return [t for t in tables if _qualified(t) in picked]
+    return [t for t in tables if qualified(t) in picked]
 
 
 def census(
@@ -244,14 +251,14 @@ def census(
     plural = "" if len(tables) == 1 else "s"
     head = f"This connection has {len(tables)} table{plural}{where}."
 
-    shown = {_qualified(t) for t in described}
-    missing = [t for t in tables if _qualified(t) not in shown]
+    shown = {qualified(t) for t in described}
+    missing = [t for t in tables if qualified(t) not in shown]
     if not missing:
         return f"{head} Every one of them is described above."
 
     listed = missing[:MAX_CENSUS_NAMES]
     names = ", ".join(
-        str(t.get("name", "")) if where else _qualified(t) for t in listed
+        str(t.get("name", "")) if where else qualified(t) for t in listed
     )
     if len(listed) < len(missing):
         names += f", and {len(missing) - len(listed)} more"

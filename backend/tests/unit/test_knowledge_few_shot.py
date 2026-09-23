@@ -116,11 +116,12 @@ def _deps(matcher: Any = None, *, examples: bool = True, **kwargs: Any) -> NodeD
 
 # ── the version, and what it bought ──────────────────────────────────────
 def test_the_prompt_version_is_at_least_v9() -> None:
-    # v9 was this phase; v10 moved it for the bound semantic layer and v11 for
-    # the layer's vocabulary reaching *retrieval* (mvp2 A5). Neither changed a
-    # word of wording, so everything below still describes the prompt as it
-    # ships — and neither touches the `{examples}` slot this file is about.
-    assert PROMPT_VERSION == "v11"
+    # v9 was this phase; v10 moved it for the bound semantic layer, v11 for the
+    # layer's vocabulary reaching *retrieval* (mvp2 A5), and v12 for the
+    # schema's prose ranking tables there too (mvp2 B2). None changed a word of
+    # wording, so everything below still describes the prompt as it ships — and
+    # none touches the `{examples}` slot this file is about.
+    assert PROMPT_VERSION == "v12"
 
 
 def test_the_empty_slot_is_byte_identical_to_v8() -> None:

@@ -52,6 +52,23 @@ than a table not chosen; and **a connection without a layer retrieves exactly as
 it did before**, which is what let `PROMPT_VERSION` move to v11 without
 invalidating a measurement. See [pipeline-chat.md](pipeline-chat.md) §4 step 4.
 
+**Since 2026-09-23 (mvp2 B2) it is read in that second direction twice**, in two
+registers that share no word. `table_terms` above is the layer's **names**, and
+they are *matched*: the question has to repeat one. `app.semantic.table_prose`
+is its **sentences** — `description`, `grain`, column descriptions, the
+*meanings* of `value_meanings`, metric descriptions, and the `meaning` of a
+glossary term (which `vocabulary_terms` drops on purpose, because that function
+is building vocabulary and this one is not) — and they are *weighed*:
+`pipeline.relevance` scores them against the question by IDF-weighted overlap,
+alongside the DDL comments, and a table carrying enough of the question's weight
+is promoted above the tables that merely happen to be large. **Nothing is in
+both bags.** A name matched the way a sentence is weighed would put a table in
+the business tier because its description contains the word "order"; a sentence
+matched the way a name is would be a substring search again. The same two
+properties hold — an excluded or invalid entry contributes nothing, and a
+connection without a layer (and without DDL comments) ranks exactly as it did at
+v11.
+
 - **Generate** — `POST /connections/{id}/semantic/generate` with an
   `llm_config_id` queues a `semantic_jobs` row and returns **202**; the SPA
   polls it. `app/semantic/generator.py` runs **one model call per table**, four

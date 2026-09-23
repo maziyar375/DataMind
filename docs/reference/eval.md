@@ -478,6 +478,29 @@ on`**, against row 3, which is the same budget with the layer off. Until that
 run exists, *no claim that A5 improved retrieval is falsifiable* — the rule B1
 was written under, applied to the feature B1 unblocked.
 
+**The arm mvp2 B2 owes is the same arm, one notch wider.** On 2026-09-23 the
+schema's *prose* — DDL comments and the layer's descriptions — started ranking
+tables on the same branch (`PROMPT_VERSION` v12,
+[plans/hybrid-retrieval.md](../plans/hybrid-retrieval.md) Phase 1). Everything
+above applies unchanged: rows 1 and 2 cannot see it, the shipped budget cannot
+see it, and the arm is a lowered `--retrieve-budget` with the prose present
+against the same budget without it. **The flags for it already exist** — B2
+reads two bodies of prose and the harness has an arm for each: `--comments`
+loads the fixture's 66-statement `COMMENT ON` overlay *and* sets
+`include_db_comments` on the connection (which since v12 is also what decides
+whether comments are **read** for ranking), and `--semantic on` loads the
+hand-written layer. So the run is
+`--suite sales_v1 --retrieve-budget 8000 --comments`, against row 3, which is
+the same budget with neither.
+
+**A5 and B2 should be measured as one grid, not two pairs.** They move the same
+branch, the same node and the same ranking function; two separate paid A/Bs
+would spend twice to answer one question badly, because the second would have to
+re-measure the first's arm to stay comparable. The honest design is **four cells
+at budget 8,000** — neither, `--semantic on`, `--comments`, both — on **one
+model**, read as within-run deltas only. Four cells at roughly the cost of the
+2026-09-22 three-arm run, and it retires both of the owed arms above.
+
 **Equal headlines are not equal arms.** Rows 1 and 2 both read 42.0 %, and share
 only fourteen of their twenty-one correct answers: **fourteen questions changed
 verdict, seven in each direction.** At n=50 the standard error is about 7 points, so this
