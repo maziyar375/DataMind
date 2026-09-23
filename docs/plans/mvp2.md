@@ -1165,7 +1165,48 @@ A1 pair automatically**. The asker is notified.
 signal the system can get, sourced from exactly the people who know the answer.
 It also gives the connection owner a *reason* to open the semantic-layer editor.
 
-### A5. Business-term and synonym index, used at retrieval · **S**
+### A5. Business-term and synonym index, used at retrieval · **S** · built 2026-09-22
+
+> **Built.** `app.semantic.table_terms` builds the index off the typed
+> document; `metadata.match_by_terms` matches it with the same token/phrase rule
+> `match_tables` uses; `retrieve` consults it on the `RANKED_MATCH` branch and
+> `fit_to_budget` ranks a term hit **second**, above `carried` and below a name
+> the user typed. `PROMPT_VERSION` moved **v10 → v11**, because which tables
+> reach the schema block can now differ — CLAUDE.md's rule counts that as a
+> prompt change. `tests/unit/test_retrieval_terms.py`, 28 tests.
+>
+> **Three decisions the item did not anticipate.** Physical spellings are
+> **excluded** from the index — `match_tables` already owns them, and repeating
+> them would let the layer re-assert a physical hit on the business tier. A
+> phrase naming more than `TERM_MAX_TABLES = 4` tables is **dropped**, because
+> "name" and "status" are column labels every table carries and promoting five
+> tables narrows nothing. And an excluded or invalid layer entry contributes
+> **nothing**, on the rule `vocabulary_terms` already followed: a table chosen
+> by a word the model was never shown is worse than a table not chosen.
+>
+> **The measurement it owes has not been taken.** Only `RANKED_MATCH` can see
+> this, and the eval's default budget never reaches that branch — so the arm is
+> `--retrieve-budget 8000 --semantic on` against the same budget with the layer
+> off. The layer-off half exists (`dc2ea4fd`, recall 80.2 % / full-hit 62.0 %,
+> DeepSeek V4 Pro); the layer-on half is unrun, and until it is, **no claim that
+> this improved retrieval is falsifiable** — the same rule B1 was written under.
+>
+> **And it changes nothing on either database in this install**, which is the
+> honest scope. `RANKED_MATCH` is reached only when the snapshot exceeds
+> `_RETRIEVE_BUDGET_CHARS` — about **80 tables** at the `sales` fixture's
+> ~630 chars each. Aurora Coffee has 13 and `sales` has 42, so both take
+> `FULL_SNAPSHOT` and every table is sent regardless. This is built for the
+> warehouse that B2 is also aimed at, and the fastest way to see it do anything
+> is the lowered-budget arm above, not the product.
+>
+> Checked against the real 47 kB Aurora layer rather than only a fixture:
+> 13 entities, 34 metrics and 7 glossary terms produce **290 phrases over 13
+> tables** — "take rate" → `channels`, "average ticket" →
+> `daily_store_metrics`, "ad spend" → `marketing_campaigns`. The width cut
+> removed **nothing** there (the most widely-shared phrase, "revenue", names
+> three tables against a limit of four), which is the intended shape: it is a
+> guard against a pathological document, not a routine pruner.
+
 *From: Genie column synonyms; Wren `instructions.md`.*
 
 The semantic layer already holds a glossary and business names. Today they
@@ -1199,7 +1240,17 @@ measurement and it does not exist yet; the runner still needs a way to pass
 ## Theme B — Fix retrieval
 *Serves §1.2. Theme A's pairs and synonyms are useless if the right tables never reach the prompt.*
 
-### B1. Un-blind the eval · **S** · ⚠️ blocking
+### B1. Un-blind the eval · **S** · ~~⚠️ blocking~~ · done 2026-09-22
+
+> **Done.** Run at `--retrieve-budget 8000` on 2026-09-22: recall **mean
+> 80.2 % / full-hit 62.0 %**, `eval_run dc2ea4fd-9164-4524-9b51-bc74d992c8ff`,
+> against 1.0 by construction at the ceiling. Recorded in
+> [reference/eval.md §6](../reference/eval.md) row 3 and in `suites/CHANGELOG.md`.
+> One finding worth carrying into B2: **two questions scored recall 0.000 and
+> answered correctly**, so recall@k on this suite scores whether retrieval
+> picked the tables the *annotator* expected — a retrieval diagnostic, never a
+> ceiling on accuracy.
+
 Run the suite at a lowered `_RETRIEVE_BUDGET_CHARS` (or widen the fixture) so
 recall stops being 1.0 by construction. **Nothing else in this theme can be
 evaluated until this is done.** Record the decision in

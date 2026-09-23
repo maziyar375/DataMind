@@ -16,6 +16,7 @@ against a dict snapshot and a fake gateway.
     covered_keys                      which tables/columns that block speaks about
     render_with_coverage              both at once, from one fit under the cap
     vocabulary_terms                  every name, label and synonym the layer speaks
+    table_terms                       which business phrases name each table, for retrieval
 """
 from __future__ import annotations
 
@@ -69,7 +70,7 @@ from app.semantic.render import (
     render_semantic,
     render_with_coverage,
 )
-from app.semantic.terms import vocabulary_terms
+from app.semantic.terms import TERM_MAX_TABLES, table_terms, vocabulary_terms
 from app.semantic.validate import (
     SchemaIndex,
     build_index,
@@ -134,6 +135,8 @@ __all__ = [
     "merge_documents",
     "render_semantic",
     "render_with_coverage",
+    "table_terms",
+    "TERM_MAX_TABLES",
     "validate_document",
     "vocabulary_terms",
 ]

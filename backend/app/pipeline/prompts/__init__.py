@@ -11,7 +11,44 @@ from app.charts import (
     MIN_HISTOGRAM_ROWS,
 )
 
-PROMPT_VERSION = "v10"
+PROMPT_VERSION = "v11"
+# v11: **no wording changed, and on most runs no byte changed either.** What
+# moved is *which tables reach the schema block* when retrieval has to choose.
+#
+# The semantic layer's labels, synonyms, metric names and glossary now also
+# index **retrieval** (mvp2 A5), not only the generate prompt they have always
+# rendered into. On the `RANKED_MATCH` branch a question naming a table in the
+# connection's own vocabulary — "churn", "net revenue" — promotes that table
+# into the block ahead of the tables it merely joins to. CLAUDE.md's rule is
+# explicit that this moves the version: *"prompts means everything the model
+# ends up reading, not only wording: a change to how much of the schema block
+# survives moves it too."*
+#
+# **Three of the four retrieval branches are byte-identical at v11**, and so is
+# every run on a connection without a semantic layer:
+#
+# * FULL_SNAPSHOT and SECTION_SNAPSHOT send every table already — there is
+#   nothing for a business word to promote.
+# * SCHEMA_QUESTION spends the budget by `select_tables`' own rule, which this
+#   does not touch.
+# * `RANKED_MATCH` with no layer builds an empty index, matches nothing, and
+#   ranks exactly as it did at v10 — the new tier sits between `named` and
+#   `carried` and is empty, so the relative order of the four existing tiers is
+#   unchanged. `tests/unit/test_retrieval_terms.py` asserts that rather than
+#   assuming it.
+#
+# So **no measurement taken at v10 is invalidated**: the three Phase 0 arms of
+# 2026-09-22 ran FULL_SNAPSHOT (rows 1 and 2) or layer-off (row 3), and none of
+# them could have taken this path. The version moves anyway, for the reason it
+# moved at v9: two runs either side of this are otherwise indistinguishable
+# from the outside, and the difference between them is whether a curator's
+# vocabulary could choose a table. Filing both under one label is how a
+# comparison quietly stops meaning anything.
+#
+# **The measurement this owes** is the arm that can actually see it: the suite
+# at a lowered `--retrieve-budget` with the layer **on**, against the same
+# budget with it off. At the shipped ceiling the branch never runs, so a
+# default-budget A/B would correctly report no change and mean nothing.
 # v10: **no wording changed.** Two things changed about what the model reads,
 # and CLAUDE.md's rule is that a change to how much of the schema block survives
 # moves the version too (`docs/plans/semantic-layer-model.md` Phase 0, D11):

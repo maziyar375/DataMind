@@ -192,8 +192,11 @@ backend/app/
   semantic/       what the schema *means*: models.py (the document), validate.py
                   (bind it to a snapshot, parse metric SQL), bind.py (the one
                   binder every reader goes through — stored `valid` flags are
-                  never trusted), terms.py (the words it speaks, for the
-                  backlog), diff.py (the one differ: typed changes keyed by
+                  never trusted), terms.py (the words it speaks — for the
+                  backlog, and `table_terms` for *retrieval*: the layer's
+                  labels, synonyms, metric names and glossary index which
+                  tables a question reaches, mvp2 A5), diff.py (the one
+                  differ: typed changes keyed by
                   entry, which versions store and the UI only words),
                   attribute.py (whether an answer's SQL used a metric's
                   definition — observed after the run, never enforced),
@@ -944,8 +947,8 @@ at commit time and shows up as drift a release later. Full tour:
   the pipeline — the pipeline reads a layer, a report reads a node, and
   neither a layer nor a node knows anything about the thing above it.
 
-  **The three constants as they stand: `PROMPT_VERSION` = `"v10"`,
-  `SEMANTIC_PROMPT_VERSION` = `"s4"`, `REPORT_PROMPT_VERSION` = `"r4"`.** Move
+  **The three constants as they stand: `PROMPT_VERSION` = `"v11"`,
+  `SEMANTIC_PROMPT_VERSION` = `"s4"`, `REPORT_PROMPT_VERSION` = `"r5"`.** Move
   the one whose prompts you changed — and note that "prompts" means everything
   the model ends up reading, not only wording: a change to how much of the
   schema block survives moves it too. Chart, clarify and describe prompt changes

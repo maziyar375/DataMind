@@ -32,6 +32,7 @@ from app.pipeline.disclosure import disclose_history
 from app.pipeline.metadata import (
     answer_metadata,
     census,
+    match_by_terms,
     match_tables,
     select_tables,
     table_chars,
@@ -672,6 +673,7 @@ def fit_to_budget(
     by_column: list[dict[str, Any]],
     relationships: list[dict[str, Any]],
     budget_chars: int,
+    by_term: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Rank the candidates, take them until the budget is spent, name the rest.
 
@@ -690,24 +692,33 @@ def fit_to_budget(
     The ranking, highest first:
 
     1. tables the question **named** by their own name;
-    2. tables **carried** from the SQL behind the turns before it — ahead of
+    2. tables the question named in the **business vocabulary** the connection's
+       semantic layer writes down — a label, a synonym, a metric name or a
+       glossary term (`semantic.table_terms`). Above `carried` because a curator
+       naming this exact table is a statement about *this* question, while a
+       carried table is inherited from the last one; below `named` because a
+       physical name is the user's own word and a label is somebody else's.
+       **Always empty without a semantic layer**, which is what makes a
+       connection that has none rank exactly as it did before this tier existed;
+    3. tables **carried** from the SQL behind the turns before it — ahead of
        column hits, because "and by status?" names a column half the warehouse
        has, and the table it is a follow-up about must not lose its place to
        every other table with a `status`;
-    3. tables the question named **by a column**;
-    4. tables one **FK hop** from any of those, a bridge that joins two of
+    4. tables the question named **by a column**;
+    5. tables one **FK hop** from any of those, a bridge that joins two of
        them before a neighbour of one — the join path a question implies but
        never spells out, which is the whole reason the hop exists;
-    5. anything else (the whole candidate list, when nothing was named).
+    6. anything else (the whole candidate list, when nothing was named).
 
     Ties go to the larger table (`approx_row_count`), then to snapshot order.
     Size because the unasked half of an unnamed question is "where is the
     data?", the same reason `select_tables` gives.
     """
     named_keys = {_key(t) for t in named}
+    term_keys = {_key(t) for t in by_term or ()}
     carried_keys = {_key(t) for t in carried}
     column_keys = {_key(t) for t in by_column}
-    seeds = named_keys | carried_keys | column_keys
+    seeds = named_keys | term_keys | carried_keys | column_keys
 
     # How many distinct seed tables each candidate joins to directly.
     touches: dict[str, set[str]] = {}
@@ -722,11 +733,13 @@ def fit_to_budget(
         key = _key(table)
         if key in named_keys:
             return 0
-        if key in carried_keys:
+        if key in term_keys:
             return 1
-        if key in column_keys:
+        if key in carried_keys:
             return 2
-        return 3 if key in touches else 4
+        if key in column_keys:
+            return 3
+        return 4 if key in touches else 5
 
     order = {_key(t): i for i, t in enumerate(candidates)}
     ranked = sorted(
@@ -806,6 +819,33 @@ def retrieve_budget_chars() -> int:
     return _RETRIEVE_BUDGET_CHARS
 
 
+def _term_index(semantic: dict[str, Any] | None) -> dict[str, frozenset[str]]:
+    """The layer's business vocabulary, keyed by table, or empty without one.
+
+    Import is local for the reason `RetrievedContext._semantic` gives: a
+    connection with no layer must not pay for `app.semantic` on every run. A
+    document that will not parse yields an empty index rather than raising —
+    retrieval degrades to the physical-name matching it did before this
+    existed, which is the same fail-open the renderer takes on the same input,
+    and a malformed layer is not a reason to fail a question.
+
+    Rebuilt per run rather than cached: the layer is edited from the product,
+    and a cache keyed by connection would serve yesterday's vocabulary until
+    something evicted it. The cost is parsing a document that the same run is
+    about to parse again for the prompt — worth paying until a measurement says
+    otherwise, and `_semantic` is where to fix it if one does.
+    """
+    if not semantic:
+        return {}
+    from app.semantic import SemanticDocument, table_terms
+
+    try:
+        doc = SemanticDocument.model_validate(semantic)
+    except ValueError:
+        return {}
+    return table_terms(doc)
+
+
 async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
     """Send the whole snapshot when it fits the budget; otherwise, choose.
 
@@ -830,6 +870,10 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
     """
     tables = deps.snapshot.get("tables", [])
     relationships = deps.snapshot.get("relationships", [])
+    # Only the RANKED_MATCH branch can consult the layer's vocabulary; the
+    # others send everything or spend the budget by their own rule. Declared
+    # here so the step detail below can say so without knowing which ran.
+    by_term: list[dict[str, Any]] = []
 
     # The section the question is about, when `scope` chose one: its members
     # and the tables that join two of them. No scope is no narrowing — an
@@ -875,12 +919,18 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
         # large to send whole falls back to.
         named = match_tables(state.question, scoped)
         by_column = match_tables(state.question, scoped, columns=True)
+        # What the connection's own vocabulary names. "Churn" reaches
+        # `subscription_events` because a curator wrote that down once, on the
+        # one branch where retrieval has to choose at all — the other three
+        # either send everything or spend the budget explicitly, so a business
+        # word cannot change what they select. Empty without a layer.
+        by_term = match_by_terms(state.question, scoped, _term_index(deps.semantic))
         # A follow-up names nothing: "and by month?" matches no table. The
         # tables the previous statement ran against are the subject it
         # inherits, so they seed retrieval alongside anything this question
         # named itself.
         carried = _tables_from_history(deps.history, scoped)
-        seed_keys = {_key(t) for t in [*named, *carried, *by_column]}
+        seed_keys = {_key(t) for t in [*named, *by_term, *carried, *by_column]}
         seed = [t for t in scoped if _key(t) in seed_keys]
         # A question names its entities ("orders", "products") but almost never
         # the junction/bridge tables that join them ("order_items",
@@ -894,6 +944,7 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
             named=named,
             carried=carried,
             by_column=by_column,
+            by_term=by_term,
             relationships=relationships,
             budget_chars=_RETRIEVE_BUDGET_CHARS,
         )
@@ -926,6 +977,8 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
         if deps.semantic else 0
     )
     detail = f"{len(selected)} tables via {strategy}"
+    if by_term:
+        detail += f" · {len(by_term)} by business term"
     if dropped:
         detail += f" · {len(dropped)} not shown"
     return NodeResult(

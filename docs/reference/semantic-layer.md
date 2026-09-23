@@ -38,6 +38,20 @@ with **flat** execution accuracy, and the residual DeepSeek failures were
 interpretation, not retrieval — rolling-vs-calendar windows, long-vs-wide
 shapes. That is the class this addresses.
 
+**It is read in two directions, and the second is newer.** The block it renders
+explains a table the retriever has already chosen; since 2026-09-22 (mvp2
+**A5**) its vocabulary also *does* the choosing. `app.semantic.table_terms`
+turns the document into `table → the phrases that name it` — entity labels and
+synonyms, column labels and synonyms, metric names, and glossary terms resolved
+through `maps_to` — and `retrieve` matches a question against it on the
+`RANKED_MATCH` branch, so "churn" reaches `subscription_events` because someone
+wrote that down once. Two properties are load-bearing there and are the same
+ones binding already guaranteed: **an excluded or invalid entry contributes
+nothing**, because a table chosen by a word the model was never shown is worse
+than a table not chosen; and **a connection without a layer retrieves exactly as
+it did before**, which is what let `PROMPT_VERSION` move to v11 without
+invalidating a measurement. See [pipeline-chat.md](pipeline-chat.md) §4 step 4.
+
 - **Generate** — `POST /connections/{id}/semantic/generate` with an
   `llm_config_id` queues a `semantic_jobs` row and returns **202**; the SPA
   polls it. `app/semantic/generator.py` runs **one model call per table**, four

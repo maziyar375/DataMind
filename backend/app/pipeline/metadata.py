@@ -94,9 +94,7 @@ def match_tables(
     tokens = _tokens(question)
 
     def spoken(forms: set[str]) -> set[str]:
-        # A single-word form must be a whole token — "id" must not match
-        # inside "identity" — while a multi-word form is matched as a phrase.
-        return {f for f in forms if (f in tokens) or (" " in f and f in asked)}
+        return _spoken(forms, asked, tokens)
 
     hits: list[tuple[dict[str, Any], set[str]]] = []
     for table in tables:
@@ -118,6 +116,56 @@ def match_tables(
             any(f != other and f in other for other in all_forms) for f in found
         )
     ]
+
+
+def match_by_terms(
+    question: str,
+    tables: list[dict[str, Any]],
+    index: dict[str, frozenset[str]],
+) -> list[dict[str, Any]]:
+    """Tables the question names in the *business* vocabulary someone wrote down.
+
+    `index` is `app.semantic.table_terms(doc)` — qualified table name to the
+    phrases that name it. The layer's labels, synonyms, metric names and
+    glossary already explain a table once it has been chosen; this is what lets
+    them do the choosing, so "churn" reaches `subscription_events` and "net
+    revenue" reaches `order_items` on the branch where retrieval has to pick.
+
+    **The matching rule is `match_tables`', deliberately and not by copy.**
+    `spoken` is the one place either function decides what counts as naming
+    something: a single-word phrase must be a whole token, so "id" cannot match
+    inside "identity"; a multi-word phrase is matched against the question as
+    written, so "net revenue" matches "our net revenue this quarter" and not
+    "revenue net of returns". A business phrase and a physical name are read by
+    one rule or the two tiers stop being comparable.
+
+    Returns tables in snapshot order, like every other selector here. A table
+    the index names but the snapshot does not contain is silently absent —
+    `tables` is the authority on what exists, and a layer entry outliving its
+    table is a drift `bind.py` flags, not something to resolve here.
+
+    Empty index, empty result, no work: a connection with no semantic layer
+    takes exactly the path it took before this existed.
+    """
+    if not index:
+        return []
+    asked = question.lower()
+    tokens = _tokens(question)
+    return [
+        table
+        for table in tables
+        if _spoken(index.get(_qualified(table).lower(), frozenset()), asked, tokens)
+    ]
+
+
+def _spoken(forms: set[str] | frozenset[str], asked: str, tokens: set[str]) -> set[str]:
+    """Which of these spellings the question actually used.
+
+    A single-word form must be a whole token — "id" must not match inside
+    "identity" — while a multi-word form is matched as a phrase against the
+    question as written.
+    """
+    return {f for f in forms if (f in tokens) or (" " in f and f in asked)}
 
 
 def _qualified(table: dict[str, Any]) -> str:

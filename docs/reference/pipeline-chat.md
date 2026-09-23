@@ -513,13 +513,34 @@ group by 1 order by runs desc;
    rest. Nothing is hidden by the cut —
    `describe` states the true table count and names every table left out (§3.3).
 4. **Over budget → `RANKED_MATCH`** (was `EXACT_MATCH` until
-   [retrieval-sections](../plans/retrieval-sections.md) Phase 0):
+   [retrieval-sections](../plans/retrieval-sections.md) Phase 0). **This is the
+   only branch a semantic layer can change**, which is worth holding on to: the
+   two above send every table or spend the budget by `select_tables`' own rule,
+   so an A/B of the layer at the shipped ceiling measures nothing about
+   retrieval. Lower `--retrieve-budget` or it is not being tested:
    - **named** = `metadata.match_tables(question, tables)` — the token-boundary
      matcher `describe` uses: snake_case spoken as words, singular/plural, a
      single-word form must be a whole token, and a name of two letters is never
      a form, so `id` no longer matches inside "paid";
    - **by column** = the same matcher with `columns=True` — a table whose
      column the question names ("revenue by *region*");
+   - **by business term** = `metadata.match_by_terms(question, tables,
+     semantic.table_terms(doc))` — a table the question names in the
+     vocabulary the connection's **semantic layer** writes down: an entity
+     label or synonym, a column label or synonym, a metric name, or a glossary
+     term resolved through its `maps_to` (mvp2 **A5**). "Churn" finds
+     `subscription_events`; "net revenue" finds `order_items`. The matching
+     rule is the one above, shared rather than copied — a single-word phrase
+     must be a whole token, a multi-word phrase is matched as a phrase — so the
+     two tiers stay comparable. **Physical spellings are deliberately not in
+     this index**: `match_tables` owns how the database spells things, and
+     repeating them would let the layer re-assert a physical hit on the
+     business tier. A phrase naming more than `TERM_MAX_TABLES = 4` tables is
+     dropped, because "name" and "status" narrow nothing. An excluded or
+     invalid entry contributes nothing, exactly as the renderer excludes it —
+     a table chosen by a word the model was never shown is the failure this
+     avoids. **Empty without a layer**, which is why a connection that has none
+     retrieves exactly as it did at v10;
    - **carried** = the tables the recent turns actually **queried** —
      `_tables_from_history` reads the qualified names out of the SQL behind an
      earlier answer, which is exact rather than approximate because
@@ -531,13 +552,18 @@ group by 1 order by runs desc;
      `order_items` bridge that joins them — *before* the cut, so a bridge is
      ranked rather than lost unscored. No seed at all → every table is a
      candidate;
-   - `fit_to_budget` ranks the candidates — named, then carried, then column
-     hits, then FK-hop tables (a bridge touching two seeds before a neighbour
-     of one), then the rest; ties to the larger `approx_row_count`, then
-     snapshot order — and takes them until `_RETRIEVE_BUDGET_CHARS` is spent,
-     always at least one. The selection is rendered in snapshot order. What
-     did not fit lands in `RetrievedContext.dropped_tables`, and the step
-     detail counts it: `"42 tables via RANKED_MATCH · 9 not shown"`.
+   - `fit_to_budget` ranks the candidates — named, then **business-term hits**,
+     then carried, then column hits, then FK-hop tables (a bridge touching two
+     seeds before a neighbour of one), then the rest; ties to the larger
+     `approx_row_count`, then snapshot order — and takes them until
+     `_RETRIEVE_BUDGET_CHARS` is spent, always at least one. A term hit sits
+     above `carried` because a curator naming *this* table is a statement about
+     this question while a carried table is inherited from the last one, and
+     below `named` because a physical name is the user's own word and a label
+     is somebody else's. The selection is rendered in snapshot order. What did
+     not fit lands in `RetrievedContext.dropped_tables`, and the step detail
+     counts both: `"42 tables via RANKED_MATCH · 1 by business term · 9 not
+     shown"`.
 
    Retrieval reads the **raw** history, before the disclosure filter of §3.9:
    the selection never leaves the process, and what is rendered from it is

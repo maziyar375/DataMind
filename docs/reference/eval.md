@@ -467,6 +467,17 @@ and it did what the row exists to do — recall fell off its ceiling, which is t
 only condition under which a retrieval claim is falsifiable here. Nothing was
 run at 12,000; that cell has never existed and is not being quietly reused.
 
+**The arm mvp2 A5 owes, and why it is not row 2.** On 2026-09-22 the semantic
+layer's vocabulary started indexing *retrieval* as well as rendering into the
+generate prompt (`PROMPT_VERSION` v11). **Rows 1 and 2 cannot see that change**,
+and neither can any run at the shipped budget: the layer can only move
+retrieval on the `RANKED_MATCH` branch, and at 50,000 chars the `sales` fixture
+takes `FULL_SNAPSHOT` on every question, where every table is sent anyway. The
+arm that measures it is **`--suite sales_v1 --retrieve-budget 8000 --semantic
+on`**, against row 3, which is the same budget with the layer off. Until that
+run exists, *no claim that A5 improved retrieval is falsifiable* — the rule B1
+was written under, applied to the feature B1 unblocked.
+
 **Equal headlines are not equal arms.** Rows 1 and 2 both read 42.0 %, and share
 only fourteen of their twenty-one correct answers: **fourteen questions changed
 verdict, seven in each direction.** At n=50 the standard error is about 7 points, so this

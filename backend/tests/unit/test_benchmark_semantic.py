@@ -339,5 +339,7 @@ async def test_a_draft_that_moved_after_queuing_fails_the_run_and_asks_no_questi
 
 def test_runs_either_side_of_the_fix_carry_different_prompt_versions() -> None:
     # `benchmark_runs.prompt_version` is what tells a layer-off score (v9 and
-    # earlier) from a score taken with the layer (v10 on). D11.
-    assert PROMPT_VERSION == "v10"
+    # earlier) from a score taken with the layer (v10 on). D11. v11 moved it
+    # again, for the layer indexing retrieval — still layer-on, so the split
+    # this test names is unaffected.
+    assert PROMPT_VERSION == "v11"
