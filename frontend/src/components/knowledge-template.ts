@@ -679,6 +679,10 @@ export interface EmbeddingState {
   servesModel: string
   /** The resolved embedder's display name, for the sentence that names it. */
   embedderName: string
+  /** The schema index the same pin feeds (mvp2 B2): tables with prose worth
+   *  embedding, and how many carry a vector that still stands for it. */
+  schemaTables: number
+  schemaTablesIndexed: number
 }
 
 export interface EmbeddingView {
@@ -812,6 +816,43 @@ export function embeddingView(state: EmbeddingState): EmbeddingView {
       'even when the words differ.',
     tone: 'on',
   }
+}
+
+/** What the *schema* index is doing, or `''` when it is doing nothing.
+ *
+ *  A second sentence rather than a second panel. One pin, one provider and one
+ *  width feed two indexes since mvp2 B2 — taught questions, matched by
+ *  meaning, and database tables, *ranked* by it — and the three pin faults
+ *  above break both. A panel that named only the questions would report half
+ *  an outage.
+ *
+ *  Silent in three states, each for its own reason: with nothing pinned there
+ *  is no index to describe; with no table prose there is nothing to embed, and
+ *  saying `0 of 0` would read as a fault where the truth is that nobody has
+ *  written a description or a `COMMENT ON` yet; and in a pin fault the
+ *  sentence above already says the right thing about both, so repeating it
+ *  per index would be the same warning twice.
+ *
+ *  The *stale* count is the honest half. A vector stops standing for its table
+ *  the moment a re-sync or an edit moves the prose, and until the next pass
+ *  that table is ranked on words — visible here rather than inferred from
+ *  silence. */
+export function schemaIndexLine(state: EmbeddingState): string {
+  if (!state.enabled || state.pin !== 'OK' || state.schemaTables === 0) return ''
+  const stale = Math.max(0, state.schemaTables - state.schemaTablesIndexed)
+  const tables = `${state.schemaTables} described ${
+    state.schemaTables === 1 ? 'table' : 'tables'
+  }`
+  if (state.schemaTablesIndexed === 0) {
+    return `${tables} are not indexed yet — they are ranked on words until the next check.`
+  }
+  if (stale > 0) {
+    return (
+      `${state.schemaTablesIndexed} of ${tables} indexed — ` +
+      `${stale} ${stale === 1 ? 'is' : 'are'} ranked on words until the next check.`
+    )
+  }
+  return `All ${tables} indexed, so a question can reach one by what it means.`
 }
 
 /** The indexing half of a sweep's summary, or `''` when there was none.

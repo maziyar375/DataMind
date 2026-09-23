@@ -22,7 +22,7 @@ policy they cannot widen, and whose data they cannot read.
 """
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Request, status
@@ -64,6 +64,7 @@ from app.infra.db.models import (
     KnowledgeTemplateRow,
     LlmConfig,
     SchemaSnapshotRow,
+    SchemaTableVector,
     User,
 )
 from app.knowledge import (
@@ -74,6 +75,7 @@ from app.knowledge import (
     TemplateStatus,
     slots,
 )
+from app.pipeline.relevance import TableVector, VectorIndex
 from app.services import audit
 from app.services.benchmark_service import (
     MIN_SET_SIZE,
@@ -91,6 +93,7 @@ from app.services.knowledge_service import (
     set_embeddings,
 )
 from app.services.policy import require
+from app.services.retrieval_index import prose_for_connection
 from app.workers.knowledge_maintenance import run_maintenance
 
 router = APIRouter(
@@ -387,6 +390,19 @@ async def set_embedding_search(
     return status
 
 
+async def _never_embeds(_texts: Any) -> list[list[float]]:
+    """A placeholder embedder for a **read**.
+
+    `VectorIndex.usable` refuses to report anything on an index it considers
+    unavailable, and availability includes having something to embed a question
+    with. This endpoint is not asking whether a question could be embedded — it
+    is asking whether these stored vectors still stand for this prose — so it
+    supplies one that is never called rather than resolving a provider (and
+    decrypting a key) to answer a status read.
+    """
+    return []
+
+
 async def _embedding_status(db, connection) -> EmbeddingStatus:
     live = await db.execute(
         select(func.count())
@@ -420,7 +436,38 @@ async def _embedding_status(db, connection) -> EmbeddingStatus:
     # means; the short version is that `enabled` asks whether a pin exists and
     # this asks whether it can still be honoured.
     pin, serves = pin_health(connection, embedder)
+    # The schema index the same pin feeds (mvp2 B2). Counted the way the pass
+    # itself counts: tables with prose worth embedding, against the vectors
+    # that are *current* for that prose — `usable` is the one rule, so a panel
+    # cannot report a table indexed that `retrieve` will score on words.
+    schema_prose = await prose_for_connection(db, connection)
+    schema_wanted = {k: v for k, v in schema_prose.items() if v}
+    schema_current = 0
+    if connection.embedding_model and schema_wanted:
+        rows = await db.execute(
+            select(SchemaTableVector).where(
+                SchemaTableVector.connection_id == connection.id,
+                SchemaTableVector.embedding_fingerprint != "",
+            )
+        )
+        index = VectorIndex(
+            model=connection.embedding_model,
+            dimension=connection.embedding_dimension or 0,
+            tables={
+                row.qualified_name: TableVector(
+                    vector=tuple(row.embedding or ()),
+                    stored_fingerprint=row.embedding_fingerprint or "",
+                )
+                for row in rows.scalars().all()
+            },
+            # `usable` refuses without one, and this read is not asking whether
+            # a question could be embedded — only whether these vectors stand.
+            embed=_never_embeds,
+        )
+        schema_current = len(index.usable(schema_wanted))
     return EmbeddingStatus(
+        schema_tables=len(schema_wanted),
+        schema_tables_indexed=schema_current,
         enabled=bool(connection.embedding_model),
         model=connection.embedding_model or "",
         dimension=connection.embedding_dimension or 0,

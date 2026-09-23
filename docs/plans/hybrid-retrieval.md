@@ -1,7 +1,8 @@
 # Hybrid retrieval — build plan
 
-> **Status:** a plan, not a proposal. Written 2026-09-23 against `main`
-> (`cb148b3`). This is [mvp2.md](mvp2.md) **B2**, the last unbuilt row of
+> **Status: built, 2026-09-23 — all three phases, 20 of 20 boxes. The one
+> thing still open is the measurement, and it is a provider run rather than
+> code.** Written the same day against `main` (`cb148b3`). This is [mvp2.md](mvp2.md) **B2**, the last unbuilt row of
 > [status.md §4](../status.md#4-what-is-next)'s Tier 1, and the third of the
 > three items [deep-analysis-mode.md §0.3](deep-analysis-mode.md) names as the
 > work that would move its gate.
@@ -429,8 +430,11 @@ recorded as owed in [eval.md §6](../reference/eval.md).
 | `app/pipeline/nodes/__init__.py` | 2 | `NodeDeps.vectors`, `_vector_scores`, the six fail-opens |
 | `app/eval/runner.py` | 2 | `--schema-vectors` and `embed_schema` — **additive**, default off |
 | `tests/unit/test_retrieval_vectors.py` | 2 | **new** — the store, the fingerprint, the blend, the six |
-| `app/infra/db/models.py` + `0040` | 3 | `runs.retrieval_signals` |
-| `frontend/src/…/connections` | 3 | freshness |
+| `app/pipeline/nodes/__init__.py` | 3 | `rank_tiers` + `SIGNALS` extracted from `fit_to_budget`; the dropped names |
+| `app/infra/db/models.py` + `0040` | 3 | `runs.retrieval_signals`, nullable |
+| `app/api/v1/knowledge.py`, `schemas.py` | 3 | `schema_tables` / `schema_tables_indexed` on `EmbeddingStatus` |
+| `frontend/…/knowledge-template.ts`, `knowledge.tsx` | 3 | `schemaIndexLine`, one sentence under the pin |
+| `tests/unit/test_retrieval_signals.py` | 3 | **new** — the vocabulary, one rule two readers, the node |
 
 Reference docs that own a sentence this changes:
 [pipeline-chat.md](../reference/pipeline-chat.md) §4 step 4,
@@ -547,10 +551,53 @@ Tick a box in the commit that lands the work, never ahead of it.
 >   not which half of prose did.
 
 ### Phase 3 — The index says what it knows
-- [ ] `runs.retrieval_signals` + `0040`, nullable
-- [ ] Freshness on the Connections screen
-- [ ] Dropped table **names** where a curator can read them
-- [ ] The first distribution read off a real connection
+- [x] `runs.retrieval_signals` + `0040`, nullable · *and counted by the ranker itself*
+- [x] Freshness where the pin already lives · *not the Connections screen — see below*
+- [x] Dropped table **names** where a curator can read them
+- [x] The first distribution read off a real connection · *and what it says is that this install cannot exercise the instrument*
+
+> Landed 2026-09-23. `tests/unit/test_retrieval_signals.py` (13) and eight
+> cases in `knowledge-template.test.ts`. What was decided:
+>
+> - **The telemetry is the ranker.** `fit_to_budget`'s tier function came out
+>   as `rank_tiers`, and `retrieve` counts the selected tables with it. A
+>   second reading of the same five lists would agree on the day it was written
+>   and describe a ranking the code had stopped performing some months later —
+>   which is the *only* way a column like this goes wrong, because nothing
+>   fails when it does. `SIGNALS` is a tuple rather than a comment for the
+>   same reason: `runs.retrieval_signals` stores those strings, and a rename
+>   splits a distribution in two silently.
+> - **A vector hit is filed apart from a word hit.** After `blend` the two
+>   halves are one number, so `_vector_scores` reports *which* tables it
+>   raised. Without that, *"is the embedding index doing anything?"* has no
+>   answer at all once Phase 2 is on.
+> - **NULL on three of four strategies, and that is the point.**
+>   `FULL_SNAPSHOT` sent every table, `SECTION_SNAPSHOT` sent the section,
+>   `SCHEMA_QUESTION` spent the budget by `select_tables`' rule: none of them
+>   *chose*, and `{}` would read as "chose nothing". Third time this schema has
+>   had to make the NULL-vs-zero call (`0023`, `0036`, `0037`).
+> - **Freshness went where the pin already lives, not onto the Connections
+>   screen this plan named.** The knowledge panel already owns the embedder,
+>   the model and the width — and its three pin faults (`NO_EMBEDDER`,
+>   `PROVIDER_MOVED`, `MODEL_MOVED`) now break **two** features, so a panel
+>   naming only the taught questions would report half an outage. One extra
+>   sentence (`schemaIndexLine`), silent in every state where it has nothing
+>   true to add, including the faults, where the sentence above already covers
+>   both. A second panel would have duplicated the pin to hold one count.
+> - **The distribution, read off the real database**, which is the box this
+>   plan wrote for itself:
+>
+>   | strategy | runs | avg tables | avg chars |
+>   |---|--:|--:|--:|
+>   | (not recorded) | 68 | – | – |
+>   | FULL_SNAPSHOT | 3 | 13 | 15,643 |
+>
+>   **Every recorded run took `FULL_SNAPSHOT`, so every one of them will write
+>   NULL to `retrieval_signals`** — the instrument is correct and this install
+>   cannot exercise it, for the same reason A5 and B2 are inert here: 13 tables
+>   and 42 tables both fit the budget whole. That is a finding about the
+>   install, not about the column, and it is why the eval arm is still what
+>   owes the number.
 
 ### The measurement
 - [ ] The four-cell grid at budget 8,000 — neither / `--semantic on` / `--comments` / both, one model. Retires A5's owed arm too

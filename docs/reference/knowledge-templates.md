@@ -316,6 +316,17 @@ Where a connection owner gets a number about *their* data, without a developer.
 ## 7. Searching the store by meaning — the embedding matcher
 
 > **Ships off.** `embedding_model` defaults to empty; `pg_trgm` is the default matcher.
+>
+> **Since 2026-09-23 the same pin feeds a second index**, and it is not this
+> one: `schema_table_vectors` embeds what is written *about each table* so that
+> retrieval can **rank** tables by meaning (mvp2 B2,
+> [plans/hybrid-retrieval.md](../plans/hybrid-retrieval.md)). One
+> `embedding_model`, one provider, one dimension, deliberately — and the
+> consequence worth knowing here is that **the three pin faults below break
+> both features**, so the panel that reports them now carries a second sentence
+> naming the schema index's freshness (`schemaIndexLine`). The two indexes
+> share this machinery and nothing else: this one matches questions somebody
+> taught, that one ranks tables nobody taught anything about.
 
 `EmbeddingMatcher` sits behind the same Protocol
 `LexicalMatcher` does, so this phase is a **constructor change** and the `match`

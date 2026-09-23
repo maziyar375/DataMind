@@ -51,8 +51,8 @@ import {
   CORRECTION_SHAPES, conflictEvidence, differingCells, embeddingView,
   indexSummary, markLiterals, matches, matchesReview, matchesSuggestion,
   percent, previewQuestion, questionParts, readiness, resolveReadiness,
-  roleLabel, rowSubtitle, scoreView, sections, sparkHeights, statusOf,
-  suggestionView,
+  roleLabel, rowSubtitle, schemaIndexLine, scoreView, sections, sparkHeights,
+  statusOf, suggestionView,
 } from './knowledge-template'
 import type { CorrectionShape, TemplateRow } from './knowledge-template'
 
@@ -2510,12 +2510,19 @@ function MatchingMode({
   busy: boolean
   onToggle: (enabled: boolean, force?: boolean) => void
 }) {
-  const view = embeddingView({
+  const state = {
     ...status,
     hasEmbedder: status.embedder !== null,
     servesModel: status.serves_model,
     embedderName: status.embedder?.name ?? '',
-  })
+    schemaTables: status.schema_tables,
+    schemaTablesIndexed: status.schema_tables_indexed,
+  }
+  const view = embeddingView(state)
+  // The second index the same pin feeds (mvp2 B2) — empty in every state
+  // where it has nothing true to add, including the pin faults, where the
+  // sentence above already covers both.
+  const schemaLine = schemaIndexLine(state)
   const tint: Record<string, string> = {
     off: 'var(--text-faint)',
     indexing: 'var(--text-muted)',
@@ -2569,6 +2576,11 @@ function MatchingMode({
         <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 2 }}>
           {view.detail}
         </div>
+        {schemaLine && (
+          <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 2 }}>
+            {schemaLine}
+          </div>
+        )}
         {status.enabled && using && status.pin === 'OK' && (
           // Which endpoint made these vectors, said rather than implied: a
           // store is only reproducible if the provider is known as well as the

@@ -554,6 +554,18 @@ class RunState(BaseModel):
     #: allows — the allowlist is the whole snapshot, always (plan D2).
     scope_tables: list[str] = Field(default_factory=list)
 
+    # ── which signal chose each table (hybrid-retrieval Phase 3) ─────────
+    #: `{signal: how many of the selected tables it chose}`, one entry per
+    #: signal that chose at least one. Written by `retrieve` on the branch that
+    #: **chooses** and empty on the three that do not, because a strategy that
+    #: sends every table chose nothing and a zero there would say it did.
+    #:
+    #: This is the instrument that makes A5 and B2 falsifiable from production
+    #: rather than from an eval arm: *"how often does a curator's word, or a
+    #: DBA's sentence, actually decide what the model sees?"* is a query over
+    #: `runs.retrieval_signals` and nothing else can answer it.
+    retrieval_signals: dict[str, int] = Field(default_factory=dict)
+
     clarification: ClarificationRequest | None = None
     context: RetrievedContext | None = None
     attempts: list[SqlAttempt] = Field(default_factory=list)

@@ -15,7 +15,8 @@ import {
   matchesReview, matchesSuggestion, percent,
   scoreView, sparkHeights,
   isUnused, markLiterals, matches, previewQuestion, questionParts, questionSlots,
-  readiness, resolveReadiness, roleLabel, rowSubtitle, sections, statusOf,
+  readiness, resolveReadiness, roleLabel, rowSubtitle, schemaIndexLine,
+  sections, statusOf,
   suggestionSection, suggestionView, tabCount, valuesOf,
 } from './knowledge-template.ts'
 import type {
@@ -499,9 +500,52 @@ function index(over: Partial<EmbeddingState> = {}): EmbeddingState {
   return {
     enabled: true, model: 'text-embedding-3-small', dimension: 1536,
     hasEmbedder: true, templates: 10, indexed: 10, message: '',
-    pin: 'OK', servesModel: '', embedderName: 'House OpenAI', ...over,
+    pin: 'OK', servesModel: '', embedderName: 'House OpenAI',
+    // Nothing described, which is the default state of a connection nobody
+    // has curated and the one in which `schemaIndexLine` says nothing.
+    schemaTables: 0, schemaTablesIndexed: 0, ...over,
   }
 }
+
+// ── the schema index (mvp2 B2) ───────────────────────────────────────────
+// A second sentence, not a second panel: one pin feeds two indexes, and the
+// three pin faults break both.
+check('nothing described says nothing at all', schemaIndexLine(index()), '')
+check(
+  'nothing pinned says nothing either',
+  schemaIndexLine(index({ enabled: false, schemaTables: 12 })),
+  '',
+)
+check(
+  'a pin fault is not repeated per index',
+  schemaIndexLine(index({ pin: 'MODEL_MOVED', schemaTables: 12, schemaTablesIndexed: 12 })),
+  '',
+)
+check(
+  'an index that has not run yet says the tables rank on words',
+  schemaIndexLine(index({ schemaTables: 12, schemaTablesIndexed: 0 })),
+  '12 described tables are not indexed yet — they are ranked on words until the next check.',
+)
+check(
+  'a partial index names what is still stale, because that is the honest half',
+  schemaIndexLine(index({ schemaTables: 12, schemaTablesIndexed: 9 })),
+  '9 of 12 described tables indexed — 3 are ranked on words until the next check.',
+)
+check(
+  'one stale table reads as one',
+  schemaIndexLine(index({ schemaTables: 12, schemaTablesIndexed: 11 })),
+  '11 of 12 described tables indexed — 1 is ranked on words until the next check.',
+)
+check(
+  'a current index says what it buys',
+  schemaIndexLine(index({ schemaTables: 12, schemaTablesIndexed: 12 })),
+  'All 12 described tables indexed, so a question can reach one by what it means.',
+)
+check(
+  'one described table is not pluralised',
+  schemaIndexLine(index({ schemaTables: 1, schemaTablesIndexed: 1 })),
+  'All 1 described table indexed, so a question can reach one by what it means.',
+)
 
 check('word matching is a state, not a warning',
       embeddingView(index({ enabled: false })).tone, 'off')

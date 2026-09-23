@@ -1007,6 +1007,14 @@ export interface EmbeddingStatus {
   dimension: number
   templates: number
   indexed: number
+  /** The *other* index this one pin feeds: tables whose prose is worth
+   *  embedding, and how many carry a vector that still stands for it
+   *  (mvp2 B2). Reported here rather than on a screen of its own because
+   *  there is one pin, one provider and one width — and because the three pin
+   *  faults break both features, so a panel naming only the questions would
+   *  report half an outage. */
+  schema_tables: number
+  schema_tables_indexed: number
   /** The provider's own sentence when the probe or the last pass refused.
    *  Empty on success. */
   message: string

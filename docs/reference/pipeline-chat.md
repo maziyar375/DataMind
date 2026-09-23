@@ -616,10 +616,25 @@ group by 1 order by runs desc;
      say. The selection is rendered in snapshot order. What did not fit lands
      in `RetrievedContext.dropped_tables`, and the step detail counts all of
      it: `"42 tables via RANKED_MATCH · 1 by business term · 2 by description ·
-     9 not shown"` — where **`by description` counts what prose *added***, not
-     what it matched, since a table's own comment usually contains its own name
-     and a table the question already named did not need a description to be
-     chosen.
+     9 not shown (public.shipments, public.refunds, +7)"` — where **`by
+     description` counts what prose *added***, not what it matched, since a
+     table's own comment usually contains its own name and a table the question
+     already named did not need a description to be chosen, and where **the
+     dropped tables are named** (up to three, in rank order, so the ones shown
+     are the ones that nearly made it). A count alone leaves a thin answer on a
+     wide schema looking identical whether the right table was dropped or was
+     never there, which is what made every retrieval change unfalsifiable from
+     outside a unit test.
+   - **Which signal chose each table is recorded per run** — `runs.retrieval_signals`
+     (`0040`), `{"name": 3, "term": 1, "fk": 4, "prose": 2, "vector": 1}`,
+     counted over what survived the cut **by the same function that ranked
+     them** (`nodes.rank_tiers`), because a second reading of the same lists
+     would eventually describe a ranking the code had stopped performing. A
+     prose hit the vector raised is filed as `vector` rather than `prose`,
+     since after the blend the two halves are one number. **NULL on the other
+     three strategies**: they sent everything, sent the section, or spent the
+     budget by their own rule, so none of them chose, and `{}` would say they
+     chose nothing.
 
    Retrieval reads the **raw** history, before the disclosure filter of §3.9:
    the selection never leaves the process, and what is rendered from it is

@@ -1624,6 +1624,14 @@ class EmbeddingStatus(BaseModel):
     #: Live templates that could carry a vector, and how many currently do.
     templates: int = 0
     indexed: int = 0
+    #: The **other** index the same pin now feeds: tables with prose worth
+    #: embedding, and how many carry a current vector
+    #: (`schema_table_vectors`, mvp2 B2). Here rather than on a screen of its
+    #: own because there is one pin, one provider and one dimension, and the
+    #: three pin faults below break *both* features — a panel that named only
+    #: the questions would report half an outage.
+    schema_tables: int = 0
+    schema_tables_indexed: int = 0
     #: Everything the probe or the last pass had to say. Empty on success.
     message: str = ""
     #: The provider that made this index — or, while the store is still matched

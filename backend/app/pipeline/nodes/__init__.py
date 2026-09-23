@@ -682,6 +682,64 @@ def _key(table: dict[str, Any]) -> str:
     return qualified(table)
 
 
+#: What chose a table, in the order `rank_tiers` decides it — index is the tier.
+#: A vocabulary rather than a comment, because `runs.retrieval_signals` stores
+#: these strings and a renamed one silently splits a distribution in two.
+SIGNALS = ("name", "term", "carried", "column", "fk", "prose", "rest")
+
+
+def rank_tiers(
+    candidates: list[dict[str, Any]],
+    *,
+    named: list[dict[str, Any]],
+    carried: list[dict[str, Any]],
+    by_column: list[dict[str, Any]],
+    relationships: list[dict[str, Any]],
+    by_term: list[dict[str, Any]] | None = None,
+    scores: dict[str, float] | None = None,
+) -> tuple[dict[str, int], dict[str, set[str]]]:
+    """Which tier each candidate is in, and how many seeds each one joins to.
+
+    Extracted from `fit_to_budget` so that **the ranking and the telemetry
+    cannot disagree**. `retrieve` records which signal chose each table it
+    sent, and computing that a second way — however carefully — is how a
+    dashboard ends up describing a ranking the code stopped performing.
+
+    The tiers are `SIGNALS`' own order and the argument for each is in
+    `fit_to_budget`'s docstring, which is the one place it belongs.
+    """
+    named_keys = {_key(t) for t in named}
+    term_keys = {_key(t) for t in by_term or ()}
+    carried_keys = {_key(t) for t in carried}
+    column_keys = {_key(t) for t in by_column}
+    rank = scores or {}
+    seeds = named_keys | term_keys | carried_keys | column_keys
+
+    # How many distinct seed tables each candidate joins to directly.
+    touches: dict[str, set[str]] = {}
+    for r in relationships:
+        a, b = r["from_table"], r["to_table"]
+        if b in seeds and a != b:
+            touches.setdefault(a, set()).add(b)
+        if a in seeds and a != b:
+            touches.setdefault(b, set()).add(a)
+
+    def tier(key: str) -> int:
+        if key in named_keys:
+            return 0
+        if key in term_keys:
+            return 1
+        if key in carried_keys:
+            return 2
+        if key in column_keys:
+            return 3
+        if key in touches:
+            return 4
+        return 5 if rank.get(key, 0.0) >= PROSE_FLOOR else 6
+
+    return {_key(t): tier(_key(t)) for t in candidates}, touches
+
+
 def fit_to_budget(
     candidates: list[dict[str, Any]],
     *,
@@ -742,41 +800,18 @@ def fit_to_budget(
     written down has anything to say. With no prose every score is 0.0, that
     key is constant, and the sort is the one this function has always done.
     """
-    named_keys = {_key(t) for t in named}
-    term_keys = {_key(t) for t in by_term or ()}
-    carried_keys = {_key(t) for t in carried}
-    column_keys = {_key(t) for t in by_column}
     rank = scores or {}
-    seeds = named_keys | term_keys | carried_keys | column_keys
-
-    # How many distinct seed tables each candidate joins to directly.
-    touches: dict[str, set[str]] = {}
-    for r in relationships:
-        a, b = r["from_table"], r["to_table"]
-        if b in seeds and a != b:
-            touches.setdefault(a, set()).add(b)
-        if a in seeds and a != b:
-            touches.setdefault(b, set()).add(a)
-
-    def tier(table: dict[str, Any]) -> int:
-        key = _key(table)
-        if key in named_keys:
-            return 0
-        if key in term_keys:
-            return 1
-        if key in carried_keys:
-            return 2
-        if key in column_keys:
-            return 3
-        if key in touches:
-            return 4
-        return 5 if rank.get(key, 0.0) >= PROSE_FLOOR else 6
+    tiers, touches = rank_tiers(
+        candidates,
+        named=named, by_term=by_term, carried=carried, by_column=by_column,
+        scores=rank, relationships=relationships,
+    )
 
     order = {_key(t): i for i, t in enumerate(candidates)}
     ranked = sorted(
         candidates,
         key=lambda t: (
-            tier(t),
+            tiers[_key(t)],
             -len(touches.get(_key(t), ())),
             -rank.get(_key(t), 0.0),
             -(t.get("approx_row_count") or 0),
@@ -843,6 +878,12 @@ def _describe_schema(
 # to be — the `sales` fixture sits at ~26.5k, which straddled the old value.
 _RETRIEVE_BUDGET_CHARS = 50_000
 
+#: How many of the tables the cut dropped are named in the step trail. The
+#: trail is one line, and `fit_to_budget` walks in rank order, so the first
+#: few are the ones that nearly made it — which is the question a curator
+#: reading *"9 not shown"* actually has.
+_DROPPED_NAMED = 3
+
 
 def retrieve_budget_chars() -> int:
     """The ceiling above, read at call time — for the Sections screen, whose
@@ -900,8 +941,9 @@ async def _vector_scores(
     lexical: dict[str, float],
     texts: dict[str, tuple[str, ...]],
     deps: NodeDeps,
-) -> dict[str, float]:
-    """The lexical score, raised wherever a vector says the table is closer.
+) -> tuple[dict[str, float], set[str]]:
+    """The lexical score raised wherever a vector says the table is closer, and
+    which tables that was.
 
     `docs/plans/hybrid-retrieval.md` Phase 2. Phase 1 asks whether a table's
     prose uses the question's words; this asks whether it *means* what the
@@ -925,16 +967,23 @@ async def _vector_scores(
     """
     usable = deps.vectors.usable(texts)
     if not usable or deps.vectors.embed is None:
-        return lexical
+        return lexical, set()
     try:
         asked = await deps.vectors.embed([question])
     except Exception:
         # The embedder's own contract is `[]` on failure; this is the second
         # door, for a caller that ever hands over one without it.
-        return lexical
+        return lexical, set()
     if not asked or not asked[0]:
-        return lexical
-    return blend(lexical, cosines(asked[0], usable))
+        return lexical, set()
+    blended = blend(lexical, cosines(asked[0], usable))
+    # Which tables the vector actually spoke for — the ones whose score it
+    # raised. Reported rather than inferred, because after the blend the two
+    # halves are one number and nothing downstream could tell them apart:
+    # `runs.retrieval_signals` is the only place the question *"is the
+    # embedding index doing anything?"* has an answer.
+    raised = {k for k, v in blended.items() if v > lexical.get(k, 0.0)}
+    return blended, raised
 
 
 async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
@@ -968,6 +1017,7 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
     # knowing which ran.
     by_term: list[dict[str, Any]] = []
     by_prose: list[dict[str, Any]] = []
+    by_vector: set[str] = set()
 
     # The section the question is about, when `scope` chose one: its members
     # and the tables that join two of them. No scope is no narrowing — an
@@ -1036,7 +1086,7 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
         # the stored vectors still stand for the prose above. Absent on every
         # connection with no embedding model pinned, which is the shipped
         # state, and absent on every failure — see `_vector_scores`.
-        scores = await _vector_scores(state.question, scores, texts, deps)
+        scores, by_vector = await _vector_scores(state.question, scores, texts, deps)
         # A follow-up names nothing: "and by month?" matches no table. The
         # tables the previous statement ran against are the subject it
         # inherits, so they seed retrieval alongside anything this question
@@ -1070,6 +1120,28 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
             budget_chars=_RETRIEVE_BUDGET_CHARS,
         )
         strategy = "RANKED_MATCH"
+        # What chose each table that survived the cut, counted by the same
+        # function that ranked them (`rank_tiers`) rather than by a second
+        # reading of the same lists — a dashboard describing a ranking the code
+        # stopped performing is the failure this avoids. Written only on this
+        # branch: the other three send every table, the section, or whatever
+        # spends the budget, and none of them *chose* anything.
+        tiers, _ = rank_tiers(
+            selected,
+            named=named, by_term=by_term, carried=carried, by_column=by_column,
+            scores=scores, relationships=relationships,
+        )
+        counted: dict[str, int] = {}
+        for key, tier_index in tiers.items():
+            name = SIGNALS[tier_index]
+            # A prose hit the vector spoke for is filed under the half that
+            # actually raised it. Both are prose; only one of them is the
+            # index, and "is the embedding index doing anything?" has no other
+            # answer once the blend has made them one number.
+            if name == "prose" and key in by_vector:
+                name = "vector"
+            counted[name] = counted.get(name, 0) + 1
+        state.retrieval_signals = counted
 
     names = {f"{t['schema']}.{t['name']}" for t in selected}
     state.context = RetrievedContext(
@@ -1103,7 +1175,17 @@ async def retrieve(state: RunState, deps: NodeDeps) -> NodeResult:
     if by_prose:
         detail += f" · {len(by_prose)} by description"
     if dropped:
-        detail += f" · {len(dropped)} not shown"
+        # **Named, not just counted** — the research's §6.5, and the cheapest
+        # thing that lets a curator tell *"retrieval was wrong"* from *"the SQL
+        # was wrong"*. Without the names, every retrieval change is
+        # unfalsifiable from outside a unit test: a thin answer on a wide
+        # schema looks identical whether the right table was dropped or was
+        # never there. Three, because the trail is one line and the first three
+        # of a ranked cut are the ones that nearly made it.
+        shown = ", ".join(dropped[:_DROPPED_NAMED])
+        rest = len(dropped) - _DROPPED_NAMED
+        detail += f" · {len(dropped)} not shown ({shown}"
+        detail += f", +{rest})" if rest > 0 else ")"
     return NodeResult(
         detail=detail + (f" · {described} described" if described else "")
     )

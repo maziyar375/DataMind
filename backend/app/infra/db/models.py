@@ -1015,6 +1015,13 @@ class Run(Base, TimestampMixin):
     #: was actually sent.
     retrieval_tables: Mapped[int | None] = mapped_column(Integer)
     retrieval_chars: Mapped[int | None] = mapped_column(Integer)
+    #: `{signal: tables it chose}` over what survived the cut — `name`, `term`,
+    #: `carried`, `column`, `fk`, `prose`, `vector`, `rest` (`nodes.SIGNALS`).
+    #: `0040`. **Only `RANKED_MATCH` writes it**; NULL on the three strategies
+    #: that send everything, send the section, or spend the budget by their own
+    #: rule, because none of them chose anything and `{}` would say they chose
+    #: nothing. The instrument mvp2 A5 and B2 owe.
+    retrieval_signals: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     #: "Ask within…" — the section the person chose before sending, or
     #: `NONE` for *Whole database*. An **input**, unlike the four above:
     #: durable for the same reason `skip_templates` is, since the replica

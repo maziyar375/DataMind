@@ -854,6 +854,11 @@ class RunService:
             run.retrieval_sections = list(state.scope_sections)
             run.retrieval_tables = len(state.context.tables)
             run.retrieval_chars = len(state.context.render(state.disclosure_policy))
+            # Which signal chose each of those tables (`0040`). Left NULL on
+            # the three strategies that never choose — `retrieve` writes the
+            # dict only on `RANKED_MATCH`, and an empty one here would say
+            # "chose nothing" where the truth is "did not choose".
+            run.retrieval_signals = state.retrieval_signals or None
 
         run.finished_at = utcnow()
         run.attempt_count = len(state.attempts)

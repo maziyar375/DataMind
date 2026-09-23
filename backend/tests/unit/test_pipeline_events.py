@@ -435,6 +435,13 @@ async def test_a_budget_cut_is_counted_in_the_retrieve_step(
     answer over a cut block says so too, in the step trail, in the same words
     the `run_steps` row stores. Room for `orders` (the larger) and not both.
 
+    **The dropped tables are named, not only counted** — hybrid-retrieval
+    Phase 3, and the research's §6.5: a thin answer on a wide schema looks
+    identical whether the right table was dropped or was never there, so a
+    count alone leaves every retrieval change unfalsifiable from the outside.
+    Up to `_DROPPED_NAMED`, in rank order, so the ones named are the ones that
+    nearly made it.
+
     The trail itself does not move: same nodes, same `seq`s, same events.
     """
     from app.pipeline import nodes
@@ -448,7 +455,7 @@ async def test_a_budget_cut_is_counted_in_the_retrieve_step(
     assert [t["name"] for t in state.context.tables] == ["orders"]
     assert state.context.dropped_tables == ["public.customers"]
     assert _retrieve_detail(recorder) == (
-        "1 tables via RANKED_MATCH · 1 not shown",
+        "1 tables via RANKED_MATCH · 1 not shown (public.customers)",
     ) * 2
     assert state.error is None
 

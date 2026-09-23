@@ -1257,7 +1257,7 @@ evaluated until this is done.** Record the decision in
 `suites/CHANGELOG.md` — post-change recall numbers are not comparable to
 pre-change ones and someone will try.
 
-### B2. Hybrid retrieval behind `RetrievedContext` · **M** · *Phases 1–2 built 2026-09-23*
+### B2. Hybrid retrieval behind `RetrievedContext` · **M** · *built 2026-09-23, unmeasured*
 
 > **Planned as [hybrid-retrieval.md](hybrid-retrieval.md), and its first phase
 > is built.** The schema's **prose** now ranks tables on the `RANKED_MATCH`
@@ -1286,9 +1286,12 @@ pre-change ones and someone will try.
 > still owes — and because `max` means turning embeddings on can add a table to
 > the block and never remove one.
 >
-> **What is left is Phase 3**: which signal chose each table, recorded per run;
-> index freshness in the product; and the names of the tables the cut dropped,
-> where a curator can read them. Plus the arm all of it owes — see below.
+> **Phase 3 landed the same day**: `runs.retrieval_signals` records which
+> signal chose each table the model saw, counted by the same function that
+> ranked them; the tables the cut dropped are **named** in the step trail, not
+> only counted; and the knowledge panel's one pin now reports both indexes it
+> feeds, because its three pin faults break both. **What is left is not code —
+> it is the arm.** See below.
 
 Embeddings over table names + column names + catalog comments + semantic-layer
 business names and descriptions, blended with the existing exact-match and FK
