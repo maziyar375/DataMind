@@ -238,6 +238,11 @@ export const NODE_META: Record<string, { label: string; detail: string }> = {
   inspect: { label: 'Inspect', detail: 'Checking the result for known traps…' },
   present: { label: 'Present', detail: 'Writing the summary…' },
   chart: { label: 'Chart', detail: 'Choosing the best chart for the result…' },
+  // A deep analysis (Phase 6). The chat nodes above repeat once per step.
+  plan: { label: 'Plan', detail: 'Planning the analysis…' },
+  step: { label: 'Step', detail: 'Starting the next step…' },
+  compute: { label: 'Compute', detail: 'Computing what the rows show…' },
+  synthesize: { label: 'Synthesize', detail: 'Writing the answer from the evidence…' },
 }
 
 /**

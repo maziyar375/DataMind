@@ -45,7 +45,9 @@ from app.domain.ports.llm import ChatMessage
 from app.domain.value_objects import (
     TRANSIENT_RUN_EVENTS,
     ArtifactKind,
+    DeepBudget,
     MessageRole,
+    RunDepth,
     RunStatus,
     StepStatus,
 )
@@ -66,10 +68,14 @@ from app.infra.db.models import (
 from app.infra.events.bus import event_bus
 from app.infra.events.listener import notify_run_event
 from app.infra.llm.litellm_gateway import LiteLLMGateway
+from app.pipeline import signals
+from app.pipeline.graph import DeepPipeline
 from app.pipeline.nodes import NodeDeps, _describe_schema, _render_history
+from app.pipeline.nodes.deep import analysis_record
 from app.pipeline.pipeline import AnalyticsPipeline
 from app.pipeline.prompts import PROMPT_VERSION
-from app.pipeline.state import NodeUsage, RunState
+from app.pipeline.prompts.deep import DEEP_PROMPT_VERSION
+from app.pipeline.state import DeepState, NodeUsage, RunState
 from app.services import audit
 from app.services.knowledge_service import build_matcher, record_hit
 from app.services.query_service import (
@@ -181,7 +187,15 @@ class RunService:
         llm_config_id: UUID | None,
         skip_templates: bool = False,
         scope_choice: str | None = None,
+        depth: str = RunDepth.QUICK,
     ) -> Run:
+        # Before anything is written: while the mode is off, asking for it is
+        # a refusal, not a quiet chat answer. Nothing escalates or de-escalates
+        # a reader's choice of depth (plan D1).
+        if depth == RunDepth.DEEP and not self._settings.deep_enabled:
+            raise ValidationError(
+                "Deep analysis is not enabled on this installation."
+            )
         conversation = await self._conversation(
             ctx, conversation_id, Privilege.MODIFY
         )
@@ -264,6 +278,7 @@ class RunService:
             # between falls open there, and this row still says what was
             # asked for, which is what makes the control measurable.
             scope_choice=(scope_choice or "").strip() or None,
+            depth=depth,
             status=RunStatus.QUEUED,
         )
         self._db.add(run)
@@ -334,11 +349,22 @@ class RunService:
             # A retry reproduces the conditions of the attempt it replaces,
             # and the section the reader chose is one of them.
             scope_choice=run.scope_choice,
+            # And so is how deep it was asked to go — unless the mode has been
+            # switched off since, in which case the retry is refused rather
+            # than silently answered as a chat question.
+            depth=self._retry_depth(run),
             status=RunStatus.QUEUED,
         )
         self._db.add(retried)
         await self._db.flush()
         return retried
+
+    def _retry_depth(self, run: Run) -> str:
+        if run.depth == RunDepth.DEEP and not self._settings.deep_enabled:
+            raise ValidationError(
+                "Deep analysis is not enabled on this installation."
+            )
+        return run.depth or RunDepth.QUICK
 
     # ── claiming ─────────────────────────────────────────────────────────
     def _claimable(self) -> Any:
@@ -613,14 +639,22 @@ class RunService:
             current_sections=await self._current_sections(run),
         )
 
-        pipeline = AnalyticsPipeline(
-            # Six parameters, the last defaulted: the adapter passes usage
-            # only on a terminal step, and only to a callback shaped to take
-            # it (see `_finish_step` in `pipeline/graph.py`).
-            on_step=lambda seq, name, status, detail, ms, usage=None: (
-                self._record_step(run_id, seq, name, status, detail, ms, usage)
-            )
-        )
+        # Six parameters, the last defaulted: the adapter passes usage only on
+        # a terminal step, and only to a callback shaped to take it (see
+        # `_finish_step` in `pipeline/graph.py`).
+        def on_step(
+            seq: int, name: str, status: str, detail: str | None, ms: int,
+            usage: NodeUsage | None = None,
+        ) -> Any:
+            return self._record_step(run_id, seq, name, status, detail, ms, usage)
+
+        pipeline: AnalyticsPipeline | DeepPipeline = AnalyticsPipeline(on_step=on_step)
+        if run.depth == RunDepth.DEEP:
+            # The same deps, the same guard policy, the same disclosure policy
+            # on the state — a deep run is a run. What differs is the graph,
+            # the deadline, and a budget that fails closed.
+            state = self._deep_state(state)
+            pipeline = DeepPipeline(on_step=on_step)
 
         # Re-stamped here rather than trusted from `create_run`, because this
         # is the process that renders the bytes. A run queued by one replica
@@ -629,7 +663,7 @@ class RunService:
         run.prompt_version = self._prompt_version()
 
         try:
-            state = await pipeline.run(state, deps)
+            state = await pipeline.run(state, deps)  # type: ignore[arg-type]
         except RunTimeoutError:
             run.status = RunStatus.TIMED_OUT
             run.error_code = "E_TIMEOUT"
@@ -644,6 +678,24 @@ class RunService:
 
         await self._finalise(
             run, state, fencing_token=fencing_token, layer=layer, snapshot=snapshot
+        )
+
+    def _deep_state(self, state: RunState) -> DeepState:
+        """The chat state, widened into a deep one.
+
+        The hard deadline is `deep_deadline_seconds`; the budget's soft one is
+        a fifth earlier, so running out of time still leaves time to write the
+        answer from what was found. The budget's bounds are `DeepBudget`'s
+        defaults until an operator can set them per connection (Phase 8).
+        """
+        now = utcnow()
+        hard = self._settings.deep_deadline_seconds
+        return DeepState(
+            **state.model_dump(exclude={"deadline_at"}),
+            deadline_at=now + timedelta(seconds=hard),
+            asked=state.question,
+            base_max_rows=state.max_rows,
+            budget=DeepBudget(deadline_at=now + timedelta(seconds=hard * 0.8)),
         )
 
     # ── persistence of run output ────────────────────────────────────────
@@ -795,6 +847,20 @@ class RunService:
                 "artifact_id": str(kpi_artifact.id), "kind": ArtifactKind.KPI,
             })
 
+        if isinstance(state, DeepState) and state.plan is not None:
+            # The analysis as a document: the plan, its revisions, what each
+            # step found and the answer's claims. What `GET /runs/{id}/plan`
+            # reads once the run is over, and withheld with every other
+            # artifact from a reader who may not see this run's data.
+            self._db.add(
+                Artifact(
+                    id=uuid.uuid4(),
+                    run_id=run.id,
+                    kind=ArtifactKind.ANALYSIS,
+                    spec={**analysis_record(state), "prompt_version": DEEP_PROMPT_VERSION},
+                )
+            )
+
         if state.clarification is not None:
             # Persisted as an artifact rather than a column: it rides to the
             # SPA on the run detail the chat already fetches, exactly as the
@@ -890,6 +956,7 @@ class RunService:
             "total_latency_ms": run.total_latency_ms,
         })
         await event_bus.close_run(run.id)
+        signals.forget(run.id)
         # Before Phase 6 nothing ever called this, so every event of every run
         # since boot stayed in memory behind a durable copy of itself. Safe
         # here because the SSE endpoint backfills from `run_events` before it
@@ -1008,11 +1075,18 @@ class RunService:
             update(Run)
             .where(Run.id == run_id)
             .values(heartbeat_at=utcnow())
-            .returning(Run.cancel_requested)
+            .returning(Run.cancel_requested, Run.answer_now_requested)
         )
-        cancel_requested = result.scalar_one_or_none()
+        row = result.one_or_none()
         await self._db.commit()
-        return bool(cancel_requested)
+        if row is None:
+            return False
+        # *Answer now* rides the same round trip. It is not a stop — the loop
+        # reads it on its next edge and writes an answer — so it is handed to
+        # the graph here and the return value stays "should I stop?".
+        if row.answer_now_requested:
+            signals.request_answer_now(run_id)
+        return bool(row.cancel_requested)
 
     async def cancel(self, ctx: RequestContext, run_id: UUID) -> bool:
         """Record the cancellation. Stopping the work is the owner's job.
@@ -1035,6 +1109,28 @@ class RunService:
         await event_bus.close_run(run_id)
         event_bus.forget(run_id)
         return True
+
+    async def answer_now(self, ctx: RequestContext, run_id: UUID) -> None:
+        """Ask a running deep analysis to stop planning and answer.
+
+        **Cooperative, and not cancel.** Cancel ends the run and keeps nothing;
+        this lets the step in flight finish, starts no further step, and has
+        `synthesize` write from the evidence already collected. The same
+        authorization as cancel — `modify` on the run's conversation — because
+        both change what the run will produce.
+
+        Durable first, local second, the order `cancel` uses: the column is
+        what reaches the replica that holds the loop, on its next heartbeat;
+        the local signal makes it instant when that replica is this one.
+        """
+        run = await self._run(ctx, run_id, Privilege.MODIFY)
+        if run.depth != RunDepth.DEEP:
+            raise ConflictError("Only a deep analysis can be asked to answer now.")
+        if not RunStatus(run.status).is_in_flight:
+            raise ConflictError("That analysis has already finished.")
+        run.answer_now_requested = True
+        await self._db.commit()
+        signals.request_answer_now(run_id)
 
     # ── helpers ──────────────────────────────────────────────────────────
     async def _prime_events(self, run_id: UUID) -> None:

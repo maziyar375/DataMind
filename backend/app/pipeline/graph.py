@@ -66,7 +66,7 @@ from app.core.clock import utcnow
 from app.core.errors import LLMError, QuestionOutOfScopeError, RunTimeoutError
 from app.core.logging import get_logger
 from app.domain.value_objects import StepName, StepStatus
-from app.pipeline import nodes
+from app.pipeline import nodes, signals
 from app.pipeline.nodes import NodeDeps
 from app.pipeline.nodes import deep as deep_nodes
 from app.pipeline.state import DeepState, NodeResult, NodeUsage, RunError, RunState
@@ -746,7 +746,12 @@ def _check_budget(run: DeepState) -> str:
     applied before a step — but a spent budget is a *normal* ending, so this
     routes rather than raising.
     """
-    reason = run.exhausted(utcnow())
+    # *Answer now* first: it is the reader's own decision, and when it
+    # coincides with a spent bound the reader should be told it was theirs.
+    reason = (
+        "answer_now" if signals.answer_now_requested(run.run_id)
+        else run.exhausted(utcnow())
+    )
     if reason and not run.stop_reason:
         run.stop_reason = reason
     return reason
@@ -794,8 +799,10 @@ def _deep(fn: Callable[[DeepState, NodeDeps], Awaitable[NodeResult]]) -> NodeFn:
 
 
 def _deep_may_repair(run: RunState) -> bool:
+    """A repair is a query: never past the budget, and never after *Answer
+    now* — the step in flight closes with what it has."""
     assert isinstance(run, DeepState)
-    return run.may_repair(utcnow())
+    return not signals.answer_now_requested(run.run_id) and run.may_repair(utcnow())
 
 
 _DEEP_EXITS = _RepairExits(

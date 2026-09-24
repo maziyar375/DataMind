@@ -5,8 +5,8 @@
 > §0.3's number is still **0.42**, the middle band; nothing has moved it. The
 > override is recorded here rather than the gate being re-read as open: the mode
 > stays behind `deep_enabled = False`, and no deep number may be quoted as
-> evidence the mode *works* until §0.3's threshold is met. Phases 4 and 5 are
-> complete (**54 of 85**). Written 2026-09-22
+> evidence the mode *works* until §0.3's threshold is met. Phases 4–6 are
+> complete (**66 of 85**). Written 2026-09-22
 > against `main`. The argument for *why* lives in
 > [research/deep-analysis-mode.md](../research/deep-analysis-mode.md) — read it
 > first; this document does not re-argue it. The feature is
@@ -969,32 +969,43 @@ corpus replayed through the new path.
 > against the real `sales` fixture is Phase 7's `--suite deep_v1 --mode deep`,
 > and it is recorded there.
 
-### 12.8 Phase 6 — The surface · **0 / 12**
+### 12.8 Phase 6 — The surface · **12 / 12** ✅
 
 **Backend**
 
-- [ ] `MessageCreate.depth: "QUICK" | "DEEP"` — beside `skip_templates` and `scope`
-- [ ] Migration `0039` — `runs.depth`, `runs.answer_now_requested`
-- [ ] `PLAN_PROPOSED`, `PLAN_REVISED`, `STEP_EVIDENCE` — durable `RunEventType`s
-- [ ] `BUDGET_SPENT` — and it joins `TRANSIENT_RUN_EVENTS`, for `RESULT_PREVIEW`'s reason
-- [ ] `POST /runs/{id}/answer-now` — durable flag, read on the heartbeat, **cooperative and not cancel**
-- [ ] `GET /runs/{id}/plan` — for a reader arriving late
+- [x] `MessageCreate.depth: "QUICK" | "DEEP"` — beside `skip_templates` and `scope`. **DEEP is refused (422) while `deep_enabled` is off**, before anything is written; a retry of a deep run is refused the same way rather than silently answered as a chat question. `/auth/me` gains `features: ["deep"]` so the composer only offers what exists
+- [x] Migration **`0041`** (the plan said `0039`; hybrid retrieval took `0039`/`0040`) — `runs.depth` (NOT NULL, default QUICK, `ck_runs_depth`), `runs.answer_now_requested` (NOT NULL, default false). Applied, rolled back and re-applied against a throwaway Postgres 16
+- [x] `PLAN_PROPOSED`, `PLAN_REVISED`, `STEP_EVIDENCE` — durable `RunEventType`s, emitted by `plan`, the reviser and `compute`. The durable record once the run ends is an **`ANALYSIS` artifact** (plan, revisions, every step with its statement and computed summary, the claims, traceability, the budget, `DEEP_PROMPT_VERSION`) — an artifact rather than a column so it is withheld with the others from a reader who may not see the run's data
+- [x] `BUDGET_SPENT` — and it joins `TRANSIENT_RUN_EVENTS`, for `RESULT_PREVIEW`'s reason
+- [x] `POST /runs/{id}/answer-now` — durable flag, read on the heartbeat (the same `UPDATE … RETURNING` as `cancel_requested`), **cooperative and not cancel**: the graph reads `pipeline/signals.py` on the edge into the next step and on every edge back into `generate`, so the step in flight finishes, no other starts, and `synthesize` writes from what exists. `modify` on the conversation, as cancel; 409 on a quick or finished run
+- [x] `GET /runs/{id}/plan` — for a reader arriving late: the `ANALYSIS` artifact once the run has ended, the durable events folded (`services/deep_plan.fold`) while it runs. A reader with the thread but not the connection gets the plan's questions and **nothing any step found**
 
 **Frontend**
 
-- [ ] The **Deep** toggle in the composer, naming its latency in the control
-- [ ] Four new `case` arms in `ChatPage.tsx`'s event switch
-- [ ] The plan panel — restatement, steps, the running one marked, **revisions shown as revisions**
-- [ ] The deep turn renders report-shaped, each claim's number opening its SQL
-- [ ] *Answer now* as a primary control, worded so nobody presses cancel meaning it
+- [x] The **Deep** toggle in the composer, naming its latency in the control — *Quick* / *Deep — a few minutes*, a radio pair beside *Ask within…*, shown only when `/auth/me` names the feature, and back to Quick after every send
+- [x] Four new `case` arms in `ChatPage.tsx`'s event switch, one fold (`deep-plan.ts`'s `applyDeepEvent`, the same fold the server runs)
+- [x] The plan panel — restatement, steps, the running one marked, **revisions shown as revisions** (the old wording struck through above the new, and *revised*); a step's row opens onto its statement and what was computed from it; steps never reached read *Not run*, never *Waiting*
+- [x] The deep turn renders report-shaped, each claim opening its SQL — a footnote after the **sentence** (Phase 3's rule), which opens that step in the panel and scrolls to it. The product's own opening sentence ("built from 3 of 5 planned steps…") is recognised and never footnoted
+- [x] *Answer now* as a primary control in the panel header — "Answer now · keep what's found", its tooltip naming the difference from the composer's stop — which turns into "Finishing this step, then writing the answer…" the moment it is pressed
 
 **Tests**
 
-- [ ] `test_deep_api.py` + `deep-plan.test.ts`
+- [x] `test_deep_api.py` + `deep-plan.test.ts` — 14 backend tests through the real app (`World`): depth refused while off, recorded when on, *Answer now* recorded and signalled and **not** cancel, refused to a stranger and to a reader with `select` only, 409 on quick and finished runs, the heartbeat handing the flag to the graph without stopping it, the plan folded from events and read from the artifact, withheld to a reader without the data. `npm run test:deep` pins which step is running, revisions, *Answer now*'s availability, the stop sentence and the footnote alignment
 
 **Done when:** a reader asks a *why* question in Deep, watches the plan fill in,
 presses *Answer now* at step three, and gets an answer built from three steps'
 evidence **that says so**.
+
+> **Seen, in the real SPA, against fixtures.** Vite on the host, every
+> `/api/v1/**` answered from a script (nothing reached `.data/db`), SSE refused
+> so the client polled, and the poll releasing a five-step analysis a batch at a
+> time. The toggle sends `depth: "DEEP"`; the plan fills in; step three arrives
+> revised and struck through; *Answer now* pressed during step three shows
+> *Finishing this step…*; the answer opens *"This answer is built from 3 of 5
+> planned steps: the analysis stopped early because you asked for an answer
+> now"*, steps 4 and 5 read *Not run*, and footnote [3] opens step three's
+> statement — dark and light. **What that does not show is a real provider
+> writing the plan**; that is Phase 7's run.
 
 ### 12.9 Phase 7 — Scoring it · **0 / 7**
 
@@ -1034,17 +1045,18 @@ evidence **that says so**.
 | 3 — Citations | 8 | 8 |
 | 4 — The plan and the graph | 12 | 12 |
 | 5 — The loop | 11 | 11 |
-| 6 — The surface | 0 | 12 |
+| 6 — The surface | 12 | 12 |
 | 7 — Scoring | 0 | 7 |
 | 8 — Governance | 0 | 6 |
 | 9 — Documentation | 0 | 6 |
-| **Total** | **54** | **85** |
+| **Total** | **66** | **85** |
 
 ### 12.13 Change log
 
 | Date | What changed |
 |---|---|
 | 2026-09-22 | Written. No phase started. |
+| 2026-09-24 | **Phase 6 complete, 12/12.** A reader can start one, watch it, and stop it early. `depth` on the message (refused while `deep_enabled` is off), `0041` for `runs.depth` and `runs.answer_now_requested`, three durable plan events and a transient budget gauge, `POST /runs/{id}/answer-now` (cooperative, read on the heartbeat, **not** cancel) and `GET /runs/{id}/plan` (the `ANALYSIS` artifact, or the events folded; withheld to a reader without the data). The composer offers *Quick* / *Deep — a few minutes* where `/auth/me` names the feature; the plan panel shows the running step, revisions struck through, and *Answer now* as its primary control; the answer's footnotes open each step's statement. Seen end to end in the SPA against fixtures, both themes. `make test` 3,452 green, `npm test` 22 suites + build green. | 66 of 85 |
 | 2026-09-24 | **Phase 5 complete, 11/11.** The steps run, the evidence accumulates, the answer gets written. `compute` discloses each step's result the moment it closes and dispatches its tool into `app/analysis/` (`pipeline/evidence.py`); `step` revises a dependent step from what its dependencies found — replace only, never add — and asks the generator for the row shape the tool needs; `synthesize` is `reports/narrate.py`'s section prompt over the steps, with Phase 3's claims checked per step. The guard's sixth entry point replays the corpus through four kinds of deep statement (96 cases); the disclosure test scans every prompt for sentinel rows and **proves the scan works on a deliberately broken `disclose()`** — and found a real leak through the next turn's history, fixed. `_finalise` files each sub-query against its own result and records the run's total repairs. `make test` 3,438 green, `make guard` 140, `lint-imports` 9/9. **Not yet run against a real provider or the real `sales` fixture** — that is Phase 7. | 54 of 85 |
 | 2026-09-23 | **Phase 4 complete, 12/12 — started over the gate, on the owner's instruction.** §0.3 still reads 0.42 and still says Phases 4–9 wait; the owner asked for 4–7 regardless, and that is recorded in the status banner rather than the gate being re-read. `DEEP_GRAPH` is compiled at import and reachable from nothing: `route → plan → [step → scope → retrieve → generate ⇄ validate → execute → inspect → compute] → synthesize → chart`. The budget is read **on the edges** — into `step` and back into `generate` — so exhaustion routes to `synthesize` rather than raising, and a failed sub-question closes its step as evidence instead of ending the run. `compute` and `synthesize` are their Phase 4 minimum (record the step; list what ran); Phase 5 fills them. `make test` 3,318 green, `lint-imports` 9/9. | 43 of 85 |
 | 2026-09-22 | **Phase 0 complete, 5/5 — and the gate did not open.** The three arms ran back to back on one model (DeepSeek V4 Pro, temp 0.0, v10, 2h 13m): **42.0 % layer off** (`d8c1035d`), **42.0 % layer on** (`5df63738`), **recall 80.2 % / 62.0 % at budget 8,000** (`dc2ea4fd`). 0.42 is §0.3's middle band, so **Phases 4–9 wait**; §0.3's rule is now written out loud in `status.md` §6 and its Tier 3 deferral row. Three findings the headline hides: the two 42 % arms share only 14 of their 21 correct answers (14 questions moved, 7 each way — this suite cannot see a difference under ±14 points); two budget-8,000 questions scored recall 0.000 and answered **correctly**, so recall@k scores the annotation rather than the model; and `eval_runs.git_sha` was read at write time, filing arm 1 under a commit made 30 minutes into its own run — **fixed, with two tests that fail on the old code**. Cache tokens came out of the same logs: **60.4 % of a layer-on prompt served from cache**, which is Phase 1's §6 measurement. Write-up: `app/eval/reports/sales_v1_deepseek_2026-09-22_phase0.md`. | 31 of 85 |

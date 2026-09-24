@@ -59,6 +59,8 @@ interface Permissions {
   /** The raw set, for a screen that needs to show it rather than branch on it. */
   capabilities: ReadonlySet<string>
   roles: string[]
+  /** Installation switches from `/auth/me` — what exists here, not who may. */
+  features: ReadonlySet<string>
 }
 
 const NOTHING: Permissions = {
@@ -66,6 +68,7 @@ const NOTHING: Permissions = {
   canAny: () => false,
   capabilities: new Set(),
   roles: [],
+  features: new Set(),
 }
 
 const PermissionsContext = createContext<Permissions>(NOTHING)
@@ -92,6 +95,7 @@ export function PermissionsProvider({
       canAny: (...capabilities) => capabilities.some((c) => held.has(c)),
       capabilities: held,
       roles: user.roles ?? [],
+      features: new Set(user.features ?? []),
     }
   }, [user])
 
@@ -105,6 +109,14 @@ export function PermissionsProvider({
 /** `const can = useCan(); can('role.manage')`. */
 export function useCan(): Permissions['can'] {
   return useContext(PermissionsContext).can
+}
+
+/**
+ * Whether an installation switch is on — `useFeature('deep')`. Off outside the
+ * provider, like everything else here: a surface nobody enabled is not shown.
+ */
+export function useFeature(name: 'deep'): boolean {
+  return useContext(PermissionsContext).features.has(name)
 }
 
 export function usePermissions(): Permissions {

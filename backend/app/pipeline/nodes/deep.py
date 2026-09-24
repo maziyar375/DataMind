@@ -145,6 +145,10 @@ async def plan(state: DeepState, deps: NodeDeps) -> NodeResult:
         return NodeResult(status="FAILED", detail="No steps planned")
 
     state.plan = tidied
+    await deps.emit("PLAN_PROPOSED", {
+        **tidied.model_dump(mode="json"),
+        "max_steps": state.budget.max_steps,
+    })
     detail = f"{len(tidied.steps)} steps planned"
     if dropped:
         detail += f" · {dropped} past the ceiling dropped"
@@ -201,9 +205,9 @@ async def _revise(state: DeepState, deps: NodeDeps, current: PlanStep) -> None:
     )
     assert state.plan is not None
     state.plan.steps[state.cursor] = replacement
-    state.revisions.append(
-        PlanRevision(index=state.cursor, replaced=current, by=replacement)
-    )
+    revision = PlanRevision(index=state.cursor, replaced=current, by=replacement)
+    state.revisions.append(revision)
+    await deps.emit("PLAN_REVISED", revision.model_dump(mode="json"))
 
 
 async def step(state: DeepState, deps: NodeDeps) -> NodeResult:
@@ -233,6 +237,7 @@ async def step(state: DeepState, deps: NodeDeps) -> NodeResult:
             status="SKIPPED", note=f"No computation is called {current.tool!r}.",
         ))
         state.cursor += 1
+        await deps.emit("STEP_EVIDENCE", ev.step_payload(state.evidence[-1], None))
         return NodeResult(
             status="SKIPPED", goto=STEP,
             detail=f"Step {state.cursor} of {total} skipped: unknown tool",
@@ -285,6 +290,8 @@ async def compute(state: DeepState, deps: NodeDeps) -> NodeResult:
     state.evidence.append(evidence)
     state.error = None
     state.cursor += 1
+    await deps.emit("STEP_EVIDENCE", ev.step_payload(evidence, _sql_of(state, evidence)))
+    await deps.emit("BUDGET_SPENT", _spent(state))
 
     n = evidence.index + 1
     if evidence.status == "FAILED":
@@ -297,6 +304,43 @@ async def compute(state: DeepState, deps: NodeDeps) -> NodeResult:
             "computed" if evidence.computed["ok"] else f"refused ({refusal})"
         )
     return NodeResult(detail=detail)
+
+
+def _sql_of(state: DeepState, evidence: StepEvidence) -> str | None:
+    """The statement a step's result came from: its last, guard-rewritten one."""
+    if evidence.last_attempt <= evidence.first_attempt:
+        return None
+    return state.attempts[evidence.last_attempt - 1].rewritten_sql
+
+
+def _spent(state: DeepState) -> dict[str, int]:
+    budget = state.budget
+    return {
+        "steps": len(state.evidence), "max_steps": budget.max_steps,
+        "queries": len(state.attempts), "max_queries": budget.max_queries,
+        "rows": state.rows_spent, "max_rows": budget.max_rows_total,
+        "prompt_tokens": state.prompt_tokens, "max_prompt_tokens": budget.max_prompt_tokens,
+    }
+
+
+def analysis_record(state: DeepState) -> dict[str, object]:
+    """The `ANALYSIS` artifact: everything the plan panel and the answer's
+    footnotes need once the run has ended, in one document."""
+    return {
+        "plan": state.plan.model_dump(mode="json") if state.plan else None,
+        "revisions": [r.model_dump(mode="json") for r in state.revisions],
+        "steps": [ev.step_payload(e, _sql_of(state, e)) for e in state.evidence],
+        "stop_reason": state.stop_reason,
+        "claims": (state.synthesis or {}).get("claims", []),
+        "traceable": _traceable(state),
+        "budget": _spent(state),
+    }
+
+
+def _traceable(state: DeepState) -> float | None:
+    if state.synthesis is None:
+        return None
+    return checks.NumericCheck.model_validate(state.synthesis).traceable
 
 
 # ── synthesize ───────────────────────────────────────────────────────────

@@ -61,7 +61,8 @@ import {
   dirOf, engineHue,
 } from '../components/ui'
 import { LIST_DRAWER_ID, ListScrim, ListToggle, useListDrawer } from '../components/list-drawer'
-import { queryable } from '../permissions'
+import { queryable, useFeature } from '../permissions'
+import { applyDeepEvent, emptyDeep, type DeepView } from '../components/deep-plan'
 
 /**
  * How long streamed tokens are collected before they are painted.
@@ -201,6 +202,14 @@ export default function ChatPage() {
   // before the persisted turn arrives. Superseded by the run's TABLE artifact
   // the moment the turn is swapped in; see `RESULT_PREVIEW` in the backend.
   const [livePreview, setLivePreview] = useState<TableArtifactSpec | null>(null)
+  // A deep analysis in flight: its plan, its revisions, what each step has
+  // found and how much budget is gone, folded from the four deep events.
+  // Null on every quick run, which is what keeps the plan panel off them.
+  const [liveDeep, setLiveDeep] = useState<DeepView | null>(null)
+  // *Quick* or *Deep — a few minutes*, for the next question only. Back to
+  // Quick after each send: a mode that costs minutes is chosen, never left on.
+  const [depth, setDepth] = useState<'QUICK' | 'DEEP'>('QUICK')
+  const deepAvailable = useFeature('deep')
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
   // A stop that has been asked for but not yet landed. The button has to stop
   // looking like a button the instant it is pressed, or it gets pressed twice.
@@ -379,6 +388,7 @@ export default function ChatPage() {
     setStopping(false)
     setLiveSteps([])
     setLivePreview(null)
+    setLiveDeep(null)
     clearText()
 
     if (!activeId) {
@@ -437,6 +447,7 @@ export default function ChatPage() {
     setStopping(false)
     setLiveSteps([])
     setLivePreview(null)
+    setLiveDeep(null)
     clearText()
     clearThinking()
 
@@ -508,6 +519,17 @@ export default function ChatPage() {
           case 'RESULT_PREVIEW':
             setLivePreview(event.data as unknown as TableArtifactSpec)
             break
+          // A deep analysis: the plan, a step replaced by a sharper one, what
+          // a step found, and the budget gauge. One fold for all four
+          // (`deep-plan.ts`), the same one the server runs for a late reader.
+          case 'PLAN_PROPOSED':
+          case 'PLAN_REVISED':
+          case 'STEP_EVIDENCE':
+          case 'BUDGET_SPENT':
+            setLiveDeep((prev) =>
+              applyDeepEvent(prev ?? emptyDeep(), event.type, event.data as Record<string, unknown>),
+            )
+            break
           default:
             break
         }
@@ -534,6 +556,7 @@ export default function ChatPage() {
         setStopping(false)
         setLiveSteps([])
         setLivePreview(null)
+        setLiveDeep(null)
         clearText()
         clearThinking()
         if (loaded === null) {
@@ -591,6 +614,26 @@ export default function ChatPage() {
       await runs.cancel(runId)
     } catch {
       setStopping(false)
+    }
+  }
+
+  /**
+   * *Answer now* on a deep analysis.
+   *
+   * Not stop: the composer's stop button cancels the run and keeps nothing;
+   * this lets the step in flight finish, starts no other, and has the answer
+   * written from what was found. The panel says so the moment it is pressed,
+   * because the answer may be a step away.
+   */
+  async function answerNow() {
+    const runId = activeRunId
+    if (!runId) return
+    setLiveDeep((prev) => (prev ? { ...prev, answerNowRequested: true } : prev))
+    try {
+      await runs.answerNow(runId)
+    } catch (err) {
+      setLiveDeep((prev) => (prev ? { ...prev, answerNowRequested: false } : prev))
+      setError(err instanceof Error ? err.message : 'Could not ask for an answer now.')
     }
   }
 
@@ -692,8 +735,13 @@ export default function ChatPage() {
         // Nobody having chosen sends nothing, so a run routes as it always
         // did; a choice is sent on every question until it is changed.
         scope: scope ?? undefined,
+        depth: deepAvailable ? depth : undefined,
       })
+      setDepth('QUICK')
       attachStream(accepted.run_id, conversationId)
+      // After the attach, which clears the live view: the panel should say
+      // "Planning…" from the first frame, not wait for the plan to arrive.
+      if (depth === 'DEEP') setLiveDeep(emptyDeep())
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not send that message.')
       setDraft(content)
@@ -705,15 +753,20 @@ export default function ChatPage() {
   // So the transcript gets this one, which never changes identity, and it
   // reads the current `send` at the moment it is actually clicked.
   const sendRef = useRef(send)
+  const answerNowRef = useRef(answerNow)
   const stopRunRef = useRef(stopRun)
   const retryRef = useRef(retryRun)
   useEffect(() => {
     sendRef.current = send
+    answerNowRef.current = answerNow
     stopRunRef.current = stopRun
     retryRef.current = retryRun
   })
   const pickOption = useCallback((text: string) => {
     void sendRef.current(text)
+  }, [])
+  const answerNowStable = useCallback(() => {
+    void answerNowRef.current()
   }, [])
   const retry = useCallback((run: RunDetail) => {
     void retryRef.current(run)
@@ -897,6 +950,7 @@ export default function ChatPage() {
     setStopping(false)
     setLiveSteps([])
     setLivePreview(null)
+    setLiveDeep(null)
     clearText()
     setActiveId(null)
     setMessages([])
@@ -1147,6 +1201,8 @@ export default function ChatPage() {
                   steps={liveSteps}
                   thinking={thinking}
                   preview={livePreview}
+                  deep={liveDeep}
+                  onAnswerNow={liveDeep ? answerNowStable : undefined}
                   streaming
                 />
               )}
@@ -1204,6 +1260,8 @@ export default function ChatPage() {
           sections={sectionNames}
           scope={scope}
           onScope={setScope}
+          depth={deepAvailable ? depth : null}
+          onDepth={setDepth}
         />
       </div>
 
@@ -2187,7 +2245,7 @@ function iconBtnStyle(color: string, hoverBg: string): React.CSSProperties {
 
 function Composer({
   value, onChange, onSubmit, onStop, busy, stopping, ready,
-  sections, scope, onScope,
+  sections, scope, onScope, depth, onDepth,
 }: {
   value: string
   onChange: (value: string) => void
@@ -2205,6 +2263,10 @@ function Composer({
   /** The chosen section, `WHOLE_DATABASE`, or null for "let it choose". */
   scope: string | null
   onScope: (scope: string | null) => void
+  /** The next question's depth, or null where deep analysis is not enabled —
+   * which is no toggle at all rather than a disabled one. */
+  depth: 'QUICK' | 'DEEP' | null
+  onDepth: (depth: 'QUICK' | 'DEEP') => void
 }) {
   const [focus, setFocus] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
@@ -2235,9 +2297,14 @@ function Composer({
             fades in only once the composer is engaged and is click-through
             until then, which is right for a keyboard tip and wrong for a
             control somebody has to find. */}
-        {sections.length > 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', marginBottom: 7, paddingLeft: 6 }}>
-            <ScopePicker value={scope} onChange={onScope} options={sections} />
+        {(sections.length > 0 || depth !== null) && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 7, paddingLeft: 6 }}>
+            {sections.length > 0 && (
+              <ScopePicker value={scope} onChange={onScope} options={sections} />
+            )}
+            {depth !== null && (
+              <DepthToggle value={depth} onChange={onDepth} disabled={busy} />
+            )}
           </div>
         )}
         <div
@@ -2407,6 +2474,65 @@ function Composer({
  * between one question and the next.
  */
 const WHOLE_DATABASE = 'NONE'
+
+/**
+ * *Quick* / *Deep — a few minutes*, beside *Ask within…*.
+ *
+ * The second option names its latency in the control itself — the cheapest
+ * honesty available, and what stops a multi-minute analysis being felt as a
+ * hang (plan §4.1). A segmented pair rather than a switch: both states are
+ * choices with names, and "off" is not one of them.
+ */
+function DepthToggle({
+  value, onChange, disabled,
+}: {
+  value: 'QUICK' | 'DEEP'
+  onChange: (value: 'QUICK' | 'DEEP') => void
+  disabled?: boolean
+}) {
+  const options: Array<{ value: 'QUICK' | 'DEEP'; label: string; title: string }> = [
+    { value: 'QUICK', label: 'Quick', title: 'One query, an answer in seconds' },
+    {
+      value: 'DEEP',
+      label: 'Deep — a few minutes',
+      title: 'A planned analysis over several queries. You can watch it and ask for the answer early.',
+    },
+  ]
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Answer depth"
+      style={{
+        display: 'inline-flex', padding: 2, gap: 2, borderRadius: 999,
+        border: '1px solid var(--border)', background: 'var(--panel)',
+        opacity: disabled ? 0.6 : 1,
+      }}
+    >
+      {options.map((option) => {
+        const on = option.value === value
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            title={option.title}
+            disabled={disabled}
+            onClick={() => onChange(option.value)}
+            style={{
+              border: 'none', borderRadius: 999, padding: '3px 10px',
+              fontSize: 12, fontWeight: on ? 600 : 500, cursor: disabled ? 'default' : 'pointer',
+              background: on ? 'var(--accent-bg)' : 'transparent',
+              color: on ? 'var(--accent)' : 'var(--text-dim)',
+            }}
+          >
+            {option.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
 
 function ScopePicker({
   value, onChange, options,

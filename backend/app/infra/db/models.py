@@ -991,6 +991,21 @@ class Run(Base, TimestampMixin):
     skip_templates: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false()
     )
+    # ── deep analysis (`0041`, docs/plans/deep-analysis-mode.md §2.3) ────
+    #: QUICK | DEEP — which graph answers this run. Defaulted so every row
+    #: written before `0041` is correct without a backfill: they were all
+    #: QUICK. An **input**, durable for `skip_templates`' reason.
+    depth: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="QUICK", server_default="QUICK"
+    )
+    #: *Answer now*: skip the rest of the plan and write the answer from the
+    #: evidence already collected. `cancel_requested`'s shape and reason — the
+    #: replica that can stop the loop is not necessarily the one the click
+    #: arrived at, so the ask is a row the owner reads on its heartbeat. It is
+    #: **not** cancel: cancel throws the run away, this keeps what it has.
+    answer_now_requested: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     # ── what retrieval did (retrieval-sections Phase 3) ──────────────────
     #
     # Four facts about the schema block this turn was answered from, written

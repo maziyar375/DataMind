@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "lint": "eslint src --ext ts,tsx",
     "typecheck": "tsc --noEmit",
-    "test": "npm run test:schedule && npm run test:format && npm run test:document && npm run test:palette && npm run test:chat && npm run test:report && npm run test:readiness && npm run test:print && npm run test:drift && npm run test:template && npm run test:thinking && npm run test:queue && npm run test:params && npm run test:metrics && npm run test:changes && npm run test:score && npm run test:layerfile && npm run test:attention && npm run test:usage && npm run test:sections && npm run test:permissions",
+    "test": "npm run test:schedule && npm run test:format && npm run test:document && npm run test:palette && npm run test:chat && npm run test:report && npm run test:readiness && npm run test:print && npm run test:drift && npm run test:template && npm run test:thinking && npm run test:queue && npm run test:params && npm run test:metrics && npm run test:changes && npm run test:score && npm run test:layerfile && npm run test:attention && npm run test:usage && npm run test:sections && npm run test:permissions && npm run test:deep",
     "test:drift": "node --experimental-strip-types src/components/semantic-drift.test.ts",
     "test:metrics": "node --experimental-strip-types src/components/semantic-metrics.test.ts",
     "test:changes": "node --experimental-strip-types src/components/semantic-changes.test.ts",
@@ -31,7 +31,8 @@
     "test:params": "node --experimental-strip-types src/components/provider-params.test.ts",
     "test:usage": "node --experimental-strip-types src/components/usage-chart.test.ts",
     "test:sections": "node --experimental-strip-types src/components/sections-model.test.ts",
-    "test:permissions": "node --experimental-strip-types scripts/permissions.test.ts"
+    "test:permissions": "node --experimental-strip-types scripts/permissions.test.ts",
+    "test:deep": "node --experimental-strip-types src/components/deep-plan.test.ts"
   },
   "dependencies": {
     "react": "^18.3.1",

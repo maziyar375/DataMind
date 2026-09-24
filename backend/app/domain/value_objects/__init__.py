@@ -165,6 +165,18 @@ class ArtifactKind(StrEnum):
     CLARIFICATION = "CLARIFICATION"
     ERROR = "ERROR"
     SQL_SUMMARY = "SQL_SUMMARY"
+    # A deep run's plan, its revisions, what each step found and the claims
+    # the answer makes — the record `GET /runs/{id}/plan` reads once the run
+    # has ended. An artifact rather than a column because it is withheld with
+    # the other artifacts from a reader who may not see the run's data.
+    ANALYSIS = "ANALYSIS"
+
+
+class RunDepth(StrEnum):
+    """Which graph answers a question. The reader chooses; nothing escalates."""
+
+    QUICK = "QUICK"
+    DEEP = "DEEP"
 
 
 # ── dashboards ───────────────────────────────────────────────────────────
@@ -417,6 +429,16 @@ class RunEventType(StrEnum):
     RESULT_PREVIEW = "RESULT_PREVIEW"
     ERROR = "ERROR"
     RUN_FINISHED = "RUN_FINISHED"
+    # ── a deep run (docs/plans/deep-analysis-mode.md Phase 6) ────────────
+    # The plan as proposed, a step replaced by a sharper one, and what a
+    # step found — durable, because they are the record a reader reopening
+    # the thread, or arriving late, reads the analysis from.
+    PLAN_PROPOSED = "PLAN_PROPOSED"
+    PLAN_REVISED = "PLAN_REVISED"
+    STEP_EVIDENCE = "STEP_EVIDENCE"
+    # How much of the budget is gone. A gauge that arrives after every step;
+    # the final figures are on the run row, so it is transient.
+    BUDGET_SPENT = "BUDGET_SPENT"
 
 
 #: Published to whoever is watching *now*, and never written to `run_events`.
@@ -447,4 +469,7 @@ class RunEventType(StrEnum):
 TRANSIENT_RUN_EVENTS = frozenset({
     RunEventType.REASONING_DELTA,
     RunEventType.RESULT_PREVIEW,
+    # A deep run's budget gauge: `RESULT_PREVIEW`'s trade exactly — the
+    # durable copy is the run row, and a row per step would store a gauge.
+    RunEventType.BUDGET_SPENT,
 })

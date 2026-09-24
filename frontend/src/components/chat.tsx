@@ -16,6 +16,8 @@ import { runs } from '../api/client'
 import { formatAnswer } from './chat-format'
 import { definitionLine, matchedLabel } from './semantic-metrics'
 import { thoughtTime } from './thinking'
+import { fromAnalysis, type DeepView } from './deep-plan'
+import { DeepAnswerText, DeepPlanPanel, useStepFocus } from './deep-panel'
 import type { ThinkingState } from './thinking'
 import type {
   Artifact, ChartOption, ClarificationSpec, GeneratedQuery, KpiSpec, RunDetail,
@@ -1594,11 +1596,18 @@ function FeedbackReceipt({ given }: { given: NonNullable<RunKnowledge['feedback'
 export const AssistantTurn = memo(function AssistantTurn({
   text, run, streaming, steps, thinking, preview, onPickOption, optionsDisabled,
   onRegenerate, onFeedback, onSaveAsTemplate, onAddToDashboard, onAddToReport,
-  blocked, title,
+  blocked, title, deep, onAnswerNow,
 }: {
   text: string
   run: RunDetail | null
   streaming?: boolean
+  /**
+   * A deep analysis in flight, folded from its live events. A finished deep
+   * turn reads its `ANALYSIS` artifact instead — same panel, from the record.
+   */
+  deep?: DeepView | null
+  /** *Answer now* — only on a deep turn that is still running. */
+  onAnswerNow?: () => void
   /**
    * The trail for a run still in flight, assembled from live events. A
    * finished turn has no use for it and reads `run.steps` instead — same
@@ -1645,6 +1654,13 @@ export const AssistantTurn = memo(function AssistantTurn({
   const clarification = run?.artifacts.find((a) => a.kind === 'CLARIFICATION')
   const clarifySpec = clarification?.spec as unknown as ClarificationSpec | undefined
   const trail = steps ?? run?.steps ?? []
+  const analysis = run?.artifacts.find((a) => a.kind === 'ANALYSIS')
+  const deepView = useMemo(
+    () => deep ?? (analysis ? fromAnalysis(analysis.spec as Record<string, unknown>) : null),
+    [deep, analysis],
+  )
+  const deepId = `deep-${run?.id ?? 'live'}`
+  const [focus, focusStep] = useStepFocus(deepId)
 
   return (
     <Turn avatar={<AssistantAvatar busy={streaming} />}>
@@ -1653,6 +1669,19 @@ export const AssistantTurn = memo(function AssistantTurn({
         streaming={streaming}
         totalMs={run?.total_latency_ms}
       />
+
+      {/* The plan, under the trail and above the answer: for the minutes a
+          deep run takes, this is what the reader is watching. */}
+      {deepView && (
+        <DeepPlanPanel
+          view={deepView}
+          inFlight={Boolean(streaming)}
+          onAnswerNow={onAnswerNow}
+          focus={focus}
+          onFocus={focusStep}
+          idPrefix={deepId}
+        />
+      )}
 
       {/* Under the trail and above the answer, which is where it happens: the
           step panel names the node that is working, this says the model
@@ -1683,7 +1712,14 @@ export const AssistantTurn = memo(function AssistantTurn({
           whiteSpace: 'pre-wrap',
         }}
       >
-        <AnswerText text={text} />
+        {deepView && !streaming && deepView.claims.length > 0 ? (
+          // Footnoted, once the answer is final: the claims describe the
+          // prose the run stored, and while it streams the markers are still
+          // being lifted out of it.
+          <DeepAnswerText text={text} claims={deepView.claims} onCite={focusStep} />
+        ) : (
+          <AnswerText text={text} />
+        )}
         {streaming && (
           <span
             className="rm-pulse"

@@ -67,6 +67,10 @@ class MeResponse(BaseModel):
     capabilities: list[str] = []
     roles: list[str] = []
     teams: list[str] = []
+    #: Installation switches the interface renders from — today only
+    #: `"deep"`, present when `deep_enabled` is on. A switch, not a
+    #: permission: it says what exists here, never what this person may do.
+    features: list[str] = []
 
 
 class ProfileUpdate(BaseModel):
@@ -2835,6 +2839,35 @@ class MessageCreate(BaseModel):
     #: chosen, which routes as before. A name no section has falls open to
     #: the whole database, so a stale picker can never narrow wrongly.
     scope: str | None = Field(default=None, max_length=60)
+    #: *Quick* or *Deep — a few minutes*: which graph answers. The reader's
+    #: choice, per question, beside `scope` and `skip_templates`; nothing
+    #: escalates a quick question on its own (plan D1). DEEP is refused while
+    #: `deep_enabled` is off.
+    depth: Literal["QUICK", "DEEP"] = "QUICK"
+
+
+class RunPlanRead(BaseModel):
+    """A deep run's plan and what each step found — `GET /runs/{id}/plan`.
+
+    The same shape whether it was read from the `ANALYSIS` artifact of an
+    ended run or folded from the events of one still running
+    (`services/deep_plan.py`). A QUICK run answers with `plan: null`.
+    """
+
+    depth: str
+    status: str
+    finished: bool
+    #: This reader may see the transcript and not the data: the plan's
+    #: questions are here, and nothing any step found.
+    restricted: bool = False
+    plan: dict[str, Any] | None = None
+    revisions: list[dict[str, Any]] = Field(default_factory=list)
+    steps: list[dict[str, Any]] = Field(default_factory=list)
+    #: Why the run stopped short of its plan; "" when it did not.
+    stop_reason: str = ""
+    claims: list[dict[str, Any]] = Field(default_factory=list)
+    traceable: float | None = None
+    budget: dict[str, Any] | None = None
 
 
 class RunStepRead(BaseModel):
@@ -2941,6 +2974,11 @@ class RunRead(BaseModel):
     id: UUID
     conversation_id: UUID
     status: str
+    #: QUICK | DEEP. A deep turn renders report-shaped, with the plan panel.
+    #: An unset value is QUICK: the column's default is applied at insert, so
+    #: a run read before its first flush carries None, and every run before
+    #: `0041` was a quick one.
+    depth: str = "QUICK"
     error_code: str | None = None
     error_message: str | None = None
     repair_count: int = 0
@@ -2979,6 +3017,11 @@ class RunRead(BaseModel):
     # `conversations.py`; `artifacts` and `queries` arrive empty beside it.
     restricted: bool = False
     restricted_reason: str | None = None
+
+    @field_validator("depth", mode="before")
+    @classmethod
+    def _quick_when_unset(cls, value: Any) -> Any:
+        return value or "QUICK"
 
     @field_validator("retrieval_sections", mode="before")
     @classmethod

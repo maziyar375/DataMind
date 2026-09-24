@@ -86,6 +86,8 @@ def _world(
         status=status, skip_templates=True,
         # *Ask within…*, as the reader set it before the attempt that failed.
         scope_choice="Sales",
+        # Every run has a depth since `0041`; a retry reproduces it.
+        depth="QUICK",
     )
 
     rows: dict[Any, Any] = {run.id: run, conn_id: connection, llm_id: llm}

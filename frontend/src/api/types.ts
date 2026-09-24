@@ -65,6 +65,12 @@ export interface User {
    */
   roles?: string[]
   teams?: string[]
+  /**
+   * Installation switches the interface renders from — today only `'deep'`,
+   * present when deep analysis is enabled here. What *exists*, never what
+   * this person may do; that is `capabilities`.
+   */
+  features?: string[]
 }
 
 /** A privilege a role holds over **every** resource of a type. Never an id. */
@@ -1127,7 +1133,7 @@ export type ArtifactSpec = TableArtifactSpec & Record<string, unknown>
 
 export interface Artifact {
   id: string
-  kind: 'TABLE' | 'CHART' | 'KPI' | 'CLARIFICATION' | 'ERROR' | 'SQL_SUMMARY'
+  kind: 'TABLE' | 'CHART' | 'KPI' | 'CLARIFICATION' | 'ERROR' | 'SQL_SUMMARY' | 'ANALYSIS'
   spec: ArtifactSpec
   /** As on the run: identity without content, for a reader who was shared the
    *  thread and not the database behind it. `spec` arrives empty. */
@@ -1407,6 +1413,8 @@ export interface RunDetail {
   id: string
   conversation_id: string
   status: string
+  /** QUICK | DEEP. A deep turn carries an `ANALYSIS` artifact and a plan panel. */
+  depth?: string
   error_code: string | null
   error_message: string | null
   repair_count: number

@@ -384,3 +384,34 @@ def pool(block: BlockNarration) -> list[float]:
     values.append(float(block.row_count))
     values.extend(block.facts.values())
     return values
+
+
+# ── what the reader is shown ─────────────────────────────────────────────
+def step_payload(evidence: StepEvidence, sql: str | None) -> dict[str, Any]:
+    """One step, as the plan panel and the `STEP_EVIDENCE` event carry it.
+
+    For the **reader**, not a model: the statement that ran and the computed
+    summary are their own data on their own screen. Rows are not here — the
+    step's table is fetched with the rest of the run, where a reader who may
+    not see the data is refused it.
+    """
+    computed = evidence.computed
+    return {
+        "index": evidence.index,
+        "question": evidence.step.question,
+        "intent": evidence.step.intent,
+        "tool": evidence.step.tool,
+        "why": evidence.step.why,
+        "status": evidence.status,
+        "note": evidence.note,
+        "row_count": evidence.row_count,
+        "truncated": evidence.truncated,
+        "sql": sql,
+        "attempts": evidence.last_attempt - evidence.first_attempt,
+        "computed": None if computed is None else {
+            "tool": computed["tool"],
+            "ok": computed["ok"],
+            "summary": computed["summary"],
+            "refusal": computed["refusal"],
+        },
+    }

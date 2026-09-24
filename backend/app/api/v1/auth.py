@@ -118,7 +118,7 @@ async def logout(
 
 
 @router.get("/me", response_model=MeResponse)
-async def me(ctx: CtxDep, db: DbDep) -> MeResponse:
+async def me(ctx: CtxDep, db: DbDep, settings: SettingsDep) -> MeResponse:
     """Who is signed in, and every affordance the SPA renders from.
 
     The capabilities come off the **context**, which resolved them from the
@@ -135,7 +135,7 @@ async def me(ctx: CtxDep, db: DbDep) -> MeResponse:
     user = await db.get(User, ctx.user_id)
     if user is None:
         raise AuthenticationError("This account no longer exists.")
-    return await _me(db, user, ctx)
+    return await _me(db, user, ctx, settings)
 
 
 @router.get("/me/permissions", response_model=PermissionsResponse)
@@ -178,7 +178,7 @@ async def my_permissions(ctx: CtxDep, db: DbDep) -> PermissionsResponse:
     )
 
 
-async def _me(db, user: User, ctx) -> MeResponse:
+async def _me(db, user: User, ctx, settings=None) -> MeResponse:
     """The account, plus what the context already resolved for this request.
 
     The roles list takes `ctx.team_ids` because a role can reach somebody
@@ -201,6 +201,7 @@ async def _me(db, user: User, ctx) -> MeResponse:
         capabilities=sorted(str(c) for c in ctx.capabilities),
         roles=[role.name for role in roles],
         teams=[team.name for team in teams],
+        features=["deep"] if settings is not None and settings.deep_enabled else [],
     )
 
 
@@ -216,7 +217,9 @@ async def _me(db, user: User, ctx) -> MeResponse:
 
 
 @router.patch("/me", response_model=MeResponse)
-async def update_me(payload: ProfileUpdate, ctx: CtxDep, db: DbDep) -> MeResponse:
+async def update_me(
+    payload: ProfileUpdate, ctx: CtxDep, db: DbDep, settings: SettingsDep
+) -> MeResponse:
     _refuse_service(ctx)
     user = await db.get(User, ctx.user_id)
     if user is None:
@@ -224,7 +227,7 @@ async def update_me(payload: ProfileUpdate, ctx: CtxDep, db: DbDep) -> MeRespons
     # Already trimmed and proven non-empty by the schema.
     user.display_name = payload.display_name
     await db.flush()
-    return await _me(db, user, ctx)
+    return await _me(db, user, ctx, settings)
 
 
 @router.put("/me/password", response_model=TokenResponse)

@@ -926,6 +926,9 @@ export const conversations = {
       // Either way the run skips its routing call: this is the reader
       // answering the question that call asks.
       scope?: string
+      // *Quick* or *Deep — a few minutes*. The reader's choice, per question;
+      // nothing escalates a quick one on its own.
+      depth?: 'QUICK' | 'DEEP'
     },
   ) => post<{ run_id: string; message_id: string }>(`/conversations/${id}/messages`, payload),
   suggestions: (id: string) =>
@@ -1112,6 +1115,14 @@ export function isRunInFlight(status: string): boolean {
 export const runs = {
   get: (id: string) => get<RunDetail>(`/runs/${id}`),
   cancel: (id: string) => post<{ cancelled: boolean }>(`/runs/${id}/cancel`),
+  /**
+   * *Answer now* on a deep analysis: finish the step in flight, start no
+   * other, and write the answer from what was found. **Not cancel** — cancel
+   * throws the run away, this keeps it. 202; the answer arrives on the stream.
+   */
+  answerNow: (id: string) => post<{ requested: boolean }>(`/runs/${id}/answer-now`),
+  /** A deep run's plan and what each step found, for a reader arriving late. */
+  plan: (id: string) => get<Record<string, unknown>>(`/runs/${id}/plan`),
   /**
    * Run the same question again, against the same user message — so the
    * transcript keeps one question where the reader asked one. Refused for a

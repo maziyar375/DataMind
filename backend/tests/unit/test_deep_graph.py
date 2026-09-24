@@ -292,12 +292,12 @@ def test_deep_is_off_by_default() -> None:
     assert Settings.model_fields["deep_enabled"].default is False
 
 
-def test_nothing_outside_the_pipeline_reaches_the_deep_graph() -> None:
-    """Phase 4's second half: the graph exists and nothing can run it.
-
-    Read from the import graph rather than trusted. When Phase 6 wires the
-    surface, this test is what has to change, and that change is the moment
-    the mode becomes reachable.
+def test_one_service_reaches_the_deep_graph_and_nothing_else_does() -> None:
+    """Phase 4 asserted that *nothing* outside the pipeline could reach this
+    graph. Phase 6 wired the surface, and this is what that test became: one
+    module does — `run_service`, behind `deep_enabled`, which
+    `test_deep_api.py` shows refusing a DEEP question while it is off. A second
+    importer would be a second door, and would have to be argued for here.
     """
     root = Path(__file__).resolve().parents[2] / "app"
     names = {"DeepPipeline", "DEEP_GRAPH", "DeepState"}
@@ -313,4 +313,4 @@ def test_nothing_outside_the_pipeline_reaches_the_deep_graph() -> None:
                 and names & {alias.name for alias in node.names}
             ):
                 reached.append(str(path.relative_to(root)))
-    assert reached == []
+    assert sorted(set(reached)) == ["services/run_service.py"]

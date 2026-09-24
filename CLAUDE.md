@@ -90,7 +90,7 @@ make authz-check  # prove no module decides access for itself
 make up / down / logs / secrets / migrate / fixtures / db-repair
 ```
 
-From `frontend/`: `npm run typecheck`, `npm run build`, `npm test` (twenty-one
+From `frontend/`: `npm run typecheck`, `npm run build`, `npm test` (twenty-two
 suites). **`npm run lint` is a dead script** — eslint is neither a devDependency
 nor configured.
 
@@ -830,15 +830,16 @@ at commit time and shows up as drift a release later. Full tour:
   A literal hex or `oklch()` in a component is a bug in both themes — one of
   them just has not been looked at yet. Chart colours are the one exception and
   they live in `components/palette.ts`, tested apart from React.
-- **The twenty DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
+- **The twenty-one DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
   `table-format.ts`, `dashboard-document.ts`, `palette.ts`, `chat-format.ts`,
   `report-document.ts`, `report-readiness.ts`, `report-print.ts`,
   `semantic-drift.ts`, `semantic-metrics.ts`, `semantic-changes.ts`,
   `semantic-score.ts`, `semantic-file.ts`, `semantic-attention.ts`,
   `knowledge-template.ts`, `thinking.ts`, `knowledge-queue.ts`,
-  `provider-params.ts`, `usage-chart.ts`, `sections-model.ts` — they hold the
-  logic whose failures are quiet, they are (with `scripts/permissions.test.ts`,
-  the twenty-first suite) the *only* tested code in the frontend, and their suites
+  `provider-params.ts`, `usage-chart.ts`, `sections-model.ts`, `deep-plan.ts` —
+  they hold the logic whose failures are quiet, they are (with
+  `scripts/permissions.test.ts`, the twenty-second suite) the *only* tested code
+  in the frontend, and their suites
   are plain `node --experimental-strip-types` scripts. **One React import turns
   a suite into a thing that cannot run.**
 - **Text a person wrote gets `dir={dirOf(value)}`.** The product ships Persian.

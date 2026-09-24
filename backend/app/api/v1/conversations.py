@@ -28,6 +28,7 @@ from app.api.schemas import (
     MessageRead,
     MetricUsedRead,
     RunKnowledge,
+    RunPlanRead,
     RunRead,
     RunStepRead,
     SuggestionsRead,
@@ -54,7 +55,7 @@ from app.infra.db.models import (
 )
 from app.infra.events.bus import event_bus
 from app.semantic import SemanticDocument
-from app.services import audit, restricted
+from app.services import audit, deep_plan, restricted
 from app.services.knowledge_service import FeedbackService, record_hit
 from app.services.policy import require
 from app.services.run_service import RunService
@@ -313,6 +314,7 @@ async def post_message(
         # Recorded on the run rather than held here, because the replica that
         # executes it is not necessarily this one.
         scope_choice=payload.scope,
+        depth=payload.depth,
     )
     await db.commit()
 
@@ -789,6 +791,37 @@ async def cancel_run(
     cancelled = await RunService(db, settings, authz).cancel(ctx, run_id)
     await request.app.state.run_executor.cancel(run_id)
     return {"cancelled": cancelled}
+
+
+@router.post("/runs/{run_id}/answer-now", status_code=status.HTTP_202_ACCEPTED)
+async def answer_now(
+    run_id: UUID, ctx: CtxDep, db: DbDep, settings: SettingsDep, authz: AuthzDep,
+) -> dict[str, bool]:
+    """Stop planning and write the answer from what has been found.
+
+    **Not cancel**, and deliberately a different route rather than a flag on
+    that one: cancel throws the run away, this keeps it. 202 because it is a
+    request the loop honours on its next edge, not a thing done by the time
+    this returns. Authorized exactly as cancel is, inside the service.
+    """
+    await RunService(db, settings, authz).answer_now(ctx, run_id)
+    return {"requested": True}
+
+
+@router.get("/runs/{run_id}/plan", response_model=RunPlanRead)
+async def get_run_plan(
+    run_id: UUID, ctx: CtxDep, db: DbDep, authz: AuthzDep
+) -> RunPlanRead:
+    """A deep run's plan and what each step found, for a reader arriving late.
+
+    `select` on the conversation, as every run read; what it found is further
+    gated on the connection, as the run's rows are (`_hydrate_run`).
+    """
+    run = await _authorized_run(db, authz, run_id, ctx, Privilege.SELECT)
+    record = await deep_plan.read_plan(
+        db, run, may_read_data=await _may_read_run_data(db, ctx, authz, run)
+    )
+    return RunPlanRead.model_validate(record)
 
 
 @router.post(
