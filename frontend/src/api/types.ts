@@ -2029,3 +2029,26 @@ export interface ShareCheck {
   total_connections: number
   unreadable: { id: string; name: string }[]
 }
+
+/**
+ * A connection's deep budget (`GET`/`PUT /connections/{id}/deep-budget`) —
+ * docs/plans/deep-analysis-mode.md Phase 8. Worded in `components/deep-budget.ts`.
+ */
+export interface DeepLimits {
+  max_steps: number
+  max_queries: number
+  max_rows_total: number
+  max_prompt_tokens: number
+  deadline_seconds: number
+}
+
+export interface DeepBudget {
+  /** What a deep run started now would get. */
+  effective: DeepLimits
+  /** The installation's: nothing here may exceed it. */
+  ceiling: DeepLimits
+  /** True while nothing is stored and the ceiling applies. */
+  is_default: boolean
+  /** The bound that stops a run starting, or null. */
+  refused: string | null
+}

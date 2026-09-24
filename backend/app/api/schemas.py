@@ -853,6 +853,47 @@ def narrow_to_describe(read: ConnectionRead) -> ConnectionRead:
     return read.model_copy(update=dict(DESCRIBE_HIDDEN))
 
 
+class DeepBudgetWrite(BaseModel):
+    """A connection's deep budget — the five numbers an administrator sets.
+
+    Each is a ceiling on **one** deep run through this connection, and each is
+    at most the installation's own (checked in the route, which knows it). A
+    zero is allowed and means *no deep analysis here*: a run is then refused,
+    with a reason, rather than started small.
+    """
+
+    max_steps: int = Field(ge=0)
+    max_queries: int = Field(ge=0)
+    max_rows_total: int = Field(ge=0)
+    max_prompt_tokens: int = Field(ge=0)
+    #: The hard deadline in seconds. 0 refuses; otherwise at least a minute,
+    #: because a shorter one could not finish a single step and would be a
+    #: silently smaller run rather than a refusal.
+    deadline_seconds: int = Field(ge=0)
+
+
+class DeepLimitsRead(BaseModel):
+    max_steps: int
+    max_queries: int
+    max_rows_total: int
+    max_prompt_tokens: int
+    deadline_seconds: int
+
+
+class DeepBudgetRead(BaseModel):
+    """What one deep run through this connection may spend, and the most it could.
+
+    `effective` is what a run started now would get: the stored budget clipped
+    to the ceiling, or the ceiling itself when `is_default`. `refused` names
+    the bound that stops a run starting at all, or is null.
+    """
+
+    effective: DeepLimitsRead
+    ceiling: DeepLimitsRead
+    is_default: bool
+    refused: str | None = None
+
+
 class DisclosureWrite(BaseModel):
     """Its own endpoint, its own schema, its own audit action.
 

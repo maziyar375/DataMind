@@ -150,3 +150,16 @@ class RunTimeoutError(AppError):
     code = "E_TIMEOUT"
     http_status = 504
     title = "Run exceeded its deadline"
+
+
+class DeepRefusedError(AppError):
+    """A deep analysis that will not start — for want of `deep.run`, or because
+    the connection's budget leaves no room for one.
+
+    Its own class so the two routes that start a run can **return** it rather
+    than raise it: the refusal is audited, and raising would roll the request's
+    transaction back and take the audit row with it (`api/errors.problem_response`).
+    """
+
+    code = "E_DEEP_REFUSED"
+    http_status = 403

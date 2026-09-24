@@ -45,7 +45,7 @@ from app.domain.ports.llm import ChatMessage
 from app.domain.value_objects import (
     TRANSIENT_RUN_EVENTS,
     ArtifactKind,
-    DeepBudget,
+    DeepLimits,
     MessageRole,
     RunDepth,
     RunStatus,
@@ -76,7 +76,7 @@ from app.pipeline.pipeline import AnalyticsPipeline
 from app.pipeline.prompts import PROMPT_VERSION
 from app.pipeline.prompts.deep import DEEP_PROMPT_VERSION
 from app.pipeline.state import DeepState, NodeUsage, RunState
-from app.services import audit
+from app.services import audit, deep_budget
 from app.services.knowledge_service import build_matcher, record_hit
 from app.services.query_service import (
     bind_connector,
@@ -238,6 +238,18 @@ class RunService:
                 "conversation."
             )
 
+        # Who may go deep, and how far on this connection — asked before
+        # anything is written, so a refusal leaves no question in the thread.
+        # Snapshotted onto the run: the replica that executes it reads that
+        # and nothing else (services/deep_budget.py, rule 3).
+        deep_limits = (
+            await deep_budget.admit(
+                self._db, ctx, connection, self._settings,
+                conversation_id=conversation_id,
+            )
+            if depth == RunDepth.DEEP else None
+        )
+
         _bind_connection(conversation, connection.id, transcript_empty=transcript_empty)
 
         user_message = Message(
@@ -279,6 +291,7 @@ class RunService:
             # asked for, which is what makes the control measurable.
             scope_choice=(scope_choice or "").strip() or None,
             depth=depth,
+            deep_budget=deep_limits.to_json() if deep_limits else None,
             status=RunStatus.QUEUED,
         )
         self._db.add(run)
@@ -328,6 +341,17 @@ class RunService:
         llm_config = await self._authorized(
             ResourceType.LLM_CONFIG, LlmConfig, run.llm_config_id, ctx
         )
+        depth = self._retry_depth(run)
+        # Re-admitted, not copied: whoever asks for the retry needs `deep.run`
+        # themselves, and it spends the connection's budget as it stands now —
+        # an operator who narrowed it after the first attempt meant this one.
+        deep_limits = (
+            await deep_budget.admit(
+                self._db, ctx, connection, self._settings,
+                conversation_id=run.conversation_id,
+            )
+            if depth == RunDepth.DEEP else None
+        )
 
         retried = Run(
             id=uuid.uuid4(),
@@ -352,7 +376,8 @@ class RunService:
             # And so is how deep it was asked to go — unless the mode has been
             # switched off since, in which case the retry is refused rather
             # than silently answered as a chat question.
-            depth=self._retry_depth(run),
+            depth=depth,
+            deep_budget=deep_limits.to_json() if deep_limits else None,
             status=RunStatus.QUEUED,
         )
         self._db.add(retried)
@@ -528,6 +553,34 @@ class RunService:
             await event_bus.close_run(run_id)
             return
 
+        # A deep run spends the budget it was **started** under, read from its
+        # own row — never the connection's current one, and never the
+        # defaults. A DEEP row whose snapshot is missing or damaged cannot say
+        # what it was allowed, so it does not run (deep_budget.py, rule 3).
+        deep_limits: DeepLimits | None = None
+        if run.depth == RunDepth.DEEP:
+            try:
+                deep_limits = DeepLimits.from_json(run.deep_budget)
+                if deep_limits.refusal():
+                    raise ValueError(deep_limits.refusal())
+            except ValueError:
+                run.status = RunStatus.FAILED
+                run.error_code = "E_DEEP_BUDGET"
+                run.error_message = (
+                    "This analysis has no budget it can be held to, so it was "
+                    "not started."
+                )
+                run.finished_at = utcnow()
+                await self._db.commit()
+                await self._emit(run_id, "RUN_FINISHED", {
+                    "status": run.status,
+                    "error_code": run.error_code,
+                    "repair_count": run.repair_count,
+                    "total_latency_ms": run.total_latency_ms,
+                })
+                await event_bus.close_run(run_id)
+                return
+
         snapshot = await latest_snapshot(self._db, connection.id)
         # Loaded once per run, not per attempt: a repair regenerates against
         # the same schema block, and the layer is part of that block.
@@ -653,7 +706,8 @@ class RunService:
             # The same deps, the same guard policy, the same disclosure policy
             # on the state — a deep run is a run. What differs is the graph,
             # the deadline, and a budget that fails closed.
-            state = self._deep_state(state)
+            assert deep_limits is not None  # refused above otherwise
+            state = self._deep_state(state, deep_limits)
             pipeline = DeepPipeline(on_step=on_step)
 
         # Re-stamped here rather than trusted from `create_run`, because this
@@ -680,22 +734,21 @@ class RunService:
             run, state, fencing_token=fencing_token, layer=layer, snapshot=snapshot
         )
 
-    def _deep_state(self, state: RunState) -> DeepState:
-        """The chat state, widened into a deep one.
+    def _deep_state(self, state: RunState, limits: DeepLimits) -> DeepState:
+        """The chat state, widened into a deep one, on the run's own budget.
 
-        The hard deadline is `deep_deadline_seconds`; the budget's soft one is
-        a fifth earlier, so running out of time still leaves time to write the
-        answer from what was found. The budget's bounds are `DeepBudget`'s
-        defaults until an operator can set them per connection (Phase 8).
+        `limits` is the run's snapshot (`runs.deep_budget`), so the hard
+        deadline is the one the connection allowed when the run was asked, and
+        the budget's soft one a fifth earlier — running out of time still
+        leaves time to write the answer from what was found.
         """
-        now = utcnow()
-        hard = self._settings.deep_deadline_seconds
+        budget, hard_deadline = limits.at(utcnow())
         return DeepState(
             **state.model_dump(exclude={"deadline_at"}),
-            deadline_at=now + timedelta(seconds=hard),
+            deadline_at=hard_deadline,
             asked=state.question,
             base_max_rows=state.max_rows,
-            budget=DeepBudget(deadline_at=now + timedelta(seconds=hard * 0.8)),
+            budget=budget,
         )
 
     # ── persistence of run output ────────────────────────────────────────

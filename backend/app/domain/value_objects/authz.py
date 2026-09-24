@@ -8,7 +8,8 @@ the API that renders them, and by a test that asserts the whole matrix is
 filled in.
 
 The reason it exists *before* anything reads it: this design has eight resource
-types, five privileges and nineteen capabilities. Introducing them alongside
+types, five privileges and nineteen capabilities (twenty since
+`deep.run`). Introducing them alongside
 the first feature that needs each one is how a vocabulary ends up half-invented
 in three places, with `"dashboard"` in one module, `ResourceKind.DASHBOARDS` in
 another and a bare string in the third.
@@ -108,7 +109,7 @@ class Capability(StrEnum):
     capability.* "May Ali create dashboards?" is a capability; "may Ali open
     *this* dashboard?" is a privilege.
 
-    Nineteen of them, in four groups (plan §12.1). This is one half of the two
+    Twenty of them, in four groups (plan §12.1). This is one half of the two
     axes every product in this space converged on — Metabase calls it
     *application permissions*, Looker calls it a *permission set*.
     """
@@ -143,6 +144,12 @@ class Capability(StrEnum):
     #: each connection; which models may answer is `select` on each llm_config.
     #: Three questions, three answers, none of them a role string.
     CONVERSATION_CREATE = "conversation.create"
+    #: "May I start a deep analysis." Not implied by `conversation.create`: a
+    #: deep run costs roughly fifteen times a chat answer and takes minutes,
+    #: so who may start one is an operator's decision (deep-analysis-mode.md
+    #: Phase 8). Which connection it may run on, and how far, is `select` on
+    #: the connection and that connection's deep budget.
+    DEEP_RUN = "deep.run"
 
     # ── system ───────────────────────────────────────────────────────────
     SETTINGS_MANAGE = "settings.manage"

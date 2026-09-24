@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, fields
+from datetime import datetime, timedelta
 from enum import StrEnum
 
 
@@ -139,6 +139,96 @@ class DeepBudget:
     max_queries: int = 12
     max_rows_total: int = 20_000
     max_prompt_tokens: int = 400_000
+
+
+#: The five numbers, in the order a reader is told them. Also the keys of the
+#: stored JSON — on `database_connections.deep_budget` and `runs.deep_budget`.
+DEEP_LIMIT_FIELDS = (
+    "max_steps", "max_queries", "max_rows_total", "max_prompt_tokens",
+    "deadline_seconds",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class DeepLimits:
+    """What an operator allows one deep run on a connection — `DeepBudget` before
+    it has a clock (docs/plans/deep-analysis-mode.md Phase 8).
+
+    `deadline_seconds` is the **hard** deadline; `at()` puts the budget's soft
+    one a fifth earlier, the same split the run has always used, so running out
+    of time still leaves time to write the answer.
+
+    A connection's limits can only **narrow** the installation's ceiling
+    (`within`), never widen it: `manage` on one connection is held by whoever
+    created it, and that is not somebody who gets to decide what a deep run on
+    this installation may cost.
+    """
+
+    max_steps: int
+    max_queries: int
+    max_rows_total: int
+    max_prompt_tokens: int
+    deadline_seconds: int
+
+    @classmethod
+    def ceiling(cls, deadline_seconds: int) -> DeepLimits:
+        """The installation's: `DeepBudget`'s shipped bounds and its deadline."""
+        shipped = {f.name: f.default for f in fields(DeepBudget)}
+        return cls(
+            max_steps=shipped["max_steps"],
+            max_queries=shipped["max_queries"],
+            max_rows_total=shipped["max_rows_total"],
+            max_prompt_tokens=shipped["max_prompt_tokens"],
+            deadline_seconds=deadline_seconds,
+        )
+
+    @classmethod
+    def from_json(cls, raw: object) -> DeepLimits:
+        """Strictly. Anything but five non-negative integers is a `ValueError`,
+        so a damaged row refuses a run rather than being read as the defaults."""
+        if not isinstance(raw, dict) or set(raw) != set(DEEP_LIMIT_FIELDS):
+            raise ValueError("A deep budget names exactly the five limits.")
+        values = [raw[name] for name in DEEP_LIMIT_FIELDS]
+        if any(type(v) is not int or v < 0 for v in values):
+            raise ValueError("Each deep limit is a whole number, zero or more.")
+        return cls(*values)
+
+    def to_json(self) -> dict[str, int]:
+        return {name: getattr(self, name) for name in DEEP_LIMIT_FIELDS}
+
+    def within(self, ceiling: DeepLimits) -> DeepLimits:
+        """Each bound at most the ceiling's. Lowering the ceiling narrows every
+        connection at once; raising it widens none that set a smaller number."""
+        return DeepLimits(*(
+            min(getattr(self, n), getattr(ceiling, n)) for n in DEEP_LIMIT_FIELDS
+        ))
+
+    def refusal(self) -> str:
+        """The first bound that leaves no room for a run at all, or "".
+
+        A zero here is a **refusal to start**, never a run that starts and
+        answers from nothing: a plan of zero steps would reach `synthesize` with
+        no evidence and write something anyway, which is the silently smaller
+        run this phase exists to rule out.
+        """
+        for name in DEEP_LIMIT_FIELDS:
+            if getattr(self, name) <= 0:
+                return name
+        return ""
+
+    def at(self, now: datetime) -> tuple[DeepBudget, datetime]:
+        """The run's budget, and its hard deadline, starting now."""
+        hard = timedelta(seconds=self.deadline_seconds)
+        return (
+            DeepBudget(
+                deadline_at=now + hard * 0.8,
+                max_steps=self.max_steps,
+                max_queries=self.max_queries,
+                max_rows_total=self.max_rows_total,
+                max_prompt_tokens=self.max_prompt_tokens,
+            ),
+            now + hard,
+        )
 
 
 class StepStatus(StrEnum):

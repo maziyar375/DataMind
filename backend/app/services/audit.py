@@ -121,6 +121,7 @@ ASK_RECORDED = "ask.recorded"
 #: api/v1/llm_configs.py            llm_config.endpoint.changed
 #:                                  llm_config.deleted
 #: api/v1/connections.py            semantic.switch.changed
+#: services/deep_budget.py          deep.budget.changed · deep.refused
 #: services/semantic_service.py     semantic.saved · semantic.restored
 #:                                  semantic.deleted · semantic.conflict
 #:                                  semantic.generation.queued

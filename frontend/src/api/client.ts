@@ -29,6 +29,8 @@ import type {
   SemanticVersionSummary, Suggestion,
   SemanticLayer, SqlDraft, TemplateCheckResult, TemplateParam,
   TilePosition, TileResult, TileType, TestResult, UsageSeries, UsageTotal, User,
+  DeepBudget,
+  DeepLimits,
 } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? '/api/v1'
@@ -545,6 +547,11 @@ export const connections = {
     put<Connection>(`/connections/${id}/disclosure`, {
       disclosure_policy: policy,
     }),
+  /** What one deep analysis through this connection may spend. `describe`. */
+  deepBudget: (id: string) => get<DeepBudget>(`/connections/${id}/deep-budget`),
+  /** Set it. `manage`, and never above the installation's ceiling (422). */
+  setDeepBudget: (id: string, limits: DeepLimits) =>
+    put<DeepBudget>(`/connections/${id}/deep-budget`, limits),
   create: (payload: Record<string, unknown>) =>
     post<Connection>('/connections', payload),
   update: (id: string, payload: Record<string, unknown>) =>

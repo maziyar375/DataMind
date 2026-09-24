@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 
 from app.api.deps import AuthzDep, ConversationCreateDep, CtxDep, DbDep, SettingsDep
+from app.api.errors import problem_response
 from app.api.schemas import (
     AnswerFeedbackRead,
     AnswerFeedbackWrite,
@@ -33,7 +34,7 @@ from app.api.schemas import (
     RunStepRead,
     SuggestionsRead,
 )
-from app.core.errors import NotFoundError, ValidationError
+from app.core.errors import DeepRefusedError, NotFoundError, ValidationError
 from app.domain.ports.authz import ResourceRef
 from app.domain.value_objects import RunStatus
 from app.domain.value_objects.authz import Privilege, ResourceType
@@ -303,19 +304,24 @@ async def post_message(
     authz: AuthzDep,
 ) -> MessageAccepted:
     service = RunService(db, settings, authz)
-    run = await service.create_run(
-        ctx=ctx,
-        conversation_id=conversation_id,
-        content=payload.content,
-        connection_id=payload.connection_id,
-        llm_config_id=payload.llm_config_id,
-        skip_templates=payload.skip_templates,
-        # *Ask within…*: a section name, or NONE for the whole database.
-        # Recorded on the run rather than held here, because the replica that
-        # executes it is not necessarily this one.
-        scope_choice=payload.scope,
-        depth=payload.depth,
-    )
+    try:
+        run = await service.create_run(
+            ctx=ctx,
+            conversation_id=conversation_id,
+            content=payload.content,
+            connection_id=payload.connection_id,
+            llm_config_id=payload.llm_config_id,
+            skip_templates=payload.skip_templates,
+            # *Ask within…*: a section name, or NONE for the whole database.
+            # Recorded on the run rather than held here, because the replica
+            # that executes it is not necessarily this one.
+            scope_choice=payload.scope,
+            depth=payload.depth,
+        )
+    except DeepRefusedError as err:
+        # Returned, not raised: the refusal wrote a `deep.refused` row and
+        # nothing else, and raising would roll that row back with the request.
+        return problem_response(err)  # type: ignore[return-value]
     await db.commit()
 
     executor = request.app.state.run_executor
@@ -840,7 +846,10 @@ async def retry_run(
     attaches to the new run exactly as it does for a send.
     """
     service = RunService(db, settings, authz)
-    run = await service.retry(ctx, run_id)
+    try:
+        run = await service.retry(ctx, run_id)
+    except DeepRefusedError as err:
+        return problem_response(err)  # type: ignore[return-value]  # see post_message
     await db.commit()
     await request.app.state.run_executor.submit(run.id)
     return MessageAccepted(run_id=run.id, message_id=run.user_message_id)

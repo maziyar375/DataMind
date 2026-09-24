@@ -5,8 +5,8 @@
 > §0.3's number is still **0.42**, the middle band; nothing has moved it. The
 > override is recorded here rather than the gate being re-read as open: the mode
 > stays behind `deep_enabled = False`, and no deep number may be quoted as
-> evidence the mode *works* until §0.3's threshold is met. Phases 4–7 are
-> complete (**73 of 85**); 8 (governance) and 9 (documentation) are open. Written 2026-09-22
+> evidence the mode *works* until §0.3's threshold is met. Phases 4–8 are
+> complete (**79 of 85**); 9 (documentation) is open. Written 2026-09-22
 > against `main`. The argument for *why* lives in
 > [research/deep-analysis-mode.md](../research/deep-analysis-mode.md) — read it
 > first; this document does not re-argue it. The feature is
@@ -1043,14 +1043,30 @@ numbers on it, and the interruption rate is a query somebody can run.
 >   the per-day check. This is precisely the failure `deep_v1` was frozen to
 >   catch, and it is the gate's warning (§0.3) made concrete.
 
-### 12.10 Phase 8 — Governance · **0 / 6**
+### 12.10 Phase 8 — Governance · **6 / 6** ✅
 
-- [ ] `DeepBudget` settable per connection by an administrator
-- [ ] The cap **fails closed** — including under load
-- [ ] A `deep.run` capability on roles
-- [ ] Audit-log rows for a budget change and for a refusal
-- [ ] The connection settings tab gains the five numbers
-- [ ] `test_deep_budget_api.py` — the capability, the audit row, and a zero-step budget **refusing** rather than degrading
+- [x] `DeepBudget` settable per connection by an administrator — `GET`/`PUT /connections/{id}/deep-budget`, read under `describe`, set under **`manage`** (the disclosure policy's gate and reason; there is no administrator arm to use instead). Stored as `DeepLimits` — five numbers, the deadline in seconds — on `database_connections.deep_budget` (`0042`, JSONB, NULL = the installation's ceiling). **A connection narrows the ceiling and never widens it**: a number above it is a 422 naming the bound, a deadline between 1 and 59 s is a 422, and a ceiling lowered later clips every stored budget at once
+- [x] The cap **fails closed** — including under load. The budget is resolved once, at `create_run`/`retry`, and **snapshotted onto the run** (`runs.deep_budget`); the executor reads only that — never the connection's current value, never `DeepBudget`'s defaults. A run claimed by another replica, taken over after a lapsed heartbeat, or executed after the connection was narrowed spends what it was started under; a DEEP row whose snapshot is missing, damaged or zero is failed `E_DEEP_BUDGET` before the connector opens. A damaged stored budget refuses (`unreadable`) rather than reading as the ceiling. Twelve concurrent deep questions against a zero budget: twelve refusals, twelve rows, no run
+- [x] A `deep.run` capability on roles — the twentieth, in the Creation group, seeded by `0042` to **Administrator alone**: a deep answer costs many chat answers, so an installation decides who gets it on a role of its own. Asked in `services/deep_budget.admit` (the body decides whether it is needed, so `demand`'s shape, not a route dependency), and on a retry for whoever pressed it. The composer offers *Deep* only where `/auth/me` names the feature **and** the capability
+- [x] Audit-log rows for a budget change and for a refusal — `deep.budget.changed` (each bound's before and after, and `from_default`; pinning the ceiling's own numbers counts, since raising the ceiling no longer raises that connection) and `deep.refused` (outcome `DENIED`, `reason` = `capability`, the zero bound, or `unreadable`; identifiers only). A refusal is `E_DEEP_REFUSED` (403) and is **returned**, not raised, by the two routes that start a run — raising rolls the request back and the audit row with it
+- [x] The connection settings tab gains the five numbers — a *Deep analysis* section on **Policy**, shown where the feature is on, editable under `manage` and saved as its own request beside the disclosure policy; each field names its problem before Save (red, with a glyph), Save stays disabled while one stands, and a sentence under the section says what a deep question here will meet — *"Deep analysis is off on this data source: it allows no steps. A deep question is refused, not answered smaller."* Wording in `components/deep-budget.ts`, a new DOM-free module under `npm run test:deep`
+- [x] `test_deep_budget_api.py` — the capability, the audit row, and a zero-step budget **refusing** rather than degrading — 31 tests through the real app (`World`) and the service: the capability refused and audited with no question written, a retry re-asking it, `describe` reading and not setting, above-ceiling and too-short deadlines refused, every bound at zero refusing, a quick question on the same connection untouched, the snapshot surviving a narrowed connection, the executor failing a run with no usable snapshot
+
+**Done when:** an administrator can cap deep runs on a connection, a
+non-capability holder cannot start one, and both facts are in the audit log.
+
+> **Seen, in the real SPA, against fixtures** — Vite on the host, every
+> `/api/v1/**` answered from a script, nothing reaching `.data/db`. The Policy
+> tab's section reads the ceiling as the default; typing 7 steps and a 30 s
+> deadline names both problems and disables Save; a `modify`-only reader sees
+> the numbers disabled with the reason; setting steps to 0 and saving sends one
+> `PUT` and the sentence turns to *off … refused, not answered smaller*. Error
+> text measured 5.3:1 (dark) and 6.9:1 (light); one column at 390 px with no
+> horizontal scroll. `0042` applied, rolled back and re-applied against a
+> throwaway Postgres 16. §6's number for this phase — refusals per budget
+> setting — is `audit_logs` where `action = 'deep.refused'`, grouped by
+> `detail->>'reason'`; nothing has been refused yet, because nothing can start a
+> deep run while `deep_enabled` is off.
 
 ### 12.11 Phase 9 — Documentation · **0 / 6**
 
@@ -1073,14 +1089,15 @@ numbers on it, and the interruption rate is a query somebody can run.
 | 5 — The loop | 11 | 11 |
 | 6 — The surface | 12 | 12 |
 | 7 — Scoring | 7 | 7 |
-| 8 — Governance | 0 | 6 |
+| 8 — Governance | 6 | 6 |
 | 9 — Documentation | 0 | 6 |
-| **Total** | **73** | **85** |
+| **Total** | **79** | **85** |
 
 ### 12.13 Change log
 
 | Date | What changed |
 |---|---|
+| 2026-09-24 | **Phase 8 complete, 6/6.** Who may go deep, and how far. `deep.run` — the twentieth capability, seeded by `0042` to Administrator alone — is asked when a deep question is sent or retried; a connection's deep budget (`GET`/`PUT /connections/{id}/deep-budget`, `manage`) narrows the installation's ceiling and never widens it; a zero refuses with `E_DEEP_REFUSED` rather than starting a smaller run. **The budget is snapshotted onto the run** and the executor reads nothing else, so no replica, takeover or later edit reaches a default, and a DEEP row with no usable snapshot fails `E_DEEP_BUDGET`. Both refusals and every change are audit rows, and the refusal is returned rather than raised so its row commits. The Policy tab gains the five numbers. `make test` 3,512 green, `make guard` 140, `lint-imports` 9/9, `authz-check` clean, `npm test` 22 suites + build green. | 79 of 85 |
 | 2026-09-22 | Written. No phase started. |
 | 2026-09-24 | **Phase 7 complete, 7/7.** `--suite deep_v1 --mode deep` runs the frozen set through `DeepPipeline` on the real fixture and prints a scorecard of the five provider-free numbers — guard pass rate, execution success, claim traceability, plan adherence, cost per answer — pooled over statements and claims, with answer correctness stated as not scored. The interruption rate is `services.deep_plan.interruption()` and its SQL twin in eval.md. First real run, one question on Flash (`bc3bd6d3`): 100% / 100% / **25.0%** / 60%, **547 s, cut by the soft deadline at step 3**, and an answer that attributed a calendar effect to channels — both recorded above as findings. The full twenty-question run was in flight when this landed. `make test` green. | 73 of 85 |
 | 2026-09-24 | **Phase 6 complete, 12/12.** A reader can start one, watch it, and stop it early. `depth` on the message (refused while `deep_enabled` is off), `0041` for `runs.depth` and `runs.answer_now_requested`, three durable plan events and a transient budget gauge, `POST /runs/{id}/answer-now` (cooperative, read on the heartbeat, **not** cancel) and `GET /runs/{id}/plan` (the `ANALYSIS` artifact, or the events folded; withheld to a reader without the data). The composer offers *Quick* / *Deep — a few minutes* where `/auth/me` names the feature; the plan panel shows the running step, revisions struck through, and *Answer now* as its primary control; the answer's footnotes open each step's statement. Seen end to end in the SPA against fixtures, both themes. `make test` 3,452 green, `npm test` 22 suites + build green. | 66 of 85 |

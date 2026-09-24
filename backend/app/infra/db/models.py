@@ -499,6 +499,11 @@ class DatabaseConnection(Base, TimestampMixin):
     # switch rather than "delete the layer": turning it off is how you A/B a
     # layer against the bare schema without throwing the work away.
     semantic_layer_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # What one deep run through this connection may spend (`0042`,
+    # deep-analysis-mode.md Phase 8): `DeepLimits.to_json()`, or NULL for the
+    # installation's ceiling. Set only through `PUT …/deep-budget`, under
+    # `manage`, and never above that ceiling.
+    deep_budget: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     # Whether an unanswerable question stops to ask instead of guessing. Off is
     # the pre-feature behaviour exactly: the `clarify` node is skipped, so the
     # prompt, the step trail and the eval baseline are unchanged.
@@ -1006,6 +1011,13 @@ class Run(Base, TimestampMixin):
     answer_now_requested: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false()
     )
+    #: The deep budget this run was **started** under (`0042`): the
+    #: connection's limits as they stood when it was asked, snapshotted for
+    #: `model_snapshot`'s reason — the replica that executes a run is not the
+    #: one that created it, and an edit in between must not widen it. NULL on
+    #: every QUICK run; a DEEP run without one is refused at execution rather
+    #: than run on the defaults.
+    deep_budget: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     # ── what retrieval did (retrieval-sections Phase 3) ──────────────────
     #
     # Four facts about the schema block this turn was answered from, written

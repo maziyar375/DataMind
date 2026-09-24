@@ -830,13 +830,14 @@ at commit time and shows up as drift a release later. Full tour:
   A literal hex or `oklch()` in a component is a bug in both themes — one of
   them just has not been looked at yet. Chart colours are the one exception and
   they live in `components/palette.ts`, tested apart from React.
-- **The twenty-one DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
+- **The twenty-two DOM-free modules must stay DOM-free.** `dashboard-schedule.ts`,
   `table-format.ts`, `dashboard-document.ts`, `palette.ts`, `chat-format.ts`,
   `report-document.ts`, `report-readiness.ts`, `report-print.ts`,
   `semantic-drift.ts`, `semantic-metrics.ts`, `semantic-changes.ts`,
   `semantic-score.ts`, `semantic-file.ts`, `semantic-attention.ts`,
   `knowledge-template.ts`, `thinking.ts`, `knowledge-queue.ts`,
-  `provider-params.ts`, `usage-chart.ts`, `sections-model.ts`, `deep-plan.ts` —
+  `provider-params.ts`, `usage-chart.ts`, `sections-model.ts`, `deep-plan.ts`,
+  `deep-budget.ts` —
   they hold the logic whose failures are quiet, they are (with
   `scripts/permissions.test.ts`, the twenty-second suite) the *only* tested code
   in the frontend, and their suites

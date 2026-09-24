@@ -1162,6 +1162,39 @@ leaked API key must not reach because they can mint an administrator; reading
 token counts mints nothing, and a service account reporting installation usage
 to a finance system is a legitimate thing to want.
 
+**`deep.run`, and a budget that fails closed.** The twentieth verb (migration
+`0042`, [deep-analysis-mode.md](../plans/deep-analysis-mode.md) Phase 8): may
+this person start a deep analysis at all. A deep answer is minutes long and
+roughly fifteen chat answers' worth of tokens, so it is not implied by
+`conversation.create`, and **it is seeded to Administrator alone** — an
+installation that turns the mode on decides who gets it by putting the word on
+a role of its own. It is asked in `services/deep_budget.admit`, not by a route
+dependency, because the same `POST …/messages` starts a quick run that needs
+no such thing; the body decides, so the check is `demand`'s shape.
+
+What a deep run may spend is set **per connection** under `manage` —
+`GET`/`PUT /connections/{id}/deep-budget`, five numbers (steps, queries, rows,
+prompt tokens, a deadline) — and three rules keep it closed:
+
+* **A connection can narrow the installation's ceiling and never widen it.** A
+  number above it is a 422 naming the bound, not a value quietly clipped; a
+  ceiling lowered later clips every stored budget at once.
+* **A zero refuses; it never shrinks.** A connection whose budget allows no
+  steps (or queries, rows, tokens, time) refuses a deep question with
+  `E_DEEP_REFUSED` and a sentence naming the bound, before anything is written
+  — rather than start a run that plans nothing and writes an answer anyway.
+* **The budget is snapshotted onto the run when it is asked** (`runs.deep_budget`)
+  and the executor reads only that. A run claimed by another replica, taken
+  over after a lapsed heartbeat, or executed after an operator narrowed the
+  connection spends what it was started under — and a DEEP row whose snapshot
+  is missing or damaged fails `E_DEEP_BUDGET` rather than run on the defaults.
+
+Both refusals are audited as `deep.refused` (outcome `DENIED`, `reason` =
+`capability` or the bound) and a change as `deep.budget.changed` with each
+bound's before and after. The refusal is **returned** rather than raised by the
+two routes that start a run, because raising rolls the request's transaction
+back and the audit row with it.
+
 **Teams.** A role reaches a principal directly *or* through a team they are
 in, and the two are one `WHERE` with two arms rather than two round trips — so
 membership costs nothing on the request path and a role assigned to a team

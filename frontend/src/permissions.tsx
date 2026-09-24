@@ -26,7 +26,7 @@ import type { User } from './api/types'
 /**
  * The capability names this SPA knows how to ask about.
  *
- * A *subset* of the backend's nineteen on purpose — these are the ones a
+ * A *subset* of the backend's twenty on purpose — these are the ones a
  * screen here actually branches on. Typing them buys a compile error for a
  * misspelling, which is the failure mode that matters: `can('role.mange')`
  * silently returns false and hides a tab forever.
@@ -47,6 +47,7 @@ export type Capability =
   | 'dashboard.create'
   | 'report.create'
   | 'conversation.create'
+  | 'deep.run'
   | 'settings.manage'
   | 'benchmark.manage'
   | 'eval.run'

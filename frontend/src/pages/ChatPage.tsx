@@ -61,7 +61,7 @@ import {
   dirOf, engineHue,
 } from '../components/ui'
 import { LIST_DRAWER_ID, ListScrim, ListToggle, useListDrawer } from '../components/list-drawer'
-import { queryable, useFeature } from '../permissions'
+import { queryable, useCan, useFeature } from '../permissions'
 import { applyDeepEvent, emptyDeep, type DeepView } from '../components/deep-plan'
 
 /**
@@ -209,7 +209,12 @@ export default function ChatPage() {
   // *Quick* or *Deep — a few minutes*, for the next question only. Back to
   // Quick after each send: a mode that costs minutes is chosen, never left on.
   const [depth, setDepth] = useState<'QUICK' | 'DEEP'>('QUICK')
-  const deepAvailable = useFeature('deep')
+  // Offered where the installation has the mode **and** this person may use
+  // it: `deep.run` is an operator's decision (Phase 8), and a toggle that
+  // answers 403 on send is a control that lied about what it could do.
+  const deepFeature = useFeature('deep')
+  const can = useCan()
+  const deepAvailable = deepFeature && can('deep.run')
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
   // A stop that has been asked for but not yet landed. The button has to stop
   // looking like a button the instant it is pressed, or it gets pressed twice.

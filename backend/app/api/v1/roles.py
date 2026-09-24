@@ -50,6 +50,7 @@ _GROUPS: dict[Capability, str] = {
     Capability.DASHBOARD_CREATE: "Creation",
     Capability.REPORT_CREATE: "Creation",
     Capability.CONVERSATION_CREATE: "Creation",
+    Capability.DEEP_RUN: "Creation",
     Capability.SETTINGS_MANAGE: "System",
     Capability.BENCHMARK_MANAGE: "System",
     Capability.EVAL_RUN: "System",
@@ -74,6 +75,9 @@ _LABELS: dict[Capability, str] = {
     Capability.DASHBOARD_CREATE: "Create dashboards.",
     Capability.REPORT_CREATE: "Create reports.",
     Capability.CONVERSATION_CREATE: "Use Chat.",
+    Capability.DEEP_RUN: (
+        "Start a deep analysis — minutes long, and many times a chat answer's cost."
+    ),
     Capability.SETTINGS_MANAGE: "Change installation settings.",
     Capability.BENCHMARK_MANAGE: "Create and run benchmark sets.",
     Capability.EVAL_RUN: "Run the evaluation harness.",
@@ -104,7 +108,7 @@ def _read(role: Role, holders: int = 0) -> RoleRead:
 
 @router.get("/capabilities", response_model=list[CapabilityCatalogEntry])
 async def capability_catalog(ctx: RoleReadDep) -> list[CapabilityCatalogEntry]:
-    """The nineteen words a role can carry, grouped and explained.
+    """The twenty words a role can carry, grouped and explained.
 
     Declared above `/{role_id}` so the literal path wins the match.
     """

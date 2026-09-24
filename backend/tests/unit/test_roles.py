@@ -70,6 +70,9 @@ TEAMS_MIGRATION = importlib.import_module(
 USAGE_MIGRATION = importlib.import_module(
     "app.infra.db.migrations.versions.0030_usage_capability"
 )
+DEEP_MIGRATION = importlib.import_module(
+    "app.infra.db.migrations.versions.0042_deep_governance"
+)
 
 
 # ── the specification, restated ──────────────────────────────────────────
@@ -125,14 +128,16 @@ SPEC: dict[str, tuple[set[str], set[tuple[str, str]]]] = {
 
 #: What the migrations *after* `0024` grant, transcribed the same way `SPEC`
 #: is: by reading the plan rather than by importing the migration. `0030` adds
-#: the nineteenth capability to two roles and to no others.
+#: the nineteenth capability to two roles and to no others; `0042` adds the
+#: twentieth, `deep.run`, to Administrator alone — a deep answer costs many
+#: chat answers, so an installation decides who gets it on a role of its own.
 #:
 #: The pairing matters as much as the set. `usage.read` answers "what did
 #: everybody's questions cost?", which is a record about people — so it belongs
 #: to the two roles whose job is reading such records, and to neither of the
 #: four roles below that build things or ask questions.
 LATER: dict[str, set[str]] = {
-    "Administrator": {"usage.read"},
+    "Administrator": {"usage.read", "deep.run"},
     "Auditor": {"usage.read"},
 }
 
@@ -142,6 +147,8 @@ def _granted_later(role: str) -> set[str]:
     later = set()
     if role in USAGE_MIGRATION.ROLES:
         later.add(USAGE_MIGRATION.CAPABILITY)
+    if role in DEEP_MIGRATION.ROLES:
+        later.add(DEEP_MIGRATION.CAPABILITY)
     return later
 
 

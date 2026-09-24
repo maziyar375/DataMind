@@ -26,7 +26,7 @@ expressed in them needs a design change, not a workaround.
   ROLE ─── a named bundle, assigned to a User or a Team                    │
    ├── CAPABILITIES              app-wide verbs with no instance           │
    │                             (user.manage, dashboard.create, audit.read,
-   │                              usage.read)                              │
+   │                              usage.read, deep.run)                    │
    └── SCOPED PRIVILEGES         a privilege over ALL resources of a type  │
                                  (manage on ALL knowledge)                 │
                                                                            │

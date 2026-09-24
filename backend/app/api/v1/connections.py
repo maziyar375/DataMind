@@ -21,6 +21,9 @@ from app.api.schemas import (
     ConnectionTestRequest,
     ConnectionTestResult,
     ConnectionUpdate,
+    DeepBudgetRead,
+    DeepBudgetWrite,
+    DeepLimitsRead,
     DisclosureWrite,
     SchemaRead,
     narrow_to_describe,
@@ -29,12 +32,12 @@ from app.api.v1.access import attach_access_routes, owner_names
 from app.core.clock import utcnow
 from app.core.errors import ConflictError, NotFoundError, ValidationError
 from app.domain.ports.authz import ResourceRef
-from app.domain.value_objects import HintBudget
+from app.domain.value_objects import DEEP_LIMIT_FIELDS, DeepLimits, HintBudget
 from app.domain.value_objects.authz import Capability, Privilege, ResourceType
 from app.infra.authz.compose import restrict
 from app.infra.connectors.factory import build_connector
 from app.infra.db.models import DatabaseConnection, SchemaSnapshotRow
-from app.services import audit
+from app.services import audit, deep_budget
 from app.services.grant_service import DISCLOSURE_CHANGED, GrantService
 from app.services.knowledge_service import KnowledgeService
 from app.services.policy import require
@@ -376,6 +379,73 @@ async def set_disclosure_policy(
     return ConnectionRead.model_validate(connection).model_copy(
         update={"privileges": sorted(str(p) for p in held)}
     )
+
+
+def _deep_budget_read(connection: DatabaseConnection, settings) -> DeepBudgetRead:
+    top = deep_budget.ceiling(settings)
+    try:
+        effective = deep_budget.limits_for(connection, settings)
+        refused = effective.refusal() or None
+    except ValueError:
+        # Shown as what a run would meet: nothing, refused as unreadable.
+        effective = DeepLimits(0, 0, 0, 0, 0)
+        refused = "unreadable"
+    return DeepBudgetRead(
+        effective=DeepLimitsRead(**effective.to_json()),
+        ceiling=DeepLimitsRead(**top.to_json()),
+        is_default=connection.deep_budget is None,
+        refused=refused,
+    )
+
+
+@router.get("/{connection_id}/deep-budget", response_model=DeepBudgetRead)
+async def get_deep_budget(
+    connection_id: UUID, ctx: CtxDep, db: DbDep, authz: AuthzDep,
+    settings: SettingsDep,
+) -> DeepBudgetRead:
+    """What one deep analysis through this connection may spend. **`describe`.**
+
+    The same reach that shows the disclosure policy: somebody who may ask
+    through a connection should be able to see the limits their question will
+    meet before they ask it. Numbers only — nothing here is data.
+    """
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.DESCRIBE)
+    return _deep_budget_read(connection, settings)
+
+
+@router.put("/{connection_id}/deep-budget", response_model=DeepBudgetRead)
+async def set_deep_budget(
+    connection_id: UUID, payload: DeepBudgetWrite,
+    ctx: CtxDep, db: DbDep, authz: AuthzDep, settings: SettingsDep,
+) -> DeepBudgetRead:
+    """Set what one deep analysis through this connection may spend. **`manage`.**
+
+    `manage` for the disclosure policy's reason: once a connection is shared,
+    this decides what *other people's* questions may cost, and it belongs with
+    deciding who they are. Audited as `deep.budget.changed` with each bound's
+    before and after.
+
+    **Never above the installation's ceiling** — a number over it is a 422
+    naming the bound, not a value quietly clipped, so the administrator is not
+    left believing they allowed something they did not. Zero is allowed, and
+    means deep analysis is refused on this connection.
+    """
+    connection = await _authorized(db, authz, connection_id, ctx, Privilege.MANAGE)
+    top = deep_budget.ceiling(settings)
+    asked = payload.model_dump()
+    for name in DEEP_LIMIT_FIELDS:
+        if asked[name] > getattr(top, name):
+            raise ValidationError(
+                f"{name} may be at most {getattr(top, name)} on this installation."
+            )
+    if 0 < asked["deadline_seconds"] < 60:
+        raise ValidationError(
+            "deadline_seconds is 0 (no deep analysis here) or at least 60."
+        )
+    await deep_budget.set_budget(
+        db, ctx, connection, DeepLimits(**asked), settings
+    )
+    return _deep_budget_read(connection, settings)
 
 
 @router.delete("/{connection_id}", status_code=status.HTTP_204_NO_CONTENT)

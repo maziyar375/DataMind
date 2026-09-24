@@ -38,7 +38,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMatch, useNavigate } from 'react-router-dom'
 import { access, connections as api } from '../api/client'
 import { useQueue, useUnsavedWork } from '../shell'
-import type { Connection, SchemaSnapshot, SchemaTable, TestResult } from '../api/types'
+import type { Connection, DeepBudget, SchemaSnapshot, SchemaTable, TestResult } from '../api/types'
 import {
   Chip, DangerButton, DisclosureBadge, EmptyState, ErrorNote, Field, GhostButton,
   GlyphBadge, Icon, PrimaryButton, SearchField, Segmented, Select, Spinner,
@@ -49,7 +49,11 @@ import {
   StatusLine, Tabs, UnsavedNote,
 } from '../components/settings'
 import { AccessPanel, ReachBadge, TransferControl } from '../components/access'
-import { useCan } from '../permissions'
+import { useCan, useFeature } from '../permissions'
+import {
+  DEEP_FIELDS, budgetChanged, budgetProblems, budgetSentence, toLimits,
+  type DeepField,
+} from '../components/deep-budget'
 import { ListScrim, ListToggle, useListDrawer } from '../components/list-drawer'
 import { forConnection } from '../components/knowledge-queue'
 import { SectionsTab } from '../components/sections'
@@ -174,6 +178,12 @@ export default function DataSourcesPage() {
     [navigate, routeId],
   )
   const [draft, setDraft] = useState<Record<string, any>>(BLANK)
+  // The deep budget is its own row on its own endpoint (`manage`, like the
+  // disclosure policy), so it is its own draft: the five numbers as typed,
+  // beside what the server last said. Null where the mode is not enabled.
+  const deepFeature = useFeature('deep')
+  const [deepBudget, setDeepBudget] = useState<DeepBudget | null>(null)
+  const [deepDraft, setDeepDraft] = useState<Record<DeepField, string> | null>(null)
   const [password, setPassword] = useState('')
   const [schema, setSchema] = useState<SchemaSnapshot | null>(null)
   /**
@@ -251,7 +261,15 @@ export default function DataSourcesPage() {
     creating
     || password !== ''
     || [...changed].some((key) => !POLICY_KEYS.has(key))
-  const policyChanges = [...changed].some((key) => POLICY_KEYS.has(key))
+  const deepChanges =
+    !creating && deepBudget !== null && deepDraft !== null
+    && budgetChanged(deepDraft, deepBudget.effective)
+  const deepProblems = deepBudget && deepDraft
+    ? budgetProblems(deepDraft, deepBudget.ceiling)
+    : {}
+  const policyChanges =
+    [...changed].some((key) => POLICY_KEYS.has(key)) || deepChanges
+  const deepInvalid = deepChanges && Object.keys(deepProblems).length > 0
 
   // What the navigation guard stops for. A brand-new form counts only once
   // something has been typed into it: `hasChanges` is true from the moment
@@ -401,6 +419,28 @@ export default function DataSourcesPage() {
     // discarding what the user had typed — every time a save reloaded the list.
   }, [selected?.id])
 
+  // What one deep analysis here may spend — `describe` reads it, so every
+  // reader of this page can see the limits a deep question will meet. Its own
+  // effect, keyed like the form above, so a save elsewhere on the page never
+  // throws away numbers somebody is typing.
+  useEffect(() => {
+    setDeepBudget(null)
+    setDeepDraft(null)
+    if (!deepFeature || !selected) return
+    let live = true
+    api
+      .deepBudget(selected.id)
+      .then((budget) => {
+        if (!live) return
+        setDeepBudget(budget)
+        setDeepDraft(asDeepDraft(budget.effective))
+      })
+      .catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [selected?.id, deepFeature])
+
   function startCreate() {
     setSchema(null)
     setDraft(BLANK)
@@ -457,6 +497,16 @@ export default function DataSourcesPage() {
           && draft.disclosure_policy !== selected.disclosure_policy
         ) {
           await api.setDisclosure(selected.id, String(draft.disclosure_policy))
+        }
+        // The deep budget: its own request under `manage`, for the same
+        // reason, and only when a number moved.
+        if (group === 'policy' && deepChanges && deepDraft) {
+          if (Object.keys(deepProblems).length > 0) {
+            throw new Error('Fix the deep analysis limits before saving.')
+          }
+          const saved = await api.setDeepBudget(selected.id, toLimits(deepDraft))
+          setDeepBudget(saved)
+          setDeepDraft(asDeepDraft(saved.effective))
         }
         await refresh()
         if (group === 'connection') setPassword('')
@@ -798,6 +848,62 @@ export default function DataSourcesPage() {
           </Field>
         </FieldRow>
       </Section>
+
+      {!creating && deepFeature && deepBudget && deepDraft && (
+        <Section
+          title="Deep analysis"
+          description="What one deep analysis through this connection may spend. Never more than the installation allows; 0 in any field switches deep analysis off here."
+          icon={<Icon.Zap size={14} />}
+        >
+          <FieldRow columns={3}>
+            {DEEP_FIELDS.map(({ key, label, hint }) => (
+              <Field key={key} label={label} hint={deepProblems[key] ? undefined : hint}>
+                <TextInput
+                  type="number"
+                  inputMode="numeric"
+                  min={0}
+                  max={deepBudget.ceiling[key]}
+                  dir="ltr"
+                  disabled={!mayManage}
+                  aria-invalid={deepProblems[key] ? true : undefined}
+                  value={deepDraft[key]}
+                  onChange={(e) =>
+                    setDeepDraft({ ...deepDraft, [key]: e.target.value })
+                  }
+                  style={deepProblems[key] ? { borderColor: 'var(--red)' } : undefined}
+                />
+                {deepProblems[key] && (
+                  <span
+                    role="alert"
+                    style={{
+                      display: 'flex', gap: 5, alignItems: 'flex-start',
+                      fontSize: 11, color: 'var(--red)', lineHeight: 1.4,
+                    }}
+                  >
+                    <Icon.Alert size={12} />
+                    {deepProblems[key]}
+                  </span>
+                )}
+              </Field>
+            ))}
+          </FieldRow>
+          <span style={{ fontSize: 12, color: 'var(--text-dim)', lineHeight: 1.5 }}>
+            {budgetSentence(
+              deepBudget,
+              deepChanges && Object.keys(deepProblems).length === 0
+                ? toLimits(deepDraft)
+                : undefined,
+            )}
+          </span>
+          {mayEdit && !mayManage && (
+            <span style={{ fontSize: 11.5, color: 'var(--text-faint)', lineHeight: 1.5 }}>
+              Only someone with full access can change these — they decide
+              what other people's deep questions through this connection may
+              cost.
+            </span>
+          )}
+        </Section>
+      )}
     </>
   )
 
@@ -967,8 +1073,12 @@ export default function DataSourcesPage() {
                     {policyChanges && <UnsavedNote />}
                     <PrimaryButton
                       onClick={() => save('policy')}
-                      disabled={saving !== null || !policyChanges}
-                      title={policyChanges ? undefined : 'No changes to save.'}
+                      disabled={saving !== null || !policyChanges || deepInvalid}
+                      title={
+                        deepInvalid
+                          ? 'Fix the deep analysis limits first.'
+                          : policyChanges ? undefined : 'No changes to save.'
+                      }
                     >
                       {saving === 'policy' && <Spinner />}
                       Save policy
@@ -1721,3 +1831,9 @@ function engineLabel(value: string): string {
   return DATABASE_TYPES.find((t) => t.value === value)?.label ?? value
 }
 
+/** A budget as the five strings its inputs hold. */
+function asDeepDraft(limits: DeepBudget['effective']): Record<DeepField, string> {
+  return Object.fromEntries(
+    DEEP_FIELDS.map(({ key }) => [key, String(limits[key])]),
+  ) as Record<DeepField, string>
+}

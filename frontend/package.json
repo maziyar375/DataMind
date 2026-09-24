@@ -32,7 +32,7 @@
     "test:usage": "node --experimental-strip-types src/components/usage-chart.test.ts",
     "test:sections": "node --experimental-strip-types src/components/sections-model.test.ts",
     "test:permissions": "node --experimental-strip-types scripts/permissions.test.ts",
-    "test:deep": "node --experimental-strip-types src/components/deep-plan.test.ts"
+    "test:deep": "node --experimental-strip-types src/components/deep-plan.test.ts && node --experimental-strip-types src/components/deep-budget.test.ts"
   },
   "dependencies": {
     "react": "^18.3.1",
