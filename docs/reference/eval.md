@@ -199,6 +199,62 @@ The scorecard carries `matcher`, `embedding_model` and `vectors_in_store`, and
 the report prints an extra line: **the share of questions the embedding half
 actually retrieved for, beside execution accuracy, on purpose.** §6.3 is why.
 
+### The deep arm — a different suite, a different pipeline, a different scorecard
+
+```bash
+bash scripts/eval_run.sh --suite deep_v1 --mode deep --llm-config <id>
+```
+
+`deep_v1.json` is twenty *why* questions frozen on 2026-09-22 with **no
+`gold_sql`**, and `--mode deep` runs each through `DeepPipeline`
+(docs/plans/deep-analysis-mode.md) against the same throwaway `sales` fixture,
+at the shipped budget and deadlines. The two refuse each other: a deep suite
+without `--mode deep`, or `--mode deep` over a gold suite, exits 2 before the app
+database is touched. `--semantic` and `--comments` are the only arms it takes.
+
+**Execution accuracy does not exist here** — there is no single statement a
+multi-query answer reduces to. The scorecard (`metrics.deep_scorecard`) reports
+the five numbers that need no provider, **pooled over statements and claims**,
+not averaged per answer:
+
+| | Computed from |
+|---|---|
+| **guard pass rate** | every statement a run generated, repairs included, against the guard's verdicts |
+| **execution success** | of those the guard accepted, the ones the database ran |
+| **claim traceability** | of the answer's sentences that state a figure, those citing a step whose result supports every figure in them (Phase 3's per-claim check) |
+| **plan adherence** | steps DONE / steps declared — and `plan_reached`, steps attempted / declared, beside it |
+| **cost per answer** | queries, prompt and completion tokens, wall clock — as distributions, beside the four above and never instead |
+
+**Answer correctness is reported as `null`, with a sentence saying why** — the
+field's default is an LLM judge, and this uses none. Read each answer against
+its record's `known_by_construction`; on this fixture most honest answers are
+*"nothing moved, and here is why the number looked like it did"*, so a run that
+names a driver has usually fabricated one.
+
+The run is filed in `eval_runs` under `prompt_version = "<PROMPT_VERSION>+<DEEP_PROMPT_VERSION>"`,
+because the planner's prompt and the generator's version separately. Each
+question's `eval_results` row leaves `gold_sql`, `execution_match` and
+`exact_match` NULL — *not measured* — and the per-question detail (the
+restatement, the answer, the steps and claims counts) is in `metrics.records`.
+
+**The interruption rate is not an eval number and no run produces it.** Of the
+deep runs readers started, how many did they read to the end? It is
+`services.deep_plan.interruption()`, and at a `psql` prompt:
+
+```sql
+SELECT
+  count(*) FILTER (WHERE status = 'SUCCEEDED' AND NOT answer_now_requested) AS read_to_end,
+  count(*) FILTER (WHERE status = 'SUCCEEDED' AND answer_now_requested)     AS answer_now,
+  count(*) FILTER (WHERE status = 'CANCELLED')                             AS cancelled,
+  count(*) FILTER (WHERE status IN ('FAILED', 'TIMED_OUT'))                AS failed
+FROM runs
+WHERE depth = 'DEEP' AND status IN ('SUCCEEDED', 'CANCELLED', 'FAILED', 'TIMED_OUT');
+```
+
+The rate is `(answer_now + cancelled) / (read_to_end + answer_now + cancelled)`.
+Failures are the product stopping, not the reader, so they are reported and
+kept out of the denominator.
+
 ---
 
 ## 2. The golden set

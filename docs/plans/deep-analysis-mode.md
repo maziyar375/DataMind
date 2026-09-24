@@ -5,8 +5,8 @@
 > §0.3's number is still **0.42**, the middle band; nothing has moved it. The
 > override is recorded here rather than the gate being re-read as open: the mode
 > stays behind `deep_enabled = False`, and no deep number may be quoted as
-> evidence the mode *works* until §0.3's threshold is met. Phases 4–6 are
-> complete (**66 of 85**). Written 2026-09-22
+> evidence the mode *works* until §0.3's threshold is met. Phases 4–7 are
+> complete (**73 of 85**); 8 (governance) and 9 (documentation) are open. Written 2026-09-22
 > against `main`. The argument for *why* lives in
 > [research/deep-analysis-mode.md](../research/deep-analysis-mode.md) — read it
 > first; this document does not re-argue it. The feature is
@@ -1007,15 +1007,41 @@ evidence **that says so**.
 > statement — dark and light. **What that does not show is a real provider
 > writing the plan**; that is Phase 7's run.
 
-### 12.9 Phase 7 — Scoring it · **0 / 7**
+### 12.9 Phase 7 — Scoring it · **7 / 7** ✅ *(the full twenty-question run was still in flight when this landed)*
 
-- [ ] A `--suite deep_v1 --mode deep` arm on the runner
-- [ ] Guard pass rate across all sub-queries — no provider
-- [ ] Execution success rate across all sub-queries — no provider
-- [ ] **Claim traceability** — every number in the prose appears in some cited result. No provider
-- [ ] Plan adherence — steps executed vs steps declared
-- [ ] Queries, tokens and wall-clock per answer, **reported beside accuracy, never instead of it**
-- [ ] **The interruption rate** — of the deep runs a reader starts, what fraction are read to the end
+- [x] A `--suite deep_v1 --mode deep` arm on the runner — `app/eval/deep.py` runs each question through `DeepPipeline` on the throwaway `sales` fixture at the shipped budget and deadlines; the suite and the mode **refuse each other** when they disagree, before the app database is touched. Filed under `prompt_version = "v12+d1"`; gold-shaped columns NULL, never `False`
+- [x] Guard pass rate across all sub-queries — no provider; pooled over every statement, repairs included
+- [x] Execution success rate across all sub-queries — no provider; of the statements the guard accepted, the ones the database ran
+- [x] **Claim traceability** — every number in the prose appears in some cited result. No provider: Phase 3's per-claim check, pooled over the claims that state a figure, with the uncited count beside it
+- [x] Plan adherence — steps done / steps declared, and `plan_reached` (attempted / declared) beside it, plus how many runs stopped early and why
+- [x] Queries, tokens and wall-clock per answer, **reported beside accuracy, never instead of it** — as distributions (mean, p50, p95, max). The card's answer-correctness field is `null` with the sentence saying why: this scorecard uses no judge, and `deep_v1` has no gold
+- [x] **The interruption rate** — `services.deep_plan.interruption()` over `runs`, and the same query as SQL in [eval.md](../reference/eval.md) §1. Failures are the product's, not the reader's, and are kept out of the denominator
+
+**Done when:** `--suite deep_v1 --mode deep` produces a scorecard with five
+numbers on it, and the interruption rate is a query somebody can run.
+
+> **The first real run, on one question** — `bc3bd6d3-d8b5-45b6-a291-2d4e6c2b0baa`,
+> 2026-09-24, DeepSeek V4 **Flash** (`3b42e44b`), `deep-001`. This is a Flash
+> number and may not share a sentence with the Pro baselines (eval.md §6).
+> Guard pass 100% over 3 statements, execution success 100%, **claim
+> traceability 25.0%** over 4 claims (1 uncited), plan adherence 60% — **stopped
+> on the soft deadline after 3 of 5 steps, in 547 s.** Two findings, recorded
+> rather than tuned away:
+>
+> - **The latency contract does not hold on this model.** Two calls were 78% of
+>   the wall clock: the plan (7,110 completion tokens, 224 s) and the first
+>   step's `generate` (13,946 completion tokens, 202 s) — a reasoning model
+>   thinking at length, not a loop. At the shipped 600 s deadline a five-step
+>   plan cannot finish, so on Flash the mode answers from partial evidence by
+>   construction. This is the §3.8 risk arriving before any reader has seen the
+>   mode, and the answer may be a shorter plan rather than a longer deadline.
+> - **The answer named a driver the fixture does not have.** `deep-001`'s
+>   `known_by_construction` is that February is short only by three days —
+>   nothing moved per trading day. The run decomposed the fall by channel
+>   ("web … 62.8% of the total change") and category, which is arithmetic that
+>   is true of the rows and an explanation that is false, and it never reached
+>   the per-day check. This is precisely the failure `deep_v1` was frozen to
+>   catch, and it is the gate's warning (§0.3) made concrete.
 
 ### 12.10 Phase 8 — Governance · **0 / 6**
 
@@ -1046,16 +1072,17 @@ evidence **that says so**.
 | 4 — The plan and the graph | 12 | 12 |
 | 5 — The loop | 11 | 11 |
 | 6 — The surface | 12 | 12 |
-| 7 — Scoring | 0 | 7 |
+| 7 — Scoring | 7 | 7 |
 | 8 — Governance | 0 | 6 |
 | 9 — Documentation | 0 | 6 |
-| **Total** | **66** | **85** |
+| **Total** | **73** | **85** |
 
 ### 12.13 Change log
 
 | Date | What changed |
 |---|---|
 | 2026-09-22 | Written. No phase started. |
+| 2026-09-24 | **Phase 7 complete, 7/7.** `--suite deep_v1 --mode deep` runs the frozen set through `DeepPipeline` on the real fixture and prints a scorecard of the five provider-free numbers — guard pass rate, execution success, claim traceability, plan adherence, cost per answer — pooled over statements and claims, with answer correctness stated as not scored. The interruption rate is `services.deep_plan.interruption()` and its SQL twin in eval.md. First real run, one question on Flash (`bc3bd6d3`): 100% / 100% / **25.0%** / 60%, **547 s, cut by the soft deadline at step 3**, and an answer that attributed a calendar effect to channels — both recorded above as findings. The full twenty-question run was in flight when this landed. `make test` green. | 73 of 85 |
 | 2026-09-24 | **Phase 6 complete, 12/12.** A reader can start one, watch it, and stop it early. `depth` on the message (refused while `deep_enabled` is off), `0041` for `runs.depth` and `runs.answer_now_requested`, three durable plan events and a transient budget gauge, `POST /runs/{id}/answer-now` (cooperative, read on the heartbeat, **not** cancel) and `GET /runs/{id}/plan` (the `ANALYSIS` artifact, or the events folded; withheld to a reader without the data). The composer offers *Quick* / *Deep — a few minutes* where `/auth/me` names the feature; the plan panel shows the running step, revisions struck through, and *Answer now* as its primary control; the answer's footnotes open each step's statement. Seen end to end in the SPA against fixtures, both themes. `make test` 3,452 green, `npm test` 22 suites + build green. | 66 of 85 |
 | 2026-09-24 | **Phase 5 complete, 11/11.** The steps run, the evidence accumulates, the answer gets written. `compute` discloses each step's result the moment it closes and dispatches its tool into `app/analysis/` (`pipeline/evidence.py`); `step` revises a dependent step from what its dependencies found — replace only, never add — and asks the generator for the row shape the tool needs; `synthesize` is `reports/narrate.py`'s section prompt over the steps, with Phase 3's claims checked per step. The guard's sixth entry point replays the corpus through four kinds of deep statement (96 cases); the disclosure test scans every prompt for sentinel rows and **proves the scan works on a deliberately broken `disclose()`** — and found a real leak through the next turn's history, fixed. `_finalise` files each sub-query against its own result and records the run's total repairs. `make test` 3,438 green, `make guard` 140, `lint-imports` 9/9. **Not yet run against a real provider or the real `sales` fixture** — that is Phase 7. | 54 of 85 |
 | 2026-09-23 | **Phase 4 complete, 12/12 — started over the gate, on the owner's instruction.** §0.3 still reads 0.42 and still says Phases 4–9 wait; the owner asked for 4–7 regardless, and that is recorded in the status banner rather than the gate being re-read. `DEEP_GRAPH` is compiled at import and reachable from nothing: `route → plan → [step → scope → retrieve → generate ⇄ validate → execute → inspect → compute] → synthesize → chart`. The budget is read **on the edges** — into `step` and back into `generate` — so exhaustion routes to `synthesize` rather than raising, and a failed sub-question closes its step as evidence instead of ending the run. `compute` and `synthesize` are their Phase 4 minimum (record the step; list what ran); Phase 5 fills them. `make test` 3,318 green, `lint-imports` 9/9. | 43 of 85 |

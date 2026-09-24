@@ -112,3 +112,58 @@ async def read_plan(db: AsyncSession, run: Run, *, may_read_data: bool) -> dict[
         ).scalars()
         record = {**base, **fold((row.type, row.data) for row in rows)}
     return record if may_read_data else _withhold(record)
+
+
+# ── the interruption rate (docs/plans/deep-analysis-mode.md §3.8) ────────────
+async def interruption(
+    db: AsyncSession, *, since: Any = None, connection_id: Any = None
+) -> dict[str, Any]:
+    """Of the deep runs readers started, how many they read to the end.
+
+    **The product metric no eval can give**: a mode people interrupt is a mode
+    whose latency contract is wrong, and that is a finding about the plan
+    panel, not about the SQL. Counted over deep runs that have **ended**, in
+    four exclusive buckets:
+
+    * `read_to_end` — SUCCEEDED, and nobody pressed *Answer now*;
+    * `answer_now` — SUCCEEDED after *Answer now*: the reader took the answer
+      early, which is an interruption that kept its evidence;
+    * `cancelled` — the reader stopped it and kept nothing;
+    * `failed` — FAILED or TIMED_OUT: the product stopped, not the reader,
+      so it is reported and **kept out of the rate's denominator**.
+
+    The rate is `(answer_now + cancelled) / (read_to_end + answer_now +
+    cancelled)`, and None when no reader has finished a deep run yet — "no
+    interruptions" and "no data" are different statements. The same query in
+    SQL, for somebody at a `psql` prompt, is in `docs/reference/eval.md`.
+    """
+    from sqlalchemy import case, func
+
+    ended = (RunStatus.SUCCEEDED, RunStatus.CANCELLED, RunStatus.FAILED, RunStatus.TIMED_OUT)
+    succeeded = Run.status == RunStatus.SUCCEEDED
+
+    def bucket(condition: Any) -> Any:
+        return func.coalesce(func.sum(case((condition, 1), else_=0)), 0)
+
+    query = select(
+        bucket(succeeded & Run.answer_now_requested.is_(False)),
+        bucket(succeeded & Run.answer_now_requested.is_(True)),
+        bucket(Run.status == RunStatus.CANCELLED),
+        bucket(Run.status.in_((RunStatus.FAILED, RunStatus.TIMED_OUT))),
+    ).where(Run.depth == RunDepth.DEEP, Run.status.in_(ended))
+    if since is not None:
+        query = query.where(Run.created_at >= since)
+    if connection_id is not None:
+        query = query.where(Run.connection_id == connection_id)
+
+    read_to_end, answer_now, cancelled, failed = (
+        int(v) for v in (await db.execute(query)).one()
+    )
+    started = read_to_end + answer_now + cancelled
+    return {
+        "read_to_end": read_to_end,
+        "answer_now": answer_now,
+        "cancelled": cancelled,
+        "failed": failed,
+        "interruption_rate": (answer_now + cancelled) / started if started else None,
+    }

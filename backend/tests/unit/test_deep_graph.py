@@ -298,6 +298,9 @@ def test_one_service_reaches_the_deep_graph_and_nothing_else_does() -> None:
     module does — `run_service`, behind `deep_enabled`, which
     `test_deep_api.py` shows refusing a DEEP question while it is off. A second
     importer would be a second door, and would have to be argued for here.
+
+    Phase 7 argued for one: `eval/deep.py`, the offline harness, which the
+    `eval is offline-only` import-linter contract keeps off the request path.
     """
     root = Path(__file__).resolve().parents[2] / "app"
     names = {"DeepPipeline", "DEEP_GRAPH", "DeepState"}
@@ -313,4 +316,4 @@ def test_one_service_reaches_the_deep_graph_and_nothing_else_does() -> None:
                 and names & {alias.name for alias in node.names}
             ):
                 reached.append(str(path.relative_to(root)))
-    assert sorted(set(reached)) == ["services/run_service.py"]
+    assert sorted(set(reached)) == ["eval/deep.py", "services/run_service.py"]

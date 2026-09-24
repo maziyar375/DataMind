@@ -1025,9 +1025,33 @@ async def _resolve_config(
     )
 
 
+def deep_arm_refusal(args: argparse.Namespace) -> str | None:
+    """Why this combination of suite and flags is not a deep run, or None.
+
+    The deep arm is its own road: a different suite shape (no gold), a
+    different pipeline, a different scorecard. A gold suite scored as deep, or
+    a deep suite run through the chat pipeline, would each print a number about
+    nothing — so the mismatch is refused, before the app database is touched.
+    """
+    deep_suite = dataset.is_deep_suite(args.suite)
+    if (args.mode == "deep") != deep_suite:
+        return (
+            "--mode deep needs a deep suite, and a deep suite needs --mode deep "
+            f"({args.suite!r} is {'a deep' if deep_suite else 'not a deep'} suite)."
+        )
+    if deep_suite and (args.templates == "on" or args.schema_vectors or args.retrieve_budget):
+        return "The deep arm takes --semantic and --comments only."
+    return None
+
+
 async def _amain(args: argparse.Namespace) -> int:
     settings = get_settings()
     negative = dataset.is_negative_suite(args.suite)
+    refusal = deep_arm_refusal(args)
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 2
+    deep_suite = dataset.is_deep_suite(args.suite)
 
     # Resolve the model config from the app database and decrypt its key.
     sm = get_sessionmaker()
@@ -1043,6 +1067,12 @@ async def _amain(args: argparse.Namespace) -> int:
         model_snapshot = llm.snapshot()
         config_id = config.id
     model_name = llm.model
+
+    if deep_suite:
+        return await _amain_deep(
+            args, settings=settings, llm=llm, model_snapshot=model_snapshot,
+            config_id=config_id,
+        )
 
     if negative:
         suite: dataset.GoldSuite | dataset.NegativeSuite
@@ -1279,6 +1309,147 @@ async def _amain(args: argparse.Namespace) -> int:
     return _apply_gates(report_dict, args)
 
 
+async def _amain_deep(
+    args: argparse.Namespace,
+    *,
+    settings: Settings,
+    llm: ResolvedLLM,
+    model_snapshot: dict[str, Any],
+    config_id: UUID | None,
+) -> int:
+    """`--suite deep_v1 --mode deep`: the deep scorecard, on the real fixture.
+
+    docs/plans/deep-analysis-mode.md Phase 7. Every question is run through
+    `DeepPipeline` against a throwaway copy of the fixture, and the scorecard
+    is `metrics.deep_scorecard` — five numbers computed from the runs
+    themselves, and answer correctness reported as not scored. The run is
+    persisted like any other, filed under `DEEP_PROMPT_VERSION` beside the
+    generator's: the planner's prompt and the SQL prompt version separately.
+    """
+    from app.eval.deep import evaluate_deep
+    from app.pipeline.prompts.deep import DEEP_PROMPT_VERSION
+
+    suite = dataset.load_deep_suite(args.suite)
+    records = _select(list(suite.records), limit=args.limit, tag=args.tag)
+    if not records:
+        print("No records selected (check --tag / --limit).", file=sys.stderr)
+        return 1
+    spec = dataset.fixture_for(records[0].connection_fixture)
+    gateway = LiteLLMGateway.from_settings(settings)
+    started_at = utcnow()
+    git_sha = _git_sha()
+    arm = ", ".join([
+        "deep",
+        "with catalog comments" if args.comments else "no catalog comments",
+        "semantic layer on" if args.semantic == "on" else "semantic layer off",
+    ])
+    print(f"Spinning fixture {spec.name} ({spec.image}, {arm}) …", file=sys.stderr)
+    outcomes: list[metrics.DeepOutcome] = []
+    async with spin_fixture(spec, comments=args.comments) as params:
+        connector = build_connector(kind=spec.dialect, **params)
+        try:
+            snap = snapshot_to_dict(
+                await connector.introspect(
+                    schema_allowlist=list(spec.schema_allowlist),
+                    hints=HintBudget.from_policy(DisclosurePolicy.FULL),
+                )
+            )
+            policy = build_policy(
+                snap, DatabaseKind(spec.dialect).sqlglot_dialect, settings.default_max_rows
+            )
+            semantic = load_semantic(spec, snap) if args.semantic == "on" else None
+            for i, record in enumerate(records, start=1):
+                outcome = await evaluate_deep(
+                    record, gateway=gateway, llm=llm, connector=connector,
+                    snapshot=snap, policy=policy, settings=settings,
+                    model_name=llm.model, semantic=semantic,
+                    include_db_comments=args.comments,
+                )
+                outcomes.append(outcome)
+                print(
+                    f"[{i:>2}/{len(records)}] {record.id}: {outcome.outcome} · "
+                    f"{outcome.steps_done}/{outcome.steps_declared} steps · "
+                    f"{outcome.statements} statements · {outcome.total_ms / 1000:.0f}s"
+                    + (f" · {outcome.failure_reason}" if outcome.failure_reason else ""),
+                    file=sys.stderr,
+                )
+        finally:
+            await connector.close()
+    finished_at = utcnow()
+
+    card = metrics.deep_scorecard(outcomes)
+    card.update({
+        "mode": "deep",
+        "deep_prompt_version": DEEP_PROMPT_VERSION,
+        "catalog_comments": bool(args.comments),
+        "semantic_layer": args.semantic == "on",
+    })
+    eval_run_id = await _persist_deep(
+        suite=suite, records=records, outcomes=outcomes, card=card,
+        config_id=config_id, model_snapshot=model_snapshot,
+        started_at=started_at, finished_at=finished_at, git_sha=git_sha,
+    )
+    await dispose_engine()
+    print(
+        json.dumps(card, indent=2, default=str) if args.json
+        else metrics.format_deep_scorecard(
+            card, title=f"{suite.suite} {suite.version} · {llm.model} · {arm}"
+        )
+    )
+    print(f"\neval_run: {eval_run_id}", file=sys.stderr)
+    return 0
+
+
+async def _persist_deep(
+    *,
+    suite: dataset.DeepSuite,
+    records: list[dataset.DeepRecord],
+    outcomes: list[metrics.DeepOutcome],
+    card: dict[str, Any],
+    config_id: UUID | None,
+    model_snapshot: dict[str, Any],
+    started_at: Any,
+    finished_at: Any,
+    git_sha: str | None,
+) -> UUID:
+    """An `eval_runs` row for the scorecard and an `eval_results` row per question.
+
+    The gold-shaped columns — `gold_sql`, `execution_match`, `exact_match` —
+    stay NULL: *not measured*, which is the truth for a suite with no gold,
+    rather than a `False` that would read as a wrong answer.
+    """
+    from app.pipeline.prompts.deep import DEEP_PROMPT_VERSION
+
+    by_id = {r.id: r for r in records}
+    sm = get_sessionmaker()
+    async with sm() as session:
+        run = EvalRun(
+            id=uuid.uuid4(), suite=suite.suite, suite_version=suite.version,
+            connection_fixture=records[0].connection_fixture,
+            llm_config_id=config_id, model_snapshot=model_snapshot,
+            prompt_version=f"{PROMPT_VERSION}+{DEEP_PROMPT_VERSION}",
+            git_sha=git_sha, total=len(outcomes), metrics=card,
+            started_at=started_at, finished_at=finished_at,
+        )
+        session.add(run)
+        await session.flush()
+        for o in outcomes:
+            session.add(EvalResult(
+                id=uuid.uuid4(), eval_run_id=run.id, record_id=o.record_id,
+                question=by_id[o.record_id].question, tags=o.tags,
+                difficulty=o.difficulty, outcome=o.outcome,
+                expected_tables=o.expected_tables, retrieved_tables=o.tables_reached,
+                retrieval_recall=metrics.retrieval_recall(o.expected_tables, o.tables_reached),
+                validated_ok=o.statements_valid > 0, execution_ok=o.steps_done > 0,
+                policy_violations=o.policy_violations, attempts=o.statements,
+                llm_ms=o.llm_ms, db_ms=o.db_ms, total_ms=o.total_ms,
+                prompt_tokens=o.prompt_tokens, completion_tokens=o.completion_tokens,
+                failure_reason=o.failure_reason,
+            ))
+        await session.commit()
+        return run.id
+
+
 def _apply_negative_gates(report: dict[str, Any]) -> int:
     """The build fails only on a *containment breach*: a greeting, write request,
     or schema question that reached the database. That is the invariant the
@@ -1363,6 +1534,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="llm_configs UUID from the app DB (defaults to EVAL_LLM_CONFIG_ID, "
         "or the sole config if only one exists)",
+    )
+    parser.add_argument(
+        "--mode", choices=("quick", "deep"), default="quick",
+        help="`deep` runs a deep suite (deep_v1) through the deep analysis "
+             "pipeline and prints the deep scorecard: guard pass rate, "
+             "execution success, claim traceability, plan adherence and cost "
+             "per answer. Answer correctness is not scored — there is no gold.",
     )
     parser.add_argument("--limit", type=int, default=None, help="run only the first N records")
     parser.add_argument("--tag", default=None, help="run only records carrying this tag")

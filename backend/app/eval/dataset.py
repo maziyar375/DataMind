@@ -54,6 +54,42 @@ class NegativeRecord(BaseModel):
     rationale: str = ""
 
 
+class DeepRecord(BaseModel):
+    """One *why* question for the deep mode — `deep_v1.json`.
+
+    **No `gold_sql`, by design**: there is no single statement a deep answer
+    reduces to, and every metric the deep scorecard reports is computed from
+    the run itself (`metrics.deep_scorecard`). `known_by_construction` is the
+    fixture fact that makes the honest answer checkable by a person reading
+    the report; nothing scores against it automatically.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    question: str
+    connection_fixture: str
+    why_deep: str
+    shallow_answer: str
+    expected_tables: list[str]
+    min_steps: int
+    known_by_construction: str | None = None
+    traps: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    difficulty: Difficulty
+
+
+class DeepSuite(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    suite: str
+    version: str
+    kind: Literal["deep"] = "deep"
+    frozen_on: str = ""
+    description: str = ""
+    records: list[DeepRecord]
+
+
 class GoldSuite(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -143,6 +179,17 @@ def _suite_path(name: str) -> Path:
 def is_negative_suite(name: str) -> bool:
     data = json.loads(_suite_path(name).read_text())
     return data.get("kind") == "negative"
+
+
+def is_deep_suite(name: str) -> bool:
+    data = json.loads(_suite_path(name).read_text())
+    return data.get("kind") == "deep"
+
+
+def load_deep_suite(name: str) -> DeepSuite:
+    suite = DeepSuite.model_validate_json(_suite_path(name).read_text())
+    _assert_unique_ids([r.id for r in suite.records])
+    return suite
 
 
 def load_gold_suite(name: str) -> GoldSuite:

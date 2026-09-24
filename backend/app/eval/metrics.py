@@ -430,3 +430,168 @@ def format_report(report: SuiteReport, *, title: str = "") -> str:
     lines.append("")
     lines.append("outcomes: " + "  ".join(f"{k}={v}" for k, v in report.outcome_counts.items()))
     return "\n".join(lines)
+
+
+# ── the deep scorecard (docs/plans/deep-analysis-mode.md Phase 7) ────────────
+#
+# **Scoring a deep answer is not execution accuracy** — there is no single
+# `gold_sql` a multi-query answer reduces to. The field's default is an LLM
+# judge, whose failure modes (length bias, position bias, self-preference) are
+# documented and whose cost is a model call per verdict. Five of the plan's
+# six metrics need no provider at all, and they are what is computed here:
+# guard pass rate, execution success rate, claim traceability, plan adherence,
+# and what an answer cost. The sixth — whether the answer is *right* — is
+# reported as **not scored**, never estimated. A person reads the answers
+# against `known_by_construction`; nothing here pretends to.
+DEEP_ANSWERED = "ANSWERED"        # synthesize wrote an answer, however partial
+DEEP_PLAN_FAILED = "PLAN_FAILED"  # no plan, so nothing to answer from
+DEEP_ERROR = "ERROR"              # the run failed or timed out
+
+ANSWER_CORRECTNESS_NOTE = (
+    "not scored: deep_v1 has no gold answers and this scorecard uses no judge. "
+    "Read each answer against its record's known_by_construction."
+)
+
+
+@dataclass
+class DeepOutcome:
+    """What one deep run did — every figure the scorecard is built from."""
+
+    record_id: str
+    tags: list[str]
+    difficulty: str
+    model: str = ""
+    outcome: str = DEEP_ERROR
+    failure_reason: str | None = None
+
+    restatement: str = ""
+    answer: str = ""
+    stop_reason: str = ""
+    min_steps: int = 0
+    #: What the plan declared, and what became of each step.
+    steps_declared: int = 0
+    steps_done: int = 0
+    steps_failed: int = 0
+    steps_skipped: int = 0
+    revisions: int = 0
+
+    #: Every statement generated, repairs included.
+    statements: int = 0
+    #: …of which the guard accepted.
+    statements_valid: int = 0
+    #: …of which ran without a database error.
+    statements_ran: int = 0
+    policy_violations: list[str] = field(default_factory=list)
+
+    #: Claims stating a figure, and of those, the ones that cite a step whose
+    #: result supports every figure in them — `NumericCheck.traceable`'s
+    #: numerator and denominator, kept so the aggregate is claim-weighted.
+    claims: int = 0
+    claims_stating: int = 0
+    claims_traced: int = 0
+    claims_uncited: int = 0
+
+    expected_tables: list[str] = field(default_factory=list)
+    tables_reached: list[str] = field(default_factory=list)
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cache_read_tokens: int | None = None
+    llm_ms: int = 0
+    db_ms: int = 0
+    total_ms: int = 0
+
+
+def _dist(values: list[float]) -> dict[str, float]:
+    if not values:
+        return {"mean": 0.0, "p50": 0.0, "p95": 0.0, "max": 0.0}
+    return {
+        "mean": round(sum(values) / len(values), 1),
+        "p50": round(percentile(values, 50), 1),
+        "p95": round(percentile(values, 95), 1),
+        "max": round(max(values), 1),
+    }
+
+
+def deep_scorecard(outcomes: list[DeepOutcome]) -> dict[str, Any]:
+    """The five provider-free numbers, beside what they cost. Pure.
+
+    Rates are **pooled**, not averaged per answer: a question that ran twelve
+    statements weighs twelve times one that ran one, because the property being
+    measured — "does every statement go through the guard and run", "does every
+    number resolve to a result" — is a property of statements and claims, not
+    of questions. The per-answer figures are the cost side, and they are
+    distributions because a mean hides the one question that spent the budget.
+    """
+    answered = [o for o in outcomes if o.outcome == DEEP_ANSWERED]
+    statements = sum(o.statements for o in outcomes)
+    valid = sum(o.statements_valid for o in outcomes)
+    ran = sum(o.statements_ran for o in outcomes)
+    stating = sum(o.claims_stating for o in answered)
+    traced = sum(o.claims_traced for o in answered)
+    declared = sum(o.steps_declared for o in answered)
+    done = sum(o.steps_done for o in answered)
+    attempted = sum(o.steps_done + o.steps_failed + o.steps_skipped for o in answered)
+
+    return {
+        "questions": len(outcomes),
+        "answered": len(answered),
+        "outcomes": dict(Counter(o.outcome for o in outcomes)),
+        # 1 — every sub-query, through the same guard as a chat question.
+        "guard_pass_rate": round(_rate(valid, statements), 4),
+        "statements": statements,
+        # 2 — of the statements the guard accepted, how many the database ran.
+        "execution_success_rate": round(_rate(ran, valid), 4),
+        # 3 — every number in the prose appears in the result it cites.
+        "claim_traceability": round(_rate(traced, stating), 4) if stating else None,
+        "claims_stating_a_figure": stating,
+        "claims_uncited": sum(o.claims_uncited for o in answered),
+        # 4 — steps executed against steps declared, and the looser "reached".
+        "plan_adherence": round(_rate(done, declared), 4) if declared else None,
+        "plan_reached": round(_rate(attempted, declared), 4) if declared else None,
+        "stopped_early": dict(Counter(o.stop_reason for o in answered if o.stop_reason)),
+        "below_min_steps": sum(1 for o in answered if o.steps_declared < o.min_steps),
+        # 5 — what an answer cost, reported beside the four above, never instead.
+        "per_answer": {
+            "queries": _dist([float(o.statements) for o in answered]),
+            "prompt_tokens": _dist([float(o.prompt_tokens) for o in answered]),
+            "completion_tokens": _dist([float(o.completion_tokens) for o in answered]),
+            "wall_clock_ms": _dist([float(o.total_ms) for o in answered]),
+        },
+        "policy_violations": dict(
+            Counter(v for o in outcomes for v in o.policy_violations)
+        ),
+        # 6 — the one that needs a provider, and is therefore not here.
+        "answer_correctness": None,
+        "answer_correctness_note": ANSWER_CORRECTNESS_NOTE,
+        "records": [o.__dict__ for o in outcomes],
+    }
+
+
+def _pct(value: float | None) -> str:
+    return "—" if value is None else f"{value * 100:.1f}%"
+
+
+def format_deep_scorecard(card: dict[str, Any], *, title: str = "") -> str:
+    per = card["per_answer"]
+    queries, tokens, clock = per["queries"], per["prompt_tokens"], per["wall_clock_ms"]
+    rows = [
+        ("questions", f"{card['questions']}  (answered {card['answered']}; "
+                      f"{card['outcomes']})"),
+        ("guard pass rate", f"{_pct(card['guard_pass_rate'])}  over "
+                            f"{card['statements']} statements"),
+        ("execution success", f"{_pct(card['execution_success_rate'])}  of the "
+                              "statements the guard accepted"),
+        ("claim traceability", f"{_pct(card['claim_traceability'])}  over "
+                               f"{card['claims_stating_a_figure']} claims stating a "
+                               f"figure ({card['claims_uncited']} uncited)"),
+        ("plan adherence", f"{_pct(card['plan_adherence'])}  steps done / declared "
+                           f"(reached {_pct(card['plan_reached'])})"),
+        ("stopped early", f"{card['stopped_early'] or 'never'}"),
+        ("queries / answer", f"mean {queries['mean']}  p95 {queries['p95']}"),
+        ("prompt tokens", f"mean {tokens['mean']:,.0f}  p95 {tokens['p95']:,.0f}"),
+        ("wall clock", f"mean {clock['mean'] / 1000:.1f}s  p95 {clock['p95'] / 1000:.1f}s"),
+        ("policy violations", f"{card['policy_violations'] or 'none'}"),
+        ("answer correctness", card["answer_correctness_note"]),
+    ]
+    return "\n".join([title or "Deep scorecard", *(f"  {k:<20} {v}" for k, v in rows)])
