@@ -38,7 +38,7 @@ __all__ = [
     "BY_STATUS", "POLICY", "REVENUE", "SNAPSHOT", "SQL_BY_STATUS",
     "SQL_FORBIDDEN", "SQL_TOTAL",
     "DeepGateway", "DeepConnector", "DeepRecorder", "plan_of", "result",
-    "deep_state", "deep_deps", "drive",
+    "deep_state", "deep_deps", "drive", "prompts",
 ]
 
 
@@ -227,7 +227,7 @@ def deep_state(
 
 def deep_deps(
     gateway: DeepGateway, connector: DeepConnector, recorder: DeepRecorder,
-    **extra: Any,
+    *, policy: Any = POLICY, **extra: Any,
 ) -> NodeDeps:
     return NodeDeps(
         llm_gateway=gateway,  # type: ignore[arg-type]
@@ -235,10 +235,15 @@ def deep_deps(
         connector=connector,  # type: ignore[arg-type]
         snapshot=SNAPSHOT,
         history=[],
-        policy=POLICY,
+        policy=policy,
         emit=recorder.emit,
         **extra,
     )
+
+
+def prompts(gateway: DeepGateway) -> str:
+    """Every byte any model was sent in the run, joined — what a leak test scans."""
+    return "\n".join(m.content for _name, sent in gateway.messages for m in sent)
 
 
 async def drive(

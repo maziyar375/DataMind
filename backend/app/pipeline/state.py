@@ -678,6 +678,25 @@ class RunState(BaseModel):
         return max(0, len(self.attempts) - 1)
 
     @property
+    def total_repairs(self) -> int:
+        """What `runs.repair_count` records. A chat run's is `repair_count`.
+
+        Separate from it because the two diverge on a deep run: the nodes ask
+        about the step in hand, the run row states the whole (plan §2.4).
+        """
+        return self.repair_count
+
+    def execution_for(self, index: int) -> ExecutionResult | None:
+        """The result `attempts[index]` produced, for its `query_executions` row.
+
+        A chat run has one result and has always filed it against every
+        statement the guard rewrote; that is kept exactly. A deep run has one
+        per step, and overrides this so each statement is filed against its
+        own.
+        """
+        return self.execution
+
+    @property
     def last_attempt(self) -> SqlAttempt | None:
         return self.attempts[-1] if self.attempts else None
 
@@ -804,10 +823,51 @@ class StepEvidence(BaseModel):
     status: Literal["DONE", "SKIPPED", "FAILED"] = "DONE"
     #: Why a step is FAILED or SKIPPED, in words a reader can act on.
     note: str = ""
+    #: The result's *shape* — how many rows, whether the cap cut it, each
+    #: column's semantic type. Copied off `execution` when the step closes so
+    #: a prompt-building reader never has a reason to open `execution`: the
+    #: disclosure ladder shares counts under every policy, and these are counts
+    #: and types, never values.
+    row_count: int = 0
+    truncated: bool = False
+    column_types: dict[str, str] = Field(default_factory=dict)
 
     @property
     def repairs(self) -> int:
         return max(0, self.last_attempt - self.first_attempt - 1)
+
+
+class StepRevision(BaseModel):
+    """The executor's verdict on the step it is about to run.
+
+    Keep it, or replace it with a sharper one now that the steps it depends on
+    have answered — *"revenue by product in the segment step two singled
+    out"* becomes *"revenue by product in EMEA"*. Only ever a replacement:
+    nothing here can add a step, so a revision can never carry a plan past its
+    ceiling. Every field required in the schema, for `PlanStep`'s reason.
+    """
+
+    keep: bool
+    question: str = Field(max_length=400)
+    why: str = Field(max_length=300)
+    intent: StepIntent
+    tool: StepTool
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fill(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            data = {"keep": True, "question": "", "why": "", "intent": "DRILL",
+                    "tool": "SQL", **data}
+        return data
+
+
+class PlanRevision(BaseModel):
+    """A step as planned, and what replaced it. Shown struck through (§4.2)."""
+
+    index: int
+    replaced: PlanStep
+    by: PlanStep
 
 
 #: Why a deep run stopped short of its plan. "" is "it did not": every step
@@ -845,6 +905,26 @@ class DeepState(RunState):
     #: run-level row budget has left.
     base_max_rows: int = 1000
     stop_reason: StopReason = ""
+    revisions: list[PlanRevision] = Field(default_factory=list)
+    #: The written answer's claims and the per-claim numeric check — a
+    #: `reports.checks.NumericCheck`, dumped. None until `synthesize` ran a
+    #: writer; a model-free answer has no claims to check.
+    synthesis: dict[str, Any] | None = None
+
+    @property
+    def total_repairs(self) -> int:
+        """Every step's repairs, summed — never `len(attempts) - 1`, which on
+        a seven-step run would report seven repairs where there were seven
+        steps (plan §2.4)."""
+        return sum(e.repairs for e in self.evidence)
+
+    def execution_for(self, index: int) -> ExecutionResult | None:
+        """The step result `attempts[index]` produced, when it is the last
+        statement of its step — the one that ran and was kept."""
+        for e in self.evidence:
+            if e.execution is not None and index == e.last_attempt - 1:
+                return e.execution
+        return None
 
     @property
     def repair_count(self) -> int:

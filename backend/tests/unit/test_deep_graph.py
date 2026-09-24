@@ -63,6 +63,8 @@ def test_the_deep_graph_is_exactly_these_edges() -> None:
         ("route", "plan"), ("route", END),
         ("plan", "step"), ("plan", "synthesize"), ("plan", END),
         ("step", "scope"), ("step", "synthesize"), ("step", END),
+        # A tool outside the closed set: the step closes without a query.
+        ("step", "step"),
         ("scope", "retrieve"), ("scope", "compute"),
         ("retrieve", "generate"), ("retrieve", "compute"),
         ("generate", "validate"), ("generate", "compute"),
@@ -113,7 +115,10 @@ async def test_a_two_step_plan_runs_both_steps_on_the_chat_road() -> None:
     assert state.question == "Why did revenue drop in March?"
     assert state.execution is not None and state.execution.row_count == 3
     assert state.stop_reason == ""
-    assert state.answer and "2 of 2" in state.answer
+    # Every planned step ran, so the writer's prose is the whole answer — no
+    # preface saying it stands on part of the plan.
+    assert state.answer == "The answer."
+    assert state.synthesis is not None
 
 
 async def test_each_step_is_asked_its_own_question() -> None:

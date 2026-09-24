@@ -58,3 +58,28 @@ plan. Never plan a step the schema cannot answer.
 Return JSON with keys: restatement, steps, stop_when."""
 
 DEEP_PLAN_USER = "Question: {question}"
+
+DEEP_REVISE_SYSTEM = """You are working through an analysis plan one step at \
+a time. The next step was written before the steps it depends on had run; \
+they have now answered. Decide whether to keep it as written or replace it \
+with a sharper sub-question that uses what they found — for example, naming \
+the segment an earlier step singled out instead of referring to it.
+
+Replace it only when the findings make a better question obvious. Never \
+widen the analysis, never ask two things at once, and never add a step: you \
+are deciding about this one step only. The replacement must be answerable by \
+a single read-only query, in the language of the original.
+
+Return JSON with keys: keep, question, why, intent, tool. When keep is true \
+the other fields are ignored; repeat the step's own values."""
+
+DEEP_REVISE_USER = """What the analysis is answering: {restatement}
+
+The step about to run:
+question: {question}
+intent: {intent}
+tool: {tool}
+why: {why}
+
+What the steps it depends on found:
+{findings}"""

@@ -127,6 +127,13 @@ _TABLES = (
     # `knowledge_templates` is here only as the target of two foreign keys.
     "artifacts", "generated_queries", "knowledge_templates",
     "knowledge_template_hits", "answer_feedback",
+    # Which result each statement produced. A deep run files one per step
+    # against the statement that produced it, and the test of that has to
+    # read the rows `_finalise` actually wrote. `run_events` because
+    # `_finalise` emits between its writes, and `_emit` rolls the session
+    # back when the event row cannot be written — without the table, every
+    # row written before the first event would vanish.
+    "query_executions", "run_events",
 )
 
 

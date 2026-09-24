@@ -35,8 +35,10 @@ logs:
 test:
 	cd backend && pytest -q
 
+# The corpus, and the corpus replayed through a deep run's sub-queries — the
+# door that multiplies statements per question (deep-analysis-mode.md §5).
 guard:
-	cd backend && pytest tests/unit/test_sqlguard_hostile.py -v
+	cd backend && pytest tests/unit/test_sqlguard_hostile.py tests/unit/test_deep_guard.py -v
 
 lint:
 	cd backend && ruff check app tests && lint-imports

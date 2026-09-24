@@ -764,6 +764,11 @@ def _next_step(label: str, run: RunState) -> str:
     return STEP
 
 
+def _after_step(label: str, run: RunState) -> str:
+    """`step` names `step` only to close a step it would not run."""
+    return _next_step(label, run) if label == STEP else label
+
+
 def _in_step(label: str, run: RunState) -> str:
     """`scope`, `retrieve`, `execute` and `inspect` inside a step.
 
@@ -808,8 +813,12 @@ def _build_deep() -> Any:
     graph.add_node(PLAN, _adapt(PLAN, _deep(deep_nodes.plan), successor=STEP,
                                 router=_next_step),
                    destinations=(STEP, SYNTHESIZE, END))
-    graph.add_node(STEP, _adapt(STEP, _deep(deep_nodes.step), successor=SCOPE),
-                   destinations=(SCOPE, SYNTHESIZE, END))
+    # A step whose tool is outside the closed set closes itself without a
+    # query and asks for the next one — through `_next_step`, like every
+    # other way into a step, so the budget is read on this edge too.
+    graph.add_node(STEP, _adapt(STEP, _deep(deep_nodes.step), successor=SCOPE,
+                                router=_after_step),
+                   destinations=(SCOPE, STEP, SYNTHESIZE, END))
     graph.add_node(SCOPE, _adapt(SCOPE, nodes.scope, successor=RETRIEVE,
                                  router=_in_step),
                    destinations=(RETRIEVE, COMPUTE))

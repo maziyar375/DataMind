@@ -709,7 +709,7 @@ class RunService:
             snapshot=snapshot,
         )
 
-        for attempt in state.attempts:
+        for index, attempt in enumerate(state.attempts):
             gq = GeneratedQuery(
                 id=uuid.uuid4(),
                 run_id=run.id,
@@ -726,21 +726,24 @@ class RunService:
             self._db.add(gq)
             await self._db.flush()
 
-            if attempt.rewritten_sql and state.execution is not None:
+            # Which result this statement produced. A chat run has one and
+            # files it against every statement the guard rewrote, as it always
+            # has; a deep run has one per step, and files each against the
+            # statement that produced it (`DeepState.execution_for`).
+            executed = state.execution_for(index)
+            if attempt.rewritten_sql and executed is not None:
                 self._db.add(
                     QueryExecution(
                         id=uuid.uuid4(),
                         generated_query_id=gq.id,
                         status="SUCCEEDED",
-                        duration_ms=state.execution.duration_ms,
-                        row_count=state.execution.row_count,
-                        truncated=state.execution.truncated,
-                        rows_scanned_estimate=state.execution.rows_scanned_estimate,
+                        duration_ms=executed.duration_ms,
+                        row_count=executed.row_count,
+                        truncated=executed.truncated,
+                        rows_scanned_estimate=executed.rows_scanned_estimate,
                         # ResultColumn is a slots dataclass and so has no
                         # __dict__; asdict is what actually serialises it.
-                        result_schema=[
-                            asdict(c) for c in state.execution.columns
-                        ],
+                        result_schema=[asdict(c) for c in executed.columns],
                     )
                 )
 
@@ -862,7 +865,10 @@ class RunService:
 
         run.finished_at = utcnow()
         run.attempt_count = len(state.attempts)
-        run.repair_count = state.repair_count
+        # The run's repairs, not the last step's: on a deep run the two
+        # differ, and `repair_count` is what the nodes ask about the step in
+        # hand (plan §2.4). Identical to `repair_count` on a chat run.
+        run.repair_count = state.total_repairs
         run.llm_latency_ms = state.llm_latency_ms
         run.db_latency_ms = state.db_latency_ms
         run.prompt_tokens = state.prompt_tokens

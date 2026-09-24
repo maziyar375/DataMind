@@ -5,8 +5,8 @@
 > §0.3's number is still **0.42**, the middle band; nothing has moved it. The
 > override is recorded here rather than the gate being re-read as open: the mode
 > stays behind `deep_enabled = False`, and no deep number may be quoted as
-> evidence the mode *works* until §0.3's threshold is met. Phase 4 is complete
-> (**43 of 85**). Written 2026-09-22
+> evidence the mode *works* until §0.3's threshold is met. Phases 4 and 5 are
+> complete (**54 of 85**). Written 2026-09-22
 > against `main`. The argument for *why* lives in
 > [research/deep-analysis-mode.md](../research/deep-analysis-mode.md) — read it
 > first; this document does not re-argue it. The feature is
@@ -945,23 +945,29 @@ The plan would be several times larger if any of these were missing.
 **Done when:** the budget cannot be exceeded by any path through the graph, and
 **nothing in the product can start a deep run.**
 
-### 12.7 Phase 5 — The loop · **0 / 11**
+### 12.7 Phase 5 — The loop · **11 / 11** ✅ *(the "against `sales`" clause is Phase 7's run — see below)*
 
-- [ ] `nodes.step` — one sub-question onto the existing `scope → retrieve → generate ⇄ validate → execute → inspect` road
-- [ ] `nodes.compute` — dispatch on `PlanStep.tool` into `app/analysis/`; an unknown tool **skips**, never crashes
-- [ ] `disclose()` per step, at render time, on the evidence about to reach a prompt
-- [ ] `StepEvidence` accumulation — `synthesize` reads `disclosed` and `computed`, **never `execution`**
-- [ ] Plan revision — **replace** a remaining step; never add beyond the ceiling
-- [ ] `nodes.synthesize` — `reports/narrate.py` + `checks.py` over the evidence, emitting Phase 3's claims
-- [ ] Every sub-query lands in `generated_queries` as an ordinary row
-- [ ] `repair_count` recomputed as the sum of per-step repairs, not `len(attempts) - 1` (§2.4)
-- [ ] **`test_deep_guard.py` — the guard's sixth entry point.** The hostile corpus imported from `test_sqlguard_hostile.py` and replayed per sub-query
-- [ ] `test_deep_disclosure.py` — the per-step assertion, written to **fail on a deliberately-broken build**
-- [ ] `test_deep_loop.py` — revision, the ceiling, the compute dispatch, an unknown tool
+- [x] `nodes.step` — one sub-question onto the existing `scope → retrieve → generate ⇄ validate → execute → inspect` road. The generator is asked the sub-question **plus the row shape its tool needs** (`evidence.SHAPE_HINTS`); a plain SQL step is asked exactly its own question
+- [x] `nodes.compute` — dispatch on `PlanStep.tool` into `app/analysis/` (`pipeline/evidence.py`). A refusal is a result — `NO_CHANGE` closes the step DONE with the refusal as its finding — and a capped result is refused rather than computed over. **An unknown tool is SKIPPED in `step`, before any query is spent**, through a `step → step` edge that goes back through `_next_step`, so the budget is read on it too
+- [x] `disclose()` per step — in `compute`, under the run's policy, **before anything downstream can read the result**: the reviser and the writer read only what it returned
+- [x] `StepEvidence` accumulation — `synthesize` reads `disclosed` and `computed`, **never `execution`**. `evidence.narration` is the one function that builds a prompt block from a step, and it does not touch `execution`; the result's row count, truncation and column types are copied onto the evidence as shape so it never has a reason to. Computed figures reach the writer **only when it was handed every row they came from** — `reports/facts.py`'s rule, applied to `app/analysis/`
+- [x] Plan revision — **replace** a remaining step; never add beyond the ceiling. Only a step that names dependencies, only when all of them produced a result, only under `SAMPLE`/`FULL`; one structured call that fails open. Revisions are kept as `PlanRevision(replaced, by)` for §4.2's strike-through
+- [x] `nodes.synthesize` — `reports/narrate.py`'s section prompt with the steps as its numbered results, streamed; `parse_claims` + `check_claims` produce Phase 3's claims, each checked against **its own step's** result. A preface written by the product (not the writer) opens any answer built from part of the plan. Under `NONE`/`AGGREGATE`, with nothing to write from, or when the writer fails, the answer is **written without a model** from the evidence
+- [x] Every sub-query lands in `generated_queries` as an ordinary row — through the real `_finalise`, on the conftest's SQLite schema: one row per statement, and each `query_executions` row filed against **the result its own statement produced** (`RunState.execution_for`; a chat run is unchanged). The fixture gained `query_executions` and `run_events`
+- [x] `repair_count` recomputed as the sum of per-step repairs — `total_repairs`, which is what `_finalise` now writes; identical to `repair_count` on a chat run
+- [x] **`test_deep_guard.py` — the guard's sixth entry point.** The corpus replayed through a first draft, a repair after the guard refused, a repair after the database refused, and a **revised** step — 96 cases, no bypass. `make guard` now runs it beside the corpus
+- [x] `test_deep_disclosure.py` — sentinel strings in every row, every byte sent to any model scanned for them, per step and per policy. **The canary replaces `disclose()` with a pass-through and asserts the scan finds the leak.** Writing it found one: a model-free answer quoted figures computed from rows past the fifty the model was allowed, which `disclose_history` would have replayed verbatim on the next turn under `SAMPLE`. Fixed in `_plain`, with its own test
+- [x] `test_deep_loop.py` — revision, the ceiling, the compute dispatch (a contribution whose driver is known by construction: EMEA, 90.0% of the change), an unknown tool, per-claim checking, the partial-plan preface, the failed-writer fallback, and the rows `_finalise` writes. 15 tests
 
 **Done when:** a deep run answers a *why* question against the `sales` fixture,
 every sub-query is a `generated_queries` row, and `make guard` is green with the
 corpus replayed through the new path.
+
+> **Two of the three are facts; the first is proven only in a scripted world.**
+> Every node is real and every provider call and query result is scripted, so
+> what is shown is that the loop *works*, not that it answers well. The run
+> against the real `sales` fixture is Phase 7's `--suite deep_v1 --mode deep`,
+> and it is recorded there.
 
 ### 12.8 Phase 6 — The surface · **0 / 12**
 
@@ -1027,18 +1033,19 @@ evidence **that says so**.
 | 2 — `app/analysis/` | 10 | 10 |
 | 3 — Citations | 8 | 8 |
 | 4 — The plan and the graph | 12 | 12 |
-| 5 — The loop | 0 | 11 |
+| 5 — The loop | 11 | 11 |
 | 6 — The surface | 0 | 12 |
 | 7 — Scoring | 0 | 7 |
 | 8 — Governance | 0 | 6 |
 | 9 — Documentation | 0 | 6 |
-| **Total** | **43** | **85** |
+| **Total** | **54** | **85** |
 
 ### 12.13 Change log
 
 | Date | What changed |
 |---|---|
 | 2026-09-22 | Written. No phase started. |
+| 2026-09-24 | **Phase 5 complete, 11/11.** The steps run, the evidence accumulates, the answer gets written. `compute` discloses each step's result the moment it closes and dispatches its tool into `app/analysis/` (`pipeline/evidence.py`); `step` revises a dependent step from what its dependencies found — replace only, never add — and asks the generator for the row shape the tool needs; `synthesize` is `reports/narrate.py`'s section prompt over the steps, with Phase 3's claims checked per step. The guard's sixth entry point replays the corpus through four kinds of deep statement (96 cases); the disclosure test scans every prompt for sentinel rows and **proves the scan works on a deliberately broken `disclose()`** — and found a real leak through the next turn's history, fixed. `_finalise` files each sub-query against its own result and records the run's total repairs. `make test` 3,438 green, `make guard` 140, `lint-imports` 9/9. **Not yet run against a real provider or the real `sales` fixture** — that is Phase 7. | 54 of 85 |
 | 2026-09-23 | **Phase 4 complete, 12/12 — started over the gate, on the owner's instruction.** §0.3 still reads 0.42 and still says Phases 4–9 wait; the owner asked for 4–7 regardless, and that is recorded in the status banner rather than the gate being re-read. `DEEP_GRAPH` is compiled at import and reachable from nothing: `route → plan → [step → scope → retrieve → generate ⇄ validate → execute → inspect → compute] → synthesize → chart`. The budget is read **on the edges** — into `step` and back into `generate` — so exhaustion routes to `synthesize` rather than raising, and a failed sub-question closes its step as evidence instead of ending the run. `compute` and `synthesize` are their Phase 4 minimum (record the step; list what ran); Phase 5 fills them. `make test` 3,318 green, `lint-imports` 9/9. | 43 of 85 |
 | 2026-09-22 | **Phase 0 complete, 5/5 — and the gate did not open.** The three arms ran back to back on one model (DeepSeek V4 Pro, temp 0.0, v10, 2h 13m): **42.0 % layer off** (`d8c1035d`), **42.0 % layer on** (`5df63738`), **recall 80.2 % / 62.0 % at budget 8,000** (`dc2ea4fd`). 0.42 is §0.3's middle band, so **Phases 4–9 wait**; §0.3's rule is now written out loud in `status.md` §6 and its Tier 3 deferral row. Three findings the headline hides: the two 42 % arms share only 14 of their 21 correct answers (14 questions moved, 7 each way — this suite cannot see a difference under ±14 points); two budget-8,000 questions scored recall 0.000 and answered **correctly**, so recall@k scores the annotation rather than the model; and `eval_runs.git_sha` was read at write time, filing arm 1 under a commit made 30 minutes into its own run — **fixed, with two tests that fail on the old code**. Cache tokens came out of the same logs: **60.4 % of a layer-on prompt served from cache**, which is Phase 1's §6 measurement. Write-up: `app/eval/reports/sales_v1_deepseek_2026-09-22_phase0.md`. | 31 of 85 |
 | 2026-09-22 | **Phase 3 complete, 8/8.** `REPORT_PROMPT_VERSION` r4 → r5: the section's results are numbered and every sentence stating a figure cites the one it came from. The markers never reach a reader — `parse_claims` lifts them into `Claim` rows on `report_section_results.claims` (`0038`, **JSONB**, §11 Q1 closed), and the numeric check now matches each sentence against **its own** result instead of the union of the section's. A figure borrowed from another result is flagged where it used to pass, and the test asserts both halves. A footnote opens the statement behind the figure; an **edited** paragraph is rendered without footnotes, because the claims describe what the model wrote. `make test` 3,196 green, `npm test` + build green, `0038` applied and rolled back against a throwaway database. | 27 of 85 |
